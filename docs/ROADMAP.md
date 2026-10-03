@@ -9,12 +9,14 @@ historical evidence and do not certify this adapter.
 - V2 plugin definition, native command/agent transforms and scoped hooks.
 - Flat V2 session creation, literal inbox correlation, idle/context validation,
   role/model binding, bounded interruption and non-resuming report notices.
-- JSON-text-only contracts; independent two-initial-plus-verifier workflows;
-  full evidence, version, original-ID, coverage and counterevidence validation.
+- Independent two-initial-plus-verifier workflows; JSON recovery and literal
+  review retention, explicit quality limitations, and separate full evidence,
+  version, original-ID, coverage and counterevidence assessment for publication.
 - Null default timeout, manual cancellation, lifecycle cleanup, exact-role
   validation and private native guards, including CodeMode execute.
-- Existing bounded output tolerance/recovery and explicit comment preview/publish
-  with uncertain-attempt lockout; no model fallback or extra review role.
+- Local punctuation/key/shape recovery, continuation after incomplete initials,
+  visible UNREVIEWED decisions and readable partial reports without extra model
+  requests. Explicit comment preview/publish retains uncertain-attempt lockout.
 - V2 package installer, current-layout defaults, conflict refusal, rollback and
   archival removal. No V1 migration, templates or installed-user configuration edit.
 - Offline contract/installation/session/runtime tests and an isolated exact-host
@@ -27,9 +29,10 @@ historical evidence and do not certify this adapter.
   MCP connection diagnostics, and value-free request-kind/retry observations.
 - Pinned exact-host fresh/replacement fixtures included in CI in addition to
   offline tests. Local fixture success and a completed CI run are separate evidence.
-- One controlled live review completed with official MCP 2.9.0 and the selected
-  models after two retained failures. Source/version fidelity and all original
-  finding IDs passed; model/tool-policy quality remains PARTIAL. See VALIDATION.
+- Controlled live reviews completed with official MCP 2.9.0 and the selected
+  models. Source/version fidelity is checked separately from review quality;
+  successes, partial inputs and earlier failures are retained. See VALIDATION
+  for the exact source revision, findings and remaining limitations.
 
 ## Acceptance still required
 
@@ -49,9 +52,11 @@ historical evidence and do not certify this adapter.
 Accept documented model/server limitations. Diagnose raw evidence before adding
 prompt text for an existing rule. Test overclaims about permanence/recovery, equal
 instants represented by different timezone offsets, and repeated report content.
-Do not add a model/PR/MCP-version exception, more model rounds, mandatory fields,
-hidden evidence caps, weakened verification or an automatic retry to inflate a
-success rate. Preserve historical failed runs and private data.
+Prefer usable results with honest limitations over discarding reviews for format
+or quality gaps. Do not add model/PR/MCP-version exceptions, more model rounds,
+mandatory fields, hidden evidence caps or fabricated evidence. Keep execution
+integrity and publication checks separate from review delivery. Preserve historical
+failed runs and private data.
 
 Real reviews, publication, installed-host upgrades and repository publication
 require authorization for the concrete action. They are not implied by tests.

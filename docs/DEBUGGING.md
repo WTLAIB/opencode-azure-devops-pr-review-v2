@@ -88,67 +88,45 @@ resumed with an ordinary prompt after their grant expires.
 
 ## Output and report presentation
 
-V2 uses JSON text only. `structuredOutput` is not a setting and there is no native
-StructuredOutput fallback. An ordinary response must be one JSON object, optionally
-inside one JSON fence, with the complete role contract. Duplicate keys, including
-escaped equivalents, fail before field values are accepted. A response containing
-only `status` cannot supply omitted evidence, coverage, or dispositions.
+Reviews prefer JSON text. Common syntax and field-shape mistakes are normalized
+locally; ambiguous or unstructured completed output remains literal review data.
+No native StructuredOutput path, parser dependency or formatting model is used.
+Settings, source checks and comment operations keep strict JSON contracts.
 
-Normal initial/verifier output can receive narrowly defined local corrections:
-ASCII whitespace around recognized finding keys; removal of exactly empty/null
-unknown finding fields; one redundant matching V disposition; and trailing JSON
-commas after complete members/values. Complete validation remains mandatory.
-Content-bearing extra fields, key collisions, invented values, and generic JSON
-repair are not permitted. Checks, comments, and amendments do not receive the
-trailing-comma tolerance.
+Inspect `outputFormatCorrections` for syntax repairs or literal-output retention.
+Offsets are zero-based UTF-16 positions in the selected JSON body. Inspect
+`reviewWarnings` and the original response for quality or structural gaps.
+Extra fields remain available; known key spelling and enum case can be normalized.
+A missing or duplicate initial ID receives a runtime tracking ID rather than
+losing its observation. Missing final decisions appear as runtime UNREVIEWED,
+with the original observations shown separately. These are not model verdicts.
 
-`outputFormatCorrections` records accepted changes. Trailing-comma offsets are
-zero-based UTF-16 offsets within the selected JSON body. The original response
-is retained. `rejectedOutputFormatCorrections` means a locally normalized candidate
-still failed validation; it cannot unlock another model request. An initial
-finding can omit only its separate location under the existing coverage rules;
-`pendingLocations` carries that unresolved work to the verifier. Final confirmed
-findings still require exact locations.
+PARTIAL initial outputs and admitted initial failures continue to the existing
+verifier. A failed execution contributes an unavailable-stage notice, not accepted
+partial model text. If the verifier cannot return complete structured evidence,
+its available observations appear in a PARTIAL report. A failed verifier execution
+retains available initial observations as an incomplete draft. Missing details do
+not become guessed evidence, a confirmed finding or a fabricated fresh SHA.
 
-The final report renders validated findings and dispositions once. Its model
-`report` field should be a short overview of checks, exclusions, and limitations.
-Check separately for unsupported claims about permanence, recovery, ordering,
-and business impact; JSON validation cannot establish those facts. Equivalent
-inputs and explicit counterexamples help expose factual errors that a successful
-run status does not reveal.
+COMPLETE means usable structured verifier output, not perfect model quality.
+Publication remains separately gated by the complete evidence contract. Read the
+limitations even when the workflow completes. A partial/stale report or incomplete
+draft includes its body even when returnReport is receipt. Synthetic notices use
+resume:false and do not start a formatting model. Queue acknowledgement does not
+certify every UI's rendering; inspect existing sessions without prompting them.
 
-`returnReport` changes the returned receipt/full report, not source collection or
-review models. Reports are queued through V2 synthetic input with `resume: false`.
-That operation requests no formatting model call. Queue acknowledgement does not
-prove that every host interface displayed the entire report. Use the saved report
-or inspect the existing session without prompting it again. Model output can
-also become context for a later, separately requested ordinary conversation.
+Check unsupported claims about permanence, recovery, ordering and business impact
+against actual source and counterexamples. A parseable result cannot establish
+those facts. The original response and failures remain in private diagnostics.
 
-## Bounded output amendments
+## Output amendments
 
-`outputRetries` defaults to `0`. Explicit `1` permits one eligible amendment per
-stage, shared between these alternatives:
-
-- A status-only spelling amendment in a fresh session using the same model.
-- Missing final locations supplied from the stopped verifier's retained context.
-- Missing MERGED dispositions for original IDs, pointing only to existing
-  confirmed originals and supported by the verifier's retained evidence.
-- One complete final-content resubmission when a parsed COMPLETE verifier result
-  failed validation but its identity, path set, and observed current versions
-  match the expected PR and remain frozen.
-
-Narrow amendments require every other applicable contract to pass. All recovery
-requires active authorization, a completed tool observation, and confirmed
-session settlement. The adapter replaces only the authorized repair instructions,
-removes tools for that request, enforces one model request, preserves the original
-failure, and validates the complete result again. It never fills missing content
-from another reviewer or guesses a disposition from prose.
-
-No recovery chains, new source reads, deadline reset, initial full-review
-regeneration, comment retry, provider-error retry, or recovery after unconfirmed
-cancellation are allowed. Inspect `attempt`, `retryOf`, `retryKind`, the original
-failure, and both submissions. Model-authored resubmission is extra usage and
-changed content, not independent proof of correctness.
+Review formatting and quality recovery is local and does not create additional
+model requests, including when outputRetries is 1. The setting remains available
+for an eligible standalone source-check status amendment: one tool-free request,
+unchanged deadline and retained failure. It is not a general model retry switch.
+Execution failure, cancellation, compaction, unknown settlement and publication
+are not repaired by asking a formatting model to regenerate a review.
 
 ## Tool observations and permissions
 
@@ -175,8 +153,9 @@ never change models, spoof client headers, or grant native execution to recover.
 If initial snapshots disagree, inspect the original metadata and labels before
 retrying. The common label uses `organization/project-id/repository-id`, with
 both stable IDs from the same PR metadata response. Project display names and
-project IDs are not interchangeable strings in this contract. The runtime keeps
-strict identity/commit comparison and does not guess or normalize equivalence.
+project IDs are not interchangeable strings in this contract. The runtime preserves the differing labels and asks the verifier to resolve the
+requested PR. It does not guess name/ID equivalence. A report can still be shown;
+unresolved initial frame conflicts prevent publication eligibility.
 
 `toolObservations` summarizes matching V2 execution hooks. Completed/error counts
 are execution observations, while `reportedErrors` and `truncated` record explicit

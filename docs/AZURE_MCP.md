@@ -71,11 +71,12 @@ separate workflow; see [commenting](COMMENTING.md).
 ## Source identity and coverage
 
 Both initial reviewers independently read PR identity, PR-reported source and
-target SHAs, changed paths, and relevant source. The runtime compares their
-repository/PR identities and SHAs, then gives the verifier the union of paths.
-The verifier independently checks evidence, adjudicates every original finding
-ID, and rereads both PR versions. Changed versions produce STALE; unavailable
-versions or required evidence cannot produce a completed review.
+target SHAs, changed paths, and relevant source. The runtime compares available
+repository/PR identities and SHAs, then gives the verifier consistent paths and
+any conflicting or incomplete observations. The verifier is asked to independently
+check evidence, adjudicate every original finding ID, and reread both PR versions.
+Changed versions produce STALE. Missing versions or evidence retain useful
+observations in a PARTIAL report without granting publication eligibility.
 
 Azure's `lastMergeSourceCommit` and `lastMergeTargetCommit` describe source and
 target heads at the last PR merge. They are not proof of live branch tips or a
@@ -133,7 +134,9 @@ Azure's [iteration changes API](https://learn.microsoft.com/en-us/rest/api/azure
 and [iterations API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-iterations/list?view=azure-devops-rest-7.1)
 document continuation and common-reference information. REST availability does
 not establish that the connected MCP exposes the needed operation. If the
-required evidence cannot be obtained, preserve the gap and incomplete status.
+required evidence cannot be obtained, preserve useful observations and disclose
+the evidence gap in a PARTIAL review. Standalone readiness and publication retain
+their separate, stricter requirements.
 
 ## Recovery and large responses
 
@@ -148,7 +151,8 @@ arguments and original deadline remain unchanged. Explicit authentication,
 permission, parameter, selector, and not-found errors do not qualify. Neither
 do writes, publication, execution, truncation, or empty search results. Record
 the original error and any recovery. This is prompt guidance, not a runtime
-retry wrapper. `outputRetries` concerns bounded output amendments only.
+retry wrapper. `outputRetries` concerns an eligible standalone source-check
+status amendment only; review formatting recovery is local.
 
 Distinguish host display truncation from incomplete server data. Prefer supported
 pagination or scoped exact-version reads. The prompt permits the native `read`

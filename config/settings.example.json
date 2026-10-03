@@ -3,7 +3,7 @@
   "version": 2,
   "models": {
     "_help": {
-      "functional": "Independent correctness review: requirements, boundaries, API compatibility, and regressions. Prefer strong code comprehension in your project language. All roles need reliable MCP tools, complete JSON envelopes, approved data handling, and acceptable cost.",
+      "functional": "Independent correctness review: requirements, boundaries, API compatibility, and regressions. Prefer strong code comprehension in your project language. All roles benefit from reliable MCP tools and clear structured reviews, with approved data handling and acceptable cost.",
       "risk": "Independent risk review: failures, retries, concurrency, authorization, and data consistency. Prefer evidence-based cross-path reasoning and reliable tool use. Also handles source checks and comments for this mode; standalone /pr-check uses review.risk.",
       "verifier": "Verify both initial reviews against source, find counterevidence, merge duplicates, and produce the final report. Prefer strong evidence judgment, long-context handling, and instruction following. Never just summarize or vote. Roles may reuse the same model ID."
     },

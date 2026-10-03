@@ -9,11 +9,11 @@ Return:
 
 There is no supplied preflight snapshot. Return the PR snapshot you established from the server. No merge-base proof is required. Use F-1, F-2, and so on. An empty findings array is valid. Return PARTIAL for incomplete coverage, missing pages, or unavailable source. COMPLETE describes review coverage, not proof of correctness or permission to merge.
 
-Fill coverage using the common rules, not the example path. Every finding field
-except location is required; severity is high, medium, or low. Provide a source-
+Fill coverage using the common rules, not the example path. Include available
+finding details; severity is high, medium, or low. Provide a source-
 verified location when possible; otherwise omit that field and explain the
-limitation in report for the verifier to resolve. Never omit source evidence or
-hide coverage gaps under this exception. Inspect before/after behavior and
+limitation in report for the verifier to resolve. Return useful observations even
+when details are unavailable, and state the evidence or coverage gap. Inspect before/after behavior and
 relevant callers, including existing guards and documented contracts, before
 reporting a regression. Keep open questions distinct from evidence-backed
 candidates. Preserve evidence even if it makes the report longer.

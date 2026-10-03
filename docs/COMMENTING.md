@@ -51,6 +51,11 @@ must explain the skip locally rather than omit essential conditions to fit.
 
 ## Enable and use
 
+Review delivery is separate from publication eligibility. PARTIAL or unstructured
+reviews remain readable, but comment preparation requires a completed structured
+review with the full evidence, identity/version and original-ID assessment. Read
+the receipt's publication limitation even when the verifier returned COMPLETE.
+
 In your private plugins/azpr-v2/settings.json, set comments.enabled=true before
 reviewing and restart OpenCode. The default is false; preview is still available.
 Set outputLanguage (for example, zh-TW) to control both final-report and comment

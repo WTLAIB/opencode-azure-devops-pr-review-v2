@@ -145,7 +145,7 @@
       "minimum": 0,
       "maximum": 1,
       "default": 0,
-      "description": "Opt in to one shared status/location/merge amendment or complete final content resubmission per stage. Narrow amendments preserve existing fields; final resubmission may replace evidence and decisions only with a matching frozen snapshot and known unchanged current source/target versions. Same stopped verifier context, configured model, one request, no ordinary tools, unchanged deadline, full validation and retained original failures. Status-only initial responses cannot regenerate a review. Provider errors, invalid outer JSON, truncation, unknown/stale versions, cancellation, unconfirmed aborts and comments do not qualify. Extra model usage may be billed."
+      "description": "Opt in to one eligible standalone source-check status amendment, using the configured model, no tools and the original deadline. Review formatting and quality gaps are recovered locally or retained in partial reports without additional model requests. Provider errors, cancellation, unconfirmed settlement and comments do not qualify. Extra source-check usage may be billed."
     },
     "debug": {
       "type": "object",

@@ -12,7 +12,7 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/config.mjs` | Strict settings, immutable roles, native denials, compiled Agent.Info. |
 | `src/session.mjs` | Exact V2 create/admit/wait/context/interrupt/synthetic contract. |
 | `src/runtime.mjs` | Command registration, grants, workflow, cancellation and lifecycle. |
-| `src/output.mjs` | Unique JSON parsing, complete evidence/disposition validation and bounded tolerance. |
+| `src/output.mjs` | Review syntax recovery, best-effort delivery and separate strict publication assessment. |
 | `src/comments.mjs` | Comment target, preview validation, stable markers and uncertain-attempt ledger. |
 | `src/attribution.mjs` | Deterministic reports, provenance, notices and receipts. |
 | `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
@@ -104,59 +104,69 @@ read is distinct from an unconfirmed in-flight model/session interruption.
 Concurrent origins own their initial role reads; cancelling one cannot reject
 another origin's preflight or replace an already pinned role fingerprint.
 
-Initial failures or valid PARTIAL results revoke sibling work, including a
-sibling SDK promise that never settles. Valid partial evidence remains in the
-incomplete draft and diagnostics. Origin/PR locks prevent duplicate review or publication workflows.
+A completed PARTIAL initial or an admitted execution failure does not cancel
+useful sibling work. Both outcomes reach the existing verifier as available
+observations or an explicit unavailable-stage notice. Failed/interrupted response
+text is not accepted as evidence. Configuration, admission and permission failures
+before a stage starts still revoke the workflow. Manual cancellation and an
+explicit timeout stop pending work; there is no new default deadline.
+Origin/PR locks prevent duplicate review or publication workflows.
 Report retention is in-memory and bounded by report count, never evidence size.
 
-## Review and evidence contract
+## Review delivery and publication assessment
 
-Normal and deep each run two independent full-scope initial stages concurrently.
-Focus differs (functional versus risk); source coverage obligations do not.
-They independently discover PR identity, PR-reported source/target SHAs and paths.
-The runtime compares identity/version/scope and passes a sorted union of their
-unique discovered paths to the verifier. It does not discover omitted server
-pages itself. The target reference is not a proven merge base.
+Normal and deep each run two independent initial stages and the existing verifier.
+The runtime retains partial observations, coverage gaps, extra fields and literal
+unstructured text. Available consistent snapshots contribute a union of paths;
+conflicting frames remain visible and are not silently merged. With no usable
+initial snapshot, the verifier receives the PR request and establishes its own.
+The target comparison commit is not a proven merge base.
 
-The verifier independently reads source/counterevidence, adjudicates every F/R ID,
-may discover new V IDs, and checks current source and target SHAs at completion.
-Confirmed findings include corrected evidence, counterevidence, severity,
-suggestion and location. Merges must point to real confirmed roots, cannot cycle,
-and cannot hide missing original IDs. Rejected and needs-info findings never
-become comment candidates. Initial location-only gaps are explicit pending
-candidates; final confirmation still requires a verified location.
+JSON is preferred, not a prerequisite for retaining useful review content.
+Completed stop-finish responses use an iterative grammar-aware recovery pass for
+trailing/missing commas, missing colons or terminal structure delimiters, redundant
+root closers, single/smart quotes, quoted literal controls, bare object keys and
+JSON comments. String content is preserved; incomplete values, array holes and
+conflicting duplicate keys are not silently repaired. Ambiguous JSON and prose
+are retained literally for verification or report presentation. Failed execution,
+context mismatch and truncation remain separate from correctable syntax.
 
-All outputs are JSON text, optionally one unambiguous fenced JSON body. Reject
-unknown envelope keys, duplicate raw/escaped-equivalent keys, invalid statuses,
-missing evidence/coverage, truncated or failed finishes, incomplete original-ID
-accounting and stale versions. Validate unique path sets, not array order. Strict
-structural validation is separate from semantic evidence requirements.
+Known key spelling, enum case, quoted SHA wrappers and simple section shapes are
+normalized locally. Extra information stays in the result. Missing or duplicate
+initial IDs receive unique runtime tracking IDs, with supplied IDs retained when
+replaced. Missing evidence is never fabricated. The verifier is asked to verify
+all candidates independently. Omitted original decisions become explicit runtime
+UNREVIEWED rows, with the full original observations shown in the report.
 
-Bounded local tolerance permits known finding-key whitespace, exactly empty/null
-unknown finding fields, and exact redundant new-finding dispositions. Normal
-initial/verifier JSON with stop finish may remove trailing separators using a
-grammar-aware scan. No values or evidence are invented. Preserve raw bytes,
-record corrections and validate the whole candidate. A rejected syntax correction
-cannot unlock model recovery. Checks, comments and amendments remain strict JSON.
+Strict validators assess structured evidence, full identity/versions, coverage,
+source/counterevidence and original-ID decisions. Review quality defects produce
+limitations and a readable PARTIAL result instead of throwing away the review.
+A model-declared stale review or changed current SHAs remains STALE. An absent
+snapshot may be displayed from initial metadata, explicitly labelled as such;
+missing current SHAs are never copied from an older snapshot.
 
-When outputRetries=1, eligible stages may receive one status-only amendment,
-missing final-location amendment, missing MERGED-disposition amendment, or complete
-final content resubmission. Each shares one stage allowance and original deadline.
-Status recovery creates a fresh session; other eligible amendments regrant the
-stopped reviewer's own context. Narrow amendments cannot alter existing fields.
-Complete resubmission freezes snapshot/current versions and revalidates all
-replacement content. No ordinary tools, fallback model or second amendment is
-allowed. Original failures remain visible; recovery is model-authored, not proof.
+Review delivery is separate from publication eligibility. Only fully assessed
+structured results and initial inputs with consistent metadata can enter the
+comment cache. Retained prose, missing decisions, conflicting frames and unconfirmed
+cleanup do not grant publication eligibility. COMPLETE describes usable structured
+verifier output, not factual perfection or automatic publication authorization.
+
+All recovery uses the existing model rounds. No extra model request fixes review
+format or missing fields, even with outputRetries=1. That setting retains an
+eligible standalone source-check status amendment under its existing tool-free,
+one-request and original-deadline rules. Checks, settings and comment operations
+continue to use strict parsing. Raw responses, failures and limitations are kept.
 
 ## Presentation, comments and diagnostics
 
 A deterministic renderer formats final findings, dispositions and invoked model
 provenance. Synthetic notices carry full text in their description and use
 resume:false. Receipt mode carries status/session/diagnostic locations; full mode
-also carries the report to the origin. Queuing never starts a formatter model and
+also carries the report to the origin. PARTIAL, STALE and incomplete draft bodies
+are included even in receipt mode. Queuing never starts a formatter model and
 does not certify TUI display. See [debugging](DEBUGGING.md#output-and-report-presentation).
 
-Only completed same-origin reviews enter the comment cache. Preview verifies
+Only publication-eligible completed same-origin reviews enter the comment cache. Preview verifies
 eligible corrected findings, anchors, severity, count and exact content with AI
 attribution. Explicit --publish requires comments.enabled and a saved preview.
 Before publication, mark every planned item uncertain; results can only update

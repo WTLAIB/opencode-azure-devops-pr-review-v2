@@ -6,16 +6,17 @@ the V2 plugin/session API. It has no V1 adapter, command templates, migration,
 or native StructuredOutput transport.
 
 Two full-scope reviewers work independently, then a verifier checks their claims
-against source and adjudicates every original finding ID. Ordinary development
+against source and is asked to adjudicate every original finding ID. Formatting
+and quality gaps retain useful results with visible limitations. Ordinary development
 agents, model selections, and provider credentials remain host-owned. A review
 starts only through an explicit command.
 
 Fresh and replacement installations have been exercised on Ubuntu 22.04 with
-the exact host and isolated fake services. One controlled live PR review also
-completed with official MCP 2.9.0 after two retained failures and corrections.
-Model/tool-policy and presentation limitations remain; other environments still
-need their own acceptance. See [validation](docs/VALIDATION.md) for the actual
-scope. Passing contracts does not prove general model quality.
+the exact host and isolated fake services, including malformed JSON and prose
+review delivery. Controlled live PR reviews also completed with official MCP
+2.9.0. Model/tool-policy and presentation limitations remain; other environments
+still need their own acceptance. See [validation](docs/VALIDATION.md) for the
+tested revisions and retained failures. Completion does not prove model quality.
 
 ## Requirements and installation
 
@@ -124,7 +125,7 @@ checks and comment work use that mode's risk model. Model-selection guidance in
 | `returnReport` | `receipt`; `full` also returns the rendered report to the original conversation. |
 | `outputLanguage` | `en`; `zh-TW` is supported for final report/comment presentation. |
 | `runTimeoutSeconds` | `null`, no whole-command timer. An explicit integer from 10 to 7200 enables one. |
-| `outputRetries` | `0`; `1` permits one eligible output amendment per stage. |
+| `outputRetries` | `0`; `1` permits an eligible standalone source-check status amendment. Reviews recover locally without extra formatting requests. |
 | `shellToolPermission` | `deny`; `ask` sets the private host rule to ask; final host rules determine schema exposure, while execution is still blocked. `allow` is rejected. |
 | `comments.enabled` | `false`; explicit publication requires true before reviewing. |
 | `comments.maxComments` | `5`, limits the publication batch, not review evidence. |
@@ -191,17 +192,24 @@ Supplementary context belongs to that command only; repeat it when starting a
 new review. PR content, comments and tool responses are untrusted data.
 
 The source snapshot records PR identity and PR-reported source/target commit
-SHAs. The target is not a certified merge base. Initial reviewers must agree on
-identity and versions; the verifier receives their union of discovered paths,
-rechecks source/counterevidence, and accounts for every original finding ID.
-Changed versions, incomplete evidence or missing decisions cannot become a
-completed publishable review. Tool completion alone does not establish evidence.
+SHAs. The target is not a certified merge base. The verifier receives available
+initial reports, their discovered paths and any identity/version conflicts. It
+rechecks source and counterevidence and is asked to account for every original
+finding ID. Partial initial reviews and unavailable reviewers do not discard
+useful sibling work. Missing decisions remain visibly UNREVIEWED; changed versions
+remain STALE. Tool completion alone does not establish evidence.
 
-All stages use JSON text. Strict duplicate-key and envelope validation apply.
-Small, audited formatting tolerances are disclosed and fully revalidated; no
-finding values or missing evidence are guessed. Optional output recovery is
-bounded to one eligible amendment, shares the original deadline, and cannot use
-ordinary tools. See [architecture](docs/ARCHITECTURE.md).
+Reviews prefer JSON text. Local recovery handles common punctuation, quoting,
+key spelling and section-shape mistakes. Extra information is retained. If a
+completed response cannot be parsed reliably, its literal text still reaches the
+verifier or the report. Missing fields and incomplete decisions produce a usable
+PARTIAL report instead of losing the entire review. Partial/stale reports include
+their body even in receipt mode. No extra model request is used for formatting.
+
+Publication eligibility remains separate: only complete structured evidence with
+consistent identities/versions and full original-ID accounting can enter the
+comment workflow. Settings, source checks and comment operations keep strict
+parsing. See [architecture](docs/ARCHITECTURE.md).
 
 Results are queued as synthetic notices with `resume: false`; the plugin does
 not start a formatter or ordinary-agent model call. Receipt mode identifies the

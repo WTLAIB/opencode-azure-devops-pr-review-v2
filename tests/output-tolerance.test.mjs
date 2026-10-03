@@ -30,7 +30,8 @@ test('one fenced envelope retains punctuation inside strings, Unicode and number
   const plain = parse(raw);
   for (const text of [raw, 'Result:\n```json\n' + raw + '\n```\nEnd.', '```JSON\r\n' + raw + '\r\n```']) {
     const prepared = parse(text);
-    assert.deepEqual(prepared, plain);
+    assert.deepEqual(prepared.envelope, plain.envelope);
+    assert.deepEqual(prepared.corrections, plain.corrections);
     assert.equal(Object.is(prepared.envelope.n, -0), true);
     assert.equal(prepared.envelope.notes, '中\t,}\n,]');
     assert.equal(prepared.corrections.length, 3);
@@ -45,8 +46,8 @@ test('one fenced envelope retains punctuation inside strings, Unicode and number
 });
 
 for (const tail of [',}', '[,]', '[1,,]', '{,}', '{"a":,}', '{"a":1,"b":}', '[1,', '{"a":1,',
-  '[1,2}', '[01,]', '[1.,]', '[NaN,]', '[True,]', "{'x':1,}", '{"a":1 /* note */,}',
-  '{"a":"unclosed,}', '{"a":"bad\\q",}', '{"a":1,}\u00a0']) {
+  '[1,2}', '[01,]', '[1.,]', '[NaN,]', '[True,]',
+  '{"a":"unclosed,}', '{"a":"bad\\q",}']) {
   test(`syntax tolerance rejects ambiguous or non-JSON content: ${JSON.stringify(tail)}`, () => {
     assert.throws(() => parse('{"status":"COMPLETE","value":' + tail + ',}'), /required JSON envelope/);
   });
@@ -62,13 +63,13 @@ test('syntax tolerance rejects duplicate keys, multiple envelopes and unsafe fen
     'prefix {"status":"COMPLETE",}', '[{"status":"COMPLETE",},]']) assert.throws(() => parse(raw));
 });
 
-test('syntax tolerance is limited to completed normal text reviews with a valid status', () => {
+test('syntax tolerance is review-only and leaves status assessment to the caller', () => {
   const raw = '{"status":"COMPLETE",}';
   for (const [role, spec] of Object.entries(ROLES)) {
     if (!['initial', 'final'].includes(spec.format)) assert.throws(() => parse(raw, role));
   }
   assert.throws(() => parse(raw, 'unknown'));
-  assert.throws(() => parse('{"status":"CCOMPLETE",}'), /status/);
+  assert.equal(parse('{"status":"CCOMPLETE",}').envelope.status, 'CCOMPLETE');
   for (const finish of ['length', 'content-filter', 'error', 'cancelled', 'tool-calls', undefined]) {
     const value = response(raw); value.info.finish = finish;
     assert.throws(() => output.parseReviewJSONReport(value, 'azpr-review-functional'));

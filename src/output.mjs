@@ -361,55 +361,112 @@ export function parseUniqueJSON(content) {
   rejectDuplicateJSONKeys(content, 'Input contains duplicate JSON keys; no field value was accepted.');
   return value;
 }
-// Recognize JSON with only the trailing-separator extension. An iterative stack
-// rejects holes/missing values without recursion or editing quoted source. The
-// strict parser below still establishes grammar and duplicate-key rejection.
-function trailingCommaCandidate(content) {
-  const stack = [{ kind: 'root', next: 'value' }], offsets = [];
-  const token = /"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null/y;
-  let i = 0;
+// Review-only syntax recovery. An iterative grammar preserves complete values;
+// it never removes an unfinished member or invents a missing value. Offsets refer
+// to the original body, including when punctuation is inserted. Settings,
+// publication and source-readiness parsing do not use this extension.
+function reviewJSONCandidate(content) {
+  const stack = [{ kind: 'root', next: 'value' }], edits = [], pieces = [];
+  const token = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null/y;
+  let i = 0, lastValueEnd = 0;
+  const change = (action, offset, replacement = '') => edits.push({ action, offset, replacement });
+  const quoted = () => {
+    const start = i, quote = content[i++], close = quote === '“' ? '”' : quote;
+    let value = '';
+    while (i < content.length) {
+      const char = content[i++];
+      if (char === close) {
+        const raw = content.slice(start, i);
+        if (quote === '"') {
+          try { JSON.parse(raw); return raw; } catch { /* Literal controls only. */ }
+        }
+        change('normalize-string-delimiters-or-controls', start);
+        return JSON.stringify(value);
+      }
+      if (char !== '\\') { value += char; continue; }
+      const escaped = content[i++];
+      if (escaped === "'" && quote === "'") { value += "'"; continue; }
+      const length = escaped === 'u' ? 4 : 0;
+      const escape = '\\' + escaped + content.slice(i, i + length);
+      try { value += JSON.parse('"' + escape + '"'); } catch { return; }
+      i += length;
+    }
+    // Closing an unfinished string would invent its content boundary.
+  };
   while (i < content.length) {
     const char = content[i], frame = stack.at(-1);
-    if (' \t\r\n'.includes(char)) { i++; continue; }
+    if (/\s/u.test(char)) { pieces.push(' \t\r\n'.includes(char) ? char : ' '); i++; continue; }
+    if (content.startsWith('//', i) || content.startsWith('/*', i)) {
+      const start = i, line = content[i + 1] === '/';
+      const end = content.indexOf(line ? '\n' : '*/', i + 2);
+      if (!line && end < 0) return;
+      i = end < 0 ? content.length : end + (line ? 0 : 2);
+      pieces.push(' '); change('remove-json-comment', start); continue;
+    }
     if (char === '}' || char === ']') {
+      if (frame.kind === 'root' && frame.next === 'end') {
+        change('remove-redundant-closing-delimiter', i++); continue;
+      }
       if (frame.kind !== (char === '}' ? 'object' : 'array')) return;
-      if (frame.comma !== undefined) offsets.push(frame.comma);
+      if (frame.comma !== undefined) {
+        pieces[frame.commaPiece] = ''; change('remove-trailing-comma', frame.comma);
+      }
       else if (!['end', 'first-key', 'first-value'].includes(frame.next)) return;
-      stack.pop(); i++; continue;
+      stack.pop(); pieces.push(char); lastValueEnd = ++i; continue;
     }
     if (frame.next === 'colon') {
-      if (char !== ':') return;
-      frame.next = 'value'; i++; continue;
+      if (char === ':') { pieces.push(char); i++; }
+      else { pieces.push(':'); change('insert-missing-colon', i, ':'); }
+      frame.next = 'value'; continue;
     }
     if (frame.next === 'end') {
-      if (char !== ',' || frame.kind === 'root') return;
-      frame.comma = i++;
+      if (frame.kind === 'root') return; // Never select one of multiple roots.
+      if (char === ',') {
+        frame.comma = i++; frame.commaPiece = pieces.length; pieces.push(',');
+      } else {
+        // Adjacent numeric/literal fragments are not missing separators.
+        if (i === lastValueEnd && !['{', '[', '"', "'", '“'].includes(char)) return;
+        pieces.push(','); change('insert-missing-comma', i, ',');
+      }
       frame.next = frame.kind === 'object' ? 'key' : 'value';
       continue;
     }
     if (['key', 'first-key'].includes(frame.next)) {
-      if (char !== '"') return;
-      token.lastIndex = i;
-      const match = token.exec(content);
-      if (!match) return;
-      i = token.lastIndex; frame.next = 'colon'; delete frame.comma;
+      let key;
+      if (['"', "'", '“'].includes(char)) key = quoted();
+      else {
+        const match = /^[A-Za-z_$][\w$-]*(?=\s*:)/.exec(content.slice(i));
+        if (!match) return;
+        key = JSON.stringify(match[0]); change('quote-object-key', i); i += match[0].length;
+      }
+      if (key === undefined) return;
+      pieces.push(key); frame.next = 'colon'; delete frame.comma;
       continue;
     }
     if (!['value', 'first-value'].includes(frame.next)) return;
     frame.next = 'end'; delete frame.comma;
     if (char === '{' || char === '[') {
       stack.push({ kind: char === '{' ? 'object' : 'array', next: char === '{' ? 'first-key' : 'first-value' });
-      i++; continue;
+      pieces.push(char); i++; continue;
     }
-    token.lastIndex = i;
-    if (!token.exec(content)) return;
-    i = token.lastIndex;
+    if (['"', "'", '“'].includes(char)) {
+      const value = quoted(); if (value === undefined) return; pieces.push(value);
+    } else {
+      token.lastIndex = i;
+      const match = token.exec(content); if (!match) return;
+      pieces.push(match[0]); i = token.lastIndex;
+    }
+    lastValueEnd = i;
   }
-  if (stack.length !== 1 || stack[0].next !== 'end' || !offsets.length) return;
-  let start = 0;
-  const pieces = offsets.map(offset => { const piece = content.slice(start, offset); start = offset + 1; return piece; });
-  pieces.push(content.slice(start));
-  return { text: pieces.join(''), corrections: offsets.map(offset => ({ action: 'remove-trailing-comma', offset })) };
+  while (stack.length > 1) {
+    const frame = stack.pop();
+    if (!['end', 'first-key', 'first-value'].includes(frame.next)) return;
+    const close = frame.kind === 'object' ? '}' : ']';
+    pieces.push(close); change('insert-missing-closing-delimiter', i, close);
+  }
+  if (stack[0].next !== 'end' || !edits.length) return;
+  return { text: pieces.join(''), corrections: edits.map(({ action, offset, replacement }) =>
+    replacement ? { action, offset, replacement } : { action, offset }) };
 }
 
 /** Strict parsing remains the contract for checks, comments and amendments. */
@@ -431,36 +488,63 @@ function parseReport(response, role) {
     throw new Error(`Reviewer returned an OpenCode/model error (${name}; finish=${finish}). Inspect the private session or debug response. No automatic retry.`);
   }
   if (['length', 'content-filter', 'error', 'cancelled'].includes(response.info?.finish)) throw new Error(`Reviewer output did not finish successfully (finish=${finish}); no partial response or output recovery was accepted.`);
-  const allowTrailingCommas = response.info?.finish === 'stop' &&
+  const allowRecovery = response.info?.finish === 'stop' &&
     ['initial', 'final'].includes(ROLES[role]?.format);
   let result, corrections = [];
   let content = visibleText(response).trim();
   if (!content) throw new Error(`Empty reviewer output (finish=${finish}); inspect the session export or debug response.`);
-  // Never guess between multiple envelopes. The scoped review extension may
-  // remove only grammar-checked trailing separators, never infer missing data.
+  // Never guess between multiple envelopes. Review recovery handles syntax;
+  // it does not fill missing values or discard an unfinished finding.
   const fences = [...content.matchAll(/^```(?:json)?[^\S\r\n]*\r?\n([\s\S]*?)^```[^\S\r\n]*$/gmi)];
   let jsonContent = content;
   function parse(candidate) {
     try { return { envelope: JSON.parse(candidate), text: candidate, corrections: [] }; }
     catch (error) {
-      const normalized = allowTrailingCommas && trailingCommaCandidate(candidate);
+      const normalized = allowRecovery && reviewJSONCandidate(candidate);
       if (!normalized) throw error;
       return { envelope: JSON.parse(normalized.text), ...normalized };
     }
   }
-  let parsed;
+  let parsed, surroundingText;
   try { parsed = parse(content); }
   catch {
     if (fences.length === 1 && !/[{}]|```/.test(content.replace(fences[0][0], ''))) {
-      try { parsed = parse(fences[0][1]); } catch { /* Fail closed below. */ }
+      try {
+        parsed = parse(fences[0][1]);
+        surroundingText = content.replace(fences[0][0], '').trim();
+      } catch { /* Retain the entire text in the review fallback. */ }
     }
     if (parsed === undefined) throw new Error(`Reviewer did not return the required JSON envelope (characters=${content.length}; finish=${finish}). Partial output remains in its session. Inspect the private session or debug response. No automatic retry.`);
   }
   ({ envelope: result, text: jsonContent, corrections } = parsed);
   rejectDuplicateJSONKeys(jsonContent, 'Reviewer text contains duplicate JSON keys; no field value was selected or repaired.');
   if (!isObject(result)) throw new Error('Review envelope must be an object.');
-  if (corrections.length && !stageFormat(role).schema.properties.status.enum.includes(result.status)) throw new Error('Trailing-comma normalization requires a valid review status; no output recovery.');
-  return { envelope: result, corrections };
+  return { envelope: result, corrections, ...(surroundingText ? { surroundingText } : {}) };
+}
+
+/** A successfully completed review may still be useful without structured JSON.
+ * Keep that text literal for the verifier/report. Never salvage failed execution
+ * as a completed answer, and never pick a winner among duplicate JSON keys. */
+export function readReviewOutput(response, role) {
+  if (!['initial', 'final'].includes(ROLES[role]?.format)) return parseReviewJSONReport(response, role);
+  if (response.info?.error) return parseReviewJSONReport(response, role);
+  if (response.info?.finish !== 'stop') throw new Error('Reviewer output did not finish successfully; retained text cannot substitute for completed execution.');
+  try {
+    const parsed = parseReviewJSONReport(response, role);
+    const reviewSections = ['findings', 'report', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions'];
+    if (!Object.keys(parsed.envelope).some(key => reviewSections.some(known => canonicalKey(key) === canonicalKey(known)))) {
+      throw new Error('A JSON example is not a structured review.');
+    }
+    if (parsed.surroundingText) parsed.envelope = { ...parsed.envelope,
+      surroundingText: Object.hasOwn(parsed.envelope, 'surroundingText')
+        ? [parsed.envelope.surroundingText, parsed.surroundingText] : parsed.surroundingText };
+    return parsed;
+  }
+  catch {
+    const report = visibleText(response).trim();
+    if (!report) throw new Error('Reviewer returned no visible review content.');
+    return { envelope: { report, unstructured: true }, corrections: [{ action: 'retain-unstructured-review' }] };
+  }
 }
 
 /** Keep supplementary text literal; do not shell-tokenize, unquote, or expand it. */
@@ -629,5 +713,180 @@ export function finalEnvelope(result, expected, originals) {
   const changedBase = expected.scope === 'pr' && sha(result.currentBase) && result.currentBase.toLowerCase() !== expected.base.toLowerCase();
   if (changedHead || changedBase) result = { ...result, status: 'STALE' }; // No automatic rerun.
   else if (result.status === 'STALE') throw new Error('STALE verdict contradicts reported versions; require manual verification.');
+  return result;
+}
+
+// Review delivery is deliberately more permissive than publication. The strict
+// validators above remain an assessment of complete, publishable structured
+// evidence. A failed assessment adds limitations; it does not discard a review.
+const initialKeys = ['status', 'snapshot', 'coverage', 'findings', 'report'];
+const finalKeys = ['status', 'snapshot', 'currentHead', 'currentBase', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions', 'report'];
+const canonicalKey = key => key.trim().replace(/[_\s-]/g, '').toLowerCase();
+const asText = value => value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+const canonicalEnum = value => typeof value === 'string' ? value.trim().toUpperCase() : '';
+const reviewSHA = value => asText(value).trim().replace(/^["'`]*([0-9a-f]{40}|[0-9a-f]{64})["'`]*$/i, '$1').toLowerCase();
+const select = (value, keys) => isObject(value) ? Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) : value;
+const note = (notes, message) => { if (!notes.includes(message)) notes.push(message); };
+
+function reviewFields(value, keys, notes) {
+  if (!isObject(value)) return {};
+  const aliases = new Map(keys.map(key => [canonicalKey(key), key]));
+  const entries = Object.entries(value), counts = new Map();
+  for (const [key] of entries) {
+    const name = aliases.get(canonicalKey(key));
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return Object.fromEntries(entries.map(([key, content]) => {
+    const name = aliases.get(canonicalKey(key));
+    if (name && counts.get(name) > 1) {
+      note(notes, 'Conflicting field aliases were retained for inspection; no alias was silently overwritten.');
+      return [key, content];
+    }
+    return [name ?? key, content];
+  }));
+}
+function reviewRows(value, notes) {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try { const parsed = parseUniqueJSON(value); if (Array.isArray(parsed)) return parsed; } catch { /* Keep literal content. */ }
+  }
+  note(notes, 'A non-array review section was retained as one entry.');
+  return [value];
+}
+function reviewSnapshot(value, notes) {
+  if (!isObject(value)) return null;
+  const result = reviewFields(value, Object.keys(snapshotSchema.properties), notes);
+  if (typeof result.prId === 'string' && /^[1-9][0-9]*$/.test(result.prId.trim())) result.prId = Number(result.prId);
+  for (const key of ['repository', 'base', 'head', 'scope']) if (typeof result[key] === 'string') result[key] = result[key].trim();
+  for (const key of ['base', 'head']) if (Object.hasOwn(result, key)) result[key] = reviewSHA(result[key]);
+  if (typeof result.scope === 'string') result.scope = result.scope.toLowerCase();
+  if (Array.isArray(result.files)) result.files = [...new Set(result.files)];
+  return result;
+}
+function snapshotView(value) { return select(value, Object.keys(snapshotSchema.properties)); }
+function findingView(value) { return select(value, finding.required); }
+function reviewFinding(value, notes) {
+  const row = isObject(value) ? reviewFields(value, finding.required, notes) : { summary: asText(value) };
+  for (const key of finding.required) if (Object.hasOwn(row, key)) row[key] = asText(row[key]);
+  if (typeof row.id === 'string') row.id = row.id.trim();
+  if (typeof row.severity === 'string') row.severity = row.severity.trim().toLowerCase();
+  if (finding.required.some(key => key !== 'id' && !text(row[key]))) note(notes, 'Some findings omit evidence, counterevidence, severity, a correction, a summary or a source location. Missing details were not invented.');
+  return row;
+}
+
+/** Stable tracking IDs are bookkeeping, never generated source evidence. All
+ * supplied rows, including prose, duplicates and extra fields, remain available. */
+export function acceptInitialReview(value, prefix, prUrl) {
+  const notes = [], source = isObject(value) ? value : { report: asText(value), unstructured: true };
+  const result = reviewFields(source, initialKeys, notes);
+  result.snapshot = reviewSnapshot(result.snapshot, notes);
+  result.coverage = reviewFields(result.coverage, ['files', 'gaps'], notes);
+  if (!Array.isArray(result.coverage.files) || !Array.isArray(result.coverage.gaps)) note(notes, 'The initial coverage ledger is missing or incomplete; the verifier must establish coverage independently.');
+  result.coverage.files = reviewRows(result.coverage.files, notes).map(asText);
+  result.coverage.gaps = reviewRows(result.coverage.gaps, notes).map(asText);
+  result.findings = reviewRows(result.findings, notes).map(row => reviewFinding(row, notes));
+  const used = new Set(), reserved = new Set(result.findings.map(row => row.id).filter(text));
+  let nextId = 1;
+  for (const row of result.findings) {
+    if (!text(row.id) || !new RegExp(`^${prefix}-[1-9][0-9]*$`).test(row.id) || used.has(row.id)) {
+      if (Object.hasOwn(row, 'id')) row.originalId = row.id;
+      while (reserved.has(`${prefix}-${nextId}`)) nextId++;
+      row.id = `${prefix}-${nextId++}`; reserved.add(row.id);
+      note(notes, 'Runtime tracking IDs were assigned to missing or repeated IDs; original IDs and finding content remain available.');
+    }
+    used.add(row.id);
+  }
+  result.report = asText(result.report);
+  result.status = canonicalEnum(result.status);
+  if (result.unstructured) note(notes, 'Unstructured initial output was retained literally for independent verification.');
+  let complete = false;
+  try {
+    const assessed = initialEnvelope({ ...select(result, initialKeys), snapshot: snapshotView(result.snapshot),
+      coverage: select(result.coverage, ['files', 'gaps']), findings: result.findings.map(findingView),
+      // Overview wording is presentation, not an evidence gate.
+      report: result.report || 'No separate overview supplied.' }, null, prefix, prUrl);
+    complete = assessed.status === 'COMPLETE';
+  } catch (error) { note(notes, `Initial review limitation: ${error.message}`); }
+  if (!complete) note(notes, 'This initial review has unresolved coverage or structured-evidence gaps.');
+  result.status = complete ? 'COMPLETE' : 'PARTIAL';
+  result.reviewWarnings = notes;
+  result.contractComplete = complete && !source.unstructured && !notes.some(message => /Conflicting|tracking IDs/.test(message));
+  return result;
+}
+
+/** Use established frames when available, and give the verifier every original
+ * report, including conflicting frames. Missing metadata never becomes a fake SHA. */
+export function selectReviewSnapshot(reviews, prUrl) {
+  const frames = [], warnings = [];
+  for (const review of reviews) {
+    try {
+      const frame = validateSnapshot(snapshotView(review.snapshot));
+      if (frame.scope !== 'pr' || (prUrl && String(frame.prId) !== new URL(prUrl).pathname.split('/').filter(Boolean).at(-1))) throw new Error();
+      frames.push(frame);
+    } catch { note(warnings, 'An initial reviewer did not establish a usable PR snapshot.'); }
+  }
+  if (!frames.length) return { snapshot: null, warnings: [...warnings, 'The verifier must establish the requested PR identity and versions independently.'] };
+  const first = frames[0];
+  const same = frame => ['repository', 'prId', 'base', 'head', 'scope'].every(key => frame[key] === first[key]);
+  if (frames.some(frame => !same(frame))) note(warnings, 'Initial reviewers reported conflicting PR identities or versions. Their observations must not be combined as one verified snapshot.');
+  return { snapshot: { ...first, files: [...new Set(frames.filter(same).flatMap(frame => frame.files))].sort() }, warnings };
+}
+
+/** Missing decisions are visible runtime UNREVIEWED rows, never fabricated
+ * model verdicts. Quality gaps retain a usable PARTIAL report without a retry. */
+export function acceptFinalReview(value, expected, originals, prUrl) {
+  const notes = [], source = isObject(value) ? value : { report: asText(value), unstructured: true };
+  const result = reviewFields(source, finalKeys, notes);
+  result.report = asText(result.report);
+  result.snapshot = reviewSnapshot(result.snapshot, notes);
+  if (!result.snapshot && expected) {
+    result.snapshot = structuredClone(expected);
+    note(notes, 'The displayed snapshot comes from the initial reviews; the verifier omitted its snapshot.');
+  }
+  result.currentHead = reviewSHA(result.currentHead);
+  result.currentBase = reviewSHA(result.currentBase);
+  const modelStatus = canonicalEnum(result.status);
+  let rows = reviewRows(result.dispositions, notes).map(item => reviewFields(isObject(item) ? item : { reason: asText(item) }, Object.keys(disposition.properties), notes));
+  for (const [category, status] of Object.entries({ confirmed: 'CONFIRMED', merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' })) {
+    for (const value of reviewRows(result[category], notes)) {
+      const item = reviewFields(isObject(value) ? value : { reason: asText(value) }, [...finding.required, 'reason', 'mergedInto', 'verifiedFinding', 'status'], notes);
+      if (status === 'CONFIRMED') {
+        const { reason, verifiedFinding, ...finding } = item;
+        rows.push({ id: item.id ?? verifiedFinding?.id, status, reason, verifiedFinding: verifiedFinding ?? finding });
+      } else rows.push({ ...item, status });
+    }
+  }
+  result.dispositions = rows.map(item => {
+    const row = { ...item, id: asText(item.id), status: canonicalEnum(item.status) || 'UNREVIEWED', reason: asText(item.reason) };
+    if (row.verifiedFinding != null) row.verifiedFinding = reviewFinding(row.verifiedFinding, notes);
+    return row;
+  });
+  result.newFindings = reviewRows(result.newFindings, notes).map(item => reviewFinding(item, notes));
+  const accounted = new Set(result.dispositions.map(row => row.id));
+  result.unreviewedFindings = originals.filter(row => !accounted.has(row.id));
+  for (const row of result.unreviewedFindings) result.dispositions.push({ id: row.id, status: 'UNREVIEWED',
+    reason: 'Runtime notice: the verifier supplied no decision for this original finding. The initial observation remains unconfirmed.' });
+  if (result.unreviewedFindings.length) note(notes, 'The verifier omitted decisions. Original observations are shown separately as unreviewed, not silently rejected or confirmed.');
+  if (source.unstructured) note(notes, 'Unstructured final output is shown literally; its claims and freshness were not machine-validated.');
+  result.modelStatus = modelStatus || 'UNSPECIFIED';
+  result.status = modelStatus;
+  let complete = false;
+  try {
+    const frame = expected ?? validateSnapshot(snapshotView(result.snapshot));
+    if (prUrl && String(result.snapshot?.prId) !== new URL(prUrl).pathname.split('/').filter(Boolean).at(-1)) throw new Error('Final snapshot PR ID does not match the requested URL.');
+    const assessed = finalEnvelope({ status: modelStatus, snapshot: snapshotView(result.snapshot), currentHead: result.currentHead, currentBase: result.currentBase,
+      report: result.report || 'No separate overview supplied.', newFindings: result.newFindings.map(findingView),
+      dispositions: result.dispositions.map(row => ({ ...select(row, Object.keys(disposition.properties)),
+        ...(row.verifiedFinding ? { verifiedFinding: findingView(row.verifiedFinding) } : {}) })) }, frame, originals);
+    complete = assessed.status === 'COMPLETE';
+    result.status = assessed.status;
+  } catch (error) { note(notes, `Final review limitation: ${error.message}`); }
+  const frame = expected ?? result.snapshot;
+  const changed = ['Head', 'Base'].some(side => sha(result[`current${side}`]) && sha(frame?.[side.toLowerCase()]) && result[`current${side}`].toLowerCase() !== frame[side.toLowerCase()].toLowerCase());
+  if (changed) note(notes, 'Reported current PR versions differ from the reviewed snapshot. This report is stale.');
+  result.status = changed || modelStatus === 'STALE' ? 'STALE' : complete && !source.unstructured && !notes.length ? 'COMPLETE' : 'PARTIAL';
+  result.reviewWarnings = notes;
+  result.contractComplete = result.status === 'COMPLETE';
   return result;
 }

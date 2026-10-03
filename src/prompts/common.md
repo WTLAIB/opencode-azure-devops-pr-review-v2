@@ -210,17 +210,19 @@ solely for an unusual trigger or test fixture. Labels measure impact, not confid
 
 ## Output
 
-Produce the complete envelope described by your role, as one JSON object following the Output transport instructions. Write intermediate reviews in English. The verifier uses outputLanguage for all human-readable structured descriptions and its brief report; the runtime renders their details. Keep JSON keys, status values, finding IDs, code identifiers, and source quotes unchanged. Provide checkable conclusions, evidence, counterevidence, and recommendations, not private reasoning traces.
+Prefer the role's JSON envelope. Write intermediate reviews in English. The
+verifier uses outputLanguage for human-readable findings and its report. Keep
+code identifiers and source quotes literal. Provide checkable conclusions,
+evidence, counterevidence and recommendations, not private reasoning traces.
 
-The finding fields are id, summary, evidence, counterevidence, location, severity
-and suggestion. Initial findings and newFindings use these seven keys; only
-initial candidates may omit location as described above. Final confirmed rows
-add reason as their eighth required key. Follow the role's category/envelope
-contract, not a seven-key limit on confirmed rows or disposition categories.
-Copy keys literally, without surrounding spaces or undocumented fields. Put
-source notes in evidence and limitations in the appropriate existing field;
-do not add evidence_note, quality scores or placeholder fields.
-Check unique role-prefixed IDs and nonempty required values. This formatting
-check cannot supply missing evidence or make an incomplete review COMPLETE.
+Use id, summary, evidence, counterevidence, location, severity and suggestion
+for findings; confirmed final rows also include reason. Keep stable unique IDs
+so the verifier can account for each observation. Put source notes in evidence
+and explain unavailable checks honestly. Never invent details to fill a field.
 
-If you cannot meet the required output contract, do not rerun, switch models, or repair the workflow yourself. The plugin will retain the session and mark the run incomplete.
+Return the useful review even when coverage, a field or formatting is imperfect.
+Initial PARTIAL observations and literal review text can still reach the verifier;
+missing final decisions remain visibly unreviewed. Do not replace substantive
+results with an apology, status-only acknowledgment or output-contract complaint.
+The runtime handles formatting and presentation. Do not rerun the workflow,
+switch models, or spend additional requests rewriting punctuation.

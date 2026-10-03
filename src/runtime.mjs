@@ -23,7 +23,7 @@ import {
   finalSubmissionIssues, finalResubmissionPlan, checkFinalResubmission,
   parseUniqueJSON, parseJSONReport, parseReviewJSONReport,
   normalizeFindingFormat, stageFormat, parseReviewRequest, checkEnvelope,
-  initialEnvelope, mergeInitialSnapshots, finalEnvelope,
+  readReviewOutput, acceptInitialReview, selectReviewSnapshot, acceptFinalReview,
 } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import {
@@ -280,6 +280,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     try { return await stageAttempt(run, role, payload, validate); }
     catch (error) {
       const spec = ROLES[role];
+      // Review recovery is local; standalone source readiness retains its
+      // optional status amendment. Do not request a model to fix review format.
+      if (['initial', 'final'].includes(spec?.format)) throw error;
       /** @type {FailedSubmission|undefined} */
       const failed = error?.submission;
       if (!state.settings.outputRetries || !spec || spec.comment || !failed?.completedTools || !run.active ||
@@ -408,16 +411,20 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (!g.messages || !g.calls) throw new Error('Required V2 prompt/context hooks were not observed; review cannot be accepted.');
       record.completedTools = g.completedTools.size;
       if (retryOf) envelope = parseJSONReport(answer);
-      else ({ envelope, corrections: syntaxCorrections } = parseReviewJSONReport(answer, role));
+      else ({ envelope, corrections: syntaxCorrections } = readReviewOutput(answer, role));
       record.outputCharacters = JSON.stringify(envelope).length;
       if (retryKind === 'final' && retryOf && (g.repairToolAttempts || g.repairRequestRejected)) throw new Error('Final resubmission attempted forbidden tools or an additional model request.');
       validatingOutput = true;
       finalResubmission = answer.info?.role === 'assistant' && answer.info?.sessionID === made.id &&
         !['length', 'content-filter', 'error', 'cancelled'].includes(answer.info?.finish);
-      prepared = retryOf ? { envelope, corrections: [] } : normalizeFindingFormat(envelope, role);
+      // Review quality gaps are reported by the review adapters, not retried or
+      // treated as execution failure. Other commands retain their strict path.
+      prepared = retryOf || ['initial', 'final'].includes(spec.format)
+        ? { envelope, corrections: [] } : normalizeFindingFormat(envelope, role);
       prepared.corrections = [...syntaxCorrections, ...prepared.corrections];
       const result = validate(prepared.envelope, record);
       if (prepared.corrections.length) record.outputFormatCorrections = prepared.corrections;
+      if (result.reviewWarnings?.length) record.reviewWarnings = result.reviewWarnings;
       if (spec.format === 'initial') {
         const pending = result.findings.filter(finding => !Object.hasOwn(finding, 'location')).map(finding => finding.id);
         if (pending.length) record.pendingLocations = pending;
@@ -432,6 +439,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (run.controller.signal.aborted) error = abortError(run.controller.signal);
       record.status = 'FAILED';
       record.error = errorText(error);
+      // Only an admitted stage failure is recoverable by the remaining review
+      // roles. Configuration/identity failures before admission stop the run.
+      if (error instanceof Error) error.reviewStageFailed = true;
       if (syntaxCorrections.length) record.rejectedOutputFormatCorrections = prepared?.corrections ?? syntaxCorrections;
       if (spec.format === 'final' && validatingOutput) {
         record.validationErrors = finalSubmissionIssues(envelope);
@@ -624,38 +634,41 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       run.phase = 'initial reviews';
       const candidates = initialRoles(run.profile);
       const first = await Promise.allSettled(candidates.map(async role => {
-        try {
-          const result = await stage(run, role, request,
-            result => initialEnvelope(result, null, ROLES[role].prefix, request.prUrl));
-          if (result.status !== 'COMPLETE') throw new Error('An initial reviewer reported PARTIAL; final verification was not started.');
-          return result;
-        } catch (error) {
-          // A failed initial cannot reach verification. Revoke its sibling now,
-          // including when the sibling's SDK promise never settles.
-          void abortRun(run, `Initial review incomplete: ${errorText(error)}`, 'INCOMPLETE');
+        try { return await stage(run, role, request, result => acceptInitialReview(result, ROLES[role].prefix, request.prUrl)); }
+        catch (error) {
+          if (!error?.reviewStageFailed) void abortRun(run, errorText(error), 'INCOMPLETE');
           throw error;
         }
       }));
-      const failed = first.find(r => r.status === 'rejected');
-      if (failed) throw new Error(`Initial review incomplete: ${errorText(failed.reason)}`);
-      const reviews = first.map(r => r.value);
-      if (reviews.some(r => r.status !== 'COMPLETE')) throw new Error('At least one initial reviewer reported PARTIAL; final verification was not started.');
-      const snapshot = mergeInitialSnapshots(reviews);
-      const packet = { ...request, snapshot };
+      if (!run.active || run.controller.signal.aborted) throw abortError(run.controller.signal);
+      const reviews = first.map((item, index) => item.status === 'fulfilled' ? item.value : {
+        status: 'PARTIAL', snapshot: null, coverage: { files: [], gaps: ['This initial reviewer did not return an accepted response.'] },
+        findings: [], report: `Runtime notice: ${candidates[index]} failed. No observations from that failed execution were accepted.`,
+        reviewWarnings: [`Initial execution unavailable: ${errorText(item.reason)}`], contractComplete: false,
+      });
+      const { snapshot, warnings: snapshotWarnings } = selectReviewSnapshot(reviews, request.prUrl);
+      const packet = { ...request, snapshot, reviewWarnings: snapshotWarnings };
       const allFindings = reviews.flatMap(r => r.findings);
       run.phase = 'final verification';
       const pendingLocations = allFindings.filter(finding => !Object.hasOwn(finding, 'location')).map(finding => finding.id);
       const expectedFindingIds = allFindings.map(finding => finding.id);
-      const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, outputLanguage: state.settings.outputLanguage }, result => finalEnvelope(result, snapshot, allFindings));
+      const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, outputLanguage: state.settings.outputLanguage }, result => acceptFinalReview(result, snapshot, allFindings, request.prUrl));
+      const initialWarnings = reviews.flatMap((review, index) => review.reviewWarnings.map(message => `${candidates[index]}: ${message}`));
+      const presented = { ...verified, reviewWarnings: [...new Set([...snapshotWarnings, ...initialWarnings, ...verified.reviewWarnings])],
+        initialObservations: verified.status === 'COMPLETE' ? [] : allFindings,
+        unstructuredInitials: verified.status === 'COMPLETE' ? [] : reviews.filter(review => review.unstructured).map(review => review.report) };
+      const publicationEligible = verified.contractComplete && reviews.every(review => review.contractComplete) && !snapshotWarnings.length;
+      if (!publicationEligible) run.publicationUnavailable = true;
       const provenance = reviewProvenance(run);
-      return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(verified, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
-        review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(verified), attempts: new Map(), plan: null } };
+      return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
+        review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, publicationEligible, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(verified), attempts: new Map(), plan: null } };
     });
     // A cancelled presentation must not leave a publishable "completed" review.
-    if (status === 'COMPLETE') {
+    if (status === 'COMPLETE' && review?.publicationEligible && !run.abortUnconfirmed) {
       completed.set(run.id, review);
       if (completed.size > 20) completed.delete(completed.keys().next().value);
     }
+    else if (review) run.publicationUnavailable = true;
     setCommandResult(output, renderReceipt(run, report, status, failure, state.settings));
   }
   // V2 registers domain transforms/hooks; no V1 hook object or config mutation.

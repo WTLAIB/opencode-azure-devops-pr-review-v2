@@ -84,9 +84,14 @@ const provider = createServer(async (request, response) => {
   const priorToolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
   const callTool = toolName && (forced ? priorToolResults < 2 : !hasResult);
   const args = shellControl ? { command: `touch ${JSON.stringify(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' } : forced === 'shell' ? { command: `touch ${join(fixture, 'NATIVE_EXECUTED')}`, description: 'Fixture forbidden shell' } : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` } : { value: 'fixture-source' };
+  let content = JSON.stringify(final);
+  if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
+  if (userContext === 'smoke-prose' && (parsed.model === 'functional' || payload.reviews)) {
+    content = payload.reviews ? 'Useful final prose with an unresolved evidence gap.' : 'Useful initial prose about a reachable fixture issue.';
+  }
   const delta = callTool
     ? { tool_calls: [{ index: 0, id: forced ? 'call_fixture_forbidden_' + (priorToolResults + 1) : 'call_fixture_read', type: 'function', function: { name: toolName, arguments: JSON.stringify(args) } }] }
-    : { content: JSON.stringify(final) };
+    : { content };
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   const emit = value => response.write(`data: ${JSON.stringify(value)}\n\n`);
   emit({ id: 'chatcmpl_fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', ...delta }, finish_reason: null }] });
@@ -260,6 +265,11 @@ try {
   };
   await invokeReview('pr-check', 'smoke-check', /\] READY/);
   await invokeReview('pr-review', 'smoke-review', /\] COMPLETE/);
+  assert.match(workflowReceipts.at(-1).receipt, /output-format-corrections=1/);
+  await invokeReview('pr-review', 'smoke-prose', /\] PARTIAL/);
+  assert.match(workflowReceipts.at(-1).receipt, /Useful final prose/);
+  assert.match(workflowReceipts.at(-1).receipt, /Useful initial prose/);
+  assert.match(workflowReceipts.at(-1).receipt, /UNREVIEWED/);
   await invokeReview('pr-check', 'smoke-check force-shell', /\] INCOMPLETE/);
   await invokeReview('pr-check', 'smoke-check force-execute', /\] INCOMPLETE/);
   assert.ok(workflowReceipts.filter(row => row.suffix.includes('force-')).every(row => row.receipt.includes('blocked-native-tools=2')));
@@ -279,12 +289,12 @@ try {
   assert.equal(requests.length, beforeCancel + 1, 'Manual cancellation must not restart the fake provider.');
   workflowReceipts.push({ command: 'pr-check + pr-stop', suffix: 'hang-smoke', receipt: cancellationReceipt });
   const mcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(mcpCalls.length, 5, 'Exactly one helper, one check, and three review stage MCP reads are expected.');
+  assert.equal(mcpCalls.length, 8, 'Exactly one helper, one check, and six review stage MCP reads are expected.');
   for (const call of mcpCalls) {
     assert.equal(call.name, 'read_fixture');
     assert.deepEqual(call.arguments, { value: 'fixture-source' });
   }
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 23);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {
@@ -316,7 +326,7 @@ try {
   }
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
-  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 5);
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 8);
   console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();

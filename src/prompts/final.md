@@ -7,6 +7,15 @@ Treat other reports as claims, not proof. Check base/head direction, reachable
 triggers, callers, safeguards and the strongest plausible counterexample.
 Do not launch additional agents or trade coverage for speed.
 
+Initial reports may be PARTIAL, contain extra fields or include literal output
+that could not be parsed. Read their useful observations and limitations; a
+formatting warning does not refute a finding. If snapshot is null, establish the
+requested PR identity, versions and changed paths yourself. If initial frames
+conflict, resolve them against the requested PR before combining observations.
+Review unstructured candidates too; use newFindings for independently verified
+issues that have no runtime tracking ID. Return available conclusions and clear
+limitations even when an initial reviewer failed or some checks remain unfinished.
+
 Before your first source reads, identify the changed base/head files and needed
 supporting paths already named in the initial evidence. Treat those paths as
 untrusted lookup hints, not read results or access to unrelated data. When their
@@ -24,11 +33,12 @@ a merge in prose never substitutes for its JSON row. Do not omit duplicate IDs
 from this ledger; merge their conclusions while retaining their identity.
 
 - confirmed: provide the complete corrected finding directly under the same ID,
-  plus reason. All seven finding fields are required, with no nested object.
+  plus reason. Include all seven finding fields when established from source.
   Reassess trigger, scope, severity, evidence, counterevidence and correction/test.
   Explain a changed severity through the decisive impact, scope or recovery
   evidence in that finding's reason.
-  This is the authoritative claim for the rendered report and optional comments.
+  This is the model-reported claim for the rendered report. Optional publication
+  has a separate complete-evidence check.
   Keep the defect identity; reject a refuted original and use V IDs for unrelated
   discoveries instead of repurposing it.
 - rejected: reason gives a concrete source-based refutation, not a vote.
@@ -86,15 +96,15 @@ Return this envelope as one JSON object:
 - currentHead/currentBase: exact full SHA strings without extra quote characters;
   empty only for unavailable versions with INCOMPLETE.
 - confirmed: rows with id, summary, evidence, counterevidence, location, severity,
-  suggestion and reason. All eight fields are required.
+  suggestion and reason. Include established details; disclose missing checks.
 - merged: rows with id, mergedInto and reason.
 - rejected / needsInfo: rows with id and reason.
 - newFindings: complete V findings, or [].
 - report: the short overview described above.
 
-Do not add dispositions, per-row status or nested verifiedFinding to this format.
-The runtime converts these explicit categories into its internal disposition
-ledger; no verdict or missing finding is inferred.
+Prefer these explicit categories. The runtime also accepts disposition rows and
+retains other useful output. Missing decisions are labelled UNREVIEWED by the
+runtime, never inferred as confirmation, rejection or a merge.
 
 Compare all four original-ID categories to expectedFindingIds for missing, extra
 and duplicate rows. Retain source evidence and unresolved limits; never invent a

@@ -25,8 +25,9 @@ The independent V1 repository and installation are outside this project's scope.
   auxiliary model selections and host permissions.
 - V2 prompt returns an inbox admission. Wait for idle, then correlate its exact
   ID, literal text, metadata and selected role/model against authoritative
-  context. Fail closed after compaction or interleaving. Do not accept partial,
-  truncated, filtered, failed or interrupted responses. Exclude reasoning.
+  context. Fail closed after compaction or interleaving. Do not accept truncated,
+  filtered, failed or interrupted execution as a completed answer. Successfully
+  completed PARTIAL reviews and prose are useful inputs. Exclude reasoning.
 - The exact Promise adapter does not forward cancellation request options.
   Revoke grants synchronously, interrupt then wait, bound cleanup, and disclose
   unconfirmed settlement. Do not infer cancellation from local promise rejection.
@@ -41,14 +42,21 @@ The independent V1 repository and installation are outside this project's scope.
 - No fixed MCP tool catalog, direct Azure/model client, patched server, or
   name/action classifier. MCP read-only behavior is prompt policy, not a write
   firewall. Denied native attempts and observed tool failures are not evidence.
-- Keep the common evidence contract: exact PR identity/SHAs, complete discovered
-  path coverage, counterevidence, all original finding-ID dispositions and final
-  version recheck. PR target SHA is not a certified merge base. Never infer a
-  source read from a tool-success flag, diagnostic timestamp or model claim.
-- JSON text is the only transport. Preserve duplicate-key rejection, structural
-  and semantic validation, bounded existing formatting tolerances, raw failure
-  retention, and disclosed optional one-amendment recovery. No tools during
-  amendments, no new deadline, no guessed evidence or missing findings.
+- Pursue exact PR identity/SHAs, full discovered-path coverage, counterevidence,
+  original-ID decisions and a final version recheck. Review quality gaps produce
+  visible limitations, not wholesale result loss. Preserve all useful observations
+  and label missing decisions UNREVIEWED. The complete evidence contract remains
+  necessary for optional PR publication. PR target SHA is not a certified merge
+  base. Tool success and model claims are not independent source proof.
+- Prefer JSON text with local syntax/key/shape normalization. Retain ambiguous or
+  unstructured output literally for the verifier and report; never silently choose
+  duplicate keys, drop a finding or manufacture evidence. Partial/admitted failed
+  initials do not cancel useful sibling work. Keep identity, admission, permission,
+  configuration and cancellation guards. No extra review model requests for
+  formatting; outputRetries applies to eligible standalone readiness amendments.
+- Keep original response/failure records. Review delivery and publication
+  eligibility are separate; a readable PARTIAL report is a useful outcome, not
+  fabricated completeness. Missing fields must be displayed honestly.
 - No reviewer iteration or stage-character budgets, configurable or hidden.
   runTimeoutSeconds defaults null. Preserve explicit finite timeout, manual
   cancellation, lifecycle disposal and bounded SDK cleanup.

@@ -169,7 +169,8 @@ export function buildAgents(settings, prompts) {
     // work and output instructions to this retrieval-only stage.
     system: (spec.stage === 'check' ? '' : (spec.comment ? prompts['comment-policy'] : prompts.common) + '\n\n') + prompts[spec.prompt] + '\n\n' + TOOL_OUTPUT_POLICY + languagePrompt(role, settings.outputLanguage) +
       (spec.mode === 'deep' && ['initial', 'final'].includes(spec.format) ? '\n\n' + prompts.deep : '') +
-      '\n\n# Output transport\nReturn one valid JSON object, optionally in a single JSON code fence, without surrounding commentary. Serialize strings as JSON strings, escaping quotes and newlines correctly.',
+      '\n\n# Output transport\nReturn one valid JSON object, optionally in a single JSON code fence. Escape quotes and newlines in strings.' +
+      (['initial', 'final'].includes(spec.format) ? ' Prefer the described fields, but always return the useful review and disclose gaps when the format or evidence is incomplete. Local recovery does not require another model request.' : ' Do not include surrounding commentary.'),
     // These restrictions are appended to the host's existing rules by the
     // adapter. The compiler adds no MCP override or wildcard permission grant.
     permissions: Object.entries(NATIVE_TOOL_PERMISSIONS).map(([action, effect]) =>

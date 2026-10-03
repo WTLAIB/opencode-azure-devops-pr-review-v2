@@ -35,20 +35,39 @@ const reportVocabulary = {
 function reportWords(language) {
   return reportVocabulary[words(language) === vocabulary.tw ? 'tw' : words(language) === vocabulary.cn ? 'cn' : 'en'];
 }
-function renderFinding(finding, w) {
-  return `### ${finding.id} — ${finding.summary} (${finding.severity})\n\n**${w.location}:** ${finding.location ?? '—'}\n\n**${w.evidence}**\n\n${finding.evidence}\n\n**${w.counter}**\n\n${finding.counterevidence}\n\n**${w.suggestion}**\n\n${finding.suggestion}`;
+const findingFields = ['id', 'summary', 'severity', 'location', 'evidence', 'counterevidence', 'suggestion'];
+function extraOutput(value, known) {
+  const entries = Object.entries(value ?? {}).filter(([key, content]) => !known.includes(key) && content !== '' && content !== null);
+  if (!entries.length) return '';
+  const text = JSON.stringify(Object.fromEntries(entries), null, 2);
+  let length = 3;
+  for (const match of text.matchAll(/`+/g)) length = Math.max(length, match[0].length + 1);
+  const fence = '`'.repeat(length);
+  return `\n\n${fence}json\n${text}\n${fence}`;
+}
+function renderFinding(finding = {}, w) {
+  finding ??= {};
+  return `### ${finding.id || '—'} — ${finding.summary || w.none} (${finding.severity || '—'})\n\n**${w.location}:** ${finding.location || '—'}\n\n**${w.evidence}**\n\n${finding.evidence || w.none}\n\n**${w.counter}**\n\n${finding.counterevidence || w.none}\n\n**${w.suggestion}**\n\n${finding.suggestion || w.none}${extraOutput(finding, findingFields)}`;
 }
 function renderSnapshot(snapshot) {
-  return `${snapshot.repository} · PR #${snapshot.prId} · ${snapshot.scope}\n\n- base: \`${snapshot.base}\`\n- head: \`${snapshot.head}\`\n- files: ${snapshot.files.join(', ')}`;
+  if (!snapshot) return 'Snapshot not established.';
+  return `${snapshot.repository || '—'} · PR #${snapshot.prId || '—'} · ${snapshot.scope || '—'}\n\n- base: \`${snapshot.base || ''}\`\n- head: \`${snapshot.head || ''}\`\n- files: ${Array.isArray(snapshot.files) ? snapshot.files.map(value => typeof value === 'string' ? value : JSON.stringify(value)).join(', ') : '—'}${extraOutput(snapshot, ['repository', 'prId', 'scope', 'base', 'head', 'files'])}`;
 }
 export function renderFinalReport(final, language) {
   const w = reportWords(language);
+  const findingTitle = final.status === 'COMPLETE' ? w.findings : words(language) === vocabulary.tw
+    ? '模型提出的問題（驗證有限）' : words(language) === vocabulary.cn ? '模型提出的问题（验证有限）' : 'Model-reported findings (verification limited)';
   const findings = [...final.dispositions.filter(d => d.status === 'CONFIRMED').map(d => d.verifiedFinding), ...(final.newFindings ?? [])];
-  const decisions = final.dispositions.map(d => `- **${d.id} — ${d.status}${d.mergedInto ? ' → ' + d.mergedInto : ''}:** ${d.reason}`).join('\n');
-  return `${final.status !== 'COMPLETE' ? '**' + final.status + ': ' + w.partial + '**\n\n' : ''}## ${w.scope}\n\n${renderSnapshot(final.snapshot)}\n\n- currentHead: \`${final.currentHead ?? ''}\`\n- currentBase: \`${final.currentBase ?? ''}\`\n\n## ${w.overview}\n\n${final.report}\n\n## ${w.findings}\n\n${findings.map(f => renderFinding(f, w)).join('\n\n') || w.none}\n\n## ${w.decisions}\n\n${decisions || w.none}`;
+  const decisions = final.dispositions.map(d => `- **${d.id || '—'} — ${d.status}${d.mergedInto ? ' → ' + d.mergedInto : ''}:** ${d.reason || w.none}${extraOutput(d, ['id', 'status', 'mergedInto', 'reason', 'verifiedFinding'])}`).join('\n');
+  const limitations = (final.reviewWarnings ?? []).map(message => `- ${message}`).join('\n');
+  const pending = [...(final.initialObservations ?? final.unreviewedFindings ?? []).map(f => renderFinding(f, w)), ...(final.unstructuredInitials ?? [])].join('\n\n');
+  const referenceTitle = words(language) === vocabulary.tw ? '初審觀察（參考資料，非最終結論）' : words(language) === vocabulary.cn
+    ? '初审观察（参考资料，非最终结论）' : 'Initial observations (reference only, not final conclusions)';
+  const extras = extraOutput(final, ['status', 'modelStatus', 'snapshot', 'currentHead', 'currentBase', 'report', 'confirmed', 'merged', 'rejected', 'needsInfo', 'dispositions', 'newFindings', 'unreviewedFindings', 'reviewWarnings', 'contractComplete', 'unstructured', 'unstructuredInitials', 'initialObservations']);
+  return `${final.status !== 'COMPLETE' ? '**' + final.status + ': ' + w.partial + '**\n\n' : ''}## ${w.scope}\n\n${renderSnapshot(final.snapshot)}\n\n- currentHead: \`${final.currentHead ?? ''}\`\n- currentBase: \`${final.currentBase ?? ''}\`\n\n## ${w.overview}\n\n${final.report || w.none}${limitations ? '\n\n' + limitations : ''}${extras}\n\n## ${findingTitle}\n\n${findings.map(f => renderFinding(f, w)).join('\n\n') || w.none}\n\n## ${w.decisions}\n\n${decisions || w.none}${pending ? '\n\n## ' + referenceTitle + '\n\n' + pending : ''}`;
 }
 
-/** Only already validated initial results are shown. Failed final claims never
+/** Completed initial responses are retained, with their limitations. Failed final claims never
  * become accepted findings, and no draft enters the completed-review cache. */
 export function renderIncompleteDraft(stages, failure, language) {
   const initials = stages.filter(s => ROLES[s.role]?.format === 'initial' && s.result);
@@ -71,6 +90,7 @@ function renderStageReceipt(stage) {
     ['truncated-tool-results', stage.toolObservations?.truncated],
     ['output-format-corrections', stage.outputFormatCorrections?.length],
     ['pending-locations', stage.pendingLocations?.length],
+    ['review-limitations', stage.reviewWarnings?.length],
   ];
   for (const [label, count] of counters) if (count) fields.push(`${label}=${count}`);
   if (stage.error) fields.push(`error=${stage.error}`);
@@ -80,17 +100,18 @@ function renderStageReceipt(stage) {
 export function renderReceipt(run, report, status, error, settings) {
   const rows = run.stages.map(renderStageReceipt).join('\n');
   let body = `[AZPR ${run.id}] ${status}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}\n`;
-  if (run.stages.some(s => s.outputFormatCorrections?.length)) body += '\nOutput format notice: narrowly allowed trailing commas, finding-key whitespace, empty/null unknown finding fields, or identical new-finding disposition duplicates were normalized locally before full validation. Required values were unchanged; no model request was added. Inspect outputFormatCorrections and the original JSON response.\n';
-  if (run.stages.some(s => s.pendingLocations?.length)) body += '\nPending location notice: initial candidates omitted locations and went unchanged to the verifier. No location was guessed. Final confirmations still require locations; unresolved candidates must remain NEEDS_INFO and cannot be published. This notice does not claim they were resolved.\n';
+  if (run.stages.some(s => s.outputFormatCorrections?.length)) body += '\nOutput format notice: review syntax was normalized locally or unstructured review text was retained. No model request was added for formatting. Inspect outputFormatCorrections, review limitations and the original response. Recovery does not establish source accuracy.\n';
+  if (run.publicationUnavailable) body += '\nThis review retains useful results with limitations. Automatic PR comment preparation is unavailable because the complete publication evidence contract was not established.\n';
+  if (run.stages.some(s => s.pendingLocations?.length)) body += '\nPending location notice: initial candidates omitted locations and were passed to the verifier. No location was guessed. Missing locations do not discard the review; findings without complete publication evidence cannot be posted. This notice does not claim they were resolved.\n';
   if (run.stages.some(s => s.retryKind === 'location')) body += '\nLocation amendment notice: the same reviewer received one request for missing locations from retained source context, with tools denied and existing fields immutable. Full revalidation is required. This is model-authored recovery, not independent location proof; inspect both submissions and their statuses.\n';
   if (run.stages.some(s => s.retryKind === 'disposition')) body += '\nDisposition amendment notice: the same verifier was asked only for missing MERGED rows pointing to already confirmed findings, with tools denied and existing fields immutable. Full revalidation and the one shared amendment allowance apply. The original failure remains recorded; this is model-authored bookkeeping, not independent source proof.\n';
   if (run.stages.some(s => s.retryKind === 'final')) body += '\nFinal resubmission notice: the same verifier received at most one additional request to replace invalid final content from retained context, with tools denied and the original deadline unchanged. Evidence and decisions may change; snapshot and current versions stay frozen. Full validation is required. Inspect both submissions; the original failure remains recorded. This is model-authored content recovery, not independent source proof.\n';
-  if (run.draft) body += '\nIncomplete draft notice: validated initial observations remain unconfirmed because final adjudication did not complete. This draft is not a completed review or input for PR comments. Failed final claims are not accepted findings.\n';
+  if (run.draft) body += '\nIncomplete draft notice: available initial observations remain unconfirmed because final adjudication did not complete. This draft is not a completed review or input for PR comments. Failed final claims are not accepted findings.\n';
   if (run.stages.length) body += '\nTool completion does not prove source validity. Error/truncation counters neither audit content nor establish recovered reads; inspect the original tool results and evidence.\n';
   body += renderDiagnosticNotices(run);
   body += run.mode === 'check'
     ? '\nStage status: READY means source access is ready; it does not approve the PR.\n'
-    : '\nStage status: initial/verifier COMPLETE means the stage passed its contracts; it does not approve the PR.\n';
+    : '\nReview status: COMPLETE means a usable structured verifier result was returned. PARTIAL retains available observations and limitations. Initial gaps can proceed to verification. Neither status proves factual completeness or approves the PR.\n';
   if (error && run.stages.some(s => s.status === 'FAILED')) body += '\nInspect the failed child session by its session ID through the host UI or private diagnostics. Preserve the original JSON and failure; sending another prompt is a new model request, not read-only inspection.\n';
   if (run.userContext) body += '\nSupplementary context applies to this command only; it is not a repository-wide rule.\n';
   if (report) {
@@ -98,7 +119,7 @@ export function renderReceipt(run, report, status, error, settings) {
     body += last?.reportQueued
       ? `\nReport delivery: synthetic report queued to session=${last.sessionID}, with no presentation model request. Queue acknowledgement does not certify UI display.\n`
       : '\nReport delivery: no appended synthetic report was confirmed. Inspect the original JSON in the review session or private report/draft diagnostics when available.\n';
-    if (settings.returnReport === 'full') {
+    if (settings.returnReport === 'full' || run.draft || ['PARTIAL', 'INCOMPLETE', 'STALE'].includes(status)) {
       body += `\nReport data:\n<azpr_report_data>\n${report.replaceAll('</azpr_report_data>', '&lt;/azpr_report_data&gt;')}\n</azpr_report_data>\n`;
     } else {
       body += '\nNo report body is enclosed in this receipt. Inspect the queued report or saved diagnostic Markdown; original model JSON is separate from the rendered report. Do not resume a reviewer session to retrieve it.\n';

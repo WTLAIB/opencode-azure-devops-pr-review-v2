@@ -317,7 +317,10 @@ for(const fault of ['snapshot','partial','missing-id','stale']) test(`${fault} c
     if(fault==='partial'&&role.endsWith('-risk')){result.status='PARTIAL';result.coverage.gaps=['Source unavailable.'];}
     if(fault==='missing-id'&&role.endsWith('-verifier'))result.confirmed=result.confirmed.slice(0,1);
     if(fault==='stale'&&role.endsWith('-verifier'))result.currentHead='c'.repeat(40);return result;
-  }}),receipt=await f.command();assert.doesNotMatch(receipt.split('\n')[0],/] COMPLETE$/);
+  }}),receipt=await f.command();
+  assert.equal(f.prompts().length,3,'Initial quality gaps still reach the verifier.');
+  if (fault==='missing-id'||fault==='stale') assert.doesNotMatch(receipt.split('\n')[0],/] COMPLETE$/);
+  assert.match(receipt,/publication evidence contract/);
   const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];await assert.rejects(f.command('pr-comment',id),/unavailable/);
 });
 for(const stop of ['cancel','dispose']) test(`${stop} revokes pending work without aborting the origin`,{timeout:3000},async t=>{
@@ -327,26 +330,33 @@ for(const stop of ['cancel','dispose']) test(`${stop} revokes pending work witho
   const receipt=await running;release.resolve();assert.match(receipt,/] CANCELLED/);
   assert.ok(f.calls.some(c=>c.kind==='interrupt'));assert.ok(f.calls.filter(c=>c.kind==='interrupt').every(c=>c.sessionID!=='ordinary'&&c.resume===false));
 });
-test('initial failure revokes a sibling whose work never settles',{timeout:3000},async t=>{
-  const both=deferred();let count=0;
-  const f=await fixture(t,{async during({session}){if(++count===2)both.resolve();await both.promise;if(session.agent.endsWith('-functional'))throw new Error('Provider failed');await new Promise(()=>{});}});
-  assert.match(await f.command(),/] INCOMPLETE/);assert.equal(f.prompts().length,2);assert.ok(f.calls.filter(c=>c.kind==='interrupt').length>=2);
+test('initial execution failure preserves sibling work and reaches independent verification',{timeout:3000},async t=>{
+  const both=deferred(),release=deferred();let count=0;
+  const f=await fixture(t,{async during({session}){
+    if(session.agent.endsWith('-verifier'))return;
+    if(++count===2)both.resolve();await both.promise;
+    if(session.agent.endsWith('-functional'))throw new Error('Provider failed');
+    await release.promise;
+  }});
+  const running=f.command();await both.promise;release.resolve();
+  const receipt=await running;assert.match(receipt,/] COMPLETE/);assert.equal(f.prompts().length,3);
+  const packet=JSON.parse(f.prompts()[2].text);
+  assert.equal(packet.reviews[0].status,'PARTIAL');assert.equal(packet.reviews[0].findings.length,0);
+  assert.equal(packet.reviews[1].findings[0].id,'R-1');assert.match(receipt,/publication evidence contract/);
 });
 test('same-origin lock rejects concurrent commands',async t=>{
   const started=deferred(),release=deferred(),f=await fixture(t,{async during(){started.resolve();await release.promise;}});
   const running=f.command('pr-check');await started.promise;await assert.rejects(f.command(),/already running/);release.resolve();assert.match(await running,/] READY/);
 });
 
-test('PARTIAL initial retains evidence and revokes a sibling that never settles',{timeout:3000},async t=>{
-  const both=deferred();let count=0;
-  const f=await fixture(t,{async during({session}){
-    if(++count===2)both.resolve();await both.promise;
-    if(session.agent.endsWith('-risk'))await new Promise(()=>{});
-  },result({result}){result.status='PARTIAL';result.coverage.gaps=['Fixture source gap.'];return result;}});
-  const receipt=await f.command();assert.match(receipt,/] INCOMPLETE/);assert.equal(f.prompts().length,2);
+test('PARTIAL initial retains evidence and coverage gaps in the verifier handoff',async t=>{
+  const f=await fixture(t,{result({result,role}){if(role.endsWith('-functional')){result.status='PARTIAL';result.coverage.gaps=['Fixture source gap.'];}return result;}});
+  const receipt=await f.command();assert.match(receipt,/] COMPLETE/);assert.equal(f.prompts().length,3);
   const saved=await resultLog(receipt),partial=saved.stages.find(stage=>stage.status==='PARTIAL');
   assert.equal(partial.result.findings[0].id,'F-1');assert.deepEqual(partial.result.coverage.gaps,['Fixture source gap.']);
-  assert.equal(saved.reportKind,'incomplete-draft');assert.ok(f.calls.some(c=>c.kind==='interrupt'));
+  const packet=JSON.parse(f.prompts()[2].text);
+  assert.deepEqual(packet.reviews[0].coverage.gaps,['Fixture source gap.']);
+  assert.equal(saved.reportKind,'report');assert.match(receipt,/publication evidence contract/);
 });
 test('status amendment is one fresh tool-free request with host instructions preserved',async t=>{
   const f=await fixture(t,{settings(s){s.outputRetries=1;},result({packet,result}){if(!packet.operation&&result.status==='READY')result.status='DONE';return result;},
@@ -354,9 +364,20 @@ test('status amendment is one fresh tool-free request with host instructions pre
   const receipt=await f.command('pr-check');assert.match(receipt,/] READY/);assert.equal(f.prompts().length,2);assert.notEqual(f.prompts()[0].sessionID,f.prompts()[1].sessionID);
   assert.equal((await resultLog(receipt)).stages[0].status,'FAILED');
 });
-test('location amendment reuses stopped verifier context and records both attempts',async t=>{
+test('missing final location retains a partial report without another model request',async t=>{
   const f=await fixture(t,{settings(s){s.outputRetries=1;},result({role,packet,result}){if(role.endsWith('-verifier')&&!packet.operation)delete result.confirmed[0].location;return result;}});
-  const receipt=await f.command();assert.match(receipt,/] COMPLETE/);assert.equal(f.prompts().length,4);assert.equal(f.prompts()[2].sessionID,f.prompts()[3].sessionID);assert.match(receipt,/Location amendment notice/);
+  const receipt=await f.command();assert.match(receipt,/] PARTIAL/);assert.equal(f.prompts().length,3);
+  assert.match(receipt,/<azpr_report_data>/);assert.match(receipt,/A reachable fixture branch/);assert.doesNotMatch(receipt,/Location amendment notice/);
+});
+test('a partial final with an incomplete confirmation still shows the original observation', async t => {
+  const initialText='Original observation that must survive an incomplete final row';
+  const f=await fixture(t,{result({result,role}){
+    if(role.endsWith('-functional'))result.findings[0].summary=initialText;
+    if(role.endsWith('-verifier'))result.confirmed[0]={id:'F-1',reason:'Incomplete confirmation'};
+    return result;
+  }});
+  const receipt=await f.command();assert.match(receipt,/] PARTIAL/);assert.ok(receipt.includes(initialText));
+  assert.equal(f.prompts().length,3);
 });
 test('amendments cannot use tools or receive another recovery',async t=>{
   const f=await fixture(t,{settings(s){s.outputRetries=1;},result({packet,result}){if(!packet.operation)result.status='DONE';return result;},async during({packet,invoke,session}){if(packet.operation)await invoke(session.id);}});
@@ -365,6 +386,32 @@ test('amendments cannot use tools or receive another recovery',async t=>{
 test('large evidence survives JSON, verifier handoff and diagnostics without a hidden cap',async t=>{
   const evidence='x'.repeat(2100000),f=await fixture(t,{result({role,packet,result}){if(ROLES[role].format==='initial')result.findings[0].evidence=evidence;if(ROLES[role].format==='final')assert.ok(packet.reviews.every(r=>r.findings[0].evidence===evidence));return result;}});
   const receipt=await f.command();assert.match(receipt,/] COMPLETE/);const result=await resultLog(receipt);assert.ok(result.stages.at(-1).inputCharacters>4000000);assert.equal(result.stages.at(-1).remainingRunMsAtEnd,null);
+});
+test('extra final brace no longer cancels a useful initial review', async t => {
+  const f=await fixture(t,{answer({answer,role}){if(role.endsWith('-functional'))answer.content[0].text+='}';}});
+  const receipt=await f.command();assert.match(receipt,/] COMPLETE/);assert.equal(f.prompts().length,3);
+  const packet=JSON.parse(f.prompts()[2].text);
+  assert.deepEqual(packet.expectedFindingIds,['F-1','R-1']);assert.equal(packet.reviews[0].findings[0].evidence,finding('F-1').evidence);
+  const saved=await resultLog(receipt);
+  assert.equal(saved.stages[0].outputFormatCorrections[0].action,'remove-redundant-closing-delimiter');
+});
+test('unstructured initial and final reviews are delivered without a formatting retry', async t => {
+  const raw='A useful review observation with source context and an unresolved limitation.';
+  const f=await fixture(t,{settings(s){s.outputRetries=1;},answer({answer,role}){
+    if(role.endsWith('-functional')||role.endsWith('-verifier'))answer.content[0].text=raw;
+  }});
+  const receipt=await f.command();assert.match(receipt,/] PARTIAL/);assert.equal(f.prompts().length,3);
+  assert.equal(JSON.parse(f.prompts()[2].text).reviews[0].report,raw);
+  assert.ok(receipt.includes(raw));assert.match(receipt,/<azpr_report_data>/);
+  const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];await assert.rejects(f.command('pr-comment',id),/unavailable/);
+});
+test('both unavailable initial reviews still permit the existing verifier to inspect the PR', async t => {
+  const f=await fixture(t,{async during({session}){if(!session.agent.endsWith('-verifier'))throw new Error('Initial service unavailable');}});
+  const receipt=await f.command();assert.equal(f.prompts().length,3);assert.match(receipt,/] COMPLETE/);
+  const packet=JSON.parse(f.prompts()[2].text);
+  assert.equal(packet.snapshot,null);assert.deepEqual(packet.expectedFindingIds,[]);
+  assert.ok(packet.reviews.every(review=>review.status==='PARTIAL'));
+  assert.match(receipt,/publication evidence contract/);
 });
 test('comment publication requires explicit preview and opt-in, and never retries',async t=>{
   const f=await fixture(t,{settings(s){s.comments.enabled=true;}}),receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];

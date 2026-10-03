@@ -32,8 +32,8 @@ forward from another repository or revision.
 | V2 plugin and commands | Default definition and setup registration, native command invocation, literal text, rejected attachments/mentions, registration cleanup. |
 | Session transport | Independent session identity and model binding, exact prompt admission, idle settlement, final-context correlation, successful text finish, compaction/mutation refusal. |
 | Permissions and grants | Private role/model fingerprints, active command grants, blocked native execution, ordinary-agent preservation, permission inheritance, expiry and cancellation. |
-| Review orchestration | Two concurrent full-scope initial reviews, independent verifier, snapshot consistency, complete original-ID decisions, final source/target recheck. |
-| Output contracts | Strict duplicate-key parsing, valid coverage/evidence, field contracts, disclosed local tolerance, bounded amendments, incomplete/stale results. |
+| Review orchestration | Two concurrent initial reviews, continuation with partial/unavailable inputs, independent verifier, visible frame conflicts and omitted decisions, separate publication eligibility. |
+| Output contracts | Local syntax/key/shape recovery, literal retention of ambiguous/prose output, no silent duplicate-key overwrite or lost findings, readable partial/stale reports, strict settings/checks/comments. |
 | Comments | Same-origin completed review, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
 | Diagnostics | Private output handling, original response and correction records, value-free observations, timing uncertainty, safe path/write behavior. |
 | Installation | V2 package discovery layout, complete manual file list, preserved current settings, old-layout conflicts, rollback/recovery, archival removal, unrelated-file preservation. |
@@ -160,13 +160,14 @@ These checks establish only the behavior observed in that host fixture. A fake
 provider cannot establish real provider schema acceptance, quotas, cost, model
 accuracy, Azure authentication, or MCP response fidelity.
 
-## 2026-10-04 stability acceptance
+## 2026-10-04 stability acceptance (before review-tolerance changes)
 
 The final local suite passed 311/311 offline tests, syntax checks and diff checks.
 Fresh and replacement exact-host fixtures each passed with 21 loopback provider
 requests, five fixture MCP reads, ordinary auxiliary positive controls, and
 private generation/compaction denial before and after restart. The CI workflow
-now includes these fixtures; a remote CI run for this change was not performed.
+included these fixtures. Subsequent [CI for the committed stability change](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/runs/37152458289)
+passed; that historical run does not cover the later review-tolerance changes.
 
 A separately authorized live test used OpenCode 2.0.22, official MCP 2.9.0 with
 resolved Azure SDK 15.1.3, Ubuntu 22.04.5 and the existing three selected models.
@@ -201,6 +202,69 @@ profile used ask only in an isolated installation. Both sandbox repositories wer
 unchanged, test servers stopped, and PR threads remained zero. No PR publication,
 paid-model substitution, host/MCP upgrade, large-PR certification or TUI rendering
 certification is implied by this result.
+
+## 2026-10-04 review-tolerance acceptance
+
+The final local suite passed 350/350 offline tests and syntax checks. Fresh and
+replacement fixtures passed on the exact 2.0.22 host, each with 27 loopback
+provider requests and eight fixture MCP reads. The added cases exercise a
+redundant JSON closing brace and entirely unstructured initial/final review
+text. PARTIAL reports retain both stages' observations and omitted original IDs
+without a formatting model request. Existing native denial, cancellation,
+ordinary-agent and revoked/restarted private-session controls still pass.
+
+Offline regressions cover punctuation and quoting recovery, duplicate-key
+ambiguity, extra fields, missing evidence, repeated IDs, conflicting snapshots,
+omitted decisions, and readable stale/partial results. They also reproduce and
+fix three content-delivery bugs: non-text snapshot paths being silently removed,
+incomplete confirmations hiding original observations, and a null legacy
+`verifiedFinding` crashing report rendering. JSON examples inside prose and
+commentary outside a review fence remain visible. Original failed checks are
+retained privately.
+
+A retained real response with one redundant final `}` was replayed read-only.
+All three findings and their supplied values were recovered unchanged, without
+another model request. Seven retained responses were also replayed: six yielded
+review content, while a genuine provider-error response remained an execution
+failure. These replays establish local recovery for those samples, not a measured
+failure-rate reduction across providers or arbitrary malformed output.
+
+A new maximum-five authorization used three whole live reviews, preserving the
+existing model choices and checking their advertised zero rates before each run:
+
+| Attempt | Outcome | Scope |
+| --- | --- | --- |
+| 1 | COMPLETE, about 1,056 seconds | Successful development snapshot; content-retention fixes were added while it ran. |
+| 2 | COMPLETE, about 390 seconds | A risk reviewer stopped with only a progress statement. That PARTIAL input reached the verifier, which still verified all three defect classes. Publication eligibility stayed disabled. A separate null-rendering regression was fixed while this run was active. |
+| 3 | COMPLETE, about 420 seconds | Final source and isolated installed files matched exactly; all three seeded defect classes found and all six original IDs adjudicated. |
+
+The final run had 15 Commit-selected content reads, all byte-identical to the
+requested Git versions, plus one Branch-selected test-file read whose bytes
+matched both PR commits. That branch request was not an exact-commit read or an
+identical retry of the earlier failure. The verifier independently read the test
+file at the exact head SHA. All four metadata reads matched independent PR
+snapshots; versions stayed unchanged. Raw answers, normalized results, verifier
+handoff and rendered report agreed. All 16 observed provider responses were HTTP
+200, with zero native attempts, output corrections or extra amendment stages.
+
+Eight final-run tool errors remain: five Commit-selector directory queries,
+two explicit missing-path content queries, and one generic test-file content
+error. Their causes must not be collapsed into one MCP failure. The second run
+separately retained one denied shell attempt (`executed: false`); a successful
+workflow does not erase that attempted policy violation.
+
+Review delivery and execution acceptance passed; model/tool-policy and
+presentation quality remains PARTIAL. The final report still overgeneralized
+caller compensation from the changed-file list and repeated findings in its
+overview. An initial reviewer disclosed its branch fallback yet also claimed all
+head reads used the exact SHA. Earlier samples retained a wrong equal-instant
+example and an unsupported permanence claim, with counterexamples kept privately.
+These limits were accepted without further model rounds or new prompt rules.
+
+All three runs left PR threads at zero, preserved the sandbox repositories and
+private settings, and stopped their test servers. The personal plugin installation
+was not replaced; tests used isolated installations. No publication, paid model,
+tool upgrade, broad compatibility or large-PR certification is implied.
 
 ## Authorized environment acceptance
 
@@ -251,9 +315,11 @@ failed evidence. Never retry an uncertain publication automatically.
 ## Report-quality acceptance cases
 
 Assess execution integrity, factual quality, and presentation separately. A
-COMPLETE status establishes the implemented contract, not PR approval or factual
-perfection. Define expected outcomes before changing prompts; inspect existing
-raw evidence before adding instructions when an existing rule was ignored.
+COMPLETE status describes usable structured verifier output, not PR approval or
+factual perfection. PARTIAL is a useful delivered result with limitations; assess
+review content separately from parser recovery and publication eligibility.
+Define expected outcomes before changing prompts; inspect existing raw evidence
+before adding instructions when an existing rule was ignored.
 
 | Case | Acceptance criterion |
 | --- | --- |
