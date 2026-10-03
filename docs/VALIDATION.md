@@ -1,0 +1,233 @@
+# Validation
+
+The target environment is `@opencode/cli@2.0.22`, official
+`@azure-devops/mcp@2.9.0`, and Ubuntu 22.04. This is a V2-only repository.
+Validate the installed package, actual binary, MCP process, resolved dependencies,
+permissions, and model services separately; a package label or passing mock suite
+is not a live compatibility certificate.
+
+The development environment used for this rewrite is Ubuntu 20.04. It cannot
+establish Ubuntu 22.04 acceptance. No live Azure/model review or PR publication
+is implied by the source audit or offline checks. Record any later host smoke
+result with its exact scope instead of promoting it to full service acceptance.
+
+## Offline checks
+
+Run from the repository root with Node.js 22 or later and Python 3:
+
+```sh
+npm run check
+npm test
+git diff --check
+```
+
+No npm install, Python package installation, model request, or Azure connection
+is required for the repository tests. Installer tests use disposable configuration
+directories. Record the actual result and count from the run; do not carry counts
+forward from another repository or revision.
+
+| Area | Required checks |
+| --- | --- |
+| V2 plugin and commands | Default definition and setup registration, native command invocation, literal text, rejected attachments/mentions, registration cleanup. |
+| Session transport | Independent session identity and model binding, exact prompt admission, idle settlement, final-context correlation, successful text finish, compaction/mutation refusal. |
+| Permissions and grants | Private role/model fingerprints, active command grants, blocked native execution, ordinary-agent preservation, permission inheritance, expiry and cancellation. |
+| Review orchestration | Two concurrent full-scope initial reviews, independent verifier, snapshot consistency, complete original-ID decisions, final source/target recheck. |
+| Output contracts | Strict duplicate-key parsing, valid coverage/evidence, field contracts, disclosed local tolerance, bounded amendments, incomplete/stale results. |
+| Comments | Same-origin completed review, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
+| Diagnostics | Private output handling, original response and correction records, value-free observations, timing uncertainty, safe path/write behavior. |
+| Installation | V2 package discovery layout, complete manual file list, preserved current settings, old-layout conflicts, rollback/recovery, archival removal, unrelated-file preservation. |
+
+Check source-only installation without touching an actual configuration:
+
+```sh
+azpr_test_root=$(mktemp -d)
+sh install.sh --config-dir "$azpr_test_root/config"
+sh install.sh --config-dir "$azpr_test_root/config" --replace
+sh uninstall.sh --config-dir "$azpr_test_root/config"
+```
+
+The default example still contains generic model placeholders. Successful file
+installation does not mean the plugin can start a review with those settings.
+For an installation test, compare the eight modules and nine prompts to source,
+check the generated `package.json` export, and verify owner-only settings
+permissions. No top-level loader or Markdown command files should be created.
+The installer must reject a conflicting older integration without moving it.
+
+## Exact-host checks without live models
+
+The optional SDK/transport smoke fixture runs only when explicitly invoked:
+
+```sh
+node tests/host-v2-smoke.mjs /absolute/path/to/opencode-v2-binary
+```
+
+It creates private evidence under `.local/`, isolates host state, and uses a
+loopback fake provider plus local fixture MCP. It is not part of `npm test`.
+On 2026-10-04 the current-source fixture passed against the actual 2.0.22 binary
+on Ubuntu 20.04, with 17 deterministic loopback provider requests and exactly
+five fixture MCP reads. The fixture exercised the installed AZPR runtime and
+its session helpers:
+
+- Native registration, exact literal prompt/context correlation, final text,
+  idle interrupt/wait, and synthetic report queue acknowledgement.
+- `/pr-check` READY and `/pr-review` COMPLETE with both independent initials,
+  the verifier, and complete F-1/R-1 adjudication.
+- A harmless ordinary-agent shell positive control that created its marker.
+  Private review shell and `execute` each received two distinct forced attempts,
+  stopped as INCOMPLETE, and disclosed `blocked-native-tools=2`. No private shell
+  marker was created and the forbidden CodeMode fetch endpoint received no call.
+- A hanging fixture request cancelled through `/pr-stop`, producing CANCELLED
+  without restarting the workflow.
+
+API inspection confirmed that the queued report description retained its full
+text. It did not exercise actual TUI rendering. All spawned processes stopped;
+private evidence from successful and failed fixture attempts was retained.
+This is exact-host integration evidence with deterministic fixtures. It does not
+certify official MCP 2.9.0 connectivity, real model quality, Azure source fidelity,
+PR publication, or Ubuntu 22.04.
+
+Before using real services, exercise the actual V2 binary in a separate temporary
+home/config/data/state/cache environment and a trusted fixture project. Keep the
+ordinary user's environment and installation unchanged. Use the official package
+version requested for validation; record the package version, binary version,
+source revision, OS release, architecture, and relevant runtime versions.
+
+A headless smoke test should establish package discovery, setup, native command
+registration, agent compilation, command argument delivery, and unload cleanup.
+A local fake model provider and fake MCP server can exercise full workflows
+without contacting paid models or Azure. They must remain separate from real
+credentials and use harmless fixture data.
+
+For the exact target, relevant isolation controls include `OPENCODE_CONFIG_DIR`,
+`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `TMPDIR`, and
+`OPENCODE_TEST_HOME`. Disabling project config, model catalog fetching, watchers,
+and optional indexing avoids unrelated environment activity in a disposable
+smoke harness. Verify these switches against the exact binary/source before
+using them. Changing only the installer `--config-dir` is not host isolation.
+
+Test these native permission cases with the unmodified integration:
+
+1. Private reviewers cannot run shell, write/edit/patch, delegation, native web,
+   or CodeMode `execute`. Force calls as well as inspecting exposed schemas.
+   A harmless marker/trace detector must have a separate positive control.
+2. `shellToolPermission: "ask"` never allows shell execution, an approval bypass,
+   or `execute`. Other native restrictions remain active.
+3. The second distinct blocked native attempt in a stage revokes the run. The
+   receipt/debug record discloses the prevented attempts without arguments.
+4. MCP is exposed directly with `codemode: false`; host/account permission rules
+   remain effective. Do not add an MCP wildcard grant just to pass the fixture.
+5. Ordinary development agents and their settings behave as before. Private
+   roles cannot be invoked through normal agent selection or delegation.
+6. Cancellation revokes grants before cleanup. Delayed prompt admission, ignored
+   AbortSignals, failed interrupt, and delayed settlement must not produce a
+   falsely confirmed cancellation or a publishable completed review.
+7. A synthetic report with `resume: false` starts no presentation model request.
+   Verify visibility separately from queue acknowledgement.
+8. Compaction removing the exact input, injected context, model/agent switching,
+   and non-success terminal responses fail closed. Active context is not a full
+   history API; do not weaken correlation to complete a large fixture.
+
+CodeMode denial is necessary because the pinned runtime exposes a `fetch` global
+outside ordinary web-tool permission checks. Inner tool hooks alone cannot make
+that container safe for private reviewers. CodeMode-only resource helpers are
+unavailable; validate that missing direct evidence remains a disclosed gap.
+See [MCP setup](AZURE_MCP.md).
+
+These checks establish only the behavior observed in that host fixture. A fake
+provider cannot establish real provider schema acceptance, quotas, cost, model
+accuracy, Azure authentication, or MCP response fidelity.
+
+## Authorized environment acceptance
+
+Use a separately authorized test repository and PR with known expected findings
+and clean controls. Keep the answer key outside reviewer-visible source and
+instructions. Do not silently change personal model choices, host permissions,
+MCP versions, server code, or the PR to make a run pass.
+
+Before a live run, record privately:
+
+- Exact OpenCode/MCP versions, MCP executable or package path, resolved Azure SDK
+  and Node versions, OS release, and source/installed-file correspondence.
+- The role models and relevant AZPR settings, with no credentials in artifacts
+  intended for publication. Both normal and deep profiles need explicit choices.
+- The existing host MCP configuration and permission semantics, including direct
+  tool exposure through `codemode: false`; do not publish full host configuration.
+- PR/repository identity, source and target SHAs, expected changed paths, seed
+  defects, clean controls, and PR thread count before the run.
+- The specific authorized operation: readiness check, review, preview, or actual
+  publication. One operation is not standing authorization for the others.
+
+An optional `/pr-check` verifies source readiness under its own policy. Normal
+`/pr-review` and `/pr-deep` start their independent initial reviews directly and
+do not inherit that check as proof or a source cache. Use a literal Azure PR URL
+and text context. A small successful PR does not certify a large-company PR or
+all models.
+
+For the review itself, retain original model outputs, parsing/correction records,
+verifier payload, final result, and rendered report. Independently compare actual
+source reads with the designated repository/path/commit content; metadata and
+completed tool states alone do not prove correct bytes. Check each initial
+coverage ledger, the verifier's union of paths, all original finding IDs, exact
+final locations, counterevidence, and both completion-time version reads.
+
+Classify observed errors individually. A Commit-selector directory error, a
+content-read failure, and a Code Search HTTP 400 use different operation paths.
+Preserve an error followed by a successful identical read and disclose the
+recovery; success does not prove a transient cause. For MCP 2.9.0, specifically
+check PR-change pagination, branch-only directory hints, indexed search versions,
+and the exact content selector. See the audited [MCP limitations](AZURE_MCP.md).
+
+Verify no shell/native execution or unexpected publication occurred. Record any
+prevented attempts, output corrections, amendment request, provider error, or
+uncertain cleanup. Confirm PR version/thread state after testing through an
+independent read. Stop test servers and preserve source, private settings, and
+failed evidence. Never retry an uncertain publication automatically.
+
+## Report-quality acceptance cases
+
+Assess execution integrity, factual quality, and presentation separately. A
+COMPLETE status establishes the implemented contract, not PR approval or factual
+perfection. Define expected outcomes before changing prompts; inspect existing
+raw evidence before adding instructions when an existing rule was ignored.
+
+| Case | Acceptance criterion |
+| --- | --- |
+| Reachable defect and clean control | Identify independently known defects; reject guarded, equivalent, or clean changes without inventing an issue. |
+| Numeric state and delta | Distinguish the final value, each operation's change, and total deviation using the actual trace. |
+| Static test analysis | Identify the first predicted failing assertion; never describe unexecuted later assertions as observed failures. |
+| Exact evidence and scope | Keep quotes exact, locations correct, and absence claims limited to inspected paths/versions. A branch listing is not commit-tree proof. |
+| Permanence and recovery | Support permanent impact or recovery instructions with explicit evidence; disclose unknown restoration behavior or deployment scope. |
+| Equal instants across time zones | Recognize equivalent timestamps as the same instant; distinguish ordering of instants from order-preservation of equal-key records. |
+| Cross-file contracts | Read and verify changed call paths and supporting contracts at relevant versions, including contradictory guards. |
+| Severity | Explain concrete affected state, authority, reachability, and recovery; a keyword or fixture label is insufficient. |
+| Complete, concise presentation | Render one full evidence packet per confirmed issue, preserve distinct supported impacts, and adjudicate every original ID without duplicating the report in the overview. |
+| Language and attribution | Apply outputLanguage to final human-facing prose, preserve source/identifiers, and retain the required AI/model disclosure. |
+
+For each case, record pass, fail, or not exercised with the original claim,
+supporting evidence or counterexample, and practical impact. Unsupported
+permanence, incorrect equal-instant reasoning, and repeated summaries remain
+quality failures even when execution passed. Keep factual errors distinct from
+presentation defects and preserve failed samples when comparing revisions.
+
+A publication test additionally requires an exact saved preview, explicit
+`comments.enabled`, explicit `--publish`, same-origin/process state, correct
+threads/locations/body/disclosure, and independently inspected Azure results.
+`MODEL_REPORTED_POSTED` is not independent publication verification. Review
+validation does not authorize this write operation.
+
+## Release evidence and remaining limits
+
+A release report should identify what was run, what passed, what failed, and what
+was not exercised. Keep these categories distinct:
+
+- Offline contract tests and source/package audit.
+- Exact-host discovery and fake-service workflows.
+- Ubuntu 22.04 environment acceptance.
+- Live MCP/provider execution and independent source/version checks.
+- Model factual/presentation quality and, when authorized, publication.
+
+Do not claim the Ubuntu target, large-context behavior, another model, or a newer
+host version has passed without its own evidence. The plugin adds no iteration,
+stage-character, or default whole-command timeout. Finite explicit timeouts and
+manual cancellation remain available. Host compaction, service limits, incomplete
+MCP responses, model mistakes, and provider costs remain real constraints.

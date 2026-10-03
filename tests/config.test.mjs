@@ -1,0 +1,123 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import {
+  BLOCKED_NATIVE_TOOLS, NATIVE_TOOL_PERMISSIONS, PROMPTS, ROLES, buildAgents,
+  validateSettings, statusRepairPrompt, locationRepairPrompt, dispositionRepairPrompt,
+  finalResubmissionPrompt,
+} from '../src/config.mjs';
+
+const example = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
+const schema = JSON.parse(await readFile(new URL('../config/settings.schema.json', import.meta.url), 'utf8'));
+const prompts = Object.fromEntries(await Promise.all(PROMPTS.map(async name =>
+  [name, await readFile(new URL(`../src/prompts/${name}.md`, import.meta.url), 'utf8')])));
+const input = () => ({ ...structuredClone(example), models: {
+  review: { functional: 'provider/family/functional', risk: 'provider/risk', verifier: 'provider/verifier' },
+  deep: { functional: '', risk: '', verifier: '' },
+} });
+
+test('V2 settings reject removed transports, ignored mappings and review limits', () => {
+  for (const key of ['structuredOutput', 'azure', 'steps', 'maxStageCharacters']) {
+    assert.equal(Object.hasOwn(example, key), false, key);
+    assert.equal(Object.hasOwn(schema.properties, key), false, key);
+    assert.throws(() => validateSettings({ ...input(), [key]: false }), /Unknown setting/, key);
+  }
+  assert.throws(() => validateSettings({ ...input(), version: 1 }), /version must be 2/);
+});
+
+test('V2 defaults retain disabled timeout and explicit bounded output repair opt-in', () => {
+  const raw = input();
+  delete raw.runTimeoutSeconds;
+  delete raw.outputRetries;
+  delete raw.shellToolPermission;
+  const settings = validateSettings(raw);
+  assert.equal(settings.runTimeoutSeconds, null);
+  assert.equal(settings.outputRetries, 0);
+  assert.equal(settings.shellToolPermission, 'deny');
+  assert.equal(Object.hasOwn(settings, 'structuredOutput'), false);
+  for (const value of [10, 7200, null]) assert.equal(validateSettings({ ...input(), runTimeoutSeconds: value }).runTimeoutSeconds, value);
+  for (const value of [0, 1]) assert.equal(validateSettings({ ...input(), outputRetries: value }).outputRetries, value);
+  for (const value of [false, 0, 9, 7201]) assert.throws(() => validateSettings({ ...input(), runTimeoutSeconds: value }), /runTimeoutSeconds/);
+  for (const value of [-1, 2, false]) assert.throws(() => validateSettings({ ...input(), outputRetries: value }), /outputRetries/);
+});
+
+test('V2 agents use Agent.Info fields and omit unavailable roles without model fallbacks', () => {
+  const raw = input();
+  const before = structuredClone(raw);
+  const settings = validateSettings(raw);
+  const agents = buildAgents(settings, prompts);
+  assert.deepEqual(raw, before);
+  assert.equal(Object.keys(agents).length, 5);
+  for (const [id, agent] of Object.entries(agents)) {
+    assert.equal(agent.id, id);
+    assert.equal(agent.name, id);
+    assert.equal(agent.mode, 'primary');
+    assert.equal(agent.hidden, true);
+    assert.deepEqual(agent.request, { settings: {}, headers: {}, body: {} });
+    assert.equal(typeof agent.system, 'string');
+    assert.ok(Array.isArray(agent.permissions));
+    for (const key of ['prompt', 'permission', 'disable', 'steps']) assert.equal(Object.hasOwn(agent, key), false, key);
+  }
+  assert.deepEqual(agents['azpr-review-functional'].model, { providerID: 'provider', id: 'family/functional' });
+  assert.equal(Object.hasOwn(agents, 'azpr-deep-functional'), false);
+  assert.equal(Object.hasOwn(agents, 'azpr-review-comment-publish'), false);
+  const full = input();
+  full.models.deep = { functional: 'other/deep-f', risk: 'other/deep-r', verifier: 'other/deep-v' };
+  full.comments.enabled = true;
+  assert.equal(Object.keys(buildAgents(validateSettings(full), prompts)).length, Object.keys(ROLES).length);
+  assert.deepEqual(buildAgents(validateSettings(full), prompts)['azpr-deep-verifier'].model, { providerID: 'other', id: 'deep-v' });
+});
+
+test('disabled settings produce no private agents', () => {
+  assert.deepEqual(buildAgents(validateSettings({ ...input(), enabled: false }), prompts), {});
+});
+
+test('V2 permission rules block CodeMode, native mutation, delegation and host control without MCP catalogs', () => {
+  const blocked = ['shell', 'execute', 'edit', 'write', 'patch', 'skill', 'subagent', 'webfetch', 'websearch',
+    'opencode_session_rename', 'opencode_session_move', 'opencode_models'];
+  const exclusions = ['read', 'opencode_list_mcp_resources', 'opencode_read_mcp_resource'];
+  for (const name of blocked) assert.ok(BLOCKED_NATIVE_TOOLS.includes(name), name);
+  for (const name of exclusions) {
+    assert.equal(BLOCKED_NATIVE_TOOLS.includes(name), false, name);
+    assert.equal(Object.hasOwn(NATIVE_TOOL_PERMISSIONS, name), false, name);
+  }
+  for (const shellToolPermission of ['deny', 'ask']) {
+    const agents = buildAgents(validateSettings({ ...input(), shellToolPermission }), prompts);
+    for (const agent of Object.values(agents)) {
+      assert.deepEqual(agent.permissions.find(rule => rule.action === 'shell'), { action: 'shell', resource: '*', effect: shellToolPermission });
+      assert.equal(agent.permissions.some(rule => rule.action === '*' || rule.effect === 'allow'), false);
+      for (const name of blocked.filter(name => name !== 'shell')) assert.deepEqual(agent.permissions.find(rule => rule.action === name), { action: name, resource: '*', effect: 'deny' });
+    }
+    assert.ok(BLOCKED_NATIVE_TOOLS.includes('shell'));
+  }
+  assert.throws(() => validateSettings({ ...input(), shellToolPermission: 'allow' }), /shellToolPermission/);
+});
+
+test('normal and amendment prompts have one JSON text transport and no native output fallback', () => {
+  const agents = buildAgents(validateSettings(input()), prompts);
+  for (const agent of Object.values(agents)) {
+    assert.match(agent.system, /one valid JSON object/);
+    assert.match(agent.system, /codemode: false/);
+    assert.match(agent.system, /Never invoke execute, use fetch/);
+    assert.match(agent.system, /CodeMode-only host MCP-resource helpers are unavailable/);
+    assert.doesNotMatch(agent.system, /StructuredOutput|native submission|native output|configured transport/);
+  }
+  for (const make of [statusRepairPrompt, locationRepairPrompt, dispositionRepairPrompt, finalResubmissionPrompt]) {
+    assert.match(make(), /JSON text/);
+    assert.doesNotMatch(make(), /StructuredOutput|missing-native|native submission/);
+    assert.match(make(), /Do not call ordinary tools|No ordinary tools/);
+  }
+});
+
+test('V2 policy retains complete evidence, same-session saved-output scope and language routing', () => {
+  const agents = buildAgents(validateSettings({ ...input(), outputLanguage: 'zh-TW' }), prompts);
+  const final = agents['azpr-review-verifier'].system;
+  assert.match(final, /outputLanguage: zh-TW/);
+  assert.match(final, /same session/);
+  assert.match(final, /Saved-output line numbers are not source-file line numbers/);
+  assert.match(final, /currentHead/);
+  assert.match(final, /currentBase/);
+  assert.match(final, /counterevidence/);
+  assert.doesNotMatch(agents['azpr-review-functional'].system, /# Configured output language/);
+  for (const name of PROMPTS) assert.throws(() => buildAgents(validateSettings(input()), { ...prompts, [name]: ' ' }), /Missing or empty prompt/);
+});

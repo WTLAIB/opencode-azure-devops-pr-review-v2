@@ -1,0 +1,13 @@
+OpenCode_Azure_PR_Review_Codex_Handoff.md
+*:Zone.Identifier
+settings.json
+team.json
+.env
+.env.*
+node_modules/
+coverage/
+.azpr-debug/
+# Machine-specific handovers and private evaluation records; never distribute.
+/.local/
+*.log
+.DS_Store

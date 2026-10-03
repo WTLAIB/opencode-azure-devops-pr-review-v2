@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Azure PR Review for OpenCode V2 settings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "models"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 2
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review"
+      ],
+      "properties": {
+        "_help": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Documentation only; never forwarded as model instructions.",
+          "properties": {
+            "functional": {
+              "type": "string"
+            },
+            "risk": {
+              "type": "string"
+            },
+            "verifier": {
+              "type": "string"
+            }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "functional",
+            "risk",
+            "verifier"
+          ],
+          "properties": {
+            "functional": {
+              "type": "string",
+              "description": "Exact provider/model ID for independent correctness review. Select for code comprehension, project language, boundary behavior, and regressions."
+            },
+            "risk": {
+              "type": "string",
+              "description": "Exact provider/model ID for independent risk review, source checks, and comments. Select for cross-path failure analysis and reliable MCP tool use. Standalone /pr-check uses review.risk."
+            },
+            "verifier": {
+              "type": "string",
+              "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization."
+            }
+          }
+        },
+        "deep": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional deep profile. Missing or empty roles disable deep mode; it never falls back to review models.",
+          "properties": {
+            "functional": {
+              "type": "string",
+              "description": "Exact provider/model ID for independent correctness review. Select for code comprehension, project language, boundary behavior, and regressions. May be empty; deep runs only when all three IDs are configured."
+            },
+            "risk": {
+              "type": "string",
+              "description": "Exact provider/model ID for independent risk review, source checks, and comments. Select for cross-path failure analysis and reliable MCP tool use. Standalone /pr-check uses review.risk. May be empty; deep runs only when all three IDs are configured."
+            },
+            "verifier": {
+              "type": "string",
+              "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization. May be empty; deep runs only when all three IDs are configured."
+            }
+          }
+        }
+      }
+    },
+    "comments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "maxComments"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow the explicit saved-preview publishing stage. MCP permissions remain governed by OpenCode."
+        },
+        "maxComments": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 5,
+          "description": "Maximum comments in a saved preview; publication follows prompt instructions."
+        }
+      }
+    },
+    "auxiliaryModels": {
+      "const": "preserve",
+      "description": "Never change global auxiliary models."
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "outputLanguage": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+      "maxLength": 63,
+      "default": "en",
+      "examples": [
+        "en",
+        "zh-TW",
+        "zh-CN",
+        "ja",
+        "zh-Hant-TW"
+      ],
+      "description": "Shared output language for final report Markdown and Azure comment prose. Use a language tag; intermediate reviews, JSON fields, identifiers, severity labels, and status receipts are unchanged. Restart OpenCode after changes."
+    },
+    "returnReport": {
+      "enum": [
+        "receipt",
+        "full"
+      ],
+      "default": "receipt"
+    },
+    "shellToolPermission": {
+      "enum": [
+        "deny",
+        "ask"
+      ],
+      "default": "deny",
+      "description": "Private AZPR roles only. Default deny hides the native shell tool. Explicit ask retains its schema for providers that reject requests without it; the runtime still blocks execution before host approval. Other native denials and ordinary agents stay unchanged. No provider detection, automatic fallback or allow mode. Restart OpenCode after changes."
+    },
+    "outputRetries": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0,
+      "description": "Opt in to one shared status/location/merge amendment or complete final content resubmission per stage. Narrow amendments preserve existing fields; final resubmission may replace evidence and decisions only with a matching frozen snapshot and known unchanged current source/target versions. Same stopped verifier context, configured model, one request, no ordinary tools, unchanged deadline, full validation and retained original failures. Status-only initial responses cannot regenerate a review. Provider errors, invalid outer JSON, truncation, unknown/stale versions, cancellation, unconfirmed aborts and comments do not qualify. Extra model usage may be billed."
+    },
+    "debug": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save private stage inputs, visible answers, errors, and results locally. May contain confidential source or model-echoed secrets. No automatic cleanup."
+        },
+        "directory": {
+          "type": "string",
+          "default": "",
+          "description": "Empty uses XDG_STATE_HOME/opencode/azpr-v2-debug (default ~/.local/state/opencode/azpr-v2-debug). Otherwise an absolute path or path relative to the active OpenCode project directory. No tilde expansion."
+        }
+      }
+    },
+    "runTimeoutSeconds": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 10,
+      "maximum": 7200,
+      "default": null,
+      "description": "Optional whole-command timeout covering all stages, amendments and report display. Null or omitted disables the timeout; an explicit integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual cancellation and bounded SDK cleanup remain available. This is not a spending cap."
+    }
+  }
+}
