@@ -54,7 +54,7 @@ const provider = createServer(async (request, response) => {
   let body = '';
   for await (const chunk of request) body += chunk;
   const parsed = JSON.parse(body);
-  requests.push({ path: request.url, body: parsed });
+  requests.push({ path: request.url, body: parsed, sessionID: request.headers['x-opencode-session-id'] });
   if (request.url !== '/v1/chat/completions') {
     response.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'Unexpected fixture route' } }));
     return;
@@ -176,19 +176,37 @@ const env = {
   OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1',
 };
 const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
-try {
+const stopHost = async () => {
+  if (child && child.exitCode === null) {
+    const stopping = child;
+    const exited = once(stopping, 'exit');
+    let timer;
+    stopping.kill('SIGTERM');
+    try {
+      await Promise.race([exited, new Promise(resolveStopped => {
+        timer = setTimeout(() => { stopping.kill('SIGKILL'); resolveStopped(); }, 5000).unref();
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+};
+const startHost = async () => {
   child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: directories.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let startup = '';
   const ready = new Promise((resolveReady, rejectReady) => {
     child.once('error', rejectReady);
     child.once('exit', code => rejectReady(new Error(`Host exited before readiness: ${code}`)));
     child.stdout.on('data', data => {
       logs += data;
-      const found = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/);
+      startup += data;
+      const found = startup.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/);
       if (found) resolveReady(found[1]);
     });
     child.stderr.on('data', data => { logs += data; });
   });
-  const url = await Promise.race([ready, new Promise((_, reject) => setTimeout(() => reject(new Error('Fixture host startup timeout')), 30000).unref())]);
+  return Promise.race([ready, new Promise((_, reject) => setTimeout(() => reject(new Error('Fixture host startup timeout')), 30000).unref())]);
+};
+try {
+  let url = await startHost();
   const api = async (path, body) => {
     const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(45000) });
     const raw = await response.text();
@@ -267,12 +285,41 @@ try {
     assert.deepEqual(call.arguments, { value: 'fixture-source' });
   }
   assert.equal(requests.length, 17);
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
-} finally {
-  if (child && child.exitCode === null) {
-    child.kill('SIGTERM');
-    await Promise.race([once(child, 'exit'), new Promise(resolveStopped => setTimeout(() => { child.kill('SIGKILL'); resolveStopped(); }, 5000).unref())]);
+  const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
+  assert.ok(privateSession, 'The private check must reach the loopback provider.');
+  const privateAuxiliaryDenied = async () => {
+    const before = requests.length;
+    await assert.rejects(api(`/api/session/${privateSession}/generate`, { prompt: 'Unauthorized private generation fixture' }));
+    await api(`/api/session/${privateSession}/compact`, {});
+    await api(`/api/experimental/session/${privateSession}/wait`, {});
+    assert.equal(requests.length, before, 'A revoked private session must not send generate or compaction requests.');
+  };
+  const ordinaryGenerate = async () => {
+    const before = requests.length;
+    const answer = await api(`/api/session/${result.made.id}/generate`, { prompt: 'Ordinary generation positive control' });
+    assert.equal(typeof answer.data.text, 'string');
+    assert.equal(requests.length, before + 1, 'Ordinary generation must still reach the fixture provider.');
+  };
+  await ordinaryGenerate();
+  const beforeCompaction = requests.length;
+  await api(`/api/session/${result.made.id}/compact`, {});
+  await api(`/api/experimental/session/${result.made.id}/wait`, {});
+  assert.ok(requests.length > beforeCompaction, 'Ordinary compaction must still reach the fixture provider.');
+  await privateAuxiliaryDenied();
+  await stopHost();
+  url = await startHost();
+  await api('/api/session', { title: 'Restart fixture origin', location: { directory: directories.work } });
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const catalog = await api('/api/mcp');
+    if (catalog.data?.some(server => server.name === 'fixture' && server.status?.status === 'connected')) break;
+    await new Promise(resolveReady => setTimeout(resolveReady, 100));
   }
+  await ordinaryGenerate();
+  await privateAuxiliaryDenied();
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 5);
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
+} finally {
+  await stopHost();
   provider.closeAllConnections();
   await new Promise(resolveClosed => provider.close(resolveClosed));
   await writeFile(join(fixture, 'host.log'), logs);

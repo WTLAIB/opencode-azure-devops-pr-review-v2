@@ -11,10 +11,11 @@ agents, model selections, and provider credentials remain host-owned. A review
 starts only through an explicit command.
 
 Fresh and replacement installations have been exercised on Ubuntu 22.04 with
-the exact host and isolated fake services. Live model services and the official
-MCP 2.9.0 Azure connection require separate acceptance. See
-[validation](docs/VALIDATION.md) for the actual scope. Passing contracts does not
-prove that a model's factual reasoning or final presentation is correct.
+the exact host and isolated fake services. One controlled live PR review also
+completed with official MCP 2.9.0 after two retained failures and corrections.
+Model/tool-policy and presentation limitations remain; other environments still
+need their own acceptance. See [validation](docs/VALIDATION.md) for the actual
+scope. Passing contracts does not prove general model quality.
 
 ## Requirements and installation
 
@@ -135,6 +136,13 @@ Restart after settings changes. There are no configurable or hidden reviewer
 iteration or stage-character caps. `steps`, `maxStageCharacters`,
 `structuredOutput`, and `azure` mappings are unsupported and rejected.
 
+Before creating reviewers, the plugin checks the selected models in the V2
+catalog for availability and tool support, and requires a connected MCP server.
+These cancellable reads submit no inference. A connected server does not prove
+Azure identity, direct-tool exposure, permissions, or source access; those remain
+separate checks. An unavailable catalog fails with an explicit receipt, without
+selecting another model or rewriting configuration.
+
 ### MCP must expose direct tools
 
 Connect the official MCP server through OpenCode's own configuration and set
@@ -200,6 +208,12 @@ not start a formatter or ordinary-agent model call. Receipt mode identifies the
 private report session and diagnostics. Full mode also carries the report in the
 origin notice. A queue acknowledgment is not proof of TUI rendering. Do not
 resume completed reviewer sessions; their grants are revoked.
+
+The V2 `model.request` hook also checks authorization across request kinds.
+Private reviewers cannot use transient generation, title requests or compaction;
+compaction would invalidate the exact admitted-context contract. The plugin stops
+before sending a summary request instead of accepting output from a lossy summary.
+Ordinary sessions retain their host-owned generation, compaction and retry behavior.
 
 Publication results are model-reported, never independently provider-verified by
 this plugin. An uncertain publication attempt locks the saved batch against

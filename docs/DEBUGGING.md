@@ -42,6 +42,7 @@ configuration, or HTTP headers.
 | Artifact | What it records |
 | --- | --- |
 | `run.json` | Run identity, settings relevant to execution, start time, and privacy notice. |
+| `readiness.json` | Checked role slots and connected MCP count; source access remains unassessed. |
 | `NN-azpr-ROLE.request.json` | Stage identity, literal payload, and applicable instructions. |
 | `NN-azpr-ROLE.response.json` | Captured visible model response, finish state, and available error data. |
 | `NN-azpr-ROLE.result.json` | Validation outcome, finding/output corrections, observations, and timing. |
@@ -74,6 +75,11 @@ transcript. If the exact admitted prompt disappears or becomes ambiguous, the
 adapter refuses the answer. It does not infer identity from a compaction summary
 or accept a nearby assistant message. This is a remaining large-context limit
 without a plugin iteration or character budget.
+
+Private compaction now fails at the V2 model-request boundary before any summary
+request is sent. Transient `session.generate` and title requests are also denied
+for private reviewers. A missing exact input remains a failure even if a later
+host or plugin changes compaction behavior. Ordinary sessions are unaffected.
 
 Review inputs come from native command `prompt.text`. They remain literal text;
 there is no Markdown command template or placeholder sentinel. Attached files,
@@ -157,6 +163,21 @@ attempts in a stage stop the run. These observations must remain visible even
 when no forbidden operation executed. They are different from MCP tool failures
 and provider rejection before any tool request.
 
+An authorized 2.0.22 live test received a provider HTTP 403 before any tool call
+with `shellToolPermission: "deny"`. The same selected models were admitted after
+using the existing `"ask"` option in an isolated test profile; the runtime guard
+still blocked shell execution and the installed personal settings stayed intact.
+This matches [upstream reports about permission-dependent free-tier rejection](https://github.com/anomalyco/opencode/issues/51241).
+It is a provider admission limitation, not an Azure authentication failure or
+proof that shell ran. Inspect the original error before changing permissions;
+never change models, spoof client headers, or grant native execution to recover.
+
+If initial snapshots disagree, inspect the original metadata and labels before
+retrying. The common label uses `organization/project-id/repository-id`, with
+both stable IDs from the same PR metadata response. Project display names and
+project IDs are not interchangeable strings in this contract. The runtime keeps
+strict identity/commit comparison and does not guess or normalize equivalence.
+
 `toolObservations` summarizes matching V2 execution hooks. Completed/error counts
 are execution observations, while `reportedErrors` and `truncated` record explicit
 result flags. Counts overlap; do not add them as unique failures. `withoutOutcome`
@@ -173,6 +194,13 @@ failures, search-service errors, and actual recovery.
 
 ## Timing, cancellation, and large output
 
+`requestObservations` separates primary, compaction, generate, title and unknown
+request-kind hooks, authorized primary preparations, rejections, and host retry
+proposals. It records no request bodies, headers or provider error text. These
+are observations of hooks, not a count of network requests or billed usage.
+Normal review retains the host's retry decision. Revoked grants and output
+amendments do not receive host retries; no new retry policy is added.
+
 With debug enabled, stage timing records model-request windows, tool intervals,
 response processing, and time after the last completed tool. Overlapping tool
 intervals count once; missing outcomes remain unknown. These measurements include
@@ -186,6 +214,10 @@ the same process to cancel. Grants are revoked before cleanup awaits the host.
 Interrupt acknowledgement alone is insufficient; the adapter also waits for
 settlement. `abortUnconfirmed` means the bounded cleanup did not establish that
 remote work stopped, and sent requests may still incur usage.
+
+Catalog/settings checks also share the run's cancellation signal. `/pr-stop`
+can release the command and origin lock while a host catalog read remains pending;
+late read results cannot authorize new work. No additional default timer is used.
 
 The V2 Promise adapter does not reliably propagate request AbortSignals. Local
 cancellation stops acceptance and the plugin's grants, while cleanup explicitly

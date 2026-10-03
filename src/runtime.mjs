@@ -155,6 +155,7 @@ async function bounded(operation, signal) {
   const stopped = new Promise((_, reject) => { onAbort = () => reject(abortError(signal)); signal.addEventListener('abort', onAbort, { once: true }); });
   try { return await Promise.race([operation(), stopped]); } finally { signal.removeEventListener('abort', onAbort); }
 }
+const scoped = (operation, signal) => signal ? bounded(operation, signal) : operation();
 async function deadline(operation, milliseconds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), milliseconds);
@@ -173,10 +174,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   const sourceRuns = new Map();
   const completed = new Map(); // At most 20 reports; no provider authentication configuration.
   const commentLocks = new Set();
-  let pinningAgents;
   const commandDescription = name => `Azure DevOps PR review: ${COMMANDS[name]} (explicit invocation only)`;
-  async function checkCommands() {
-    const catalog = await context.command.list();
+  async function checkCommands(signal) {
+    const catalog = await scoped(() => context.command.list(), signal);
     if (!Array.isArray(catalog?.data)) throw new Error('[AZPR] Invalid OpenCode V2 command catalog.');
     for (const name of Object.keys(COMMANDS)) {
       const matches = catalog.data.filter(command => command?.name === name);
@@ -185,54 +185,77 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       }
     }
   }
-  async function pinAgents() {
+  async function pinAgents(signal) {
     if (state.agentsPinned) return;
-    if (!pinningAgents) pinningAgents = (async () => {
-      // ConfigAgentPlugin runs after external plugins in V2. Its global/project
-      // rules are appended only once the host has finished building this state.
-      // Pin every role before the first run, including the later verifier.
-      const resolved = await Promise.all(Object.entries(state.agents).map(async ([role, definition]) => {
-        const response = await context.agent.get({ agentID: role });
-        const actual = response?.data;
-        if (!isObject(actual)) throw new Error('[AZPR] Private reviewer definition is unavailable.');
-        const { permissions, ...protectedFields } = actual;
-        const { permissions: restrictions, ...expectedFields } = definition;
-        const prefix = state.registrationPermissions[role];
-        if (!isDeepStrictEqual(protectedFields, expectedFields) || !Array.isArray(permissions) ||
-            !Array.isArray(prefix) || !isDeepStrictEqual(permissions.slice(0, prefix.length), prefix) ||
-            !isDeepStrictEqual(prefix.slice(-restrictions.length), restrictions)) {
-          throw new Error('[AZPR] Host configuration changed a protected private reviewer field or native permission rule; reload after resolving the conflict.');
-        }
-        return [role, clone(actual)];
-      }));
-      state.fingerprints = Object.fromEntries(resolved);
-      state.agentsPinned = true;
-    })().finally(() => { pinningAgents = undefined; });
-    await pinningAgents;
+    // ConfigAgentPlugin runs after external plugins in V2. Pin every complete
+    // role before first use, including the later verifier. Concurrent origins
+    // own their reads so cancelling one cannot reject another origin's preflight.
+    const resolved = await Promise.all(Object.entries(state.agents).map(async ([role, definition]) => {
+      const response = await scoped(() => context.agent.get({ agentID: role }), signal);
+      const actual = response?.data;
+      if (!isObject(actual)) throw new Error('[AZPR] Private reviewer definition is unavailable.');
+      const { permissions, ...protectedFields } = actual;
+      const { permissions: restrictions, ...expectedFields } = definition;
+      const prefix = state.registrationPermissions[role];
+      if (!isDeepStrictEqual(protectedFields, expectedFields) || !Array.isArray(permissions) ||
+          !Array.isArray(prefix) || !isDeepStrictEqual(permissions.slice(0, prefix.length), prefix) ||
+          !isDeepStrictEqual(prefix.slice(-restrictions.length), restrictions)) {
+        throw new Error('[AZPR] Host configuration changed a protected private reviewer field or native permission rule; reload after resolving the conflict.');
+      }
+      return [role, clone(actual)];
+    }));
+    if (signal?.aborted) throw abortError(signal);
+    const fingerprints = Object.fromEntries(resolved);
+    if (state.agentsPinned && !isDeepStrictEqual(fingerprints, state.fingerprints)) {
+      throw new Error('[AZPR] Private reviewer configuration changed during concurrent preflight; reload the plugin.');
+    }
+    state.fingerprints = fingerprints;
+    state.agentsPinned = true;
   }
-  async function current() {
+  async function current(signal) {
     if (!state.ready) throw new Error(`[AZPR] ${state.error} Settings: ${settingsPath}`);
     if (!state.settings.enabled) throw new Error('[AZPR] Review is disabled (enabled=false). Normal development is unchanged.');
     let now;
-    try { now = await readFile(settingsPath, 'utf8'); } catch { throw new Error('[AZPR] settings.json is not readable. Restart after fixing it.'); }
+    try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { throw new Error('[AZPR] settings.json is not readable. Restart after fixing it.'); }
     if (now !== state.raw) throw new Error('[AZPR] settings.json changed. Restart OpenCode; never mix settings within a run.');
-    await checkCommands();
-    await pinAgents();
+    await checkCommands(signal);
+    await pinAgents(signal);
   }
-  async function checkRole(role) {
+  async function checkRole(role, signal) {
     if (!Object.hasOwn(state.agents ?? {}, role)) throw new Error('[AZPR] Private reviewer is disabled or unknown.');
-    const actual = await context.agent.get({ agentID: role });
+    const actual = await scoped(() => context.agent.get({ agentID: role }), signal);
     if (!isDeepStrictEqual(actual.data, state.fingerprints[role])) throw new Error('[AZPR] Private reviewer configuration changed; reload the plugin.');
   }
   async function authorize(sessionID, agent, actualModel) {
     const g = grants.get(sessionID);
     if (!g || !g.run.active || g.role !== agent) throw new Error('[AZPR] No active command-scoped reviewer authorization.');
-    await checkRole(agent);
+    await current(g.run.controller.signal);
+    await checkRole(agent, g.run.controller.signal);
     if (!g.run.active || grants.get(sessionID) !== g) throw new Error('[AZPR] Reviewer authorization expired.');
     if (`${actualModel?.providerID}/${actualModel?.id}` !== g.model ||
         (actualModel?.variant ?? 'default') !== 'default') throw new Error('[AZPR] Model mismatch; no fallback or manual reviewer model switching.');
     if (ROLES[agent].mode !== g.run.profile) throw new Error('[AZPR] Reviewer profile mismatch.');
     return g;
+  }
+  async function readiness(run) {
+    if (typeof context.model?.list !== 'function' || typeof context.mcp?.list !== 'function') {
+      throw new Error('[AZPR] OpenCode V2 model/MCP catalogs are unavailable.');
+    }
+    const [models, servers] = await bounded(() => Promise.all([context.model.list(), context.mcp.list()]), run.controller.signal);
+    if (!Array.isArray(models?.data) || !Array.isArray(servers?.data)) throw new Error('[AZPR] Invalid V2 readiness catalogs.');
+    const slots = ['review', 'deep'].includes(run.mode) ? ['functional', 'risk', 'verifier'] : ['risk'];
+    for (const slot of slots) {
+      const selected = state.settings.models[run.profile][slot];
+      const matches = models.data.filter(model => `${model.providerID}/${model.id}` === selected && model.enabled !== false);
+      if (matches.length !== 1) throw new Error(`[AZPR] The selected ${run.profile}.${slot} model is unavailable; check the host catalog. No fallback was selected.`);
+      if (matches[0].capabilities?.tools !== true) throw new Error(`[AZPR] The selected ${run.profile}.${slot} model does not advertise tool support.`);
+    }
+    const connected = servers.data.filter(server => server.status?.status === 'connected').length;
+    run.readiness = { checkedModelSlots: slots, connectedMcpServers: connected, sourceAccess: 'not-assessed' };
+    await run.debug.write('readiness.json', run.readiness);
+    // The public status catalog has no server config or tool provenance. Do not
+    // infer Azure identity, direct-tool exposure, permissions or evidence truth.
+    if (!connected) throw new Error('[AZPR] No MCP server is connected. Check host MCP status/authentication and codemode:false before starting another review.');
   }
   async function abortSession(run, id) {
     try { await deadline(signal => interruptSession(context, { sessionID: id, signal }), 5000); }
@@ -250,7 +273,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     return run.stopping;
   }
   async function requireActiveAmendment(run, originalError) {
-    await current();
+    await current(run.controller.signal);
     if (!run.active || run.controller.signal.aborted || run.abortUnconfirmed) throw originalError;
   }
   async function stage(run, role, payload, validate) {
@@ -325,10 +348,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     }
   }
   async function stageAttempt(run, role, payload, validate, retryOf, retryKind = 'status') {
-    await current();
+    await current(run.controller.signal);
     if (!run.active) throw new Error('Review stopped.');
     if (retryOf && run.abortUnconfirmed) throw new Error('Output retry stopped because session abort was not confirmed.');
-    await checkRole(role);
+    await checkRole(role, run.controller.signal);
     if (typeof validate !== 'function') throw new Error('Every stage requires an explicit output validator.');
     const input = JSON.stringify(payload);
     const spec = ROLES[role];
@@ -347,6 +370,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     const g = {
       run, role, model: idModel, repairKind: retryOf ? retryKind : null, expectedText: input,
       messages: 0, calls: 0, nonce: randomUUID(),
+      primaryPrepared: false, requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 },
+      rejectedRequests: 0, retryEvents: [],
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(),
       blockedNativeCalls: new Map(), repairToolAttempts: 0,
@@ -437,6 +462,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       record.toolFailures = g.failedTools.size;
       record.toolObservations = collectToolObservations(g);
       record.modelRequests = g.calls;
+      record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls,
+        rejected: g.rejectedRequests, retries: g.retryEvents, transportRequests: 'not-assessed' };
       if (g.firstToolAt) record.firstToolAt = g.firstToolAt;
       if (g.lastToolAt) record.lastToolAt = g.lastToolAt;
       record.endedAt = new Date().toISOString();
@@ -461,7 +488,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   }
   async function finishDiagnostics(run, status, report, failure) {
     if (report) await run.debug.write(run.draft ? 'draft.md' : 'report.md', report);
-    await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none', error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(), timing: run.timing, stages: run.stages, warnings: run.debug.warnings });
+    await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none', error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(), readiness: run.readiness, timing: run.timing, stages: run.stages, warnings: run.debug.warnings });
   }
   function renderReport(run, render) {
     const start = performance.now();
@@ -487,6 +514,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     const outcome = { status: 'INCOMPLETE', report: '', failure: '' };
     try {
       run.debug = await createDiagnostics(state.settings, { directory: context.location?.directory }, run);
+      await current(run.controller.signal);
+      await readiness(run);
       Object.assign(outcome, await action(run));
       if (!run.active) throw new Error(run.reason || 'Review stopped.');
       await displayReport(run, outcome.report, outcome.status);
@@ -580,7 +609,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       setCommandResult(output, run ? `[AZPR ${run.id}] Authorization revoked and cancellation requested. Requests already sent may still be billed.${run.abortUnconfirmed ? ' OpenCode did not confirm session abort; inspect its sessions.' : ''} Display this status only; do not start another review.` : '[AZPR] No active review found in this process. No reviewer was started; display this status only.');
       return;
     }
-    await current();
     if (seenSessions.has(input.sessionID)) throw new Error('[AZPR] Start a new Review command from your ordinary development session, not a reviewer session.');
     if (mode === 'comment') return executeComment(input, output);
     if (!text(input.sessionID) || !text(input.arguments) || input.arguments.length > 16000) throw new Error(`[AZPR] Usage: /${input.command} <Azure PR URL> [your context]`);
@@ -672,20 +700,18 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         throw new Error('[AZPR] Private reviewers cannot be mentioned or delegated.');
       }
       if (!seenSessions.has(event.sessionID)) return;
-      await current();
       const g = grants.get(event.sessionID);
       if (!g?.run.active || g.messages || event.prompt.text !== g.expectedText ||
           event.metadata?.azprGrant !== g.nonce || event.prompt.files?.length ||
           event.prompt.agents?.length || event.prompt.skills?.length) {
         throw new Error('[AZPR] Only the exact plugin-started reviewer input is authorized.');
       }
-      const session = await context.session.get({ sessionID: event.sessionID });
+      const session = await bounded(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal);
       await authorize(event.sessionID, session.agent, session.model);
       g.messages++;
     }));
     registrations.push(await context.session.hook('context', async event => {
       if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
-      await current();
       const g = await authorize(event.sessionID, event.agent, event.model);
       if (!g.messages) throw new Error('[AZPR] Missing authorized reviewer input.');
       if (g.repairKind) {
@@ -705,16 +731,50 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         // Execution hooks still reject every attempt if a provider submits one.
         for (const name of Object.keys(event.tools)) delete event.tools[name];
       }
-      g.calls++;
-      g.timing?.modelRequest();
+      g.primaryPrepared = true;
+    }));
+    registrations.push(await context.session.hook('model.request', async event => {
+      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
+      const observed = grants.get(event.sessionID);
+      const kind = Object.hasOwn(observed?.requestKinds ?? {}, event.kind) ? event.kind : 'unknown';
+      if (observed) observed.requestKinds[kind]++;
+      try {
+        const g = await authorize(event.sessionID, event.agent, event.model);
+        if (event.kind !== 'primary') {
+          throw new Error(event.kind === 'compaction'
+            ? '[AZPR] Private review compaction is not authorized: exact admitted context must remain available. No summary request was sent.'
+            : '[AZPR] Auxiliary model requests are not authorized for private reviewers.');
+        }
+        if (!g.messages || !g.primaryPrepared || (g.repairKind && g.calls)) throw new Error('[AZPR] Model request has no authorized primary context.');
+        g.primaryPrepared = false;
+        g.calls++;
+        g.timing?.modelRequest();
+      } catch (error) {
+        if (observed) observed.rejectedRequests++;
+        throw error;
+      }
+    }));
+    registrations.push(await context.session.hook('retry', async event => {
+      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
+      const g = grants.get(event.sessionID);
+      const proposed = event.decision?.retry === true;
+      let authorized = false;
+      if (g?.run.active && !g.repairKind) {
+        try { await authorize(event.sessionID, event.agent, event.model); authorized = true; } catch {}
+      }
+      if (!authorized) event.decision = { retry: false };
+      if (g) g.retryEvents.push({ attempt: Number.isInteger(event.attempt) ? event.attempt : null,
+        proposed, allowed: authorized && proposed,
+        delayMs: authorized && proposed && Number.isFinite(event.decision.delay) ? event.decision.delay : null });
+      // Observe the host proposal; never introduce or expand its retry policy.
     }));
     registrations.push(await context.tool.hook('execute.before', async event => {
       if (event.tool === 'subagent' && ownRole(event.input?.agent)) throw new Error('[AZPR] Private reviewers cannot be delegated.');
       if (!seenSessions.has(event.sessionID)) return;
-      await current();
       const g = grants.get(event.sessionID);
       if (!g?.run.active || g.role !== event.agent) throw new Error('[AZPR] Review tool authorization expired.');
-      await checkRole(g.role);
+      await current(g.run.controller.signal);
+      await checkRole(g.role, g.run.controller.signal);
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
       const call = `${event.id}:${event.tool}`;
       if (g.repairKind) { g.repairToolAttempts++; throw new Error('[AZPR] Output amendment cannot invoke ordinary tools.'); }

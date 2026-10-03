@@ -44,6 +44,8 @@ async function fixture(t, opts = {}) {
   };
   const context = {
     location:{directory},
+    model:{async list(){return {data:Object.values(settings.models).flatMap(group=>Object.values(group)).filter(id=>typeof id==='string'&&id.startsWith('fixture/')).map(value=>({providerID:'fixture',id:value.slice(8),enabled:true,capabilities:{tools:true}}))};}},
+    mcp:{async list(){return {data:[{name:'arbitrary-server',status:{status:'connected'}}]};}},
     agent:{
       async get({agentID}) { return {location:{directory},data:clone(agents.get(agentID))}; },
       async list() { return {location:{directory},data:[...agents.values()].map(clone)}; },
@@ -89,6 +91,7 @@ async function fixture(t, opts = {}) {
           const frame={sessionID:session.id,agent:role,model:clone(session.model),system:[{type:'text',text:agents.get(role).system+'\nHOST_RULES'}],tools:{fixture_mcp_read:{},shell:{}},messages:[],options:{}};
           await opts.beforeContext?.({frame,emit,session,packet,agents});
           if(!opts.skipContextHook) await emit('session','context',frame);
+          if(!opts.skipModelHook) await emit('session','model.request',{sessionID:session.id,agent:role,model:clone(session.model),kind:'primary',headers:{}});
           await opts.during?.({frame,emit,context,invoke,session,packet,calls,agents});
           if(!packet.operation&&!opts.skipTool) await invoke(session.id);
           let result;
@@ -181,7 +184,7 @@ test('MCP names stay unclassified; diagnostics retain error and truncation obser
   assert.match(receipt,/] READY/);assert.equal(stage.completedTools,0);assert.equal(stage.toolObservations.reportedErrors,1);assert.equal(stage.toolObservations.truncated,1);assert.equal(stage.toolFailures,1);
   assert.doesNotMatch(JSON.stringify(result),/PRIVATE_OUTPUT|PRIVATE_INPUT|PRIVATE_ERROR/);
 });
-for(const hook of ['skipPromptHook','skipContextHook']) test(`missing ${hook} fails closed`,async t=>{const f=await fixture(t,{[hook]:true});assert.match(await f.command('pr-check'),/] INCOMPLETE/);});
+for(const hook of ['skipPromptHook','skipContextHook','skipModelHook']) test(`missing ${hook} fails closed`,async t=>{const f=await fixture(t,{[hook]:true});assert.match(await f.command('pr-check'),/] INCOMPLETE/);});
 for(const change of ['text','nonce','model','variant','agent']) test(`private ${change} mutation is rejected`,async t=>{
   const f=await fixture(t,{beforePrompt({event,session,agents}){
     if(change==='text')event.prompt.text+=' injected';if(change==='nonce')event.metadata={azprGrant:'forged'};
@@ -193,7 +196,117 @@ test('settings changes require restart and completed sessions cannot resume',asy
   const f=await fixture(t);await f.command('pr-check');const id=f.prompts()[0].sessionID;
   await assert.rejects(f.emit('session','prompt',{sessionID:id,prompt:{text:'resume'}}),/authorized/);
   await assert.rejects(f.command('pr-check',PR,id),/ordinary development session/);
-  await writeFile(join(f.directory,'settings.json'),JSON.stringify({...f.settings,outputLanguage:'zh-TW'}));await assert.rejects(f.command('pr-check'),/changed/);
+  await writeFile(join(f.directory,'settings.json'),JSON.stringify({...f.settings,outputLanguage:'zh-TW'}));assert.match(await f.command('pr-check'),/settings.json changed/);
+});
+
+for (const kind of ['generate','compaction','title','unknown']) test(`private ${kind} model requests are denied during and after a run`, async t => {
+  const f = await fixture(t, { async during({ emit, session }) {
+    await assert.rejects(emit('session','model.request',{sessionID:session.id,agent:session.agent,model:clone(session.model),kind,headers:{authorization:'PRIVATE_HEADER'}}), /not authorized/);
+  }});
+  const receipt = await f.command('pr-check');
+  assert.match(receipt, /] READY/);
+  const saved = (await resultLog(receipt)).stages[0].requestObservations;
+  assert.equal(saved.kinds[kind], 1);
+  assert.equal(saved.rejected, 1);
+  assert.equal(saved.authorizedPrimary, 1);
+  assert.doesNotMatch(JSON.stringify(saved), /PRIVATE_HEADER/);
+  const session = f.sessions.get(f.prompts()[0].sessionID);
+  await assert.rejects(f.emit('session','model.request',{sessionID:session.id,agent:session.agent,model:session.model,kind}), /authorization/);
+});
+
+test('private auxiliary requests fail closed even without a remembered session; ordinary requests remain host-owned', async t => {
+  const f = await fixture(t);
+  for (const kind of ['primary','generate','compaction','title']) {
+    await assert.rejects(f.emit('session','model.request',{sessionID:'previous-process-private',agent:'azpr-review-risk',model:{providerID:'fixture',id:'review-risk'},kind}), /authorization/);
+    await f.emit('session','model.request',{sessionID:'ordinary',agent:'build',kind});
+  }
+  await rm(join(f.directory,'settings.json'));
+  const retry={sessionID:'ordinary',agent:'build',decision:{retry:true,delay:500},attempt:2};
+  await f.emit('session','retry',retry);
+  assert.deepEqual(retry.decision,{retry:true,delay:500});
+});
+
+test('a second primary request needs a new authorized context', async t => {
+  const f = await fixture(t, { async during({ emit, session }) {
+    await assert.rejects(emit('session','model.request',{sessionID:session.id,agent:session.agent,model:session.model,kind:'primary'}), /authorized primary context/);
+  }});
+  assert.match(await f.command('pr-check'), /] READY/);
+});
+
+test('retry observations retain host decisions but block amendments and revoked sessions', async t => {
+  const f = await fixture(t, { settings(s){s.outputRetries=1;}, result({packet,result}){if(!packet.operation)result.status='DONE';return result;}, async during({ emit, session, packet }) {
+    const event={sessionID:session.id,agent:session.agent,model:session.model,attempt:2,error:{message:'PRIVATE_PROVIDER_ERROR'},decision:{retry:true,delay:100}};
+    await emit('session','retry',event);
+    assert.deepEqual(event.decision,packet.operation?{retry:false}:{retry:true,delay:100});
+  }});
+  const receipt=await f.command('pr-check'), stages=(await resultLog(receipt)).stages;
+  assert.match(receipt, /] READY/);
+  assert.deepEqual(stages.map(s=>s.requestObservations.retries[0].allowed),[true,false]);
+  assert.doesNotMatch(JSON.stringify(stages),/PRIVATE_PROVIDER_ERROR/);
+  const session=f.sessions.get(f.prompts().at(-1).sessionID);
+  const event={sessionID:session.id,agent:session.agent,model:session.model,attempt:3,decision:{retry:true,delay:100}};
+  await f.emit('session','retry',event);assert.deepEqual(event.decision,{retry:false});
+});
+
+for (const target of ['initial-agent','stage-agent','command','model','mcp']) test(`cancellation releases a pending ${target} catalog read and its origin lock`, {timeout:3000}, async t => {
+  const entered=deferred(), pending=deferred();let arm=false, reads=0;
+  const f=await fixture(t,{context({context}){
+    const domain=target.includes('agent')?'agent':target, method=domain==='agent'?'get':'list', original=context[domain][method];
+    context[domain][method]=async input=>{
+      const relevant=domain!=='agent'||input.agentID==='azpr-review-check';
+      if(arm&&relevant&&++reads===(target==='stage-agent'?2:1)){entered.resolve();await pending.promise;}
+      return original(input);
+    };
+  }});
+  arm=true;const running=f.command('pr-check');await entered.promise;
+  await f.command('pr-stop','');assert.match(await running,/] CANCELLED/);
+  assert.equal(f.prompts().length,0);
+  arm=false;assert.match(await f.command('pr-check'),/] READY/);
+  pending.resolve();
+});
+
+test('disposal cancels a pending catalog read before reviewer creation', {timeout:3000}, async t => {
+  const entered=deferred(),pending=deferred();
+  const f=await fixture(t,{context({context}){context.model.list=async()=>{entered.resolve();await pending.promise;return {data:[]};};}});
+  const running=f.command('pr-check');await entered.promise;await f.cleanup();
+  assert.match(await running,/] CANCELLED/);assert.equal(f.prompts().length,0);pending.resolve();
+});
+
+test('cancelling one origin during initial role pinning does not cancel another origin', {timeout:3000}, async t => {
+  const entered=deferred(), pending=deferred(), otherPreflight=deferred();
+  let held=false, commandReads=0;
+  const f=await fixture(t,{context({context}){
+    const get=context.agent.get, list=context.command.list;
+    context.agent.get=async input=>{
+      if(!held){held=true;entered.resolve();await pending.promise;}
+      return get(input);
+    };
+    context.command.list=async()=>{
+      if(++commandReads===3)otherPreflight.resolve();
+      return list();
+    };
+  }});
+  t.after(()=>pending.resolve());
+  const first=f.command('pr-check',PR,'first');await entered.promise;
+  const second=f.command('pr-check',PR,'second');await otherPreflight.promise;
+  await new Promise(resolve=>setImmediate(resolve));
+  await f.command('pr-stop','','first');assert.match(await first,/] CANCELLED/);
+  pending.resolve();assert.match(await second,/] READY/);
+});
+
+for (const target of ['missing-model','no-tools','disconnected','invalid-catalog']) test(`readiness rejects ${target} before either initial reviewer starts`, async t => {
+  const f=await fixture(t,{context({context}){
+    const original=context.model.list;
+    if(target==='disconnected')context.mcp.list=async()=>({data:[{name:'anything',status:{status:'needs_auth'}}]});
+    else context.model.list=async()=>{
+      if(target==='invalid-catalog')return {data:null};
+      const models=await original();
+      if(target==='missing-model')models.data=models.data.filter(m=>m.id!=='review-verifier');
+      else models.data.find(m=>m.id==='review-verifier').capabilities.tools=false;
+      return models;
+    };
+  }});
+  assert.match(await f.command(),/] INCOMPLETE/);assert.equal(f.prompts().length,0);assert.equal(f.calls.filter(c=>c.kind==='create').length,0);
 });
 for(const missing of ['functional','risk','verifier']) test(`incomplete deep ${missing} stops without model fallback`,async t=>{
   const f=await fixture(t,{settings(s){s.models.deep[missing]='';}});await assert.rejects(f.command('pr-deep'),/All three/);assert.equal(f.calls.length,0);

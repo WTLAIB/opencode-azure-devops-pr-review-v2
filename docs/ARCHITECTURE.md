@@ -19,7 +19,8 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
 
 The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
-entry re-exporting `plugin.js`, matching package exports, eight source modules, nine prompts and private settings. No top-level loader or
+entry re-exporting `plugin.js`, matching package exports, eight source modules,
+nine prompts and private settings. No top-level loader or
 Markdown command expansion is involved. Optional docs/schema/uninstaller do not
 change runtime requirements. The installer merges missing current defaults;
 obsolete profiles/keys fail instead of being migrated. See README's exact list.
@@ -43,6 +44,21 @@ input and a random admission nonce carried in metadata, outside the model text.
 The prompt/context/tool hooks enforce that grant. Private agent mentions,
 delegation, manual model switching and reuse of stopped sessions are rejected.
 Ordinary sessions pass through without reading plugin settings.
+
+An additional `session.model.request` hook covers every V2 model request kind,
+including operations that do not trigger `prompt` or `context`. Only a primary
+request preceded by the granted context hook is authorized. Private generation,
+title and compaction requests fail before provider submission, including after
+completion and after a host restart. No in-memory session ID is needed to reject
+an ungranted private role. Compaction fails early because its summary cannot
+replace the exact admitted input in the current evidence contract.
+
+Workflow-owned preflight checks all selected role models through `model.list`
+and reads MCP connection state through `mcp.list`. It records value-free readiness
+counts. The public MCP status schema has no server configuration/tool provenance;
+the adapter does not infer Azure identity or `codemode:false` from a connection.
+No provider fallback, extra inference, MCP action classifier or permission grant
+is introduced. The existing review evidence checks remain authoritative.
 
 The private native deny set includes shell, mutation, delegation, skills,
 public web, unrestricted local search, interactive questions, host session/model
@@ -79,6 +95,14 @@ session with bounded cleanup. The Promise adapter ignores extra request options;
 local AbortSignal races are not server cancellation. Track pending admissions
 before interrupt so a delayed prompt cannot start after an idle acknowledgment.
 Unconfirmed settlement is visible in receipts and prevents recovery.
+
+The same run signal covers settings reads, command/agent catalog validation,
+initial role pinning and model/MCP preflight. Cancellation can therefore release
+the command and origin lock while a non-cancellable SDK read remains pending.
+Late read results cannot create a reviewer or restore a revoked grant. A pending
+read is distinct from an unconfirmed in-flight model/session interruption.
+Concurrent origins own their initial role reads; cancelling one cannot reject
+another origin's preflight or replace an already pinned role fingerprint.
 
 Initial failures or valid PARTIAL results revoke sibling work, including a
 sibling SDK promise that never settles. Valid partial evidence remains in the
@@ -143,6 +167,10 @@ Optional diagnostics persist requests, visible answers, stage results and render
 reports under private permissions; never provider reasoning or full host config.
 Tool hook counts/timing do not audit source contents. Missing outcomes remain
 unknown; an MCP error, host truncation and a blocked native attempt are distinct.
+Request-kind observations count hook events and authorized primary preparations,
+not billable HTTP requests. The retry hook preserves the host's proposal during
+ordinary review, rejects it for revoked grants and one-request amendments, and
+records only attempt/decision/delay. It never starts or expands a retry policy.
 See [validation](VALIDATION.md) for tests and remaining service/OS acceptance.
 
 ## Exact upstream contracts

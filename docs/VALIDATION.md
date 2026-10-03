@@ -64,7 +64,8 @@ node tests/host-v2-smoke.mjs /absolute/path/to/opencode-v2-binary --replace
 ```
 
 It creates private evidence under `.local/`, isolates host state, and uses a
-loopback fake provider plus local fixture MCP. It is not part of `npm test`.
+loopback fake provider plus local fixture MCP. It is separate from `npm test`;
+CI installs the pinned host in a disposable prefix and runs both installation modes.
 The original Ubuntu 20.04 fixture copied source behind a top-level loader. It
 validated runtime behavior but missed directory discovery: exports alone did
 not load the installed package. That historical success was not installer proof.
@@ -93,6 +94,11 @@ entry symlink, rollback and archival uninstall. The installed fixture checks:
 API inspection confirmed that the queued report description retained its full
 text. It did not exercise actual TUI rendering. All spawned processes stopped;
 private evidence from successful and failed fixture attempts was retained.
+The stability regression extends each fixture to 21 loopback provider requests:
+ordinary generation/compaction positive controls still work, while generation
+and compaction on a revoked private session send zero requests, before and after
+a host restart. Offline fault injection also checks cancellation during catalog
+reads, origin-lock release, unavailable models and disconnected MCP servers.
 This is exact-host integration evidence with deterministic fixtures. It does not
 certify official MCP 2.9.0 connectivity, real model quality, Azure source fidelity,
 or PR publication.
@@ -137,6 +143,12 @@ Test these native permission cases with the unmodified integration:
 8. Compaction removing the exact input, injected context, model/agent switching,
    and non-success terminal responses fail closed. Active context is not a full
    history API; do not weaken correlation to complete a large fixture.
+9. Private auxiliary requests are rejected at `model.request`, including after
+   completion and restart. Ordinary generation/compaction must have positive
+   controls so a disconnected provider cannot masquerade as successful denial.
+10. Pending command/agent/model/MCP catalog reads remain cancellable. No reviewer
+    may start from a late result after cancellation or plugin disposal; an origin
+    lock must not remain held by a read-only SDK promise that ignored cancellation.
 
 CodeMode denial is necessary because the pinned runtime exposes a `fetch` global
 outside ordinary web-tool permission checks. Inner tool hooks alone cannot make
@@ -147,6 +159,48 @@ See [MCP setup](AZURE_MCP.md).
 These checks establish only the behavior observed in that host fixture. A fake
 provider cannot establish real provider schema acceptance, quotas, cost, model
 accuracy, Azure authentication, or MCP response fidelity.
+
+## 2026-10-04 stability acceptance
+
+The final local suite passed 311/311 offline tests, syntax checks and diff checks.
+Fresh and replacement exact-host fixtures each passed with 21 loopback provider
+requests, five fixture MCP reads, ordinary auxiliary positive controls, and
+private generation/compaction denial before and after restart. The CI workflow
+now includes these fixtures; a remote CI run for this change was not performed.
+
+A separately authorized live test used OpenCode 2.0.22, official MCP 2.9.0 with
+resolved Azure SDK 15.1.3, Ubuntu 22.04.5 and the existing three selected models.
+Three whole-review attempts were made under a maximum-five authorization:
+
+| Attempt | Outcome | Evidence and correction |
+| --- | --- | --- |
+| 1 | INCOMPLETE, about 5 seconds | Provider HTTP 403 before any tool call. The isolated profile changed the existing shell option from deny to ask while preserving the execution guard; see DEBUGGING. |
+| 2 | INCOMPLETE, about 130 seconds | Initials used the same PR/SHAs but different project name/ID labels. The ambiguous common rule and examples were replaced with explicit stable project/repository IDs. Strict comparison remained unchanged. |
+| 3 | COMPLETE, about 421 seconds | All three seeded defect classes found; all six original finding IDs adjudicated. |
+
+In the completed attempt, all 19 content reads exactly matched the requested Git
+commit bytes and all four review metadata reads matched the independently checked
+PR identity/versions. Raw initial output, verifier handoff, accepted final output
+and deterministic rendering agreed. There were 17 observed HTTP responses, all
+200; zero native attempts, output corrections or amendment stages. The three
+retained tool errors were unsupported directory lookups, not content-read or
+Code Search failures. Earlier attempts retain their different error categories.
+
+Execution acceptance passed; overall model/tool-policy quality remains PARTIAL.
+The final equal-instant explanation was correct and did not repeat earlier
+permanence overclaims. However, the overview repeated structured decisions, an
+exclusive caller claim exceeded the verifier's own reads, and the last metadata
+read ran alongside an additional supporting-file read rather than after all reads.
+An independent post-run check found unchanged versions. The model also repeated
+unsupported directory queries despite the existing policy. These limitations
+were retained without extra model rounds, special cases or relaxed validation.
+
+All raw successes/failures and assessments remain private under `.local/`. The
+installed personal settings and credentials stayed byte-identical; the acceptance
+profile used ask only in an isolated installation. Both sandbox repositories were
+unchanged, test servers stopped, and PR threads remained zero. No PR publication,
+paid-model substitution, host/MCP upgrade, large-PR certification or TUI rendering
+certification is implied by this result.
 
 ## Authorized environment acceptance
 

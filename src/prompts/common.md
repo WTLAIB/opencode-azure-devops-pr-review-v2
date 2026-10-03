@@ -20,8 +20,10 @@ receives both independent reviews and their combined file list. Do not run a
 separate readiness investigation, prove ancestry or reconstruct commit history.
 
 For an initial review, establish snapshot from one PR metadata response:
-- repository: organization/project/repository.id, using the target repository's
-  stable ID from PR metadata, never its display name or the URL repository name.
+- repository: organization/project-id/repository-id. Take the organization from
+  the confirmed server URL, and both target repository.project.id and repository.id
+  from that same PR metadata response. Use stable IDs for both project and
+  repository, never their display names or the corresponding URL lookup hints.
   prId: the requested PR ID, confirmed in that response. urlIdentity supplies
   lookup hints only. snapshot.repository is a comparison label; do not copy it
   into MCP repositoryId. For calls, follow the operation's schema using the

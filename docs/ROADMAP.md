@@ -20,14 +20,25 @@ historical evidence and do not certify this adapter.
 - Offline contract/installation/session/runtime tests and an isolated exact-host
   fixture using deterministic local fake services. Fresh and replacement package
   discovery passed on Ubuntu 22.04.5 with OpenCode 2.0.22; see VALIDATION for scope.
+- Shared V2 model-request authorization across primary and auxiliary kinds;
+  private compaction fails before a lossy summary request. Ordinary auxiliary
+  behavior is preserved, including across the host restart regression.
+- Cancellable catalog/settings preflight, selected-model tool-capability checks,
+  MCP connection diagnostics, and value-free request-kind/retry observations.
+- Pinned exact-host fresh/replacement fixtures included in CI in addition to
+  offline tests. Local fixture success and a completed CI run are separate evidence.
+- One controlled live review completed with official MCP 2.9.0 and the selected
+  models after two retained failures. Source/version fidelity and all original
+  finding IDs passed; model/tool-policy quality remains PARTIAL. See VALIDATION.
 
 ## Acceptance still required
 
-1. Validate the official MCP 2.9.0 process and its resolved SDK/dependencies with
-   the intended Azure organization, direct-tool configuration and host permissions.
-2. With separate authorization, run a controlled live review using explicitly
-   selected models. Audit raw tool/version/evidence output and every finding ID;
-   assess operational, factual and presentation quality separately.
+1. Repeat environment acceptance for other installations/providers; the observed
+   MCP 2.9.0/SDK 15.1.3 connection and selected-model result apply to the tested
+   environment only. Provider schema admission remains a separate constraint.
+2. With separate authorization, assess additional model samples and PRs against
+   the retained factual, tool-policy and presentation limitations. Do not treat
+   a COMPLETE workflow as general model-quality acceptance.
 3. Verify actual TUI notice rendering and recovery navigation. Queue acknowledgment
    and headless content inspection do not establish every UI presentation detail.
 4. Expand PR scale/language/model coverage only with evidence and consent. A single

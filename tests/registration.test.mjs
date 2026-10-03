@@ -24,6 +24,8 @@ async function fixture(t, existingCommands = []) {
   const registration = () => ({ dispose: async () => {} });
   const context = {
     location: { directory },
+    model: { list: async () => ({ data: [] }) },
+    mcp: { list: async () => ({ data: [{ name: 'fixture', status: { status: 'connected' } }] }) },
     agent: {
       get: async ({ agentID }) => { calls.agents.push(agentID); return { data: copy(agents.get(agentID)) }; },
       transform: async callback => {
@@ -78,7 +80,8 @@ test('V2 post-config global permissions are preserved and all complete private d
   t.after(dispose);
   const global = { action: 'fixture_mcp_*', resource: '*', effect: 'deny' };
   for (const [role, agent] of f.agents) if (role.startsWith('azpr-')) agent.permissions.push(copy(global));
-  await assert.rejects(f.invoke('pr-deep'), /All three models.deep roles/);
+  await f.invoke('pr-check');
+  assert.ok(f.calls.reports.some(report => report.includes('model is unavailable')));
   assert.ok(f.calls.agents.includes('azpr-review-verifier'));
   assert.equal(f.calls.created, 0);
   for (const [role, agent] of f.agents) if (role.startsWith('azpr-')) {
@@ -101,7 +104,8 @@ test('post-config cannot replace protected role fields or native restrictions be
     const f = await fixture(t);
     t.after(await f.setup());
     alter(f.agents.get('azpr-review-functional'));
-    await assert.rejects(f.invoke('pr-deep'), /protected private reviewer field or native permission rule/);
+    await f.invoke('pr-check');
+    assert.ok(f.calls.reports.some(report => report.includes('protected private reviewer field or native permission rule')));
     assert.equal(f.calls.created, 0);
   }
 });
@@ -109,7 +113,8 @@ test('post-config cannot replace protected role fields or native restrictions be
 test('later host permission changes fail existing role fingerprints before creating a reviewer', async t => {
   const f = await fixture(t);
   t.after(await f.setup());
-  await assert.rejects(f.invoke('pr-deep'), /All three models.deep roles/);
+  await f.invoke('pr-check');
+  f.context.model.list = async () => ({ data: ['functional', 'risk', 'verifier'].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true } })) });
   for (const role of ['azpr-review-functional', 'azpr-review-risk']) f.agents.get(role).permissions.push({ action: 'fixture_mcp_read', resource: '*', effect: 'deny' });
   await f.invoke('pr-review');
   assert.equal(f.calls.created, 0);
@@ -120,11 +125,13 @@ test('a later reserved-command shadow and changed settings both fail before sess
   const f = await fixture(t);
   t.after(await f.setup());
   f.commands.set('pr-review', { name: 'pr-review', description: 'Late user command', execute: async () => {} });
-  await assert.rejects(f.invoke('pr-deep'), /missing or shadowed/);
+  await f.invoke('pr-check');
+  assert.ok(f.calls.reports.some(report => report.includes('missing or shadowed')));
   assert.equal(f.calls.created, 0);
   const g = await fixture(t);
   t.after(await g.setup());
   await writeFile(join(g.directory, 'settings.json'), JSON.stringify(g.raw) + '\n');
-  await assert.rejects(g.invoke('pr-deep'), /settings.json changed/);
+  await g.invoke('pr-check');
+  assert.ok(g.calls.reports.some(report => report.includes('settings.json changed')));
   assert.equal(g.calls.created, 0);
 });
