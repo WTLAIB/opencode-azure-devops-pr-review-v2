@@ -18,8 +18,8 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
 | `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
 
-The installer creates one `plugins/azpr-v2` ESM package with an exported entry,
-eight source modules, nine prompts and private settings. No top-level loader or
+The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
+entry re-exporting `plugin.js`, matching package exports, eight source modules, nine prompts and private settings. No top-level loader or
 Markdown command expansion is involved. Optional docs/schema/uninstaller do not
 change runtime requirements. The installer merges missing current defaults;
 obsolete profiles/keys fail instead of being migrated. See README's exact list.

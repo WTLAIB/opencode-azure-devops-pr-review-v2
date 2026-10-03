@@ -1,14 +1,14 @@
 /**
- * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode
+ * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
  * Uses isolated directories, a loopback deterministic provider, and a fake stdio
  * MCP. Covers session helpers, full review, native guards, and cancellation.
  * The ordinary-agent shell positive control writes only inside its own fixture.
  * This does not validate a real provider, official Azure MCP, or TUI rendering.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, cp, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
@@ -17,12 +17,33 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const binary = process.argv[2];
 assert.ok(binary?.startsWith('/'), 'Supply the exact downloaded host binary as an absolute path.');
+const replacement = process.argv[3] === '--replace';
+assert.ok(process.argv.length <= 4 && (!process.argv[3] || replacement), 'Only --replace is supported.');
 const fixturesRoot = join(sourceRoot, '.local');
 await mkdir(fixturesRoot, { recursive: true });
 const fixture = await mkdtemp(join(fixturesRoot, 'host-v2-smoke-'));
 const directories = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work'].map(name => [name, join(fixture, name)]));
 await Promise.all(Object.values(directories).map(path => mkdir(path, { recursive: true })));
 await mkdir(join(directories.config, 'plugins'), { recursive: true });
+const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
+const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
+for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
+settings.shellToolPermission = 'ask';
+settings.debug = { enabled: true, directory: join(fixture, 'debug') };
+const profile = join(fixture, 'settings.json');
+await writeFile(profile, JSON.stringify(settings, null, 2));
+const install = args => {
+  const result = spawnSync('/bin/sh', [join(sourceRoot, 'install.sh'), '--config-dir', directories.config, ...args], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+};
+install(['--settings', profile]);
+if (replacement) {
+  const before = await readFile(join(runtimeDirectory, 'settings.json'));
+  await rm(join(runtimeDirectory, 'server.js'), { force: true });
+  await writeFile(join(runtimeDirectory, 'package.json'), JSON.stringify({ type: 'module', exports: './plugin.js', private: true }));
+  install(['--replace']);
+  assert.deepEqual(await readFile(join(runtimeDirectory, 'settings.json')), before);
+}
 const requests = [];
 const workflowReceipts = [];
 let forbiddenFetches = 0;
@@ -77,14 +98,6 @@ await once(provider, 'listening');
 const providerURL = `http://127.0.0.1:${provider.address().port}/v1`;
 const resultPath = join(fixture, 'result.json');
 const mcpPath = join(fixture, 'mcp.mjs');
-const runtimeDirectory = join(fixture, 'runtime');
-await cp(join(sourceRoot, 'src'), runtimeDirectory, { recursive: true });
-const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
-for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
-settings.shellToolPermission = 'ask';
-settings.debug = { enabled: true, directory: join(fixture, 'debug') };
-await writeFile(join(runtimeDirectory, 'settings.json'), JSON.stringify(settings, null, 2));
-await writeFile(join(directories.config, 'plugins', 'azpr.js'), `export { default } from ${JSON.stringify(pathToFileURL(join(runtimeDirectory, 'plugin.js')).href)};\n`);
 await writeFile(mcpPath, `import { createInterface } from 'node:readline';
 import { appendFileSync } from 'node:fs';
 for await (const line of createInterface({ input: process.stdin })) {
@@ -103,7 +116,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 `);
 await writeFile(join(directories.config, 'plugins', 'smoke.js'), `
 import { writeFile } from 'node:fs/promises';
-import { createReviewSession, requestReview, interruptSession, appendReport } from ${JSON.stringify(pathToFileURL(join(sourceRoot, 'src', 'session.mjs')).href)};
+import { createReviewSession, requestReview, interruptSession, appendReport } from ${JSON.stringify(pathToFileURL(join(runtimeDirectory, 'session.mjs')).href)};
 export default { id: 'azpr.fixture.smoke', async setup(ctx) {
   const observations = { app: ctx.app, prompts: 0, contexts: 0, before: [], after: [] };
   await ctx.agent.transform(editor => editor.update('fixture-helper', agent => {
@@ -194,6 +207,14 @@ try {
     await new Promise(resolveReady => setTimeout(resolveReady, 100));
   }
   assert.equal(connected, true, 'Fixture MCP did not connect.');
+  const commands = await api('/api/command');
+  for (const name of ['pr-check', 'pr-review', 'pr-stop', 'pr-deep', 'pr-comment']) {
+    assert.ok(commands.data.some(command => command.name === name), `Installed command missing: ${name}`);
+  }
+  const agents = await api('/api/agent');
+  for (const role of ['check', 'functional', 'risk', 'verifier', 'comment-plan']) {
+    assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), `Installed role missing: ${role}`);
+  }
   await api(`/api/session/${origin.id}/command`, { name: 'fixture-smoke', text: 'Literal $ARGUMENTS `pwd` @private.txt', delivery: 'steer' });
   const result = JSON.parse(await readFile(resultPath, 'utf8'));
   assert.equal(result.ok, true, result.error);
@@ -246,7 +267,7 @@ try {
     assert.deepEqual(call.arguments, { value: 'fixture-source' });
   }
   assert.equal(requests.length, 17);
-  console.log(JSON.stringify({ status: 'PASS', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   if (child && child.exitCode === null) {
     child.kill('SIGTERM');

@@ -123,8 +123,10 @@ stage=$(mktemp -d "$root/.azpr-v2-stage.XXXXXX")
 mkdir -p "$stage/new/$target/prompts"
 for file in $runtime_files; do cp "$src/src/$file" "$stage/new/$target/"; done
 for name in $prompt_names; do cp "$src/src/prompts/$name.md" "$stage/new/$target/prompts/"; done
-# OpenCode V2 discovers a local plugin package through its package exports.
-printf '%s\n' '{"type":"module","exports":"./plugin.js","private":true}' > "$stage/new/$target/package.json"
+# OpenCode 2.0.22 resolves local package directories through server, then index.
+# Keep the entry inside the staged package so replacement and rollback own it.
+printf '%s\n' "export { default } from './plugin.js';" > "$stage/new/$target/server.js"
+printf '%s\n' '{"type":"module","exports":"./server.js","private":true}' > "$stage/new/$target/package.json"
 for file in config/settings.schema.json README.md uninstall.sh; do copy_optional "$file"; done
 if [ -d "$src/docs" ]; then
   cp -R "$src/docs" "$stage/new/plugins/azpr-v2/docs" || printf 'WARNING: Could not copy optional docs directory.\n' >&2

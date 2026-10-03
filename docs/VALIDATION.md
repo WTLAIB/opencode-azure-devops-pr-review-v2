@@ -6,8 +6,9 @@ Validate the installed package, actual binary, MCP process, resolved dependencie
 permissions, and model services separately; a package label or passing mock suite
 is not a live compatibility certificate.
 
-The development environment used for this rewrite is Ubuntu 20.04. It cannot
-establish Ubuntu 22.04 acceptance. No live Azure/model review or PR publication
+The initial rewrite was tested on Ubuntu 20.04. On 2026-10-04, installer
+regressions and installed-package host fixtures also passed on Ubuntu 22.04.5
+with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publication
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
@@ -49,7 +50,7 @@ sh uninstall.sh --config-dir "$azpr_test_root/config"
 The default example still contains generic model placeholders. Successful file
 installation does not mean the plugin can start a review with those settings.
 For an installation test, compare the eight modules and nine prompts to source,
-check the generated `package.json` export, and verify owner-only settings
+check the generated regular `server.js` entry and matching `package.json` export, and verify owner-only settings
 permissions. No top-level loader or Markdown command files should be created.
 The installer must reject a conflicting older integration without moving it.
 
@@ -59,15 +60,25 @@ The optional SDK/transport smoke fixture runs only when explicitly invoked:
 
 ```sh
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode-v2-binary
+node tests/host-v2-smoke.mjs /absolute/path/to/opencode-v2-binary --replace
 ```
 
 It creates private evidence under `.local/`, isolates host state, and uses a
 loopback fake provider plus local fixture MCP. It is not part of `npm test`.
-On 2026-10-04 the current-source fixture passed against the actual 2.0.22 binary
-on Ubuntu 20.04, with 17 deterministic loopback provider requests and exactly
-five fixture MCP reads. The fixture exercised the installed AZPR runtime and
-its session helpers:
+The original Ubuntu 20.04 fixture copied source behind a top-level loader. It
+validated runtime behavior but missed directory discovery: exports alone did
+not load the installed package. That historical success was not installer proof.
 
+On 2026-10-04, both fresh and replacement installations passed against the actual
+2.0.22 binary on Ubuntu 22.04.5, each with 17 deterministic loopback provider
+requests and exactly five fixture MCP reads. The fixture now invokes `install.sh`
+and loads the installed package and session helpers. Replacement simulates the
+previous exports-only layout and checks that private settings remain byte-identical.
+With the old installer, the updated fixture failed at command discovery before
+any provider request. Offline regressions also cover replacement of the temporary
+entry symlink, rollback and archival uninstall. The installed fixture checks:
+
+- Discovery of all five native commands and five enabled private roles.
 - Native registration, exact literal prompt/context correlation, final text,
   idle interrupt/wait, and synthetic report queue acknowledgement.
 - `/pr-check` READY and `/pr-review` COMPLETE with both independent initials,
@@ -84,7 +95,7 @@ text. It did not exercise actual TUI rendering. All spawned processes stopped;
 private evidence from successful and failed fixture attempts was retained.
 This is exact-host integration evidence with deterministic fixtures. It does not
 certify official MCP 2.9.0 connectivity, real model quality, Azure source fidelity,
-PR publication, or Ubuntu 22.04.
+or PR publication.
 
 Before using real services, exercise the actual V2 binary in a separate temporary
 home/config/data/state/cache environment and a trusted fixture project. Keep the

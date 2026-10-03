@@ -10,9 +10,9 @@ against source and adjudicates every original finding ID. Ordinary development
 agents, model selections, and provider credentials remain host-owned. A review
 starts only through an explicit command.
 
-The exact host API has been exercised with isolated fake services. The development
-machine is Ubuntu 20.04; Ubuntu 22.04, live model services, and the official MCP
-2.9.0 Azure connection still require separate acceptance. See
+Fresh and replacement installations have been exercised on Ubuntu 22.04 with
+the exact host and isolated fake services. Live model services and the official
+MCP 2.9.0 Azure connection require separate acceptance. See
 [validation](docs/VALIDATION.md) for the actual scope. Passing contracts does not
 prove that a model's factual reasoning or final presentation is correct.
 
@@ -30,7 +30,9 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config
 ```
 
 The installer creates `plugins/azpr-v2/` with a generated ESM `package.json`
-exporting `./plugin.js`. Configure OpenCode to use that configuration directory;
+exporting `./server.js`. The generated package-local `server.js` re-exports
+`plugin.js`; OpenCode 2.0.22 resolves local directories through this entry, not
+package exports alone. Configure OpenCode to use that configuration directory;
 `--config-dir` controls installation only. The plugin is discovered as a V2
 package, with commands registered during setup.
 
@@ -83,8 +85,8 @@ src/prompts/comment-publish.md
 
 README, `docs/`, the settings schema and `uninstall.sh` are optional installer
 inputs. Include them for local guidance. No `commands/` directory or top-level
-loader is needed. The installed core has 19 files: eight modules, nine prompts,
-settings, and generated package metadata.
+loader is needed. The installed core has 20 files: eight modules, nine prompts,
+settings, generated package metadata, and the generated server entry.
 
 ## Configuration
 

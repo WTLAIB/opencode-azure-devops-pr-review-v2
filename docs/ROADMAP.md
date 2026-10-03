@@ -18,20 +18,19 @@ historical evidence and do not certify this adapter.
 - V2 package installer, current-layout defaults, conflict refusal, rollback and
   archival removal. No V1 migration, templates or installed-user configuration edit.
 - Offline contract/installation/session/runtime tests and an isolated exact-host
-  fixture using deterministic local fake services. See VALIDATION for actual scope.
+  fixture using deterministic local fake services. Fresh and replacement package
+  discovery passed on Ubuntu 22.04.5 with OpenCode 2.0.22; see VALIDATION for scope.
 
 ## Acceptance still required
 
-1. Run the exact source/install/host fixture on Ubuntu 22.04. CI targets that OS;
-   defining a workflow is not evidence of a completed CI run.
-2. Validate the official MCP 2.9.0 process and its resolved SDK/dependencies with
+1. Validate the official MCP 2.9.0 process and its resolved SDK/dependencies with
    the intended Azure organization, direct-tool configuration and host permissions.
-3. With separate authorization, run a controlled live review using explicitly
+2. With separate authorization, run a controlled live review using explicitly
    selected models. Audit raw tool/version/evidence output and every finding ID;
    assess operational, factual and presentation quality separately.
-4. Verify actual TUI notice rendering and recovery navigation. Queue acknowledgment
+3. Verify actual TUI notice rendering and recovery navigation. Queue acknowledgment
    and headless content inspection do not establish every UI presentation detail.
-5. Expand PR scale/language/model coverage only with evidence and consent. A single
+4. Expand PR scale/language/model coverage only with evidence and consent. A single
    successful review never certifies arbitrary enterprise PRs or later versions.
 
 ## Quality principles

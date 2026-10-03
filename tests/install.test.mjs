@@ -3,12 +3,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync,
-  readdirSync, rmSync, chmodSync, statSync, symlinkSync, renameSync, cpSync,
+  readdirSync, rmSync, chmodSync, statSync, lstatSync, symlinkSync, renameSync, cpSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { PROMPTS } from '../src/config.mjs';
 
 const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -108,7 +109,7 @@ test('fresh installation creates one V2 package and preserves existing configura
   for (const name of ['runtime.mjs', 'session.mjs', 'plugin.js', 'comments.mjs', 'config.mjs', 'settings.schema.json', 'README.md', 'docs/ARCHITECTURE.md', 'uninstall.sh']) {
     assert.ok(existsSync(installed(s, name)), name);
   }
-  assert.deepEqual(JSON.parse(readFileSync(installed(s, 'package.json'), 'utf8')), { type: 'module', exports: './plugin.js', private: true });
+  assert.deepEqual(JSON.parse(readFileSync(installed(s, 'package.json'), 'utf8')), { type: 'module', exports: './server.js', private: true });
   const { default: plugin } = await import(pathToFileURL(installed(s, 'plugin.js')).href);
   assert.equal(plugin.id, 'azpr');
   assert.equal(typeof plugin.setup, 'function');
@@ -116,6 +117,49 @@ test('fresh installation creates one V2 package and preserves existing configura
   assert.deepEqual(readdirSync(join(s.root, 'commands')), ['my-command.md']);
   for (const name of ['azpr', 'skills', 'agents', 'azpr-v2-backups']) assert.ok(!existsSync(join(s.root, name)));
   assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
+});
+
+// OpenCode 2.0.22 Host.resolve resolves local <directory>/server before index;
+// a package's exports field alone does not select its local directory entry.
+async function loadDirectoryEntry(s) {
+  const entry = createRequire(import.meta.url).resolve(installed(s, 'server'));
+  const loaded = await import(pathToFileURL(entry).href);
+  const original = await import(pathToFileURL(installed(s, 'plugin.js')).href);
+  assert.equal(loaded.default, original.default);
+  assert.equal(loaded.default.id, 'azpr');
+  assert.equal(typeof loaded.default.setup, 'function');
+  assert.ok(lstatSync(installed(s, 'server.js')).isFile(), 'The installer owns a regular entry file, not a workaround symlink.');
+  return entry;
+}
+
+test('local directory entry resolves and loads from a minimal fresh install', async () => {
+  const s = setup(); minimalSource(s);
+  ok(install(s, ['--settings', profile(s)]));
+  await loadDirectoryEntry(s);
+  assert.equal(readdirSync(installed(s, '')).length, 12); // 8 modules + entry + metadata + settings, plus prompts directory
+  original(s); clean(s);
+});
+
+test('replacement repairs an exports-only package without changing private settings', async () => {
+  const s = setup(); ok(install(s, ['--settings', profile(s)]));
+  rmSync(installed(s, 'server.js'), { force: true });
+  writeFileSync(installed(s, 'package.json'), JSON.stringify({ type: 'module', exports: './plugin.js', private: true }));
+  const settings = readFileSync(installed(s, 'settings.json'));
+  ok(install(s, ['--replace']));
+  await loadDirectoryEntry(s);
+  assert.deepEqual(readFileSync(installed(s, 'settings.json')), settings);
+  original(s); clean(s);
+});
+
+test('replacement replaces the temporary entry symlink with a generated regular file', async () => {
+  const s = setup(); ok(install(s, ['--settings', profile(s)]));
+  rmSync(installed(s, 'server.js'), { force: true });
+  symlinkSync('plugin.js', installed(s, 'server.js'));
+  const settings = readFileSync(installed(s, 'settings.json'));
+  ok(install(s, ['--replace']));
+  await loadDirectoryEntry(s);
+  assert.deepEqual(readFileSync(installed(s, 'settings.json')), settings);
+  original(s); clean(s);
 });
 
 test('20-file manual source package installs and compiles every role without optional files or npm', async () => {
@@ -305,7 +349,7 @@ test('XDG paths with spaces work and JSON strings are never executed', () => {
 
 test('failed replacement restores the original package and settings exactly', () => {
   const s = setup(); ok(install(s, ['--settings', profile(s)]));
-  const files = ['runtime.mjs', 'settings.json', 'plugin.js', 'package.json'];
+  const files = ['runtime.mjs', 'settings.json', 'plugin.js', 'server.js', 'package.json'];
   const before = files.map(file => readFileSync(installed(s, file), 'utf8'));
   const extra = wrapper(s, '#!/bin/sh\ncase "$1" in --) shift;; esac\ncase "$1" in */new/plugins/azpr-v2) exit 71;; esac\nexec /bin/mv "$@"\n');
   bad(install(s, ['--replace'], extra));
@@ -354,6 +398,7 @@ test('explicit uninstall archives only the V2 package including private settings
   const archives = readdirSync(join(s.root, 'azpr-v2-backups')); assert.equal(archives.length, 1);
   const archive = join(s.root, 'azpr-v2-backups', archives[0], destination);
   assert.equal(readFileSync(join(archive, 'settings.json'), 'utf8'), readFileSync(file, 'utf8'));
+  assert.ok(statSync(join(archive, 'server.js')).isFile());
   assert.equal(readFileSync(join(s.root, 'plugins/azpr/settings.json'), 'utf8'), 'OLD_PRIVATE_PROFILE'); original(s); clean(s);
 });
 
