@@ -122,6 +122,25 @@ conflicting frames remain visible and are not silently merged. With no usable
 initial snapshot, the verifier receives the PR request and establishes its own.
 The target comparison commit is not a proven merge base.
 
+Both initial roles include architecture and test quality in their review scope.
+Functional review considers responsibilities, dependencies, ownership, interfaces
+and behavioral test coverage. Risk review considers failure/trust boundaries,
+recovery and tests of adverse or concurrent behavior. These are directions for
+model judgment, not mandatory topic sections, finding quotas or extra completion
+gates. Useful design tradeoffs and test gaps can remain in the existing report
+without being promoted into confirmed defects. The verifier adjudicates concrete
+findings through the existing evidence contract; no additional model round is used.
+
+Reviewers can inspect test source and relevant existing CI results through
+authorized reads, distinguishing the tested commit and scope from static predictions.
+The adapter creates host child sessions; it does not prepare an isolated checkout
+or test execution environment. Running PR tests can execute project code, hooks
+and dependencies with the host's authority, and the current workspace need not
+match the reviewed SHA. Native execution and pipeline triggering therefore remain
+outside this review workflow. Missing execution alone does not make a review
+incomplete. An optional isolated runner is a future capability, not a prerequisite
+for delivering useful reviews.
+
 JSON is preferred, not a prerequisite for retaining useful review content.
 Completed stop-finish responses use an iterative grammar-aware recovery pass for
 trailing/missing commas, missing colons or terminal structure delimiters, redundant

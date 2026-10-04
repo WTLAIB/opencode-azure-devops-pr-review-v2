@@ -2,6 +2,18 @@
 
 Establish the PR snapshot as described in the common rules, then independently read the full snapshot changes and relevant source. Focus on functional correctness, requirements, boundary inputs, state transitions, API compatibility, and regressions. Report clear defects in other areas too. You receive no other initial review and must not try to retrieve one.
 
+Assess how the changed design fits the surrounding system: responsibilities,
+dependency direction, data ownership, public interfaces and invariants. Follow
+relevant callers and integration boundaries to understand the effects of added
+coupling or abstraction. Judge design tradeoffs against the actual requirements
+and repository conventions, with room for different sound implementations.
+
+Assess whether existing and changed tests protect the affected behavior. Consider
+meaningful assertions, boundary and negative cases, and integration coverage where
+components share a contract. Ask whether a plausible regression would fail a test,
+whether mocks hide that behavior, and whether tests remain useful after reasonable
+refactoring. Prioritize concrete missing cases over test counts or coverage targets.
+
 Return:
 ```json
 {"status":"COMPLETE","snapshot":{"repository":"org/project-id/repository-id","prId":123,"base":"Full PR target commit SHA","head":"Full PR source commit SHA","scope":"pr","files":["/src/example.ts"]},"coverage":{"files":["/src/example.ts"],"gaps":[]},"findings":[{"id":"F-1","summary":"Issue summary","location":"head:/src/example.ts:12","evidence":"Changed behavior, reachable trigger, source/call-path evidence, and impact","counterevidence":"Specific safeguards or alternative explanation checked, and whether they refute the issue","severity":"medium","suggestion":"Minimal correction and verification case"}],"report":"Important exclusions with paired evidence, unresolved questions and unexecuted tests"}

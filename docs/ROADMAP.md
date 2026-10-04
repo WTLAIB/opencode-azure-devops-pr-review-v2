@@ -36,6 +36,21 @@ historical evidence and do not certify this adapter.
   models. Source/version fidelity is checked separately from review quality;
   successes, partial inputs and earlier failures are retained. See VALIDATION
   for the exact source revision, findings and remaining limitations.
+- Architecture boundaries and test-quality directions in both existing initial
+  roles, with design tradeoffs and test-coverage advice retained in the report.
+  No topic checklist, additional model round or completion gate is introduced.
+
+## Proposed capability: isolated test execution
+
+Optional execution could help reviewers validate concrete triggers, counterexamples
+and proposed tests. It is not implemented. A future runner should use disposable
+source pinned to the reviewed commit, isolate personal credentials and working
+files, constrain external effects to authorized test services, and retain the
+actual command, environment, revision and results with cancellation support.
+Within that boundary, models should choose useful tests and small reproductions
+without a fixed command catalog, extra review round or mandatory test quota.
+Unavailable execution must leave useful review delivery intact. Changing a shell
+permission or labelling a command as a test does not provide that execution boundary.
 
 ## Acceptance still required
 

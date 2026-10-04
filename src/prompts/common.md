@@ -147,6 +147,12 @@ Report concrete PR defects, not cosmetic preferences, speculation or unrelated
 pre-existing issues. Trace relevant callers, guards, retries, transactions, locks
 and idempotency before concluding.
 
+Use the architecture and test-quality directions with judgment about this change.
+They are not mandatory topic sections, finding quotas or extra completion gates.
+Keep useful design tradeoffs, test gaps and focused verification advice in report
+when the evidence does not establish a defect. A missing test alone does not make
+an otherwise completed review incomplete; disclose the unprotected behavior.
+
 Every candidate finding needs an evidence packet: when supplied, location identifies
 the base/head side, path and line(s); evidence identifies the changed behavior,
 reachable trigger, source/call-path evidence and observable impact; suggestion
@@ -187,8 +193,11 @@ Reconcile numeric claims with the expected state, resulting state and their diff
 Trace reachable inputs within the code's limits. For static test analysis, follow
 assertion order and identify the first failing assertion; later state differences
 are static predictions, not executed assertion failures. A general testing caveat
-does not correct a contradictory evidence claim. Observed execution needs tool or
-CI evidence tied to the reviewed SHA; propose any needed execution instead of running it.
+does not correct a contradictory evidence claim. Use relevant existing test or CI
+results through authorized reads when useful. Identify the tested commit and
+behavior; disclose a different or unknown revision instead of treating it as proof
+for the reviewed SHA. The current reviewer has no isolated test runner. Propose
+needed execution instead of running PR code or triggering pipelines in this host.
 
 Keep negative claims bounded to inspected paths, functions and versions. Name the
 guard or caller checked and its result; broader absence or class-count claims need

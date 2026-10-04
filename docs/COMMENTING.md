@@ -83,15 +83,22 @@ byte offsets and do not add required fields to the planner's output. The
 publisher maps the complete saved positions to the available tool schema;
 actual remote coordinates still require independent verification.
 
-Every saved comment includes the review stages' selected provider/model IDs,
-the model assigned to comment preparation/publication, and a notice that it is
-AI-generated rather than human approval. This is an intentional disclosure to
-PR readers, including when the MCP uses a personal account. Check company
-policy before publishing. The runtime generates attribution from invoked review
-stages, not from the planner's prose; unused configured models are not listed.
-The method is independent reviews plus source verification/duplicate merging,
-not majority voting. The publisher is instructed to preserve the entire footer.
-Exact remote content still depends on model/MCP compliance; inspect Azure.
+Every saved comment ends with one short disclosure: it is an AI-generated review,
+not human review or approval, followed by the distinct selected provider/model IDs
+from the review stages and comment preparation/publication. Repeated model IDs
+appear once. For example, using placeholder IDs:
+
+```text
+AI-generated review; not human review or approval. Models: `provider/model-a`, `provider/model-b`
+```
+
+The disclosure follows the report's `outputLanguage`. The full report retains
+the per-role model ledger and review method. The runtime generates attribution
+from invoked review stages, not from the planner's prose; unused configured
+models are not listed. This disclosure also applies when the MCP uses a personal
+account. Check company policy before publishing. The publisher preserves the
+entire saved footer. Exact remote content still depends on model/MCP compliance;
+inspect Azure.
 
 The workflow does not start a publisher without explicit --publish. This is not
 a guarantee that a model cannot misuse a host-permitted tool during review or

@@ -2,6 +2,18 @@
 
 Establish the PR snapshot as described in the common rules, then independently read the full snapshot changes and relevant source. Focus on exceptions, timeouts, cancellation, resource release, partial success, retry scope, duplicate execution, concurrency, transaction boundaries, authorization, data consistency, and test gaps. Report clear defects in other areas too. Do not obtain or rely on another initial review.
 
+Assess architecture at failure and trust boundaries: ownership of state and
+resources, containment of partial failures, and compatibility and recovery across
+components. Follow the relevant control and data paths to understand whether
+coupling or boundary changes widen the impact of a failure. Judge the design
+against its actual operating assumptions and safeguards.
+
+Assess whether tests protect the important failure behavior, including relevant
+negative, asynchronous, concurrency and recovery scenarios. Consider integration
+coverage at those boundaries, assertions that miss or swallow failures, timing
+dependence, and mocks that bypass the behavior under review. Explain the concrete
+behavior an important missing test would protect, accounting for existing coverage.
+
 Return:
 ```json
 {"status":"COMPLETE","snapshot":{"repository":"org/project-id/repository-id","prId":123,"base":"Full PR target commit SHA","head":"Full PR source commit SHA","scope":"pr","files":["/src/example.ts"]},"coverage":{"files":["/src/example.ts"],"gaps":[]},"findings":[{"id":"R-1","summary":"Issue summary","location":"head:/src/example.ts:12","evidence":"Changed behavior, reachable failure path, source evidence, trigger, and impact","counterevidence":"Specific locks, transactions, guards or retry boundaries checked, and whether they refute the issue","severity":"medium","suggestion":"Minimal correction and verification case"}],"report":"Important exclusions with paired evidence, unresolved questions and unexecuted tests"}
