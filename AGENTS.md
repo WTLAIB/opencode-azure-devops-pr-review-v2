@@ -45,18 +45,25 @@ The independent V1 repository and installation are outside this project's scope.
 - Pursue exact PR identity/SHAs, full discovered-path coverage, counterevidence,
   original-ID decisions and a final version recheck. Review quality gaps produce
   visible limitations, not wholesale result loss. Preserve all useful observations
-  and label missing decisions UNREVIEWED. The complete evidence contract remains
-  necessary for optional PR publication. PR target SHA is not a certified merge
-  base. Tool success and model claims are not independent source proof.
+  and label missing decisions UNREVIEWED. A COMPLETE final verifier result enters
+  same-origin comment preview; initial coverage disclosures, partial/unavailable
+  initials and their warnings must not impose a second eligibility veto. The
+  verifier still establishes final evidence, versions and original-ID decisions.
+  PR target SHA is not a certified merge base. Tool success and model claims are
+  not independent source proof.
 - Prefer JSON text with local syntax/key/shape normalization. Retain ambiguous or
-  unstructured output literally for the verifier and report; never silently choose
+  unstructured output literally for the verifier and report. Extract a unique
+  review object from prose/fences while retaining surrounding examples; incidental
+  code braces are not competing review envelopes. Never silently choose
   duplicate keys, drop a finding or manufacture evidence. Partial/admitted failed
   initials do not cancel useful sibling work. Keep identity, admission, permission,
   configuration and cancellation guards. No extra review model requests for
   formatting; outputRetries applies to eligible standalone readiness amendments.
-- Keep original response/failure records. Review delivery and publication
-  eligibility are separate; a readable PARTIAL report is a useful outcome, not
-  fabricated completeness. Missing fields must be displayed honestly.
+- Keep original response/failure records. COMPLETE must be actionable for comment
+  preview in the same session/process; publication still needs a saved plan and
+  explicit authorization. Normalized formatting warnings alone cannot downgrade
+  validated final evidence. A readable PARTIAL report is useful, not fabricated
+  completeness. Missing fields and execution failures remain explicit.
 - No reviewer iteration or stage-character budgets, configurable or hidden.
   runTimeoutSeconds defaults null. Preserve explicit finite timeout, manual
   cancellation, lifecycle disposal and bounded SDK cleanup.
@@ -71,7 +78,9 @@ The independent V1 repository and installation are outside this project's scope.
   to reformat them. Queue acknowledgment is distinct from actual UI display.
 - Comment publication needs a same-origin completed review, saved preview,
   enabled publication and explicit --publish. Track uncertainty before writes,
-  prohibit automatic retries and label results model-reported.
+  revoke publication grants on any observed tool error, prohibit automatic
+  retries and label results model-reported. Derive line-local offsets from saved
+  anchors; do not ask the planner for additional coordinate fields.
 
 ## Verification and delivery
 

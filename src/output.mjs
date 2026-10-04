@@ -481,6 +481,89 @@ export function parseReviewJSONReport(response, role) {
   return parseReport(response, role);
 }
 
+const reviewSections = ['findings', 'report', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions'];
+const looksLikeReview = value => isObject(value) && Object.keys(value).some(key =>
+  reviewSections.some(known => canonicalKey(key) === canonicalKey(known)));
+
+// Consume all Markdown fences in order. A Python block's closing delimiter is
+// not the opening delimiter of the following JSON block.
+function fencedBlocks(content) {
+  const blocks = [];
+  let open;
+  for (const match of content.matchAll(/^[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/gm)) {
+    const [, delimiter, info] = match;
+    if (!open) {
+      open = { start: match.index, body: match.index + match[0].length,
+        delimiter, json: /^(?:jsonc?)?\s*$/i.test(info.trim()) };
+    } else if (!info.trim() && delimiter[0] === open.delimiter[0] && delimiter.length >= open.delimiter.length) {
+      blocks.push({ start: open.start, end: match.index + match[0].length,
+        text: content.slice(open.body, match.index).replace(/^\r?\n/, ''), json: open.json });
+      open = undefined;
+    }
+  }
+  return blocks;
+}
+
+/** Locate whole objects in commentary without treating braces inside strings or
+ * comments as delimiters. Keep unfinished objects as ambiguity candidates too.
+ * This scanner is iterative and has no output/depth budget. */
+function embeddedObjects(content) {
+  const objects = [];
+  let start = -1, depth = 0, quote = '', escaped = false, comment = '';
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i], next = content[i + 1];
+    if (start < 0) {
+      if (char === '{') { start = i; depth = 1; }
+      continue;
+    }
+    if (comment) {
+      if (comment === 'line' && /[\r\n]/.test(char)) comment = '';
+      else if (comment === 'block' && char === '*' && next === '/') { comment = ''; i++; }
+      continue;
+    }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (['"', "'", '“'].includes(char)) { quote = char === '“' ? '”' : char; continue; }
+    if (char === '/' && ['/', '*'].includes(next)) { comment = next === '/' ? 'line' : 'block'; i++; continue; }
+    if (char === '{') depth++;
+    if (char === '}' && --depth === 0) {
+      objects.push({ start, end: i + 1, text: content.slice(start, i + 1) }); start = -1;
+    }
+  }
+  if (start >= 0) objects.push({ start, end: content.length, text: content.slice(start) });
+  return objects;
+}
+
+/** Choose one identifiable review, never one of competing review submissions.
+ * Incidental JSON/code examples and every surrounding character remain data. */
+function embeddedReview(content, blocks, parse) {
+  let outside = '', end = 0;
+  for (const block of blocks) {
+    outside += content.slice(end, block.start) + ' '.repeat(block.end - block.start); end = block.end;
+  }
+  outside += content.slice(end);
+  const candidates = [];
+  for (const block of [...blocks.filter(block => block.json), ...embeddedObjects(outside)]) {
+    let parsed;
+    try { parsed = parse(block.text); } catch { /* Do not overlook an unfinished competing review. */ }
+    const firstKey = /^\{\s*["'“]?([A-Za-z_$][\w$ -]*?)["'”]?\s*:/.exec(block.text)?.[1];
+    const unfinishedReview = !parsed && firstKey && [...reviewSections, 'status', 'snapshot', 'currentHead', 'currentBase']
+      .some(key => canonicalKey(key) === canonicalKey(firstKey));
+    const verdict = isObject(parsed?.envelope) && Object.entries(parsed.envelope).some(([key, value]) =>
+      canonicalKey(key) === 'status' && ['COMPLETE', 'PARTIAL', 'INCOMPLETE', 'STALE'].includes(canonicalEnum(value)));
+    if (looksLikeReview(parsed?.envelope) || verdict || unfinishedReview) candidates.push({ ...block, parsed });
+  }
+  if (candidates.length !== 1 || !looksLikeReview(candidates[0].parsed?.envelope)) return;
+  const selected = candidates[0];
+  return { ...selected.parsed,
+    corrections: [...selected.parsed.corrections, { action: 'extract-review-envelope' }],
+    surroundingText: (content.slice(0, selected.start) + content.slice(selected.end)).trim() };
+}
+
 function parseReport(response, role) {
   const finish = String(response.info?.finish ?? 'unknown').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
   if (response.info?.error) {
@@ -495,7 +578,7 @@ function parseReport(response, role) {
   if (!content) throw new Error(`Empty reviewer output (finish=${finish}); inspect the session export or debug response.`);
   // Never guess between multiple envelopes. Review recovery handles syntax;
   // it does not fill missing values or discard an unfinished finding.
-  const fences = [...content.matchAll(/^```(?:json)?[^\S\r\n]*\r?\n([\s\S]*?)^```[^\S\r\n]*$/gmi)];
+  const blocks = fencedBlocks(content), fences = blocks.filter(block => block.json);
   let jsonContent = content;
   function parse(candidate) {
     try { return { envelope: JSON.parse(candidate), text: candidate, corrections: [] }; }
@@ -508,11 +591,16 @@ function parseReport(response, role) {
   let parsed, surroundingText;
   try { parsed = parse(content); }
   catch {
-    if (fences.length === 1 && !/[{}]|```/.test(content.replace(fences[0][0], ''))) {
+    const outsideFence = fences.length === 1 ? content.slice(0, fences[0].start) + content.slice(fences[0].end) : '';
+    if (fences.length === 1 && !/[{}]|```|~~~/.test(outsideFence)) {
       try {
-        parsed = parse(fences[0][1]);
-        surroundingText = content.replace(fences[0][0], '').trim();
+        parsed = parse(fences[0].text);
+        surroundingText = outsideFence.trim();
       } catch { /* Retain the entire text in the review fallback. */ }
+    }
+    if (parsed === undefined && allowRecovery) {
+      parsed = embeddedReview(content, blocks, parse);
+      surroundingText = parsed?.surroundingText;
     }
     if (parsed === undefined) throw new Error(`Reviewer did not return the required JSON envelope (characters=${content.length}; finish=${finish}). Partial output remains in its session. Inspect the private session or debug response. No automatic retry.`);
   }
@@ -531,8 +619,7 @@ export function readReviewOutput(response, role) {
   if (response.info?.finish !== 'stop') throw new Error('Reviewer output did not finish successfully; retained text cannot substitute for completed execution.');
   try {
     const parsed = parseReviewJSONReport(response, role);
-    const reviewSections = ['findings', 'report', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions'];
-    if (!Object.keys(parsed.envelope).some(key => reviewSections.some(known => canonicalKey(key) === canonicalKey(known)))) {
+    if (!looksLikeReview(parsed.envelope)) {
       throw new Error('A JSON example is not a structured review.');
     }
     if (parsed.surroundingText) parsed.envelope = { ...parsed.envelope,
@@ -717,8 +804,8 @@ export function finalEnvelope(result, expected, originals) {
 }
 
 // Review delivery is deliberately more permissive than publication. The strict
-// validators above remain an assessment of complete, publishable structured
-// evidence. A failed assessment adds limitations; it does not discard a review.
+// validators above assess structured evidence independently of presentation
+// warnings. Initial limitations inform the verifier, not a second publication veto.
 const initialKeys = ['status', 'snapshot', 'coverage', 'findings', 'report'];
 const finalKeys = ['status', 'snapshot', 'currentHead', 'currentBase', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions', 'report'];
 const canonicalKey = key => key.trim().replace(/[_\s-]/g, '').toLowerCase();
@@ -840,6 +927,7 @@ export function acceptFinalReview(value, expected, originals, prUrl) {
   const result = reviewFields(source, finalKeys, notes);
   result.report = asText(result.report);
   result.snapshot = reviewSnapshot(result.snapshot, notes);
+  const verifierSnapshot = result.snapshot !== null;
   if (!result.snapshot && expected) {
     result.snapshot = structuredClone(expected);
     note(notes, 'The displayed snapshot comes from the initial reviews; the verifier omitted its snapshot.');
@@ -885,7 +973,12 @@ export function acceptFinalReview(value, expected, originals, prUrl) {
   const frame = expected ?? result.snapshot;
   const changed = ['Head', 'Base'].some(side => sha(result[`current${side}`]) && sha(frame?.[side.toLowerCase()]) && result[`current${side}`].toLowerCase() !== frame[side.toLowerCase()].toLowerCase());
   if (changed) note(notes, 'Reported current PR versions differ from the reviewed snapshot. This report is stale.');
-  result.status = changed || modelStatus === 'STALE' ? 'STALE' : complete && !source.unstructured && !notes.length ? 'COMPLETE' : 'PARTIAL';
+  // A repaired section shape or supplementary note cannot invalidate a final
+  // result that passed the full evidence contract. Borrowed identity and
+  // conflicting aliases still cannot stand in for the verifier's own evidence.
+  const ambiguous = notes.some(message => message.startsWith('Conflicting field aliases'));
+  result.status = changed || modelStatus === 'STALE' ? 'STALE' : complete && !source.unstructured &&
+    verifierSnapshot && !ambiguous ? 'COMPLETE' : 'PARTIAL';
   result.reviewWarnings = notes;
   result.contractComplete = result.status === 'COMPLETE';
   return result;

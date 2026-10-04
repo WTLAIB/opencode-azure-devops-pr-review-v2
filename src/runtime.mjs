@@ -439,6 +439,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (run.controller.signal.aborted) error = abortError(run.controller.signal);
       record.status = 'FAILED';
       record.error = errorText(error);
+      if (error?.execution) {
+        record.execution = { ...error.execution, authorizedPrimaryRequests: g.calls };
+        if (!g.calls) record.error += ' No authorized primary model request was observed for this stage.';
+      }
       // Only an admitted stage failure is recoverable by the remaining review
       // roles. Configuration/identity failures before admission stop the run.
       if (error instanceof Error) error.reviewStageFailed = true;
@@ -479,7 +483,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       record.endedAt = new Date().toISOString();
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
-      if (g.timing) record.timing = g.timing.finish();
+      if (g.timing) {
+        record.timing = g.timing.finish();
+        // A large difference is diagnostic data, not proof of suspend/resume or
+        // permission to retry. Neither clock creates an implicit deadline.
+        record.timing.wallMinusMonotonicMs = Math.round(record.durationMs - record.timing.elapsedMs);
+      }
       await run.debug.write(`${stem}.result.json`, record);
     }
   }
@@ -548,6 +557,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       const cleanupStart = performance.now();
       clearTimeout(timer);
       await abortRun(run, outcome.failure || 'Workflow completed.');
+      if (['review', 'deep'].includes(run.mode) && outcome.status === 'COMPLETE' && run.abortUnconfirmed) {
+        outcome.status = 'INCOMPLETE';
+        outcome.failure = 'OpenCode did not confirm reviewer settlement; comment preparation is unavailable.';
+      }
       runs.delete(id);
       sourceRuns.delete(run.origin);
       if (run.lockKey) commentLocks.delete(run.lockKey);
@@ -573,6 +586,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (!publish) review.plan = null; // Never leave an obsolete preview after a failed refresh.
       const payload = { target: review.target, snapshot: review.snapshot, report: review.final.report,
         outputLanguage: review.outputLanguage, provenance: review.provenance,
+        reviewWarnings: review.final.reviewWarnings,
         findings: confirmedFindings(review), dispositions: review.final.dispositions, maxComments: remaining,
         attemptedFindings: [...review.attempts.values()],
         ...(publish ? { comments: clone(review.plan.comments) } : {}) };
@@ -653,18 +667,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       const pendingLocations = allFindings.filter(finding => !Object.hasOwn(finding, 'location')).map(finding => finding.id);
       const expectedFindingIds = allFindings.map(finding => finding.id);
       const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, outputLanguage: state.settings.outputLanguage }, result => acceptFinalReview(result, snapshot, allFindings, request.prUrl));
-      const initialWarnings = reviews.flatMap((review, index) => review.reviewWarnings.map(message => `${candidates[index]}: ${message}`));
+      const initialWarnings = reviews.flatMap((review, index) => [
+        ...review.reviewWarnings,
+        ...review.coverage.gaps.map(gap => `Reported initial gap: ${gap}`),
+      ].map(message => `${candidates[index]}: ${message}`));
       const presented = { ...verified, reviewWarnings: [...new Set([...snapshotWarnings, ...initialWarnings, ...verified.reviewWarnings])],
         initialObservations: verified.status === 'COMPLETE' ? [] : allFindings,
         unstructuredInitials: verified.status === 'COMPLETE' ? [] : reviews.filter(review => review.unstructured).map(review => review.report) };
-      const publicationEligible = verified.contractComplete && reviews.every(review => review.contractComplete) && !snapshotWarnings.length;
-      if (!publicationEligible) run.publicationUnavailable = true;
+      // The independent verifier is the final evidence decision. Initial
+      // limitations remain visible and reach the planner; they cannot veto a
+      // COMPLETE verifier that checked the requested PR and current versions.
+      if (verified.status !== 'COMPLETE') run.publicationUnavailable = true;
       const provenance = reviewProvenance(run);
       return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
-        review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, publicationEligible, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(verified), attempts: new Map(), plan: null } };
+        review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), attempts: new Map(), plan: null } };
     });
     // A cancelled presentation must not leave a publishable "completed" review.
-    if (status === 'COMPLETE' && review?.publicationEligible && !run.abortUnconfirmed) {
+    if (status === 'COMPLETE' && review) {
       completed.set(run.id, review);
       if (completed.size > 20) completed.delete(completed.keys().next().value);
     }
@@ -811,12 +830,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       const status = event.status === 'error' ? 'error' : 'completed';
       g.terminalTools.set(call, status);
       g.timing?.toolEnded(call, status);
-      if (status === 'error') { g.failedTools.add(call); return; }
-      g.returnedTools.add(call);
       const result = event.result;
-      if (result?.metadata?.isError === true || result?.isError === true) g.reportedToolErrors.add(call);
-      if (result?.metadata?.truncated === true) g.truncatedTools.add(call);
-      if (!g.reportedToolErrors.has(call) && !g.truncatedTools.has(call)) g.completedTools.add(call);
+      if (status === 'error') g.failedTools.add(call);
+      else {
+        g.returnedTools.add(call);
+        if (result?.metadata?.isError === true || result?.isError === true) g.reportedToolErrors.add(call);
+        if (result?.metadata?.truncated === true) g.truncatedTools.add(call);
+        if (!g.reportedToolErrors.has(call) && !g.truncatedTools.has(call)) g.completedTools.add(call);
+      }
+      if (ROLES[g.role]?.stage === 'comment-publish' && (g.failedTools.has(call) || g.reportedToolErrors.has(call))) {
+        // Publication cannot rely on a model honoring "do not retry" after an
+        // error. Revoke synchronously without classifying MCP names or actions.
+        void abortRun(g.run, 'A publisher tool failed. Publication state is uncertain; inspect Azure before another attempt.', 'INCOMPLETE');
+      }
     }));
     registrations.push(await context.command.transform(editor => {
       for (const name of Object.keys(COMMANDS)) editor.add({

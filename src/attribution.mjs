@@ -100,8 +100,9 @@ function renderStageReceipt(stage) {
 export function renderReceipt(run, report, status, error, settings) {
   const rows = run.stages.map(renderStageReceipt).join('\n');
   let body = `[AZPR ${run.id}] ${status}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}\n`;
-  if (run.stages.some(s => s.outputFormatCorrections?.length)) body += '\nOutput format notice: review syntax was normalized locally or unstructured review text was retained. No model request was added for formatting. Inspect outputFormatCorrections, review limitations and the original response. Recovery does not establish source accuracy.\n';
+  if (run.stages.some(s => s.outputFormatCorrections?.length)) body += '\nOutput format notice: a review envelope was extracted, syntax was normalized locally, or unstructured review text was retained. No model request was added for formatting. Inspect outputFormatCorrections, review limitations and the original response. Recovery does not establish source accuracy.\n';
   if (run.publicationUnavailable) body += '\nThis review retains useful results with limitations. Automatic PR comment preparation is unavailable because the complete publication evidence contract was not established.\n';
+  if (['review', 'deep'].includes(run.mode) && status === 'COMPLETE') body += `\nComment preview: /pr-comment ${run.id}\nPreview checks the current PR, source anchors and existing discussions. Publishing requires the saved preview and an explicit --publish command.\n`;
   if (run.stages.some(s => s.pendingLocations?.length)) body += '\nPending location notice: initial candidates omitted locations and were passed to the verifier. No location was guessed. Missing locations do not discard the review; findings without complete publication evidence cannot be posted. This notice does not claim they were resolved.\n';
   if (run.stages.some(s => s.retryKind === 'location')) body += '\nLocation amendment notice: the same reviewer received one request for missing locations from retained source context, with tools denied and existing fields immutable. Full revalidation is required. This is model-authored recovery, not independent location proof; inspect both submissions and their statuses.\n';
   if (run.stages.some(s => s.retryKind === 'disposition')) body += '\nDisposition amendment notice: the same verifier was asked only for missing MERGED rows pointing to already confirmed findings, with tools denied and existing fields immutable. Full revalidation and the one shared amendment allowance apply. The original failure remains recorded; this is model-authored bookkeeping, not independent source proof.\n';
@@ -111,7 +112,7 @@ export function renderReceipt(run, report, status, error, settings) {
   body += renderDiagnosticNotices(run);
   body += run.mode === 'check'
     ? '\nStage status: READY means source access is ready; it does not approve the PR.\n'
-    : '\nReview status: COMPLETE means a usable structured verifier result was returned. PARTIAL retains available observations and limitations. Initial gaps can proceed to verification. Neither status proves factual completeness or approves the PR.\n';
+    : '\nReview status: COMPLETE means the final verifier result passed its evidence and version checks and can enter comment preview in this session/process. Initial gaps and formatting warnings remain visible. PARTIAL retains results whose final checks are incomplete. Neither status proves factual completeness or approves the PR.\n';
   if (error && run.stages.some(s => s.status === 'FAILED')) body += '\nInspect the failed child session by its session ID through the host UI or private diagnostics. Preserve the original JSON and failure; sending another prompt is a new model request, not read-only inspection.\n';
   if (run.userContext) body += '\nSupplementary context applies to this command only; it is not a repository-wide rule.\n';
   if (report) {

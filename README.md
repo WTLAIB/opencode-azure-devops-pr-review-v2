@@ -200,16 +200,24 @@ useful sibling work. Missing decisions remain visibly UNREVIEWED; changed versio
 remain STALE. Tool completion alone does not establish evidence.
 
 Reviews prefer JSON text. Local recovery handles common punctuation, quoting,
-key spelling and section-shape mistakes. Extra information is retained. If a
+key spelling and section-shape mistakes. A unique review object can be extracted
+from surrounding prose or JSON fences, including commentary with dictionary
+examples and other code blocks. Surrounding text is retained; competing review
+objects and duplicate keys remain ambiguous. Extra information is retained. If a
 completed response cannot be parsed reliably, its literal text still reaches the
 verifier or the report. Missing fields and incomplete decisions produce a usable
 PARTIAL report instead of losing the entire review. Partial/stale reports include
 their body even in receipt mode. No extra model request is used for formatting.
 
-Publication eligibility remains separate: only complete structured evidence with
-consistent identities/versions and full original-ID accounting can enter the
-comment workflow. Settings, source checks and comment operations keep strict
-parsing. See [architecture](docs/ARCHITECTURE.md).
+A COMPLETE review can enter `/pr-comment <review-id>` from its original
+session/process. The independent verifier must establish the final evidence,
+identity/versions and original-ID decisions. Initial coverage disclosures, partial
+or unavailable initials, and successfully normalized formatting do not veto that
+completed result. Limitations remain visible and accompany the comment preview.
+Preview still checks each proposed comment against current source and existing
+discussions; publication requires the saved preview and explicit `--publish`.
+Settings, source checks and comment operations keep strict parsing. See
+[architecture](docs/ARCHITECTURE.md).
 
 Results are queued as synthetic notices with `resume: false`; the plugin does
 not start a formatter or ordinary-agent model call. Receipt mode identifies the

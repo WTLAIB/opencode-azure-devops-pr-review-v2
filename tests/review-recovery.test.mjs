@@ -70,6 +70,40 @@ test('text outside a structured JSON fence is retained with the review', () => {
   assert.match(parsed.envelope.surroundingText, /deployment assumption/);
 });
 
+for (const wrapper of [
+  json => 'Example: `reserve({"item": 3})` preserves the trigger.\n```json\n' + json + '\n```\nAn unmatched prose brace { is commentary.',
+  json => '```python\nreserve({"item": 3})\n```\n```json\n' + json + '\n```',
+  json => 'Configuration example:\n```json\n{"enabled":false}\n```\nFinal review:\n```json\n' + json + '\n```',
+  json => 'Here is the final review:\n' + json + '\nEnd of review.',
+  json => 'Example `{x: 1}`.\n~~~~json\n' + json + '\n~~~~',
+  json => 'Example `{x: 1}`.\n````json\n' + json + '\n````',
+]) test('a unique review envelope survives surrounding examples without losing their text', () => {
+  const value = final(), raw = wrapper(JSON.stringify(value));
+  const parsed = readReviewOutput(response(raw), 'azpr-review-verifier');
+  assert.deepEqual(parsed.envelope.confirmed, value.confirmed);
+  assert.ok(parsed.envelope.surroundingText);
+  assert.equal(acceptFinalReview(parsed.envelope, snapshot, [finding('F-1')], PR).status, 'COMPLETE');
+  assert.equal(raw, wrapper(JSON.stringify(value)), 'The original output is unchanged.');
+});
+
+for (const other of [
+  JSON.stringify(final()),
+  '{"status":"PARTIAL","findings":[]}',
+  '{"status":"INCOMPLETE"}',
+  '{"status":"COMPLETE","confirmed":',
+  '{"status":"COMPLETE","confirmed":[],"confirmed":[',
+]) test('a competing complete or unfinished review cannot be hidden by a JSON fence', () => {
+  const raw = other + '\n```json\n' + JSON.stringify(final()) + '\n```';
+  const parsed = readReviewOutput(response(raw), 'azpr-review-verifier');
+  assert.equal(parsed.envelope.unstructured, true);
+  assert.equal(parsed.envelope.report, raw);
+});
+
+test('duplicate keys inside a selected fenced review remain ambiguous', () => {
+  const raw = 'Example: `fn({x: 1})`.\n```json\n' + JSON.stringify(final()).replace('"status":"COMPLETE"', '"status":"PARTIAL","status":"COMPLETE"') + '\n```';
+  assert.equal(readReviewOutput(response(raw), 'azpr-review-verifier').envelope.report, raw);
+});
+
 test('the trailing-brace failure shape keeps every finding and supplemental field', () => {
   const original = initial(); original.findings.push(finding('F-2'), finding('F-3'));
   original.findings[1].counterevidence_note = '';
@@ -138,6 +172,26 @@ test('missing empty sections and overview are optional when final evidence is ot
   const value = final(); for (const field of ['merged', 'rejected', 'needsInfo', 'newFindings', 'report']) delete value[field];
   const accepted = acceptFinalReview(value, snapshot, [finding('F-1')], PR);
   assert.equal(accepted.status, 'COMPLETE'); assert.equal(accepted.contractComplete, true);
+});
+
+test('a locally normalized single-row final section stays complete with its warning visible', () => {
+  const value = final(); value.confirmed = value.confirmed[0];
+  const accepted = acceptFinalReview(value, snapshot, [finding('F-1')], PR);
+  assert.equal(accepted.status, 'COMPLETE'); assert.equal(accepted.contractComplete, true);
+  assert.ok(accepted.reviewWarnings.some(message => /non-array/.test(message)));
+  assert.match(renderFinalReport(accepted, 'en'), /non-array/);
+});
+
+test('a missing verifier snapshot or conflicting aliases still cannot be declared complete', () => {
+  const missing = final(); delete missing.snapshot;
+  assert.equal(acceptFinalReview(missing, snapshot, [finding('F-1')], PR).status, 'PARTIAL');
+  const conflict = final(); conflict.confirmed[0][' Evidence '] = 'Conflicting evidence';
+  assert.equal(acceptFinalReview(conflict, snapshot, [finding('F-1')], PR).status, 'PARTIAL');
+});
+
+test('normalizing the verifier snapshot key preserves its own established identity', () => {
+  const value = final(); value.Snapshot = value.snapshot; delete value.snapshot;
+  assert.equal(acceptFinalReview(value, snapshot, [finding('F-1')], PR).status, 'COMPLETE');
 });
 
 test('quote wrappers around full SHAs are formatting, not invented versions', () => {

@@ -32,9 +32,9 @@ forward from another repository or revision.
 | V2 plugin and commands | Default definition and setup registration, native command invocation, literal text, rejected attachments/mentions, registration cleanup. |
 | Session transport | Independent session identity and model binding, exact prompt admission, idle settlement, final-context correlation, successful text finish, compaction/mutation refusal. |
 | Permissions and grants | Private role/model fingerprints, active command grants, blocked native execution, ordinary-agent preservation, permission inheritance, expiry and cancellation. |
-| Review orchestration | Two concurrent initial reviews, continuation with partial/unavailable inputs, independent verifier, visible frame conflicts and omitted decisions, separate publication eligibility. |
+| Review orchestration | Two concurrent initial reviews, continuation with partial/unavailable inputs, independent verifier, visible frame conflicts and omitted decisions, COMPLETE-to-preview availability. |
 | Output contracts | Local syntax/key/shape recovery, literal retention of ambiguous/prose output, no silent duplicate-key overwrite or lost findings, readable partial/stale reports, strict settings/checks/comments. |
-| Comments | Same-origin completed review, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
+| Comments | COMPLETE-to-preview after partial/unavailable initials, preserved warnings, same-origin scope, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
 | Diagnostics | Private output handling, original response and correction records, value-free observations, timing uncertainty, safe path/write behavior. |
 | Installation | V2 package discovery layout, complete manual file list, preserved current settings, old-layout conflicts, rollback/recovery, archival removal, unrelated-file preservation. |
 
@@ -77,7 +77,7 @@ and loads the installed package and session helpers. Replacement simulates the
 previous exports-only layout and checks that private settings remain byte-identical.
 With the old installer, the updated fixture failed at command discovery before
 any provider request. Offline regressions also cover replacement of the temporary
-entry symlink, rollback and archival uninstall. The installed fixture checks:
+entry symlink, rollback and archival uninstall. Those initial installed fixtures checked:
 
 - Discovery of all five native commands and five enabled private roles.
 - Native registration, exact literal prompt/context correlation, final text,
@@ -102,6 +102,30 @@ reads, origin-lock release, unavailable models and disconnected MCP servers.
 This is exact-host integration evidence with deterministic fixtures. It does not
 certify official MCP 2.9.0 connectivity, real model quality, Azure source fidelity,
 or PR publication.
+
+The 2026-10-04 comment-usability follow-up passed 371/371 offline tests and syntax
+checks. Fresh and replacement installations on OpenCode 2.0.22/Ubuntu 22.04.5 each
+passed with 29 loopback provider requests and nine fixture MCP reads. These
+fixtures cover an initial coverage disclosure, a final JSON fence preceded by a
+dictionary example, and COMPLETE followed by a same-origin `/pr-comment` PREVIEW.
+Native permission, auxiliary-request, restart and cancellation controls still pass.
+
+Two preserved live response sets were also replayed through the updated runtime
+without external requests. A COMPLETE review previously blocked by initial gaps
+now reaches preview; a PARTIAL result caused by surrounding dictionary braces now
+parses as COMPLETE and reaches preview. The planner was deterministic and local:
+this verifies the cache/preview path, not live source anchors or Azure publication.
+The third recorded failure involved interrupted/failed sessions; its cause remains
+unestablished. New terminal-state and clock diagnostics help investigation but do
+not prove recovery. This follow-up made no new live review or publication request.
+
+The subsequent publication-failure regression passed 375/375 offline tests and
+syntax checks. Fresh and replacement 2.0.22 fixtures each passed with 30 loopback
+provider requests and ten fixture MCP calls. The fake publisher would retry a
+tool failure if allowed; the runtime now revokes its grants after the first error,
+with zero subsequent model requests or tool attempts. The saved publisher payload
+also contains line-local offsets derived from the existing anchor. This tests
+failure containment and payload construction, not correct live Azure rendering.
 
 Before using real services, exercise the actual V2 binary in a separate temporary
 home/config/data/state/cache environment and a trusted fixture project. Keep the
@@ -266,6 +290,24 @@ private settings, and stopped their test servers. The personal plugin installati
 was not replaced; tests used isolated installations. No publication, paid model,
 tool upgrade, broad compatibility or large-PR certification is implied.
 
+## Later review/comment trial
+
+Two separately authorized live reviews on the same target environment returned
+COMPLETE. The first created three inline threads: independent Azure reads matched
+their saved bodies and file/line ranges, but the publisher used cumulative file
+offsets instead of line-local character positions. It also retried after an MCP
+parameter-validation error despite the stop instruction. The original threads
+and failed call remain recorded; this is PARTIAL publication-quality acceptance.
+
+The subsequent correction derives offsets from the saved anchor and revokes the
+publisher on any observed tool error, as covered by the 375-test/fault-injection
+checks above. A second live review completed, its preview skipped all three
+existing discussions and one low-severity finding, and publication returned
+NOTHING_TO_POST without starting a publisher. This proves continued review and
+duplicate handling; it does not validate corrected coordinates on a new Azure
+create. Existing comments were not rewritten or duplicated. Factual review
+quality still has recorded recovery/scope overclaims and remains PARTIAL.
+
 ## Authorized environment acceptance
 
 Use a separately authorized test repository and PR with known expected findings
@@ -315,9 +357,10 @@ failed evidence. Never retry an uncertain publication automatically.
 ## Report-quality acceptance cases
 
 Assess execution integrity, factual quality, and presentation separately. A
-COMPLETE status describes usable structured verifier output, not PR approval or
-factual perfection. PARTIAL is a useful delivered result with limitations; assess
-review content separately from parser recovery and publication eligibility.
+COMPLETE status means the final verifier passed its evidence/version checks and
+the review can enter same-origin comment preview; it does not approve the PR or
+prove factual perfection. PARTIAL retains results with incomplete final checks;
+assess review content separately from parser recovery and comment readiness.
 Define expected outcomes before changing prompts; inspect existing raw evidence
 before adding instructions when an existing rule was ignored.
 

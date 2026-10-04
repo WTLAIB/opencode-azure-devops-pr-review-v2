@@ -23,6 +23,15 @@ test('plan validates format and creates a stable marker, not provider evidence',
   assert.match(a.plan.comments[0].content,/<!-- azpr-comment:[a-f0-9]{32} -->$/);
   assert.equal(a.plan.comments[0].args,undefined);
 });
+test('saved positions use line-local offsets derived from the existing anchor',()=>{
+  for(const [anchor,endLine,endOffset] of [['    first\n  last',3,6],['😀x',2,3],['first\r\n',3,1]]) {
+    const d=draft();Object.assign(d.comments[0],{anchor,endLine});
+    const saved=validateCommentPlan(d,review(),5).comments[0];
+    assert.equal(saved.startOffset,1);assert.equal(saved.endOffset,endOffset);
+    assert.equal(saved.startLine,2);assert.equal(saved.endLine,endLine);
+    assert.equal(saved.anchor,anchor);assert.equal(saved.body,d.comments[0].body);
+  }
+});
 for(const [name,change] of [
   ['unknown finding',d=>d.comments[0].findingId='X-1'],
   ['duplicate finding',d=>d.comments.push({...d.comments[0]})],

@@ -7,7 +7,11 @@ Tool names, prefixes, argument keys, and response formats are not predetermined.
 You may create ONLY the supplied saved comments on the supplied target PR.
 Do not paraphrase, translate, extend, add, or relocate comments. Send each saved
 comment's content exactly, including its AI/model disclosure and marker, on the supplied right-side
-path/startLine/endLine. Translate those coordinates into the actual tool schema.
+path/startLine/endLine. The runtime also supplies startOffset/endOffset, derived
+from the saved anchor as one-based character positions within their respective
+lines. Use these saved values when translating the complete start/end positions
+into the actual tool schema, including coupled line and offset fields. Never
+recompute them as byte positions or cumulative offsets in the whole file.
 If the tool cannot express the saved target, content, and anchor, STOP. Do not
 substitute a general summary thread. No replies, updates, deletions, votes,
 approvals, merges, code edits, or pipeline/work-item changes are authorized.

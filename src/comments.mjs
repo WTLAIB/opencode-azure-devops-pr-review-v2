@@ -76,7 +76,11 @@ export function validateCommentPlan(result, review, maxComments) {
     const tag = marker(review, finding, c);
     if (markers.has(tag)) fail('Duplicate finding in this plan; select one representative.');
     markers.add(tag);
-    return { ...c, marker: tag, content: `${c.body.trim()}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}` };
+    // Azure SDK positions are line-local, one-based UTF-16 character offsets.
+    // Derive whole-line endpoints from the existing anchor, never file offsets
+    // or another model-authored field. An empty final line uses its first column.
+    const startOffset = 1, endOffset = Math.max(1, c.anchor.split(/\r?\n/).at(-1).length);
+    return { ...c, startOffset, endOffset, marker: tag, content: `${c.body.trim()}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}` };
   });
   for (const s of result.skipped) {
     exactKeys(s, ['findingId', 'reason']);

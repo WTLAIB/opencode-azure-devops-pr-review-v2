@@ -10,10 +10,13 @@ historical evidence and do not certify this adapter.
 - Flat V2 session creation, literal inbox correlation, idle/context validation,
   role/model binding, bounded interruption and non-resuming report notices.
 - Independent two-initial-plus-verifier workflows; JSON recovery and literal
-  review retention, explicit quality limitations, and separate full evidence,
-  version, original-ID, coverage and counterevidence assessment for publication.
+  review retention, explicit quality limitations, and final evidence/version/ID
+  assessment. Every COMPLETE result can enter same-origin comment preview;
+  initial disclosures do not impose a second eligibility gate.
 - Null default timeout, manual cancellation, lifecycle cleanup, exact-role
   validation and private native guards, including CodeMode execute.
+- Unique review-envelope extraction from prose, JSON fences and code examples,
+  with all surrounding text retained and competing review objects left ambiguous.
 - Local punctuation/key/shape recovery, continuation after incomplete initials,
   visible UNREVIEWED decisions and readable partial reports without extra model
   requests. Explicit comment preview/publish retains uncertain-attempt lockout.

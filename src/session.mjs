@@ -97,9 +97,10 @@ function normalizeAnswer(message, sessionID) {
   };
 }
 
-function responseError(message, response) {
+function responseError(message, response, execution) {
   const error = new Error(message);
   if (response) error.response = response;
+  if (execution) error.execution = execution;
   return error;
 }
 
@@ -141,7 +142,15 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
   if (session.outcome !== 'succeeded' || terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
-    throw responseError('[AZPR] Reviewer execution did not finish successfully; no partial response was accepted.', answer);
+    // Report only bounded host states here, never arbitrary provider error text,
+    // prompts or credentials. Keep the original response in private diagnostics.
+    const outcome = value => ['succeeded', 'failed', 'interrupted'].includes(value) ? value : 'unknown';
+    const finish = ['stop', 'tool-calls', 'length', 'content-filter', 'error', 'cancelled'].includes(final?.finish) ? final.finish : 'unknown';
+    const execution = { sessionOutcome: outcome(session.outcome),
+      terminalOutcome: terminal?.type === 'idle' ? outcome(terminal.outcome) : 'missing-idle',
+      assistantResponses: assistants.length, lastFinish: finish,
+      interrupted: session.outcome === 'interrupted' || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
+    throw responseError(`[AZPR] Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}); no partial response was accepted.`, answer, execution);
   }
   if (session.agent !== role || !sameModel(session.model, selectedModel) ||
       assistants.some(message => message.agent !== role || !sameModel(message.model, selectedModel))) {

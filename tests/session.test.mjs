@@ -129,6 +129,31 @@ test('V2 output rejects stale idle markers or missing terminal settlement', asyn
   }
 });
 
+test('failed and interrupted sessions expose terminal states without leaking provider error text', async () => {
+  for (const outcome of ['failed', 'interrupted']) {
+    const final = assistant({ finish: 'error', error: { type: 'aborted', message: 'PRIVATE_PROVIDER_DETAIL' } });
+    const { context } = host({ get: async () => ({ id: sessionID, outcome }),
+      context: async () => [{ id: 'msg_input', type: 'user', text: input }, final, { ...idle(), outcome }] });
+    await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+      assert.equal(error.execution.sessionOutcome, outcome);
+      assert.equal(error.execution.terminalOutcome, outcome);
+      assert.equal(error.execution.assistantResponses, 1);
+      assert.equal(error.execution.lastFinish, 'error');
+      assert.equal(error.execution.interrupted, true);
+      assert.doesNotMatch(error.message, /PRIVATE_PROVIDER_DETAIL/);
+      assert.equal(error.response.info.error.message, 'PRIVATE_PROVIDER_DETAIL');
+      return true;
+    });
+  }
+  const { context } = host({ get: async () => ({ id: sessionID, outcome: 'failed' }),
+    context: async () => [{ id: 'msg_input', type: 'user', text: input }, { ...idle(), outcome: 'failed' }] });
+  await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+    assert.equal(error.execution.assistantResponses, 0);
+    assert.equal(error.response, undefined);
+    return true;
+  });
+});
+
 test('V2 output requires the granted agent/model in session and every assistant turn', async () => {
   for (const changed of [{ agent: 'build' }, { model: { ...model, id: 'other' } }, { model: { ...model, variant: 'other' } }]) {
     const selection = host({ get: async () => ({ id: sessionID, outcome: 'succeeded', agent: 'azpr-review-functional', model, ...changed }) });

@@ -311,17 +311,36 @@ for (const target of ['missing-model','no-tools','disconnected','invalid-catalog
 for(const missing of ['functional','risk','verifier']) test(`incomplete deep ${missing} stops without model fallback`,async t=>{
   const f=await fixture(t,{settings(s){s.models.deep[missing]='';}});await assert.rejects(f.command('pr-deep'),/All three/);assert.equal(f.calls.length,0);
 });
-for(const fault of ['snapshot','partial','missing-id','stale']) test(`${fault} cannot become a publishable review`,async t=>{
+for(const fault of ['final-snapshot','missing-id','stale']) test(`${fault} cannot become a publishable review`,async t=>{
   const f=await fixture(t,{result({role,result}){
-    if(fault==='snapshot'&&role.endsWith('-risk'))result.snapshot.head='c'.repeat(40);
-    if(fault==='partial'&&role.endsWith('-risk')){result.status='PARTIAL';result.coverage.gaps=['Source unavailable.'];}
+    if(fault==='final-snapshot'&&role.endsWith('-verifier'))result.snapshot.head='c'.repeat(40);
     if(fault==='missing-id'&&role.endsWith('-verifier'))result.confirmed=result.confirmed.slice(0,1);
     if(fault==='stale'&&role.endsWith('-verifier'))result.currentHead='c'.repeat(40);return result;
   }}),receipt=await f.command();
   assert.equal(f.prompts().length,3,'Initial quality gaps still reach the verifier.');
-  if (fault==='missing-id'||fault==='stale') assert.doesNotMatch(receipt.split('\n')[0],/] COMPLETE$/);
+  assert.doesNotMatch(receipt.split('\n')[0],/] COMPLETE$/);
   assert.match(receipt,/publication evidence contract/);
   const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];await assert.rejects(f.command('pr-comment',id),/unavailable/);
+});
+for(const initial of ['disclosures','partial','conflicting-frame']) test(`a complete verifier permits preview despite initial ${initial}`,async t=>{
+  const f=await fixture(t,{settings(s){s.comments.enabled=true;},result({role,result}){
+    if(role.endsWith('-risk')) {
+      if(initial==='conflicting-frame')result.snapshot.head='c'.repeat(40);
+      else {result.coverage.gaps=['Tests were not executed. The comparison base is not a proven merge base.'];if(initial==='partial')result.status='PARTIAL';}
+    }
+    return result;
+  }});
+  const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  assert.match(receipt,/] COMPLETE/);assert.doesNotMatch(receipt,/publication evidence contract/);
+  assert.equal(f.prompts().length,3);
+  await assert.rejects(f.command('pr-comment',id,'another-origin'),/unavailable/);
+  assert.match(await f.command('pr-comment',id),/] PREVIEW/);
+  const packet=JSON.parse(f.prompts().at(-1).text);
+  assert.ok(packet.reviewWarnings.length,'The planner sees the retained review limitations.');
+  if(initial!=='conflicting-frame')assert.ok(packet.reviewWarnings.some(warning=>warning.includes('Tests were not executed.')));
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
+  assert.match(await f.command('pr-comment',id+' --publish'),/] MODEL_REPORTED_POSTED/);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,1);
 });
 for(const stop of ['cancel','dispose']) test(`${stop} revokes pending work without aborting the origin`,{timeout:3000},async t=>{
   const started=deferred(),release=deferred(),f=await fixture(t,{async during(){started.resolve();await release.promise;}});
@@ -342,7 +361,8 @@ test('initial execution failure preserves sibling work and reaches independent v
   const receipt=await running;assert.match(receipt,/] COMPLETE/);assert.equal(f.prompts().length,3);
   const packet=JSON.parse(f.prompts()[2].text);
   assert.equal(packet.reviews[0].status,'PARTIAL');assert.equal(packet.reviews[0].findings.length,0);
-  assert.equal(packet.reviews[1].findings[0].id,'R-1');assert.match(receipt,/publication evidence contract/);
+  assert.equal(packet.reviews[1].findings[0].id,'R-1');assert.doesNotMatch(receipt,/publication evidence contract/);
+  const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];assert.match(await f.command('pr-comment',id),/] PREVIEW/);
 });
 test('same-origin lock rejects concurrent commands',async t=>{
   const started=deferred(),release=deferred(),f=await fixture(t,{async during(){started.resolve();await release.promise;}});
@@ -356,7 +376,8 @@ test('PARTIAL initial retains evidence and coverage gaps in the verifier handoff
   assert.equal(partial.result.findings[0].id,'F-1');assert.deepEqual(partial.result.coverage.gaps,['Fixture source gap.']);
   const packet=JSON.parse(f.prompts()[2].text);
   assert.deepEqual(packet.reviews[0].coverage.gaps,['Fixture source gap.']);
-  assert.equal(saved.reportKind,'report');assert.match(receipt,/publication evidence contract/);
+  assert.equal(saved.reportKind,'report');assert.doesNotMatch(receipt,/publication evidence contract/);
+  const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];assert.match(await f.command('pr-comment',id),/] PREVIEW/);
 });
 test('status amendment is one fresh tool-free request with host instructions preserved',async t=>{
   const f=await fixture(t,{settings(s){s.outputRetries=1;},result({packet,result}){if(!packet.operation&&result.status==='READY')result.status='DONE';return result;},
@@ -406,18 +427,68 @@ test('unstructured initial and final reviews are delivered without a formatting 
   const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];await assert.rejects(f.command('pr-comment',id),/unavailable/);
 });
 test('both unavailable initial reviews still permit the existing verifier to inspect the PR', async t => {
-  const f=await fixture(t,{async during({session}){if(!session.agent.endsWith('-verifier'))throw new Error('Initial service unavailable');}});
+  const f=await fixture(t,{async during({session}){if(ROLES[session.agent].format==='initial')throw new Error('Initial service unavailable');}});
   const receipt=await f.command();assert.equal(f.prompts().length,3);assert.match(receipt,/] COMPLETE/);
   const packet=JSON.parse(f.prompts()[2].text);
   assert.equal(packet.snapshot,null);assert.deepEqual(packet.expectedFindingIds,[]);
   assert.ok(packet.reviews.every(review=>review.status==='PARTIAL'));
-  assert.match(receipt,/publication evidence contract/);
+  assert.doesNotMatch(receipt,/publication evidence contract/);
+  const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];assert.match(await f.command('pr-comment',id),/] PREVIEW/);
+});
+
+test('code examples surrounding a complete final JSON do not require another review before comments',async t=>{
+  const f=await fixture(t,{answer({answer,role}){
+    if(role.endsWith('-verifier'))answer.content[0].text='Trigger: fn({"item":3}).\n```json\n'+answer.content[0].text+'\n```';
+  }});
+  const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  assert.match(receipt,/] COMPLETE/);assert.equal(f.prompts().length,3);
+  assert.match(await f.command('pr-comment',id),/] PREVIEW/);assert.equal(f.prompts().length,4);
+});
+
+test('unconfirmed cleanup cannot leave a COMPLETE receipt without a comment cache entry',async t=>{
+  const f=await fixture(t,{context({context}){context.session.interrupt=async()=>{throw new Error('Settlement unavailable');};},
+    during({session}){if(session.agent.endsWith('-functional'))throw new Error('Provider failed');}});
+  const receipt=await f.command();assert.match(receipt,/] INCOMPLETE/);
+  assert.equal((await resultLog(receipt)).abortUnconfirmed,true);
+  const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];await assert.rejects(f.command('pr-comment',id),/unavailable/);
+});
+
+test('a verifier failure before model submission remains incomplete with actionable diagnostics',async t=>{
+  const f=await fixture(t,{beforeContext({session}){if(session.agent.endsWith('-verifier'))throw new Error('Fixture host failure');}});
+  const receipt=await f.command(),result=await resultLog(receipt),stage=result.stages.at(-1);
+  assert.match(receipt,/] INCOMPLETE/);assert.equal(f.prompts().length,3);
+  assert.match(receipt,/No authorized primary model request was observed/);
+  assert.deepEqual(stage.execution,{sessionOutcome:'failed',terminalOutcome:'failed',assistantResponses:0,lastFinish:'unknown',interrupted:false,authorizedPrimaryRequests:0});
+  assert.ok(Number.isFinite(stage.timing.wallMinusMonotonicMs));
 });
 test('comment publication requires explicit preview and opt-in, and never retries',async t=>{
   const f=await fixture(t,{settings(s){s.comments.enabled=true;}}),receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
   await assert.rejects(f.command('pr-comment',id+' --publish'),/Preview first/);assert.match(await f.command('pr-comment',id),/] PREVIEW/);
   assert.match(await f.command('pr-comment',id+' --publish'),/] MODEL_REPORTED_POSTED/);await assert.rejects(f.command('pr-comment',id+' --publish'),/already had a publication/);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,1);
+});
+
+for(const failure of ['execution','metadata','result']) test(`publisher ${failure} error revokes authorization before another request or tool`,async t=>{
+  const checked=deferred();
+  const f=await fixture(t,{settings(s){s.comments.enabled=true;},async during({invoke,emit,session}){
+    if(ROLES[session.agent].stage!=='comment-publish')return;
+    try {
+      const result=failure==='metadata'?{metadata:{isError:true}}:{isError:true};
+      await invoke(session.id,'arbitrary_operation',result,failure==='execution'?'error':'completed');
+      await assert.rejects(emit('session','model.request',{sessionID:session.id,agent:session.agent,model:session.model,kind:'primary'}),/authorization|authorized/);
+      await assert.rejects(invoke(session.id,'another_operation'),/authorization|authorized/);
+      checked.resolve();
+    } catch(error) {checked.resolve(error);throw error;}
+  }});
+  const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  await f.command('pr-comment',id);
+  const published=await f.command('pr-comment',id+' --publish');
+  assert.equal(await checked.promise,undefined);
+  assert.match(published,/] INCOMPLETE/);assert.match(published,/publisher tool failed/i);
+  assert.match(published,/UNKNOWN/);assert.doesNotMatch(published,/MODEL_REPORTED_POSTED/);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='arbitrary_operation').length,1);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&['another_operation','fixture_mcp_write'].includes(c.tool)).length,0);
+  await assert.rejects(f.command('pr-comment',id+' --publish'),/already had a publication/);
 });
 
 test('null timeout creates no run timer even after a day, while manual cancellation still works',{timeout:3000},async t=>{

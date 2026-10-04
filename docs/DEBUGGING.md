@@ -76,6 +76,14 @@ adapter refuses the answer. It does not infer identity from a compaction summary
 or accept a nearby assistant message. This is a remaining large-context limit
 without a plugin iteration or character budget.
 
+Execution failures record bounded session/terminal outcomes, assistant-response
+count and final finish state in the stage result. `authorizedPrimaryRequests: 0`
+distinguishes failure before a model request from failure after submission.
+The receipt does not echo arbitrary provider error text. `wallMinusMonotonicMs`
+compares timestamp duration with monotonic timing; a large difference is a clue
+for investigating suspension or clock changes, not proof of the interruption
+cause and not permission to retry or claim a successful response.
+
 Private compaction now fails at the V2 model-request boundary before any summary
 request is sent. Transient `session.generate` and title requests are also denied
 for private reviewers. A missing exact input remains a failure even if a later
@@ -97,6 +105,10 @@ Inspect `outputFormatCorrections` for syntax repairs or literal-output retention
 Offsets are zero-based UTF-16 positions in the selected JSON body. Inspect
 `reviewWarnings` and the original response for quality or structural gaps.
 Extra fields remain available; known key spelling and enum case can be normalized.
+`extract-review-envelope` records selection of a unique review object from prose
+or code fences. Braces in ordinary code examples no longer block selection.
+Surrounding text remains attached; competing review candidates or duplicate
+keys retain the complete literal output instead.
 A missing or duplicate initial ID receives a runtime tracking ID rather than
 losing its observation. Missing final decisions appear as runtime UNREVIEWED,
 with the original observations shown separately. These are not model verdicts.
@@ -108,9 +120,10 @@ its available observations appear in a PARTIAL report. A failed verifier executi
 retains available initial observations as an incomplete draft. Missing details do
 not become guessed evidence, a confirmed finding or a fabricated fresh SHA.
 
-COMPLETE means usable structured verifier output, not perfect model quality.
-Publication remains separately gated by the complete evidence contract. Read the
-limitations even when the workflow completes. A partial/stale report or incomplete
+COMPLETE means the final verifier passed its evidence and version checks and the
+review can enter comment preview in the original session/process. Initial
+limitations do not impose another eligibility gate. Read the limitations even
+when the workflow completes; preview still rechecks anchors and duplicates. A partial/stale report or incomplete
 draft includes its body even when returnReport is receipt. Synthetic notices use
 resume:false and do not start a formatting model. Queue acknowledgement does not
 certify every UI's rendering; inspect existing sessions without prompting them.
@@ -154,8 +167,9 @@ If initial snapshots disagree, inspect the original metadata and labels before
 retrying. The common label uses `organization/project-id/repository-id`, with
 both stable IDs from the same PR metadata response. Project display names and
 project IDs are not interchangeable strings in this contract. The runtime preserves the differing labels and asks the verifier to resolve the
-requested PR. It does not guess name/ID equivalence. A report can still be shown;
-unresolved initial frame conflicts prevent publication eligibility.
+requested PR. It does not guess name/ID equivalence. The final verifier must
+establish the expected requested frame and current versions; a valid final
+result can proceed to comment preview with initial warnings preserved.
 
 `toolObservations` summarizes matching V2 execution hooks. Completed/error counts
 are execution observations, while `reportedErrors` and `truncated` record explicit
@@ -179,6 +193,15 @@ proposals. It records no request bodies, headers or provider error text. These
 are observations of hooks, not a count of network requests or billed usage.
 Normal review retains the host's retry decision. Revoked grants and output
 amendments do not receive host retries; no new retry policy is added.
+
+`A publisher tool failed` means the publication stage observed a tool error and
+revoked its grants immediately. This includes explicit error results returned
+through a completed hook. The uncertain-attempt ledger stays intact; inspect
+Azure even if the error appears to be parameter validation. An existing thread
+does not prove correct coordinates: compare its body, file, line range and
+line-local character offsets with the saved preview. Cumulative file offsets
+are not valid substitutes. Preserve the original evidence before any authorized
+correction; never infer that an interrupted write had no remote effect.
 
 With debug enabled, stage timing records model-request windows, tool intervals,
 response processing, and time after the last completed tool. Overlapping tool

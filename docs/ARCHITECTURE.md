@@ -12,7 +12,7 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/config.mjs` | Strict settings, immutable roles, native denials, compiled Agent.Info. |
 | `src/session.mjs` | Exact V2 create/admit/wait/context/interrupt/synthetic contract. |
 | `src/runtime.mjs` | Command registration, grants, workflow, cancellation and lifecycle. |
-| `src/output.mjs` | Review syntax recovery, best-effort delivery and separate strict publication assessment. |
+| `src/output.mjs` | Review envelope extraction, syntax recovery, best-effort delivery and final evidence assessment. |
 | `src/comments.mjs` | Comment target, preview validation, stable markers and uncertain-attempt ledger. |
 | `src/attribution.mjs` | Deterministic reports, provenance, notices and receipts. |
 | `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
@@ -145,11 +145,23 @@ A model-declared stale review or changed current SHAs remains STALE. An absent
 snapshot may be displayed from initial metadata, explicitly labelled as such;
 missing current SHAs are never copied from an older snapshot.
 
-Review delivery is separate from publication eligibility. Only fully assessed
-structured results and initial inputs with consistent metadata can enter the
-comment cache. Retained prose, missing decisions, conflicting frames and unconfirmed
-cleanup do not grant publication eligibility. COMPLETE describes usable structured
-verifier output, not factual perfection or automatic publication authorization.
+Every COMPLETE review enters the same-origin comment cache. The independent
+verifier must pass the final evidence, requested snapshot, current-version and
+original-ID checks. Initial coverage disclosures, partial/unavailable initials
+and their frame warnings remain context for verification and comment planning;
+they are not a second publication veto. A corrected section shape can keep its
+warning without downgrading a final result that passes these checks. Borrowed
+verifier identity, conflicting field aliases, missing final evidence/decisions,
+stale versions and unstructured final prose still cannot establish completeness.
+Unconfirmed session settlement makes the workflow INCOMPLETE, avoiding a COMPLETE
+receipt with no comment-cache entry. Completion never publishes automatically.
+
+Fenced extraction consumes Markdown blocks in order, so a code example closing
+fence cannot swallow the next JSON block. It selects a unique review-shaped
+object and retains surrounding prose/examples. Another complete or unfinished
+review candidate, including a status-only verdict, prevents automatic selection.
+An incidental dictionary literal is not a competing review. Settings, source
+checks and publication receipts do not use this review-only extraction.
 
 All recovery uses the existing model rounds. No extra model request fixes review
 format or missing fields, even with outputRetries=1. That setting retains an
@@ -166,12 +178,18 @@ also carries the report to the origin. PARTIAL, STALE and incomplete draft bodie
 are included even in receipt mode. Queuing never starts a formatter model and
 does not certify TUI display. See [debugging](DEBUGGING.md#output-and-report-presentation).
 
-Only publication-eligible completed same-origin reviews enter the comment cache. Preview verifies
+COMPLETE same-origin reviews enter the comment cache. Preview verifies
 eligible corrected findings, anchors, severity, count and exact content with AI
 attribution. Explicit --publish requires comments.enabled and a saved preview.
+The saved plan adds line-local character offsets derived from its existing
+anchor. This does not add fields the planner must generate or inspect MCP schemas
+in code; the publisher translates the saved positions to the available tool.
 Before publication, mark every planned item uncertain; results can only update
-that ledger to model-reported outcomes. No automatic retry or independent
-provider verification is claimed.
+that ledger to model-reported outcomes. Any observed execution-hook error or
+explicit error result during publication synchronously revokes grants before
+interruption is awaited. This stops subsequent authorized model/tool requests
+without classifying MCP actions; it cannot recall calls already dispatched.
+No automatic retry or independent provider verification is claimed.
 
 Optional diagnostics persist requests, visible answers, stage results and rendered
 reports under private permissions; never provider reasoning or full host config.

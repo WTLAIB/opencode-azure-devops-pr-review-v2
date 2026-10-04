@@ -29,6 +29,7 @@ const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.shellToolPermission = 'ask';
+settings.comments.enabled = true;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 const profile = join(fixture, 'settings.json');
 await writeFile(profile, JSON.stringify(settings, null, 2));
@@ -79,13 +80,21 @@ const provider = createServer(async (request, response) => {
     else if (payload.reviews) final = { status: 'COMPLETE', snapshot, currentHead: snapshot.head, currentBase: snapshot.base, confirmed: payload.reviews.flatMap(review => review.findings).map(item => ({ ...item, reason: 'Deterministic verifier fixture checked the source marker.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Deterministic fixture final report.' };
     else final = { status: 'COMPLETE', snapshot, coverage: { files: snapshot.files, gaps: [] }, findings: [finding(parsed.model === 'functional' ? 'F-1' : 'R-1')], report: 'Deterministic initial fixture.' };
   }
+  if (userContext === 'smoke-review' && parsed.model === 'risk') final.coverage.gaps = ['Tests were not executed in this source-only fixture.'];
+  if (payload?.target && payload.findings && !payload.comments) final = { status: 'READY',
+    comments: payload.findings.slice(0, 1).map(item => ({ findingId: item.id, severity: item.severity,
+      path: snapshot.files[0], startLine: 1, endLine: 1, anchor: 'fixture-source',
+      body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
+    skipped: payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })) };
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
   const toolName = shellControl ? 'shell' : forced ?? tool?.function.name;
   const priorToolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
-  const callTool = toolName && (forced ? priorToolResults < 2 : !hasResult);
-  const args = shellControl ? { command: `touch ${JSON.stringify(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' } : forced === 'shell' ? { command: `touch ${join(fixture, 'NATIVE_EXECUTED')}`, description: 'Fixture forbidden shell' } : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` } : { value: 'fixture-source' };
+  const publisher = Boolean(payload?.comments);
+  const callTool = toolName && (forced || publisher ? priorToolResults < 2 : !hasResult);
+  const args = shellControl ? { command: `touch ${JSON.stringify(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' } : forced === 'shell' ? { command: `touch ${join(fixture, 'NATIVE_EXECUTED')}`, description: 'Fixture forbidden shell' } : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` } : { value: publisher ? 'publisher-error' : 'fixture-source' };
   let content = JSON.stringify(final);
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
+  if (userContext === 'smoke-review' && payload.reviews) content = 'Example: fn({"item": 3}).\n```json\n' + content + '\n```';
   if (userContext === 'smoke-prose' && (parsed.model === 'functional' || payload.reviews)) {
     content = payload.reviews ? 'Useful final prose with an unresolved evidence gap.' : 'Useful initial prose about a reachable fixture issue.';
   }
@@ -114,7 +123,9 @@ for await (const line of createInterface({ input: process.stdin })) {
   else if (request.method === 'tools/list') result = { tools: [{ name: 'read_fixture', description: 'Read-only deterministic smoke fixture.', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } }] };
   else if (request.method === 'tools/call') {
     appendFileSync(${JSON.stringify(join(fixture, 'mcp-calls.jsonl'))}, JSON.stringify(request.params) + '\\n');
-    result = { content: [{ type: 'text', text: 'fixture-source' }] };
+    result = request.params.arguments.value === 'publisher-error'
+      ? { isError: true, content: [{ type: 'text', text: 'Fixture publication tool failed.' }] }
+      : { content: [{ type: 'text', text: 'fixture-source' }] };
   } else result = {};
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
 }
@@ -235,7 +246,7 @@ try {
     assert.ok(commands.data.some(command => command.name === name), `Installed command missing: ${name}`);
   }
   const agents = await api('/api/agent');
-  for (const role of ['check', 'functional', 'risk', 'verifier', 'comment-plan']) {
+  for (const role of ['check', 'functional', 'risk', 'verifier', 'comment-plan', 'comment-publish']) {
     assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), `Installed role missing: ${role}`);
   }
   await api(`/api/session/${origin.id}/command`, { name: 'fixture-smoke', text: 'Literal $ARGUMENTS `pwd` @private.txt', delivery: 'steer' });
@@ -264,8 +275,25 @@ try {
     return created.data.id;
   };
   await invokeReview('pr-check', 'smoke-check', /\] READY/);
-  await invokeReview('pr-review', 'smoke-review', /\] COMPLETE/);
+  const reviewOrigin = await invokeReview('pr-review', 'smoke-review', /\] COMPLETE/);
   assert.match(workflowReceipts.at(-1).receipt, /output-format-corrections=1/);
+  assert.match(workflowReceipts.at(-1).receipt, /azpr-review-risk: PARTIAL/);
+  const reviewID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
+  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID, delivery: 'steer' });
+  const preview = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
+  assert.match(preview, /\] PREVIEW/);
+  workflowReceipts.push({ command: 'pr-comment', suffix: 'smoke-review-preview', receipt: preview });
+  const beforePublication = requests.length;
+  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' });
+  const publication = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
+  assert.match(publication, /\] INCOMPLETE/); assert.match(publication, /publisher tool failed/i);
+  assert.match(publication, /UNKNOWN/);
+  assert.equal(requests.length, beforePublication + 1, 'A publisher tool error must prevent another model request.');
+  const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
+  assert.equal(publicationPayload.comments[0].startOffset, 1);
+  assert.equal(publicationPayload.comments[0].endOffset, 14);
+  await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /already had a publication/);
+  workflowReceipts.push({ command: 'pr-comment --publish', suffix: 'publisher-error', receipt: publication });
   await invokeReview('pr-review', 'smoke-prose', /\] PARTIAL/);
   assert.match(workflowReceipts.at(-1).receipt, /Useful final prose/);
   assert.match(workflowReceipts.at(-1).receipt, /Useful initial prose/);
@@ -289,12 +317,13 @@ try {
   assert.equal(requests.length, beforeCancel + 1, 'Manual cancellation must not restart the fake provider.');
   workflowReceipts.push({ command: 'pr-check + pr-stop', suffix: 'hang-smoke', receipt: cancellationReceipt });
   const mcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(mcpCalls.length, 8, 'Exactly one helper, one check, and six review stage MCP reads are expected.');
+  assert.equal(mcpCalls.length, 10, 'One helper, one check, six review stages, one preview and one failed publisher tool call are expected.');
   for (const call of mcpCalls) {
     assert.equal(call.name, 'read_fixture');
-    assert.deepEqual(call.arguments, { value: 'fixture-source' });
+    assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
   }
-  assert.equal(requests.length, 23);
+  assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 1);
+  assert.equal(requests.length, 26);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {
@@ -326,7 +355,7 @@ try {
   }
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
-  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 8);
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 10);
   console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();

@@ -51,10 +51,14 @@ must explain the skip locally rather than omit essential conditions to fit.
 
 ## Enable and use
 
-Review delivery is separate from publication eligibility. PARTIAL or unstructured
-reviews remain readable, but comment preparation requires a completed structured
-review with the full evidence, identity/version and original-ID assessment. Read
-the receipt's publication limitation even when the verifier returned COMPLETE.
+A COMPLETE review can enter comment preview in its original session/process.
+There is no additional veto based on initial coverage disclosures or incomplete
+initial reviewers after the independent verifier passes the final evidence,
+identity/version and original-ID checks. Retained limitations accompany the
+planner, which still checks current source, anchors and existing discussions.
+PARTIAL, STALE and interrupted final results remain readable but do not enter the
+comment cache. COMPLETE is not automatic publication or a guarantee that an
+eligible, nonduplicate inline comment exists.
 
 In your private plugins/azpr-v2/settings.json, set comments.enabled=true before
 reviewing and restart OpenCode. The default is false; preview is still available.
@@ -73,6 +77,11 @@ The preview shows complete saved content (body, AI/model disclosure, marker), lo
 Inspect it before requesting publication. The publisher receives the saved
 content and coordinates, not a freshly generated plan. It is instructed to
 send the content exactly, without translation or relocation.
+The runtime derives `startOffset` and `endOffset` from the saved anchor using
+the Azure SDK's one-based, line-local character positions. These are not file
+byte offsets and do not add required fields to the planner's output. The
+publisher maps the complete saved positions to the available tool schema;
+actual remote coordinates still require independent verification.
 
 Every saved comment includes the review stages' selected provider/model IDs,
 the model assigned to comment preparation/publication, and a notice that it is
@@ -133,7 +142,11 @@ calls do not establish that a write happened or that it was correct.
 
 Only one publishing attempt is allowed per completed review. After any attempt,
 inspect Azure before starting a new review. The plugin cannot identify which
-calls were writes and never retries the batch automatically. This is not an
+calls were writes. Any execution-hook error or explicit MCP error result during
+publication immediately revokes the stage's grants and requests interruption.
+No subsequent tool or model request is authorized, even if the failed call was
+a read or parameter validation. Already dispatched calls cannot be recalled.
+The plugin never retries the batch automatically. This is not an
 exactly-once guarantee: the model, host, or server could still retry operations.
 Prompts forbid blind retries. A push or new discussion can race the last check.
 Cancellation cannot undo already dispatched operations; no remote rollback or

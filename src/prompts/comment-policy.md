@@ -36,6 +36,10 @@ stage authorizes creating the saved comments, not any other changes. Stop when
 tools, permissions, identity, source, duplicate checks, or evidence are uncertain.
 Never fabricate success or bypass host permission decisions.
 
+The following read-recovery policy applies to comment planning only. During
+publication, any observed tool error ends authorization for the stage; inspect
+Azure before another attempt, even if an error appears to be validation-only.
+
 For explicitly transient read failures, at most one identical retry per logical
 read is allowed. Separately, at most one unknown-cause read retry is allowed in
 this entire stage, only for an operation documented as an idempotent read with
