@@ -52,6 +52,7 @@ const workflowReceipts = [];
 let forbiddenFetches = 0;
 let child;
 let logs = '';
+let rejectNextPlan = true;
 const provider = createServer(async (request, response) => {
   if (request.url === '/v1/forbidden') { forbiddenFetches++; response.end('Forbidden fixture fetch was reached'); return; }
   let body = '';
@@ -67,6 +68,11 @@ const provider = createServer(async (request, response) => {
   const rawPrompt = parsed.messages?.findLast(message => message.role === 'user')?.content;
   let payload;
   try { payload = JSON.parse(rawPrompt); } catch {}
+  if (rejectNextPlan && payload?.target && payload.findings && !payload.comments) {
+    rejectNextPlan = false;
+    response.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'PRIVATE_PROVIDER_DIAGNOSTIC', type: 'permission_error' } }));
+    return;
+  }
   const userContext = payload?.userContext ?? '';
   const shellControl = rawPrompt === 'fixture-shell-positive-control';
   if (userContext.includes('hang-smoke')) {
@@ -325,6 +331,16 @@ try {
   assert.match(workflowReceipts.at(-1).receipt, /output-format-corrections=1/);
   assert.match(workflowReceipts.at(-1).receipt, /azpr-review-risk: PARTIAL/);
   const reviewID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
+  const beforeRejectedPlan = requests.length;
+  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID, delivery: 'steer' });
+  const rejectedPlan = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
+  assert.match(rejectedPlan, /\] INCOMPLETE/);
+  assert.match(rejectedPlan, /HTTP 403; 0 tool calls observed/);
+  assert.doesNotMatch(rejectedPlan, /PRIVATE_PROVIDER_DIAGNOSTIC/);
+  assert.equal(requests.length, beforeRejectedPlan + 1, 'Provider rejection must not trigger a repair or fallback request.');
+  await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /Preview first/);
+  assert.equal(requests.length, beforeRejectedPlan + 1, 'A failed preview must not authorize a publisher.');
+  workflowReceipts.push({ command: 'pr-comment', suffix: 'provider-rejected-preview', receipt: rejectedPlan });
   await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID, delivery: 'steer' });
   const preview = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
   assert.match(preview, /\] PREVIEW/);
@@ -427,7 +443,7 @@ try {
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
   }
   assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 1);
-  assert.equal(requests.length, 51);
+  assert.equal(requests.length, 52);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {

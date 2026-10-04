@@ -104,7 +104,8 @@ async function fixture(t, opts = {}) {
           result=await opts.result?.({result,role,packet,session})??result;
           const answer={id:`answer_${++seq}`,type:'assistant',agent:role,model:clone(session.model),finish:'stop',time:{created:Date.now(),completed:Date.now()},content:[{type:'text',text:JSON.stringify(result)}]};
           await opts.answer?.({answer,packet,role});
-          session.history.push(answer,{id:`idle_${++seq}`,type:'idle',outcome:'succeeded'});session.outcome='succeeded';
+          const outcome = answer.error ? 'failed' : 'succeeded';
+          session.history.push(answer,{id:`idle_${++seq}`,type:'idle',outcome});session.outcome=outcome;
         };
         session.running=Promise.race([Promise.resolve().then(work),session.stopped.promise]).catch(error=>{
           session.outcome='failed';session.failure=error.message;
@@ -457,6 +458,33 @@ test('a verifier failure before model submission remains incomplete with actiona
   assert.deepEqual(stage.execution,{sessionOutcome:'failed',terminalOutcome:'failed',assistantResponses:0,lastFinish:'unknown',interrupted:false,authorizedPrimaryRequests:0});
   assert.ok(Number.isFinite(stage.timing.wallMinusMonotonicMs));
 });
+test('provider-rejected preview preserves the completed review, starts no publisher and exposes only safe diagnostics',async t=>{
+  let rejectPlan = true;
+  const f = await fixture(t, { skipTool: true, async during({ invoke, session }) {
+    if (!session.agent.endsWith('-comment-plan')) await invoke(session.id);
+  }, answer({ answer, role }) {
+    if (rejectPlan && role.endsWith('-comment-plan')) {
+      answer.finish = 'error';
+      answer.error = { type: 'provider.auth', status: 403, message: 'PRIVATE_PROVIDER_DETAIL', response: { body: 'PRIVATE_BODY' } };
+      answer.content = [];
+    }
+  }});
+  const review = await f.command(), id = /AZPR ([a-f0-9]{8})/.exec(review)[1];
+  assert.match(review, /] COMPLETE/);
+  const failed = await f.command('pr-comment', id);
+  assert.match(failed, /] INCOMPLETE/);
+  assert.match(failed, /HTTP 403; 0 tool calls observed/);
+  assert.doesNotMatch(failed, /PRIVATE_PROVIDER_DETAIL|PRIVATE_BODY/);
+  assert.deepEqual((await resultLog(failed)).stages[0].execution.provider, { status: 403, toolCallsObserved: 0 });
+  assert.equal(f.prompts().length, 4);
+  await assert.rejects(f.command('pr-comment', id + ' --publish'), /Preview first/);
+  assert.equal(f.prompts().length, 4);
+  assert.equal(f.calls.some(call => call.kind === 'executed-tool' && call.tool === 'fixture_mcp_write'), false);
+  rejectPlan = false;
+  assert.match(await f.command('pr-comment', id), /] PREVIEW/);
+  assert.equal(f.prompts().length, 5, 'An explicitly requested new preview reuses the original COMPLETE review.');
+});
+
 test('comment publication needs a saved preview and explicit publish without a config switch',async t=>{
   const f=await fixture(t,{}),receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
   await assert.rejects(f.command('pr-comment',id+' --publish'),/Preview first/);

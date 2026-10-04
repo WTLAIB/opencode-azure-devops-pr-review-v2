@@ -84,7 +84,7 @@ test('V2 permission rules block CodeMode, native mutation, delegation and host c
       else assert.deepEqual(rule, { action: name, resource: '*', effect: 'deny' });
     }
     if (projectReviewRole(role)) {
-      assert.match(agent.system, /Verification in the current project/);
+      assert.ok(agent.system.includes(prompts.common), 'Review roles must include the complete shared review policy.');
       assert.doesNotMatch(agent.system, /Source-only role|azpr_verify|rootfs/);
     } else assert.match(agent.system, /Source-only role/);
   }

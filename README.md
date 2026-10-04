@@ -60,7 +60,7 @@ recovery location. Unrelated backups and private history are untouched.
 ### Manual copying without Git
 
 Keep the following relative paths under one source directory, then run its
-installer. These **22 files** are sufficient:
+installer. These **20 files** are sufficient:
 
 ```text
 install.sh
@@ -87,9 +87,9 @@ src/prompts/comment-publish.md
 
 README, `docs/`, the settings schema and `uninstall.sh` are optional installer
 inputs. Include them for local guidance. No `commands/` directory or top-level
-loader is needed. The installed core has 22 files: nine JavaScript modules, one
-Python helper, nine prompts, settings, generated package metadata, and the generated
-server entry.
+loader is needed. The installed core has 20 files: eight JavaScript modules,
+nine prompts, settings, generated package metadata, and the generated server entry.
+The Python helper is used by the installer, not installed into the runtime.
 
 ## Configuration
 
@@ -154,8 +154,11 @@ selecting another model or rewriting configuration.
 
 The two initial reviewers and verifier can use shell, read, glob and grep in the
 current OpenCode project under its normal permissions. Models choose useful tests,
-reproductions or static checks. Open another project to review its checkout; there
-is no repository mapping, root filesystem, custom execution tool or test quota.
+reproductions or static checks. The PR source comes from MCP; the current directory
+need not contain a checkout or Git history. Review does not clone/fetch a repository.
+For an experiment, the model can save only needed MCP-returned files in a fresh
+temporary directory and record their paths and commit provenance. There is no
+repository mapping, root filesystem, custom execution tool or test quota.
 
 Commands use the real project and can change files or contact services. The plugin
 does not sandbox them or override host allow/ask/deny decisions. Reviewers must

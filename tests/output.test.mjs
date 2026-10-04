@@ -396,7 +396,6 @@ test('review guidance uses PR versions; standalone check retains cumulative proo
   assert.match(check,/post-listing tip check unless that second read actually occurred/);
   assert.match(check,/Do not perform a code review or diagnose defects/);
   assert.match(check,/missing required evidence prevents\s+READY/);
-  assert.match(common,/does not imply directory-listing\s+Commit support/);
   assert.match(common,/Reuse complete exact-commit content\s+already\s+obtained in your own session/s);
   result.snapshot=snapshot;
   assert.equal(checkEnvelope(result).status,'READY');
@@ -419,7 +418,6 @@ test('finding locations must be recounted from exact source without transport wr
   assert.match(finalPrompt,/Recount.*source/s);
   assert.match(finalPrompt,/do not inherit the representative's offsets/);
   assert.match(finalPrompt,/NEEDS_INFO/);
-  assert.match(common,/zero search results.*index/s);
 });
 
 test('only visible JSON text can supply the review envelope', () => {

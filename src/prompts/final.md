@@ -72,9 +72,11 @@ limitation; it is not a proven common ancestor.
 
 ## Single-source report output
 
-Write the corrected findings and ID decisions first; derive the overview from
-those checked claims. Apply the shared submission check to the final localized
-findings, reasons and report: translation and merging must preserve evidence scope.
+Write corrected findings from your source checks, not by copying the more detailed
+initial packet. Detail and reviewer agreement are not evidence. Preserve useful
+claims, narrow unsupported consequences and reconcile the proposed fixes across
+findings before deriving the overview. Apply the shared submission check to final
+localized text; translation and merging must preserve evidence and test provenance.
 Each finding's evidence packet is written once in confirmed/newFindings.
 Use a short disposition reason: CONFIRMED points to the decisive check in its
 corrected finding; MERGED names the shared cause and representative without copying

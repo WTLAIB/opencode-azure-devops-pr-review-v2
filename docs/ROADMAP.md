@@ -48,6 +48,9 @@ historical evidence and do not certify this adapter.
 
 Initial reviewers and the verifier choose tests or other checks in the current
 OpenCode project, using native shell/read/search with inherited host permissions.
+MCP supplies remote source; no checkout, clone or local Git history is required.
+Optional experiments use needed retrieved files with commit provenance in fresh
+temporary directories, or an existing checkout whose state is explicitly checked.
 There is no custom execution platform, repository mapping, extra review round or
 mandatory test quota. Failed or unavailable tests preserve useful source review.
 The real project can be affected by permitted commands; tested versions, local
@@ -72,6 +75,9 @@ changes and cancellation limitations must be disclosed. See
 Accept documented model/server limitations. Diagnose raw evidence before adding
 prompt text for an existing rule. Test overclaims about permanence/recovery, equal
 instants represented by different timezone offsets, and repeated report content.
+Keep fixes consistent across findings and distinguish exact source execution from
+modified reproductions. Instruction changes are not measured model-quality gains;
+later authorized samples must be audited against the original evidence.
 Prefer usable results with honest limitations over discarding reviews for format
 or quality gaps. Do not add model/PR/MCP-version exceptions, more model rounds,
 mandatory fields, hidden evidence caps or fabricated evidence. Keep execution

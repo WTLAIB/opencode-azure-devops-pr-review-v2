@@ -19,8 +19,9 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
 
 The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
-entry re-exporting `plugin.js`, matching package exports, nine JavaScript modules,
-one Python helper, nine prompts and private settings. No top-level loader or
+entry re-exporting `plugin.js`, matching package exports, eight JavaScript modules,
+nine prompts and private settings. The Python settings helper runs only during
+installation. No top-level loader or
 Markdown command expansion is involved. Optional docs/schema/uninstaller do not
 change runtime requirements. The installer merges missing current defaults;
 obsolete profiles/keys fail instead of being migrated. See README's exact list.
@@ -33,8 +34,8 @@ ordinary-agent model invocation. Matching text in a normal chat, PR comment or
 MCP result cannot grant access. Reserved command/agent conflicts fail closed.
 
 `ctx.agent.transform` creates hidden primary agents with explicit provider/model
-references and composed system text. Unconfigured deep roles and disabled
-publishers are absent. The host's post-configuration phase applies global/project
+references and composed system text. Unconfigured deep roles are absent.
+The host's post-configuration phase applies global/project
 permissions after external transforms. Before use, the adapter validates resolved
 protected fields, retains host permission rules, and pins the complete role
 configuration. Changes to settings or resolved roles require a restart.
@@ -93,6 +94,14 @@ programmatically prove local-file provenance. These limits must remain explicit.
 5. Revoke the grant before cleanup. A completed reviewer cannot be resumed by
    ordinary messages. Raw captured failures remain available in diagnostics.
 
+Recognized provider failures expose only the HTTP error status and the number
+of tool calls observed in admitted assistant context. Authentication/authorization
+statuses point to provider access and role/tool compatibility, not JSON repair.
+Raw provider details stay outside the receipt; private diagnostics retain the
+error message/status, while full bodies require the original host response.
+Cancellation stays distinct; no fallback, retry or permission change is
+introduced by this diagnostic.
+
 There is no whole-run timer when runTimeoutSeconds is null. Explicit finite
 seconds create one deadline shared by all stages. Cancellation
 or disposal revokes grants synchronously, then interrupts and waits for each
@@ -139,8 +148,11 @@ findings through the existing evidence contract; no additional model round is us
 Reviewers use their current OpenCode project for model-chosen verification methods,
 including tests, reproductions and static inspection. OpenCode child sessions
 [inherit the origin's location and session permissions](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/session.ts#L254).
-This replaces the custom
-isolated executor; no repository mappings, root filesystems, subprocess launcher,
+MCP remains the source for remote PR identity, paths and exact-commit content;
+no local Git repository or history is required. Models do not clone/fetch for
+review. They may save needed MCP-returned files in fresh temporary directories
+for experiments, preserving provenance and distinguishing modified reproductions.
+This replaces the custom isolated executor; no repository mappings, root filesystems, subprocess launcher,
 resource settings or runtime verification ledger remain. Relevant commands and
 observations belong in the existing review evidence/report fields, with original
 tool results in the host session. The verifier must attribute initial observations

@@ -38,6 +38,9 @@ The independent V1 repository and installation are outside this project's scope.
 - Initial reviewers and the verifier may use shell/read/glob/grep in the current
   OpenCode project under inherited host permissions. Do not add a second execution
   platform, repository mapping, command allowlist or plugin permission switch.
+  MCP is the source for the remote PR; local Git history or a checkout is not
+  required. Do not clone/fetch for review. Model-chosen reproductions may use
+  needed MCP-returned files in fresh temporary directories with version provenance.
   Preserve parent location and permissions, active role/model binding and grant
   revocation. Readiness and comment roles still deny native execution/search.
 - Deny native editing/delegation/public web and host session/model control in
@@ -45,7 +48,7 @@ The independent V1 repository and installation are outside this project's scope.
   silently rewrite host configuration or claim filesystem/network isolation:
   authorized shell commands have ordinary host authority and can have side effects.
   Models choose verification methods, preserve user work and disclose the tested
-  repository/commit/local changes, failures and limitations. No mandatory tests,
+  source provenance and any local changes, failures and limitations. No mandatory tests,
   extra review round or execution-based completion gate.
 - No fixed MCP tool catalog, direct Azure/model client, patched server, or
   name/action classifier. MCP read-only behavior is prompt policy, not a write

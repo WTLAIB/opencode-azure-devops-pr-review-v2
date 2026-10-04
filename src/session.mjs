@@ -104,6 +104,17 @@ function responseError(message, response, execution) {
   return error;
 }
 
+// Only expose bounded host metadata. Provider messages/bodies may contain
+// private request data; retain the original response for private inspection only.
+function providerFailure(final, assistants) {
+  const error = final?.error;
+  if (typeof error?.type !== 'string' || !error.type.startsWith('provider.') ||
+      !Number.isInteger(error.status) || error.status < 400 || error.status > 599) return undefined;
+  return { status: error.status,
+    toolCallsObserved: assistants.reduce((count, message) => count +
+      (Array.isArray(message.content) ? message.content.filter(part => part?.type === 'tool').length : 0), 0) };
+}
+
 /**
  * Admit exactly one literal prompt, await idle, then read authoritative context.
  * Context is not a full history API: if compaction removes the admitted input,
@@ -150,7 +161,12 @@ export async function requestReview(context, { sessionID, text, role, model, met
       terminalOutcome: terminal?.type === 'idle' ? outcome(terminal.outcome) : 'missing-idle',
       assistantResponses: assistants.length, lastFinish: finish,
       interrupted: session.outcome === 'interrupted' || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
-    throw responseError(`[AZPR] Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}); no partial response was accepted.`, answer, execution);
+    const provider = !execution.interrupted && providerFailure(final, assistants);
+    if (provider) execution.provider = provider;
+    const detail = provider
+      ? `Model provider request failed (HTTP ${provider.status}; ${provider.toolCallsObserved} tool calls observed).${[401, 403].includes(provider.status) ? ' Check provider access and compatibility with the role\'s tool permissions; this is not a review-format failure.' : ''} `
+      : '';
+    throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}); no partial response was accepted.`, answer, execution);
   }
   if (session.agent !== role || !sameModel(session.model, selectedModel) ||
       assistants.some(message => message.agent !== role || !sameModel(message.model, selectedModel))) {

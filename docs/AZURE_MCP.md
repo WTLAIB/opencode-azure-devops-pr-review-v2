@@ -70,6 +70,11 @@ separate workflow; see [commenting](COMMENTING.md).
 
 ## Source identity and coverage
 
+The remote PR is reviewed through MCP. Neither a matching local checkout nor Git
+history is required, and review does not clone/fetch a repository. Optional local
+experiments may use needed MCP-returned files with repository/path/commit provenance;
+temporary materialization is not proof of a complete project or commit tree.
+
 Both initial reviewers independently read PR identity, PR-reported source and
 target SHAs, changed paths, and relevant source. The runtime compares available
 repository/PR identities and SHAs, then gives the verifier consistent paths and
@@ -103,7 +108,10 @@ fallback client.
   Commit selector into Branch. A SHA supplied to that directory operation can
   therefore fail as a branch lookup. A supported branch listing can supply path
   hints, but cannot prove the reviewed commit's tree or absence of guidance.
-  Read required content at the actual reviewed SHA.
+  The shared selector enum is documented for file-content reads; do not infer
+  directory support from that enum alone. Read required content at the actual
+  reviewed SHA. Discover relevant paths for a concrete missing fact, rather than
+  repeating directory reads for known files or speculating through argument variants.
   See the [file handlers](https://github.com/microsoft/azure-devops-mcp/blob/b43e9ad32a6dd5c1456ce4730ba84a2ae0304691/src/tools/repositories.ts#L553).
 - **PR changed-file summaries are not a full pagination guarantee.** The get
   handler requests one changes page for the latest iteration and returns

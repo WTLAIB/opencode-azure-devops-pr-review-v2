@@ -12,6 +12,44 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 remote-source guidance and provider diagnostics
+
+Syntax checks and 389/389 offline tests passed on Ubuntu 22.04.5 / Node 22.23.3.
+Actual OpenCode 2.0.22 fresh and replacement fixtures both passed, each with 56
+loopback fake-provider requests and 12 fixture MCP calls. A new rejected-preview
+case checks that an HTTP 403 is reported without leaking provider text, no repair
+or fallback request starts, publication remains blocked without a saved plan,
+and a later explicitly requested preview can reuse the COMPLETE review. Existing
+permission, cancellation and publisher-error checks still pass.
+
+Three harmless live admission probes used the existing selected comment-plan
+model and production role/system, with all tool execution blocked. Each sent one
+primary request after checking current model capability and zero catalog pricing.
+The results were deny/403, ask/success, deny/403. The first probe ran while MCP
+discovery was still settling and cannot isolate shell. In the last two probes,
+the input, system and model matched, and the exposed tool catalogs differed only
+by shell. Neither executed a tool. This is evidence of provider admission
+sensitivity to role permissions/tool exposure, not proof of the provider's
+internal classifier or general compatibility. Production denials were preserved.
+Current catalog pricing is not a billing audit or a promise of future free use.
+
+The review guidance now starts from MCP source without requiring local Git or a
+clone. Optional experiments may materialize needed retrieved files with version
+provenance. Source discovery follows operation-specific selector semantics and
+avoids speculative argument variations after deterministic errors. The shared
+quality guidance was consolidated around factual scope and coherent fixes; an
+obsolete isolated-execution restriction was removed. No new fields, model rounds,
+completion gate or tool-name classifier was added. These instruction changes
+have not yet been measured in another real PR review.
+
+One diagnostic startup failed before inference because its command was not yet
+registered; the diagnostic runner now waits for registration. One focused test
+initially used an inconsistent mock success outcome for a provider error; the
+fixture now represents the host's failed terminal state. Three full-suite failures
+were stale literal prompt assertions. All original failures and corrected results
+remain private. The task changed no daily installation, private profile, PR
+comments or source sandboxes, and ran no full live PR review or publication.
+
 ## 2026-10-05 native project verification acceptance
 
 The custom isolated executor and its configuration have been removed. Syntax
@@ -147,7 +185,7 @@ forward from another repository or revision.
 | Comments | COMPLETE-to-preview after partial/unavailable initials, preserved warnings, same-origin scope, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
 | Diagnostics | Private output handling, original response and correction records, value-free observations, timing uncertainty, safe path/write behavior. |
 | Installation | V2 package discovery layout, complete manual file list, preserved current settings, old-layout conflicts, rollback/recovery, archival removal, unrelated-file preservation. |
-| Isolated verification | Actual Linux process and filesystem/network/syscall boundaries, source fidelity, command freedom, nonzero/unavailable results, cancellation, active-grant enforcement and usable COMPLETE/preview delivery. |
+| Project verification | Inherited location/permissions, host allow/ask/deny behavior, model-chosen methods, nonzero/unavailable results, cancellation, active-grant enforcement and usable COMPLETE/preview delivery. No plugin isolation claim. |
 
 Check source-only installation without touching an actual configuration:
 
@@ -160,7 +198,7 @@ sh uninstall.sh --config-dir "$azpr_test_root/config"
 
 The default example still contains generic model placeholders. Successful file
 installation does not mean the plugin can start a review with those settings.
-For an installation test, compare the nine JavaScript modules, Python helper and nine prompts to source,
+For an installation test, compare the eight JavaScript modules and nine prompts to source,
 check the generated regular `server.js` entry and matching `package.json` export, and verify owner-only settings
 permissions. No top-level loader or Markdown command files should be created.
 The installer must reject a conflicting older integration without moving it.

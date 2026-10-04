@@ -15,7 +15,7 @@ The following limits are project choices, not universal standards:
 | Rule | Default |
 | --- | --- |
 | Eligibility | Confirmed high/medium-impact defects only |
-| Volume | At most 5 saved comments; configurable from 1 to 10; one publishing stage per review |
+| Volume | No numerical comment quota; one publishing attempt per review |
 | Comment size | At most 1,200 body characters, plus runtime AI/model disclosure and a hidden deduplication marker |
 | Anchor | Smallest useful 1-5 line range in a changed HEAD file |
 | Structure | Short issue title; triggering condition and impact; correction or regression test |
@@ -62,6 +62,10 @@ eligible, nonduplicate inline comment exists.
 
 Publication has no separate configuration switch. It requires a saved preview
 and an explicit `--publish` in the same original session/process.
+Comment roles retain native shell/search denials. Provider tool-schema admission
+can therefore differ from ordinary review, even with the same selected model.
+A provider rejection creates no saved plan and starts no publisher; it does not
+invalidate the completed review. See [provider diagnostics](DEBUGGING.md#tool-observations-and-permissions).
 Set outputLanguage (for example, zh-TW) to control both final-report and comment
 prose. Initial reviewers use the same language so the verifier does not need to
 switch from an English handoff. Structured keys, identifiers and source quotes
@@ -137,8 +141,8 @@ On-premises Azure URLs are not currently supported for the comment workflow.
 
 ## What is enforced and what is instructed
 
-The runtime checks plan structure: known confirmed finding IDs, maximum plan
-size, high/medium labels matching the verified finding, body length, changed-file paths, 1-5 line ranges, anchor
+The runtime checks plan structure: known confirmed finding IDs,
+high/medium labels matching the verified finding, body length, changed-file paths, 1-5 line ranges, anchor
 line count, and an explanation for every skipped eligible finding. It adds stable
 markers. These checks are not proof that source lines or findings are correct.
 

@@ -155,6 +155,23 @@ attempts in a stage stop the run. These observations must remain visible even
 when no forbidden operation executed. They are different from MCP tool failures
 and provider rejection before any tool request.
 
+`Model provider request failed (HTTP ...; ... tool calls observed)` separates
+provider rejection from review-format failures. It exposes only bounded host
+metadata; raw provider error messages and response bodies stay in private evidence.
+A zero observed-tool count describes the admitted assistant context, not a network
+or billing audit. Check the original error before attributing a 401/403 to Azure.
+
+On 2026-10-05, isolated comment-plan admission probes on 2.0.22 held the selected
+model, role, system and input constant. With MCP discovery settled, exposing shell
+under an ask permission succeeded; removing shell under deny produced HTTP 403.
+Both probes executed zero tools. An earlier deny probe also failed, but MCP was
+still connecting, so its tool catalog is not a controlled comparison. This
+demonstrates compatibility sensitivity in that tested provider/profile, not the
+provider's internal rule or a requirement to execute shell. The production
+comment-role denials remain intact. Check provider support before another live
+attempt; do not weaken execution permissions or spoof client identity to obtain
+admission. An alternative provider/model needs explicit selection and a cost check.
+
 Historical note, before native project verification: an authorized 2.0.22 live test received a provider HTTP 403 before any tool call
 with `shellToolPermission: "deny"`. The same selected models were admitted after
 using the existing `"ask"` option in an isolated test profile; the runtime guard
@@ -163,7 +180,8 @@ This matches [upstream reports about permission-dependent free-tier rejection](h
 It is a provider admission limitation, not an Azure authentication failure or
 proof that shell ran. Inspect the original error before changing permissions;
 never change models or spoof client headers to recover. The old shellToolPermission
-setting is now removed; shell execution follows actual host permissions.
+setting is now removed. Review roles inherit actual host permissions, while
+readiness and comment roles retain their native execution denials.
 
 If initial snapshots disagree, inspect the original metadata and labels before
 retrying. The common label uses `organization/project-id/repository-id`, with
@@ -233,8 +251,11 @@ MCP pagination, server-side truncation, and service limits remain independent.
 There is no `azpr_verify` tool or `verification` configuration. OpenCode's native
 tools operate in the current project. Inspect the child session's location,
 inherited permissions, approval requests and actual tool result. No plugin repo
-mapping or root filesystem is needed. A checkout different from the PR head must
-be disclosed; do not reset user work to make a test apply.
+mapping or root filesystem is needed. A local checkout or Git history is optional;
+MCP supplies the remote source. Models may save needed retrieved files in fresh
+temporary directories, recording source commits and any reproduction changes.
+A checkout different from the PR head must be disclosed; do not reset user work
+to make a test apply.
 
 Distinguish tool execution failure from a test command's nonzero exit. Read the
 output and tested state before interpreting either; a shell pipeline can return

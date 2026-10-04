@@ -154,6 +154,49 @@ test('failed and interrupted sessions expose terminal states without leaking pro
   });
 });
 
+test('provider failures expose status and observed tool turns while retaining private error details only in diagnostics', async () => {
+  for (const status of [401, 403, 429, 503]) for (const toolCount of [0, 2]) {
+    const detail = { type: status < 429 ? 'provider.auth' : 'provider.api', status,
+      message: 'PRIVATE_PROVIDER_DETAIL', response: { body: 'PRIVATE_REQUEST_BODY' } };
+    const final = assistant({ finish: 'error', error: detail });
+    const toolTurn = assistant({ id: 'msg_tools', finish: 'tool-calls',
+      content: Array.from({ length: toolCount }, (_, i) => ({ type: 'tool', id: `tool_${i}`, state: { status: 'completed' } })) });
+    const { context, calls } = host({ get: async () => ({ id: sessionID, outcome: 'failed' }),
+      context: async () => [assistant({ id: 'old_tools', content: [{ type: 'tool' }] }),
+        { id: 'msg_input', type: 'user', text: input }, toolTurn, final, { ...idle(), outcome: 'failed' }] });
+    await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+      assert.match(error.message, new RegExp(`HTTP ${status}; ${toolCount} tool calls observed`));
+      assert.equal(error.message.includes('compatibility with the role'), [401, 403].includes(status));
+      assert.deepEqual(error.execution.provider, { status, toolCallsObserved: toolCount });
+      assert.doesNotMatch(error.message + JSON.stringify(error.execution), /PRIVATE_/);
+      assert.deepEqual(error.response.info.error, detail);
+      return true;
+    });
+    assert.deepEqual(calls.map(call => call.name), ['prompt', 'wait', 'context', 'get']);
+  }
+});
+
+test('untrusted or missing provider metadata and interrupted runs keep the generic execution failure', async () => {
+  for (const detail of [
+    { type: 'provider.auth', status: '403 PRIVATE_DETAIL' },
+    { type: 'provider.auth', status: 200 }, { type: 'provider.auth', status: 600 },
+    { type: 'provider.auth', status: 403.5 }, { type: 'provider.auth' },
+    { type: 'host.error', status: 403 }, { status: 403 },
+    { type: 'provider.auth', status: 403, interrupted: true },
+  ]) {
+    const outcome = detail.interrupted ? 'interrupted' : 'failed';
+    const { context } = host({ get: async () => ({ id: sessionID, outcome }),
+      context: async () => [{ id: 'msg_input', type: 'user', text: input },
+        assistant({ finish: 'error', error: detail }), { ...idle(), outcome }] });
+    await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+      assert.match(error.message, /did not finish successfully/);
+      assert.doesNotMatch(error.message, /HTTP|PRIVATE_DETAIL/);
+      assert.equal(Object.hasOwn(error.execution, 'provider'), false);
+      return true;
+    });
+  }
+});
+
 test('V2 output requires the granted agent/model in session and every assistant turn', async () => {
   for (const changed of [{ agent: 'build' }, { model: { ...model, id: 'other' } }, { model: { ...model, variant: 'other' } }]) {
     const selection = host({ get: async () => ({ id: sessionID, outcome: 'succeeded', agent: 'azpr-review-functional', model, ...changed }) });
