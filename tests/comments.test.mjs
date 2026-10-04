@@ -8,7 +8,7 @@ const draft=()=>({status:'READY',comments:[{findingId:'F-1',severity:'high',path
 const verifiedFinding=()=>({id:'F-1',summary:'Missing guard',evidence:'Null input throws',counterevidence:'The caller allows null on the failing path.',severity:'high',location:'head:/src/example.ts:2',suggestion:'Add a guard and a regression test.'});
 const review=()=>({target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
 function planned(){
-  const r=review();r.plan=validateCommentPlan(draft(),r,5);
+  const r=review();r.plan=validateCommentPlan(draft(),r);
   for(const c of r.plan.comments) r.attempts.set(c.marker,{findingId:c.findingId,state:'UNKNOWN'});
   return r;
 }
@@ -26,7 +26,7 @@ test('plan validates format and creates a stable marker, not provider evidence',
 test('saved positions use line-local offsets derived from the existing anchor',()=>{
   for(const [anchor,endLine,endOffset] of [['    first\n  last',3,6],['😀x',2,3],['first\r\n',3,1]]) {
     const d=draft();Object.assign(d.comments[0],{anchor,endLine});
-    const saved=validateCommentPlan(d,review(),5).comments[0];
+    const saved=validateCommentPlan(d,review()).comments[0];
     assert.equal(saved.startOffset,1);assert.equal(saved.endOffset,endOffset);
     assert.equal(saved.startLine,2);assert.equal(saved.endLine,endLine);
     assert.equal(saved.anchor,anchor);assert.equal(saved.body,d.comments[0].body);
@@ -48,7 +48,7 @@ for(const [name,change] of [
   ['not ready',d=>d.status='INCOMPLETE'],
   ['missing skip reason',d=>{d.comments=[];d.skipped=[{findingId:'F-1',reason:''}];}],
 ]) test('plan format rejects '+name,()=>{
-  const d=draft();change(d);assert.throws(()=>validateCommentPlan(d,review(),5));
+  const d=draft();change(d);assert.throws(()=>validateCommentPlan(d,review()));
 });
 test('confirmed findings and verifier additions are eligible, not rejected concerns',()=>{
   const r=review();r.final.dispositions=[{id:'F-1',status:'REJECTED',reason:'The caller prevents the failing input.'}];r.final.newFindings=[{...verifiedFinding(),id:'V-1'}];
@@ -60,8 +60,8 @@ test('comments use corrected verifier claims rather than the original candidates
   assert.deepEqual(confirmedFindings(r),[r.final.dispositions[0].verifiedFinding]);
   assert.notEqual(confirmedFindings(r)[0].summary,r.findings[0].summary);
   const d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('(high)','(medium)');
-  assert.equal(validateCommentPlan(d,r,5).comments[0].severity,'medium');
-  assert.throws(()=>validateCommentPlan(draft(),r,5),/severity must match/);
+  assert.equal(validateCommentPlan(d,r).comments[0].severity,'medium');
+  assert.throws(()=>validateCommentPlan(draft(),r),/severity must match/);
   delete r.final.dispositions[0].verifiedFinding;
   assert.throws(()=>confirmedFindings(r),/missing its verified finding/);
 });
@@ -71,16 +71,15 @@ test('a planner cannot change verified severity or promote low findings into com
     if(source==='new') {r.final.dispositions=[];r.final.newFindings=[{...f,id:'V-1'}];}
     else r.final.dispositions[0].verifiedFinding=f;
     const id=source==='new'?'V-1':'F-1', d=draft();d.comments[0].findingId=id;
-    assert.throws(()=>validateCommentPlan(d,r,5),/severity must match/);
-    assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:id,reason:'Not selected for publication.'}]},r,5).comments.length,0);
+    assert.throws(()=>validateCommentPlan(d,r),/severity must match/);
+    assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:id,reason:'Not selected for publication.'}]},r).comments.length,0);
   }
   const r=review(), d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('(high)','(medium)');
-  assert.throws(()=>validateCommentPlan(d,r,5),/severity must match/);
+  assert.throws(()=>validateCommentPlan(d,r),/severity must match/);
 });
-test('caps and attempted findings still constrain saved plans',()=>{
-  assert.throws(()=>validateCommentPlan(draft(),review(),0),/limit/);
-  assert.throws(()=>validateCommentPlan(draft(),planned(),5),/attempted/);
-  assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:'F-1',reason:'Already discussed.'}]},review(),5).comments.length,0);
+test('attempted findings remain blocked and skipped findings require reasons',()=>{
+  assert.throws(()=>validateCommentPlan(draft(),planned()),/attempted/);
+  assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:'F-1',reason:'Already discussed.'}]},review()).comments.length,0);
 });
 test('all reported posts are labeled model-reported, never provider-verified',()=>{
   const r=planned();

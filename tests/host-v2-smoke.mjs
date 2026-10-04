@@ -6,13 +6,14 @@
  * This does not validate a real provider, official Azure MCP, or TUI rendering.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, access, readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { verificationFixture, namespaceSupport, nodeCommand } from './verification-fixture.mjs';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const binary = process.argv[2];
@@ -26,11 +27,14 @@ const directories = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp
 await Promise.all(Object.values(directories).map(path => mkdir(path, { recursive: true })));
 await mkdir(join(directories.config, 'plugins'), { recursive: true });
 const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
+assert.ok(namespaceSupport(), 'This acceptance fixture requires Linux x86_64 user namespaces.');
+const verification = await verificationFixture(join(fixture, 'verification'));
+const verificationMarker = `azpr-verification-${randomUUID()}`;
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.shellToolPermission = 'ask';
-settings.comments.enabled = true;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
+settings.verification = verification.config;
 const profile = join(fixture, 'settings.json');
 await writeFile(profile, JSON.stringify(settings, null, 2));
 const install = args => {
@@ -72,7 +76,7 @@ const provider = createServer(async (request, response) => {
     response.write(': fixture waits for cancellation\n\n');
     return;
   }
-  const snapshot = { repository: 'fixture/project/repository', prId: 123, base: 'a'.repeat(40), head: 'b'.repeat(40), scope: 'pr', files: ['/src/fixture.js'] };
+  const snapshot = { repository: 'fixture/project/repository', prId: 123, base: 'a'.repeat(40), head: verification.commit, scope: 'pr', files: ['/src/fixture.js'] };
   const finding = id => ({ id, summary: 'Deterministic fixture finding', location: 'head:/src/fixture.js:1', severity: 'high', evidence: 'Fixture read returned the source marker.', counterevidence: 'Fixture explicitly omits the required guard.', suggestion: 'Add the fixture guard and its regression.' });
   let final = { status: 'READY', fixture: 'literal-source' };
   if (payload?.prUrl) {
@@ -87,11 +91,16 @@ const provider = createServer(async (request, response) => {
       body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
     skipped: payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })) };
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
-  const toolName = shellControl ? 'shell' : forced ?? tool?.function.name;
+  const isolated = userContext === 'smoke-verification' && !payload.reviews;
+  const hanging = userContext === 'hang-verification' && parsed.model === 'functional';
+  const toolName = isolated || hanging ? parsed.tools?.find(item => item.function?.name === 'azpr_verify')?.function.name : shellControl ? 'shell' : forced ?? tool?.function.name;
   const priorToolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
   const publisher = Boolean(payload?.comments);
   const callTool = toolName && (forced || publisher ? priorToolResults < 2 : !hasResult);
-  const args = shellControl ? { command: `touch ${JSON.stringify(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' } : forced === 'shell' ? { command: `touch ${join(fixture, 'NATIVE_EXECUTED')}`, description: 'Fixture forbidden shell' } : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` } : { value: publisher ? 'publisher-error' : 'fixture-source' };
+  const args = isolated || hanging ? { commit: verification.commit, command: hanging
+    ? nodeCommand(`process.title=${JSON.stringify(verificationMarker + '-wait')}; require('node:child_process').spawn('/usr/bin/node',['-e',${JSON.stringify(`process.title=${JSON.stringify(verificationMarker + '-child')};setInterval(()=>{},1000)`)}],{detached:true,stdio:'ignore'}).unref(); setInterval(()=>{},1000)`)
+    : parsed.model === 'risk' ? 'printf expected-test-failure; exit 7' : nodeCommand("require('node:assert/strict').equal(require('./example.cjs').divide(12,3),4); console.log('ISOLATED_REPRODUCTION_PASSED')") }
+    : shellControl ? { command: `touch ${JSON.stringify(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' } : forced === 'shell' ? { command: `touch ${join(fixture, 'NATIVE_EXECUTED')}`, description: 'Fixture forbidden shell' } : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` } : { value: publisher ? 'publisher-error' : 'fixture-source' };
   let content = JSON.stringify(final);
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
   if (userContext === 'smoke-review' && payload.reviews) content = 'Example: fn({"item": 3}).\n```json\n' + content + '\n```';
@@ -276,6 +285,15 @@ try {
   };
   await invokeReview('pr-check', 'smoke-check', /\] READY/);
   const reviewOrigin = await invokeReview('pr-review', 'smoke-review', /\] COMPLETE/);
+  const languageRequests = requests.filter(request => {
+    try { return JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).userContext === 'smoke-review'; }
+    catch { return false; }
+  });
+  assert.equal(new Set(languageRequests.map(request => request.body.model)).size, 3);
+  for (const request of languageRequests) {
+    assert.equal(JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).outputLanguage, settings.outputLanguage);
+    assert.ok(request.body.messages.some(message => message.role === 'system' && JSON.stringify(message.content).includes(`outputLanguage: ${settings.outputLanguage}`)), 'Configured language must reach the actual provider request for every reviewer.');
+  }
   assert.match(workflowReceipts.at(-1).receipt, /output-format-corrections=1/);
   assert.match(workflowReceipts.at(-1).receipt, /azpr-review-risk: PARTIAL/);
   const reviewID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
@@ -303,6 +321,37 @@ try {
   assert.ok(workflowReceipts.filter(row => row.suffix.includes('force-')).every(row => row.receipt.includes('blocked-native-tools=2')));
   assert.equal(forbiddenFetches, 0);
   await assert.rejects(access(join(fixture, 'NATIVE_EXECUTED')));
+  const verifiedOrigin = await invokeReview('pr-review', 'smoke-verification', /\] COMPLETE/);
+  const verifiedReceipt = workflowReceipts.at(-1).receipt;
+  const verifiedDirectory = /Private debug directory: ([^\n]+)/.exec(verifiedReceipt)[1];
+  const verifiedResult = JSON.parse(await readFile(join(verifiedDirectory, 'result.json'), 'utf8'));
+  assert.equal(verifiedResult.verification.length, 2);
+  assert.ok(verifiedResult.verification.every(row => row.status === 'COMPLETED' && row.cleanupConfirmed));
+  assert.deepEqual(verifiedResult.verification.map(row => row.exitCode).sort(), [0, 7]);
+  assert.ok(verifiedResult.verification.some(row => row.output.includes('ISOLATED_REPRODUCTION_PASSED')));
+  const verifiedID = /\[AZPR ([a-f0-9]{8})\]/.exec(verifiedReceipt)[1];
+  await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID, delivery: 'steer' });
+  assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /\] PREVIEW/);
+  const namespaceProcesses = async () => {
+    const found = [];
+    for (const pid of (await readdir('/proc')).filter(name => /^\d+$/.test(name))) {
+      try { if ((await readFile(`/proc/${pid}/cmdline`, 'utf8')).startsWith(verificationMarker)) found.push(pid); } catch {}
+    }
+    return found;
+  };
+  const toolCancelOrigin = (await api('/api/session', { title: 'Verification cancellation fixture', location: { directory: directories.work } })).data;
+  const toolCancellation = api(`/api/session/${toolCancelOrigin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 hang-verification', delivery: 'steer' });
+  let observedProcesses = [];
+  for (let attempt = 0; attempt < 100; attempt++) {
+    observedProcesses = await namespaceProcesses();
+    if (observedProcesses.length >= 2) break;
+    await new Promise(resolveReady => setTimeout(resolveReady, 100));
+  }
+  assert.ok(observedProcesses.length >= 2, 'Real sandbox command and detached child must start before cancellation.');
+  await api(`/api/session/${toolCancelOrigin.id}/command`, { name: 'pr-stop', text: '', delivery: 'steer' });
+  await toolCancellation;
+  assert.deepEqual(await namespaceProcesses(), []);
+  assert.ok((await api(`/api/session/${toolCancelOrigin.id}/inbox`)).data.some(item => /\] CANCELLED/.test(item.payload?.text ?? '')));
   const cancelledOrigin = (await api('/api/session', { title: 'Cancellation fixture', location: { directory: directories.work } })).data;
   const beforeCancel = requests.length;
   const cancellation = api(`/api/session/${cancelledOrigin.id}/command`, { name: 'pr-check', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 smoke-check hang-smoke', delivery: 'steer' }).then(value => ({ value }), error => ({ error }));
@@ -317,13 +366,13 @@ try {
   assert.equal(requests.length, beforeCancel + 1, 'Manual cancellation must not restart the fake provider.');
   workflowReceipts.push({ command: 'pr-check + pr-stop', suffix: 'hang-smoke', receipt: cancellationReceipt });
   const mcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(mcpCalls.length, 10, 'One helper, one check, six review stages, one preview and one failed publisher tool call are expected.');
+  assert.equal(mcpCalls.length, 13, 'Original ten calls plus isolated verifier, preview and cancellation sibling reads.');
   for (const call of mcpCalls) {
     assert.equal(call.name, 'read_fixture');
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
   }
   assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 1);
-  assert.equal(requests.length, 26);
+  assert.equal(requests.length, 37);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {
@@ -355,8 +404,8 @@ try {
   }
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
-  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 10);
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 13);
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, isolatedVerification: true, isolatedCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();
   provider.closeAllConnections();

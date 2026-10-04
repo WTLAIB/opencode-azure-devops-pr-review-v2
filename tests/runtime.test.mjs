@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES, BLOCKED_NATIVE_TOOLS } from '../src/config.mjs';
+import { VERIFICATION_TOOL } from '../src/verification.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const PR = 'https://dev.azure.com/org/proj/_git/repo/pullrequest/123';
@@ -29,6 +30,7 @@ async function fixture(t, opts = {}) {
   const agents = new Map([['build',{id:'build',system:'Ordinary developer rules',permissions:clone(globalPermissions)}]]);
   const commands = new Map([['existing',{name:'existing',execute(){}}]]);
   const hooks = new Map(), sessions = new Map(), calls = [], notices = [];
+  const registeredTools = new Map();
   let seq = 0;
   const emit = async (domain,name,event) => { for (const fn of hooks.get(`${domain}:${name}`) ?? []) await fn(event); };
   const hook = domain => async (name,fn) => {
@@ -36,11 +38,13 @@ async function fixture(t, opts = {}) {
     list.push(fn); hooks.set(key,list);
     return {dispose(){hooks.set(key,list.filter(item => item !== fn));}};
   };
-  const invoke = async (id,tool='fixture_mcp_read',result={output:'fixture source',metadata:{}},status='completed') => {
-    const session=sessions.get(id), event={sessionID:id,agent:session.agent,messageID:`assistant_${seq}`,id:`call_${++seq}`,tool,input:{secret:'PRIVATE_INPUT'}};
+  const invoke = async (id,tool='fixture_mcp_read',result={output:'fixture source',metadata:{}},status='completed',input={secret:'PRIVATE_INPUT'}) => {
+    const session=sessions.get(id), event={sessionID:id,agent:session.agent,messageID:`assistant_${seq}`,id:`call_${++seq}`,tool,input};
     await emit('tool','execute.before',event);
     calls.push({kind:'executed-tool',tool,sessionID:id});
+    if (registeredTools.has(tool)) result = await registeredTools.get(tool).execute(input, { ...event, signal: new AbortController().signal });
     await emit('tool','execute.after',{...event,status,...(status==='error'?{error:new Error('PRIVATE_ERROR')}:{result})});
+    return result;
   };
   const context = {
     location:{directory},
@@ -67,7 +71,10 @@ async function fixture(t, opts = {}) {
         return {dispose(){commands.clear();for(const [id,value] of before) commands.set(id,value);}};
       },
     },
-    tool:{hook:hook('tool')},
+    tool:{hook:hook('tool'), async transform(fn) {
+      fn({ get: name => registeredTools.get(name), add: definition => registeredTools.set(definition.name, definition) });
+      return { dispose() { registeredTools.clear(); } };
+    }},
     session:{
       hook:hook('session'),
       async create(input) {
@@ -89,17 +96,14 @@ async function fixture(t, opts = {}) {
         session.stopped=deferred();
         const work=async()=>{
           const frame={sessionID:session.id,agent:role,model:clone(session.model),system:[{type:'text',text:agents.get(role).system+'\nHOST_RULES'}],tools:{fixture_mcp_read:{},shell:{}},messages:[],options:{}};
+          for (const name of registeredTools.keys()) frame.tools[name] = {};
           await opts.beforeContext?.({frame,emit,session,packet,agents});
           if(!opts.skipContextHook) await emit('session','context',frame);
           if(!opts.skipModelHook) await emit('session','model.request',{sessionID:session.id,agent:role,model:clone(session.model),kind:'primary',headers:{}});
           await opts.during?.({frame,emit,context,invoke,session,packet,calls,agents});
-          if(!packet.operation&&!opts.skipTool) await invoke(session.id);
+          if(!opts.skipTool) await invoke(session.id);
           let result;
-          if(packet.operation==='output-status-repair') result={status:spec.stage==='check'?'READY':'COMPLETE'};
-          else if(packet.operation==='output-location-repair') result={locations:packet.missingLocations.map(({id})=>({id,location:finding(id).location}))};
-          else if(packet.operation==='output-disposition-repair') result={dispositions:packet.missingDispositionIds.map(id=>({id,status:'MERGED',mergedInto:packet.mergeTargets[0],reason:'Same verified defect.'}))};
-          else if(packet.operation==='output-final-resubmission') result={status:'COMPLETE',...clone(packet.frozen),confirmed:packet.expectedFindingIds.map(id=>({...finding(id),reason:'Rechecked retained source.'})),merged:[],rejected:[],needsInfo:[],newFindings:[],report:'Corrected final.'};
-          else if(spec.stage==='check') result={status:'READY',snapshot:{...clone(SNAP),scope:'cumulative'},sourceAccess:{diff:'fixture'},requirements:'Fixture requirement',report:'Source access ready.'};
+          if(spec.stage==='check') result={status:'READY',snapshot:{...clone(SNAP),scope:'cumulative'},sourceAccess:{diff:'fixture'},requirements:'Fixture requirement',report:'Source access ready.'};
           else if(spec.format==='initial') result={status:'COMPLETE',snapshot:clone(SNAP),coverage:{files:[...SNAP.files],gaps:[]},findings:[finding(`${spec.prefix}-1`)],report:`PRIVATE_INITIAL_${spec.prefix}`};
           else if(spec.format==='final') result={status:'COMPLETE',snapshot:clone(SNAP),currentHead:SNAP.head,currentBase:SNAP.base,confirmed:packet.reviews.flatMap(r=>r.findings).map(f=>({...f,reason:'Independently verified.'})),merged:[],rejected:[],needsInfo:[],newFindings:[],report:'FINAL_REPORT'};
           else if(spec.stage==='comment-plan') result={status:'READY',comments:packet.findings.slice(0,1).map(f=>({findingId:f.id,severity:f.severity,path:SNAP.files[0],startLine:12,endLine:12,anchor:'fixture code',body:`issue (${f.severity}): fixture defect\n\nTrigger, impact and correction.`})),skipped:packet.findings.slice(1).map(f=>({findingId:f.id,reason:'Duplicate concern.'}))};
@@ -123,7 +127,7 @@ async function fixture(t, opts = {}) {
   };
   opts.context?.({context,agents,commands});
   const cleanup=await setupAzurePrReview(context,directory);t.after(cleanup);
-  return {directory,settings,agents,commands,sessions,hooks,calls,notices,context,emit,invoke,cleanup,
+  return {directory,settings,agents,commands,sessions,hooks,calls,notices,context,emit,invoke,cleanup,registeredTools,
     prompts:()=>calls.filter(c=>c.kind==='prompt'),
     async command(name='pr-review',text=PR,origin='ordinary') {await commands.get(name).execute({sessionID:origin,prompt:{text},delivery:'steer'});return notices.filter(n=>n.sessionID===origin).at(-1)?.text;},
   };
@@ -131,13 +135,14 @@ async function fixture(t, opts = {}) {
 const resultLog=async receipt=>JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1],'result.json'),'utf8'));
 
 for(const mode of ['review','deep']) test(`V2 ${mode} preserves literal context and uses independent full-scope sessions`,async t=>{
-  const f=await fixture(t),receipt=await f.command(mode==='deep'?'pr-deep':'pr-review',PR+' literal !`not-run` @../../secret $HOME\ncheck this');
+  const f=await fixture(t,{settings(s){s.outputLanguage='zh-TW';}}),receipt=await f.command(mode==='deep'?'pr-deep':'pr-review',PR+' literal !`not-run` @../../secret $HOME\ncheck this');
   assert.match(receipt,/] COMPLETE/);
   const prompts=f.prompts(),stages=(await resultLog(receipt)).stages;
   assert.equal(prompts.length,3);assert.equal(new Set(prompts.map(p=>p.sessionID)).size,3);
   assert.deepEqual(stages.map(s=>s.model).sort(),['functional','risk','verifier'].map(r=>`fixture/${mode}-${r}`).sort());
   assert.ok(stages.every(s=>s.completedTools===1&&s.modelRequests===1));
   assert.ok(prompts.every(p=>p.resume===true&&p.metadata.azprGrant));
+  assert.ok(prompts.every(p=>JSON.parse(p.text).outputLanguage==='zh-TW'));
   assert.match(JSON.parse(prompts[0].text).userContext,/literal !`not-run` @\.\.\/\.\.\/secret \$HOME/);
   assert.deepEqual(JSON.parse(prompts[2].text).expectedFindingIds,['F-1','R-1']);
   assert.ok(f.notices.every(n=>n.resume===false&&n.description===n.text));
@@ -233,15 +238,15 @@ test('a second primary request needs a new authorized context', async t => {
   assert.match(await f.command('pr-check'), /] READY/);
 });
 
-test('retry observations retain host decisions but block amendments and revoked sessions', async t => {
-  const f = await fixture(t, { settings(s){s.outputRetries=1;}, result({packet,result}){if(!packet.operation)result.status='DONE';return result;}, async during({ emit, session, packet }) {
+test('retry observations retain host decisions and block revoked sessions', async t => {
+  const f = await fixture(t, { async during({ emit, session }) {
     const event={sessionID:session.id,agent:session.agent,model:session.model,attempt:2,error:{message:'PRIVATE_PROVIDER_ERROR'},decision:{retry:true,delay:100}};
     await emit('session','retry',event);
-    assert.deepEqual(event.decision,packet.operation?{retry:false}:{retry:true,delay:100});
+    assert.deepEqual(event.decision,{retry:true,delay:100});
   }});
   const receipt=await f.command('pr-check'), stages=(await resultLog(receipt)).stages;
   assert.match(receipt, /] READY/);
-  assert.deepEqual(stages.map(s=>s.requestObservations.retries[0].allowed),[true,false]);
+  assert.deepEqual(stages.map(s=>s.requestObservations.retries[0].allowed),[true]);
   assert.doesNotMatch(JSON.stringify(stages),/PRIVATE_PROVIDER_ERROR/);
   const session=f.sessions.get(f.prompts().at(-1).sessionID);
   const event={sessionID:session.id,agent:session.agent,model:session.model,attempt:3,decision:{retry:true,delay:100}};
@@ -323,7 +328,7 @@ for(const fault of ['final-snapshot','missing-id','stale']) test(`${fault} canno
   const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];await assert.rejects(f.command('pr-comment',id),/unavailable/);
 });
 for(const initial of ['disclosures','partial','conflicting-frame']) test(`a complete verifier permits preview despite initial ${initial}`,async t=>{
-  const f=await fixture(t,{settings(s){s.comments.enabled=true;},result({role,result}){
+  const f=await fixture(t,{result({role,result}){
     if(role.endsWith('-risk')) {
       if(initial==='conflicting-frame')result.snapshot.head='c'.repeat(40);
       else {result.coverage.gaps=['Tests were not executed. The comparison base is not a proven merge base.'];if(initial==='partial')result.status='PARTIAL';}
@@ -379,14 +384,16 @@ test('PARTIAL initial retains evidence and coverage gaps in the verifier handoff
   assert.equal(saved.reportKind,'report');assert.doesNotMatch(receipt,/publication evidence contract/);
   const id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];assert.match(await f.command('pr-comment',id),/] PREVIEW/);
 });
-test('status amendment is one fresh tool-free request with host instructions preserved',async t=>{
-  const f=await fixture(t,{settings(s){s.outputRetries=1;},result({packet,result}){if(!packet.operation&&result.status==='READY')result.status='DONE';return result;},
-    during({packet,frame}){if(packet.operation){assert.deepEqual(frame.tools,{});assert.match(frame.system[0].text,/status/);assert.match(frame.system[0].text,/HOST_RULES/);}}});
-  const receipt=await f.command('pr-check');assert.match(receipt,/] READY/);assert.equal(f.prompts().length,2);assert.notEqual(f.prompts()[0].sessionID,f.prompts()[1].sessionID);
+test('invalid standalone readiness retains the failure without another model request',async t=>{
+  const f=await fixture(t,{result({result}){result.status='DONE';return result;}});
+  const receipt=await f.command('pr-check');assert.match(receipt,/] INCOMPLETE/);assert.equal(f.prompts().length,1);
   assert.equal((await resultLog(receipt)).stages[0].status,'FAILED');
+  const directory=/Private debug directory: ([^\n]+)/.exec(receipt)[1];
+  const original=JSON.parse(await readFile(join(directory,'01-azpr-review-check.response.json'),'utf8'));
+  assert.match(original.text,/"status":"DONE"/);
 });
 test('missing final location retains a partial report without another model request',async t=>{
-  const f=await fixture(t,{settings(s){s.outputRetries=1;},result({role,packet,result}){if(role.endsWith('-verifier')&&!packet.operation)delete result.confirmed[0].location;return result;}});
+  const f=await fixture(t,{result({role,packet,result}){if(role.endsWith('-verifier'))delete result.confirmed[0].location;return result;}});
   const receipt=await f.command();assert.match(receipt,/] PARTIAL/);assert.equal(f.prompts().length,3);
   assert.match(receipt,/<azpr_report_data>/);assert.match(receipt,/A reachable fixture branch/);assert.doesNotMatch(receipt,/Location amendment notice/);
 });
@@ -399,10 +406,6 @@ test('a partial final with an incomplete confirmation still shows the original o
   }});
   const receipt=await f.command();assert.match(receipt,/] PARTIAL/);assert.ok(receipt.includes(initialText));
   assert.equal(f.prompts().length,3);
-});
-test('amendments cannot use tools or receive another recovery',async t=>{
-  const f=await fixture(t,{settings(s){s.outputRetries=1;},result({packet,result}){if(!packet.operation)result.status='DONE';return result;},async during({packet,invoke,session}){if(packet.operation)await invoke(session.id);}});
-  assert.match(await f.command('pr-check'),/] INCOMPLETE/);assert.equal(f.prompts().length,2);assert.equal(f.calls.filter(c=>c.kind==='executed-tool').length,1);
 });
 test('large evidence survives JSON, verifier handoff and diagnostics without a hidden cap',async t=>{
   const evidence='x'.repeat(2100000),f=await fixture(t,{result({role,packet,result}){if(ROLES[role].format==='initial')result.findings[0].evidence=evidence;if(ROLES[role].format==='final')assert.ok(packet.reviews.every(r=>r.findings[0].evidence===evidence));return result;}});
@@ -418,7 +421,7 @@ test('extra final brace no longer cancels a useful initial review', async t => {
 });
 test('unstructured initial and final reviews are delivered without a formatting retry', async t => {
   const raw='A useful review observation with source context and an unresolved limitation.';
-  const f=await fixture(t,{settings(s){s.outputRetries=1;},answer({answer,role}){
+  const f=await fixture(t,{answer({answer,role}){
     if(role.endsWith('-functional')||role.endsWith('-verifier'))answer.content[0].text=raw;
   }});
   const receipt=await f.command();assert.match(receipt,/] PARTIAL/);assert.equal(f.prompts().length,3);
@@ -461,16 +464,58 @@ test('a verifier failure before model submission remains incomplete with actiona
   assert.deepEqual(stage.execution,{sessionOutcome:'failed',terminalOutcome:'failed',assistantResponses:0,lastFinish:'unknown',interrupted:false,authorizedPrimaryRequests:0});
   assert.ok(Number.isFinite(stage.timing.wallMinusMonotonicMs));
 });
-test('comment publication requires explicit preview and opt-in, and never retries',async t=>{
-  const f=await fixture(t,{settings(s){s.comments.enabled=true;}}),receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
-  await assert.rejects(f.command('pr-comment',id+' --publish'),/Preview first/);assert.match(await f.command('pr-comment',id),/] PREVIEW/);
+test('comment publication needs a saved preview and explicit publish without a config switch',async t=>{
+  const f=await fixture(t,{}),receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  await assert.rejects(f.command('pr-comment',id+' --publish'),/Preview first/);
+  await assert.rejects(f.command('pr-comment',id,'other-origin'),/unavailable/);
+  assert.match(await f.command('pr-comment',id),/] PREVIEW/);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
   assert.match(await f.command('pr-comment',id+' --publish'),/] MODEL_REPORTED_POSTED/);await assert.rejects(f.command('pr-comment',id+' --publish'),/already had a publication/);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,1);
 });
 
+test('all twelve eligible findings reach the saved preview and explicitly requested publication',async t=>{
+  const f=await fixture(t,{result({role,packet,result}){
+    if(ROLES[role].format==='initial') result.findings=Array.from({length:6},(_,i)=>finding(`${ROLES[role].prefix}-${i+1}`));
+    if(ROLES[role].stage==='comment-plan') {
+      assert.equal(Object.hasOwn(packet,'maxComments'),false);
+      result.comments=packet.findings.map((item,i)=>({findingId:item.id,severity:item.severity,path:SNAP.files[0],
+        startLine:i+1,endLine:i+1,anchor:`fixture branch ${i+1}`,body:`issue (${item.severity}): Defect ${item.id}\n\nIndependent trigger, impact and correction ${i+1}.`}));
+      result.skipped=[];
+    }
+    return result;
+  }});
+  const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  const preview=await f.command('pr-comment',id);
+  assert.match(preview,/] PREVIEW/);assert.match(preview,/Comments prepared: 12/);
+  assert.equal((preview.match(/<!-- azpr-comment:/g)??[]).length,12);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
+  const published=await f.command('pr-comment',id+' --publish');
+  assert.match(published,/] MODEL_REPORTED_POSTED/);
+  const packet=JSON.parse(f.prompts().at(-1).text);
+  assert.equal(packet.comments.length,12);
+  for(const comment of packet.comments) assert.ok(preview.includes(comment.content));
+  assert.equal((published.match(/; thread=101/g)??[]).length,12);
+});
+
+test('an empty saved preview starts no publisher even with explicit publish',async t=>{
+  const f=await fixture(t,{result({role,packet,result}){
+    if(ROLES[role].stage==='comment-plan') {
+      result.comments=[];result.skipped=packet.findings.map(item=>({findingId:item.id,reason:'Already discussed.'}));
+    }
+    return result;
+  }});
+  const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  assert.match(await f.command('pr-comment',id),/Comments prepared: 0/);
+  const before=f.prompts().length;
+  assert.match(await f.command('pr-comment',id+' --publish'),/] NOTHING_TO_POST/);
+  assert.equal(f.prompts().length,before);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
+});
+
 for(const failure of ['execution','metadata','result']) test(`publisher ${failure} error revokes authorization before another request or tool`,async t=>{
   const checked=deferred();
-  const f=await fixture(t,{settings(s){s.comments.enabled=true;},async during({invoke,emit,session}){
+  const f=await fixture(t,{async during({invoke,emit,session}){
     if(ROLES[session.agent].stage!=='comment-publish')return;
     try {
       const result=failure==='metadata'?{metadata:{isError:true}}:{isError:true};
@@ -511,19 +556,91 @@ test('explicit timeout interrupts pending work at the original deadline',{timeou
   const stage=(await resultLog(receipt)).stages[0];assert.equal(stage.remainingRunMsAtStart,10000);assert.equal(stage.remainingRunMsAtEnd,0);
 });
 
-test('amendment retains the original deadline instead of starting a new timer',{timeout:3000},async t=>{
-  const f=await fixture(t,{settings(s){s.runTimeoutSeconds=10;s.outputRetries=1;},
-    during({packet}){t.mock.timers.tick(packet.operation?4000:6000);},
-    result({packet,result}){if(!packet.operation)result.status='DONE';return result;}});
+test('verifier shares the original review deadline instead of starting a new timer',{timeout:3000},async t=>{
+  const f=await fixture(t,{settings(s){s.runTimeoutSeconds=10;},
+    during({session}){if(session.agent.endsWith('-functional'))t.mock.timers.tick(6000);if(session.agent.endsWith('-verifier'))t.mock.timers.tick(4000);}});
   t.mock.timers.enable({apis:['setTimeout','Date']});
-  const receipt=await f.command('pr-check');assert.match(receipt,/] TIMED_OUT/);assert.equal(f.prompts().length,2);
-  const stages=(await resultLog(receipt)).stages;assert.equal(stages[1].remainingRunMsAtStart,4000);assert.equal(stages[1].remainingRunMsAtEnd,0);
+  const receipt=await f.command();assert.match(receipt,/] TIMED_OUT/);assert.equal(f.prompts().length,3);
+  const verifier=(await resultLog(receipt)).stages.find(s=>s.stage==='verifier');
+  assert.equal(verifier.remainingRunMsAtStart,4000);assert.equal(verifier.remainingRunMsAtEnd,0);
 });
 
-test('captured truncated output is retained privately and never accepted or amended',async t=>{
-  const f=await fixture(t,{settings(s){s.outputRetries=1;},answer({answer}){answer.finish='length';}});
+test('captured truncated output is retained privately and never accepted or resubmitted',async t=>{
+  const f=await fixture(t,{answer({answer}){answer.finish='length';}});
   const receipt=await f.command('pr-check');assert.match(receipt,/] INCOMPLETE/);assert.equal(f.prompts().length,1);
   const directory=/Private debug directory: ([^\n]+)/.exec(receipt)[1];
   const saved=JSON.parse(await readFile(join(directory,'01-azpr-review-check.response.json'),'utf8'));
   assert.equal(saved.finish,'length');assert.match(saved.text,/Source access ready/);
+});
+
+test('optional verification is restricted to review grants and unavailable execution preserves COMPLETE', async t => {
+  const executed = [];
+  const f = await fixture(t, {
+    settings(settings) { settings.verification = { enabled: true, rootfs: '/nonexistent-azpr-fixture-rootfs', repositories: [{ url: PR.replace('/pullrequest/123', ''), path: '/nonexistent-azpr-fixture-repo' }] }; },
+    async during({ session, frame, packet, invoke }) {
+      const spec = ROLES[session.agent];
+      if (['initial', 'final'].includes(spec.format)) {
+        assert.ok(frame.tools[VERIFICATION_TOOL]);
+        await assert.rejects(f.registeredTools.get(VERIFICATION_TOOL).execute({ commit: SNAP.head, command: 'echo forged' }, { sessionID: session.id, agent: session.agent, id: 'unobserved' }), /fresh observed tool call/);
+        if (spec.format === 'final') {
+          assert.equal(packet.verification.length, 2);
+          assert.ok(packet.verification.every(row => row.status === 'UNAVAILABLE'));
+        }
+        const result = await invoke(session.id, VERIFICATION_TOOL, undefined, 'completed', { commit: SNAP.head, command: 'printf SHOULD_NOT_RUN_ON_HOST' });
+        assert.equal(JSON.parse(result.content).status, 'UNAVAILABLE'); executed.push(session.id);
+      } else {
+        assert.equal(frame.tools[VERIFICATION_TOOL], undefined);
+        await assert.rejects(invoke(session.id, VERIFICATION_TOOL, undefined, 'completed', { commit: SNAP.head, command: 'echo denied' }), /active initial reviewer/);
+      }
+    },
+  });
+  const tool = f.registeredTools.get(VERIFICATION_TOOL);
+  assert.equal(tool.options.codemode, false);
+  const input = { commit: SNAP.head, command: 'printf NOT_AUTHORIZED' };
+  await assert.rejects(tool.execute(input, { sessionID: 'ordinary', agent: 'build' }), /active initial reviewer/);
+  const ordinaryFrame = { sessionID: 'ordinary', agent: 'build', tools: { [VERIFICATION_TOOL]: {}, shell: {} } };
+  await f.emit('session', 'context', ordinaryFrame);
+  assert.equal(ordinaryFrame.tools[VERIFICATION_TOOL], undefined); assert.ok(ordinaryFrame.tools.shell);
+  assert.match(await f.command('pr-check'), /READY/);
+  const receipt = await f.command(); assert.match(receipt, /\] COMPLETE/); assert.equal(executed.length, 3);
+  const log = await resultLog(receipt); assert.equal(log.verification.length, 3); assert.match(log.verification[0].reason, /repository|namespace|preparation/i);
+  const session = f.sessions.get(executed[0]);
+  await assert.rejects(tool.execute(input, { sessionID: session.id, agent: session.agent }), /active initial reviewer/);
+  const id = receipt.match(/AZPR ([a-f0-9]{8})/)[1];
+  assert.match(await f.command('pr-comment', id), /\] PREVIEW/);
+});
+
+test('verification executor rechecks the selected reviewer model before creating a process', async t => {
+  const f = await fixture(t, {
+    settings(settings) { settings.verification = { enabled: true, rootfs: '/nonexistent-fixture-rootfs', repositories: [{ url: PR.replace('/pullrequest/123', ''), path: '/nonexistent-fixture-repo' }] }; },
+    async during({ session, invoke }) {
+      const prior = session.model;
+      session.model = { providerID: 'fixture', id: 'wrong', variant: 'default' };
+      await assert.rejects(invoke(session.id, VERIFICATION_TOOL, undefined, 'completed', { commit: SNAP.head, command: 'echo denied' }), /Model mismatch/);
+      session.model = prior;
+    },
+  });
+  const receipt = await f.command(); assert.match(receipt, /\] COMPLETE/);
+  assert.deepEqual((await resultLog(receipt)).verification, []);
+});
+
+test('a publisher denied isolated verification loses its grants before another tool can start', async t => {
+  let denied = false;
+  const f = await fixture(t, {
+    settings(settings) { settings.verification = { enabled: true, rootfs: '/nonexistent-fixture-rootfs', repositories: [{ url: PR.replace('/pullrequest/123', ''), path: '/nonexistent-fixture-repo' }] }; },
+    async during({ session, emit, invoke }) {
+      if (ROLES[session.agent].stage !== 'comment-publish') return;
+      const event = { sessionID: session.id, agent: session.agent, id: 'publisher-denied-verification', tool: VERIFICATION_TOOL, input: { commit: SNAP.head, command: 'echo denied' } };
+      await assert.rejects(emit('tool', 'execute.before', event), /active initial reviewer/);
+      await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture verification') });
+      await assert.rejects(invoke(session.id, 'fixture_mcp_write'), /authorization expired/);
+      denied = true;
+    },
+  });
+  const receipt = await f.command(); const id = receipt.match(/AZPR ([a-f0-9]{8})/)[1];
+  assert.match(await f.command('pr-comment', id), /\] PREVIEW/);
+  const before = f.calls.filter(call => call.kind === 'executed-tool').length;
+  assert.match(await f.command('pr-comment', id + ' --publish'), /\] INCOMPLETE/);
+  assert.equal(denied, true);
+  assert.equal(f.calls.filter(call => call.kind === 'executed-tool').length, before);
 });

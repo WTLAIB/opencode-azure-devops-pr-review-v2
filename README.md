@@ -60,7 +60,7 @@ recovery location. Unrelated backups and private history are untouched.
 ### Manual copying without Git
 
 Keep the following relative paths under one source directory, then run its
-installer. These **20 files** are sufficient:
+installer. These **22 files** are sufficient:
 
 ```text
 install.sh
@@ -74,6 +74,8 @@ src/output.mjs
 src/comments.mjs
 src/diagnostics.mjs
 src/attribution.mjs
+src/verification.mjs
+src/verification.py
 src/prompts/common.md
 src/prompts/check.md
 src/prompts/functional.md
@@ -87,8 +89,9 @@ src/prompts/comment-publish.md
 
 README, `docs/`, the settings schema and `uninstall.sh` are optional installer
 inputs. Include them for local guidance. No `commands/` directory or top-level
-loader is needed. The installed core has 20 files: eight modules, nine prompts,
-settings, generated package metadata, and the generated server entry.
+loader is needed. The installed core has 22 files: nine JavaScript modules, one
+Python helper, nine prompts, settings, generated package metadata, and the generated
+server entry.
 
 ## Configuration
 
@@ -123,19 +126,25 @@ checks and comment work use that mode's risk model. Model-selection guidance in
 | `version` | `2`, the current settings layout. |
 | `enabled` | `true`; false registers no private roles or commands. |
 | `returnReport` | `receipt`; `full` also returns the rendered report to the original conversation. |
-| `outputLanguage` | `en`; `zh-TW` is supported for final report/comment presentation. |
+| `outputLanguage` | `en`; shared by initial reviews, the final report and comments. Use `zh-TW` for Traditional Chinese. |
 | `runTimeoutSeconds` | `null`, no whole-command timer. An explicit integer from 10 to 7200 enables one. |
-| `outputRetries` | `0`; `1` permits an eligible standalone source-check status amendment. Reviews recover locally without extra formatting requests. |
+| `verification` | Disabled by default. Optional offline Linux execution in a trusted rootfs with explicitly mapped local Git repositories. Models choose commands; see [verification setup and limits](docs/VERIFICATION.md). |
 | `shellToolPermission` | `deny`; `ask` sets the private host rule to ask; final host rules determine schema exposure, while execution is still blocked. `allow` is rejected. |
-| `comments.enabled` | `false`; explicit publication requires true before reviewing. |
-| `comments.maxComments` | `5`, limits the publication batch, not review evidence. |
 | `debug.enabled` | `false`; opt in to private requests, visible answers, results and reports. |
 | `debug.directory` | Empty uses the private `opencode/azpr-v2-debug` state directory. Relative paths resolve against the project. |
-| `auxiliaryModels` | `preserve`; ordinary host auxiliary choices are unchanged. |
 
 Restart after settings changes. There are no configurable or hidden reviewer
 iteration or stage-character caps. `steps`, `maxStageCharacters`,
-`structuredOutput`, and `azure` mappings are unsupported and rejected.
+`structuredOutput`, `azure`, `comments`, `auxiliaryModels`, and `outputRetries`
+are unsupported and rejected. Before replacing an older V2 installation, back up
+your private settings, remove those obsolete keys explicitly, and pass that
+cleaned profile with `--settings FILE`; the installer never silently migrates it.
+
+Comment preview has no numerical quota. A saved preview and explicit `--publish`
+authorize publication without a separate config switch. Ordinary host auxiliary
+model selections are always preserved; private reviewers cannot start auxiliary
+requests. `/pr-check` remains a standalone diagnosis with strict output validation
+and no additional model request to repair its answer.
 
 Before creating reviewers, the plugin checks the selected models in the V2
 catalog for availability and tool support, and requires a connected MCP server.
@@ -184,7 +193,7 @@ Invoke from an ordinary development session:
 | `/pr-deep <PR URL> [context]` | Same pipeline, separate three-role models and deeper analysis. |
 | `/pr-stop [run-id]` | Revoke active authorization and request interruption; omitted ID uses the current origin session. |
 | `/pr-comment <completed-run-id>` | Build an inline-comment preview from verified findings. |
-| `/pr-comment <completed-run-id> --publish` | Request posting exactly the saved preview, only with publication enabled. |
+| `/pr-comment <completed-run-id> --publish` | Explicitly request posting exactly the saved preview from this conversation/process. |
 
 Arguments are literal command text; shell-like syntax, `$` and `@` are not
 expanded by this plugin. Attachments and private-agent mentions are rejected.

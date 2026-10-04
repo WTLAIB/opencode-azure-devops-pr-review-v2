@@ -39,6 +39,12 @@ The independent V1 repository and installation are outside this project's scope.
   control in private roles, including CodeMode execute (its fetch bypasses the
   native tool boundary). Require MCP codemode:false. Do not silently rewrite
   the user's host configuration. shellToolPermission=ask does not relax guards.
+- Optional azpr_verify permits model-chosen commands only inside its configured
+  disposable Linux boundary, for active initial/verifier grants. Preserve source
+  commit records, clean environment, offline network, filesystem isolation,
+  privilege reduction, cancellation and honest resource/coverage limitations.
+  No host fallback, command allowlist, extra review round or testing completion gate.
+  Readiness, comments and ordinary agents cannot invoke this tool.
 - No fixed MCP tool catalog, direct Azure/model client, patched server, or
   name/action classifier. MCP read-only behavior is prompt policy, not a write
   firewall. Denied native attempts and observed tool failures are not evidence.
@@ -58,7 +64,7 @@ The independent V1 repository and installation are outside this project's scope.
   duplicate keys, drop a finding or manufacture evidence. Partial/admitted failed
   initials do not cancel useful sibling work. Keep identity, admission, permission,
   configuration and cancellation guards. No extra review model requests for
-  formatting; outputRetries applies to eligible standalone readiness amendments.
+  formatting or standalone readiness repair.
 - Keep original response/failure records. COMPLETE must be actionable for comment
   preview in the same session/process; publication still needs a saved plan and
   explicit authorization. Normalized formatting warnings alone cannot downgrade
@@ -77,7 +83,9 @@ The independent V1 repository and installation are outside this project's scope.
 - Reports/receipts use synthetic notices with resume:false. Never run a model
   to reformat them. Queue acknowledgment is distinct from actual UI display.
 - Comment publication needs a same-origin completed review, saved preview,
-  enabled publication and explicit --publish. Track uncertainty before writes,
+  explicit --publish. Preview has no numerical comment quota. The removed
+  comments, auxiliaryModels and outputRetries settings must not return as hidden
+  switches, caps or extra model requests. Track uncertainty before writes,
   revoke publication grants on any observed tool error, prohibit automatic
   retries and label results model-reported. Derive line-local offsets from saved
   anchors; do not ask the planner for additional coordinate fields.

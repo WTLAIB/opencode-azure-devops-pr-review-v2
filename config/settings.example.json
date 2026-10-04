@@ -18,19 +18,22 @@
       "verifier": ""
     }
   },
-  "comments": {
-    "enabled": false,
-    "maxComments": 5
-  },
-  "auxiliaryModels": "preserve",
   "enabled": true,
   "returnReport": "receipt",
   "shellToolPermission": "deny",
-  "outputRetries": 0,
   "debug": {
     "enabled": false,
     "directory": ""
   },
   "outputLanguage": "en",
-  "runTimeoutSeconds": null
+  "runTimeoutSeconds": null,
+  "verification": {
+    "enabled": false,
+    "rootfs": "",
+    "repositories": [],
+    "timeoutSeconds": 120,
+    "memoryMiB": 4096,
+    "processes": 128,
+    "storageMiB": 512
+  }
 }

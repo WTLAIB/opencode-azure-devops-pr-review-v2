@@ -16,11 +16,13 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/comments.mjs` | Comment target, preview validation, stable markers and uncertain-attempt ledger. |
 | `src/attribution.mjs` | Deterministic reports, provenance, notices and receipts. |
 | `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
+| `src/verification.mjs` | Optional tool contract, strict environment settings, process lifetime and execution records. |
+| `src/verification.py` | Trusted Git object materialization and Linux namespace/capability/seccomp boundary. |
 | `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
 
 The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
-entry re-exporting `plugin.js`, matching package exports, eight source modules,
-nine prompts and private settings. No top-level loader or
+entry re-exporting `plugin.js`, matching package exports, nine JavaScript modules,
+one Python helper, nine prompts and private settings. No top-level loader or
 Markdown command expansion is involved. Optional docs/schema/uninstaller do not
 change runtime requirements. The installer merges missing current defaults;
 obsolete profiles/keys fail instead of being migrated. See README's exact list.
@@ -89,7 +91,7 @@ programmatically prove local-file provenance. These limits must remain explicit.
    ordinary messages. Raw captured failures remain available in diagnostics.
 
 There is no whole-run timer when runTimeoutSeconds is null. Explicit finite
-seconds create one deadline shared by original stages and amendments. Cancellation
+seconds create one deadline shared by all stages. Cancellation
 or disposal revokes grants synchronously, then interrupts and waits for each
 session with bounded cleanup. The Promise adapter ignores extra request options;
 local AbortSignal races are not server cancellation. Track pending admissions
@@ -133,13 +135,24 @@ findings through the existing evidence contract; no additional model round is us
 
 Reviewers can inspect test source and relevant existing CI results through
 authorized reads, distinguishing the tested commit and scope from static predictions.
-The adapter creates host child sessions; it does not prepare an isolated checkout
-or test execution environment. Running PR tests can execute project code, hooks
-and dependencies with the host's authority, and the current workspace need not
-match the reviewed SHA. Native execution and pipeline triggering therefore remain
-outside this review workflow. Missing execution alone does not make a review
-incomplete. An optional isolated runner is a future capability, not a prerequisite
-for delivering useful reviews.
+Native shell still executes with host authority and remains denied. An optional
+`azpr_verify` tool supplies a separate disposable environment to initial reviewers
+and the verifier. Models choose commands without a method checklist. The executor
+rechecks the live role/model grant, uses only a configured local repository mapping,
+materializes a full commit from Git objects, and starts project code only after
+filesystem/process/network isolation and privilege reduction. It never fetches,
+triggers pipelines or mounts the host worktree. The trusted rootfs supplies tools
+and dependencies; each command gets a fresh writable copy and immutable source.
+
+The new tool uses the exact V2 tool transform with `codemode:false`; it is an owned
+tool, not an MCP-name/action classifier or native permission exception. It is
+removed from ordinary, readiness and comment contexts, with independent
+executor authorization against direct invocation. Host permission rules still
+apply. Initial execution records reach the verifier; all attempts remain in private
+diagnostics and a short runtime report ledger. Failure, timeout or unavailable
+execution does not invalidate an otherwise COMPLETE review or comment preview.
+Unconfirmed process settlement revokes the run and prevents a COMPLETE cache.
+See [verification](VERIFICATION.md) for setup, resource semantics and limitations.
 
 JSON is preferred, not a prerequisite for retaining useful review content.
 Completed stop-finish responses use an iterative grammar-aware recovery pass for
@@ -182,11 +195,10 @@ review candidate, including a status-only verdict, prevents automatic selection.
 An incidental dictionary literal is not a competing review. Settings, source
 checks and publication receipts do not use this review-only extraction.
 
-All recovery uses the existing model rounds. No extra model request fixes review
-format or missing fields, even with outputRetries=1. That setting retains an
-eligible standalone source-check status amendment under its existing tool-free,
-one-request and original-deadline rules. Checks, settings and comment operations
-continue to use strict parsing. Raw responses, failures and limitations are kept.
+All review recovery uses local normalization and the existing review rounds.
+There are no model requests for status, location, disposition or final-content
+repair. Standalone source checks, settings and comment operations continue to
+use strict parsing. Raw responses, failures and limitations are kept.
 
 ## Presentation, comments and diagnostics
 
@@ -198,8 +210,9 @@ are included even in receipt mode. Queuing never starts a formatter model and
 does not certify TUI display. See [debugging](DEBUGGING.md#output-and-report-presentation).
 
 COMPLETE same-origin reviews enter the comment cache. Preview verifies
-eligible corrected findings, anchors, severity, count and exact content with AI
-attribution. Explicit --publish requires comments.enabled and a saved preview.
+eligible corrected findings, anchors, severity and exact content with AI
+attribution. Preview displays the full comment count without a numerical quota.
+Explicit --publish requires a saved preview; no separate config switch applies.
 The saved plan adds line-local character offsets derived from its existing
 anchor. This does not add fields the planner must generate or inspect MCP schemas
 in code; the publisher translates the saved positions to the available tool.
@@ -216,7 +229,7 @@ Tool hook counts/timing do not audit source contents. Missing outcomes remain
 unknown; an MCP error, host truncation and a blocked native attempt are distinct.
 Request-kind observations count hook events and authorized primary preparations,
 not billable HTTP requests. The retry hook preserves the host's proposal during
-ordinary review, rejects it for revoked grants and one-request amendments, and
+ordinary review, rejects it for revoked grants, and
 records only attempt/decision/delay. It never starts or expands a retry policy.
 See [validation](VALIDATION.md) for tests and remaining service/OS acceptance.
 

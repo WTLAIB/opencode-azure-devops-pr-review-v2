@@ -81,32 +81,6 @@
         }
       }
     },
-    "comments": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "enabled",
-        "maxComments"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow the explicit saved-preview publishing stage. MCP permissions remain governed by OpenCode."
-        },
-        "maxComments": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10,
-          "default": 5,
-          "description": "Maximum comments in a saved preview; publication follows prompt instructions."
-        }
-      }
-    },
-    "auxiliaryModels": {
-      "const": "preserve",
-      "description": "Never change global auxiliary models."
-    },
     "enabled": {
       "type": "boolean",
       "default": true
@@ -123,7 +97,7 @@
         "ja",
         "zh-Hant-TW"
       ],
-      "description": "Shared output language for final report Markdown and Azure comment prose. Use a language tag; intermediate reviews, JSON fields, identifiers, severity labels, and status receipts are unchanged. Restart OpenCode after changes."
+      "description": "Language for human-facing initial and final reviews, comment bodies, skip reasons and AI attribution. IDs, JSON keys, code, paths, source quotes and severity tokens remain unchanged."
     },
     "returnReport": {
       "enum": [
@@ -139,13 +113,6 @@
       ],
       "default": "deny",
       "description": "Private AZPR roles only. Default deny hides the native shell tool. Explicit ask retains its schema for providers that reject requests without it; the runtime still blocks execution before host approval. Other native denials and ordinary agents stay unchanged. No provider detection, automatic fallback or allow mode. Restart OpenCode after changes."
-    },
-    "outputRetries": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 1,
-      "default": 0,
-      "description": "Opt in to one eligible standalone source-check status amendment, using the configured model, no tools and the original deadline. Review formatting and quality gaps are recovered locally or retained in partial reports without additional model requests. Provider errors, cancellation, unconfirmed settlement and comments do not qualify. Extra source-check usage may be billed."
     },
     "debug": {
       "type": "object",
@@ -174,7 +141,73 @@
       "minimum": 10,
       "maximum": 7200,
       "default": null,
-      "description": "Optional whole-command timeout covering all stages, amendments and report display. Null or omitted disables the timeout; an explicit integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual cancellation and bounded SDK cleanup remain available. This is not a spending cap."
+      "description": "Optional whole-command timeout covering all stages and report display. Null or omitted disables the timeout; an explicit integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual cancellation and bounded SDK cleanup remain available. This is not a spending cap."
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional offline Linux x86_64 execution; host shell permissions remain unchanged. See docs/VERIFICATION.md.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "rootfs": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to an operator-prepared, trusted, credential-free root filesystem; mounted read-only."
+        },
+        "repositories": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "url",
+              "path"
+            ],
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "Exact canonical HTTPS Azure repository URL without a PR suffix, credentials, query or fragment."
+              },
+              "path": {
+                "type": "string",
+                "description": "Absolute trusted local Git repository path; objects only, no fetch, working-tree reads, hooks or filters."
+              }
+            }
+          }
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7200,
+          "default": 120,
+          "description": "Per-command environment wall-clock lifetime, including preparation and cleanup; independent of the review run timeout."
+        },
+        "memoryMiB": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 65536,
+          "default": 4096,
+          "description": "Per-process virtual address-space limit, not an aggregate container RAM quota. Some runtimes need more virtual address space."
+        },
+        "processes": {
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 4096,
+          "default": 128,
+          "description": "RLIMIT_NPROC threshold; Linux counts processes/threads against the real user, so existing host usage may reduce available headroom."
+        },
+        "storageMiB": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 8192,
+          "default": 512,
+          "description": "Total disposable tmpfs capacity, including both source copies; also the per-file size limit. No host write mounts."
+        }
+      }
     }
   }
 }

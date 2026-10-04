@@ -22,7 +22,7 @@ const coverageSchema = object({
   gaps: { ...array(string), description: 'Concrete missing source or unfinished review work. Empty only when coverage is complete.' },
 });
 
-export function stageFormat(role, statusOnly = false) {
+export function stageFormat(role) {
   const kind = ROLES[role]?.format;
   if (!kind) throw new Error('Unknown review role.');
   let schema;
@@ -57,14 +57,6 @@ export function stageFormat(role, statusOnly = false) {
     coverage: coverageSchema, findings: array(initialFinding),
     report: { ...string, description: 'Review summary and limitations. Submit the full review, never a status-only acknowledgement or placeholder.' },
   }, ['status', 'coverage', 'findings', 'report']);
-  if (statusOnly === 'disposition') schema = object({ dispositions: array(object({
-    id: string, status: status('MERGED'), mergedInto: string,
-    reason: { ...string, description: 'Existing source-based reason for the same root cause and correction, in outputLanguage. Do not invent a merge to fill a missing row.' },
-  })) });
-  else if (statusOnly === 'location') schema = object({ locations: array(object({ id: string,
-    location: { ...string, description: 'Exact base:/path:line or head:/path:start-end from source already read in this session. No guesses or new source reads.' },
-  })) });
-  else if (statusOnly && statusOnly !== 'final') schema = object({ status: schema.properties.status });
   return { schema };
 }
 
@@ -158,25 +150,6 @@ export function finalSubmissionIssues(result) {
   return issues;
 }
 
-/** Output defects may be resubmitted only with an already known, fresh frame.
- * This establishes eligibility, not truth or sufficiency of source evidence. */
-export function finalResubmissionPlan(original, expected) {
-  try {
-    if (!isObject(original) || original.status !== 'COMPLETE' || expected.scope !== 'pr' ||
-        snapshotKey(original.snapshot) !== snapshotKey(expected) || !sha(original.currentHead) || !sha(original.currentBase) ||
-        original.currentHead.toLowerCase() !== expected.head.toLowerCase() || original.currentBase.toLowerCase() !== expected.base.toLowerCase()) return;
-    return { snapshot: validateSnapshot(expected), currentHead: original.currentHead, currentBase: original.currentBase };
-  } catch { return; }
-}
-
-/** Preserve observations that cannot be refreshed in a tool-free resubmission. */
-export function checkFinalResubmission(result, plan) {
-  if (!isObject(result) || snapshotKey(result.snapshot) !== snapshotKey(plan.snapshot) ||
-      !sha(result.currentHead) || !sha(result.currentBase) || result.currentHead.toLowerCase() !== plan.currentHead.toLowerCase() ||
-      result.currentBase.toLowerCase() !== plan.currentBase.toLowerCase()) throw new Error('Final resubmission changed or omitted the frozen snapshot/current versions.');
-  return result;
-}
-
 /** Narrow, auditable formatting only. The caller must validate the entire result
  * before accepting these changes. Never mutate the raw response or add evidence. */
 export function normalizeFindingFormat(result, role) {
@@ -252,88 +225,6 @@ export class OutputDispositionError extends Error {
   }
 }
 
-/** Missing rows may only be amended as merges into already confirmed originals.
- * The temporary NEEDS_INFO rows test other contracts; they are never accepted. */
-export function dispositionRepairPlan(original, missingIds, validate) {
-  if (!isObject(original) || original.status !== 'COMPLETE' || !missingIds.length ||
-      !Array.isArray(original.dispositions)) return;
-  try {
-    const mergeTargets = original.dispositions.filter(d => d.status === 'CONFIRMED').map(d => d.id);
-    if (!mergeTargets.length || original.dispositions.some(d => missingIds.includes(d.id) ||
-        (d.status === 'MERGED' && missingIds.includes(d.mergedInto)))) return;
-    const probe = JSON.parse(JSON.stringify(original));
-    probe.dispositions.push(...missingIds.map(id => ({ id, status: 'NEEDS_INFO', reason: 'ELIGIBILITY PROBE ONLY' })));
-    if (validate(probe).status !== 'COMPLETE') return;
-    return { missingDispositionIds: [...missingIds], mergeTargets };
-  } catch { return; }
-}
-
-/** Add only model-authored missing MERGED rows. Never infer a decision from prose. */
-export function applyDispositionAmendment(original, plan, amendment) {
-  if (!isObject(amendment) || Object.keys(amendment).length !== 1 ||
-      !Array.isArray(amendment.dispositions) || amendment.dispositions.length !== plan.missingDispositionIds.length) {
-    throw new Error('Disposition retry must return exactly the missing merge rows; no existing fields may change.');
-  }
-  const remaining = new Set(plan.missingDispositionIds);
-  for (const item of amendment.dispositions) {
-    if (!isObject(item) || Object.keys(item).length !== 4 ||
-        Object.keys(item).some(key => !['id', 'status', 'mergedInto', 'reason'].includes(key)) ||
-        !remaining.delete(item.id) || item.status !== 'MERGED' || !plan.mergeTargets.includes(item.mergedInto) ||
-        !text(item.reason)) throw new Error('Disposition retry requires unique requested IDs, existing confirmed targets and nonempty merge reasons.');
-  }
-  if (remaining.size) throw new Error('Disposition retry omitted requested IDs.');
-  const amended = JSON.parse(JSON.stringify(original));
-  amended.dispositions.push(...JSON.parse(JSON.stringify(amendment.dispositions)));
-  return amended;
-}
-
-function findingSlots(result, role) {
-  if (ROLES[role]?.format === 'initial') return (result.findings ?? []).map((value, i) => ({ value, path: `findings[${i}].location` }));
-  if (ROLES[role]?.format === 'final') return [
-    ...(result.dispositions ?? []).flatMap((d, i) => d.status === 'CONFIRMED' ? [{ value: d.verifiedFinding, path: `dispositions[${i}].verifiedFinding.location` }] : []),
-    ...(result.newFindings ?? []).map((value, i) => ({ value, path: `newFindings[${i}].location` })),
-  ];
-  return [];
-}
-
-/** Check eligibility only: the placeholder is never a result or source evidence.
- * Missing source/evidence/coverage and changed heads must fail this probe. */
-export function locationRepairPlan(original, role, validate) {
-  if (ROLES[role]?.format !== 'final' || !isObject(original) || original.status !== 'COMPLETE') return;
-  try {
-    const probe = JSON.parse(JSON.stringify(original));
-    const missingLocations = [];
-    for (const { value, path } of findingSlots(probe, role)) {
-      if (isObject(value) && !Object.hasOwn(value, 'location')) {
-        missingLocations.push({ id: value.id, path });
-        value.location = 'ELIGIBILITY PROBE ONLY';
-      }
-    }
-    if (!missingLocations.length || validate(probe).status !== 'COMPLETE') return;
-    return missingLocations;
-  } catch { return; }
-}
-
-/** Add only explicitly requested absent location fields. No original value may
- * change; the caller must still validate the entire amended envelope. */
-export function applyLocationAmendment(original, role, missingLocations, amendment) {
-  if (!isObject(amendment) || Object.keys(amendment).length !== 1 || !Array.isArray(amendment.locations) ||
-      amendment.locations.length !== missingLocations.length) throw new Error('Location retry must return exactly the requested locations; no other fields may change.');
-  const expected = new Set(missingLocations.map(item => item.id)), received = new Map();
-  for (const item of amendment.locations) {
-    if (!isObject(item) || Object.keys(item).length !== 2 || !expected.has(item.id) || received.has(item.id) || typeof item.location !== 'string') {
-      throw new Error('Location retry has missing, duplicate, unexpected IDs or extra fields.');
-    }
-    const match = /^(base|head):\/[^\r\n:]+:([1-9][0-9]*)(?:-([1-9][0-9]*))?$/.exec(item.location);
-    if (!match || !Number.isSafeInteger(Number(match[2])) || (match[3] && (!Number.isSafeInteger(Number(match[3])) || Number(match[3]) < Number(match[2])))) {
-      throw new Error('Location retry requires an exact base/head path and positive, ordered source lines; unavailable locations cannot complete a review.');
-    }
-    received.set(item.id, item.location);
-  }
-  const amended = JSON.parse(JSON.stringify(original));
-  for (const { value } of findingSlots(amended, role)) if (!Object.hasOwn(value, 'location')) value.location = received.get(value.id);
-  return amended;
-}
 function requireStatus(result, allowed, label) {
   if (!allowed.includes(result.status)) throw new OutputStatusError(label, result.status, allowed);
 }
@@ -469,7 +360,7 @@ function reviewJSONCandidate(content) {
     replacement ? { action, offset, replacement } : { action, offset }) };
 }
 
-/** Strict parsing remains the contract for checks, comments and amendments. */
+/** Strict parsing remains the contract for checks and comments. */
 export function parseJSONReport(response) {
   return parseReport(response).envelope;
 }

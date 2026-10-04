@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { finalEnvelope, finalSubmission, finalSubmissionIssues, finalResubmissionPlan, checkFinalResubmission, normalizeFindingFormat, stageFormat } from '../src/output.mjs';
+import { finalEnvelope, finalSubmission, finalSubmissionIssues, normalizeFindingFormat, stageFormat } from '../src/output.mjs';
 
 const snapshot = { repository: 'org/project/repo', prId: 123, base: 'a'.repeat(40), head: 'b'.repeat(40), scope: 'pr', files: ['/a.js', '/b.js'] };
 const finding = id => ({ id, summary: 'Missing guard', evidence: 'Reachable null input fails at the new dereference.', counterevidence: 'The caller only guards undefined.', location: 'head:/a.js:12', severity: 'medium', suggestion: 'Guard null and test that input.' });
@@ -58,28 +58,6 @@ test('snapshot equality ignores unique file order but not identity, duplicate or
   for (const edit of [p => p.snapshot.files.pop(), p => p.snapshot.files.push('/a.js'), p => p.snapshot.prId++, p => p.snapshot.head = 'c'.repeat(40)]) {
     const bad = packet(); edit(bad); assert.throws(() => validate(bad));
   }
-});
-
-test('resubmission eligibility requires a complete known identity and fresh unchanged versions', () => {
-  for (const raw of [
-    { ...finalSubmission(packet()), dispositions: '[{"id":"F-1","reason":"broken "quote""}]' },
-    { ...finalSubmission(packet()), dispositions: [{ id: 'F-1', status: 'CONFIRMED', reason: 'Source checked' }] },
-    { ...packet(), confirmed: [] },
-  ]) {
-    assert.throws(() => validate(raw));
-    const plan = finalResubmissionPlan(raw, snapshot);
-    assert.ok(plan); assert.equal(validate(checkFinalResubmission(packet(), plan)).status, 'COMPLETE');
-  }
-  for (const edit of [p => p.status = 'INCOMPLETE', p => p.status = 'STALE', p => p.status = 'CREATE',
-    p => delete p.snapshot, p => p.snapshot.repository = 'different', p => p.snapshot.files.pop(),
-    p => p.currentHead = '', p => p.currentBase = '', p => p.currentHead = 'c'.repeat(40), p => p.currentBase = 'c'.repeat(40)]) {
-    const bad = packet(); edit(bad); assert.equal(finalResubmissionPlan(bad, snapshot), undefined);
-  }
-  const plan = finalResubmissionPlan(packet(), snapshot);
-  for (const edit of [p => p.currentHead = 'c'.repeat(40), p => p.currentBase = '', p => p.snapshot.prId++]) {
-    const bad = packet(); edit(bad); assert.throws(() => checkFinalResubmission(bad, plan));
-  }
-  assert.equal(finalResubmissionPlan({ status: 'CREATE' }, snapshot), undefined);
 });
 
 test('diagnostics collect missing evidence paths without echoing private field names or values', () => {

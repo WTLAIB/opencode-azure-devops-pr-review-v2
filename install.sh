@@ -33,7 +33,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
-runtime_files='session.mjs runtime.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs plugin.js'
+runtime_files='session.mjs runtime.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs verification.mjs verification.py plugin.js'
 prompt_names='common check functional risk deep final comment-policy comment-plan comment-publish'
 command_names='pr-check pr-review pr-deep pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }

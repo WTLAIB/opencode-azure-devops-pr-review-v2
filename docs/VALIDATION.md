@@ -12,6 +12,81 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 configuration cleanup and live acceptance
+
+Syntax checks and 390/390 offline tests passed on Ubuntu 22.04.5 with Node
+22.23.3, with no skips. Tests cover twelve eligible comments reaching the complete
+saved preview and explicit fixture publication, empty previews starting no
+publisher, rejected obsolete settings without installation changes, and invalid
+standalone readiness output retaining its failure without a repair request.
+Same-origin grants, cancellation, auxiliary restrictions and immediate publisher
+revocation after tool errors remain covered. Three initial installer-test failures
+were stale role-count expectations after removing the publication config switch;
+the corrected full run passed. All failure evidence is retained privately.
+
+Fresh and replacement installations passed with the actual OpenCode 2.0.22
+binary, each using 41 local fake-provider requests and 13 fixture MCP calls.
+These fixtures include real isolated command execution and cleanup. They do not
+establish real Azure publication or provider behavior.
+
+One newly authorized live review then finished COMPLETE in 421 seconds. One
+initial stream ended without a finish reason; the host inserted a synthetic
+continuation, and the plugin correctly rejected the changed context. That
+initial's output was not accepted. The sibling completed and the existing
+verifier independently reread source and rechecked PR versions. All three
+admitted original finding IDs were adjudicated, covering the three seeded defects.
+The incomplete initial remains disclosed instead of becoming a second delivery
+gate. No additional plugin output-repair round was started.
+
+Independent auditing matched 16/16 exact-commit content reads to Git and 3/3 PR
+metadata reads to unchanged snapshots. Four directory errors remain: the pinned
+official MCP maps Commit directory selectors to Branch. Content reads were
+audited separately; no server patch or tool-name special case was added. Initial
+reviewers chose four isolated commands, including actual head/base test suites:
+head had three failures among 23 tests, while base passed all 23. All commands
+settled and cleaned up. Shell pipelines masked test failures in their exit codes,
+so the test results above come from unittest output, not shell exit alone.
+
+The main findings and overview are Traditional Chinese. Model content quality
+remains PARTIAL independently of the COMPLETE workflow: the verifier incorrectly
+describes initial-reviewer test execution as its own, one suggested test already
+exists, and some correction wording is ambiguous. Original output, tool records,
+failure analysis and quality assessment remain private and unchanged. No new
+formatting gate, model round or prompt workaround was added for these limitations.
+
+The daily installation was not updated in this cleanup task. An isolated install
+used the current source and a private profile with only retired settings removed
+and debug output redirected. Private model choices, host configuration and PAT
+were preserved. No real comment preview/publication ran; all existing Azure thread
+contents remained unchanged. Corrected inline coordinates and UI placement still
+need a separately authorized real publication opportunity.
+
+## 2026-10-04 isolated verification acceptance
+
+The isolated-verification working tree passed syntax checks and 387/387 tests on
+Ubuntu 22.04.5 with Node 22.23.3. Real namespace tests used trusted, disposable
+Node/Python toolchains and local fixture repositories. They checked exact committed
+blobs despite a dirty worktree and export attributes, symlink containment, immutable
+source, disposable edits, empty credential environment, inaccessible host files and
+supervisor descriptors, local test networking, denied host/external networking and
+VSOCK, dropped capabilities, seccomp, nonzero exits, output truncation, unavailable
+environments, cancellation and detached-process cleanup.
+
+Fresh and replacement installations passed against the actual OpenCode 2.0.22
+binary. Each used 41 deterministic local fake-provider requests and 13 fixture MCP
+calls. The added workflow executed model-selected commands through the installed
+V2 tool, retained a nonzero test exit without losing COMPLETE or same-origin preview,
+and cancelled a real sandbox process plus its detached child. Native permission,
+publisher-error, auxiliary-model and host-restart checks still passed. Offline
+runtime tests also check direct-call/admission/model guards and immediate publisher
+grant revocation after a denied verification attempt.
+
+These are offline/fixture execution results. No live model, official Azure MCP
+service call, PR comment write, daily installation update or real project review
+was performed for this feature. The new GitHub CI result is not established by
+local tests. Other rootfs contents, languages, kernels, architectures and provider
+schemas remain unvalidated; resource limitations are in [verification](VERIFICATION.md).
+
 ## Offline checks
 
 Run from the repository root with Node.js 22 or later and Python 3:
@@ -37,6 +112,7 @@ forward from another repository or revision.
 | Comments | COMPLETE-to-preview after partial/unavailable initials, preserved warnings, same-origin scope, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
 | Diagnostics | Private output handling, original response and correction records, value-free observations, timing uncertainty, safe path/write behavior. |
 | Installation | V2 package discovery layout, complete manual file list, preserved current settings, old-layout conflicts, rollback/recovery, archival removal, unrelated-file preservation. |
+| Isolated verification | Actual Linux process and filesystem/network/syscall boundaries, source fidelity, command freedom, nonzero/unavailable results, cancellation, active-grant enforcement and usable COMPLETE/preview delivery. |
 
 Check source-only installation without touching an actual configuration:
 
@@ -49,7 +125,7 @@ sh uninstall.sh --config-dir "$azpr_test_root/config"
 
 The default example still contains generic model placeholders. Successful file
 installation does not mean the plugin can start a review with those settings.
-For an installation test, compare the eight modules and nine prompts to source,
+For an installation test, compare the nine JavaScript modules, Python helper and nine prompts to source,
 check the generated regular `server.js` entry and matching `package.json` export, and verify owner-only settings
 permissions. No top-level loader or Markdown command files should be created.
 The installer must reject a conflicting older integration without moving it.
@@ -384,7 +460,7 @@ quality failures even when execution passed. Keep factual errors distinct from
 presentation defects and preserve failed samples when comparing revisions.
 
 A publication test additionally requires an exact saved preview, explicit
-`comments.enabled`, explicit `--publish`, same-origin/process state, correct
+A saved preview, explicit `--publish`, same-origin/process state, correct
 threads/locations/body/disclosure, and independently inspected Azure results.
 `MODEL_REPORTED_POSTED` is not independent publication verification. Review
 validation does not authorize this write operation.

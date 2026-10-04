@@ -46,10 +46,10 @@ of silently revising the verifier's conclusion. Preserve the trigger and all
 qualifications when translating a finding into a short comment. The model still
 assesses relevance and semantic duplicates; the runtime cannot prove those
 judgments or the comment's meaning correct. Inspect the preview.
-If the verified claim cannot fit faithfully within the comment limit, the planner
+If the verified claim cannot fit faithfully within the per-comment body limit, the planner
 must explain the skip locally rather than omit essential conditions to fit.
 
-## Enable and use
+## Preview and publish
 
 A COMPLETE review can enter comment preview in its original session/process.
 There is no additional veto based on initial coverage disclosures or incomplete
@@ -60,10 +60,12 @@ PARTIAL, STALE and interrupted final results remain readable but do not enter th
 comment cache. COMPLETE is not automatic publication or a guarantee that an
 eligible, nonduplicate inline comment exists.
 
-In your private plugins/azpr-v2/settings.json, set comments.enabled=true before
-reviewing and restart OpenCode. The default is false; preview is still available.
+Publication has no separate configuration switch. It requires a saved preview
+and an explicit `--publish` in the same original session/process.
 Set outputLanguage (for example, zh-TW) to control both final-report and comment
-prose. Intermediate review output and structured keys stay in English.
+prose. Initial reviewers use the same language so the verifier does not need to
+switch from an English handoff. Structured keys, identifiers and source quotes
+remain unchanged. Language compliance is model behavior, not a completion gate.
 
 From the same original conversation/process:
 
@@ -73,7 +75,11 @@ From the same original conversation/process:
 /pr-comment <completed-review-id> --publish
 ```
 
-The preview shows complete saved content (body, AI/model disclosure, marker), locations, and skip reasons even in receipt mode.
+The preview shows the comment count, complete saved content (body, AI/model
+disclosure, marker), locations, and skip reasons even in receipt mode. There is
+no numerical comment quota: all independently actionable eligible findings can
+be included. Duplicate, low-severity or unsupported findings still need skip
+reasons; removing the count limit does not relax evidence or anchor checks.
 Inspect it before requesting publication. The publisher receives the saved
 content and coordinates, not a freshly generated plan. It is instructed to
 send the content exactly, without translation or relocation.

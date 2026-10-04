@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   BLOCKED_NATIVE_TOOLS, NATIVE_TOOL_PERMISSIONS, PROMPTS, ROLES, buildAgents,
-  validateSettings, statusRepairPrompt, locationRepairPrompt, dispositionRepairPrompt,
-  finalResubmissionPrompt,
+  validateSettings,
 } from '../src/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
@@ -17,7 +16,7 @@ const input = () => ({ ...structuredClone(example), models: {
 } });
 
 test('V2 settings reject removed transports, ignored mappings and review limits', () => {
-  for (const key of ['structuredOutput', 'azure', 'steps', 'maxStageCharacters']) {
+  for (const key of ['structuredOutput', 'azure', 'steps', 'maxStageCharacters', 'comments', 'auxiliaryModels', 'outputRetries']) {
     assert.equal(Object.hasOwn(example, key), false, key);
     assert.equal(Object.hasOwn(schema.properties, key), false, key);
     assert.throws(() => validateSettings({ ...input(), [key]: false }), /Unknown setting/, key);
@@ -25,20 +24,16 @@ test('V2 settings reject removed transports, ignored mappings and review limits'
   assert.throws(() => validateSettings({ ...input(), version: 1 }), /version must be 2/);
 });
 
-test('V2 defaults retain disabled timeout and explicit bounded output repair opt-in', () => {
+test('V2 defaults retain disabled timeout and native shell denial', () => {
   const raw = input();
   delete raw.runTimeoutSeconds;
-  delete raw.outputRetries;
   delete raw.shellToolPermission;
   const settings = validateSettings(raw);
   assert.equal(settings.runTimeoutSeconds, null);
-  assert.equal(settings.outputRetries, 0);
   assert.equal(settings.shellToolPermission, 'deny');
   assert.equal(Object.hasOwn(settings, 'structuredOutput'), false);
   for (const value of [10, 7200, null]) assert.equal(validateSettings({ ...input(), runTimeoutSeconds: value }).runTimeoutSeconds, value);
-  for (const value of [0, 1]) assert.equal(validateSettings({ ...input(), outputRetries: value }).outputRetries, value);
   for (const value of [false, 0, 9, 7201]) assert.throws(() => validateSettings({ ...input(), runTimeoutSeconds: value }), /runTimeoutSeconds/);
-  for (const value of [-1, 2, false]) assert.throws(() => validateSettings({ ...input(), outputRetries: value }), /outputRetries/);
 });
 
 test('V2 agents use Agent.Info fields and omit unavailable roles without model fallbacks', () => {
@@ -47,7 +42,7 @@ test('V2 agents use Agent.Info fields and omit unavailable roles without model f
   const settings = validateSettings(raw);
   const agents = buildAgents(settings, prompts);
   assert.deepEqual(raw, before);
-  assert.equal(Object.keys(agents).length, 5);
+  assert.equal(Object.keys(agents).length, 6);
   for (const [id, agent] of Object.entries(agents)) {
     assert.equal(agent.id, id);
     assert.equal(agent.name, id);
@@ -60,10 +55,9 @@ test('V2 agents use Agent.Info fields and omit unavailable roles without model f
   }
   assert.deepEqual(agents['azpr-review-functional'].model, { providerID: 'provider', id: 'family/functional' });
   assert.equal(Object.hasOwn(agents, 'azpr-deep-functional'), false);
-  assert.equal(Object.hasOwn(agents, 'azpr-review-comment-publish'), false);
+  assert.equal(Object.hasOwn(agents, 'azpr-review-comment-publish'), true);
   const full = input();
   full.models.deep = { functional: 'other/deep-f', risk: 'other/deep-r', verifier: 'other/deep-v' };
-  full.comments.enabled = true;
   assert.equal(Object.keys(buildAgents(validateSettings(full), prompts)).length, Object.keys(ROLES).length);
   assert.deepEqual(buildAgents(validateSettings(full), prompts)['azpr-deep-verifier'].model, { providerID: 'other', id: 'deep-v' });
 });
@@ -93,7 +87,7 @@ test('V2 permission rules block CodeMode, native mutation, delegation and host c
   assert.throws(() => validateSettings({ ...input(), shellToolPermission: 'allow' }), /shellToolPermission/);
 });
 
-test('normal and amendment prompts have one JSON text transport and no native output fallback', () => {
+test('review, check and comment prompts have one JSON text transport and no native output fallback', () => {
   const agents = buildAgents(validateSettings(input()), prompts);
   for (const agent of Object.values(agents)) {
     assert.match(agent.system, /one valid JSON object/);
@@ -101,11 +95,6 @@ test('normal and amendment prompts have one JSON text transport and no native ou
     assert.match(agent.system, /Never invoke execute, use fetch/);
     assert.match(agent.system, /CodeMode-only host MCP-resource helpers are unavailable/);
     assert.doesNotMatch(agent.system, /StructuredOutput|native submission|native output|configured transport/);
-  }
-  for (const make of [statusRepairPrompt, locationRepairPrompt, dispositionRepairPrompt, finalResubmissionPrompt]) {
-    assert.match(make(), /JSON text/);
-    assert.doesNotMatch(make(), /StructuredOutput|missing-native|native submission/);
-    assert.match(make(), /Do not call ordinary tools|No ordinary tools/);
   }
 });
 
@@ -118,6 +107,9 @@ test('V2 policy retains complete evidence, same-session saved-output scope and l
   assert.match(final, /currentHead/);
   assert.match(final, /currentBase/);
   assert.match(final, /counterevidence/);
-  assert.doesNotMatch(agents['azpr-review-functional'].system, /# Configured output language/);
+  for (const role of ['functional', 'risk']) {
+    assert.match(agents[`azpr-review-${role}`].system, /outputLanguage: zh-TW/);
+    assert.doesNotMatch(agents[`azpr-review-${role}`].system, /intermediate reviews in English|Intermediate reviews remain in English/);
+  }
   for (const name of PROMPTS) assert.throws(() => buildAgents(validateSettings(input()), { ...prompts, [name]: ' ' }), /Missing or empty prompt/);
 });

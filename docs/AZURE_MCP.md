@@ -151,8 +151,8 @@ arguments and original deadline remain unchanged. Explicit authentication,
 permission, parameter, selector, and not-found errors do not qualify. Neither
 do writes, publication, execution, truncation, or empty search results. Record
 the original error and any recovery. This is prompt guidance, not a runtime
-retry wrapper. `outputRetries` concerns an eligible standalone source-check
-status amendment only; review formatting recovery is local.
+retry wrapper. Output-format recovery is local and never starts an additional
+model request. Standalone source checks retain strict validation.
 
 Distinguish host display truncation from incomplete server data. Prefer supported
 pagination or scoped exact-version reads. The prompt permits the native `read`

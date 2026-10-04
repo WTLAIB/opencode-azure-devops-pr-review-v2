@@ -133,7 +133,7 @@ export async function createDiagnostics(settings, context, run) {
     };
     await log.write('run.json', { id: run.id, origin: run.origin, mode: run.mode, profile: run.profile, sourceReview: run.review?.id,
       startedAt: new Date().toISOString(), project: context.directory, outputLanguage: settings.outputLanguage,
-      returnReport: settings.returnReport, outputTransport: 'json-text', outputRetries: settings.outputRetries,
+      returnReport: settings.returnReport, outputTransport: 'json-text',
       shellToolPermission: settings.shellToolPermission,
       runTimeoutSeconds: settings.runTimeoutSeconds,
       privacy: 'Private review data. May contain source, PR details, model IDs, or secrets echoed by the model. Do not upload or commit. No automatic retention cleanup.' });

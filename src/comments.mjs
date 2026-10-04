@@ -54,10 +54,9 @@ function marker(review, finding, comment) {
   return `<!-- azpr-comment:${fingerprint} -->`;
 }
 
-export function validateCommentPlan(result, review, maxComments) {
+export function validateCommentPlan(result, review) {
   exactKeys(result, ['status', 'comments', 'skipped']);
   if (result.status !== 'READY' || !Array.isArray(result.comments) || !Array.isArray(result.skipped)) fail('Planner did not return a READY comment plan.');
-  if (result.comments.length > maxComments) fail('Comment limit exceeded.');
   const eligible = new Map(confirmedFindings(review).map(f => [f.id, f]));
   const accounted = new Set();
   const markers = new Set();

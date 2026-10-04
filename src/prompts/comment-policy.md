@@ -48,5 +48,4 @@ deadline; if it fails again, stop with the missing evidence. Never use this rule
 for explicit authentication/permission, parameter, selector or not-found errors,
 writes, publication, execution, truncation or empty searches. Disclose recovered
 reads in the local explanation; success does not establish a transient cause.
-This is call-selection guidance, not a plugin-managed MCP retry mechanism or
-the outputRetries allowance. Uncertain publication must never be retried.
+This is call-selection guidance, not a plugin-managed MCP retry mechanism. Uncertain publication must never be retried.

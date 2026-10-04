@@ -35,7 +35,7 @@ test('diagnostics retain complete visible answers and errors without preview tru
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_/);
 });
 
-test('complete amendment text cannot bypass provider errors or incomplete finishes', () => {
+test('complete JSON text cannot bypass provider errors or incomplete finishes', () => {
   const values = [{ status: 'COMPLETE' }, { locations: [{ id: 'F-1', location: 'head:/main.js:2' }] }];
   for (const value of values) {
     const reply = response(JSON.stringify(value));
@@ -487,8 +487,8 @@ test('PR version contract: initial failures may omit unknown snapshot but cannot
 });
 
 
-test('missing disposition diagnostics and multi-row merge amendments never change existing evidence',async()=>{
-  const { OutputDispositionError, dispositionRepairPlan, applyDispositionAmendment }=await import('../src/output.mjs');
+test('missing disposition diagnostics retain every missing ID without inventing decisions',async()=>{
+  const { OutputDispositionError }=await import('../src/output.mjs');
   const originals=[finding('F-1'),finding('F-2'),finding('F-3'),finding('R-1'),finding('R-2'),finding('R-3')];
   const raw=final(originals.slice(0,3).map(f=>({id:f.id,status:'CONFIRMED',reason:'Source verified',verifiedFinding:f})));
   const before=JSON.stringify(raw);
@@ -501,23 +501,7 @@ test('missing disposition diagnostics and multi-row merge amendments never chang
     assert.match(e.message,/R-1, R-2, R-3/);
     return true;
   });
-  const plan=dispositionRepairPlan(raw,missing,validate);
-  const amendment={dispositions:missing.map((id,i)=>({id,status:'MERGED',mergedInto:['F-2','F-3','F-1'][i],reason:'Same established root cause and fix'}))};
-  const amended=applyDispositionAmendment(raw,plan,amendment);
-  assert.equal(validate(amended).status,'COMPLETE');
-  assert.deepEqual(amended.dispositions.slice(0,3),raw.dispositions);
   assert.equal(JSON.stringify(raw),before);
-  assert.ok(!JSON.stringify(amended).includes('ELIGIBILITY PROBE'));
-  for(const mutate of [
-    x=>{x.currentHead='c'.repeat(40);},
-    x=>{x.currentHead='';},
-    x=>{delete x.dispositions[0].verifiedFinding.evidence;},
-    x=>{x.dispositions[0]={id:'F-1',status:'MERGED',mergedInto:'R-1',reason:'Unresolved dependency'};},
-    x=>{x.dispositions[0]={id:'F-1',status:'MERGED',mergedInto:'F-2',reason:'Cycle'};x.dispositions[1]={id:'F-2',status:'MERGED',mergedInto:'F-1',reason:'Cycle'};},
-  ]){
-    const bad=structuredClone(raw);mutate(bad);
-    assert.equal(dispositionRepairPlan(bad,missing,validate),undefined);
-  }
   const malicious=new OutputDispositionError(['PRIVATE_UNTRUSTED_VALUE']);
   assert.doesNotMatch(malicious.message,/PRIVATE_UNTRUSTED_VALUE/);
 });

@@ -12,7 +12,7 @@ earlier candidate or a broader sentence in report prose. Keep its severity
 unchanged. If the source checks contradict it or the report leaves its meaning
 unclear, skip it with a reason instead of inventing a corrected claim here.
 
-Rank by actual impact. Select at most maxComments (possibly zero). Skip every ID in attemptedFindings and skip duplicates by meaning, including human-written discussions without an AZPR marker. Read existing marker-bearing threads too. Do not move an anchor or change wording to evade duplicate checks. Every supplied finding must appear exactly once in comments or skipped. For duplicates within this batch, choose one representative and explain the other IDs in skipped. New verifier findings are eligible only if supplied in findings; do not extract arbitrary prose into new IDs.
+Rank by actual impact. Include all independently actionable eligible findings (possibly zero); there is no numerical comment quota. Skip every ID in attemptedFindings and skip duplicates by meaning, including human-written discussions without an AZPR marker. Read existing marker-bearing threads too. Do not move an anchor or change wording to evade duplicate checks. Every supplied finding must appear exactly once in comments or skipped. For duplicates within this batch, choose one representative and explain the other IDs in skipped. New verifier findings are eligible only if supplied in findings; do not extract arbitrary prose into new IDs.
 
 Return exactly this JSON envelope (example values are placeholders):
 ```json

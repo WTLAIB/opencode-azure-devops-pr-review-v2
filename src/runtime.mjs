@@ -1,6 +1,6 @@
 /**
- * AZPR opt-in OpenCode adapter. No external dependencies, model SDK, child process,
- * Azure client. Optional private debug files use native filesystem APIs.
+ * AZPR opt-in OpenCode adapter. No npm dependencies, model SDK or Azure client.
+ * Optional verification uses an isolated Linux helper, never the host shell tool.
  * Uses the OpenCode-provided Session SDK.
  * Native execution/editing is denied; MCP read-only behavior is prompt policy.
  * OpenCode owns MCP discovery/permissions.
@@ -15,22 +15,20 @@ import { createReviewSession, requestReview, interruptSession, appendReport } fr
 import { commentTarget, confirmedFindings, recordPublishResult, targetKey, validateCommentPlan } from './comments.mjs';
 import {
   COMMANDS, ROLES, PROMPTS, BLOCKED_NATIVE_TOOLS, roleFor, initialRoles, buildAgents,
-  statusRepairPrompt, locationRepairPrompt, dispositionRepairPrompt, finalResubmissionPrompt, validateSettings,
+  validateSettings,
 } from './config.mjs';
 import {
-  OutputStatusError, OutputLocationError, OutputDispositionError,
-  dispositionRepairPlan, applyDispositionAmendment, locationRepairPlan, applyLocationAmendment,
-  finalSubmissionIssues, finalResubmissionPlan, checkFinalResubmission,
-  parseUniqueJSON, parseJSONReport, parseReviewJSONReport,
-  normalizeFindingFormat, stageFormat, parseReviewRequest, checkEnvelope,
+  OutputDispositionError, finalSubmissionIssues,
+  parseUniqueJSON,
+  normalizeFindingFormat, parseReviewRequest, checkEnvelope,
   readReviewOutput, acceptInitialReview, selectReviewSnapshot, acceptFinalReview,
 } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, createStageTiming, collectToolObservations } from './diagnostics.mjs';
+import { VERIFICATION_TOOL, VERIFICATION_DESCRIPTION, VERIFICATION_INPUT, repositoryURL, runVerification, verificationNotice } from './verification.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices,
 } from './attribution.mjs';
-const REPAIR_PROMPTS = { status: statusRepairPrompt, location: locationRepairPrompt, disposition: dispositionRepairPrompt, final: finalResubmissionPrompt };
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
 const ownRole = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
 const blockedNativeTools = new Set(BLOCKED_NATIVE_TOOLS);
@@ -46,7 +44,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {'review'|'deep'} profile
  * @property {boolean} active Revoked synchronously before any abort acknowledgement.
  * @property {AbortController} controller
- * @property {number|null} deadlineAt Whole-run deadline, or null when disabled; unchanged by amendments.
+ * @property {number|null} deadlineAt Whole-run deadline, or null when disabled.
  * @property {StageRecord[]} stages Append-only attempt ledger; failed attempts stay visible.
  * @property {Awaited<ReturnType<typeof createDiagnostics>>} [debug]
  * @property {{renderMs:number, displayMs:number, cleanupMs:number}} [timing]
@@ -62,7 +60,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  */
 
 /**
- * One command-scoped session grant. Each amendment receives fresh counters.
+ * One command-scoped session grant with request and tool observations.
  * @typedef {object} Grant
  * @property {Run} run
  * @property {string} role
@@ -71,11 +69,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {number} calls
  * @property {Map<string,string>} toolCalls Call IDs stay in memory only.
  * @property {Set<string>} completedTools Returned outcomes, never source certification.
- * @property {'status'|'location'|'disposition'|'final'|null} [repairKind]
  * @property {string} [expectedText]
- * @property {boolean} [repairInstructionsApplied]
- * @property {boolean} [repairRequestRejected]
- * @property {number} [repairToolAttempts]
  * @property {Map<string,'completed'|'error'>} [terminalTools]
  * @property {Set<string>} [failedTools]
  * @property {Set<string>} [returnedTools]
@@ -96,11 +90,9 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {string} model
  * @property {string} sessionID
  * @property {string} title
- * @property {1|2} attempt
+ * @property {1} attempt
  * @property {string} status RUNNING, FAILED or a validated domain status.
  * @property {string} startedAt
- * @property {string} [retryOf]
- * @property {'status'|'location'|'disposition'|'final'} [retryKind]
  * @property {object} [result] Populated only after complete domain validation.
  * @property {string} [error]
  * @property {number} [completedTools]
@@ -114,9 +106,6 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {object[]} [validationErrors]
  * @property {string[]} [missingDispositionIds]
  * @property {string[]} [pendingLocations]
- * @property {string[]} [amendedDispositions]
- * @property {object[]} [amendedLocations]
- * @property {object} [finalResubmission]
  * @property {number} [inputCharacters]
  * @property {number} [instructionCharacters]
  * @property {number} [outputCharacters]
@@ -128,19 +117,6 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {number} [durationMs]
  * @property {object} [timing]
  * @property {boolean} [displayed]
- */
-
-/**
- * Explicit failure handoff to the shared one-amendment decision. Neither raw
- * nor prepared envelopes are validated evidence; both must be treated as data.
- * @typedef {object} FailedSubmission
- * @property {unknown} envelope Prepared candidate used by narrow eligibility probes.
- * @property {unknown} rawEnvelope Original parsed submission, before normalization.
- * @property {string} sessionID Stopped original session; no standing authorization.
- * @property {number} completedTools
- * @property {boolean} finalResubmission Eligible transport, not a validated replacement.
- * @property {object[]} [corrections]
- * @property {object[]} [validationErrors]
  */
 
 function errorText(e) { return e instanceof Error ? e.message : 'OpenCode SDK operation failed.'; }
@@ -269,91 +245,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     run.controller.abort(new Error(reason));
     const active = [...grants].filter(([, g]) => g.run === run).map(([id]) => id);
     for (const id of active) grants.delete(id); // Revoke BEFORE awaiting the SDK.
-    run.stopping = Promise.allSettled(active.map(id => abortSession(run, id)));
+    run.stopping = Promise.allSettled([
+      ...active.map(id => abortSession(run, id)),
+      ...[...run.verifications].map(task => deadline(() => task, 6000).catch(() => { run.abortUnconfirmed = true; })),
+    ]);
     return run.stopping;
   }
-  async function requireActiveAmendment(run, originalError) {
-    await current(run.controller.signal);
-    if (!run.active || run.controller.signal.aborted || run.abortUnconfirmed) throw originalError;
-  }
   async function stage(run, role, payload, validate) {
-    try { return await stageAttempt(run, role, payload, validate); }
-    catch (error) {
-      const spec = ROLES[role];
-      // Review recovery is local; standalone source readiness retains its
-      // optional status amendment. Do not request a model to fix review format.
-      if (['initial', 'final'].includes(spec?.format)) throw error;
-      /** @type {FailedSubmission|undefined} */
-      const failed = error?.submission;
-      if (!state.settings.outputRetries || !spec || spec.comment || !failed?.completedTools || !run.active ||
-          run.controller.signal.aborted || run.abortUnconfirmed) throw error;
-      if (error instanceof OutputDispositionError && spec.format === 'final') {
-        const original = clone(failed.envelope), plan = dispositionRepairPlan(original, error.missingIds, validate);
-        if (plan) {
-          await requireActiveAmendment(run, error);
-          const repair = { operation: 'output-disposition-repair', originalEnvelope: original, ...plan,
-            outputLanguage: state.settings.outputLanguage, error: error.message };
-          return stageAttempt(run, role, repair, (amendment, record) => {
-            const result = validate(applyDispositionAmendment(original, plan, amendment));
-            if (failed.corrections?.length) record.outputFormatCorrections = failed.corrections;
-            record.amendedDispositions = plan.missingDispositionIds;
-            return result;
-          }, failed.sessionID, 'disposition');
-        }
-      }
-      if (error instanceof OutputLocationError) {
-        const original = clone(failed.envelope), missingLocations = locationRepairPlan(original, role, validate);
-        if (missingLocations) {
-          await requireActiveAmendment(run, error);
-          const repair = { operation: 'output-location-repair', originalEnvelope: original, missingLocations, error: error.message };
-          // A scoped regrant retains this reviewer's own source context. Status and
-          // location recovery share one budget: neither calls stage() recursively.
-          return stageAttempt(run, role, repair, (amendment, record) => {
-            const result = validate(applyLocationAmendment(original, role, missingLocations, amendment));
-            if (failed.corrections?.length) record.outputFormatCorrections = failed.corrections;
-            record.amendedLocations = missingLocations;
-            return result;
-          }, failed.sessionID, 'location');
-        }
-      }
-      if (spec.format === 'final' && failed.finalResubmission) {
-        const plan = finalResubmissionPlan(failed.rawEnvelope, payload.snapshot);
-        if (plan) {
-          await requireActiveAmendment(run, error);
-          const repair = { operation: 'output-final-resubmission', originalEnvelope: failed.rawEnvelope,
-            frozen: plan, expectedFindingIds: payload.expectedFindingIds, validationErrors: failed.validationErrors,
-            outputLanguage: state.settings.outputLanguage };
-          // This replaces model-authored content, not missing values inferred by
-          // the runtime. All amendment kinds share this single stage allowance.
-          return stageAttempt(run, role, repair, (replacement, record) => {
-            const result = validate(checkFinalResubmission(replacement, plan));
-            record.finalResubmission = { scope: 'complete-final-content', originalSessionID: failed.sessionID };
-            return result;
-          }, failed.sessionID, 'final');
-        }
-      }
-      if (!(error instanceof OutputStatusError) || typeof failed.envelope.status !== 'string' || !/^[A-Z_]{1,24}$/.test(failed.envelope.status)) throw error;
-      const original = clone(failed.envelope), completeStatus = spec.format === 'check' ? 'READY' : 'COMPLETE';
-      // This probe only establishes that every other contract passes. Never
-      // adopt its result or infer the model's intended status from a typo.
-      try {
-        if (validate({ ...clone(original), status: completeStatus }).status !== completeStatus) throw error;
-      } catch { throw error; }
-      await requireActiveAmendment(run, error);
-      const repair = { operation: 'output-status-repair', originalEnvelope: original,
-        allowedStatuses: stageFormat(role).schema.properties.status.enum, error: error.message };
-      // Exactly one fresh session with the same model; never recurse through
-      // stage(), reuse a revoked session, or restart the run deadline.
-      return stageAttempt(run, role, repair, amendment => {
-        if (Object.keys(amendment).length !== 1 || !Object.hasOwn(amendment, 'status')) throw new Error('Output retry may contain only the status field; original evidence must remain unchanged.');
-        return validate({ ...original, status: amendment.status });
-      }, failed.sessionID);
-    }
-  }
-  async function stageAttempt(run, role, payload, validate, retryOf, retryKind = 'status') {
     await current(run.controller.signal);
     if (!run.active) throw new Error('Review stopped.');
-    if (retryOf && run.abortUnconfirmed) throw new Error('Output retry stopped because session abort was not confirmed.');
     await checkRole(role, run.controller.signal);
     if (typeof validate !== 'function') throw new Error('Every stage requires an explicit output validator.');
     const input = JSON.stringify(payload);
@@ -361,38 +261,35 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     if (spec.mode !== run.profile) throw new Error('[AZPR] Reviewer profile mismatch before invocation.');
     const idModel = state.settings.models[spec.mode][spec.slot];
     if (!idModel) throw new Error('Required model is not configured.');
-    const title = `[AZPR ${run.id}] ${spec.label}${retryOf ? ' (output retry 1/1)' : ''}`;
-    const reuseContext = Boolean(retryOf && ['location', 'disposition', 'final'].includes(retryKind));
-    const made = reuseContext ? { id: retryOf } : await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), signal: run.controller.signal }), run.controller.signal);
-    if (!text(made.id) || made.id === run.origin || (!reuseContext && seenSessions.has(made.id))) throw new Error('SDK did not return a new independent session.');
-    if (reuseContext && (!seenSessions.has(made.id) || grants.has(made.id) || !run.stages.some(s => s.sessionID === made.id && s.role === role && s.model === idModel && s.attempt === 1 && s.status === 'FAILED'))) throw new Error('Context amendment requires this stage\'s stopped original session.');
+    const title = `[AZPR ${run.id}] ${spec.label}`;
+    const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), signal: run.controller.signal }), run.controller.signal);
+    if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');
     if (!run.active) throw new Error('Review stopped before model invocation.');
-    if (retryOf && run.abortUnconfirmed) throw new Error('Output retry stopped because session abort was not confirmed.');
     seenSessions.add(made.id);
     /** @type {Grant} */
     const g = {
-      run, role, model: idModel, repairKind: retryOf ? retryKind : null, expectedText: input,
+      run, role, model: idModel, expectedText: input,
       messages: 0, calls: 0, nonce: randomUUID(),
       primaryPrepared: false, requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 },
       rejectedRequests: 0, retryEvents: [],
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(),
-      blockedNativeCalls: new Map(), repairToolAttempts: 0,
+      blockedNativeCalls: new Map(),
       timing: state.settings.debug.enabled ? createStageTiming() : undefined,
     };
     grants.set(made.id, g);
     /** @type {StageRecord} */
     const record = {
       role, profile: spec.mode, stage: spec.stage, model: idModel, sessionID: made.id, title,
-      attempt: retryOf ? 2 : 1, ...(retryOf ? { retryOf, retryKind } : {}),
+      attempt: 1,
       status: 'RUNNING', startedAt: new Date().toISOString(),
     };
     run.stages.push(record);
     const stem = `${String(run.stages.length).padStart(2, '0')}-${role}`;
-    const instructions = retryOf ? REPAIR_PROMPTS[retryKind]() : state.agents[role].system;
+    const instructions = state.agents[role].system;
     Object.assign(record, { inputCharacters: input.length, instructionCharacters: instructions.length,
       remainingRunMsAtStart: remainingRunMs(run) });
-    let envelope, prepared, syntaxCorrections = [], validatingOutput = false, finalResubmission = false;
+    let envelope, prepared, syntaxCorrections = [], validatingOutput = false;
     try {
       await run.debug.write(`${stem}.request.json`, { ...record, payload, instructions });
       if (!run.active) throw new Error('Review stopped before model invocation.');
@@ -410,16 +307,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (!run.active) throw new Error('Review stopped before output validation.');
       if (!g.messages || !g.calls) throw new Error('Required V2 prompt/context hooks were not observed; review cannot be accepted.');
       record.completedTools = g.completedTools.size;
-      if (retryOf) envelope = parseJSONReport(answer);
-      else ({ envelope, corrections: syntaxCorrections } = readReviewOutput(answer, role));
+      ({ envelope, corrections: syntaxCorrections } = readReviewOutput(answer, role));
       record.outputCharacters = JSON.stringify(envelope).length;
-      if (retryKind === 'final' && retryOf && (g.repairToolAttempts || g.repairRequestRejected)) throw new Error('Final resubmission attempted forbidden tools or an additional model request.');
       validatingOutput = true;
-      finalResubmission = answer.info?.role === 'assistant' && answer.info?.sessionID === made.id &&
-        !['length', 'content-filter', 'error', 'cancelled'].includes(answer.info?.finish);
       // Review quality gaps are reported by the review adapters, not retried or
       // treated as execution failure. Other commands retain their strict path.
-      prepared = retryOf || ['initial', 'final'].includes(spec.format)
+      prepared = ['initial', 'final'].includes(spec.format)
         ? { envelope, corrections: [] } : normalizeFindingFormat(envelope, role);
       prepared.corrections = [...syntaxCorrections, ...prepared.corrections];
       const result = validate(prepared.envelope, record);
@@ -450,19 +343,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (spec.format === 'final' && validatingOutput) {
         record.validationErrors = finalSubmissionIssues(envelope);
         if (!record.validationErrors.length) record.validationErrors = [{ path: '$', code: 'contract', message: errorText(error) }];
-      }
-      // Syntax tolerance must pass every contract locally; it cannot unlock an
-      // amendment/resubmission that the original malformed JSON could not enter.
-      const recoverableFailure = error instanceof OutputStatusError || error instanceof OutputLocationError ||
-        error instanceof OutputDispositionError || (spec.format === 'final' && validatingOutput && finalResubmission);
-      if (!retryOf && !syntaxCorrections.length && recoverableFailure) {
-        /** @type {FailedSubmission} */
-        const submission = {
-          envelope: prepared?.envelope ?? envelope, corrections: prepared?.corrections,
-          sessionID: made.id, completedTools: g.completedTools.size,
-          rawEnvelope: envelope, finalResubmission, validationErrors: record.validationErrors,
-        };
-        error.submission = submission;
       }
       if (error instanceof OutputDispositionError) record.missingDispositionIds = error.missingIds;
       grants.delete(made.id); // Revoke even if a failed HTTP request left work on the server.
@@ -507,7 +387,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   }
   async function finishDiagnostics(run, status, report, failure) {
     if (report) await run.debug.write(run.draft ? 'draft.md' : 'report.md', report);
-    await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none', error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(), readiness: run.readiness, timing: run.timing, stages: run.stages, warnings: run.debug.warnings });
+    await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none', error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(), readiness: run.readiness, timing: run.timing, stages: run.stages, verification: run.verification, warnings: run.debug.warnings });
   }
   function renderReport(run, render) {
     const start = performance.now();
@@ -520,7 +400,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     for (const fn of ['create', 'prompt', 'wait', 'context', 'interrupt', 'synthetic']) if (typeof context.session?.[fn] !== 'function') throw new Error(`[AZPR] OpenCode Session SDK ${fn} is unavailable; no workflow was started.`);
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
     /** @type {Run} */
-    const run = { ...details, id, active: true, controller: new AbortController(), stages: [],
+    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], verification: [], verifications: new Set(),
       timing: state.settings.debug.enabled ? { renderMs: 0, displayMs: 0, cleanupMs: 0 } : undefined,
       deadlineAt: state.settings.runTimeoutSeconds === null ? null : Date.now() + state.settings.runTimeoutSeconds * 1000 };
     runs.set(id, run);
@@ -576,18 +456,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     if (!review || review.origin !== input.sessionID) throw new Error('[AZPR] Completed review is unavailable in this original session/process. Run /pr-review or /pr-deep again.');
     review.target = commentTarget(review.request, review.snapshot);
     const publish = Boolean(match[2]);
-    if (publish && !state.settings.comments.enabled) throw new Error('[AZPR] Set comments.enabled=true and restart BEFORE reviewing. Preview is still available without requesting publication.');
     if (publish && !review.plan) throw new Error('[AZPR] Preview first with /pr-comment <review-id>.');
     if (review.attempts.size) throw new Error('[AZPR] This review already had a publication attempt. Inspect Azure before starting a new review; automatic retry is disabled.');
     const { run, status, report, failure } = await workflow({ origin: input.sessionID, mode: 'comment', profile: review.profile, review, lockKey: targetKey(review.target) }, async run => {
       run.phase = publish ? 'comment publication' : 'comment preview';
       let status, report;
-      const remaining = Math.max(0, state.settings.comments.maxComments - review.attempts.size);
       if (!publish) review.plan = null; // Never leave an obsolete preview after a failed refresh.
       const payload = { target: review.target, snapshot: review.snapshot, report: review.final.report,
         outputLanguage: review.outputLanguage, provenance: review.provenance,
         reviewWarnings: review.final.reviewWarnings,
-        findings: confirmedFindings(review), dispositions: review.final.dispositions, maxComments: remaining,
+        findings: confirmedFindings(review), dispositions: review.final.dispositions,
         attemptedFindings: [...review.attempts.values()],
         ...(publish ? { comments: clone(review.plan.comments) } : {}) };
       if (publish && !review.plan.comments.length) { status = 'NOTHING_TO_POST'; report = 'The saved preview contains no comments. No publisher was started.'; }
@@ -601,7 +479,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
           if (publish) {
             if (!record.completedTools) throw new Error('Publisher did not complete any tool call. Publication remains unverified; inspect Azure.');
             allReported = recordPublishResult(result, review);
-          } else review.plan = validateCommentPlan(result, review, remaining);
+          } else review.plan = validateCommentPlan(result, review);
           return publish && !allReported ? { ...result, status: 'INCOMPLETE' } : result;
         });
         if (publish) {
@@ -611,6 +489,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
           status = 'PREVIEW';
           report = review.plan.comments.map(c => `### ${c.findingId} — ${c.path}:${c.startLine}-${c.endLine}\n\n${c.content}`).join('\n\n');
           report ||= 'No new actionable inline comments to post.';
+          report = `Comments prepared: ${review.plan.comments.length}\n\n${report}`;
           report += '\n\nSkipped confirmed findings:\n' + (review.plan.skipped.map(s => `- ${s.findingId}: ${s.reason}`).join('\n') || '- None.');
           report += `\n\nPublication was not requested. To request posting this exact preview: /pr-comment ${review.id} --publish`;
         }
@@ -639,7 +518,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     const request = parseReviewRequest(input.arguments);
     // Only explicit command events grant access; matching text in chat/MCP results does not.
     if (mode === 'deep' && !state.settings.deepReady) throw new Error('[AZPR] All three models.deep roles must be configured before /pr-deep. No fallback to review models.');
-    const { run, status, report, failure, review } = await workflow({ origin: input.sessionID, mode, profile: mode === 'deep' ? 'deep' : 'review', userContext: request.userContext }, async run => {
+    const { run, status, report, failure, review } = await workflow({ origin: input.sessionID, mode, profile: mode === 'deep' ? 'deep' : 'review', userContext: request.userContext, prUrl: request.prUrl }, async run => {
       if (mode === 'check') {
         run.phase = 'source check';
         const pre = await stage(run, roleFor(run.profile, 'check'), request, result => checkEnvelope(result, request.prUrl));
@@ -647,8 +526,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       }
       run.phase = 'initial reviews';
       const candidates = initialRoles(run.profile);
+      const initialRequest = { ...request, outputLanguage: state.settings.outputLanguage };
       const first = await Promise.allSettled(candidates.map(async role => {
-        try { return await stage(run, role, request, result => acceptInitialReview(result, ROLES[role].prefix, request.prUrl)); }
+        try { return await stage(run, role, initialRequest, result => acceptInitialReview(result, ROLES[role].prefix, request.prUrl)); }
         catch (error) {
           if (!error?.reviewStageFailed) void abortRun(run, errorText(error), 'INCOMPLETE');
           throw error;
@@ -666,7 +546,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       run.phase = 'final verification';
       const pendingLocations = allFindings.filter(finding => !Object.hasOwn(finding, 'location')).map(finding => finding.id);
       const expectedFindingIds = allFindings.map(finding => finding.id);
-      const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, outputLanguage: state.settings.outputLanguage }, result => acceptFinalReview(result, snapshot, allFindings, request.prUrl));
+      const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, verification: clone(run.verification), outputLanguage: state.settings.outputLanguage }, result => acceptFinalReview(result, snapshot, allFindings, request.prUrl));
       const initialWarnings = reviews.flatMap((review, index) => [
         ...review.reviewWarnings,
         ...review.coverage.gaps.map(gap => `Reported initial gap: ${gap}`),
@@ -679,7 +559,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       // COMPLETE verifier that checked the requested PR and current versions.
       if (verified.status !== 'COMPLETE') run.publicationUnavailable = true;
       const provenance = reviewProvenance(run);
-      return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
+      return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}${verificationNotice(run.verification, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
         review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), attempts: new Map(), plan: null } };
     });
     // A cancelled presentation must not leave a publishable "completed" review.
@@ -702,6 +582,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   const agents = buildAgents(settings, prompts);
   state = { ready: true, raw, settings, agents, fingerprints: {}, registrationPermissions: {}, agentsPinned: false };
   const registrations = [];
+  const canVerify = grant => Boolean(grant?.run.active && ['initial', 'final'].includes(ROLES[grant.role]?.format));
+  async function verificationGrant(sessionID, agent) {
+    const grant = grants.get(sessionID);
+    if (!canVerify(grant) || grant.role !== agent || !grant.messages || !grant.calls) throw new Error('[AZPR] Isolated verification requires an active initial reviewer or verifier grant.');
+    const session = await scoped(() => context.session.get({ sessionID }), grant.run.controller.signal);
+    await authorize(sessionID, session.agent, session.model);
+    if (!canVerify(grant) || grants.get(sessionID) !== grant) throw new Error('[AZPR] Verification authorization expired.');
+    return grant;
+  }
   try {
     // V2's command editor.add replaces an existing entry. Inspect the current
     // catalog before registering anything so an earlier user/plugin command is
@@ -711,6 +600,38 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     if (!Array.isArray(commandCatalog?.data)) throw new Error('[AZPR] Invalid OpenCode V2 command catalog.');
     for (const command of commandCatalog.data) {
       if (Object.hasOwn(COMMANDS, command?.name)) throw new Error(`[AZPR] Reserved command name conflict: ${command.name}`);
+    }
+    if (settings.verification.enabled) {
+      if (typeof context.tool?.transform !== 'function') throw new Error('[AZPR] The V2 tool transform is unavailable.');
+      registrations.push(await context.tool.transform(editor => {
+        if (editor.get(VERIFICATION_TOOL)) throw new Error('[AZPR] Reserved verification tool name conflict.');
+        editor.add({ name: VERIFICATION_TOOL, description: VERIFICATION_DESCRIPTION, input: VERIFICATION_INPUT,
+          options: { codemode: false, permission: VERIFICATION_TOOL },
+          async execute(input, execution) {
+            const g = await verificationGrant(execution.sessionID, execution.agent);
+            const call = `${execution.id}:${VERIFICATION_TOOL}`;
+            g.verificationCalls ??= new Set();
+            if (g.toolCalls.get(call) !== VERIFICATION_TOOL || g.terminalTools.has(call) || g.verificationCalls.has(call)) throw new Error('[AZPR] Verification requires a fresh observed tool call in the admitted review.');
+            g.verificationCalls.add(call);
+            const signal = execution.signal ? AbortSignal.any([g.run.controller.signal, execution.signal]) : g.run.controller.signal;
+            // A later stage never inherits another stage's mutable filesystem.
+            const task = (async () => {
+              let repository;
+              try { repository = repositoryURL(g.run.prUrl); } catch { repository = ''; }
+              const result = await runVerification(state.settings.verification, repository, input, signal);
+              g.run.verification.push({ ...result, role: g.role });
+              if (result.cleanupConfirmed === false) {
+                g.run.abortUnconfirmed = true;
+                void abortRun(g.run, 'Isolated verification process settlement is unconfirmed.', 'INCOMPLETE');
+              }
+              await g.run.debug.write(`verification-${g.run.verification.length}.json`, { ...result, role: g.role });
+              return { content: JSON.stringify(result), metadata: { verification: true } };
+            })();
+            g.run.verifications.add(task);
+            try { return await task; } finally { g.run.verifications.delete(task); }
+          },
+        });
+      }));
     }
     registrations.push(await context.agent.transform(editor => {
       for (const [role, definition] of Object.entries(agents)) {
@@ -743,26 +664,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       g.messages++;
     }));
     registrations.push(await context.session.hook('context', async event => {
+      if (settings.verification.enabled && !canVerify(grants.get(event.sessionID))) delete event.tools[VERIFICATION_TOOL];
       if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
       const g = await authorize(event.sessionID, event.agent, event.model);
       if (!g.messages) throw new Error('[AZPR] Missing authorized reviewer input.');
-      if (g.repairKind) {
-        if (g.calls) { g.repairRequestRejected = true; throw new Error('[AZPR] Output repair permits one model request.'); }
-        const original = state.agents[g.role].system;
-        let occurrences = 0;
-        const replacement = REPAIR_PROMPTS[g.repairKind]();
-        for (const part of event.system) {
-          if (part.type !== 'text' || typeof part.text !== 'string') continue;
-          const pieces = part.text.split(original);
-          occurrences += pieces.length - 1;
-          part.text = pieces.join(replacement);
-        }
-        if (occurrences !== 1) throw new Error('[AZPR] Cannot isolate amendment instructions in V2 context.');
-        g.repairInstructionsApplied = true;
-        // Remove the ordinary catalog for the one tool-free amendment request.
-        // Execution hooks still reject every attempt if a provider submits one.
-        for (const name of Object.keys(event.tools)) delete event.tools[name];
-      }
       g.primaryPrepared = true;
     }));
     registrations.push(await context.session.hook('model.request', async event => {
@@ -777,7 +682,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
             ? '[AZPR] Private review compaction is not authorized: exact admitted context must remain available. No summary request was sent.'
             : '[AZPR] Auxiliary model requests are not authorized for private reviewers.');
         }
-        if (!g.messages || !g.primaryPrepared || (g.repairKind && g.calls)) throw new Error('[AZPR] Model request has no authorized primary context.');
+        if (!g.messages || !g.primaryPrepared) throw new Error('[AZPR] Model request has no authorized primary context.');
         g.primaryPrepared = false;
         g.calls++;
         g.timing?.modelRequest();
@@ -791,7 +696,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       const g = grants.get(event.sessionID);
       const proposed = event.decision?.retry === true;
       let authorized = false;
-      if (g?.run.active && !g.repairKind) {
+      if (g?.run.active) {
         try { await authorize(event.sessionID, event.agent, event.model); authorized = true; } catch {}
       }
       if (!authorized) event.decision = { retry: false };
@@ -802,14 +707,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     }));
     registrations.push(await context.tool.hook('execute.before', async event => {
       if (event.tool === 'subagent' && ownRole(event.input?.agent)) throw new Error('[AZPR] Private reviewers cannot be delegated.');
-      if (!seenSessions.has(event.sessionID)) return;
+      if (!seenSessions.has(event.sessionID)) {
+        if (settings.verification.enabled && event.tool === VERIFICATION_TOOL) await verificationGrant(event.sessionID, event.agent);
+        return;
+      }
       const g = grants.get(event.sessionID);
       if (!g?.run.active || g.role !== event.agent) throw new Error('[AZPR] Review tool authorization expired.');
       await current(g.run.controller.signal);
       await checkRole(g.role, g.run.controller.signal);
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
       const call = `${event.id}:${event.tool}`;
-      if (g.repairKind) { g.repairToolAttempts++; throw new Error('[AZPR] Output amendment cannot invoke ordinary tools.'); }
       if (blockedNativeTools.has(event.tool)) {
         g.blockedNativeCalls.set(call, event.tool);
         if (g.blockedNativeCalls.size >= 2) {
@@ -822,6 +729,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       g.toolCalls.set(call, event.tool);
       g.timing?.toolStarted(call, event.tool);
       g.firstToolAt ??= new Date().toISOString();
+      // Track an owned-tool denial as an observed error too. In particular, a
+      // publisher must lose its grants on this error before any subsequent call.
+      if (settings.verification.enabled && event.tool === VERIFICATION_TOOL) await verificationGrant(event.sessionID, event.agent);
     }));
     registrations.push(await context.tool.hook('execute.after', event => {
       const g = grants.get(event.sessionID), call = `${event.id}:${event.tool}`;

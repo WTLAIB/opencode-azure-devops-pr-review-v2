@@ -72,18 +72,16 @@ test('failed queuing offers original JSON and private diagnostics without promis
   assert.doesNotMatch(receipt, /opencode export|The full report is in|synthetic report queued to/);
 });
 
-test('bounded amendments and accepted corrections remain disclosed with the original failure', () => {
+test('accepted local corrections and pending locations remain disclosed with an initial failure', () => {
   const value = run();
   value.stages[0].status = 'FAILED'; value.stages[0].error = 'Missing original disposition';
-  value.stages.push(...['location', 'disposition', 'final'].map((retryKind, index) => ({
-    role: 'azpr-review-verifier', status: 'COMPLETE', sessionID: 'ses_repair_' + index,
-    model: 'fixture/verifier', retryOf: 'ses_fixture', retryKind,
-    outputFormatCorrections: [{ kind: 'finding-key-whitespace' }], pendingLocations: ['F1'],
-  })));
+  value.stages.push({
+    role: 'azpr-review-verifier', status: 'COMPLETE', sessionID: 'ses_verifier',
+    model: 'fixture/verifier', outputFormatCorrections: [{ kind: 'finding-key-whitespace' }], pendingLocations: ['F1'],
+  });
   const receipt = renderReceipt(value, 'Report', 'COMPLETE', '', settings);
-  for (const notice of ['Location amendment notice', 'Disposition amendment notice', 'Final resubmission notice', 'Output format notice', 'Pending location notice']) assert.ok(receipt.includes(notice));
+  for (const notice of ['Output format notice', 'Pending location notice']) assert.ok(receipt.includes(notice));
   assert.match(receipt, /error=Missing original disposition/);
-  assert.match(receipt, /Evidence and decisions may change/);
   assert.match(receipt, /This notice does not claim they were resolved/);
   assert.doesNotMatch(receipt, /StructuredOutput|transport fallback|invalid-structured-output/);
 });

@@ -132,12 +132,12 @@ Check unsupported claims about permanence, recovery, ordering and business impac
 against actual source and counterexamples. A parseable result cannot establish
 those facts. The original response and failures remain in private diagnostics.
 
-## Output amendments
+## Output recovery
 
-Review formatting and quality recovery is local and does not create additional
-model requests, including when outputRetries is 1. The setting remains available
-for an eligible standalone source-check status amendment: one tool-free request,
-unchanged deadline and retained failure. It is not a general model retry switch.
+Review formatting recovery is local and does not create additional model
+requests. Useful incomplete content is retained for the existing verifier and
+report. Standalone `/pr-check` uses strict validation and retains an invalid
+answer as a diagnostic failure; it never asks a model to amend it.
 Execution failure, cancellation, compaction, unknown settlement and publication
 are not repaired by asking a formatting model to regenerate a review.
 
@@ -191,8 +191,8 @@ failures, search-service errors, and actual recovery.
 request-kind hooks, authorized primary preparations, rejections, and host retry
 proposals. It records no request bodies, headers or provider error text. These
 are observations of hooks, not a count of network requests or billed usage.
-Normal review retains the host's retry decision. Revoked grants and output
-amendments do not receive host retries; no new retry policy is added.
+Normal review retains the host's retry decision. Revoked grants cannot retry;
+no new retry policy is added.
 
 `A publisher tool failed` means the publication stage observed a tool error and
 revoked its grants immediately. This includes explicit error results returned
@@ -226,3 +226,19 @@ cancellation stops acceptance and the plugin's grants, while cleanup explicitly
 interrupts and waits. Preserve uncertainty if that cleanup fails. There is no
 plugin spending cap, iteration cap, or stage-character cap. Host context limits,
 MCP pagination, server-side truncation, and service limits remain independent.
+## Optional isolated verification
+
+If `azpr_verify` is absent, check that `verification.enabled` is true in the loaded
+profile, OpenCode was restarted, and the active stage is an initial reviewer or
+verifier. Host tool permissions still apply. Readiness, comments and
+ordinary agents cannot use the tool. Changing `shellToolPermission` will not enable
+isolated execution or bypass its boundary.
+
+UNAVAILABLE means no successful sandbox command result was obtained. Check its
+safe diagnostic, the explicitly mapped local Git repository and full commit,
+dedicated rootfs layout and executables, Linux x86_64 namespace/seccomp support,
+and configured resource limits. The runner does not fetch missing objects or
+dependencies. A nonzero command exit, timeout or truncated output must be interpreted
+from the recorded evidence; none automatically invalidates a usable review.
+Private debug mode saves `verification-N.json` alongside stage results.
+See [verification setup](VERIFICATION.md) for the full boundary and limitations.

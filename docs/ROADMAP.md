@@ -39,18 +39,22 @@ historical evidence and do not certify this adapter.
 - Architecture boundaries and test-quality directions in both existing initial
   roles, with design tradeoffs and test-coverage advice retained in the report.
   No topic checklist, additional model round or completion gate is introduced.
+- Comment previews include all eligible findings without a numerical quota;
+  publication needs the saved preview and explicit `--publish`, with no config
+  switch. Host auxiliary selections are always preserved. Obsolete settings and
+  model-authored output-repair paths are removed; `/pr-check` stays standalone.
 
-## Proposed capability: isolated test execution
+## Optional isolated verification
 
-Optional execution could help reviewers validate concrete triggers, counterexamples
-and proposed tests. It is not implemented. A future runner should use disposable
-source pinned to the reviewed commit, isolate personal credentials and working
-files, constrain external effects to authorized test services, and retain the
-actual command, environment, revision and results with cancellation support.
-Within that boundary, models should choose useful tests and small reproductions
-without a fixed command catalog, extra review round or mandatory test quota.
-Unavailable execution must leave useful review delivery intact. Changing a shell
-permission or labelling a command as a test does not provide that execution boundary.
+Implemented as an opt-in Linux x86_64 tool for the existing initial reviewers and
+verifier. Models select commands in a disposable offline environment at an exact
+local Git commit. Native host execution stays denied. Execution records include
+the command, environment boundaries, commit, outcome and truncation, and cancellation
+terminates the process namespace. There is no command catalog, extra review round
+or mandatory test quota; unavailable execution preserves usable review delivery.
+An operator must prepare a trusted rootfs and map repositories explicitly. See
+[verification](VERIFICATION.md). Networked dependency acquisition, submodule expansion,
+aggregate cgroup quotas and other CPU architectures are not implemented.
 
 ## Acceptance still required
 

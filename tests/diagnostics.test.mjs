@@ -88,7 +88,7 @@ test('stage timing leaves unmatched tools unknown on interruption and ignores la
   now=30;timing.toolEnded('read');timing.modelRequest();
   assert.deepEqual(timing.finish(),result);
 });
-test('stage timing counts each tool once and does not invent a last read for tool-free amendments',()=>{
+test('stage timing counts each tool once and does not invent a last read for tool-free stages',()=>{
   let now=0;const timing=createStageTiming(()=>now);
   timing.promptStarted();timing.modelRequest();now=2;timing.toolStarted('a','read');
   now=3;timing.toolStarted('a','read');now=7;timing.toolEnded('a');

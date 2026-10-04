@@ -16,7 +16,7 @@ const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
 const destination = 'plugins/azpr-v2';
 const requiredFiles = [
   'install.sh', 'scripts/merge-settings.py', 'config/settings.example.json',
-  ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'diagnostics.mjs', 'attribution.mjs'].map(name => 'src/' + name),
+  ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'diagnostics.mjs', 'attribution.mjs', 'verification.mjs', 'verification.py'].map(name => 'src/' + name),
   ...['common', 'check', 'functional', 'risk', 'deep', 'final', 'comment-policy', 'comment-plan', 'comment-publish'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
@@ -65,7 +65,7 @@ async function installedAgents(s) {
   const settings = validateSettings(JSON.parse(readFileSync(join(s.root, destination, 'settings.json'), 'utf8')));
   const prompts = Object.fromEntries(names.map(name => [name, readFileSync(join(s.root, destination, 'prompts', name + '.md'), 'utf8')]));
   const agents = buildAgents(settings, prompts);
-  assert.equal(Object.keys(agents).length, 10);
+  assert.equal(Object.keys(agents).length, 12);
   return agents;
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr + (result.error ?? '')); }
@@ -98,7 +98,7 @@ test('manual copy list and all runtime modules and prompts match the required so
   const section = readme.slice(readme.indexOf('### Manual copying without Git'));
   const listed = /```text\n([\s\S]*?)\n```/.exec(section)[1].trim().split('\n');
   assert.deepEqual(listed.sort(), [...requiredFiles].sort());
-  const runtime = readdirSync(join(pkg, 'src')).filter(name => /\.(mjs|js)$/.test(name)).map(name => 'src/' + name);
+  const runtime = readdirSync(join(pkg, 'src')).filter(name => /\.(mjs|js|py)$/.test(name)).map(name => 'src/' + name);
   assert.deepEqual([...runtime, ...PROMPTS.map(name => 'src/prompts/' + name + '.md')].sort(), requiredFiles.filter(file => file.startsWith('src/')).sort());
   assert.ok(!existsSync(join(pkg, 'commands')));
 });
@@ -136,7 +136,7 @@ test('local directory entry resolves and loads from a minimal fresh install', as
   const s = setup(); minimalSource(s);
   ok(install(s, ['--settings', profile(s)]));
   await loadDirectoryEntry(s);
-  assert.equal(readdirSync(installed(s, '')).length, 12); // 8 modules + entry + metadata + settings, plus prompts directory
+  assert.equal(readdirSync(installed(s, '')).length, 14); // 9 JS modules + Python helper + entry + metadata + settings + prompts
   original(s); clean(s);
 });
 
@@ -162,8 +162,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('20-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 20);
+test('22-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 22);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
@@ -219,9 +219,9 @@ test('duplicate installation refuses without explicit replacement', () => {
   original(s); clean(s);
 });
 
-test('replacement preserves chosen model mappings, language, retries, shell policy and bytes without a backup', async () => {
+test('replacement preserves chosen model mappings, language, shell policy and bytes without a backup', async () => {
   const s = setup(), file = profile(s), settings = JSON.parse(readFileSync(file, 'utf8'));
-  settings.outputLanguage = 'zh-TW'; settings.outputRetries = 1; settings.shellToolPermission = 'ask';
+  settings.outputLanguage = 'zh-TW'; settings.shellToolPermission = 'ask';
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   ok(install(s, ['--settings', file])); ok(install(s, ['--replace']));
   assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), readFileSync(file, 'utf8'));
@@ -242,16 +242,16 @@ test('explicit current-layout settings replace the installed model mapping witho
 
 test('current partial settings merge only missing defaults and preserve existing values', () => {
   const s = setup(), file = join(s.temp, 'partial.json');
-  const partial = { version: 2, models: { review: { functional: 'team/new' } }, outputLanguage: 'zh-TW', enabled: false, debug: { enabled: true }, comments: { enabled: false }, custom: { array: [1, 2], value: null } };
+  const partial = { version: 2, models: { review: { functional: 'team/new' } }, outputLanguage: 'zh-TW', enabled: false, debug: { enabled: true }, custom: { array: [1, 2], value: null } };
   const raw = JSON.stringify(partial); writeFileSync(file, raw);
   const result = install(s, ['--settings', file]); ok(result);
   assert.doesNotMatch(result.stdout + result.stderr, /team\/new/);
   const merged = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
   assert.equal(merged.models.review.functional, 'team/new');
   assert.deepEqual(merged.debug, { enabled: true, directory: '' });
-  assert.deepEqual(merged.comments, { enabled: false, maxComments: 5 });
+  for(const key of ['comments','auxiliaryModels','outputRetries']) assert.equal(Object.hasOwn(merged,key),false);
   for (const key of ['enabled', 'outputLanguage', 'custom']) assert.deepEqual(merged[key], partial[key]);
-  assert.equal(merged.runTimeoutSeconds, null); assert.equal(merged.outputRetries, 0);
+  assert.equal(merged.runTimeoutSeconds, null);
   assert.equal(readFileSync(file, 'utf8'), raw);
   original(s); clean(s);
 });
@@ -283,6 +283,7 @@ for (const invalid of [
   { models: { freeA: 'private/old' } }, { version: 2, models: { freeB: 'private/old' } },
   { version: 2, models: { deep: 'private/old' } }, { models: null },
   { steps: { initial: 60 } }, { maxStageCharacters: null }, { structuredOutput: false }, { azure: {} },
+  { comments: { enabled: false, maxComments: 5 } }, { auxiliaryModels: "preserve" }, { outputRetries: 0 },
 ]) test(`removed settings and V1 profiles are rejected without migration: ${JSON.stringify(invalid)}`, () => {
   const s = setup(); ok(install(s)); const file = installed(s, 'settings.json'), raw = JSON.stringify(invalid); writeFileSync(file, raw);
   const result = install(s, ['--replace']); bad(result); assert.match(result.stderr, /current version-2 nested model layout/);

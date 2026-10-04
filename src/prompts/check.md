@@ -80,7 +80,7 @@ authentication/permission, parameter, selector or not-found errors, writes,
 publication, execution, truncation or empty searches. A successful repeat does
 not establish a transient cause. Disclose the failed read and repeat outcome in
 sourceAccess/report. This is call-selection guidance, not a plugin-managed MCP
-retry mechanism or the outputRetries allowance. Do not explore unrelated
+retry mechanism. Do not explore unrelated
 history, builds, wikis or projects.
 A missing optional file may be a limitation; missing required evidence prevents
 READY. If output cannot be completed, do not rerun or repair the workflow yourself.

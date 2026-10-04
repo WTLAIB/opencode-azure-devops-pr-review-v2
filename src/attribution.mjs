@@ -82,7 +82,6 @@ export function renderIncompleteDraft(stages, failure, language) {
 // Native commands queue deterministic receipts; no presentation model is used.
 function renderStageReceipt(stage) {
   const fields = [`${stage.role}: ${stage.status}`, `session=${stage.sessionID}`, `model=${stage.model}`];
-  if (stage.retryOf) fields.push('output-retry=1/1', `retry-of=${stage.retryOf}`, `retry-kind=${stage.retryKind}`);
   const counters = [
     ['blocked-native-tools', stage.blockedNativeToolCalls],
     ['observed-tool-errors', stage.toolFailures],
@@ -104,9 +103,6 @@ export function renderReceipt(run, report, status, error, settings) {
   if (run.publicationUnavailable) body += '\nThis review retains useful results with limitations. Automatic PR comment preparation is unavailable because the complete publication evidence contract was not established.\n';
   if (['review', 'deep'].includes(run.mode) && status === 'COMPLETE') body += `\nComment preview: /pr-comment ${run.id}\nPreview checks the current PR, source anchors and existing discussions. Publishing requires the saved preview and an explicit --publish command.\n`;
   if (run.stages.some(s => s.pendingLocations?.length)) body += '\nPending location notice: initial candidates omitted locations and were passed to the verifier. No location was guessed. Missing locations do not discard the review; findings without complete publication evidence cannot be posted. This notice does not claim they were resolved.\n';
-  if (run.stages.some(s => s.retryKind === 'location')) body += '\nLocation amendment notice: the same reviewer received one request for missing locations from retained source context, with tools denied and existing fields immutable. Full revalidation is required. This is model-authored recovery, not independent location proof; inspect both submissions and their statuses.\n';
-  if (run.stages.some(s => s.retryKind === 'disposition')) body += '\nDisposition amendment notice: the same verifier was asked only for missing MERGED rows pointing to already confirmed findings, with tools denied and existing fields immutable. Full revalidation and the one shared amendment allowance apply. The original failure remains recorded; this is model-authored bookkeeping, not independent source proof.\n';
-  if (run.stages.some(s => s.retryKind === 'final')) body += '\nFinal resubmission notice: the same verifier received at most one additional request to replace invalid final content from retained context, with tools denied and the original deadline unchanged. Evidence and decisions may change; snapshot and current versions stay frozen. Full validation is required. Inspect both submissions; the original failure remains recorded. This is model-authored content recovery, not independent source proof.\n';
   if (run.draft) body += '\nIncomplete draft notice: available initial observations remain unconfirmed because final adjudication did not complete. This draft is not a completed review or input for PR comments. Failed final claims are not accepted findings.\n';
   if (run.stages.length) body += '\nTool completion does not prove source validity. Error/truncation counters neither audit content nor establish recovered reads; inspect the original tool results and evidence.\n';
   body += renderDiagnosticNotices(run);
