@@ -13,7 +13,6 @@ import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { verificationFixture, namespaceSupport, nodeCommand } from './verification-fixture.mjs';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const binary = process.argv[2];
@@ -23,18 +22,17 @@ assert.ok(process.argv.length <= 4 && (!process.argv[3] || replacement), 'Only -
 const fixturesRoot = join(sourceRoot, '.local');
 await mkdir(fixturesRoot, { recursive: true });
 const fixture = await mkdtemp(join(fixturesRoot, 'host-v2-smoke-'));
-const directories = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work'].map(name => [name, join(fixture, name)]));
+const directories = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work', 'other-project'].map(name => [name, join(fixture, name)]));
 await Promise.all(Object.values(directories).map(path => mkdir(path, { recursive: true })));
 await mkdir(join(directories.config, 'plugins'), { recursive: true });
 const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
-assert.ok(namespaceSupport(), 'This acceptance fixture requires Linux x86_64 user namespaces.');
-const verification = await verificationFixture(join(fixture, 'verification'));
-const verificationMarker = `azpr-verification-${randomUUID()}`;
+const verificationMarker = `azpr-project-${randomUUID()}`;
+for (const name of ['work', 'other-project']) await writeFile(join(directories[name], 'project-marker.txt'), name);
+const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+const nodeCommand = code => `${shellQuote(process.execPath)} -e ${shellQuote(code)}`;
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
-settings.shellToolPermission = 'ask';
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
-settings.verification = verification.config;
 const profile = join(fixture, 'settings.json');
 await writeFile(profile, JSON.stringify(settings, null, 2));
 const install = args => {
@@ -76,7 +74,7 @@ const provider = createServer(async (request, response) => {
     response.write(': fixture waits for cancellation\n\n');
     return;
   }
-  const snapshot = { repository: 'fixture/project/repository', prId: 123, base: 'a'.repeat(40), head: verification.commit, scope: 'pr', files: ['/src/fixture.js'] };
+  const snapshot = { repository: 'fixture/project/repository', prId: 123, base: 'a'.repeat(40), head: 'b'.repeat(40), scope: 'pr', files: ['/src/fixture.js'] };
   const finding = id => ({ id, summary: 'Deterministic fixture finding', location: 'head:/src/fixture.js:1', severity: 'high', evidence: 'Fixture read returned the source marker.', counterevidence: 'Fixture explicitly omits the required guard.', suggestion: 'Add the fixture guard and its regression.' });
   let final = { status: 'READY', fixture: 'literal-source' };
   if (payload?.prUrl) {
@@ -91,16 +89,18 @@ const provider = createServer(async (request, response) => {
       body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
     skipped: payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })) };
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
-  const isolated = userContext === 'smoke-verification' && !payload.reviews;
+  const projectVerification = userContext.startsWith('project-');
   const hanging = userContext === 'hang-verification' && parsed.model === 'functional';
-  const toolName = isolated || hanging ? parsed.tools?.find(item => item.function?.name === 'azpr_verify')?.function.name : shellControl ? 'shell' : forced ?? tool?.function.name;
+  const toolName = projectVerification || hanging || shellControl ? 'shell' : forced ?? tool?.function.name;
   const priorToolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
   const publisher = Boolean(payload?.comments);
   const callTool = toolName && (forced || publisher ? priorToolResults < 2 : !hasResult);
-  const args = isolated || hanging ? { commit: verification.commit, command: hanging
-    ? nodeCommand(`process.title=${JSON.stringify(verificationMarker + '-wait')}; require('node:child_process').spawn('/usr/bin/node',['-e',${JSON.stringify(`process.title=${JSON.stringify(verificationMarker + '-child')};setInterval(()=>{},1000)`)}],{detached:true,stdio:'ignore'}).unref(); setInterval(()=>{},1000)`)
-    : parsed.model === 'risk' ? 'printf expected-test-failure; exit 7' : nodeCommand("require('node:assert/strict').equal(require('./example.cjs').divide(12,3),4); console.log('ISOLATED_REPRODUCTION_PASSED')") }
-    : shellControl ? { command: `touch ${JSON.stringify(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' } : forced === 'shell' ? { command: `touch ${join(fixture, 'NATIVE_EXECUTED')}`, description: 'Fixture forbidden shell' } : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` } : { value: publisher ? 'publisher-error' : 'fixture-source' };
+  const args = projectVerification ? { command: nodeCommand(`const fs=require('node:fs'); const cwd=process.cwd(); const project=fs.readFileSync('project-marker.txt','utf8'); fs.writeFileSync(${JSON.stringify(userContext + '-' + parsed.model + '.json')},JSON.stringify({cwd,project,role:${JSON.stringify(parsed.model)}})); console.log('PROJECT_REPRODUCTION:'+project); process.exit(${parsed.model === 'risk' ? 7 : 0});`), description: 'Local project verification fixture' }
+    : hanging ? { command: nodeCommand(`process.title=${JSON.stringify(verificationMarker)}; require('node:fs').writeFileSync('running.pid',String(process.pid)); setInterval(()=>{},1000)`), description: 'Cancellable foreground project fixture' }
+    : shellControl ? { command: `touch ${shellQuote(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' }
+    : forced === 'shell' ? { command: `touch ${shellQuote(join(fixture, 'NATIVE_EXECUTED'))}`, description: 'Fixture forbidden shell' }
+    : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` }
+    : { value: publisher ? 'publisher-error' : 'fixture-source' };
   let content = JSON.stringify(final);
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
   if (userContext === 'smoke-review' && payload.reviews) content = 'Example: fn({"item": 3}).\n```json\n' + content + '\n```';
@@ -232,8 +232,8 @@ const startHost = async () => {
 };
 try {
   let url = await startHost();
-  const api = async (path, body) => {
-    const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(45000) });
+  const api = async (path, body, directory = directories.work) => {
+    const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directory }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(45000) });
     const raw = await response.text();
     if (!response.ok) throw new Error(`Fixture API ${path}: ${response.status} ${raw}`);
     return raw ? JSON.parse(raw) : undefined;
@@ -274,9 +274,37 @@ try {
   assert.equal(inbox.data.length, 1);
   assert.equal(inbox.data[0].type, 'synthetic');
   assert.equal(inbox.data[0].payload.description, inbox.data[0].payload.text);
-  const invokeReview = async (command, suffix, expected) => {
-    const created = await api('/api/session', { title: 'Workflow fixture ' + suffix, location: { directory: directories.work } });
-    await api(`/api/session/${created.data.id}/command`, { name: command, text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 ' + suffix, delivery: 'steer' });
+  const permissionReplies = [];
+  const invokeReview = async (command, suffix, expected, { directory = directories.work, permissions, approve = false } = {}) => {
+    const created = await api('/api/session', { title: 'Workflow fixture ' + suffix, location: { directory }, ...(permissions ? { permissions } : {}) }, directory);
+    // Each project owns its MCP lifecycle; fixture startup is not a product retry.
+    let connected = false;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const catalog = await api('/api/mcp', undefined, directory);
+      if (catalog.data?.some(server => server.name === 'fixture' && server.status?.status === 'connected')) { connected = true; break; }
+      await new Promise(resolveReady => setTimeout(resolveReady, 100));
+    }
+    assert.equal(connected, true, 'Project fixture MCP did not connect.');
+    let done = false;
+    const run = api(`/api/session/${created.data.id}/command`, { name: command, text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 ' + suffix, delivery: 'steer' }, directory).then(value => ({ value }), error => ({ error })).finally(() => { done = true; });
+    if (approve) {
+      while (!done) {
+        const pending = await api('/api/permission/request', undefined, directory);
+        for (const request of pending.data) {
+          assert.equal(request.action, 'shell');
+          // The host must have paused before executing any requested command.
+          const session = (await api(`/api/session/${request.sessionID}`)).data;
+          assert.equal(session.parentID, created.data.id);
+          assert.equal(session.location.directory, directory);
+          await assert.rejects(access(join(directory, suffix + '-' + session.model.id + '.json')));
+          permissionReplies.push({ sessionID: request.sessionID, action: request.action, directory });
+          await api(`/api/session/${request.sessionID}/permission/${request.id}/reply`, { decision: 'once' });
+        }
+        if (!done) await new Promise(resolveReady => setTimeout(resolveReady, 100));
+      }
+    }
+    const settled = await run;
+    if (settled.error) throw settled.error;
     const queued = await api(`/api/session/${created.data.id}/inbox`);
     const receipt = queued.data.at(-1)?.payload?.text;
     workflowReceipts.push({ command, suffix, receipt });
@@ -316,41 +344,68 @@ try {
   assert.match(workflowReceipts.at(-1).receipt, /Useful final prose/);
   assert.match(workflowReceipts.at(-1).receipt, /Useful initial prose/);
   assert.match(workflowReceipts.at(-1).receipt, /UNREVIEWED/);
-  await invokeReview('pr-check', 'smoke-check force-shell', /\] INCOMPLETE/);
+  await invokeReview('pr-check', 'smoke-check force-shell', /\] INCOMPLETE/, { permissions: [{ action: 'shell', resource: '*', effect: 'allow' }] });
   await invokeReview('pr-check', 'smoke-check force-execute', /\] INCOMPLETE/);
   assert.ok(workflowReceipts.filter(row => row.suffix.includes('force-')).every(row => row.receipt.includes('blocked-native-tools=2')));
   assert.equal(forbiddenFetches, 0);
   await assert.rejects(access(join(fixture, 'NATIVE_EXECUTED')));
-  const verifiedOrigin = await invokeReview('pr-review', 'smoke-verification', /\] COMPLETE/);
+  const shellPermission = effect => [{ action: 'shell', resource: '*', effect }];
+  const verifiedOrigin = await invokeReview('pr-review', 'project-allowed', /\] COMPLETE/, { permissions: shellPermission('allow') });
   const verifiedReceipt = workflowReceipts.at(-1).receipt;
-  const verifiedDirectory = /Private debug directory: ([^\n]+)/.exec(verifiedReceipt)[1];
-  const verifiedResult = JSON.parse(await readFile(join(verifiedDirectory, 'result.json'), 'utf8'));
-  assert.equal(verifiedResult.verification.length, 2);
-  assert.ok(verifiedResult.verification.every(row => row.status === 'COMPLETED' && row.cleanupConfirmed));
-  assert.deepEqual(verifiedResult.verification.map(row => row.exitCode).sort(), [0, 7]);
-  assert.ok(verifiedResult.verification.some(row => row.output.includes('ISOLATED_REPRODUCTION_PASSED')));
   const verifiedID = /\[AZPR ([a-f0-9]{8})\]/.exec(verifiedReceipt)[1];
   await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID, delivery: 'steer' });
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /\] PREVIEW/);
-  const namespaceProcesses = async () => {
+  await invokeReview('pr-review', 'project-approved', /\] COMPLETE/, { directory: directories['other-project'], permissions: shellPermission('ask'), approve: true });
+  assert.equal(permissionReplies.length, 3, 'Every reviewer shell call must receive explicit host approval.');
+  for (const [suffix, name] of [['project-allowed', 'work'], ['project-approved', 'other-project']]) {
+    for (const role of ['functional', 'risk', 'verifier']) {
+      const observed = JSON.parse(await readFile(join(directories[name], `${suffix}-${role}.json`), 'utf8'));
+      assert.deepEqual(observed, { cwd: directories[name], project: name, role });
+      const answer = requests.find(request => {
+        try { return request.body.model === role && JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).userContext === suffix && request.body.messages.some(message => message.role === 'tool'); }
+        catch { return false; }
+      });
+      assert.ok(answer?.body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('PROJECT_REPRODUCTION:' + name)), 'Actual shell output must reach each reviewer.');
+    }
+  }
+  await invokeReview('pr-review', 'project-denied', /\] COMPLETE/, { permissions: shellPermission('deny') });
+  for (const role of ['functional', 'risk', 'verifier']) await assert.rejects(access(join(directories.work, `project-denied-${role}.json`)));
+  const approvalOrigin = (await api('/api/session', { title: 'Cancel pending approvals', location: { directory: directories.work }, permissions: shellPermission('ask') })).data;
+  const approvalCancellation = api(`/api/session/${approvalOrigin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 project-cancelled-approval', delivery: 'steer' });
+  let approvals = [];
+  for (let attempt = 0; attempt < 100; attempt++) {
+    approvals = (await api('/api/permission/request')).data;
+    if (approvals.length === 2) break;
+    await new Promise(resolveReady => setTimeout(resolveReady, 100));
+  }
+  assert.equal(approvals.length, 2, 'Both initials must wait for approval before cancellation.');
+  const requestsBeforeStop = requests.length;
+  await api(`/api/session/${approvalOrigin.id}/command`, { name: 'pr-stop', text: '', delivery: 'steer' });
+  await approvalCancellation;
+  assert.ok((await api(`/api/session/${approvalOrigin.id}/inbox`)).data.some(item => /\] CANCELLED/.test(item.payload?.text ?? '')));
+  assert.deepEqual((await api('/api/permission/request')).data, []);
+  for (const request of approvals) await assert.rejects(api(`/api/session/${request.sessionID}/permission/${request.id}/reply`, { decision: 'once' }));
+  for (const role of ['functional', 'risk', 'verifier']) await assert.rejects(access(join(directories.work, `project-cancelled-approval-${role}.json`)));
+  assert.equal(requests.length, requestsBeforeStop, 'Late approvals must not execute commands or restart reviewers.');
+  const foregroundProcesses = async () => {
     const found = [];
     for (const pid of (await readdir('/proc')).filter(name => /^\d+$/.test(name))) {
       try { if ((await readFile(`/proc/${pid}/cmdline`, 'utf8')).startsWith(verificationMarker)) found.push(pid); } catch {}
     }
     return found;
   };
-  const toolCancelOrigin = (await api('/api/session', { title: 'Verification cancellation fixture', location: { directory: directories.work } })).data;
+  const toolCancelOrigin = (await api('/api/session', { title: 'Project command cancellation fixture', location: { directory: directories.work }, permissions: shellPermission('allow') })).data;
   const toolCancellation = api(`/api/session/${toolCancelOrigin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 hang-verification', delivery: 'steer' });
   let observedProcesses = [];
   for (let attempt = 0; attempt < 100; attempt++) {
-    observedProcesses = await namespaceProcesses();
-    if (observedProcesses.length >= 2) break;
+    observedProcesses = await foregroundProcesses();
+    if (observedProcesses.length) break;
     await new Promise(resolveReady => setTimeout(resolveReady, 100));
   }
-  assert.ok(observedProcesses.length >= 2, 'Real sandbox command and detached child must start before cancellation.');
+  assert.equal(observedProcesses.length, 1, 'A real foreground command must start before cancellation.');
   await api(`/api/session/${toolCancelOrigin.id}/command`, { name: 'pr-stop', text: '', delivery: 'steer' });
   await toolCancellation;
-  assert.deepEqual(await namespaceProcesses(), []);
+  assert.deepEqual(await foregroundProcesses(), []);
   assert.ok((await api(`/api/session/${toolCancelOrigin.id}/inbox`)).data.some(item => /\] CANCELLED/.test(item.payload?.text ?? '')));
   const cancelledOrigin = (await api('/api/session', { title: 'Cancellation fixture', location: { directory: directories.work } })).data;
   const beforeCancel = requests.length;
@@ -366,13 +421,13 @@ try {
   assert.equal(requests.length, beforeCancel + 1, 'Manual cancellation must not restart the fake provider.');
   workflowReceipts.push({ command: 'pr-check + pr-stop', suffix: 'hang-smoke', receipt: cancellationReceipt });
   const mcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(mcpCalls.length, 13, 'Original ten calls plus isolated verifier, preview and cancellation sibling reads.');
+  assert.equal(mcpCalls.length, 12, 'Source workflows, project preview and cancellation sibling use fixture MCP.');
   for (const call of mcpCalls) {
     assert.equal(call.name, 'read_fixture');
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
   }
   assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 1);
-  assert.equal(requests.length, 37);
+  assert.equal(requests.length, 51);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {
@@ -404,8 +459,8 @@ try {
   }
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
-  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 13);
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, isolatedVerification: true, isolatedCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 12);
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, projectVerification: true, projectSwitch: true, hostPermissionApprovals: permissionReplies.length, hostPermissionDenial: true, pendingApprovalCancellation: true, foregroundCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();
   provider.closeAllConnections();

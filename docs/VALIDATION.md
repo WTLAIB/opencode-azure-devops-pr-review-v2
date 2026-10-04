@@ -12,6 +12,36 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 native project verification acceptance
+
+The custom isolated executor and its configuration have been removed. Syntax
+checks and 386/386 offline tests passed on Ubuntu 22.04.5 / Node 22.23.3, with no
+skips. Retired isolation tests were replaced by native-role, admission/model,
+expiry and publisher-denial regressions. Installation tests reject the removed
+settings, preserve private profiles and check the reduced manual-copy package.
+
+Actual OpenCode 2.0.22 fresh and replacement fixtures both passed, each with 55
+local fake-provider requests and 12 fixture MCP calls. All three review roles
+executed real commands in the origin project, and a second project required no
+repository mapping. Three shell approval requests paused execution until approved;
+host denial prevented marker creation. A nonzero test exit still allowed a valid
+COMPLETE result to enter same-origin preview. Cancellation cleared pending
+approvals, rejected late approval, and stopped a real foreground command. Native
+source-only denials, publisher-error revocation, ordinary auxiliary behavior and
+private-role rejection after host restart remained effective.
+
+Four initial offline failures were stale installer/prompt assertions. One initial
+host run invoked review in the second project before its fixture MCP connected;
+the fixture now waits for that project's startup. Original failure logs remain
+private. No service-specific product retry was introduced.
+
+These are local contract and actual-host fixture results, not real model/Azure
+acceptance or TUI approval/rendering verification. No daily installation, private
+settings, source sandbox or real PR comments were changed. Shell uses host authority;
+these results do not certify isolation, arbitrary detached-process cleanup or
+absence of command side effects. Historical custom-executor results below apply
+only to their recorded revisions.
+
 ## 2026-10-05 configuration cleanup and live acceptance
 
 Syntax checks and 390/390 offline tests passed on Ubuntu 22.04.5 with Node
@@ -61,7 +91,10 @@ were preserved. No real comment preview/publication ran; all existing Azure thre
 contents remained unchanged. Corrected inline coordinates and UI placement still
 need a separately authorized real publication opportunity.
 
-## 2026-10-04 isolated verification acceptance
+## 2026-10-04 isolated verification acceptance (historical)
+
+This tested the former custom executor, since replaced by native project tools.
+It does not certify the current execution behavior.
 
 The isolated-verification working tree passed syntax checks and 387/387 tests on
 Ubuntu 22.04.5 with Node 22.23.3. Real namespace tests used trusted, disposable
@@ -85,7 +118,9 @@ These are offline/fixture execution results. No live model, official Azure MCP
 service call, PR comment write, daily installation update or real project review
 was performed for this feature. The new GitHub CI result is not established by
 local tests. Other rootfs contents, languages, kernels, architectures and provider
-schemas remain unvalidated; resource limitations are in [verification](VERIFICATION.md).
+schemas remained unvalidated. Historical resource limitations and failure records
+are preserved with that revision; [verification](VERIFICATION.md) describes the
+replacement behavior.
 
 ## Offline checks
 
@@ -106,7 +141,7 @@ forward from another repository or revision.
 | --- | --- |
 | V2 plugin and commands | Default definition and setup registration, native command invocation, literal text, rejected attachments/mentions, registration cleanup. |
 | Session transport | Independent session identity and model binding, exact prompt admission, idle settlement, final-context correlation, successful text finish, compaction/mutation refusal. |
-| Permissions and grants | Private role/model fingerprints, active command grants, blocked native execution, ordinary-agent preservation, permission inheritance, expiry and cancellation. |
+| Permissions and grants | Private role/model fingerprints, active command grants, role-specific native denials, ordinary-agent preservation, permission inheritance, expiry and cancellation. |
 | Review orchestration | Two concurrent initial reviews, continuation with partial/unavailable inputs, independent verifier, visible frame conflicts and omitted decisions, COMPLETE-to-preview availability. |
 | Output contracts | Local syntax/key/shape recovery, literal retention of ambiguous/prose output, no silent duplicate-key overwrite or lost findings, readable partial/stale reports, strict settings/checks/comments. |
 | Comments | COMPLETE-to-preview after partial/unavailable initials, preserved warnings, same-origin scope, exact saved preview, explicit opt-in/publication, model attribution, uncertain-attempt lockout. |
@@ -224,11 +259,12 @@ using them. Changing only the installer `--config-dir` is not host isolation.
 
 Test these native permission cases with the unmodified integration:
 
-1. Private reviewers cannot run shell, write/edit/patch, delegation, native web,
-   or CodeMode `execute`. Force calls as well as inspecting exposed schemas.
-   A harmless marker/trace detector must have a separate positive control.
-2. `shellToolPermission: "ask"` never allows shell execution, an approval bypass,
-   or `execute`. Other native restrictions remain active.
+1. Initial reviewers and the verifier use shell/read/search in the origin's
+   project. Verify two project locations without any repository mapping.
+2. Host shell allow/ask/deny decisions remain effective. An ask must pause before
+   execution, then run only after approval. Readiness/comment roles still block
+   shell; all private roles block edit/write/patch, delegation, native web and
+   CodeMode `execute`. Force calls as well as inspecting schemas.
 3. The second distinct blocked native attempt in a stage revokes the run. The
    receipt/debug record discloses the prevented attempts without arguments.
 4. MCP is exposed directly with `codemode: false`; host/account permission rules
@@ -424,7 +460,8 @@ recovery; success does not prove a transient cause. For MCP 2.9.0, specifically
 check PR-change pagination, branch-only directory hints, indexed search versions,
 and the exact content selector. See the audited [MCP limitations](AZURE_MCP.md).
 
-Verify no shell/native execution or unexpected publication occurred. Record any
+Audit authorized native commands, tested checkouts, their side effects and
+cancellation separately from forbidden attempts or unexpected publication. Record any
 prevented attempts, output corrections, amendment request, provider error, or
 uncertain cleanup. Confirm PR version/thread state after testing through an
 independent read. Stop test servers and preserve source, private settings, and

@@ -44,17 +44,15 @@ historical evidence and do not certify this adapter.
   switch. Host auxiliary selections are always preserved. Obsolete settings and
   model-authored output-repair paths are removed; `/pr-check` stays standalone.
 
-## Optional isolated verification
+## Project verification
 
-Implemented as an opt-in Linux x86_64 tool for the existing initial reviewers and
-verifier. Models select commands in a disposable offline environment at an exact
-local Git commit. Native host execution stays denied. Execution records include
-the command, environment boundaries, commit, outcome and truncation, and cancellation
-terminates the process namespace. There is no command catalog, extra review round
-or mandatory test quota; unavailable execution preserves usable review delivery.
-An operator must prepare a trusted rootfs and map repositories explicitly. See
-[verification](VERIFICATION.md). Networked dependency acquisition, submodule expansion,
-aggregate cgroup quotas and other CPU architectures are not implemented.
+Initial reviewers and the verifier choose tests or other checks in the current
+OpenCode project, using native shell/read/search with inherited host permissions.
+There is no custom execution platform, repository mapping, extra review round or
+mandatory test quota. Failed or unavailable tests preserve useful source review.
+The real project can be affected by permitted commands; tested versions, local
+changes and cancellation limitations must be disclosed. See
+[project verification](VERIFICATION.md).
 
 ## Acceptance still required
 

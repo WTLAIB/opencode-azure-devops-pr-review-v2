@@ -48,18 +48,18 @@ runtime exposes a `fetch` global that does not traverse ordinary web-tool
 permission checks; see its [web runtime](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/codemode/web.ts)
 and [CodeMode container](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/codemode/tool.ts). Allowing that container would invalidate the intended native
 web restriction. Reviewers therefore use direct MCP tools and must disclose
-missing capabilities instead of switching to CodeMode, shell, delegation, or
-public web. CodeMode-only MCP resource helpers are unavailable to these roles.
+missing capabilities instead of bypassing permissions with CodeMode, delegation
+or public web. Native shell is available separately for current-project verification. CodeMode-only MCP resource helpers are unavailable to these roles.
 The plugin does not change this connection setting for the user.
 
 MCP names, schemas, and actions remain host-owned. There are no plugin-side MCP
 prefixes, action allowlists, tool mappings, or wildcard grants. Private-role
 definitions add native denials while retaining host permission rules. Scoped
-runtime guards block native execution even when `shellToolPermission: "ask"` is
-selected. That setting
-affects only the native shell permission entry; it never permits `execute`
-execution. Later host rules can affect which native schemas are exposed. The
-runtime guard remains necessary even when the plugin requested a denial.
+runtime guards enforce the role's native denials even if later host rules expose
+a prohibited schema. Initial reviewers and the verifier inherit host permissions
+for shell/read/search in the current project; readiness and comment roles still
+deny shell/search. Native shell is not an isolation boundary or permission bypass.
+The plugin does not define a separate shell permission switch.
 
 Reviewers are independent agents. Restrictions configured only on a Build or
 Plan agent are not copied as that agent's identity. Configure shared policy at

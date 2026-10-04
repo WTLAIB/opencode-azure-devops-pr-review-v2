@@ -16,7 +16,7 @@ const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
 const destination = 'plugins/azpr-v2';
 const requiredFiles = [
   'install.sh', 'scripts/merge-settings.py', 'config/settings.example.json',
-  ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'diagnostics.mjs', 'attribution.mjs', 'verification.mjs', 'verification.py'].map(name => 'src/' + name),
+  ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'diagnostics.mjs', 'attribution.mjs'].map(name => 'src/' + name),
   ...['common', 'check', 'functional', 'risk', 'deep', 'final', 'comment-policy', 'comment-plan', 'comment-publish'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
@@ -136,7 +136,7 @@ test('local directory entry resolves and loads from a minimal fresh install', as
   const s = setup(); minimalSource(s);
   ok(install(s, ['--settings', profile(s)]));
   await loadDirectoryEntry(s);
-  assert.equal(readdirSync(installed(s, '')).length, 14); // 9 JS modules + Python helper + entry + metadata + settings + prompts
+  assert.equal(readdirSync(installed(s, '')).length, 12); // 8 JS modules + entry + metadata + settings + prompts
   original(s); clean(s);
 });
 
@@ -163,7 +163,7 @@ test('replacement replaces the temporary entry symlink with a generated regular 
 });
 
 test('22-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 22);
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 20);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
@@ -219,16 +219,16 @@ test('duplicate installation refuses without explicit replacement', () => {
   original(s); clean(s);
 });
 
-test('replacement preserves chosen model mappings, language, shell policy and bytes without a backup', async () => {
+test('replacement preserves chosen model mappings, language and bytes without a backup', async () => {
   const s = setup(), file = profile(s), settings = JSON.parse(readFileSync(file, 'utf8'));
-  settings.outputLanguage = 'zh-TW'; settings.shellToolPermission = 'ask';
+  settings.outputLanguage = 'zh-TW';
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   ok(install(s, ['--settings', file])); ok(install(s, ['--replace']));
   assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), readFileSync(file, 'utf8'));
   assert.ok(!existsSync(join(s.root, 'azpr-v2-backups')));
   const agents = await installedAgents(s);
   assert.match(agents['azpr-review-verifier'].system, /outputLanguage: zh-TW/);
-  for (const agent of Object.values(agents)) assert.equal(agent.permissions.find(rule => rule.action === 'shell').effect, 'ask');
+  for (const role of ['functional', 'risk', 'verifier']) assert.equal(agents['azpr-review-' + role].permissions.some(rule => rule.action === 'shell'), false);
   original(s); clean(s);
 });
 

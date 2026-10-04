@@ -20,20 +20,10 @@
   },
   "enabled": true,
   "returnReport": "receipt",
-  "shellToolPermission": "deny",
   "debug": {
     "enabled": false,
     "directory": ""
   },
   "outputLanguage": "en",
-  "runTimeoutSeconds": null,
-  "verification": {
-    "enabled": false,
-    "rootfs": "",
-    "repositories": [],
-    "timeoutSeconds": 120,
-    "memoryMiB": 4096,
-    "processes": 128,
-    "storageMiB": 512
-  }
+  "runTimeoutSeconds": null
 }

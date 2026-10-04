@@ -143,10 +143,11 @@ are not repaired by asking a formatting model to regenerate a review.
 
 ## Tool observations and permissions
 
-Private roles block V2 `execute`, shell, editing, delegation, and other restricted
-native tools. `shellToolPermission: "ask"` retains that permission choice while
-the runtime still blocks shell execution. It does not enable CodeMode. Set the
-MCP connection to `codemode: false` so reviewers can use direct MCP tools. See
+Initial reviewers and the verifier use native shell/read/search under OpenCode's
+normal permissions. Check the active project's host rules and pending approval
+requests when execution is unavailable. Readiness and comment stages still deny
+shell/search; all private roles deny CodeMode `execute`, native editing, delegation
+and public web tools. Set MCP `codemode: false` for direct tools. See
 [the CodeMode boundary and MCP limitations](AZURE_MCP.md).
 
 A forbidden native attempt is prevented before execution. Two distinct blocked
@@ -154,14 +155,15 @@ attempts in a stage stop the run. These observations must remain visible even
 when no forbidden operation executed. They are different from MCP tool failures
 and provider rejection before any tool request.
 
-An authorized 2.0.22 live test received a provider HTTP 403 before any tool call
+Historical note, before native project verification: an authorized 2.0.22 live test received a provider HTTP 403 before any tool call
 with `shellToolPermission: "deny"`. The same selected models were admitted after
 using the existing `"ask"` option in an isolated test profile; the runtime guard
 still blocked shell execution and the installed personal settings stayed intact.
 This matches [upstream reports about permission-dependent free-tier rejection](https://github.com/anomalyco/opencode/issues/51241).
 It is a provider admission limitation, not an Azure authentication failure or
 proof that shell ran. Inspect the original error before changing permissions;
-never change models, spoof client headers, or grant native execution to recover.
+never change models or spoof client headers to recover. The old shellToolPermission
+setting is now removed; shell execution follows actual host permissions.
 
 If initial snapshots disagree, inspect the original metadata and labels before
 retrying. The common label uses `organization/project-id/repository-id`, with
@@ -226,19 +228,17 @@ cancellation stops acceptance and the plugin's grants, while cleanup explicitly
 interrupts and waits. Preserve uncertainty if that cleanup fails. There is no
 plugin spending cap, iteration cap, or stage-character cap. Host context limits,
 MCP pagination, server-side truncation, and service limits remain independent.
-## Optional isolated verification
+## Project verification
 
-If `azpr_verify` is absent, check that `verification.enabled` is true in the loaded
-profile, OpenCode was restarted, and the active stage is an initial reviewer or
-verifier. Host tool permissions still apply. Readiness, comments and
-ordinary agents cannot use the tool. Changing `shellToolPermission` will not enable
-isolated execution or bypass its boundary.
+There is no `azpr_verify` tool or `verification` configuration. OpenCode's native
+tools operate in the current project. Inspect the child session's location,
+inherited permissions, approval requests and actual tool result. No plugin repo
+mapping or root filesystem is needed. A checkout different from the PR head must
+be disclosed; do not reset user work to make a test apply.
 
-UNAVAILABLE means no successful sandbox command result was obtained. Check its
-safe diagnostic, the explicitly mapped local Git repository and full commit,
-dedicated rootfs layout and executables, Linux x86_64 namespace/seccomp support,
-and configured resource limits. The runner does not fetch missing objects or
-dependencies. A nonzero command exit, timeout or truncated output must be interpreted
-from the recorded evidence; none automatically invalidates a usable review.
-Private debug mode saves `verification-N.json` alongside stage results.
-See [verification setup](VERIFICATION.md) for the full boundary and limitations.
+Distinguish tool execution failure from a test command's nonzero exit. Read the
+output and tested state before interpreting either; a shell pipeline can return
+zero even when a test fails. Neither creates a new review completion requirement.
+The host session retains native command results; debug stage records expose tool
+counts and errors. The custom `verification-N.json` ledger is historical only.
+See [project verification](VERIFICATION.md) for permissions and cancellation scope.

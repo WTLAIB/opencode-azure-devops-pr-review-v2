@@ -1,8 +1,8 @@
 /**
  * AZPR opt-in OpenCode adapter. No npm dependencies, model SDK or Azure client.
- * Optional verification uses an isolated Linux helper, never the host shell tool.
+ * Reviewers verify in the current project under ordinary host permissions.
  * Uses the OpenCode-provided Session SDK.
- * Native execution/editing is denied; MCP read-only behavior is prompt policy.
+ * Review-only behavior is prompt policy, not a filesystem or network sandbox.
  * OpenCode owns MCP discovery/permissions.
  * Ordinary chat hooks are no-ops. All private sessions are explicit-command-scoped.
  */
@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport } from './session.mjs';
 import { commentTarget, confirmedFindings, recordPublishResult, targetKey, validateCommentPlan } from './comments.mjs';
 import {
-  COMMANDS, ROLES, PROMPTS, BLOCKED_NATIVE_TOOLS, roleFor, initialRoles, buildAgents,
+  COMMANDS, ROLES, PROMPTS, nativeToolPermissions, projectReviewRole, roleFor, initialRoles, buildAgents,
   validateSettings,
 } from './config.mjs';
 import {
@@ -24,14 +24,12 @@ import {
   readReviewOutput, acceptInitialReview, selectReviewSnapshot, acceptFinalReview,
 } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, createStageTiming, collectToolObservations } from './diagnostics.mjs';
-import { VERIFICATION_TOOL, VERIFICATION_DESCRIPTION, VERIFICATION_INPUT, repositoryURL, runVerification, verificationNotice } from './verification.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices,
 } from './attribution.mjs';
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
 const ownRole = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
-const blockedNativeTools = new Set(BLOCKED_NATIVE_TOOLS);
 const text = (v) => typeof v === 'string' && v.trim().length > 0;
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -247,7 +245,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     for (const id of active) grants.delete(id); // Revoke BEFORE awaiting the SDK.
     run.stopping = Promise.allSettled([
       ...active.map(id => abortSession(run, id)),
-      ...[...run.verifications].map(task => deadline(() => task, 6000).catch(() => { run.abortUnconfirmed = true; })),
     ]);
     return run.stopping;
   }
@@ -387,7 +384,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   }
   async function finishDiagnostics(run, status, report, failure) {
     if (report) await run.debug.write(run.draft ? 'draft.md' : 'report.md', report);
-    await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none', error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(), readiness: run.readiness, timing: run.timing, stages: run.stages, verification: run.verification, warnings: run.debug.warnings });
+    await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none', error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(), readiness: run.readiness, timing: run.timing, stages: run.stages, warnings: run.debug.warnings });
   }
   function renderReport(run, render) {
     const start = performance.now();
@@ -400,7 +397,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     for (const fn of ['create', 'prompt', 'wait', 'context', 'interrupt', 'synthetic']) if (typeof context.session?.[fn] !== 'function') throw new Error(`[AZPR] OpenCode Session SDK ${fn} is unavailable; no workflow was started.`);
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
     /** @type {Run} */
-    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], verification: [], verifications: new Set(),
+    const run = { ...details, id, active: true, controller: new AbortController(), stages: [],
       timing: state.settings.debug.enabled ? { renderMs: 0, displayMs: 0, cleanupMs: 0 } : undefined,
       deadlineAt: state.settings.runTimeoutSeconds === null ? null : Date.now() + state.settings.runTimeoutSeconds * 1000 };
     runs.set(id, run);
@@ -546,7 +543,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       run.phase = 'final verification';
       const pendingLocations = allFindings.filter(finding => !Object.hasOwn(finding, 'location')).map(finding => finding.id);
       const expectedFindingIds = allFindings.map(finding => finding.id);
-      const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, verification: clone(run.verification), outputLanguage: state.settings.outputLanguage }, result => acceptFinalReview(result, snapshot, allFindings, request.prUrl));
+      const verified = await stage(run, roleFor(run.profile, 'verifier'), { ...packet, reviews, pendingLocations, expectedFindingIds, outputLanguage: state.settings.outputLanguage }, result => acceptFinalReview(result, snapshot, allFindings, request.prUrl));
       const initialWarnings = reviews.flatMap((review, index) => [
         ...review.reviewWarnings,
         ...review.coverage.gaps.map(gap => `Reported initial gap: ${gap}`),
@@ -559,7 +556,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       // COMPLETE verifier that checked the requested PR and current versions.
       if (verified.status !== 'COMPLETE') run.publicationUnavailable = true;
       const provenance = reviewProvenance(run);
-      return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}${verificationNotice(run.verification, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
+      return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
         review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), attempts: new Map(), plan: null } };
     });
     // A cancelled presentation must not leave a publishable "completed" review.
@@ -582,15 +579,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   const agents = buildAgents(settings, prompts);
   state = { ready: true, raw, settings, agents, fingerprints: {}, registrationPermissions: {}, agentsPinned: false };
   const registrations = [];
-  const canVerify = grant => Boolean(grant?.run.active && ['initial', 'final'].includes(ROLES[grant.role]?.format));
-  async function verificationGrant(sessionID, agent) {
-    const grant = grants.get(sessionID);
-    if (!canVerify(grant) || grant.role !== agent || !grant.messages || !grant.calls) throw new Error('[AZPR] Isolated verification requires an active initial reviewer or verifier grant.');
-    const session = await scoped(() => context.session.get({ sessionID }), grant.run.controller.signal);
-    await authorize(sessionID, session.agent, session.model);
-    if (!canVerify(grant) || grants.get(sessionID) !== grant) throw new Error('[AZPR] Verification authorization expired.');
-    return grant;
-  }
   try {
     // V2's command editor.add replaces an existing entry. Inspect the current
     // catalog before registering anything so an earlier user/plugin command is
@@ -600,38 +588,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     if (!Array.isArray(commandCatalog?.data)) throw new Error('[AZPR] Invalid OpenCode V2 command catalog.');
     for (const command of commandCatalog.data) {
       if (Object.hasOwn(COMMANDS, command?.name)) throw new Error(`[AZPR] Reserved command name conflict: ${command.name}`);
-    }
-    if (settings.verification.enabled) {
-      if (typeof context.tool?.transform !== 'function') throw new Error('[AZPR] The V2 tool transform is unavailable.');
-      registrations.push(await context.tool.transform(editor => {
-        if (editor.get(VERIFICATION_TOOL)) throw new Error('[AZPR] Reserved verification tool name conflict.');
-        editor.add({ name: VERIFICATION_TOOL, description: VERIFICATION_DESCRIPTION, input: VERIFICATION_INPUT,
-          options: { codemode: false, permission: VERIFICATION_TOOL },
-          async execute(input, execution) {
-            const g = await verificationGrant(execution.sessionID, execution.agent);
-            const call = `${execution.id}:${VERIFICATION_TOOL}`;
-            g.verificationCalls ??= new Set();
-            if (g.toolCalls.get(call) !== VERIFICATION_TOOL || g.terminalTools.has(call) || g.verificationCalls.has(call)) throw new Error('[AZPR] Verification requires a fresh observed tool call in the admitted review.');
-            g.verificationCalls.add(call);
-            const signal = execution.signal ? AbortSignal.any([g.run.controller.signal, execution.signal]) : g.run.controller.signal;
-            // A later stage never inherits another stage's mutable filesystem.
-            const task = (async () => {
-              let repository;
-              try { repository = repositoryURL(g.run.prUrl); } catch { repository = ''; }
-              const result = await runVerification(state.settings.verification, repository, input, signal);
-              g.run.verification.push({ ...result, role: g.role });
-              if (result.cleanupConfirmed === false) {
-                g.run.abortUnconfirmed = true;
-                void abortRun(g.run, 'Isolated verification process settlement is unconfirmed.', 'INCOMPLETE');
-              }
-              await g.run.debug.write(`verification-${g.run.verification.length}.json`, { ...result, role: g.role });
-              return { content: JSON.stringify(result), metadata: { verification: true } };
-            })();
-            g.run.verifications.add(task);
-            try { return await task; } finally { g.run.verifications.delete(task); }
-          },
-        });
-      }));
     }
     registrations.push(await context.agent.transform(editor => {
       for (const [role, definition] of Object.entries(agents)) {
@@ -664,7 +620,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       g.messages++;
     }));
     registrations.push(await context.session.hook('context', async event => {
-      if (settings.verification.enabled && !canVerify(grants.get(event.sessionID))) delete event.tools[VERIFICATION_TOOL];
       if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
       const g = await authorize(event.sessionID, event.agent, event.model);
       if (!g.messages) throw new Error('[AZPR] Missing authorized reviewer input.');
@@ -707,31 +662,34 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     }));
     registrations.push(await context.tool.hook('execute.before', async event => {
       if (event.tool === 'subagent' && ownRole(event.input?.agent)) throw new Error('[AZPR] Private reviewers cannot be delegated.');
-      if (!seenSessions.has(event.sessionID)) {
-        if (settings.verification.enabled && event.tool === VERIFICATION_TOOL) await verificationGrant(event.sessionID, event.agent);
-        return;
-      }
+      if (!seenSessions.has(event.sessionID) && !ownRole(event.agent)) return;
       const g = grants.get(event.sessionID);
       if (!g?.run.active || g.role !== event.agent) throw new Error('[AZPR] Review tool authorization expired.');
       await current(g.run.controller.signal);
       await checkRole(g.role, g.run.controller.signal);
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
+      // Native project execution uses the same live role/model binding as the
+      // reviewer request; host permissions decide whether the command may run.
+      if (projectReviewRole(g.role) && ['shell', 'read', 'glob', 'grep'].includes(event.tool)) {
+        if (!g.messages || !g.calls) throw new Error('[AZPR] Project tools require admitted reviewer input and an authorized model request.');
+        const session = await scoped(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal);
+        await authorize(event.sessionID, session.agent, session.model);
+      }
       const call = `${event.id}:${event.tool}`;
-      if (blockedNativeTools.has(event.tool)) {
+      g.toolCalls.set(call, event.tool);
+      g.timing?.toolStarted(call, event.tool);
+      g.firstToolAt ??= new Date().toISOString();
+      // Record denials as observed errors too, so a publisher loses its grants
+      // before another tool/model request even if the host exposed the schema.
+      if (Object.hasOwn(nativeToolPermissions(g.role), event.tool)) {
         g.blockedNativeCalls.set(call, event.tool);
         if (g.blockedNativeCalls.size >= 2) {
           void abortRun(g.run, 'Prohibited native tool attempts (2/2); stopping before execution.', 'INCOMPLETE');
         }
-        throw new Error('[AZPR] Native tool denied in this private review. Use authorized MCP source reads.');
+        throw new Error('[AZPR] Native tool denied in this private review. Use tools authorized for this role under host permissions.');
       }
       // Direct MCP names, schemas and actions remain host-owned. CodeMode execute
       // is blocked because its fetch builtin has no permission/tool-hook boundary.
-      g.toolCalls.set(call, event.tool);
-      g.timing?.toolStarted(call, event.tool);
-      g.firstToolAt ??= new Date().toISOString();
-      // Track an owned-tool denial as an observed error too. In particular, a
-      // publisher must lose its grants on this error before any subsequent call.
-      if (settings.verification.enabled && event.tool === VERIFICATION_TOOL) await verificationGrant(event.sessionID, event.agent);
     }));
     registrations.push(await context.tool.hook('execute.after', event => {
       const g = grants.get(event.sessionID), call = `${event.id}:${event.tool}`;

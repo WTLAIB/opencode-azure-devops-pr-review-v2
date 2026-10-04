@@ -16,8 +16,6 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/comments.mjs` | Comment target, preview validation, stable markers and uncertain-attempt ledger. |
 | `src/attribution.mjs` | Deterministic reports, provenance, notices and receipts. |
 | `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
-| `src/verification.mjs` | Optional tool contract, strict environment settings, process lifetime and execution records. |
-| `src/verification.py` | Trusted Git object materialization and Linux namespace/capability/seccomp boundary. |
 | `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
 
 The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
@@ -62,14 +60,19 @@ the adapter does not infer Azure identity or `codemode:false` from a connection.
 No provider fallback, extra inference, MCP action classifier or permission grant
 is introduced. The existing review evidence checks remain authoritative.
 
-The private native deny set includes shell, mutation, delegation, skills,
-public web, unrestricted local search, interactive questions, host session/model
-control and CodeMode execute. CodeMode's built-in fetch is not permission-gated
-in the target host; private roles therefore require direct MCP tools configured
-with codemode:false. See [MCP boundaries](AZURE_MCP.md#direct-mcp-tools-are-required).
-Host global rules still apply. shellToolPermission=ask sets the private host rule to ask; final host rules
-determine schema exposure. The immutable execution guard still applies. The second observed distinct native attempt
-revokes the run; a host hook failure can terminate execution on the first.
+Initial reviewers and the verifier inherit host shell/read/glob/grep permissions.
+The plugin adds no permission rule for those tools. Source-only readiness and
+comment roles still deny shell/search. All private roles deny native editing,
+delegation, skills, public web, interactive questions, host session/model control
+and CodeMode execute. CodeMode's built-in fetch is not permission-gated in the
+target host; use direct MCP tools with codemode:false. See
+[MCP boundaries](AZURE_MCP.md#direct-mcp-tools-are-required).
+
+The execution hook enforces these role-specific denials even if later host rules
+expose a prohibited schema. A second distinct prohibited attempt revokes the run;
+a host hook failure can terminate execution on the first. Allowed project tools
+recheck the active reviewer role/model and use the host's permission decision.
+There is no separate plugin shell permission setting.
 
 MCP action meanings remain host/server-owned. The plugin cannot guarantee that a
 reviewer's generic MCP call is read-only. Nor does the saved-output prompt policy
@@ -133,26 +136,24 @@ gates. Useful design tradeoffs and test gaps can remain in the existing report
 without being promoted into confirmed defects. The verifier adjudicates concrete
 findings through the existing evidence contract; no additional model round is used.
 
-Reviewers can inspect test source and relevant existing CI results through
-authorized reads, distinguishing the tested commit and scope from static predictions.
-Native shell still executes with host authority and remains denied. An optional
-`azpr_verify` tool supplies a separate disposable environment to initial reviewers
-and the verifier. Models choose commands without a method checklist. The executor
-rechecks the live role/model grant, uses only a configured local repository mapping,
-materializes a full commit from Git objects, and starts project code only after
-filesystem/process/network isolation and privilege reduction. It never fetches,
-triggers pipelines or mounts the host worktree. The trusted rootfs supplies tools
-and dependencies; each command gets a fresh writable copy and immutable source.
+Reviewers use their current OpenCode project for model-chosen verification methods,
+including tests, reproductions and static inspection. OpenCode child sessions
+[inherit the origin's location and session permissions](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/session.ts#L254).
+This replaces the custom
+isolated executor; no repository mappings, root filesystems, subprocess launcher,
+resource settings or runtime verification ledger remain. Relevant commands and
+observations belong in the existing review evidence/report fields, with original
+tool results in the host session. The verifier must attribute initial observations
+and establish the PR evidence independently.
 
-The new tool uses the exact V2 tool transform with `codemode:false`; it is an owned
-tool, not an MCP-name/action classifier or native permission exception. It is
-removed from ordinary, readiness and comment contexts, with independent
-executor authorization against direct invocation. Host permission rules still
-apply. Initial execution records reach the verifier; all attempts remain in private
-diagnostics and a short runtime report ledger. Failure, timeout or unavailable
-execution does not invalidate an otherwise COMPLETE review or comment preview.
-Unconfirmed process settlement revokes the run and prevents a COMPLETE cache.
-See [verification](VERIFICATION.md) for setup, resource semantics and limitations.
+Native shell executes with ordinary host authority. The plugin does not guarantee
+filesystem/network isolation or prevent side effects of permitted commands.
+Reviewers must preserve user work and distinguish a dirty/different local checkout
+from the PR commit. Test failure or missing execution does not impose a completion
+gate. Cancellation revokes grants and interrupts/waits for host sessions; it does
+not guarantee termination of detached processes or undo side effects. Unconfirmed
+session settlement still prevents a COMPLETE cache. See
+[project verification](VERIFICATION.md).
 
 JSON is preferred, not a prerequisite for retaining useful review content.
 Completed stop-finish responses use an iterative grammar-aware recovery pass for

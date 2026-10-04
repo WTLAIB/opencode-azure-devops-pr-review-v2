@@ -35,16 +35,18 @@ The independent V1 repository and installation are outside this project's scope.
   global/project permissions and session inheritance. Pin validated resolved
   roles before first use and reject later changes. Never borrow Build-only rules
   or introduce a wildcard permission grant.
-- Deny native execution/editing/delegation/public web and host session/model
-  control in private roles, including CodeMode execute (its fetch bypasses the
-  native tool boundary). Require MCP codemode:false. Do not silently rewrite
-  the user's host configuration. shellToolPermission=ask does not relax guards.
-- Optional azpr_verify permits model-chosen commands only inside its configured
-  disposable Linux boundary, for active initial/verifier grants. Preserve source
-  commit records, clean environment, offline network, filesystem isolation,
-  privilege reduction, cancellation and honest resource/coverage limitations.
-  No host fallback, command allowlist, extra review round or testing completion gate.
-  Readiness, comments and ordinary agents cannot invoke this tool.
+- Initial reviewers and the verifier may use shell/read/glob/grep in the current
+  OpenCode project under inherited host permissions. Do not add a second execution
+  platform, repository mapping, command allowlist or plugin permission switch.
+  Preserve parent location and permissions, active role/model binding and grant
+  revocation. Readiness and comment roles still deny native execution/search.
+- Deny native editing/delegation/public web and host session/model control in
+  private roles, including CodeMode execute. Require MCP codemode:false. Do not
+  silently rewrite host configuration or claim filesystem/network isolation:
+  authorized shell commands have ordinary host authority and can have side effects.
+  Models choose verification methods, preserve user work and disclose the tested
+  repository/commit/local changes, failures and limitations. No mandatory tests,
+  extra review round or execution-based completion gate.
 - No fixed MCP tool catalog, direct Azure/model client, patched server, or
   name/action classifier. MCP read-only behavior is prompt policy, not a write
   firewall. Denied native attempts and observed tool failures are not evidence.
@@ -78,8 +80,8 @@ The independent V1 repository and installation are outside this project's scope.
   read per stage with fixed arguments/target/version/deadline. Never retry writes,
   authorization/parameter/not-found failures, truncation or empty searches.
 - Host-saved output may be read only under the documented same-session policy.
-  That prompt rule is not a programmatic file-provenance sandbox. Do not broaden
-  local reads or treat saved-response offsets as source line numbers.
+  Initial/verifier roles may also inspect their current project. Neither prompt
+  policy proves file provenance; saved-response offsets are not source line numbers.
 - Reports/receipts use synthetic notices with resume:false. Never run a model
   to reformat them. Queue acknowledgment is distinct from actual UI display.
 - Comment publication needs a same-origin completed review, saved preview,

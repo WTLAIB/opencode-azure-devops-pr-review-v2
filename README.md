@@ -74,8 +74,6 @@ src/output.mjs
 src/comments.mjs
 src/diagnostics.mjs
 src/attribution.mjs
-src/verification.mjs
-src/verification.py
 src/prompts/common.md
 src/prompts/check.md
 src/prompts/functional.md
@@ -128,14 +126,13 @@ checks and comment work use that mode's risk model. Model-selection guidance in
 | `returnReport` | `receipt`; `full` also returns the rendered report to the original conversation. |
 | `outputLanguage` | `en`; shared by initial reviews, the final report and comments. Use `zh-TW` for Traditional Chinese. |
 | `runTimeoutSeconds` | `null`, no whole-command timer. An explicit integer from 10 to 7200 enables one. |
-| `verification` | Disabled by default. Optional offline Linux execution in a trusted rootfs with explicitly mapped local Git repositories. Models choose commands; see [verification setup and limits](docs/VERIFICATION.md). |
-| `shellToolPermission` | `deny`; `ask` sets the private host rule to ask; final host rules determine schema exposure, while execution is still blocked. `allow` is rejected. |
 | `debug.enabled` | `false`; opt in to private requests, visible answers, results and reports. |
 | `debug.directory` | Empty uses the private `opencode/azpr-v2-debug` state directory. Relative paths resolve against the project. |
 
 Restart after settings changes. There are no configurable or hidden reviewer
 iteration or stage-character caps. `steps`, `maxStageCharacters`,
-`structuredOutput`, `azure`, `comments`, `auxiliaryModels`, and `outputRetries`
+`structuredOutput`, `azure`, `comments`, `auxiliaryModels`, `outputRetries`,
+`verification`, and `shellToolPermission`
 are unsupported and rejected. Before replacing an older V2 installation, back up
 your private settings, remove those obsolete keys explicitly, and pass that
 cleaned profile with `--settings FILE`; the installer never silently migrates it.
@@ -152,6 +149,20 @@ These cancellable reads submit no inference. A connected server does not prove
 Azure identity, direct-tool exposure, permissions, or source access; those remain
 separate checks. An unavailable catalog fails with an explicit receipt, without
 selecting another model or rewriting configuration.
+
+### Verification in the current project
+
+The two initial reviewers and verifier can use shell, read, glob and grep in the
+current OpenCode project under its normal permissions. Models choose useful tests,
+reproductions or static checks. Open another project to review its checkout; there
+is no repository mapping, root filesystem, custom execution tool or test quota.
+
+Commands use the real project and can change files or contact services. The plugin
+does not sandbox them or override host allow/ask/deny decisions. Reviewers must
+preserve existing work and distinguish local checkout results from evidence about
+the PR's exact commit. Test failures and missing dependencies remain reportable
+limitations. Readiness and comment stages do not execute project commands. See
+[project verification](docs/VERIFICATION.md) for scope and cancellation limits.
 
 ### MCP must expose direct tools
 

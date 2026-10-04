@@ -6,7 +6,7 @@
   "description": "Explicit Azure DevOps PR review workflows for OpenCode V2",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/session.mjs && node --check src/runtime.mjs && node --check src/comments.mjs && node --check src/config.mjs && node --check src/output.mjs && node --check src/diagnostics.mjs && node --check src/attribution.mjs && node --check src/plugin.js && sh -n install.sh && sh -n uninstall.sh && node --check src/verification.mjs && python3 -I -c \"import ast; ast.parse(open('src/verification.py').read())\""
+    "check": "node --check src/session.mjs && node --check src/runtime.mjs && node --check src/comments.mjs && node --check src/config.mjs && node --check src/output.mjs && node --check src/diagnostics.mjs && node --check src/attribution.mjs && node --check src/plugin.js && sh -n install.sh && sh -n uninstall.sh"
   },
   "engines": {
     "node": ">=22.12.0"

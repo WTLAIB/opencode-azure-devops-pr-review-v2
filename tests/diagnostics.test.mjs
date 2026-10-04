@@ -112,7 +112,7 @@ async function fixture(t) {
   return { directory };
 }
 const run = { id: '01234567', mode: 'review', profile: 'review', origin: 'ses_test' };
-const settings = { debug: { enabled: true, directory: '.azpr-v2-debug' }, outputLanguage: 'zh-TW', returnReport: 'receipt', shellToolPermission: 'ask' };
+const settings = { debug: { enabled: true, directory: '.azpr-v2-debug' }, outputLanguage: 'zh-TW', returnReport: 'receipt' };
 test('debug off makes no files or directories', async t => {
   const context = await fixture(t);
   const log = await createDiagnostics({ ...settings, debug: { enabled: false, directory: '.azpr-v2-debug' } }, context, run);
@@ -138,7 +138,6 @@ test('project diagnostics are private, ignored by Git, unique, and never overwri
   const log = await createDiagnostics(settings, context, run);
   assert.equal(log.warnings.length, 0);
   const metadata = JSON.parse(await readFile(join(log.directory, 'run.json'), 'utf8'));
-  assert.equal(metadata.shellToolPermission, 'ask');
   assert.equal(metadata.outputTransport, 'json-text');
   assert.equal(Object.hasOwn(metadata, 'structuredOutput'), false);
   await log.write('report.md', 'Private report');

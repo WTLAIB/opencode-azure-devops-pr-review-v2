@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES, BLOCKED_NATIVE_TOOLS } from '../src/config.mjs';
-import { VERIFICATION_TOOL } from '../src/verification.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const PR = 'https://dev.azure.com/org/proj/_git/repo/pullrequest/123';
@@ -30,7 +29,6 @@ async function fixture(t, opts = {}) {
   const agents = new Map([['build',{id:'build',system:'Ordinary developer rules',permissions:clone(globalPermissions)}]]);
   const commands = new Map([['existing',{name:'existing',execute(){}}]]);
   const hooks = new Map(), sessions = new Map(), calls = [], notices = [];
-  const registeredTools = new Map();
   let seq = 0;
   const emit = async (domain,name,event) => { for (const fn of hooks.get(`${domain}:${name}`) ?? []) await fn(event); };
   const hook = domain => async (name,fn) => {
@@ -42,7 +40,6 @@ async function fixture(t, opts = {}) {
     const session=sessions.get(id), event={sessionID:id,agent:session.agent,messageID:`assistant_${seq}`,id:`call_${++seq}`,tool,input};
     await emit('tool','execute.before',event);
     calls.push({kind:'executed-tool',tool,sessionID:id});
-    if (registeredTools.has(tool)) result = await registeredTools.get(tool).execute(input, { ...event, signal: new AbortController().signal });
     await emit('tool','execute.after',{...event,status,...(status==='error'?{error:new Error('PRIVATE_ERROR')}:{result})});
     return result;
   };
@@ -71,10 +68,7 @@ async function fixture(t, opts = {}) {
         return {dispose(){commands.clear();for(const [id,value] of before) commands.set(id,value);}};
       },
     },
-    tool:{hook:hook('tool'), async transform(fn) {
-      fn({ get: name => registeredTools.get(name), add: definition => registeredTools.set(definition.name, definition) });
-      return { dispose() { registeredTools.clear(); } };
-    }},
+    tool:{hook:hook('tool')},
     session:{
       hook:hook('session'),
       async create(input) {
@@ -96,7 +90,6 @@ async function fixture(t, opts = {}) {
         session.stopped=deferred();
         const work=async()=>{
           const frame={sessionID:session.id,agent:role,model:clone(session.model),system:[{type:'text',text:agents.get(role).system+'\nHOST_RULES'}],tools:{fixture_mcp_read:{},shell:{}},messages:[],options:{}};
-          for (const name of registeredTools.keys()) frame.tools[name] = {};
           await opts.beforeContext?.({frame,emit,session,packet,agents});
           if(!opts.skipContextHook) await emit('session','context',frame);
           if(!opts.skipModelHook) await emit('session','model.request',{sessionID:session.id,agent:role,model:clone(session.model),kind:'primary',headers:{}});
@@ -127,7 +120,7 @@ async function fixture(t, opts = {}) {
   };
   opts.context?.({context,agents,commands});
   const cleanup=await setupAzurePrReview(context,directory);t.after(cleanup);
-  return {directory,settings,agents,commands,sessions,hooks,calls,notices,context,emit,invoke,cleanup,registeredTools,
+  return {directory,settings,agents,commands,sessions,hooks,calls,notices,context,emit,invoke,cleanup,
     prompts:()=>calls.filter(c=>c.kind==='prompt'),
     async command(name='pr-review',text=PR,origin='ordinary') {await commands.get(name).execute({sessionID:origin,prompt:{text},delivery:'steer'});return notices.filter(n=>n.sessionID===origin).at(-1)?.text;},
   };
@@ -174,8 +167,8 @@ test('check uses one readiness stage and full return contains the report',async 
   const f=await fixture(t,{settings(s){s.returnReport='full';}}),receipt=await f.command('pr-check');
   assert.match(receipt,/] READY/);assert.match(receipt,/Source access ready/);assert.equal(f.prompts().length,1);
 });
-for(const native of BLOCKED_NATIVE_TOOLS) test(`execution guard blocks ${native}, including shell=ask`,async t=>{
-  const f=await fixture(t,{settings(s){s.shellToolPermission='ask';},async during({invoke,session}){await invoke(session.id,native);}});
+for(const native of BLOCKED_NATIVE_TOOLS) test(`source-only role execution guard blocks ${native}`,async t=>{
+  const f=await fixture(t,{async during({invoke,session}){await invoke(session.id,native);}});
   const receipt=await f.command('pr-check');assert.match(receipt,/] INCOMPLETE/);
   assert.ok(!f.calls.some(c=>c.kind==='executed-tool'&&c.tool===native));
   const result=await resultLog(receipt);assert.equal(result.stages[0].blockedNativeToolCalls,1);assert.doesNotMatch(JSON.stringify(result),/PRIVATE_INPUT/);
@@ -573,66 +566,63 @@ test('captured truncated output is retained privately and never accepted or resu
   assert.equal(saved.finish,'length');assert.match(saved.text,/Source access ready/);
 });
 
-test('optional verification is restricted to review grants and unavailable execution preserves COMPLETE', async t => {
+for (const mode of ['review', 'deep']) test(`${mode} reviewers use native project tools; failed commands do not veto COMPLETE preview`, async t => {
   const executed = [];
   const f = await fixture(t, {
-    settings(settings) { settings.verification = { enabled: true, rootfs: '/nonexistent-azpr-fixture-rootfs', repositories: [{ url: PR.replace('/pullrequest/123', ''), path: '/nonexistent-azpr-fixture-repo' }] }; },
-    async during({ session, frame, packet, invoke }) {
+    async during({ session, invoke }) {
       const spec = ROLES[session.agent];
       if (['initial', 'final'].includes(spec.format)) {
-        assert.ok(frame.tools[VERIFICATION_TOOL]);
-        await assert.rejects(f.registeredTools.get(VERIFICATION_TOOL).execute({ commit: SNAP.head, command: 'echo forged' }, { sessionID: session.id, agent: session.agent, id: 'unobserved' }), /fresh observed tool call/);
-        if (spec.format === 'final') {
-          assert.equal(packet.verification.length, 2);
-          assert.ok(packet.verification.every(row => row.status === 'UNAVAILABLE'));
+        for (const tool of ['shell', 'read', 'glob', 'grep']) {
+          await invoke(session.id, tool, { output: 'Fixture command failed; source evidence remains available.', metadata: { exit: 7 } });
+          executed.push({ id: session.id, tool });
         }
-        const result = await invoke(session.id, VERIFICATION_TOOL, undefined, 'completed', { commit: SNAP.head, command: 'printf SHOULD_NOT_RUN_ON_HOST' });
-        assert.equal(JSON.parse(result.content).status, 'UNAVAILABLE'); executed.push(session.id);
-      } else {
-        assert.equal(frame.tools[VERIFICATION_TOOL], undefined);
-        await assert.rejects(invoke(session.id, VERIFICATION_TOOL, undefined, 'completed', { commit: SNAP.head, command: 'echo denied' }), /active initial reviewer/);
+      } else if (spec.stage !== 'comment-publish') {
+        await assert.rejects(invoke(session.id, 'shell'), /Native tool denied/);
       }
     },
   });
-  const tool = f.registeredTools.get(VERIFICATION_TOOL);
-  assert.equal(tool.options.codemode, false);
-  const input = { commit: SNAP.head, command: 'printf NOT_AUTHORIZED' };
-  await assert.rejects(tool.execute(input, { sessionID: 'ordinary', agent: 'build' }), /active initial reviewer/);
-  const ordinaryFrame = { sessionID: 'ordinary', agent: 'build', tools: { [VERIFICATION_TOOL]: {}, shell: {} } };
-  await f.emit('session', 'context', ordinaryFrame);
-  assert.equal(ordinaryFrame.tools[VERIFICATION_TOOL], undefined); assert.ok(ordinaryFrame.tools.shell);
   assert.match(await f.command('pr-check'), /READY/);
-  const receipt = await f.command(); assert.match(receipt, /\] COMPLETE/); assert.equal(executed.length, 3);
-  const log = await resultLog(receipt); assert.equal(log.verification.length, 3); assert.match(log.verification[0].reason, /repository|namespace|preparation/i);
-  const session = f.sessions.get(executed[0]);
-  await assert.rejects(tool.execute(input, { sessionID: session.id, agent: session.agent }), /active initial reviewer/);
+  const receipt = await f.command(mode === 'deep' ? 'pr-deep' : 'pr-review');
+  assert.match(receipt, /\] COMPLETE/); assert.equal(executed.length, 12);
+  for (const { id, tool } of executed) await assert.rejects(f.invoke(id, tool), /authorization expired/);
   const id = receipt.match(/AZPR ([a-f0-9]{8})/)[1];
   assert.match(await f.command('pr-comment', id), /\] PREVIEW/);
+  for (const agent of f.agents.values()) assert.ok(agent.permissions.some(rule => rule.action === 'fixture_mcp_write' && rule.effect === 'deny'));
 });
 
-test('verification executor rechecks the selected reviewer model before creating a process', async t => {
+for (const tool of ['shell', 'read', 'glob', 'grep']) test(`project ${tool} rechecks reviewer model binding before execution`, async t => {
   const f = await fixture(t, {
-    settings(settings) { settings.verification = { enabled: true, rootfs: '/nonexistent-fixture-rootfs', repositories: [{ url: PR.replace('/pullrequest/123', ''), path: '/nonexistent-fixture-repo' }] }; },
     async during({ session, invoke }) {
       const prior = session.model;
       session.model = { providerID: 'fixture', id: 'wrong', variant: 'default' };
-      await assert.rejects(invoke(session.id, VERIFICATION_TOOL, undefined, 'completed', { commit: SNAP.head, command: 'echo denied' }), /Model mismatch/);
+      await assert.rejects(invoke(session.id, tool), /Model mismatch/);
       session.model = prior;
     },
   });
-  const receipt = await f.command(); assert.match(receipt, /\] COMPLETE/);
-  assert.deepEqual((await resultLog(receipt)).verification, []);
+  assert.match(await f.command(), /\] COMPLETE/);
+  assert.equal(f.calls.filter(call => call.kind === 'executed-tool' && call.tool === tool).length, 0);
+  await assert.rejects(f.emit('tool', 'execute.before', { sessionID: 'ordinary', agent: 'azpr-review-functional', tool }), /authorization expired/);
 });
 
-test('a publisher denied isolated verification loses its grants before another tool can start', async t => {
+test('project tools require literal admission and an authorized model request', async t => {
+  const probe = async ({ session, emit }) => {
+    for (const tool of ['shell', 'read', 'glob', 'grep']) {
+      await assert.rejects(emit('tool', 'execute.before', { sessionID: session.id, agent: session.agent, id: 'unadmitted', tool }), /admitted reviewer input/);
+    }
+  };
+  const f = await fixture(t, { beforePrompt: probe, beforeContext: probe });
+  assert.match(await f.command(), /\] COMPLETE/);
+  assert.equal(f.calls.filter(call => call.kind === 'executed-tool' && call.tool !== 'fixture_mcp_read').length, 0);
+});
+
+test('a publisher denied native shell loses its grants before another tool can start', async t => {
   let denied = false;
   const f = await fixture(t, {
-    settings(settings) { settings.verification = { enabled: true, rootfs: '/nonexistent-fixture-rootfs', repositories: [{ url: PR.replace('/pullrequest/123', ''), path: '/nonexistent-fixture-repo' }] }; },
     async during({ session, emit, invoke }) {
       if (ROLES[session.agent].stage !== 'comment-publish') return;
-      const event = { sessionID: session.id, agent: session.agent, id: 'publisher-denied-verification', tool: VERIFICATION_TOOL, input: { commit: SNAP.head, command: 'echo denied' } };
-      await assert.rejects(emit('tool', 'execute.before', event), /active initial reviewer/);
-      await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture verification') });
+      const event = { sessionID: session.id, agent: session.agent, id: 'publisher-denied-shell', tool: 'shell', input: { command: 'echo denied' } };
+      await assert.rejects(emit('tool', 'execute.before', event), /Native tool denied/);
+      await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture shell') });
       await assert.rejects(invoke(session.id, 'fixture_mcp_write'), /authorization expired/);
       denied = true;
     },
