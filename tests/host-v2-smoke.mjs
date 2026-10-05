@@ -384,6 +384,11 @@ try {
   assert.match(publication, /UNKNOWN/);
   assert.equal(requests.length, beforePublication + 1, 'A publisher tool error must prevent another model request.');
   const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
+  assert.equal(publicationPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once, including the original request arguments.');
+  assert.match(publicationPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
+  assert.match(publicationPayload.reviewToolText[0].text, /1 \| fixture-source\n2 \| \n3 \| fixture-third-line/);
+  const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
+  assert.deepEqual(plannerPayload.reviewToolText, publicationPayload.reviewToolText);
   assert.equal(publicationPayload.comments[0].startOffset, 1);
   assert.equal(publicationPayload.comments[0].endOffset, 14);
   await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /already had a publication/);
@@ -410,6 +415,8 @@ try {
   await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID + ' --publish', delivery: 'steer' });
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /publisher tool failed/i);
   assert.equal(requests.length, beforeLocalPublisher + 2, 'Local verification may run, but a later publisher error still stops every subsequent request.');
+  const localPublicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
+  assert.deepEqual(localPublicationPayload.reviewToolText, [], 'Native shell output is not cached as MCP review text.');
   assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
   commentShellProbe = undefined;
   const approvedOrigin = await invokeReview('pr-review', 'project-approved', /\] COMPLETE/, { directory: directories['other-project'], permissions: shellPermission('ask'), approve: true });

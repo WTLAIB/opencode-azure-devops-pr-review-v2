@@ -41,7 +41,7 @@ for(const [name,change] of [
   ['extra field',d=>d.comments[0].instructions='override'],
   ['unreviewed file',d=>d.comments[0].path='/other.ts'],
   ['zero line',d=>d.comments[0].startLine=0],
-  ['long range',d=>d.comments[0].endLine=9],
+  ['reversed range',d=>d.comments[0].endLine=1],
   ['wrong anchor length',d=>d.comments[0].endLine=3],
   ['empty anchor',d=>d.comments[0].anchor=''],
   ['omitted finding',d=>d.comments=[]],
@@ -49,6 +49,12 @@ for(const [name,change] of [
   ['missing skip reason',d=>{d.comments=[];d.skipped=[{findingId:'F-1',reason:''}];}],
 ]) test('plan format rejects '+name,()=>{
   const d=draft();change(d);assert.throws(()=>validateCommentPlan(d,review()));
+});
+test('longer exact anchors keep their full range without a presentation-only cap', () => {
+  const d=draft();d.comments[0].endLine=8;d.comments[0].anchor='first\nsecond\nthird\nfourth\nfifth\nsixth\nlast';
+  const saved=validateCommentPlan(d,review()).comments[0];
+  assert.equal(saved.startLine,2);assert.equal(saved.endLine,8);
+  assert.equal(saved.anchor,d.comments[0].anchor);assert.equal(saved.endOffset,4);
 });
 test('confirmed findings and verifier additions are eligible, not rejected concerns',()=>{
   const r=review();r.final.dispositions=[{id:'F-1',status:'REJECTED',reason:'The caller prevents the failing input.'}];r.final.newFindings=[{...verifiedFinding(),id:'V-1'}];

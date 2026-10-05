@@ -60,7 +60,11 @@ The independent V1 repository and installation are outside this project's scope.
   firewall. Denied native attempts and observed tool failures are not evidence.
   Plain multiline tool text may receive a numbered model-facing display through
   the public result hook. Preserve raw output, wrappers, errors and truncation;
-  numbering is not provenance or a new source/eligibility gate.
+  numbering is not provenance or a new source/eligibility gate. Successful
+  multiline review tool observations may be shared with same-origin comment roles
+  together with original arguments. Keep them as untrusted temporary data;
+  exclude native tool output and flagged errors/truncation, deduplicate identical
+  observations, and do not introduce cloning, source classification or model calls.
   Startup may observe direct-tool registration through public host namespaces;
   this is metadata synchronization, never MCP action classification or a source
   certificate. The bounded observation grace period must not become a refusal,

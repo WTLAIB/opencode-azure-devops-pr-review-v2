@@ -282,3 +282,14 @@ that source/API and an isolated actual-host fixture before changing the target.
 The [V2 plugin guide](https://opencode.ai/v2/docs/build/plugins/) describes the
 public model; exact-version source and runtime evidence determine this adapter's
 claims. Model/provider/MCP/OS acceptance remains separate from host API tests.
+
+
+Successful multiline review tool text is retained with its observed request
+arguments for same-origin comment planning/publication. The existing display
+eligibility excludes flagged failures, truncation and unsupported wrappers;
+native project-tool output is excluded. Identical tool/arguments/raw-text
+observations are deduplicated, with no source-content classification or new
+model request. The completed-review cache owns this temporary data and drops it
+with the review; no checkout, persisted cache or repository map is introduced.
+Captured text is data, not source/commit certification or a new eligibility gate.
+Initials remain independent and the verifier retains its existing source checks.

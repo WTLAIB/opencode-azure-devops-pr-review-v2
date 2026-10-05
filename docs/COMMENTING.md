@@ -17,7 +17,7 @@ The following limits are project choices, not universal standards:
 | Eligibility | Confirmed high/medium-impact defects only |
 | Volume | No numerical comment quota; one publishing attempt per review |
 | Comment size | At most 1,200 body characters, plus runtime AI/model disclosure and a hidden deduplication marker |
-| Anchor | Smallest useful 1-5 line range in a changed HEAD file |
+| Anchor | Smallest useful exact range in a changed HEAD file; no fixed line-count maximum |
 | Structure | Short issue title; triggering condition and impact; correction or regression test |
 | Language | Shared `outputLanguage` for the final report and comment prose; identifiers and machine-readable labels unchanged |
 | Duplicates | One root cause per thread; skip non-deleted discussions, including resolved ones |
@@ -101,6 +101,16 @@ disclosure, marker), locations, and skip reasons even in receipt mode. There is
 no numerical comment quota: all independently actionable eligible findings can
 be included. Duplicate, low-severity or unsupported findings still need skip
 reasons; removing the count limit does not relax evidence or anchor checks.
+Comment stages receive successful multiline tool text captured during the same
+review, with the original request arguments beside numbered rows. Identical
+observations are shared once. This is temporary in-process review data; it needs
+no checkout, clone, repository mapping or additional model request. Native
+shell/read output and flagged failed/truncated results are not cached here.
+Observed text is not certified provenance: select the matching commit/path and
+check missing source and mutable PR/discussion state. It helps avoid inventing
+anchor text from a finding description. Prefer a concise anchor; exact longer
+ranges are accepted instead of failing on an arbitrary five-line maximum.
+
 Inspect it before requesting publication. The publisher receives the saved
 content and coordinates, not a freshly generated plan. It is instructed to
 send the content exactly, without translation or relocation.
@@ -168,7 +178,7 @@ On-premises Azure URLs are not currently supported for the comment workflow.
 ## What is enforced and what is instructed
 
 The runtime checks plan structure: known confirmed finding IDs,
-high/medium labels matching the verified finding, body length, changed-file paths, 1-5 line ranges, anchor
+high/medium labels matching the verified finding, body length, changed-file paths, positive ordered line ranges, anchor
 line count, and an explanation for every skipped eligible finding. It adds stable
 markers. These checks are not proof that source lines or findings are correct.
 

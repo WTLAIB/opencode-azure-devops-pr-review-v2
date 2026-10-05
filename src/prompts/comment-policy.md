@@ -20,7 +20,7 @@ When planning, skip with a local explanation if a claim cannot be stated faithfu
 within the comment limit. Do not drop triggering conditions or qualifications
 just to fit; the complete finding remains in the local review report.
 
-Use a changed file at the reviewed HEAD and the smallest useful RIGHT-side range (1-5 lines). Use an available read operation to obtain that complete file at snapshot.head. Verify the defect actually applies to those lines and quote them exactly in the plan's anchor field. Do not invent line numbers or use base-file coordinates. Skip deleted-only files, binary files, source that remains truncated after supported continuation, and findings that cannot be reliably anchored. Explain every skipped confirmed finding locally.
+Use a changed file at the reviewed HEAD and the smallest useful RIGHT-side range. Prefer a few lines; a longer exact range is acceptable when needed for context. Use applicable captured reviewToolText or an available read operation to obtain that complete file at snapshot.head. Verify the defect actually applies to those lines and quote them exactly in the plan's anchor field. Do not invent line numbers or use base-file coordinates. Skip deleted-only files, binary files, source that remains truncated after supported continuation, and findings that cannot be reliably anchored. Explain every skipped confirmed finding locally.
 
 Use appropriate available MCP read operations to verify the current PR identity
 and HEAD, read source at the exact reviewed commit, and enumerate ALL existing

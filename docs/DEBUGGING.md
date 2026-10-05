@@ -293,3 +293,10 @@ or override role-filtered tool exposure. Source-supported sibling/final results
 remain usable. Inspect original contexts and tool history when a provider still
 acts as though tools are missing. Never troubleshoot by exposing credentials or
 printing the host configuration; native shell retains ordinary host authority.
+
+
+Comment request diagnostics include `reviewToolText`: already observed successful
+review tool text with arguments and numbered display. This can contain source
+code and PR data, so it follows the same private-diagnostics handling as other
+request payloads. Empty observations do not block planning; the model may read
+missing data normally. They are not proof of correct source selection or copying.

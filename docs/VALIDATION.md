@@ -651,3 +651,24 @@ fixture accounts for that one-request race explicitly. Initial receipt-only
 warning and fixed-total-count test assertion failures remain in private evidence.
 These fixtures establish host integration, not real Azure publication or UI
 rendering correctness.
+
+
+## Captured review text for comments (2026-10-05)
+
+A live COMPLETE review was followed by a zero-tool planner response that invented
+three source anchors. Its first seven-line range also hit an arbitrary five-line
+limit. No publisher ran. A separate same-release comparison completed review,
+posted three exact saved comments and confirmed their deletion. These are
+different outcomes; removing the line limit alone would not fix invented source.
+
+Comment roles now receive successful multiline tool observations from their
+completed review, including original request arguments and numbered rows. This
+reduces source reconstruction from finding prose without a new model request,
+source certificate or required-tool gate. The five-line maximum is removed;
+positive ordered coordinates and matching anchor line count remain required.
+
+Syntax and 409 offline tests pass. Fresh and replacement OpenCode 2.0.22 fixtures
+each pass with 63 local provider requests and 12 fixture MCP calls. They check
+that both comment roles receive deduplicated source observations while native
+shell output remains excluded. Live model adherence, source-copy correctness
+and Azure UI placement remain separate acceptance questions.

@@ -70,7 +70,7 @@ export function validateCommentPlan(result, review) {
     if (!['high', 'medium'].includes(c.severity) || !nonempty(c.body) || c.body.length > 1200 ||
         !c.body.startsWith(`issue (${c.severity}): `) || /<!--|-->/.test(c.body)) fail('Invalid severity, title, or comment length.');
     if (!review.snapshot.files.includes(c.path) || !c.path.startsWith('/') || /[\r\n\0]/.test(c.path) ||
-        !integer(c.startLine) || !integer(c.endLine) || c.endLine < c.startLine || c.endLine - c.startLine > 4) fail('Use a changed HEAD file and a 1-5 line range.');
+        !integer(c.startLine) || !integer(c.endLine) || c.endLine < c.startLine) fail('Use a changed HEAD file and a positive, ordered line range.');
     if (!nonempty(c.anchor) || c.anchor.split(/\r?\n/).length !== c.endLine - c.startLine + 1) fail('Supply exact anchor text for the selected range. The model must verify it against source.');
     const tag = marker(review, finding, c);
     if (markers.has(tag)) fail('Duplicate finding in this plan; select one representative.');

@@ -438,7 +438,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     for (const fn of ['create', 'prompt', 'wait', 'context', 'interrupt', 'synthetic']) if (typeof context.session?.[fn] !== 'function') throw new Error(`[AZPR] OpenCode Session SDK ${fn} is unavailable; no workflow was started.`);
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
     /** @type {Run} */
-    const run = { ...details, id, active: true, controller: new AbortController(), stages: [],
+    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(),
       timing: state.settings.debug.enabled ? { renderMs: 0, displayMs: 0, cleanupMs: 0 } : undefined,
       deadlineAt: state.settings.runTimeoutSeconds === null ? null : Date.now() + state.settings.runTimeoutSeconds * 1000 };
     runs.set(id, run);
@@ -501,6 +501,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       let status, report;
       if (!publish) review.plan = null; // Never leave an obsolete preview after a failed refresh.
       const payload = { target: review.target, snapshot: review.snapshot, report: review.final.report,
+        reviewToolText: review.toolText ?? [],
         outputLanguage: review.outputLanguage, provenance: review.provenance,
         reviewWarnings: review.final.reviewWarnings,
         findings: confirmedFindings(review), dispositions: review.final.dispositions,
@@ -598,7 +599,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (verified.status !== 'COMPLETE') run.publicationUnavailable = true;
       const provenance = reviewProvenance(run);
       return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}`),
-        review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), attempts: new Map(), plan: null } };
+        review: { id: run.id, origin: run.origin, profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), toolText: [...run.toolText.values()], attempts: new Map(), plan: null } };
     });
     // A cancelled presentation must not leave a publishable "completed" review.
     if (status === 'COMPLETE' && review) {
@@ -756,6 +757,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         // intact. Native tools already own their display and source offsets.
         if (projectToolRole(g.role) && !['shell', 'read', 'glob', 'grep'].includes(event.tool)) {
           event.result = numberToolText(result, event.input);
+          if (event.result !== result && ['initial', 'final'].includes(ROLES[g.role]?.format)) {
+            // Share observed text with comment roles instead of asking them to
+            // reconstruct source from finding prose. Keep arguments beside the
+            // text; they describe the call, not certified source provenance.
+            const key = JSON.stringify([event.tool, event.input, result.output]);
+            g.run.toolText.set(key, { tool: event.tool, text: event.result.content[0].text });
+          }
         }
       }
       if (ROLES[g.role]?.stage === 'comment-publish' && (g.failedTools.has(call) || g.reportedToolErrors.has(call))) {
