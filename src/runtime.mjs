@@ -521,9 +521,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
           } else {
             review.plan = validateCommentPlan(result, review);
             if (review.plan.anchorRestorations) record.anchorRestorations = review.plan.anchorRestorations;
+            if (review.plan.locationRestorations) record.locationRestorations = review.plan.locationRestorations;
             // Diagnostics and preview expose the saved anchors. The original
             // model envelope remains in response.json, never overwritten.
-            return { ...result, comments: result.comments.map((comment, index) => ({ ...comment, anchor: review.plan.comments[index].anchor })) };
+            return { ...result, comments: result.comments.map((comment, index) => {
+              const saved = review.plan.comments[index];
+              return { ...comment, anchor: saved.anchor, startLine: saved.startLine, endLine: saved.endLine };
+            }) };
           }
           return publish && !allReported ? { ...result, status: 'INCOMPLETE' } : result;
         });

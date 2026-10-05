@@ -304,6 +304,7 @@ missing data normally. They are not proof of correct source selection or copying
 
 For comment `anchorRestorations`, compare the retained response.json with the
 result.json saved anchor and original captured output. Restoration only fixes
-indentation/quote display at the same line range; it cannot certify provenance
-or fix an incorrect location. Known excluded verifier IDs can appear in skipped
+indentation/quote display and uniquely locatable counted lines. It cannot certify
+full-file content or provenance. `locationRestorations` keeps original/restored
+coordinates; ambiguous matches stay untouched. Known excluded verifier IDs can appear in skipped
 notes without enabling a comment for those IDs.

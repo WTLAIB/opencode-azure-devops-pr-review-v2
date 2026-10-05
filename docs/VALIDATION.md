@@ -694,3 +694,24 @@ model was rerun or historical cache restored. Syntax/413 offline tests pass.
 Fresh/replacement OpenCode 2.0.22 fixtures each pass with 63 local provider requests
 and 12 MCP calls, exercising rejected-ID notes, saved-anchor restoration and its
 publisher input. Live model/Azure delivery still needs its own evidence.
+
+
+## Counted-location recovery (2026-10-05)
+
+A live free-profile cycle completed review and independently verified three
+exact Azure comments, including one six-line anchor restored from captured text
+and one publisher body restored to saved text. All three comments were deleted.
+The paired comparison completed review but selected line 38 for a quote uniquely
+present at line 37; independent audit withheld all publication. Original failures
+and successful remote-write evidence remain separate.
+
+Anchor recovery now prefers a matching declared location, or otherwise requires
+one unique quoted range in captured text with matching path/HEAD argument values.
+It retains original/restored coordinates and does not change claims, select
+ambiguous locations or bypass duplicate/attempted-finding policy. Observed-text
+matching cannot certify full-file content or provenance.
+
+The original failed plan replays with all three exact anchors after 38 becomes 37;
+this does not recreate a cache or run another model. Syntax/415 offline tests and
+fresh/replacement OpenCode 2.0.22 fixtures pass (63 local provider requests and 12 MCP
+calls each), including actual saved publisher coordinates after line restoration.

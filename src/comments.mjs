@@ -60,23 +60,31 @@ function argumentStrings(value) {
   return object(value) ? Object.values(value).flatMap(argumentStrings) : [];
 }
 
-// Restore presentation differences only at the declared lines. Matching literal
-// argument values is deliberately schema-agnostic, not a source certificate.
-// Never search for a different location or select between different raw ranges.
+// Resolve a quoted range in already observed text, without interpreting a tool
+// schema. Argument-value matching is not a full-file/provenance certificate.
+// Prefer an existing matching location; otherwise require one unique range.
 function restoreAnchor(comment, review) {
   const trim = value => value.split(/\r?\n/).map(line => line.replace(/^[ \t]+|[ \t]+$/g, '')).join('\n');
   const forms = new Set([trim(comment.anchor), trim(comment.anchor.replace(/\\"/g, '"'))]);
-  const candidates = new Set();
+  const declared = new Map(), candidates = new Map();
+  const count = comment.endLine - comment.startLine + 1;
   for (const observation of review.toolText ?? []) {
     const values = argumentStrings(observation.input);
     if (!values.includes(comment.path) || !values.includes(review.snapshot.head) || typeof observation.output !== 'string') continue;
     const lines = observation.output.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
-    if (comment.endLine > lines.length) continue;
-    const anchor = lines.slice(comment.startLine - 1, comment.endLine).join('\n');
-    if (forms.has(trim(anchor))) candidates.add(anchor);
+    for (let start = 0; start + count <= lines.length; start++) {
+      const anchor = lines.slice(start, start + count).join('\n');
+      if (!forms.has(trim(anchor))) continue;
+      const range = { anchor, startLine: start + 1, endLine: start + count };
+      const key = JSON.stringify(range);
+      candidates.set(key, range);
+      if (range.startLine === comment.startLine) declared.set(key, range);
+    }
   }
-  return candidates.size === 1 ? [...candidates][0] : comment.anchor;
+  const matches = declared.size ? declared : candidates;
+  return matches.size === 1 ? [...matches.values()][0]
+    : { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine };
 }
 
 export function validateCommentPlan(result, review) {
@@ -85,7 +93,7 @@ export function validateCommentPlan(result, review) {
   const eligible = new Map(confirmedFindings(review).map(f => [f.id, f]));
   const accounted = new Set();
   const knownExcluded = new Set(review.final.dispositions.filter(d => d.status !== 'CONFIRMED').map(d => d.id));
-  const skippedIds = new Set(), anchorRestorations = [];
+  const skippedIds = new Set(), anchorRestorations = [], locationRestorations = [];
   const markers = new Set();
   const comments = result.comments.map(c => {
     exactKeys(c, ['findingId', 'severity', 'path', 'startLine', 'endLine', 'anchor', 'body']);
@@ -99,16 +107,18 @@ export function validateCommentPlan(result, review) {
     if (!review.snapshot.files.includes(c.path) || !c.path.startsWith('/') || /[\r\n\0]/.test(c.path) ||
         !integer(c.startLine) || !integer(c.endLine) || c.endLine < c.startLine) fail('Use a changed HEAD file and a positive, ordered line range.');
     if (!nonempty(c.anchor) || c.anchor.split(/\r?\n/).length !== c.endLine - c.startLine + 1) fail('Supply exact anchor text for the selected range. The model must verify it against source.');
-    const anchor = restoreAnchor(c, review);
-    if (anchor !== c.anchor) anchorRestorations.push(c.findingId);
-    const tag = marker(review, finding, c);
+    const restored = restoreAnchor(c, review), { anchor } = restored;
+    if (anchor !== c.anchor || restored.startLine !== c.startLine) anchorRestorations.push(c.findingId);
+    if (restored.startLine !== c.startLine) locationRestorations.push({ findingId: c.findingId,
+      original: { startLine: c.startLine, endLine: c.endLine }, restored: { startLine: restored.startLine, endLine: restored.endLine } });
+    const tag = marker(review, finding, { ...c, ...restored });
     if (markers.has(tag)) fail('Duplicate finding in this plan; select one representative.');
     markers.add(tag);
     // Azure SDK positions are line-local, one-based UTF-16 character offsets.
     // Derive whole-line endpoints from the existing anchor, never file offsets
     // or another model-authored field. An empty final line uses its first column.
     const startOffset = 1, endOffset = Math.max(1, anchor.split(/\r?\n/).at(-1).length);
-    return { ...c, anchor, startOffset, endOffset, marker: tag, content: `${c.body.trim()}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}` };
+    return { ...c, ...restored, startOffset, endOffset, marker: tag, content: `${c.body.trim()}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}` };
   });
   for (const s of result.skipped) {
     exactKeys(s, ['findingId', 'reason']);
@@ -117,7 +127,8 @@ export function validateCommentPlan(result, review) {
     if (eligible.has(s.findingId)) accounted.add(s.findingId);
   }
   if (accounted.size !== eligible.size) fail('Planner omitted confirmed findings instead of explaining exclusions.');
-  return { comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}) };
+  return { comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}),
+    ...(locationRestorations.length ? { locationRestorations } : {}) };
 }
 
 /** Restore a whole marked comment from the saved plan, independent of tool schema.

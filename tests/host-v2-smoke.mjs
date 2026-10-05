@@ -100,7 +100,7 @@ const provider = createServer(async (request, response) => {
   if (userContext === 'smoke-review' && parsed.model === 'risk') final.coverage.gaps = ['Tests were not executed in this source-only fixture.'];
   if (payload?.target && payload.findings && !payload.comments) final = { status: 'READY',
     comments: payload.findings.slice(0, 1).map(item => ({ findingId: item.id, severity: item.severity,
-      path: snapshot.files[0], startLine: 1, endLine: 1, anchor: 'fixture-source',
+      path: snapshot.files[0], startLine: 2, endLine: 2, anchor: 'fixture-source',
       body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
     skipped: [...payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })), ...payload.dispositions.filter(item=>item.status!=='CONFIRMED').map(item=>({findingId:item.id,reason:item.reason}))] };
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
@@ -396,6 +396,8 @@ try {
   assert.equal(publicationPayload.comments[0].startOffset, 1);
   assert.equal(publicationPayload.comments[0].endOffset, 16);
   assert.equal(publicationPayload.comments[0].anchor, '  fixture-source');
+  assert.equal(publicationPayload.comments[0].startLine, 1);
+  assert.equal(publicationPayload.comments[0].endLine, 1);
   assert.match(preview, /Fixture candidate declined by verifier/);
   await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /already had a publication/);
   workflowReceipts.push({ command: 'pr-comment --publish', suffix: 'publisher-error', receipt: publication });

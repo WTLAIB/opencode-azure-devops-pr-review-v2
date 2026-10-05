@@ -151,13 +151,12 @@ test('saved anchors restore indentation and quote display from uniquely matching
   assert.equal(plan.comments[0].anchor,raw);assert.equal(plan.comments[0].endOffset,raw.length);
   assert.deepEqual(plan.anchorRestorations,['F-1']);assert.notEqual(d.comments[0].anchor,raw);
 });
-test('anchor restoration does not choose ambiguous text, change positions or match other versions', () => {
+test('anchor restoration does not choose ambiguous text or match other versions', () => {
   const r=review(),d=draft(),anchor=d.comments[0].anchor;
   const matching={input:{a:snapshot.files[0],b:snapshot.head},output:'header\n  '+anchor+'\n'};
   for (const observations of [
     [{...matching,input:{a:snapshot.files[0],b:'c'.repeat(40)}}],
     [{...matching,input:{a:'/other.ts',b:snapshot.head}}],
-    [{...matching,output:'header\nother\n  '+anchor+'\n'}],
     [matching,{...matching,output:'header\n    '+anchor+'\n'}],
     [{...matching,output:'header\n  return other.name;\n'}],
   ]) {
@@ -165,4 +164,23 @@ test('anchor restoration does not choose ambiguous text, change positions or mat
     assert.equal(plan.comments[0].anchor,anchor);assert.equal(plan.comments[0].startLine,2);
     assert.equal(plan.anchorRestorations,undefined);
   }
+});
+
+test('a uniquely quoted captured range corrects counted lines before marker and offset calculation', () => {
+  const r=review(),d=draft(),anchor=d.comments[0].anchor;
+  r.toolText=[{input:{path:snapshot.files[0],revision:snapshot.head},output:'header\nother\n  '+anchor+'\n'}];
+  const plan=validateCommentPlan(d,r),saved=plan.comments[0];
+  assert.equal(saved.startLine,3);assert.equal(saved.endLine,3);assert.equal(saved.anchor,'  '+anchor);
+  assert.equal(saved.endOffset,anchor.length+2);
+  assert.deepEqual(plan.locationRestorations,[{findingId:'F-1',original:{startLine:2,endLine:2},restored:{startLine:3,endLine:3}}]);
+  const correct=draft();correct.comments[0].startLine=3;correct.comments[0].endLine=3;correct.comments[0].anchor='  '+anchor;
+  assert.equal(saved.marker,validateCommentPlan(correct,review()).comments[0].marker);
+  assert.equal(d.comments[0].startLine,2);
+});
+test('existing locations stay preferred and multiple alternative locations are not guessed', () => {
+  const r=review(),d=draft(),anchor=d.comments[0].anchor;
+  r.toolText=[{input:{path:snapshot.files[0],revision:snapshot.head},output:'  '+anchor+'\nother\n  '+anchor+'\n'}];
+  assert.equal(validateCommentPlan(d,r).comments[0].startLine,2);
+  d.comments[0].startLine=3;d.comments[0].endLine=3;
+  const plan=validateCommentPlan(d,r);assert.equal(plan.comments[0].startLine,3);assert.equal(plan.locationRestorations,undefined);
 });

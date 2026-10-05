@@ -126,7 +126,8 @@ without manually counting blank lines and keeps the selected version visible.
 The raw tool output is preserved; `N |` prefixes are display aids, not anchor
 characters. Numbering does not prove that a response is a complete file or repair
 a model's selected location automatically. The narrow formatting restoration
-described below can copy a uniquely matching captured range without moving it. The saved preview remains the exact
+described below can copy a uniquely matching captured range and correct a counted
+location. The saved preview remains the exact
 publication input, and its location still needs review.
 
 Every saved comment ends with one short disclosure: it is an AI-generated review,
@@ -259,16 +260,21 @@ entries, conflicting selections and missing reasons still fail validation.
 
 Before saving a plan, the runtime may restore leading/trailing indentation and
 one extra layer of escaped quotation marks in an anchor. It considers only the
-original captured tool output at the declared line range, where argument string
+original captured tool output, where argument string
 values contain the exact selected path and HEAD SHA. No tool, action or argument
 field names are classified. All matching observations must agree on one literal
-range. The runtime never moves coordinates, searches another location, changes a
-claim or chooses between different raw ranges. Missing/ambiguous matches leave
+range. A matching declared location stays preferred. Otherwise one uniquely
+quoted range may correct a counted location before preview and marker/offset
+calculation. The runtime never changes the claimed defect, path or commit, or
+chooses between ambiguous alternative ranges. Missing/ambiguous matches leave
 the planner text untouched; this is no additional completion gate.
 
-Argument-value matching is not proof of source provenance. Existing source
+Argument-value matching does not prove full-file content or source provenance;
+numbered rows describe the observed text. Existing source
 verification and publication checks still apply. Original model output remains
 in response diagnostics; `anchorRestorations` records changed finding IDs, and
-result/preview diagnostics contain the saved anchors. Offsets are computed from
+result/preview diagnostics contain the saved anchors. `locationRestorations`
+retains original and restored coordinates. This cannot bypass attempted-finding
+or duplicate-discussion policy. Offsets are computed from
 that saved exact text. These formatting restorations do not alter comment body
 claims or authorize publication.
