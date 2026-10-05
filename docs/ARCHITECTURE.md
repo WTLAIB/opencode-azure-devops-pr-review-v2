@@ -18,6 +18,16 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
 | `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
 
+Active review and comment roles receive a numbered display of plain, multiline
+tool text when its single text block exactly matches the raw string output.
+The request arguments stay beside that display to help distinguish source
+versions. The original output bytes remain unchanged. Native displays, errors,
+truncated results, structured output, wrappers and attachments pass through.
+This uses the public `tool.execute.after` result hook without classifying MCP
+names or actions. It adds no requests, fields, source certificate or completion
+gate. Display row numbers are source positions only for complete unwrapped files;
+models still establish the file/version and interpret the evidence.
+
 The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
 entry re-exporting `plugin.js`, matching package exports, eight JavaScript modules,
 nine prompts and private settings. The Python settings helper runs only during

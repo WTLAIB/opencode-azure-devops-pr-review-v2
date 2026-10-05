@@ -12,6 +12,27 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 numbered source-display checks
+
+A subsequent live round produced two COMPLETE reviews. One profile delivered
+three comments whose exact text, line ranges and line-local offsets matched the
+saved preview on Azure; all three test comments were then deleted and absence
+confirmed. The other profile produced a READY preview with an off-by-one line:
+the quoted statement was on the next line. Independent pre-publication auditing
+withheld that write. The runtime had checked plan structure, not source bytes.
+All 40 review-stage exact-commit content reads matched reference Git bytes.
+Model base/head confusion, missed defects and overbroad impact claims remained.
+
+The resulting display change adds computed row numbers and adjacent request
+arguments to matching plain-text tool responses while preserving raw output.
+Syntax and 396/396 offline tests passed. Actual OpenCode 2.0.22 fresh and
+replacement fixtures each passed with 62 local fake-provider requests, 12 fixture
+MCP calls and four one-time host approvals. The fixtures verify that numbered
+text reaches reviewer and planner provider requests. Existing permission,
+cancellation and publisher-error revocation cases still pass. These local
+results do not yet establish live acceptance of the numbered display or Azure
+UI placement. Earlier results below retain their original revision scope.
+
 ## 2026-10-05 post-comparison usability checks
 
 Five authorized live cycles exercised one unchanged release: four reviews were

@@ -54,6 +54,9 @@ The independent V1 repository and installation are outside this project's scope.
 - No fixed MCP tool catalog, direct Azure/model client, patched server, or
   name/action classifier. MCP read-only behavior is prompt policy, not a write
   firewall. Denied native attempts and observed tool failures are not evidence.
+  Plain multiline tool text may receive a numbered model-facing display through
+  the public result hook. Preserve raw output, wrappers, errors and truncation;
+  numbering is not provenance or a new source/eligibility gate.
 - Pursue exact PR identity/SHAs, full discovered-path coverage, counterevidence,
   original-ID decisions and a final version recheck. Review quality gaps produce
   visible limitations, not wholesale result loss. Preserve all useful observations

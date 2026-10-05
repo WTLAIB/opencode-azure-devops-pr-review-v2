@@ -151,6 +151,31 @@ test('ordinary hooks are no-ops after settings disappear; disposal preserves ord
   assert.deepEqual(f.agents.get('build'),ordinary);await f.cleanup();
   assert.deepEqual([...f.agents.keys()],['build']);assert.deepEqual([...f.commands.keys()],['existing']);
 });
+test('numbered text is scoped to active project roles and preserves raw/native/ordinary output', async t => {
+  const seen = [];
+  const f = await fixture(t, { skipTool: true, async during({ emit, session }) {
+    for (const tool of ['arbitrary_source_tool', 'shell']) {
+      const raw = 'first\n\nfixture code\n';
+      const event = { sessionID: session.id, agent: session.agent, messageID: 'fixture', id: tool,
+        tool, input: { revision: SNAP.head }, status: 'completed', result: { output: raw, content: [{ type: 'text', text: raw }] } };
+      await emit('tool', 'execute.before', event);
+      await emit('tool', 'execute.after', event);
+      assert.equal(event.result.output, raw);
+      if (tool === 'shell') assert.equal(event.result.content[0].text, raw);
+      else assert.match(event.result.content[0].text, /3 \| fixture code$/);
+    }
+    seen.push(session.agent);
+  } });
+  const receipt = await f.command();
+  const id = /\[AZPR ([a-f0-9]+)\]/.exec(receipt)[1];
+  assert.match(await f.command('pr-comment', id), /\] PREVIEW/);
+  assert.match(await f.command('pr-comment', id + ' --publish'), /\] MODEL_REPORTED_POSTED/);
+  assert.equal(seen.length, 5);
+  const result = { output: 'ordinary\nsource', content: [{ type: 'text', text: 'ordinary\nsource' }] };
+  const event = { sessionID: 'ordinary', agent: 'build', tool: 'arbitrary_source_tool', id: 'ordinary', status: 'completed', result };
+  await f.emit('tool', 'execute.after', event);
+  assert.equal(event.result, result);
+});
 test('disabled plugin registers nothing',async t=>{const f=await fixture(t,{settings(s){s.enabled=false;}});assert.equal(f.commands.size,1);assert.equal(f.agents.size,1);assert.equal(f.hooks.size,0);});
 for(const kind of ['agent','command']) test(`${kind} collision preserves existing definition`,async t=>{
   const original={name:'pr-check',id:'azpr-review-check',system:'Keep me'};let map;

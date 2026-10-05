@@ -63,6 +63,23 @@ export function stageFormat(role) {
 export function visibleText(response) {
   return (response?.parts ?? []).filter(p => p.type === 'text' && !p.ignored).map(p => p.text ?? '').join('\n');
 }
+
+/** A display aid, not a source/commit certificate. Keep the raw output intact. */
+export function numberToolText(result, input) {
+  if (typeof result?.output !== 'string' || !result.output.includes('\n') ||
+      result.isError === true || result.metadata?.isError === true || result.metadata?.truncated === true) return result;
+  // Never discard wrappers, alternate content, attachments or structured output.
+  if (result.content !== undefined && (!Array.isArray(result.content) || result.content.length !== 1 ||
+      result.content[0]?.type !== 'text' || result.content[0].text !== result.output)) return result;
+  const lines = result.output.split('\n');
+  if (lines.at(-1) === '') lines.pop(); // A terminal newline does not add a source line.
+  const numbered = lines.map((line, index) => `${index + 1} | ${line.replace(/\r$/, '')}`).join('\n');
+  let request = '';
+  try { if (input !== undefined) request = `\nRequest arguments: ${JSON.stringify(input)}`; }
+  catch { return result; } // An optional display aid must never fail a tool call.
+  return { ...result, content: [{ ...(result.content?.[0] ?? {}), type: 'text',
+    text: `AZPR numbered tool text (display only).${request}\nRows count this returned text, not wrappers or missing source. The N | prefixes are not part of the original text.\n\n${numbered}` }] };
+}
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const findingKey = key => key.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
 const finalCategories = ['confirmed', 'merged', 'rejected', 'needsInfo'];

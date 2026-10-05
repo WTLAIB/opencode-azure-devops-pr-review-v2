@@ -20,7 +20,7 @@ import {
 import {
   OutputDispositionError, finalSubmissionIssues,
   parseUniqueJSON,
-  normalizeFindingFormat, parseReviewRequest, checkEnvelope,
+  normalizeFindingFormat, numberToolText, parseReviewRequest, checkEnvelope,
   readReviewOutput, acceptInitialReview, selectReviewSnapshot, acceptFinalReview,
 } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, createStageTiming, collectToolObservations } from './diagnostics.mjs';
@@ -705,6 +705,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         if (result?.metadata?.isError === true || result?.isError === true) g.reportedToolErrors.add(call);
         if (result?.metadata?.truncated === true) g.truncatedTools.add(call);
         if (!g.reportedToolErrors.has(call) && !g.truncatedTools.has(call)) g.completedTools.add(call);
+        // Show computed rows beside the request that retrieved the text. This
+        // changes only the model-facing view; raw output and MCP schemas stay
+        // intact. Native tools already own their display and source offsets.
+        if (projectToolRole(g.role) && !['shell', 'read', 'glob', 'grep'].includes(event.tool)) {
+          event.result = numberToolText(result, event.input);
+        }
       }
       if (ROLES[g.role]?.stage === 'comment-publish' && (g.failedTools.has(call) || g.reportedToolErrors.has(call))) {
         // Publication cannot rely on a model honoring "do not retry" after an

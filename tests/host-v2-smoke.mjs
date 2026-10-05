@@ -143,7 +143,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     appendFileSync(${JSON.stringify(join(fixture, 'mcp-calls.jsonl'))}, JSON.stringify(request.params) + '\\n');
     result = request.params.arguments.value === 'publisher-error'
       ? { isError: true, content: [{ type: 'text', text: 'Fixture publication tool failed.' }] }
-      : { content: [{ type: 'text', text: 'fixture-source' }] };
+      : { content: [{ type: 'text', text: 'fixture-source\\n\\nfixture-third-line\\n' }] };
   } else result = {};
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
 }
@@ -485,6 +485,15 @@ try {
     assert.equal(call.name, 'read_fixture');
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
   }
+  const numberedRequests = requests.filter(request => request.body.messages?.some(message =>
+    message.role === 'tool' && JSON.stringify(message.content).includes('AZPR numbered tool text')));
+  assert.ok(numberedRequests.length >= 4, 'Actual host must deliver numbered MCP text to reviewer and planner requests.');
+  for (const request of numberedRequests) {
+    const toolMessage = request.body.messages.find(message => message.role === 'tool' && JSON.stringify(message.content).includes('AZPR numbered tool text'));
+    assert.ok(JSON.stringify(toolMessage.content).includes('3 | fixture-third-line'));
+    assert.ok(JSON.stringify(toolMessage.content).includes('Request arguments:'));
+  }
+  assert.ok(numberedRequests.some(request => JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).findings), 'Comment planner receives the numbered source view.');
   assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 2);
   assert.equal(requests.length, 58);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;

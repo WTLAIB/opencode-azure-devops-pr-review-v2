@@ -102,6 +102,14 @@ byte offsets and do not add required fields to the planner's output. The
 publisher maps the complete saved positions to the available tool schema;
 actual remote coordinates still require independent verification.
 
+For matching plain-text tool responses, review and comment roles see a locally
+numbered view with the original request arguments. This helps locate anchors
+without manually counting blank lines and keeps the selected version visible.
+The raw tool output is preserved; `N |` prefixes are display aids, not anchor
+characters. Numbering does not prove that a response is a complete file or repair
+a model's selected anchor automatically. The saved preview remains the exact
+publication input, and its location still needs review.
+
 Every saved comment ends with one short disclosure: it is an AI-generated review,
 not human review or approval, followed by the distinct selected provider/model IDs
 from the review stages and comment preparation/publication. Repeated model IDs
