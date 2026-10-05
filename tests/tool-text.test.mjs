@@ -20,6 +20,31 @@ test('numbered display preserves final blank source lines and accepts absent dis
   assert.match(numberToolText({ output: 'a\nb' }).content[0].text, /1 \| a\n2 \| b$/);
 });
 
+for (const [key, label] of [['head', 'HEAD (PR source)'], ['base', 'BASE (PR target reference)']]) {
+  test(`numbered display labels exact nested ${key} arguments from the existing snapshot`, () => {
+    const snapshot = { head: 'b'.repeat(40), base: 'a'.repeat(40) };
+    const source = 'first\nsecond', result = numberToolText({ output: source }, { arbitrary: [{ value: snapshot[key] }] }, snapshot);
+    assert.ok(result.content[0].text.includes(`Review snapshot argument match: ${label}.`));
+    assert.match(result.content[0].text, /labels argument values only, not returned-content provenance/);
+    assert.equal(result.output, source);
+  });
+}
+
+test('snapshot labels do not infer a version from object keys, substrings or an absent snapshot', () => {
+  const snapshot = { head: 'b'.repeat(40), base: 'a'.repeat(40) };
+  for (const [input, reference] of [[{ [snapshot.head]: 'key only' }, snapshot],
+    [{ command: 'show ' + snapshot.head }, snapshot], [{ revision: snapshot.head }, undefined]]) {
+    assert.doesNotMatch(numberToolText({ output: 'first\nsecond' }, input, reference).content[0].text, /snapshot argument match/);
+  }
+});
+
+test('snapshot labels preserve both matches without choosing a side or certifying selector semantics', () => {
+  const revision = 'b'.repeat(40);
+  const display = numberToolText({ output: 'first\nsecond' }, { arbitraryText: revision }, { head: revision, base: revision }).content[0].text;
+  assert.match(display, /HEAD \(PR source\); BASE \(PR target reference\)/);
+  assert.match(display, /not returned-content provenance or a certified merge base/);
+});
+
 test('errors, truncation, wrappers, attachments and structured results pass through unchanged', () => {
   for (const result of [
     undefined, { output: 'single line' }, { output: { code: 'a\nb' } },

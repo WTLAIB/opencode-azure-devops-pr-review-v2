@@ -12,6 +12,31 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 snapshot argument labels
+
+The next live pair had one successful three-comment delivery, independently
+matched and deleted, with six publisher tool calls and no repeated source reads.
+Its counted anchor location was restored before preview and matched actual Azure
+coordinates. The other profile reversed base/head in both initial reviews and
+the verifier, copied base code into its claimed head tests, and produced a valid
+empty plan. Fourteen exact-commit reads matched independent bytes; correct bytes
+did not prevent incorrect version reasoning. A separate operator metadata read
+also failed, and no publication started. Empty plans must not invent findings.
+
+Numbered tool displays now label exact argument-value matches to an already
+admitted snapshot as HEAD (PR source) or BASE (PR target reference). The labels
+do not certify tool selector semantics, returned content or merge-base ancestry.
+Independent initials receive no invented snapshot. No required model field,
+model stage, permission rule or completion gate was added.
+
+Syntax and 420/420 offline tests passed. Actual OpenCode 2.0.22 fresh/replacement
+fixtures each passed with 63 loopback provider requests, 12 fixture MCP calls
+and four one-time host permission approvals. They observe a snapshot label in
+the real result hook and preserved planner handoff. Offline display replay of
+the failed verifier's six original observations labels three HEAD and three BASE
+argument matches without changing raw bytes. This is not a model rerun or proof
+that version reasoning is fixed for every future review.
+
 ## 2026-10-05 publication batch and original-error diagnostics
 
 A later live pair completed both reviews but failed publication. One publisher

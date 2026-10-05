@@ -65,7 +65,7 @@ export function visibleText(response) {
 }
 
 /** A display aid, not a source/commit certificate. Keep the raw output intact. */
-export function numberToolText(result, input) {
+export function numberToolText(result, input, snapshot) {
   if (typeof result?.output !== 'string' || !result.output.includes('\n') ||
       result.isError === true || result.metadata?.isError === true || result.metadata?.truncated === true) return result;
   // Never discard wrappers, alternate content, attachments or structured output.
@@ -75,8 +75,16 @@ export function numberToolText(result, input) {
   if (lines.at(-1) === '') lines.pop(); // A terminal newline does not add a source line.
   const numbered = lines.map((line, index) => `${index + 1} | ${line.replace(/\r$/, '')}`).join('\n');
   let request = '';
-  try { if (input !== undefined) request = `\nRequest arguments: ${JSON.stringify(input)}`; }
+  const values = new Set();
+  try { if (input !== undefined) request = `\nRequest arguments: ${JSON.stringify(input, (_key, value) => {
+    if (typeof value === 'string') values.add(value);
+    return value;
+  })}`; }
   catch { return result; } // An optional display aid must never fail a tool call.
+  const matches = [['head', 'HEAD (PR source)'], ['base', 'BASE (PR target reference)']]
+    .filter(([key]) => typeof snapshot?.[key] === 'string' && snapshot[key] && values.has(snapshot[key]))
+    .map(([, label]) => label);
+  if (matches.length) request += `\nReview snapshot argument match: ${matches.join('; ')}. This labels argument values only, not returned-content provenance or a certified merge base.`;
   return { ...result, content: [{ ...(result.content?.[0] ?? {}), type: 'text',
     text: `AZPR numbered tool text (display only).${request}\nRows count this returned text, not wrappers or missing source. The N | prefixes are not part of the original text.\n\n${numbered}` }] };
 }

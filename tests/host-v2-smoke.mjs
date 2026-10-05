@@ -392,6 +392,7 @@ try {
   const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
   assert.equal(plannerPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once with the planner, including original arguments.');
   assert.match(plannerPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
+  assert.match(plannerPayload.reviewToolText[0].text, /HEAD \(PR source\)/);
   assert.match(plannerPayload.reviewToolText[0].text, /1 \|   fixture-source\n2 \| \n3 \| fixture-third-line/);
   const publicationDebug = /Private debug directory: ([^\n]+)/.exec(publication)[1];
   const publicationStage = JSON.parse(await readFile(join(publicationDebug, '01-azpr-review-comment-publish.result.json'), 'utf8'));

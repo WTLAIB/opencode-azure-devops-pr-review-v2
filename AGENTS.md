@@ -60,8 +60,11 @@ The independent V1 repository and installation are outside this project's scope.
   firewall. Denied native attempts and observed tool failures are not evidence.
   Plain multiline tool text may receive a numbered model-facing display through
   the public result hook. Preserve raw output, wrappers, errors and truncation;
-  numbering is not provenance or a new source/eligibility gate. Successful
-  multiline review tool observations may be shared with the same-origin comment planner
+  numbering is not provenance or a new source/eligibility gate.
+  Existing admitted snapshots may label exact argument-value matches as PR
+  source HEAD or target-reference BASE. Do not parse MCP schemas, invent an
+  initial snapshot or treat these labels as proof of the returned version.
+  Successful multiline review tool observations may be shared with the same-origin comment planner
   together with original arguments. Keep them as untrusted temporary data;
   exclude native tool output and flagged errors/truncation, deduplicate identical
   observations, and do not introduce cloning, source classification or model calls.

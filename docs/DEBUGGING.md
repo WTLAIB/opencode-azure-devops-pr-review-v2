@@ -309,6 +309,11 @@ code and PR data, so it follows the same private-diagnostics handling as other
 request payloads. Empty observations do not block planning; the model may read
 missing data normally. They are not proof of correct source selection or copying.
 Publisher requests contain the saved target, snapshot, language and comments only.
+Numbered displays may include snapshot argument labels when that stage already
+knows a selected snapshot. Compare the original arguments and bytes if HEAD/BASE
+reasoning is wrong: a matching string does not certify selector semantics or the
+returned revision. Substring/key-name matches do not produce labels; both labels
+remain visible if the same value matches both references.
 
 
 For comment `anchorRestorations`, compare the retained response.json with the

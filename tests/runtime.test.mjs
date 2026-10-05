@@ -162,7 +162,11 @@ test('numbered text is scoped to active project roles and preserves raw/native/o
       await emit('tool', 'execute.after', event);
       assert.equal(event.result.output, raw);
       if (tool === 'shell') assert.equal(event.result.content[0].text, raw);
-      else assert.match(event.result.content[0].text, /3 \| fixture code$/);
+      else {
+        assert.match(event.result.content[0].text, /3 \| fixture code$/);
+        if (ROLES[session.agent].format === 'initial') assert.doesNotMatch(event.result.content[0].text, /snapshot argument match/);
+        else assert.match(event.result.content[0].text, /HEAD \(PR source\)/);
+      }
     }
     seen.push(session.agent);
   } });

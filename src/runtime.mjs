@@ -75,6 +75,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {Set<string>} [truncatedTools]
  * @property {Map<string,string>} [blockedNativeCalls] Only fixed native names, never arguments.
  * @property {object[]} [toolErrorDetails] Opt-in private error summaries, captured before interruption.
+ * @property {object} [referenceSnapshot] Existing admitted snapshot for argument display labels only.
  * @property {ReturnType<typeof createStageTiming>} [timing]
  * @property {string} [firstToolAt]
  * @property {string} [lastToolAt]
@@ -300,6 +301,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     /** @type {Grant} */
     const g = {
       run, role, model: idModel, expectedText: input,
+      referenceSnapshot: payload.snapshot,
       messages: 0, calls: 0, nonce: randomUUID(),
       primaryPrepared: false, requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 },
       rejectedRequests: 0, retryEvents: [],
@@ -771,7 +773,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         // changes only the model-facing view; raw output and MCP schemas stay
         // intact. Native tools already own their display and source offsets.
         if (projectToolRole(g.role) && !['shell', 'read', 'glob', 'grep'].includes(event.tool)) {
-          event.result = numberToolText(result, event.input);
+          event.result = numberToolText(result, event.input, g.referenceSnapshot);
           if (event.result !== result && ['initial', 'final'].includes(ROLES[g.role]?.format)) {
             // Share observed text with comment roles instead of asking them to
             // reconstruct source from finding prose. Keep arguments beside the

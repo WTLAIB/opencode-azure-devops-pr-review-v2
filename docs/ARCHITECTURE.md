@@ -21,7 +21,11 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 Active review and comment roles receive a numbered display of plain, multiline
 tool text when its single text block exactly matches the raw string output.
 The request arguments stay beside that display to help distinguish source
-versions. The original output bytes remain unchanged. Native displays, errors,
+versions. When the admitted stage already has a snapshot, exact string argument
+values matching its head/base receive HEAD (PR source) / BASE (PR target reference)
+labels. These label arguments only: they do not certify selector semantics,
+returned bytes or a merge base. No snapshot is invented for independent initials.
+The original output bytes remain unchanged. Native displays, errors,
 truncated results, structured output, wrappers and attachments pass through.
 This uses the public `tool.execute.after` result hook without classifying MCP
 names or actions. It adds no requests, fields, source certificate or completion

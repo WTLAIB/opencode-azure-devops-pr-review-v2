@@ -130,6 +130,9 @@ actual remote coordinates still require independent verification.
 For matching plain-text tool responses, review and comment roles see a locally
 numbered view with the original request arguments. This helps locate anchors
 without manually counting blank lines and keeps the selected version visible.
+When a stage already has a review snapshot, matching argument values are labeled
+HEAD (PR source) or BASE (PR target reference). This display comparison does not
+prove that the tool honored those arguments or returned the requested revision.
 The raw tool output is preserved; `N |` prefixes are display aids, not anchor
 characters. Numbering does not prove that a response is a complete file or repair
 a model's selected location automatically. The narrow formatting restoration
