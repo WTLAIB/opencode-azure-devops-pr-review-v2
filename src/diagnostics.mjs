@@ -41,6 +41,16 @@ export function collectToolObservations(grant) {
   };
 }
 
+// Capture the public execution error before interruption can replace it with an
+// aborted-tool outcome. Opt-in diagnostics only; never copy arguments, result
+// bodies, nested provider data, headers or reasoning into this summary.
+export function diagnosticToolError(event) {
+  const error = Object.fromEntries(['name', 'type', 'message', 'status']
+    .flatMap(key => ['string', 'number'].includes(typeof event.error?.[key]) ? [[key, event.error[key]]] : []));
+  return { tool: event.tool, source: event.status === 'error' ? 'execution' : 'result-flag',
+    ...(Object.keys(error).length ? { error } : {}) };
+}
+
 // Local hook intervals, not provider inference/queue time or Azure server time.
 // Keep only tool names and offsets: no call IDs, arguments, output or reasoning.
 export function createStageTiming(clock = () => performance.now()) {

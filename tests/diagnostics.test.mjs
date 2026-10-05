@@ -4,7 +4,21 @@ import { mkdtemp, rm, readdir, readFile, stat, symlink, writeFile } from 'node:f
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { createDiagnostics, createStageTiming, collectToolObservations, diagnosticResponse } from '../src/diagnostics.mjs';
+import { createDiagnostics, createStageTiming, collectToolObservations, diagnosticResponse, diagnosticToolError } from '../src/diagnostics.mjs';
+
+test('original tool error summaries exclude inputs, result bodies and nested provider data', () => {
+  const error = Object.assign(new Error('Original execution failure'), { type: 'tool-error', status: 503,
+    response: { body: 'PRIVATE_PROVIDER_BODY' }, headers: { authorization: 'PRIVATE_HEADER' } });
+  assert.deepEqual(diagnosticToolError({ tool: 'arbitrary_operation', status: 'error', error,
+    input: { token: 'PRIVATE_INPUT' }, result: { output: 'PRIVATE_RESULT' } }), {
+    tool: 'arbitrary_operation', source: 'execution',
+    error: { name: 'Error', type: 'tool-error', message: 'Original execution failure', status: 503 },
+  });
+  assert.deepEqual(diagnosticToolError({ tool: 'arbitrary_operation', status: 'completed',
+    result: { isError: true, content: [{ type: 'text', text: 'PRIVATE_RESULT' }] } }), {
+    tool: 'arbitrary_operation', source: 'result-flag',
+  });
+});
 
 test('V2 execution timing records error outcomes without source content or call IDs', () => {
   let now = 0; const timing = createStageTiming(() => now);

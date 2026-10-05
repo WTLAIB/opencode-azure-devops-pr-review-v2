@@ -23,7 +23,7 @@ import {
   normalizeFindingFormat, numberToolText, parseReviewRequest, checkEnvelope,
   readReviewOutput, acceptInitialReview, selectReviewSnapshot, acceptFinalReview,
 } from './output.mjs';
-import { createDiagnostics, diagnosticResponse, createStageTiming, collectToolObservations } from './diagnostics.mjs';
+import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices,
@@ -74,6 +74,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {Set<string>} [reportedToolErrors]
  * @property {Set<string>} [truncatedTools]
  * @property {Map<string,string>} [blockedNativeCalls] Only fixed native names, never arguments.
+ * @property {object[]} [toolErrorDetails] Opt-in private error summaries, captured before interruption.
  * @property {ReturnType<typeof createStageTiming>} [timing]
  * @property {string} [firstToolAt]
  * @property {string} [lastToolAt]
@@ -97,6 +98,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * @property {number} [blockedNativeToolCalls]
  * @property {string[]} [blockedNativeTools]
  * @property {number} [toolFailures]
+ * @property {object[]} [toolErrors] Original execution error summaries; no inputs or result bodies.
  * @property {import('./diagnostics.mjs').ToolObservations} [toolObservations]
  * @property {number} [modelRequests]
  * @property {object[]} [outputFormatCorrections]
@@ -305,6 +307,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(),
       blockedNativeCalls: new Map(),
       savedTextRestorations: [],
+      toolErrorDetails: state.settings.debug.enabled ? [] : undefined,
       timing: state.settings.debug.enabled ? createStageTiming() : undefined,
     };
     grants.set(made.id, g);
@@ -392,6 +395,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (g.blockedNativeCalls.size) record.blockedNativeTools = [...new Set(g.blockedNativeCalls.values())];
       record.toolFailures = g.failedTools.size;
       record.toolObservations = collectToolObservations(g);
+      if (g.toolErrorDetails?.length) record.toolErrors = g.toolErrorDetails;
       if (g.savedTextRestorations.length) record.savedTextRestorations = g.savedTextRestorations;
       record.modelRequests = g.calls;
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls,
@@ -500,13 +504,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       run.phase = publish ? 'comment publication' : 'comment preview';
       let status, report;
       if (!publish) review.plan = null; // Never leave an obsolete preview after a failed refresh.
-      const payload = { target: review.target, snapshot: review.snapshot, report: review.final.report,
+      const payload = publish ? { target: review.target, snapshot: review.snapshot,
+        outputLanguage: review.outputLanguage, comments: clone(review.plan.comments) }
+        : { target: review.target, snapshot: review.snapshot, report: review.final.report,
         reviewToolText: (review.toolText ?? []).map(({ tool, text }) => ({ tool, text })),
         outputLanguage: review.outputLanguage, provenance: review.provenance,
         reviewWarnings: review.final.reviewWarnings,
         findings: confirmedFindings(review), dispositions: review.final.dispositions,
-        attemptedFindings: [...review.attempts.values()],
-        ...(publish ? { comments: clone(review.plan.comments) } : {}) };
+        attemptedFindings: [...review.attempts.values()] };
       if (publish && !review.plan.comments.length) { status = 'NOTHING_TO_POST'; report = 'The saved preview contains no comments. No publisher was started.'; }
       else {
         // Mark the whole saved batch uncertain BEFORE any publisher can run.
@@ -776,7 +781,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
           }
         }
       }
-      if (ROLES[g.role]?.stage === 'comment-publish' && (g.failedTools.has(call) || g.reportedToolErrors.has(call))) {
+      const failed = g.failedTools.has(call) || g.reportedToolErrors.has(call);
+      if (failed) g.toolErrorDetails?.push(diagnosticToolError(event));
+      if (ROLES[g.role]?.stage === 'comment-publish' && failed) {
         // Publication cannot rely on a model honoring "do not retry" after an
         // error. Revoke synchronously without classifying MCP names or actions.
         void abortRun(g.run, 'A publisher tool failed. Publication state is uncertain; inspect Azure before another attempt.', 'INCOMPLETE');

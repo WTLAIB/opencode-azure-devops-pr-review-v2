@@ -61,7 +61,7 @@ The independent V1 repository and installation are outside this project's scope.
   Plain multiline tool text may receive a numbered model-facing display through
   the public result hook. Preserve raw output, wrappers, errors and truncation;
   numbering is not provenance or a new source/eligibility gate. Successful
-  multiline review tool observations may be shared with same-origin comment roles
+  multiline review tool observations may be shared with the same-origin comment planner
   together with original arguments. Keep them as untrusted temporary data;
   exclude native tool output and flagged errors/truncation, deduplicate identical
   observations, and do not introduce cloning, source classification or model calls.
@@ -113,6 +113,11 @@ The independent V1 repository and installation are outside this project's scope.
   argument strings containing a whole comment with its unique saved marker may
   be restored to saved content. This copies approved text, not MCP operation,
   target or coordinate authorization. Preserve host permissions and uncertainty.
+  Publisher input is the saved target/snapshot/language/comments only. Reuse
+  verified immutable anchors and make mutable PR/discussion checks batch-scoped;
+  no mandatory source/metadata reread per comment or repeated review selection.
+  Preserve original scalar execution errors in opt-in private diagnostics before
+  interrupting; do not copy tool arguments, result bodies or provider internals.
   Known non-confirmed dispositions may remain skipped notes, never eligible posts.
   Anchor formatting may be restored from one unambiguous captured literal range
   when argument values include the selected path and HEAD. Prefer matching

@@ -16,17 +16,24 @@ If the tool cannot express the saved target, content, and anchor, STOP. Do not
 substitute a general summary thread. No replies, updates, deletions, votes,
 approvals, merges, code edits, or pipeline/work-item changes are authorized.
 
-For EACH comment, sequentially:
-1. Read the complete anchor file at snapshot.head and verify its exact anchor text.
-2. Read ALL unfiltered existing thread pages. If the issue is already discussed,
-   including by a human and by meaning, STOP without writing. Never evade markers.
-3. Re-read PR identity, active status, and source HEAD immediately before writing.
-   If they differ from the reviewed target or snapshot, STOP.
-4. Create the saved comment once. Inspect the actual returned thread ID and
-   verify its content and anchor. Stop on permission denial, error, timeout, or
-   uncertainty. NEVER retry a create operation: it may have succeeded remotely.
+The saved preview already contains verified immutable-commit anchors. Reuse them;
+do not repeat the review or reread each source file just to recreate the same plan.
+Read additional source only if needed to resolve an actual uncertainty.
 
-Refresh evidence before each subsequent comment. Do not rerun the review.
+Before this batch, check the current PR identity, active status and source HEAD,
+and read all current unfiltered discussion pages once. Stop if the PR changed or
+a saved issue is already discussed, including by a human and by meaning. Prefer
+complete records containing comment bodies and deletion state when the available
+tool supports them. Do not individually reread explicitly deleted threads or
+comments, or complete discussions already returned in the list. Read further only
+for missing content, unclear deletion state or pagination. Never evade markers.
+
+Then create EACH saved comment once, sequentially. Inspect its actual returned
+thread ID, content and anchor. The same batch checks cover subsequent comments;
+do not repeat PR/thread/source reads after every successful create unless new
+evidence makes them necessary. Stop on permission denial, error, timeout or
+uncertainty. NEVER retry a create operation: it may have succeeded remotely.
+
 Return a JSON envelope:
 {"status":"DONE","posted":[{"findingId":"F-1","threadId":"actual returned thread ID"}]}
 Use status INCOMPLETE if any saved comment was not confirmed by you. Include in

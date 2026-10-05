@@ -101,7 +101,7 @@ disclosure, marker), locations, and skip reasons even in receipt mode. There is
 no numerical comment quota: all independently actionable eligible findings can
 be included. Duplicate, low-severity or unsupported findings still need skip
 reasons; removing the count limit does not relax evidence or anchor checks.
-Comment stages receive successful multiline tool text captured during the same
+The comment planner receives successful multiline tool text captured during the same
 review, with the original request arguments beside numbered rows. Identical
 observations are shared once. This is temporary in-process review data; it needs
 no checkout, clone, repository mapping or additional model request. Native
@@ -111,9 +111,16 @@ check missing source and mutable PR/discussion state. It helps avoid inventing
 anchor text from a finding description. Prefer a concise anchor; exact longer
 ranges are accepted instead of failing on an arbitrary five-line maximum.
 
-Inspect it before requesting publication. The publisher receives the saved
-content and coordinates, not a freshly generated plan. It is instructed to
-send the content exactly, without translation or relocation.
+Inspect it before requesting publication. The publisher receives only the target,
+snapshot, output language and saved comments, including their exact content,
+anchors and coordinates. The full review, findings and tool-text collection stay
+with planning. The publisher sends saved content without translation or relocation.
+It checks current PR identity/HEAD and complete discussions once before the batch,
+then creates comments sequentially. It reuses preview-verified immutable anchors;
+additional reads are for missing or uncertain evidence, not a mandatory repeated
+source/PR/thread scan for each comment. Complete returned discussions and explicit
+deletion records do not need individual rereads. These remain model instructions,
+not an independently enforced remote-state certificate.
 The runtime derives `startOffset` and `endOffset` from the saved anchor using
 the Azure SDK's one-based, line-local character positions. These are not file
 byte offsets and do not add required fields to the planner's output. The

@@ -214,6 +214,14 @@ private output paths, or inferred causes. Inspect original host tool history to
 check exact versions and distinguish directory selector failures, content-read
 failures, search-service errors, and actual recovery.
 
+With debug enabled, `toolErrors` also retains the tool name and scalar execution
+error name/type/message/status observed before grant revocation. Interruption can
+otherwise replace the original host tool error with an aborted outcome. Explicit
+error-result flags without an execution error retain only their source, not the
+result body. These private summaries omit arguments, headers, nested provider
+data and reasoning; receipts do not echo them. Error messages may still contain
+sensitive text, so do not publish the diagnostic files.
+
 ## Timing, cancellation, and large output
 
 `requestObservations` separates primary, compaction, generate, title and unknown
@@ -295,11 +303,12 @@ acts as though tools are missing. Never troubleshoot by exposing credentials or
 printing the host configuration; native shell retains ordinary host authority.
 
 
-Comment request diagnostics include `reviewToolText`: already observed successful
+Planner request diagnostics include `reviewToolText`: already observed successful
 review tool text with arguments and numbered display. This can contain source
 code and PR data, so it follows the same private-diagnostics handling as other
 request payloads. Empty observations do not block planning; the model may read
 missing data normally. They are not proof of correct source selection or copying.
+Publisher requests contain the saved target, snapshot, language and comments only.
 
 
 For comment `anchorRestorations`, compare the retained response.json with the

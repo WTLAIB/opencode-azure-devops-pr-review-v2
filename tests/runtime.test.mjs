@@ -209,6 +209,8 @@ test('comment-plan notes survive locally without entering saved publication cont
   assert.equal(record.outputFormatCorrections[0].action, 'extract-comment-plan-envelope');
   assert.match(await f.command('pr-comment', id + ' --publish'), /\] MODEL_REPORTED_POSTED/);
   const publication = JSON.parse(f.prompts().at(-1).text);
+  assert.deepEqual(Object.keys(publication).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
+  assert.equal(JSON.parse(f.prompts().at(-2).text).report, 'FINAL_REPORT');
   assert.ok(publication.comments.every(comment => !comment.content.includes('PRIVATE_PLANNER_NOTE')));
   assert.equal(f.prompts().length, 5);
 });
@@ -234,14 +236,17 @@ for(const native of BLOCKED_NATIVE_TOOLS) test(`source-only role execution guard
   assert.ok(!f.calls.some(c=>c.kind==='executed-tool'&&c.tool===native));
   const result=await resultLog(receipt);assert.equal(result.stages[0].blockedNativeToolCalls,1);assert.doesNotMatch(JSON.stringify(result),/PRIVATE_INPUT/);
 });
-test('MCP names stay unclassified; diagnostics retain error and truncation observations without content',async t=>{
+test('MCP names stay unclassified; diagnostics retain counts and private errors without tool bodies',async t=>{
   const f=await fixture(t,{skipTool:true,async during({invoke,session}){
     await invoke(session.id,'arbitrary_server_operation',{output:'PRIVATE_OUTPUT',metadata:{isError:true}});
     await invoke(session.id,'other_operation',{output:'PRIVATE_OUTPUT',metadata:{truncated:true}});
     await invoke(session.id,'failed_operation',undefined,'error');
   }}),receipt=await f.command('pr-check'),result=await resultLog(receipt),stage=result.stages[0];
   assert.match(receipt,/] READY/);assert.equal(stage.completedTools,0);assert.equal(stage.toolObservations.reportedErrors,1);assert.equal(stage.toolObservations.truncated,1);assert.equal(stage.toolFailures,1);
-  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_OUTPUT|PRIVATE_INPUT|PRIVATE_ERROR/);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE_OUTPUT|PRIVATE_INPUT/);
+  assert.doesNotMatch(JSON.stringify(stage.toolObservations),/PRIVATE_/);
+  assert.equal(stage.toolErrors.at(-1).error.message, 'PRIVATE_ERROR');
+  assert.doesNotMatch(receipt,/PRIVATE_OUTPUT|PRIVATE_INPUT|PRIVATE_ERROR/);
 });
 for(const hook of ['skipPromptHook','skipContextHook','skipModelHook']) test(`missing ${hook} fails closed`,async t=>{const f=await fixture(t,{[hook]:true});assert.match(await f.command('pr-check'),/] INCOMPLETE/);});
 for(const change of ['text','nonce','model','variant','agent']) test(`private ${change} mutation is rejected`,async t=>{
@@ -629,6 +634,12 @@ for(const failure of ['execution','metadata','result']) test(`publisher ${failur
   assert.equal(await checked.promise,undefined);
   assert.match(published,/] INCOMPLETE/);assert.match(published,/publisher tool failed/i);
   assert.match(published,/UNKNOWN/);assert.doesNotMatch(published,/MODEL_REPORTED_POSTED/);
+  assert.doesNotMatch(published,/PRIVATE_ERROR|PRIVATE_INPUT/);
+  const stage = (await resultLog(published)).stages[0];
+  assert.deepEqual(stage.toolErrors, [{ tool: 'arbitrary_operation',
+    source: failure === 'execution' ? 'execution' : 'result-flag',
+    ...(failure === 'execution' ? { error: { name: 'Error', message: 'PRIVATE_ERROR' } } : {}) }]);
+  assert.doesNotMatch(JSON.stringify(stage.toolErrors), /PRIVATE_INPUT/);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='arbitrary_operation').length,1);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&['another_operation','fixture_mcp_write'].includes(c.tool)).length,0);
   await assert.rejects(f.command('pr-comment',id+' --publish'),/already had a publication/);

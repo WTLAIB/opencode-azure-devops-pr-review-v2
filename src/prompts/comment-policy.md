@@ -6,7 +6,7 @@ Use the configured outputLanguage for human-facing comment titles, explanations,
 
 Publish only confirmed, evidence-backed high/medium-impact defects. Do not turn uncertainty, optional refactoring, style preferences, praise, or a clean bill of health into PR comments. A severity label describes impact, not a reviewer vote or merge decision. One root cause per thread; combine duplicate findings and skip existing non-deleted discussions even if resolved/closed. An explicitly deleted thread or comment is a deletion record, not an existing discussion or deduplication marker. Inspect remaining non-deleted comments in partially deleted threads. A missing body alone is not proof of deletion; if deletion state or remaining content is unclear, disclose the uncertainty. Never reopen, delete or resolve someone else's thread. Deletion does not clear attemptedFindings or authorize retrying an uncertain publication.
 
-The supplied findings are the final verifier's corrected findings, not the
+For planning, the supplied findings are the final verifier's corrected findings, not the
 initial candidates. They are authoritative for the verified trigger, impact,
 location, severity and qualifications. Do not revive rejected assumptions from
 the report or inflate severity to make a finding eligible. Use the exact verified
@@ -22,12 +22,14 @@ just to fit; the complete finding remains in the local review report.
 
 Use a changed file at the reviewed HEAD and the smallest useful RIGHT-side range. Prefer a few lines; a longer exact range is acceptable when needed for context. Use applicable captured reviewToolText or an available read operation to obtain that complete file at snapshot.head. Verify the defect actually applies to those lines and quote them exactly in the plan's anchor field. Do not invent line numbers or use base-file coordinates. Skip deleted-only files, binary files, source that remains truncated after supported continuation, and findings that cannot be reliably anchored. Explain every skipped confirmed finding locally.
 
-Use appropriate available MCP read operations to verify the current PR identity
+During planning, use appropriate available MCP read operations to verify the current PR identity
 and HEAD, read source at the exact reviewed commit, and enumerate ALL existing
 threads with complete pagination and no status/author filters. Inspect all
 existing discussions, not just this bot's markers. A single thread's comments
 are not proof that all threads were checked. Choose parameter names and values
-from the actual tool schemas; do not assume a fixed API family.
+from the actual tool schemas; do not assume a fixed API family. Publication uses
+the saved plan and the batch checks in the publisher instructions; it does not
+repeat finding selection, source reconstruction or per-comment metadata reads.
 
 The plugin coordinates models and validates the plan format; it does not police
 MCP names, actions, arguments, or output schemas. You must honor the task's

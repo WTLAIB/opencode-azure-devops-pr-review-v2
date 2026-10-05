@@ -388,11 +388,16 @@ try {
   assert.match(publication, /UNKNOWN/);
   assert.equal(requests.length, beforePublication + 1, 'A publisher tool error must prevent another model request.');
   const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
-  assert.equal(publicationPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once, including the original request arguments.');
-  assert.match(publicationPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
-  assert.match(publicationPayload.reviewToolText[0].text, /1 \|   fixture-source\n2 \| \n3 \| fixture-third-line/);
+  assert.deepEqual(Object.keys(publicationPayload).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
   const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
-  assert.deepEqual(plannerPayload.reviewToolText, publicationPayload.reviewToolText);
+  assert.equal(plannerPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once with the planner, including original arguments.');
+  assert.match(plannerPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
+  assert.match(plannerPayload.reviewToolText[0].text, /1 \|   fixture-source\n2 \| \n3 \| fixture-third-line/);
+  const publicationDebug = /Private debug directory: ([^\n]+)/.exec(publication)[1];
+  const publicationStage = JSON.parse(await readFile(join(publicationDebug, '01-azpr-review-comment-publish.result.json'), 'utf8'));
+  assert.equal(publicationStage.toolErrors.length, 1);
+  assert.match(publicationStage.toolErrors[0].error.message, /Fixture publication tool failed/);
+  assert.doesNotMatch(publication, /Fixture publication tool failed/);
   assert.equal(publicationPayload.comments[0].startOffset, 1);
   assert.equal(publicationPayload.comments[0].endOffset, 16);
   assert.equal(publicationPayload.comments[0].anchor, '  fixture-source');
@@ -417,6 +422,8 @@ try {
   commentShellProbe = 'comment-plan-allowed';
   await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID, delivery: 'steer' });
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /\] PREVIEW/);
+  const localPlanPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
+  assert.deepEqual(localPlanPayload.reviewToolText, [], 'Native shell output is not cached as MCP review text.');
   assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
   commentShellProbe = 'comment-publish-allowed';
   const beforeLocalPublisher = requests.length;
@@ -424,7 +431,7 @@ try {
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /publisher tool failed/i);
   assert.equal(requests.length, beforeLocalPublisher + 2, 'Local verification may run, but a later publisher error still stops every subsequent request.');
   const localPublicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
-  assert.deepEqual(localPublicationPayload.reviewToolText, [], 'Native shell output is not cached as MCP review text.');
+  assert.equal(Object.hasOwn(localPublicationPayload, 'reviewToolText'), false);
   assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
   commentShellProbe = undefined;
   const approvedOrigin = await invokeReview('pr-review', 'project-approved', /\] COMPLETE/, { directory: directories['other-project'], permissions: shellPermission('ask'), approve: true });

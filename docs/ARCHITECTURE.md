@@ -256,6 +256,11 @@ Explicit --publish requires a saved preview; no separate config switch applies.
 The saved plan adds line-local character offsets derived from its existing
 anchor. This does not add fields the planner must generate or inspect MCP schemas
 in code; the publisher translates the saved positions to the available tool.
+Publisher input contains only the target, snapshot, output language and saved
+comments. Full report/finding/source observations remain planner context. Current
+PR and discussion checks apply once to the batch; preview-verified immutable
+anchors need no mandatory reread. Models read further when evidence is missing
+or uncertain, without adding a stage or a request budget.
 Before publication, mark every planned item uncertain; results can only update
 that ledger to model-reported outcomes. Any observed execution-hook error or
 explicit error result during publication synchronously revokes grants before
@@ -267,6 +272,9 @@ Optional diagnostics persist requests, visible answers, stage results and render
 reports under private permissions; never provider reasoning or full host config.
 Tool hook counts/timing do not audit source contents. Missing outcomes remain
 unknown; an MCP error, host truncation and a blocked native attempt are distinct.
+Opt-in `toolErrors` retain scalar execution-error fields before cancellation can
+replace the host outcome with an interruption. They omit arguments, result bodies
+and nested provider data; receipts do not echo these private messages.
 Request-kind observations count hook events and authorized primary preparations,
 not billable HTTP requests. The retry hook preserves the host's proposal during
 ordinary review, rejects it for revoked grants, and
@@ -285,7 +293,7 @@ claims. Model/provider/MCP/OS acceptance remains separate from host API tests.
 
 
 Successful multiline review tool text is retained with its observed request
-arguments for same-origin comment planning/publication. The existing display
+arguments for same-origin comment planning. The existing display
 eligibility excludes flagged failures, truncation and unsupported wrappers;
 native project-tool output is excluded. Identical tool/arguments/raw-text
 observations are deduplicated, with no source-content classification or new

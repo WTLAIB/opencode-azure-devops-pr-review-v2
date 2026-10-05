@@ -12,6 +12,31 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 publication batch and original-error diagnostics
+
+A later live pair completed both reviews but failed publication. One publisher
+created two of three saved comments before a tool error; independent Azure reads
+confirmed those two matched saved text and coordinates, and both were deleted.
+The other publisher failed a discussion read before writing. Cancellation replaced
+both original tool errors with interruption outcomes in host history. The original
+causes cannot be established from those records; a later identical read succeeded,
+which does not prove that the first error was transient. All failure records remain
+private. Twenty-two individual historical-comment reads and a host model-request
+retry also made the first publisher slow; neither proves an Azure service defect.
+
+Publisher input now contains only the saved target, snapshot, language and comments.
+Planning retains full review/source context. Mutable PR/discussion checks are
+batch-scoped, and immutable anchors can be reused without mandatory source rereads.
+Opt-in diagnostics preserve scalar execution errors before interruption. Immediate
+grant revocation, publication uncertainty and the prohibition on write retries remain.
+
+Syntax and 416/416 offline tests passed. Actual OpenCode 2.0.22 fresh/replacement
+fixtures each passed with 63 loopback provider requests, 12 fixture MCP calls and
+four one-time host permission approvals. They verify the reduced publisher payload,
+preserved planner observations, original MCP error retention, private receipt
+handling and zero subsequent requests after the publisher error. These fixtures
+do not establish live model adherence to the batch-read guidance or Azure behavior.
+
 ## 2026-10-05 comment-plan extraction and tool registration
 
 The next live round again completed both reviews. One retained an unavailable
