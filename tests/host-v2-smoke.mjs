@@ -54,6 +54,8 @@ let child;
 let logs = '';
 let rejectNextPlan = true;
 let commentShellProbe;
+const continuedResponses = new Map();
+const expectedPublishedText = [];
 const provider = createServer(async (request, response) => {
   if (request.url === '/v1/forbidden') { forbiddenFetches++; response.end('Forbidden fixture fetch was reached'); return; }
   let body = '';
@@ -66,7 +68,9 @@ const provider = createServer(async (request, response) => {
   }
   const tool = parsed.tools?.find(item => item.function?.description === 'Read-only deterministic smoke fixture.');
   const hasResult = parsed.messages?.some(message => message.role === 'tool');
-  const rawPrompt = parsed.messages?.findLast(message => message.role === 'user')?.content;
+  const sessionID = request.headers['x-opencode-session-id'];
+  const continued = continuedResponses.get(sessionID);
+  const rawPrompt = continued?.prompt ?? parsed.messages?.findLast(message => message.role === 'user')?.content;
   let payload;
   try { payload = JSON.parse(rawPrompt); } catch {}
   if (rejectNextPlan && payload?.target && payload.findings && !payload.comments) {
@@ -109,7 +113,8 @@ const provider = createServer(async (request, response) => {
     : shellControl ? { command: `touch ${shellQuote(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' }
     : forced === 'shell' ? { command: `touch ${shellQuote(join(fixture, 'NATIVE_EXECUTED'))}`, description: 'Fixture forbidden shell' }
     : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` }
-    : { value: publisher ? 'publisher-error' : 'fixture-source' };
+    : { value: publisher ? 'publisher-error' : 'fixture-source', ...(publisher ? { payload: payload.comments[0].content.replace('Restore the guard', 'Please restore the guard') } : {}) };
+  if (publisher && callTool && toolName !== 'shell') expectedPublishedText.push(payload.comments[0].content);
   let content = JSON.stringify(final);
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
   if (userContext === 'smoke-review' && payload.reviews) content = 'Example: fn({"item": 3}).\n```json\n' + content + '\n```';
@@ -117,12 +122,20 @@ const provider = createServer(async (request, response) => {
   if (userContext === 'smoke-prose' && (parsed.model === 'functional' || payload.reviews)) {
     content = payload.reviews ? 'Useful final prose with an unresolved evidence gap.' : 'Useful initial prose about a reachable fixture issue.';
   }
+  let incomplete = false;
+  if (continued) { content = continued.tail; continuedResponses.delete(sessionID); }
+  else if (!callTool && userContext === 'smoke-review' && payload.reviews) {
+    const split = content.indexOf('Deterministic fixture final report.') + 14;
+    continuedResponses.set(sessionID, { prompt: rawPrompt, tail: content.slice(split) });
+    content = content.slice(0, split); incomplete = true;
+  }
   const delta = callTool
     ? { tool_calls: [{ index: 0, id: forced ? 'call_fixture_forbidden_' + (priorToolResults + 1) : 'call_fixture_read', type: 'function', function: { name: toolName, arguments: JSON.stringify(args) } }] }
     : { content };
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   const emit = value => response.write(`data: ${JSON.stringify(value)}\n\n`);
   emit({ id: 'chatcmpl_fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', ...delta }, finish_reason: null }] });
+  if (incomplete) { response.end(); return; }
   emit({ id: 'chatcmpl_fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: callTool ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   response.end('data: [DONE]\n\n');
 });
@@ -139,7 +152,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (request.id === undefined) continue;
   let result;
   if (request.method === 'initialize') result = { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'azpr-smoke-fixture', version: '1.0.0' } };
-  else if (request.method === 'tools/list') result = { tools: [{ name: 'read_fixture', description: 'Read-only deterministic smoke fixture.', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } }] };
+  else if (request.method === 'tools/list') result = { tools: [{ name: 'read_fixture', description: 'Read-only deterministic smoke fixture.', inputSchema: { type: 'object', properties: { value: { type: 'string' }, payload: { type: 'string' } }, required: ['value'] } }] };
   else if (request.method === 'tools/call') {
     appendFileSync(${JSON.stringify(join(fixture, 'mcp-calls.jsonl'))}, JSON.stringify(request.params) + '\\n');
     result = request.params.arguments.value === 'publisher-error'
@@ -345,6 +358,10 @@ try {
   }
   assert.match(workflowReceipts.at(-1).receipt, /output-format-corrections=1/);
   assert.match(workflowReceipts.at(-1).receipt, /azpr-review-risk: PARTIAL/);
+  const continuedStage = JSON.parse(await readFile(join(reviewDebug, '03-azpr-review-verifier.result.json'), 'utf8'));
+  assert.equal(continuedStage.hostContinuations, 1);
+  assert.match(continuedStage.reviewWarnings.join(' '), /OpenCode continued 1 incomplete text stream/);
+  assert.equal(continuedResponses.size, 0);
   const reviewID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
   const beforeRejectedPlan = requests.length;
   await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID, delivery: 'steer' });
@@ -505,9 +522,15 @@ try {
     assert.ok(JSON.stringify(toolMessage.content).includes('3 | fixture-third-line'));
     assert.ok(JSON.stringify(toolMessage.content).includes('Request arguments:'));
   }
-  assert.ok(numberedRequests.some(request => JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).findings), 'Comment planner receives the numbered source view.');
+  assert.ok(numberedRequests.some(request => request.body.messages.some(message => { try { return message.role === 'user' && JSON.parse(message.content).findings; } catch { return false; } })), 'Comment planner receives the numbered source view.');
   assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 2);
-  assert.equal(requests.length, 58);
+  assert.deepEqual(mcpCalls.filter(call => call.arguments.value === 'publisher-error').map(call => call.arguments.payload), expectedPublishedText, 'The actual MCP must receive saved text after execute.before normalization.');
+  const cancellationSiblingRequests = requests.filter(request => {
+    try { return request.body.model === 'risk' && JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).userContext === 'hang-verification'; }
+    catch { return false; }
+  }).length;
+  assert.ok([1, 2].includes(cancellationSiblingRequests), 'Cancellation may stop the sibling before or after its tool-result response.');
+  assert.equal(requests.length - cancellationSiblingRequests, 57);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {

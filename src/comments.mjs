@@ -1,5 +1,5 @@
 // Tool-agnostic comment plans and explicitly MODEL-REPORTED publication receipts.
-// No MCP name mapping, argument adapter, or provider-response verification.
+// No MCP name mapping, action/field adapter, or provider-response verification.
 import { createHash } from 'node:crypto';
 
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -88,6 +88,28 @@ export function validateCommentPlan(result, review) {
   }
   if (accounted.size !== eligible.size) fail('Planner omitted confirmed findings instead of explaining exclusions.');
   return { comments, skipped: result.skipped };
+}
+
+/** Restore a whole marked comment from the saved plan, independent of tool schema.
+ * Targets, coordinates, marker searches and unrecognized strings are untouched.
+ * A marker identifies saved text; it does not prove where a tool will publish it.
+ */
+export function restoreSavedCommentText(input, comments) {
+  const restored = [];
+  function visit(value) {
+    if (typeof value === 'string') {
+      const tags = value.match(/<!-- azpr-comment:[a-f0-9]{32} -->/g) ?? [];
+      if (tags.length !== 1 || !value.endsWith(tags[0])) return value;
+      const saved = comments.find(comment => comment.marker === tags[0]);
+      if (!saved || !value.startsWith(`issue (${saved.severity}): `) || value === saved.content) return value;
+      restored.push(saved.findingId);
+      return saved.content;
+    }
+    if (Array.isArray(value)) return value.map(visit);
+    if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
+    return value;
+  }
+  return { input: visit(input), restored };
 }
 
 /** Validate only the model's report shape, NEVER claim provider verification. */

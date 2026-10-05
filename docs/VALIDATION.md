@@ -627,3 +627,27 @@ host version has passed without its own evidence. The plugin adds no iteration,
 stage-character, or default whole-command timeout. Finite explicit timeouts and
 manual cancellation remain available. Host compaction, service limits, incomplete
 MCP responses, model mistakes, and provider costs remain real constraints.
+
+
+## Successful host continuation and saved publication text (2026-10-05)
+
+The transport now recognizes the pinned host's missing-finish text continuation
+for initial/final reviews, preserving raw fragments and requiring a successful
+final session plus ordinary review validation. A captured failed verifier
+replays as COMPLETE offline after joining its literal text fragments; the
+historical live result remains INCOMPLETE. Other interruption and identity
+checks still apply. Comment/check execution keeps its strict path.
+
+Publisher whole-comment strings with a unique saved marker are restored to saved
+text through the public input hook. Fixture MCP independently receives the saved
+text even when the simulated publisher adds wording; target/coordinate checks
+remain distinct, and any publisher tool error still revokes further requests.
+
+Syntax and 408 offline tests pass. Fresh and replacement actual OpenCode 2.0.22
+fixtures pass with 12 MCP calls each and 63 loopback provider requests in the
+recorded passing runs, including a real host-generated stream continuation. A
+cancellation sibling may finish before or after its tool-result response; the
+fixture accounts for that one-request race explicitly. Initial receipt-only
+warning and fixed-total-count test assertion failures remain in private evidence.
+These fixtures establish host integration, not real Azure publication or UI
+rendering correctness.

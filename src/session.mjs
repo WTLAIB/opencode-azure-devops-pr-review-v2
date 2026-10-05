@@ -115,12 +115,44 @@ function providerFailure(final, assistants) {
       (Array.isArray(message.content) ? message.content.filter(part => part?.type === 'tool').length : 0), 0) };
 }
 
+// OpenCode 2.0.22 emits this synthetic message after scheduling continuation of
+// an incomplete stream with visible output. It is not another admitted prompt.
+const hostContinuation = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
+function continuedText(turn, enabled) {
+  const recovered = new Set(), synthetic = new Set();
+  if (!enabled) return { recovered, synthetic };
+  const start = turn.findIndex(message => message?.type === 'assistant' && message.error);
+  if (start < 0) return { recovered, synthetic };
+  const tail = turn.slice(start, -1);
+  // Recover only text fragments followed directly by a successful final text.
+  // Never accept tools, foreign input, compaction or another unfinished output.
+  for (let index = 0; index < tail.length; index += 2) {
+    const message = tail[index];
+    if (message?.type !== 'assistant' || !Array.isArray(message.content) ||
+        !message.content.every(part => ['text', 'reasoning'].includes(part?.type)) ||
+        !message.content.some(part => part?.type === 'text' && textValue(part.text)) ||
+        !Number.isFinite(message.time?.completed)) return { recovered: new Set(), synthetic: new Set() };
+    if (index === tail.length - 1 && message.finish === 'stop' && !message.error) break;
+    const next = tail[index + 1], error = message.error;
+    if (message.finish !== 'error' || error?.type !== 'provider.invalid-output' || error.status !== 200 ||
+        error.message !== 'OpenAI Chat stream ended without finish_reason' ||
+        !Number.isInteger(message.retry?.attempt) || message.retry.attempt < 1 ||
+        !Number.isFinite(message.retry?.at) || message.retry.at < message.time.completed ||
+        !isDeepStrictEqual(message.retry.error, error) ||
+        next?.type !== 'synthetic' || next.text !== hostContinuation ||
+        index + 2 >= tail.length) return { recovered: new Set(), synthetic: new Set() };
+    recovered.add(message);
+    synthetic.add(next);
+  }
+  return { recovered, synthetic };
+}
+
 /**
  * Admit exactly one literal prompt, await idle, then read authoritative context.
  * Context is not a full history API: if compaction removes the admitted input,
  * correlation fails closed. Events cannot substitute for that missing evidence.
  */
-export async function requestReview(context, { sessionID, text, role, model, metadata, signal }) {
+export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false }) {
   const api = sessionApi(context, ['prompt', 'wait', 'context', 'get']);
   if (!textValue(sessionID) || !textValue(text) || !textValue(role)) throw new Error('[AZPR] A session, role and literal prompt are required.');
   const selectedModel = modelRef(model);
@@ -145,7 +177,8 @@ export async function requestReview(context, { sessionID, text, role, model, met
     throw new Error('[AZPR] The projected review prompt differs from the admitted literal input.');
   }
   const turn = messages.slice(indexes[0] + 1);
-  if (turn.some(message => ['user', 'synthetic', 'agent-switched', 'model-switched', 'location-switched', 'shell', 'skill'].includes(message?.type))) {
+  const continuation = continuedText(turn, allowHostContinuations);
+  if (turn.some(message => ['user', 'synthetic', 'agent-switched', 'model-switched', 'location-switched', 'shell', 'skill'].includes(message?.type) && !continuation.synthetic.has(message))) {
     throw new Error('[AZPR] Reviewer context changed after admission; output cannot be assigned to the authorized request.');
   }
   const terminal = turn.at(-1);
@@ -173,14 +206,22 @@ export async function requestReview(context, { sessionID, text, role, model, met
     throw responseError('[AZPR] Reviewer agent or model binding changed; no output was accepted.', answer);
   }
   if (!final || turn.at(-2) !== final || !Array.isArray(final.content) || !Number.isFinite(final.time?.completed) ||
-      assistants.some(message => message.error || !Number.isFinite(message.time?.completed) ||
-        !['stop', 'tool-calls'].includes(message.finish))) {
+      assistants.some(message => !continuation.recovered.has(message) && (message.error || !Number.isFinite(message.time?.completed) ||
+        !['stop', 'tool-calls'].includes(message.finish)))) {
     throw responseError('[AZPR] Reviewer context has no complete, successful final assistant response.', answer);
   }
   if (final.finish !== 'stop' || final.content.some(part => part?.type === 'tool')) {
     throw responseError('[AZPR] Reviewer output did not end with a final text response; no partial output was accepted.', answer);
   }
   if (answer.parts.some(part => typeof part.text !== 'string')) throw new Error('[AZPR] Invalid reviewer text content.');
+  if (continuation.recovered.size) {
+    const fragments = [...continuation.recovered, final].map(message => normalizeAnswer(message, sessionID));
+    if (fragments.some(fragment => fragment.parts.some(part => typeof part.text !== 'string'))) throw new Error('[AZPR] Invalid continued reviewer text.');
+    // Preserve literal boundaries, including a stream ending inside a JSON string.
+    // The ordinary output parser decides whether this is an unambiguous review.
+    answer.parts = [{ type: 'text', text: fragments.flatMap(fragment => fragment.parts.map(part => part.text)).join('') }];
+    answer.continuation = { count: continuation.recovered.size, fragments };
+  }
   aborted(signal);
   return answer;
 }

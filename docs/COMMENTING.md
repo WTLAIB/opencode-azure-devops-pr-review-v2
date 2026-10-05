@@ -172,9 +172,18 @@ high/medium labels matching the verified finding, body length, changed-file path
 line count, and an explanation for every skipped eligible finding. It adds stable
 markers. These checks are not proof that source lines or findings are correct.
 
+Before a publisher tool executes, the runtime restores a whole comment string
+with one recognized saved marker to the saved content. This prevents paraphrasing
+during copying. It does not classify tool names, actions or argument field names,
+and leaves other arguments, coordinates, marker-only searches and ambiguous or
+unknown marker strings untouched. Diagnostic `savedTextRestorations` records
+finding IDs without copying argument values. Host permissions still apply.
+
 Reading source, checking HEAD/identity, finding duplicate discussions, using only
-create operations, sending exact content to the intended PR, and verifying the
-actual create response are **model instructions**, not MCP-call guards.
+create operations, selecting the intended target/coordinates and verifying the
+actual create response remain **model instructions**, not MCP-call guards.
+Unrecognized or missing markers are not corrected. Independently inspect Azure;
+text restoration is not evidence that a correct write happened.
 
 Before starting a publisher, the runtime marks the whole batch UNKNOWN. A valid
 publisher report with all planned IDs can produce MODEL_REPORTED_POSTED, showing

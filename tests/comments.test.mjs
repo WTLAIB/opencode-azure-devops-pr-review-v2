@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { commentTarget, confirmedFindings, recordPublishResult, validateCommentPlan } from '../src/comments.mjs';
+import { commentTarget, confirmedFindings, recordPublishResult, restoreSavedCommentText, validateCommentPlan } from '../src/comments.mjs';
 
 const snapshot={head:'a'.repeat(40),prId:123,files:['/src/example.ts']};
 const target=commentTarget('https://dev.azure.com/org/project/_git/repo/pullrequest/123',snapshot);
@@ -105,3 +105,22 @@ for(const posted of [[{findingId:'X-1',threadId:42}],[{findingId:'F-1',threadId:
     assert.equal([...r.attempts.values()][0].state,'UNKNOWN');
   });
 }
+
+test('publisher strings with one saved marker are restored without changing target or coordinates', () => {
+  const comments = planned().plan.comments, saved = comments[0];
+  const changed = saved.content.replace('Add a guard', 'Please add a guard');
+  const input = { target: 'repo', where: { line: 2, offset: 1 }, arbitrary: [{ value: changed }], untouched: 'read' };
+  const original = structuredClone(input);
+  const normalized = restoreSavedCommentText(input, comments);
+  assert.deepEqual(normalized.input, { ...input, arbitrary: [{ value: saved.content }] });
+  assert.deepEqual(normalized.restored, ['F-1']);
+  assert.deepEqual(input, original);
+  assert.deepEqual(restoreSavedCommentText(normalized.input, comments).restored, []);
+});
+test('publisher restoration leaves ambiguous, unknown and search-only strings untouched', () => {
+  const comments = planned().plan.comments, saved = comments[0];
+  for (const value of [saved.marker, 'search ' + saved.marker, saved.content + saved.marker,
+    saved.content.replace(saved.marker, '<!-- azpr-comment:' + '0'.repeat(32) + ' -->'), saved.content + ' trailing text']) {
+    assert.deepEqual(restoreSavedCommentText({ value }, comments), { input: { value }, restored: [] });
+  }
+});

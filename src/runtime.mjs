@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport } from './session.mjs';
-import { commentTarget, confirmedFindings, recordPublishResult, targetKey, validateCommentPlan } from './comments.mjs';
+import { commentTarget, confirmedFindings, recordPublishResult, restoreSavedCommentText, targetKey, validateCommentPlan } from './comments.mjs';
 import {
   COMMANDS, ROLES, PROMPTS, nativeToolPermissions, projectToolRole, roleFor, initialRoles, buildAgents,
   validateSettings,
@@ -304,6 +304,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(),
       blockedNativeCalls: new Map(),
+      savedTextRestorations: [],
       timing: state.settings.debug.enabled ? createStageTiming() : undefined,
     };
     grants.set(made.id, g);
@@ -325,6 +326,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       g.timing?.promptStarted();
       const answer = await bounded(() => requestReview(context, {
         sessionID: made.id, role, model: modelRef(idModel), text: input, metadata: { azprGrant: g.nonce }, signal: run.controller.signal,
+        allowHostContinuations: ['initial', 'final'].includes(spec.format),
       }), run.controller.signal).then(answer => {
         g.timing?.promptSettled('returned');
         return answer;
@@ -347,6 +349,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         ? { envelope, corrections: [] } : normalizeFindingFormat(envelope, role);
       prepared.corrections = [...syntaxCorrections, ...prepared.corrections];
       const result = validate(prepared.envelope, record);
+      if (answer.continuation) {
+        record.hostContinuations = answer.continuation.count;
+        result.reviewWarnings = [...(result.reviewWarnings ?? []), `OpenCode continued ${answer.continuation.count} incomplete text stream(s); literal fragments were joined after successful completion.`];
+      }
       if (prepared.corrections.length) record.outputFormatCorrections = prepared.corrections;
       if (result.reviewWarnings?.length) record.reviewWarnings = result.reviewWarnings;
       if (spec.format === 'initial') {
@@ -386,6 +392,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (g.blockedNativeCalls.size) record.blockedNativeTools = [...new Set(g.blockedNativeCalls.values())];
       record.toolFailures = g.failedTools.size;
       record.toolObservations = collectToolObservations(g);
+      if (g.savedTextRestorations.length) record.savedTextRestorations = g.savedTextRestorations;
       record.modelRequests = g.calls;
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls,
         rejected: g.rejectedRequests, retries: g.retryEvents, transportRequests: 'not-assessed' };
@@ -702,6 +709,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       await current(g.run.controller.signal);
       await checkRole(g.role, g.run.controller.signal);
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
+      if (ROLES[g.role]?.stage === 'comment-publish') {
+        const restored = restoreSavedCommentText(event.input, g.run.review.plan.comments);
+        event.input = restored.input;
+        g.savedTextRestorations.push(...restored.restored);
+      }
       // Native project execution uses the same live role/model binding as the
       // reviewer request; host permissions decide whether the command may run.
       if (projectToolRole(g.role) && ['shell', 'read', 'glob', 'grep'].includes(event.tool)) {

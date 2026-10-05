@@ -97,12 +97,24 @@ programmatically prove local-file provenance. These limits must remain explicit.
    its ID, type, literal payload, metadata and delivery; do not submit again.
 3. `session.wait` waits for idle. Read `session.context` and session info, locating
    exactly that admitted user message. Require unchanged projected input and no
-   interleaved user/synthetic/switch/other input.
+   interleaved user/switch/other input. Unrelated synthetic input also fails.
 4. Require a successful terminal idle and complete final assistant text with
    stop finish, matching granted role/model. Exclude provider reasoning and
    earlier tool turns. If compaction removed the exact input, fail closed.
 5. Revoke the grant before cleanup. A completed reviewer cannot be resumed by
    ordinary messages. Raw captured failures remain available in diagnostics.
+
+Initial/final review text may recover the pinned host's incomplete-stream
+continuation when the authoritative context contains the failed text response,
+matching retry metadata, exact host continuation message and direct text
+continuation ending successfully in the same role/model. Only the observed
+missing `finish_reason` protocol is recognized. Literal fragments are joined
+without inserted text; ordinary extraction and final evidence checks still
+apply. Diagnostics preserve visible fragments and disclose recovery. This adds
+no plugin model request and cannot recover cancellation, failed final sessions,
+tool execution between fragments or missing admission. Check/comment roles keep
+the strict transport path.
+
 
 Recognized provider failures expose only the HTTP error status and the number
 of tool calls observed in admitted assistant context. Authentication/authorization

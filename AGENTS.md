@@ -26,7 +26,11 @@ The independent V1 repository and installation are outside this project's scope.
 - V2 prompt returns an inbox admission. Wait for idle, then correlate its exact
   ID, literal text, metadata and selected role/model against authoritative
   context. Fail closed after compaction or interleaving. Do not accept truncated,
-  filtered, failed or interrupted execution as a completed answer. Successfully
+  filtered, failed or interrupted execution as a completed answer. A successful
+  initial/final session may include the pinned host incomplete-stream text
+  continuation: verify the failed-text/retry/synthetic/final-stop sequence, keep
+  raw fragments, join literal text only, then apply ordinary review validation.
+  No plugin retry or continuation recovery for comment/check roles. Successfully
   completed PARTIAL reviews and prose are useful inputs. Exclude reasoning.
 - The exact Promise adapter does not forward cancellation request options.
   Revoke grants synchronously, interrupt then wait, bound cleanup, and disclose
@@ -101,7 +105,10 @@ The independent V1 repository and installation are outside this project's scope.
   switches, caps or extra model requests. Track uncertainty before writes,
   revoke publication grants on any observed tool error, prohibit automatic
   retries and label results model-reported. Derive line-local offsets from saved
-  anchors; do not ask the planner for additional coordinate fields.
+  anchors; do not ask the planner for additional coordinate fields. Publisher
+  argument strings containing a whole comment with its unique saved marker may
+  be restored to saved content. This copies approved text, not MCP operation,
+  target or coordinate authorization. Preserve host permissions and uncertainty.
 
 ## Verification and delivery
 

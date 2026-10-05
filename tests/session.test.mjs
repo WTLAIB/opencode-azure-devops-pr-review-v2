@@ -253,3 +253,46 @@ test('V2 report delivery queues the exact report without starting a model call',
   assert.deepEqual(await appendReport(context, { sessionID: 'ses_origin', text: 'Final report' }), { queued: true, id: 'msg_report' });
   assert.deepEqual(calls, [{ name: 'synthetic', args: [{ sessionID: 'ses_origin', text: 'Final report', description: 'Final report', delivery: 'queue', resume: false }] }]);
 });
+
+const continuationText = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
+function continuationTurn() {
+  const error = { type: 'provider.invalid-output', status: 200, message: 'OpenAI Chat stream ended without finish_reason' };
+  return [assistant({ id: 'msg_fragment', finish: 'error', error, retry: { attempt: 2, at: 4, error },
+    content: [{ type: 'reasoning', text: 'PRIVATE_REASONING' }, { type: 'text', text: '{"status":"COM' }] }),
+  { type: 'synthetic', text: continuationText },
+  assistant({ content: [{ type: 'text', text: 'PLETE"}' }] }), idle()];
+}
+test('review text can complete through the pinned host continuation protocol without another plugin prompt', async () => {
+  const { context, calls } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...continuationTurn()] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
+  assert.equal(answer.continuation.count, 1);
+  assert.equal(answer.continuation.fragments[0].info.finish, 'error');
+  assert.equal(answer.continuation.fragments[0].parts[0].text, '{"status":"COM');
+  assert.doesNotMatch(JSON.stringify(answer), /PRIVATE_REASONING/);
+  assert.equal(calls.filter(call => call.name === 'prompt').length, 1);
+  await assert.rejects(requestReview(context, { sessionID, text: input }), /context changed/);
+});
+test('host continuation cannot excuse foreign input, tool execution, binding changes or unfinished execution', async () => {
+  const mutations = [
+    turn => delete turn[0].retry,
+    turn => turn[0].retry.error = { type: 'other' },
+    turn => turn[0].retry.at = 1,
+    turn => turn[0].error = { type: 'aborted', status: 200 },
+    turn => turn[0].finish = 'length',
+    turn => turn[0].content.push({ type: 'tool', id: 'unexpected' }),
+    turn => turn[1].text = 'foreign input',
+    turn => turn[1].type = 'user',
+    turn => turn[2].agent = 'build',
+    turn => turn[2].model = { ...model, id: 'changed' },
+    turn => turn[2].finish = 'tool-calls',
+    turn => turn[2].content.push({ type: 'tool', id: 'unexpected' }),
+    turn => turn[3].outcome = 'interrupted',
+    turn => turn.splice(2, 0, { type: 'synthetic', text: 'foreign input' }),
+  ];
+  for (const mutate of mutations) {
+    const turn = continuationTurn(); mutate(turn);
+    const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
+    await assert.rejects(requestReview(context, { sessionID, text: input, allowHostContinuations: true }));
+  }
+});

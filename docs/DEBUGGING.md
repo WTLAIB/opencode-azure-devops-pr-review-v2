@@ -68,7 +68,11 @@ waits for session settlement, reads active context, and verifies that the final
 assistant response belongs to that prompt. It accepts only a successful session
 ending in a complete text response with `finish: "stop"`. A tool-call turn,
 interrupted session, provider error, filtered/length finish, or mismatched context
-is not a complete review.
+is not a complete review. A successful initial/final session can recover the
+pinned host missing-finish continuation sequence; `hostContinuations` and a
+review warning disclose it. Response diagnostics retain each visible fragment
+and the original stream error. No plugin prompt retry is added; unrelated
+synthetic input, changed admission and unsuccessful terminal states still fail.
 
 The V2 context API returns active context after compaction, not an unlimited
 transcript. If the exact admitted prompt disappears or becomes ambiguous, the

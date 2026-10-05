@@ -150,5 +150,7 @@ export function diagnosticResponse(response) {
     finish: response?.info?.finish,
     error: error ? { type: error.type, message: String(error.message ?? ''), status: error.status } : undefined,
     text: raw, textCharacters: raw.length,
+    ...(response?.continuation ? { continuation: { count: response.continuation.count,
+      fragments: response.continuation.fragments.map(diagnosticResponse) } } : {}),
   };
 }
