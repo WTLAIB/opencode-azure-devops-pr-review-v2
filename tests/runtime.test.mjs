@@ -442,6 +442,23 @@ test('code examples surrounding a complete final JSON do not require another rev
   assert.match(await f.command('pr-comment',id),/] PREVIEW/);assert.equal(f.prompts().length,4);
 });
 
+test('normalized new verifier IDs allow same-origin preview without another review', async t => {
+  const f = await fixture(t, { result({ result, role }) {
+    if (ROLES[role].format === 'initial') result.findings = [];
+    if (ROLES[role].format === 'final') result.newFindings = [finding('V001'), finding('V002')];
+    return result;
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /] COMPLETE/);
+  const final = (await resultLog(receipt)).stages.find(stage => stage.stage === 'verifier').result;
+  assert.deepEqual(final.newFindings.map(row => [row.id, row.originalId]), [['V-1', 'V001'], ['V-2', 'V002']]);
+  const id = /AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  assert.match(await f.command('pr-comment', id), /] PREVIEW/);
+  assert.equal(f.prompts().length, 4);
+  const packet = JSON.parse(f.prompts().at(-1).text);
+  assert.deepEqual(packet.findings, final.newFindings);
+});
+
 test('unconfirmed cleanup cannot leave a COMPLETE receipt without a comment cache entry',async t=>{
   const f=await fixture(t,{context({context}){context.session.interrupt=async()=>{throw new Error('Settlement unavailable');};},
     during({session}){if(session.agent.endsWith('-functional'))throw new Error('Provider failed');}});
@@ -604,7 +621,12 @@ for (const mode of ['review', 'deep']) test(`${mode} reviewers use native projec
           await invoke(session.id, tool, { output: 'Fixture command failed; source evidence remains available.', metadata: { exit: 7 } });
           executed.push({ id: session.id, tool });
         }
-      } else if (spec.stage !== 'comment-publish') {
+      } else if (spec.comment) {
+        for (const tool of ['shell', 'read', 'glob', 'grep']) {
+          await invoke(session.id, tool);
+          executed.push({ id: session.id, tool });
+        }
+      } else {
         await assert.rejects(invoke(session.id, 'shell'), /Native tool denied/);
       }
     },
@@ -615,6 +637,10 @@ for (const mode of ['review', 'deep']) test(`${mode} reviewers use native projec
   for (const { id, tool } of executed) await assert.rejects(f.invoke(id, tool), /authorization expired/);
   const id = receipt.match(/AZPR ([a-f0-9]{8})/)[1];
   assert.match(await f.command('pr-comment', id), /\] PREVIEW/);
+  assert.equal(executed.length, 16);
+  assert.match(await f.command('pr-comment', id + ' --publish'), /\] MODEL_REPORTED_POSTED/);
+  assert.equal(executed.length, 20);
+  for (const { id, tool } of executed) await assert.rejects(f.invoke(id, tool), /authorization expired/);
   for (const agent of f.agents.values()) assert.ok(agent.permissions.some(rule => rule.action === 'fixture_mcp_write' && rule.effect === 'deny'));
 });
 
@@ -643,14 +669,14 @@ test('project tools require literal admission and an authorized model request', 
   assert.equal(f.calls.filter(call => call.kind === 'executed-tool' && call.tool !== 'fixture_mcp_read').length, 0);
 });
 
-test('a publisher denied native shell loses its grants before another tool can start', async t => {
+test('a publisher denied CodeMode loses its grants before another tool can start', async t => {
   let denied = false;
   const f = await fixture(t, {
     async during({ session, emit, invoke }) {
       if (ROLES[session.agent].stage !== 'comment-publish') return;
-      const event = { sessionID: session.id, agent: session.agent, id: 'publisher-denied-shell', tool: 'shell', input: { command: 'echo denied' } };
+      const event = { sessionID: session.id, agent: session.agent, id: 'publisher-denied-execute', tool: 'execute', input: { code: '1 + 1' } };
       await assert.rejects(emit('tool', 'execute.before', event), /Native tool denied/);
-      await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture shell') });
+      await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture CodeMode') });
       await assert.rejects(invoke(session.id, 'fixture_mcp_write'), /authorization expired/);
       denied = true;
     },

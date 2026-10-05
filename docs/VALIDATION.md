@@ -12,6 +12,34 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 post-comparison usability checks
+
+Five authorized live cycles exercised one unchanged release: four reviews were
+COMPLETE and one retained a useful PARTIAL result. Three previews were rejected
+by the provider before any tool call. Another preview incorrectly treated an
+explicitly deleted discussion as a duplicate and produced an empty plan; explicit
+publication returned NOTHING_TO_POST without a publisher. The last review's new
+finding ID spelling prevented preview. No live comment was created or deleted.
+All 70 review-stage exact-commit content reads and 16 metadata reads matched independent
+reference checks. Correct reads did not prevent model version confusion or
+incorrectly reconstructed test source. These samples do not establish stability,
+model quality, or inline-coordinate/UI acceptance.
+
+Subsequent local changes assign tracking IDs to new verifier findings, clarify
+deleted-discussion semantics, and let comment roles inherit host project-tool
+permissions. Syntax and 392/392 offline tests passed. Actual OpenCode 2.0.22 fresh
+and replacement fixtures each passed with 62 loopback fake-provider requests,
+12 fixture MCP calls, and four one-time host shell approvals. Comment-stage
+execution, inherited asks/denials and publisher error revocation were exercised.
+The first offline run retained one stale prompt assertion failure before its
+correction. An offline replay of the last raw verifier output now passes the
+COMPLETE contract without changing evidence or original decisions; this does not
+change that historical run, recreate its cache, or verify live publication.
+
+No additional live model review or publication tested these post-comparison
+changes. Cold MCP tool-registration timing remains unresolved; see
+[startup diagnostics](DEBUGGING.md#connected-mcp-before-tool-registration).
+
 ## 2026-10-05 remote-source guidance and provider diagnostics
 
 Syntax checks and 389/389 offline tests passed on Ubuntu 22.04.5 / Node 22.23.3.
@@ -300,8 +328,8 @@ Test these native permission cases with the unmodified integration:
 1. Initial reviewers and the verifier use shell/read/search in the origin's
    project. Verify two project locations without any repository mapping.
 2. Host shell allow/ask/deny decisions remain effective. An ask must pause before
-   execution, then run only after approval. Readiness/comment roles still block
-   shell; all private roles block edit/write/patch, delegation, native web and
+   execution, then run only after approval. Exercise both comment stages too;
+   standalone readiness still blocks shell. All private roles block edit/write/patch, delegation, native web and
    CodeMode `execute`. Force calls as well as inspecting schemas.
 3. The second distinct blocked native attempt in a stage revokes the run. The
    receipt/debug record discloses the prevented attempts without arguments.

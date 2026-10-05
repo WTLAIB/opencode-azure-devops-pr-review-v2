@@ -109,7 +109,7 @@ Extra fields remain available; known key spelling and enum case can be normalize
 or code fences. Braces in ordinary code examples no longer block selection.
 Surrounding text remains attached; competing review candidates or duplicate
 keys retain the complete literal output instead.
-A missing or duplicate initial ID receives a runtime tracking ID rather than
+A missing, malformed or duplicate initial/new-verifier ID receives a runtime tracking ID rather than
 losing its observation. Missing final decisions appear as runtime UNREVIEWED,
 with the original observations shown separately. These are not model verdicts.
 
@@ -143,10 +143,10 @@ are not repaired by asking a formatting model to regenerate a review.
 
 ## Tool observations and permissions
 
-Initial reviewers and the verifier use native shell/read/search under OpenCode's
+Initial reviewers, the verifier and comment roles use native shell/read/search under OpenCode's
 normal permissions. Check the active project's host rules and pending approval
-requests when execution is unavailable. Readiness and comment stages still deny
-shell/search; all private roles deny CodeMode `execute`, native editing, delegation
+requests when execution is unavailable. Comment roles now inherit those same
+project permissions; standalone readiness still denies shell/search. All private roles deny CodeMode `execute`, native editing, delegation
 and public web tools. Set MCP `codemode: false` for direct tools. See
 [the CodeMode boundary and MCP limitations](AZURE_MCP.md).
 
@@ -167,10 +167,14 @@ under an ask permission succeeded; removing shell under deny produced HTTP 403.
 Both probes executed zero tools. An earlier deny probe also failed, but MCP was
 still connecting, so its tool catalog is not a controlled comparison. This
 demonstrates compatibility sensitivity in that tested provider/profile, not the
-provider's internal rule or a requirement to execute shell. The production
-comment-role denials remain intact. Check provider support before another live
-attempt; do not weaken execution permissions or spoof client identity to obtain
-admission. An alternative provider/model needs explicit selection and a cost check.
+provider's internal rule or a requirement to execute shell. Those probes kept production
+comment-role denials intact. A later five-cycle comparison again saw three
+provider rejections before any comment tool call. Following the user's request
+to relax unnecessary restrictions, comment roles now inherit host project-tool
+permissions, including real shell execution. This is not an isolation guarantee;
+host asks and denials still apply. Never spoof client identity. End-to-end
+provider/publication acceptance still requires a separately authorized live test.
+An alternative provider/model needs explicit selection and a cost check.
 
 Historical note, before native project verification: an authorized 2.0.22 live test received a provider HTTP 403 before any tool call
 with `shellToolPermission: "deny"`. The same selected models were admitted after
@@ -181,7 +185,8 @@ It is a provider admission limitation, not an Azure authentication failure or
 proof that shell ran. Inspect the original error before changing permissions;
 never change models or spoof client headers to recover. The old shellToolPermission
 setting is now removed. Review roles inherit actual host permissions, while
-readiness and comment roles retain their native execution denials.
+standalone readiness retains native execution denials. The comment-role policy
+has since changed as described above.
 
 If initial snapshots disagree, inspect the original metadata and labels before
 retrying. The common label uses `organization/project-id/repository-id`, with
@@ -263,3 +268,18 @@ zero even when a test fails. Neither creates a new review completion requirement
 The host session retains native command results; debug stage records expose tool
 counts and errors. The custom `verification-N.json` ledger is historical only.
 See [project verification](VERIFICATION.md) for permissions and cancellation scope.
+
+## Connected MCP before tool registration
+
+A controlled five-cycle comparison observed initial contexts with only native
+tools even though MCP status was connected; later contexts exposed the server's
+tools. In the pinned host, connection and tool-registry reconciliation are separate,
+and the public tool-list API reads the current registry. See the pinned host
+[registration implementation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/tool/mcp.ts)
+and [catalog implementation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/tool.ts).
+A single catalog read is
+not a registration barrier. Inspect the initial context and subsequent tool lists
+before attributing missing source to model capability. Do not infer Azure identity
+or tool availability from connection status, add a guessed delay, or retry models
+to hide this failure. The source-supported sibling/final result remains usable;
+startup readiness still needs a host-supported settlement solution.

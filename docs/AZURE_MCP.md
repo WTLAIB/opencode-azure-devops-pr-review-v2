@@ -56,9 +56,9 @@ MCP names, schemas, and actions remain host-owned. There are no plugin-side MCP
 prefixes, action allowlists, tool mappings, or wildcard grants. Private-role
 definitions add native denials while retaining host permission rules. Scoped
 runtime guards enforce the role's native denials even if later host rules expose
-a prohibited schema. Initial reviewers and the verifier inherit host permissions
-for shell/read/search in the current project; readiness and comment roles still
-deny shell/search. Native shell is not an isolation boundary or permission bypass.
+a prohibited schema. Initial reviewers, the verifier and comment roles inherit
+host permissions for shell/read/search in the current project. Standalone
+readiness still denies shell/search. Native shell is not an isolation boundary or permission bypass.
 The plugin does not define a separate shell permission switch.
 
 Reviewers are independent agents. Restrictions configured only on a Build or

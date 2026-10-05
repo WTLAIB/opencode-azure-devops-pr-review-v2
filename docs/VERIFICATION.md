@@ -15,12 +15,15 @@ initial reviewers and one verifier.
 
 ## Permissions and effects
 
-The plugin adds no shell/read/search permission override for these reviewers.
+The plugin adds no shell/read/search permission override for reviewers or comment roles.
 OpenCode's applicable global, project, private-role and inherited session rules
 decide allow, ask or deny. Rules configured only for another agent such as Build
 are not copied. An ask decision requires normal host approval; a denial must not
 be bypassed. See the pinned host's [permission evaluation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/permission.ts#L144).
-Readiness and comment roles retain native shell/search denials.
+Standalone readiness retains native shell/search denials. Comment stages may use
+local tools for evidence inspection and coordinate calculations; remote PR access
+and publication still use MCP. Publication keeps its saved-plan authorization and
+stops on observed tool errors, including failures during local verification.
 
 Commands execute in the real project with host authority. This is not a filesystem,
 process or network sandbox: permitted tests may create files, run package scripts

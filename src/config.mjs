@@ -2,8 +2,8 @@
 export const MODES = Object.freeze(['review', 'deep']);
 export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'review', 'pr-deep': 'deep', 'pr-stop': 'stop', 'pr-comment': 'comment' });
 // Native host capabilities only: never grant or classify MCP tools/actions.
-// Reviewers inherit host shell/read/search permissions in the current project.
-// Check/comment roles retain source-only restrictions. CodeMode's fetch global
+// Review and comment roles inherit host project-tool permissions.
+// Standalone checks retain source-only restrictions. CodeMode's fetch global
 // bypasses ordinary web permissions, so all private roles still deny execute.
 export const NATIVE_TOOL_PERMISSIONS = Object.freeze({
   shell: 'deny', execute: 'deny', edit: 'deny', write: 'deny', patch: 'deny', skill: 'deny',
@@ -27,8 +27,9 @@ export const PROMPTS = Object.freeze([...new Set(['common', 'comment-policy', 'd
 export const initialRoles = mode => Object.entries(ROLES).filter(([, spec]) => spec.mode === mode && spec.format === 'initial').map(([role]) => role);
 export const commentRole = role => ROLES[role]?.comment === true;
 export const projectReviewRole = role => ['initial', 'final'].includes(ROLES[role]?.format);
+export const projectToolRole = role => projectReviewRole(role) || commentRole(role);
 export const nativeToolPermissions = role => Object.fromEntries(Object.entries(NATIVE_TOOL_PERMISSIONS)
-  .filter(([name]) => !projectReviewRole(role) || !['shell', 'glob', 'grep'].includes(name)));
+  .filter(([name]) => !projectToolRole(role) || !['shell', 'glob', 'grep'].includes(name)));
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function keys(value, allowed, at) {
@@ -118,9 +119,19 @@ Record the truncation and how missing content was obtained; never claim recovery
 without checking it. Reading a saved publication result never authorizes retrying
 the write. Unknown or unavailable source remains incomplete under the role's rules.`;
 const SOURCE_ONLY_POLICY = `\n\n# Source-only role
-This readiness/comment stage does not execute project commands or inspect a local
+This standalone readiness stage does not execute project commands or inspect a local
 working tree. Use direct MCP source tools and the same-session saved-output exception
 above. Do not use shell, directory search, native edits or public web tools.`;
+const COMMENT_PROJECT_POLICY = `\n\n# Local verification
+You may use shell, read, glob and grep in the current project under inherited
+OpenCode permissions to inspect evidence or compute source coordinates. MCP is
+the remote PR source; no checkout, Git history, clone or fetch is required.
+Preserve existing user files. Optional temporary copies must come from retrieved
+source with explicit commit provenance; disclose changes and verification limits.
+Shell has ordinary host authority, not filesystem or network isolation. Never
+bypass a host denial or use a direct API client to replace the supplied MCP tools.
+Local verification does not authorize PR changes. During publication, only the
+saved MCP creates are authorized; do not rerun the review or alter saved content.`;
 
 /** Pure compilation: file I/O and OpenCode config mutation stay in the adapter. */
 export function buildAgents(settings, prompts) {
@@ -135,7 +146,7 @@ export function buildAgents(settings, prompts) {
     request: { settings: {}, headers: {}, body: {} },
     // Readiness has its own complete policy; finding-review rules add unrelated
     // work and output instructions to this retrieval-only stage.
-    system: (spec.stage === 'check' ? '' : (spec.comment ? prompts['comment-policy'] : prompts.common) + '\n\n') + prompts[spec.prompt] + '\n\n' + TOOL_OUTPUT_POLICY + (projectReviewRole(role) ? '' : SOURCE_ONLY_POLICY) + languagePrompt(role, settings.outputLanguage) +
+    system: (spec.stage === 'check' ? '' : (spec.comment ? prompts['comment-policy'] : prompts.common) + '\n\n') + prompts[spec.prompt] + '\n\n' + TOOL_OUTPUT_POLICY + (spec.comment ? COMMENT_PROJECT_POLICY : projectReviewRole(role) ? '' : SOURCE_ONLY_POLICY) + languagePrompt(role, settings.outputLanguage) +
       (spec.mode === 'deep' && ['initial', 'final'].includes(spec.format) ? '\n\n' + prompts.deep : '') +
       '\n\n# Output transport\nReturn one valid JSON object, optionally in a single JSON code fence. Escape quotes and newlines in strings.' +
       (['initial', 'final'].includes(spec.format) ? ' Prefer the described fields, but always return the useful review and disclose gaps when the format or evidence is incomplete. Local recovery does not require another model request.' : ' Do not include surrounding commentary.'),

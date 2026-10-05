@@ -53,6 +53,7 @@ let forbiddenFetches = 0;
 let child;
 let logs = '';
 let rejectNextPlan = true;
+let commentShellProbe;
 const provider = createServer(async (request, response) => {
   if (request.url === '/v1/forbidden') { forbiddenFetches++; response.end('Forbidden fixture fetch was reached'); return; }
   let body = '';
@@ -96,12 +97,14 @@ const provider = createServer(async (request, response) => {
     skipped: payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })) };
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
   const projectVerification = userContext.startsWith('project-');
+  const localComment = payload?.target && commentShellProbe;
   const hanging = userContext === 'hang-verification' && parsed.model === 'functional';
-  const toolName = projectVerification || hanging || shellControl ? 'shell' : forced ?? tool?.function.name;
   const priorToolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
+  const toolName = projectVerification || hanging || shellControl || (localComment && !hasResult) ? 'shell' : forced ?? tool?.function.name;
   const publisher = Boolean(payload?.comments);
   const callTool = toolName && (forced || publisher ? priorToolResults < 2 : !hasResult);
-  const args = projectVerification ? { command: nodeCommand(`const fs=require('node:fs'); const cwd=process.cwd(); const project=fs.readFileSync('project-marker.txt','utf8'); fs.writeFileSync(${JSON.stringify(userContext + '-' + parsed.model + '.json')},JSON.stringify({cwd,project,role:${JSON.stringify(parsed.model)}})); console.log('PROJECT_REPRODUCTION:'+project); process.exit(${parsed.model === 'risk' ? 7 : 0});`), description: 'Local project verification fixture' }
+  const args = localComment && !hasResult ? { command: nodeCommand(`const fs=require('node:fs'); const project=fs.readFileSync('project-marker.txt','utf8'); fs.writeFileSync(${JSON.stringify(commentShellProbe + '.json')},JSON.stringify({cwd:process.cwd(),project})); console.log('COMMENT_PROJECT:'+project);`), description: 'Local comment verification fixture' }
+    : projectVerification ? { command: nodeCommand(`const fs=require('node:fs'); const cwd=process.cwd(); const project=fs.readFileSync('project-marker.txt','utf8'); fs.writeFileSync(${JSON.stringify(userContext + '-' + parsed.model + '.json')},JSON.stringify({cwd,project,role:${JSON.stringify(parsed.model)}})); console.log('PROJECT_REPRODUCTION:'+project); process.exit(${parsed.model === 'risk' ? 7 : 0});`), description: 'Local project verification fixture' }
     : hanging ? { command: nodeCommand(`process.title=${JSON.stringify(verificationMarker)}; require('node:fs').writeFileSync('running.pid',String(process.pid)); setInterval(()=>{},1000)`), description: 'Cancellable foreground project fixture' }
     : shellControl ? { command: `touch ${shellQuote(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' }
     : forced === 'shell' ? { command: `touch ${shellQuote(join(fixture, 'NATIVE_EXECUTED'))}`, description: 'Fixture forbidden shell' }
@@ -369,10 +372,40 @@ try {
   const verifiedOrigin = await invokeReview('pr-review', 'project-allowed', /\] COMPLETE/, { permissions: shellPermission('allow') });
   const verifiedReceipt = workflowReceipts.at(-1).receipt;
   const verifiedID = /\[AZPR ([a-f0-9]{8})\]/.exec(verifiedReceipt)[1];
+  commentShellProbe = 'comment-plan-allowed';
   await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID, delivery: 'steer' });
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /\] PREVIEW/);
-  await invokeReview('pr-review', 'project-approved', /\] COMPLETE/, { directory: directories['other-project'], permissions: shellPermission('ask'), approve: true });
+  assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
+  commentShellProbe = 'comment-publish-allowed';
+  const beforeLocalPublisher = requests.length;
+  await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID + ' --publish', delivery: 'steer' });
+  assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /publisher tool failed/i);
+  assert.equal(requests.length, beforeLocalPublisher + 2, 'Local verification may run, but a later publisher error still stops every subsequent request.');
+  assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
+  commentShellProbe = undefined;
+  const approvedOrigin = await invokeReview('pr-review', 'project-approved', /\] COMPLETE/, { directory: directories['other-project'], permissions: shellPermission('ask'), approve: true });
+  const approvedID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
   assert.equal(permissionReplies.length, 3, 'Every reviewer shell call must receive explicit host approval.');
+  commentShellProbe = 'comment-plan-approved';
+  let planDone = false;
+  const approvedPlan = api(`/api/session/${approvedOrigin}/command`, { name: 'pr-comment', text: approvedID, delivery: 'steer' }, directories['other-project']).finally(() => { planDone = true; });
+  while (!planDone) {
+    for (const request of (await api('/api/permission/request', undefined, directories['other-project'])).data) {
+      const session = (await api(`/api/session/${request.sessionID}`)).data;
+      assert.equal(session.agent, 'azpr-review-comment-plan');
+      assert.equal(session.parentID, approvedOrigin);
+      assert.equal(request.action, 'shell');
+      await assert.rejects(access(join(directories['other-project'], commentShellProbe + '.json')));
+      permissionReplies.push({ sessionID: request.sessionID, action: request.action, directory: directories['other-project'] });
+      await api(`/api/session/${request.sessionID}/permission/${request.id}/reply`, { decision: 'once' });
+    }
+    if (!planDone) await new Promise(resolveReady => setTimeout(resolveReady, 100));
+  }
+  await approvedPlan;
+  assert.match((await api(`/api/session/${approvedOrigin}/inbox`)).data.at(-1).payload.text, /\] PREVIEW/);
+  assert.deepEqual(JSON.parse(await readFile(join(directories['other-project'], commentShellProbe + '.json'), 'utf8')), { cwd: directories['other-project'], project: 'other-project' });
+  assert.equal(permissionReplies.length, 4, 'The comment planner must also receive its own one-time host approval.');
+  commentShellProbe = undefined;
   for (const [suffix, name] of [['project-allowed', 'work'], ['project-approved', 'other-project']]) {
     for (const role of ['functional', 'risk', 'verifier']) {
       const observed = JSON.parse(await readFile(join(directories[name], `${suffix}-${role}.json`), 'utf8'));
@@ -384,7 +417,17 @@ try {
       assert.ok(answer?.body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('PROJECT_REPRODUCTION:' + name)), 'Actual shell output must reach each reviewer.');
     }
   }
-  await invokeReview('pr-review', 'project-denied', /\] COMPLETE/, { permissions: shellPermission('deny') });
+  const deniedOrigin = await invokeReview('pr-review', 'project-denied', /\] COMPLETE/, { permissions: shellPermission('deny') });
+  const deniedID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
+  commentShellProbe = 'comment-plan-denied';
+  await api(`/api/session/${deniedOrigin}/command`, { name: 'pr-comment', text: deniedID, delivery: 'steer' });
+  await assert.rejects(access(join(directories.work, commentShellProbe + '.json')));
+  const deniedRequest = requests.findLast(request => {
+    try { return Boolean(JSON.parse(request.body.messages.findLast(message => message.role === 'user').content)?.target); }
+    catch { return false; }
+  });
+  assert.ok(!deniedRequest.body.tools.some(item => item.function?.name === 'shell'), 'Inherited host deny must still hide the shell schema.');
+  commentShellProbe = undefined;
   for (const role of ['functional', 'risk', 'verifier']) await assert.rejects(access(join(directories.work, `project-denied-${role}.json`)));
   const approvalOrigin = (await api('/api/session', { title: 'Cancel pending approvals', location: { directory: directories.work }, permissions: shellPermission('ask') })).data;
   const approvalCancellation = api(`/api/session/${approvalOrigin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 project-cancelled-approval', delivery: 'steer' });
@@ -442,8 +485,8 @@ try {
     assert.equal(call.name, 'read_fixture');
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
   }
-  assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 1);
-  assert.equal(requests.length, 52);
+  assert.equal(mcpCalls.filter(call => call.arguments.value === 'publisher-error').length, 2);
+  assert.equal(requests.length, 58);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {

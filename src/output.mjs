@@ -753,6 +753,20 @@ function reviewFinding(value, notes) {
   return row;
 }
 
+function assignTrackingIds(findings, prefix, notes) {
+  const used = new Set(), reserved = new Set(findings.map(row => row.id).filter(text));
+  let nextId = 1;
+  for (const row of findings) {
+    if (!text(row.id) || !new RegExp(`^${prefix}-[1-9][0-9]*$`).test(row.id) || used.has(row.id)) {
+      if (Object.hasOwn(row, 'id')) row.originalId = row.id;
+      while (reserved.has(`${prefix}-${nextId}`)) nextId++;
+      row.id = `${prefix}-${nextId++}`; reserved.add(row.id);
+      note(notes, 'Runtime tracking IDs were assigned to missing, malformed or repeated IDs; original IDs and finding content remain available.');
+    }
+    used.add(row.id);
+  }
+}
+
 /** Stable tracking IDs are bookkeeping, never generated source evidence. All
  * supplied rows, including prose, duplicates and extra fields, remain available. */
 export function acceptInitialReview(value, prefix, prUrl) {
@@ -764,17 +778,7 @@ export function acceptInitialReview(value, prefix, prUrl) {
   result.coverage.files = reviewRows(result.coverage.files, notes).map(asText);
   result.coverage.gaps = reviewRows(result.coverage.gaps, notes).map(asText);
   result.findings = reviewRows(result.findings, notes).map(row => reviewFinding(row, notes));
-  const used = new Set(), reserved = new Set(result.findings.map(row => row.id).filter(text));
-  let nextId = 1;
-  for (const row of result.findings) {
-    if (!text(row.id) || !new RegExp(`^${prefix}-[1-9][0-9]*$`).test(row.id) || used.has(row.id)) {
-      if (Object.hasOwn(row, 'id')) row.originalId = row.id;
-      while (reserved.has(`${prefix}-${nextId}`)) nextId++;
-      row.id = `${prefix}-${nextId++}`; reserved.add(row.id);
-      note(notes, 'Runtime tracking IDs were assigned to missing or repeated IDs; original IDs and finding content remain available.');
-    }
-    used.add(row.id);
-  }
+  assignTrackingIds(result.findings, prefix, notes);
   result.report = asText(result.report);
   result.status = canonicalEnum(result.status);
   if (result.unstructured) note(notes, 'Unstructured initial output was retained literally for independent verification.');
@@ -842,6 +846,9 @@ export function acceptFinalReview(value, expected, originals, prUrl) {
     return row;
   });
   result.newFindings = reviewRows(result.newFindings, notes).map(item => reviewFinding(item, notes));
+  // New verifier findings have no original reviewer decision to correlate.
+  // Assign bookkeeping IDs without rewriting dispositions or inventing evidence.
+  assignTrackingIds(result.newFindings, 'V', notes);
   const accounted = new Set(result.dispositions.map(row => row.id));
   result.unreviewedFindings = originals.filter(row => !accounted.has(row.id));
   for (const row of result.unreviewedFindings) result.dispositions.push({ id: row.id, status: 'UNREVIEWED',

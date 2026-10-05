@@ -20,9 +20,16 @@ The following limits are project choices, not universal standards:
 | Anchor | Smallest useful 1-5 line range in a changed HEAD file |
 | Structure | Short issue title; triggering condition and impact; correction or regression test |
 | Language | Shared `outputLanguage` for the final report and comment prose; identifiers and machine-readable labels unchanged |
-| Duplicates | One root cause per thread; skip existing discussions, including resolved ones |
+| Duplicates | One root cause per thread; skip non-deleted discussions, including resolved ones |
 | Exclusions | Speculation, unanswered questions, cosmetic nits, optional refactoring, praise, and no-issues summaries |
 | Unlocatable findings | Explain the skip locally; never invent an inline location |
+
+An explicit deletion record is not an existing discussion or marker. Enumerate
+all threads, ignore explicitly deleted comments, and still inspect any remaining
+non-deleted comments in a partially deleted thread. Resolved discussions remain
+duplicates. A missing body does not prove deletion. This distinction does not
+clear the saved publication-attempt ledger or permit an uncertain write retry.
+Deletion interpretation remains model policy, not an MCP response parser.
 
 Example body (shown in English; the actual body uses the shared `outputLanguage` setting):
 
@@ -62,8 +69,10 @@ eligible, nonduplicate inline comment exists.
 
 Publication has no separate configuration switch. It requires a saved preview
 and an explicit `--publish` in the same original session/process.
-Comment roles retain native shell/search denials. Provider tool-schema admission
-can therefore differ from ordinary review, even with the same selected model.
+Comment roles inherit shell/read/search permissions from OpenCode for local
+verification. They add no allow rule: host asks and denials remain effective.
+This also removes the plugin's shell-schema difference associated with a tested
+provider's rejected comment admission. It does not certify provider compatibility.
 A provider rejection creates no saved plan and starts no publisher; it does not
 invalidate the completed review. See [provider diagnostics](DEBUGGING.md#tool-observations-and-permissions).
 Set outputLanguage (for example, zh-TW) to control both final-report and comment
@@ -128,8 +137,9 @@ server still enforce their own permissions; the plugin adds no MCP overrides.
 
 Read-response truncation uses the shared output-reading policy: supported
 pagination or bounded Read of a full output file saved and identified by OpenCode
-in this same session, subject to host permissions. Other local files remain
-prohibited. Saved response offsets are not source-file coordinates, and an
+in this same session, subject to host permissions. Local project verification
+also follows the shared [project-tool policy](VERIFICATION.md).
+Saved response offsets are not source-file coordinates, and an
 incomplete server response remains incomplete after saving. A partial duplicate
 listing or missing source cannot qualify a comment for publication. Inspecting a
 saved create result never grants another publishing attempt.

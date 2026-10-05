@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   BLOCKED_NATIVE_TOOLS, NATIVE_TOOL_PERMISSIONS, PROMPTS, ROLES, buildAgents,
-  validateSettings, projectReviewRole,
+  validateSettings, projectToolRole, projectReviewRole,
 } from '../src/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
@@ -80,11 +80,12 @@ test('V2 permission rules block CodeMode, native mutation, delegation and host c
     assert.equal(agent.permissions.some(rule => rule.action === '*' || rule.effect === 'allow'), false);
     for (const name of BLOCKED_NATIVE_TOOLS) {
       const rule = agent.permissions.find(rule => rule.action === name);
-      if (projectReviewRole(role) && ['shell', 'glob', 'grep'].includes(name)) assert.equal(rule, undefined);
+      if (projectToolRole(role) && ['shell', 'glob', 'grep'].includes(name)) assert.equal(rule, undefined);
       else assert.deepEqual(rule, { action: name, resource: '*', effect: 'deny' });
     }
-    if (projectReviewRole(role)) {
-      assert.ok(agent.system.includes(prompts.common), 'Review roles must include the complete shared review policy.');
+    if (projectToolRole(role)) {
+      if (projectReviewRole(role)) assert.ok(agent.system.includes(prompts.common), 'Review roles must include the complete shared review policy.');
+      else assert.match(agent.system, /Local verification/);
       assert.doesNotMatch(agent.system, /Source-only role|azpr_verify|rootfs/);
     } else assert.match(agent.system, /Source-only role/);
   }

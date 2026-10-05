@@ -61,9 +61,9 @@ the adapter does not infer Azure identity or `codemode:false` from a connection.
 No provider fallback, extra inference, MCP action classifier or permission grant
 is introduced. The existing review evidence checks remain authoritative.
 
-Initial reviewers and the verifier inherit host shell/read/glob/grep permissions.
-The plugin adds no permission rule for those tools. Source-only readiness and
-comment roles still deny shell/search. All private roles deny native editing,
+Initial reviewers, the verifier and comment roles inherit host shell/read/glob/grep
+permissions. The plugin adds no permission rule for those tools. Standalone
+source readiness still denies shell/search. All private roles deny native editing,
 delegation, skills, public web, interactive questions, host session/model control
 and CodeMode execute. CodeMode's built-in fetch is not permission-gated in the
 target host; use direct MCP tools with codemode:false. See
@@ -177,9 +177,10 @@ are retained literally for verification or report presentation. Failed execution
 context mismatch and truncation remain separate from correctable syntax.
 
 Known key spelling, enum case, quoted SHA wrappers and simple section shapes are
-normalized locally. Extra information stays in the result. Missing or duplicate
-initial IDs receive unique runtime tracking IDs, with supplied IDs retained when
-replaced. Missing evidence is never fabricated. The verifier is asked to verify
+normalized locally. Extra information stays in the result. Missing, malformed or
+duplicate IDs in initial and new-verifier findings receive unique runtime tracking
+IDs, with supplied IDs retained when replaced. Original disposition IDs are never
+remapped by this recovery. Missing evidence is never fabricated. The verifier is asked to verify
 all candidates independently. Omitted original decisions become explicit runtime
 UNREVIEWED rows, with the full original observations shown in the report.
 

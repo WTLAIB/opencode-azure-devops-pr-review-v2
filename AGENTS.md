@@ -35,14 +35,15 @@ The independent V1 repository and installation are outside this project's scope.
   global/project permissions and session inheritance. Pin validated resolved
   roles before first use and reject later changes. Never borrow Build-only rules
   or introduce a wildcard permission grant.
-- Initial reviewers and the verifier may use shell/read/glob/grep in the current
+- Initial reviewers, the verifier and comment roles may use shell/read/glob/grep in the current
   OpenCode project under inherited host permissions. Do not add a second execution
   platform, repository mapping, command allowlist or plugin permission switch.
   MCP is the source for the remote PR; local Git history or a checkout is not
   required. Do not clone/fetch for review. Model-chosen reproductions may use
   needed MCP-returned files in fresh temporary directories with version provenance.
   Preserve parent location and permissions, active role/model binding and grant
-  revocation. Readiness and comment roles still deny native execution/search.
+  revocation. Standalone readiness still denies native execution/search. Comment
+  tools support local verification; remote reads and saved publication use MCP.
 - Deny native editing/delegation/public web and host session/model control in
   private roles, including CodeMode execute. Require MCP codemode:false. Do not
   silently rewrite host configuration or claim filesystem/network isolation:

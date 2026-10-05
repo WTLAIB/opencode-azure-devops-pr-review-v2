@@ -164,7 +164,9 @@ Commands use the real project and can change files or contact services. The plug
 does not sandbox them or override host allow/ask/deny decisions. Reviewers must
 preserve existing work and distinguish local checkout results from evidence about
 the PR's exact commit. Test failures and missing dependencies remain reportable
-limitations. Readiness and comment stages do not execute project commands. See
+limitations. Comment roles also inherit project-tool permissions for local
+verification; standalone readiness remains source-only. Publication still uses
+the supplied MCP tools and requires the saved preview and explicit --publish. See
 [project verification](docs/VERIFICATION.md) for scope and cancellation limits.
 
 ### MCP must expose direct tools

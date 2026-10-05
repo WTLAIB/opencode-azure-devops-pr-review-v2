@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport } from './session.mjs';
 import { commentTarget, confirmedFindings, recordPublishResult, targetKey, validateCommentPlan } from './comments.mjs';
 import {
-  COMMANDS, ROLES, PROMPTS, nativeToolPermissions, projectReviewRole, roleFor, initialRoles, buildAgents,
+  COMMANDS, ROLES, PROMPTS, nativeToolPermissions, projectToolRole, roleFor, initialRoles, buildAgents,
   validateSettings,
 } from './config.mjs';
 import {
@@ -670,7 +670,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
       // Native project execution uses the same live role/model binding as the
       // reviewer request; host permissions decide whether the command may run.
-      if (projectReviewRole(g.role) && ['shell', 'read', 'glob', 'grep'].includes(event.tool)) {
+      if (projectToolRole(g.role) && ['shell', 'read', 'glob', 'grep'].includes(event.tool)) {
         if (!g.messages || !g.calls) throw new Error('[AZPR] Project tools require admitted reviewer input and an authorized model request.');
         const session = await scoped(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal);
         await authorize(event.sessionID, session.agent, session.model);

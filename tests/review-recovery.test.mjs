@@ -182,6 +182,33 @@ test('a locally normalized single-row final section stays complete with its warn
   assert.match(renderFinalReport(accepted, 'en'), /non-array/);
 });
 
+test('new verifier findings receive tracking IDs without losing rows, supplied IDs or evidence', () => {
+  const value = final();
+  value.newFindings = [finding('V001'), finding('V-1'), finding('V-1'), finding('')];
+  const original = structuredClone(value);
+  const accepted = acceptFinalReview(value, snapshot, [finding('F-1')], PR);
+  assert.equal(accepted.status, 'COMPLETE');
+  assert.deepEqual(accepted.newFindings.map(row => row.id), ['V-2', 'V-1', 'V-3', 'V-4']);
+  assert.deepEqual(accepted.newFindings.map(row => row.originalId), ['V001', undefined, 'V-1', '']);
+  assert.ok(accepted.newFindings.every(row => row.evidence === original.newFindings[0].evidence));
+  assert.deepEqual(value, original);
+  assert.ok(accepted.reviewWarnings.some(message => /tracking IDs/.test(message)));
+});
+
+test('new finding tracking IDs do not repair missing evidence or original finding decisions', () => {
+  const value = final(); value.newFindings = [finding('V001')];
+  delete value.newFindings[0].evidence;
+  const incomplete = acceptFinalReview(value, snapshot, [finding('F-1')], PR);
+  assert.equal(incomplete.status, 'PARTIAL');
+  assert.equal(incomplete.newFindings[0].evidence, undefined);
+  value.newFindings[0].evidence = 'Source-backed evidence';
+  value.confirmed[0].id = 'F001';
+  const changed = acceptFinalReview(value, snapshot, [finding('F-1')], PR);
+  assert.equal(changed.status, 'PARTIAL');
+  assert.equal(changed.dispositions[0].id, 'F001');
+  assert.equal(changed.unreviewedFindings[0].id, 'F-1');
+});
+
 test('a missing verifier snapshot or conflicting aliases still cannot be declared complete', () => {
   const missing = final(); delete missing.snapshot;
   assert.equal(acceptFinalReview(missing, snapshot, [finding('F-1')], PR).status, 'PARTIAL');
