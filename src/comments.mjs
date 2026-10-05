@@ -54,11 +54,38 @@ function marker(review, finding, comment) {
   return `<!-- azpr-comment:${fingerprint} -->`;
 }
 
+function argumentStrings(value) {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(argumentStrings);
+  return object(value) ? Object.values(value).flatMap(argumentStrings) : [];
+}
+
+// Restore presentation differences only at the declared lines. Matching literal
+// argument values is deliberately schema-agnostic, not a source certificate.
+// Never search for a different location or select between different raw ranges.
+function restoreAnchor(comment, review) {
+  const trim = value => value.split(/\r?\n/).map(line => line.replace(/^[ \t]+|[ \t]+$/g, '')).join('\n');
+  const forms = new Set([trim(comment.anchor), trim(comment.anchor.replace(/\\"/g, '"'))]);
+  const candidates = new Set();
+  for (const observation of review.toolText ?? []) {
+    const values = argumentStrings(observation.input);
+    if (!values.includes(comment.path) || !values.includes(review.snapshot.head) || typeof observation.output !== 'string') continue;
+    const lines = observation.output.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    if (comment.endLine > lines.length) continue;
+    const anchor = lines.slice(comment.startLine - 1, comment.endLine).join('\n');
+    if (forms.has(trim(anchor))) candidates.add(anchor);
+  }
+  return candidates.size === 1 ? [...candidates][0] : comment.anchor;
+}
+
 export function validateCommentPlan(result, review) {
   exactKeys(result, ['status', 'comments', 'skipped']);
   if (result.status !== 'READY' || !Array.isArray(result.comments) || !Array.isArray(result.skipped)) fail('Planner did not return a READY comment plan.');
   const eligible = new Map(confirmedFindings(review).map(f => [f.id, f]));
   const accounted = new Set();
+  const knownExcluded = new Set(review.final.dispositions.filter(d => d.status !== 'CONFIRMED').map(d => d.id));
+  const skippedIds = new Set(), anchorRestorations = [];
   const markers = new Set();
   const comments = result.comments.map(c => {
     exactKeys(c, ['findingId', 'severity', 'path', 'startLine', 'endLine', 'anchor', 'body']);
@@ -72,22 +99,25 @@ export function validateCommentPlan(result, review) {
     if (!review.snapshot.files.includes(c.path) || !c.path.startsWith('/') || /[\r\n\0]/.test(c.path) ||
         !integer(c.startLine) || !integer(c.endLine) || c.endLine < c.startLine) fail('Use a changed HEAD file and a positive, ordered line range.');
     if (!nonempty(c.anchor) || c.anchor.split(/\r?\n/).length !== c.endLine - c.startLine + 1) fail('Supply exact anchor text for the selected range. The model must verify it against source.');
+    const anchor = restoreAnchor(c, review);
+    if (anchor !== c.anchor) anchorRestorations.push(c.findingId);
     const tag = marker(review, finding, c);
     if (markers.has(tag)) fail('Duplicate finding in this plan; select one representative.');
     markers.add(tag);
     // Azure SDK positions are line-local, one-based UTF-16 character offsets.
     // Derive whole-line endpoints from the existing anchor, never file offsets
     // or another model-authored field. An empty final line uses its first column.
-    const startOffset = 1, endOffset = Math.max(1, c.anchor.split(/\r?\n/).at(-1).length);
-    return { ...c, startOffset, endOffset, marker: tag, content: `${c.body.trim()}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}` };
+    const startOffset = 1, endOffset = Math.max(1, anchor.split(/\r?\n/).at(-1).length);
+    return { ...c, anchor, startOffset, endOffset, marker: tag, content: `${c.body.trim()}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}` };
   });
   for (const s of result.skipped) {
     exactKeys(s, ['findingId', 'reason']);
-    if (!eligible.has(s.findingId) || accounted.has(s.findingId) || !nonempty(s.reason)) fail('Every skipped confirmed finding needs a unique ID and reason.');
-    accounted.add(s.findingId);
+    if ((!eligible.has(s.findingId) && !knownExcluded.has(s.findingId)) || accounted.has(s.findingId) || skippedIds.has(s.findingId) || !nonempty(s.reason)) fail('Every skipped finding needs a known, unique ID and reason.');
+    skippedIds.add(s.findingId);
+    if (eligible.has(s.findingId)) accounted.add(s.findingId);
   }
   if (accounted.size !== eligible.size) fail('Planner omitted confirmed findings instead of explaining exclusions.');
-  return { comments, skipped: result.skipped };
+  return { comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}) };
 }
 
 /** Restore a whole marked comment from the saved plan, independent of tool schema.

@@ -672,3 +672,25 @@ each pass with 63 local provider requests and 12 fixture MCP calls. They check
 that both comment roles receive deduplicated source observations while native
 shell output remains excluded. Live model adherence, source-copy correctness
 and Azure UI placement remain separate acceptance questions.
+
+
+## Non-publishable notes and anchor formatting (2026-10-05)
+
+A live free-profile planner produced three exact anchors from captured review
+text but also listed four verifier-rejected IDs in skipped notes. Those harmless
+notes blocked the plan. A same-release comparison produced correct line numbers
+but omitted indentation and over-escaped one anchor's quotes; independent audit
+withheld publication. Both historical failures and zero writes are preserved.
+
+Known excluded dispositions can now remain skipped notes without becoming
+eligible comments. At unchanged coordinates, a uniquely matching captured range
+can restore indentation/quote formatting when its argument values contain the
+selected path and HEAD. Ambiguity, other versions/paths and different code remain
+untouched. This neither interprets MCP schemas nor certifies source provenance.
+
+Offline replays preserve all three comments from each original plan; the second
+replay restores three exact anchors and derives full-line offsets from them. No
+model was rerun or historical cache restored. Syntax/413 offline tests pass.
+Fresh/replacement OpenCode 2.0.22 fixtures each pass with 63 local provider requests
+and 12 MCP calls, exercising rejected-ID notes, saved-anchor restoration and its
+publisher input. Live model/Azure delivery still needs its own evidence.

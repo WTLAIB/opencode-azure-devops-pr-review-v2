@@ -300,3 +300,10 @@ review tool text with arguments and numbered display. This can contain source
 code and PR data, so it follows the same private-diagnostics handling as other
 request payloads. Empty observations do not block planning; the model may read
 missing data normally. They are not proof of correct source selection or copying.
+
+
+For comment `anchorRestorations`, compare the retained response.json with the
+result.json saved anchor and original captured output. Restoration only fixes
+indentation/quote display at the same line range; it cannot certify provenance
+or fix an incorrect location. Known excluded verifier IDs can appear in skipped
+notes without enabling a comment for those IDs.

@@ -130,3 +130,39 @@ test('publisher restoration leaves ambiguous, unknown and search-only strings un
     assert.deepEqual(restoreSavedCommentText({ value }, comments), { input: { value }, restored: [] });
   }
 });
+
+test('known rejected findings may remain skipped notes without becoming eligible comments', () => {
+  const r=review(),d=draft();r.final.dispositions.push({id:'R-1',status:'REJECTED',reason:'Wrong version.'});
+  d.skipped.push({findingId:'R-1',reason:'Verifier rejected the reversed source interpretation.'});
+  const plan=validateCommentPlan(d,r);assert.deepEqual(plan.skipped,d.skipped);assert.equal(plan.comments.length,1);
+  d.comments[0].findingId='R-1';assert.throws(()=>validateCommentPlan(d,r),/confirmed findings/);
+});
+test('ancillary skipped notes cannot hide missing eligible findings or invent IDs', () => {
+  const r=review();r.final.dispositions.push({id:'R-1',status:'REJECTED',reason:'Wrong version.'});
+  assert.throws(()=>validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:'R-1',reason:'Rejected.'}]},r),/omitted confirmed/);
+  const d=draft();d.skipped=[{findingId:'unknown',reason:'Unknown note.'}];assert.throws(()=>validateCommentPlan(d,r),/known, unique/);
+});
+test('saved anchors restore indentation and quote display from uniquely matching recorded text', () => {
+  const r=review(),d=draft();
+  const raw='    return { "value": 1 };';
+  d.comments[0].anchor=raw.trim().replaceAll('"',String.fromCharCode(92)+'"');
+  r.toolText=[{input:{arbitrary:{first:snapshot.files[0],second:snapshot.head}},output:'header\n'+raw+'\n'}];
+  const plan=validateCommentPlan(d,r);
+  assert.equal(plan.comments[0].anchor,raw);assert.equal(plan.comments[0].endOffset,raw.length);
+  assert.deepEqual(plan.anchorRestorations,['F-1']);assert.notEqual(d.comments[0].anchor,raw);
+});
+test('anchor restoration does not choose ambiguous text, change positions or match other versions', () => {
+  const r=review(),d=draft(),anchor=d.comments[0].anchor;
+  const matching={input:{a:snapshot.files[0],b:snapshot.head},output:'header\n  '+anchor+'\n'};
+  for (const observations of [
+    [{...matching,input:{a:snapshot.files[0],b:'c'.repeat(40)}}],
+    [{...matching,input:{a:'/other.ts',b:snapshot.head}}],
+    [{...matching,output:'header\nother\n  '+anchor+'\n'}],
+    [matching,{...matching,output:'header\n    '+anchor+'\n'}],
+    [{...matching,output:'header\n  return other.name;\n'}],
+  ]) {
+    r.toolText=observations;const plan=validateCommentPlan(d,r);
+    assert.equal(plan.comments[0].anchor,anchor);assert.equal(plan.comments[0].startLine,2);
+    assert.equal(plan.anchorRestorations,undefined);
+  }
+});

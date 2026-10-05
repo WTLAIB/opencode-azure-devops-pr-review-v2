@@ -113,6 +113,11 @@ The independent V1 repository and installation are outside this project's scope.
   argument strings containing a whole comment with its unique saved marker may
   be restored to saved content. This copies approved text, not MCP operation,
   target or coordinate authorization. Preserve host permissions and uncertainty.
+  Known non-confirmed dispositions may remain skipped notes, never eligible posts.
+  Anchor formatting may be restored from one unambiguous captured literal range
+  at the same lines when argument values include the selected path and HEAD.
+  Do not interpret MCP fields/actions, relocate lines or invent source; preserve
+  original output and disclose changed IDs. This is not source certification.
 
 ## Verification and delivery
 

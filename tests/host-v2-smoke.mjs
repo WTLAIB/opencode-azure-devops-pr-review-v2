@@ -93,12 +93,16 @@ const provider = createServer(async (request, response) => {
     else if (payload.reviews) final = { status: 'COMPLETE', snapshot, currentHead: snapshot.head, currentBase: snapshot.base, confirmed: payload.reviews.flatMap(review => review.findings).map(item => ({ ...item, reason: 'Deterministic verifier fixture checked the source marker.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Deterministic fixture final report.' };
     else final = { status: 'COMPLETE', snapshot, coverage: { files: snapshot.files, gaps: [] }, findings: [finding(parsed.model === 'functional' ? 'F-1' : 'R-1')], report: 'Deterministic initial fixture.' };
   }
+  if (userContext === 'smoke-review' && payload.reviews) {
+    final.rejected=final.confirmed.filter(item=>item.id==='R-1').map(item=>({id:item.id,reason:'Fixture candidate declined by verifier.'}));
+    final.confirmed=final.confirmed.filter(item=>item.id!=='R-1');
+  }
   if (userContext === 'smoke-review' && parsed.model === 'risk') final.coverage.gaps = ['Tests were not executed in this source-only fixture.'];
   if (payload?.target && payload.findings && !payload.comments) final = { status: 'READY',
     comments: payload.findings.slice(0, 1).map(item => ({ findingId: item.id, severity: item.severity,
       path: snapshot.files[0], startLine: 1, endLine: 1, anchor: 'fixture-source',
       body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
-    skipped: payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })) };
+    skipped: [...payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })), ...payload.dispositions.filter(item=>item.status!=='CONFIRMED').map(item=>({findingId:item.id,reason:item.reason}))] };
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
   const projectVerification = userContext.startsWith('project-');
   const localComment = payload?.target && commentShellProbe;
@@ -113,7 +117,7 @@ const provider = createServer(async (request, response) => {
     : shellControl ? { command: `touch ${shellQuote(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' }
     : forced === 'shell' ? { command: `touch ${shellQuote(join(fixture, 'NATIVE_EXECUTED'))}`, description: 'Fixture forbidden shell' }
     : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` }
-    : { value: publisher ? 'publisher-error' : 'fixture-source', ...(publisher ? { payload: payload.comments[0].content.replace('Restore the guard', 'Please restore the guard') } : {}) };
+    : { value: publisher ? 'publisher-error' : 'fixture-source', ...(payload?.prUrl ? { anyPath: snapshot.files[0], anyRevision: snapshot.head } : {}), ...(publisher ? { payload: payload.comments[0].content.replace('Restore the guard', 'Please restore the guard') } : {}) };
   if (publisher && callTool && toolName !== 'shell') expectedPublishedText.push(payload.comments[0].content);
   let content = JSON.stringify(final);
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
@@ -152,12 +156,12 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (request.id === undefined) continue;
   let result;
   if (request.method === 'initialize') result = { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'azpr-smoke-fixture', version: '1.0.0' } };
-  else if (request.method === 'tools/list') result = { tools: [{ name: 'read_fixture', description: 'Read-only deterministic smoke fixture.', inputSchema: { type: 'object', properties: { value: { type: 'string' }, payload: { type: 'string' } }, required: ['value'] } }] };
+  else if (request.method === 'tools/list') result = { tools: [{ name: 'read_fixture', description: 'Read-only deterministic smoke fixture.', inputSchema: { type: 'object', properties: { value: { type: 'string' }, payload: { type: 'string' }, anyPath: { type: 'string' }, anyRevision: { type: 'string' } }, required: ['value'] } }] };
   else if (request.method === 'tools/call') {
     appendFileSync(${JSON.stringify(join(fixture, 'mcp-calls.jsonl'))}, JSON.stringify(request.params) + '\\n');
     result = request.params.arguments.value === 'publisher-error'
       ? { isError: true, content: [{ type: 'text', text: 'Fixture publication tool failed.' }] }
-      : { content: [{ type: 'text', text: 'fixture-source\\n\\nfixture-third-line\\n' }] };
+      : { content: [{ type: 'text', text: '  fixture-source\\n\\nfixture-third-line\\n' }] };
   } else result = {};
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
 }
@@ -386,11 +390,13 @@ try {
   const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
   assert.equal(publicationPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once, including the original request arguments.');
   assert.match(publicationPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
-  assert.match(publicationPayload.reviewToolText[0].text, /1 \| fixture-source\n2 \| \n3 \| fixture-third-line/);
+  assert.match(publicationPayload.reviewToolText[0].text, /1 \|   fixture-source\n2 \| \n3 \| fixture-third-line/);
   const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
   assert.deepEqual(plannerPayload.reviewToolText, publicationPayload.reviewToolText);
   assert.equal(publicationPayload.comments[0].startOffset, 1);
-  assert.equal(publicationPayload.comments[0].endOffset, 14);
+  assert.equal(publicationPayload.comments[0].endOffset, 16);
+  assert.equal(publicationPayload.comments[0].anchor, '  fixture-source');
+  assert.match(preview, /Fixture candidate declined by verifier/);
   await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /already had a publication/);
   workflowReceipts.push({ command: 'pr-comment --publish', suffix: 'publisher-error', receipt: publication });
   await invokeReview('pr-review', 'smoke-prose', /\] PARTIAL/);

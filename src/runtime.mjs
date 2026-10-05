@@ -501,7 +501,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       let status, report;
       if (!publish) review.plan = null; // Never leave an obsolete preview after a failed refresh.
       const payload = { target: review.target, snapshot: review.snapshot, report: review.final.report,
-        reviewToolText: review.toolText ?? [],
+        reviewToolText: (review.toolText ?? []).map(({ tool, text }) => ({ tool, text })),
         outputLanguage: review.outputLanguage, provenance: review.provenance,
         reviewWarnings: review.final.reviewWarnings,
         findings: confirmedFindings(review), dispositions: review.final.dispositions,
@@ -518,7 +518,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
           if (publish) {
             if (!record.completedTools) throw new Error('Publisher did not complete any tool call. Publication remains unverified; inspect Azure.');
             allReported = recordPublishResult(result, review);
-          } else review.plan = validateCommentPlan(result, review);
+          } else {
+            review.plan = validateCommentPlan(result, review);
+            if (review.plan.anchorRestorations) record.anchorRestorations = review.plan.anchorRestorations;
+            // Diagnostics and preview expose the saved anchors. The original
+            // model envelope remains in response.json, never overwritten.
+            return { ...result, comments: result.comments.map((comment, index) => ({ ...comment, anchor: review.plan.comments[index].anchor })) };
+          }
           return publish && !allReported ? { ...result, status: 'INCOMPLETE' } : result;
         });
         if (publish) {
@@ -529,7 +535,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
           report = review.plan.comments.map(c => `### ${c.findingId} — ${c.path}:${c.startLine}-${c.endLine}\n\n${c.content}`).join('\n\n');
           report ||= 'No new actionable inline comments to post.';
           report = `Comments prepared: ${review.plan.comments.length}\n\n${report}`;
-          report += '\n\nSkipped confirmed findings:\n' + (review.plan.skipped.map(s => `- ${s.findingId}: ${s.reason}`).join('\n') || '- None.');
+          report += '\n\nSkipped findings:\n' + (review.plan.skipped.map(s => `- ${s.findingId}: ${s.reason}`).join('\n') || '- None.');
           report += `\n\nPublication was not requested. To request posting this exact preview: /pr-comment ${review.id} --publish`;
         }
       }
@@ -762,7 +768,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
             // reconstruct source from finding prose. Keep arguments beside the
             // text; they describe the call, not certified source provenance.
             const key = JSON.stringify([event.tool, event.input, result.output]);
-            g.run.toolText.set(key, { tool: event.tool, text: event.result.content[0].text });
+            g.run.toolText.set(key, { tool: event.tool, input: clone(event.input), output: result.output, text: event.result.content[0].text });
           }
         }
       }
