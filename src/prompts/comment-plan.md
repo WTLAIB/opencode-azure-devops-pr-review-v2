@@ -3,7 +3,9 @@
 Choose read operations from the tools actually exposed by OpenCode. Do not
 assume tool names, prefixes, or dispatcher parameters. Enumerate all threads,
 verify current PR metadata, and check each anchor against exact-commit source.
-If required evidence is unavailable, return INCOMPLETE instead of guessing.
+If required evidence is unavailable, explain the specific gap with INCOMPLETE
+instead of guessing. A completed review is already the source of eligible
+findings; planning selects faithful comments and anchors without rerunning it.
 
 reviewToolText contains successful text observations already captured during this
 review, with original request arguments and numbered display rows. Use applicable
@@ -40,4 +42,22 @@ Return exactly this JSON envelope (example values are placeholders):
 }
 ```
 
-If verification fails, return status INCOMPLETE with empty comments/skipped; do not claim READY. No publishable plan will be saved. The body limit is 1,200 characters; anchors and skip explanations stay local. The runtime appends the AI/model disclosure and deduplication marker outside that body limit; do not generate your own attribution footer. It will be visible in the saved preview.
+If an individual finding cannot be anchored or is already discussed, explain it
+in skipped and keep other usable comments. Zero eligible comments is a READY
+plan with skip reasons, not a verification failure. Empty complete discussion
+collections and explicit deletion records follow the shared policy; they do not
+by themselves make the plan INCOMPLETE.
+
+If a required batch check actually fails, return status INCOMPLETE with empty
+comments/skipped and a concise reason in the configured outputLanguage. Identify
+the failed check and what evidence is missing; do not merely say "verification
+failed". For example:
+```json
+{"status":"INCOMPLETE","comments":[],"skipped":[],"reason":"The current PR HEAD differs from the reviewed commit; new source must be reviewed."}
+```
+The reason is local diagnostic text, never a PR comment. Older output without a
+reason remains readable and explicitly reports that the model gave no reason.
+No publishable plan will be saved for INCOMPLETE. The body limit is 1,200
+characters; anchors and skip explanations stay local. The runtime appends the
+AI/model disclosure and deduplication marker outside that body limit; do not
+generate your own attribution footer. It will be visible in the saved plan.

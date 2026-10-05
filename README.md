@@ -137,8 +137,9 @@ are unsupported and rejected. Before replacing an older V2 installation, back up
 your private settings, remove those obsolete keys explicitly, and pass that
 cleaned profile with `--settings FILE`; the installer never silently migrates it.
 
-Comment preview has no numerical quota. A saved preview and explicit `--publish`
-authorize publication without a separate config switch. Ordinary host auxiliary
+Comment preview has no numerical quota. Explicit `--publish` prepares and saves
+a plan if needed, then publishes it without a separate preview command or config
+switch. An existing preview is reused exactly. Ordinary host auxiliary
 model selections are always preserved; private reviewers cannot start auxiliary
 requests. `/pr-check` remains a standalone diagnosis with strict output validation
 and no additional model request to repair its answer.
@@ -208,8 +209,17 @@ Invoke from an ordinary development session:
 | `/pr-review <PR URL> [context]` | Two concurrent normal reviewers, then independent verification. |
 | `/pr-deep <PR URL> [context]` | Same pipeline, separate three-role models and deeper analysis. |
 | `/pr-stop [run-id]` | Revoke active authorization and request interruption; omitted ID uses the current origin session. |
-| `/pr-comment <completed-run-id>` | Build an inline-comment preview from verified findings. |
-| `/pr-comment <completed-run-id> --publish` | Explicitly request posting exactly the saved preview from this conversation/process. |
+| `/pr-comment [review-id]` | Preview comments for this conversation's latest completed review, or the supplied ID. |
+| `/pr-comment [review-id] --publish` | Prepare and publish comments in one command, or publish an existing preview exactly. |
+
+After a review, `/pr-comment --publish` is enough to request publication. Preview
+is optional: use `/pr-comment` to inspect the proposed comments first. Neither
+command reruns the reviewers. `returnReport: full` only controls displaying the
+review report; it does not add a prerequisite or change comment eligibility.
+Every COMPLETE report ends with both complete commands, including its review ID.
+Comment commands also work from that report or its comment-result session, using
+the same original conversation and permissions. Unrelated conversations cannot
+use its cached review, and omitting the ID never searches other conversations.
 
 Arguments are literal command text; shell-like syntax, `$` and `@` are not
 expanded by this plugin. Attachments and private-agent mentions are rejected.
@@ -234,13 +244,16 @@ verifier or the report. Missing fields and incomplete decisions produce a usable
 PARTIAL report instead of losing the entire review. Partial/stale reports include
 their body even in receipt mode. No extra model request is used for formatting.
 
-A COMPLETE review can enter `/pr-comment <review-id>` from its original
-session/process. The independent verifier must establish the final evidence,
+A COMPLETE review can enter `/pr-comment` from its original conversation or report
+session in the same process. The independent verifier must establish the final evidence,
 identity/versions and original-ID decisions. Initial coverage disclosures, partial
 or unavailable initials, and successfully normalized formatting do not veto that
 completed result. Limitations remain visible and accompany the comment preview.
-Preview still checks each proposed comment against current source and existing
-discussions; publication requires the saved preview and explicit `--publish`.
+Planning still checks each proposed comment against current source and existing
+discussions. Explicit `--publish` can perform that planning and publication in
+one command; it never treats an INCOMPLETE plan as publishable. A planning failure
+retains the review and exposes the supplied reason, so another explicit comment
+command can address it without rerunning the review.
 Settings, source checks and comment operations keep strict parsing. See
 [architecture](docs/ARCHITECTURE.md).
 
@@ -260,6 +273,21 @@ Publication results are model-reported, never independently provider-verified by
 this plugin. An uncertain publication attempt locks the saved batch against
 automatic retry. Inspect Azure before taking further action. Nothing posts merely
 because a review completes or a preview exists.
+
+### Review retention
+
+Publication data is local **process memory**, not a durable run-ID database.
+Each plugin instance keeps the latest 20 completed reviews, including source
+observations, any prepared plan, and publication-attempt state. A newer completed
+review evicts the oldest when the limit is exceeded. There is no time-based TTL;
+plugin unload or process restart clears this cache. An expired ID fails clearly
+and never silently selects another review or triggers a new model review.
+
+OpenCode owns its conversation history. Optional private debug files remain on
+disk until the user removes them; the plugin does not automatically purge those
+files or host history. Neither history nor debug JSON restores publication
+authorization after restart. See [comment retention](docs/COMMENTING.md#retention)
+and [diagnostics](docs/DEBUGGING.md).
 
 ## Development and removal
 

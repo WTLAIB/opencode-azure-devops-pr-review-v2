@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderReceipt, renderDiagnosticNotices } from '../src/attribution.mjs';
+import { renderReceipt, renderDiagnosticNotices, renderCommentActions } from '../src/attribution.mjs';
 
 function freeze(value) {
   if (value && typeof value === 'object') {
@@ -19,6 +19,17 @@ const run = () => ({
   debug: { directory: '/fixture/debug', warnings: [] },
 });
 const settings = { returnReport: 'receipt', outputLanguage: 'zh-TW' };
+
+test('comment actions include exact direct and preview commands with process retention limits', () => {
+  for (const language of ['en', 'zh-TW', 'zh-CN']) {
+    const text = renderCommentActions('12345678', language);
+    assert.match(text, /\/pr-comment 12345678 --publish/);
+    assert.match(text, /`\/pr-comment 12345678`/);
+    assert.match(text, /`\/pr-comment --publish`/);
+    assert.match(text, /20/);
+  }
+  assert.match(renderCommentActions('12345678', 'zh-TW'), /重啟後清除/);
+});
 
 test('receipt rendering is pure and exposes report content only in explicit full mode', () => {
   const value = freeze(run());

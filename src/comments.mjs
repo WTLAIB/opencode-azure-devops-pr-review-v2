@@ -88,7 +88,10 @@ function restoreAnchor(comment, review) {
 }
 
 export function validateCommentPlan(result, review) {
-  exactKeys(result, ['status', 'comments', 'skipped']);
+  exactKeys(result, ['status', 'comments', 'skipped', 'reason']);
+  // A diagnostic reason never makes a usable READY plan invalid. Keep the raw
+  // value in the response; only nonempty text can explain an incomplete plan.
+  if (result.status === 'INCOMPLETE') fail(`Comment planning incomplete: ${nonempty(result.reason) ? result.reason.trim() : 'The model did not explain what could not be verified.'} No comments were published; the completed review remains available.`);
   if (result.status !== 'READY' || !Array.isArray(result.comments) || !Array.isArray(result.skipped)) fail('Planner did not return a READY comment plan.');
   const eligible = new Map(confirmedFindings(review).map(f => [f.id, f]));
   const accounted = new Set();

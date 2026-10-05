@@ -25,8 +25,11 @@ and read all current unfiltered discussion pages once. Stop if the PR changed or
 a saved issue is already discussed, including by a human and by meaning. Prefer
 complete records containing comment bodies and deletion state when the available
 tool supports them. Do not individually reread explicitly deleted threads or
-comments, or complete discussions already returned in the list. Read further only
-for missing content, unclear deletion state or pagination. Never evade markers.
+comments, or complete discussions already returned in the list. A complete empty
+comment collection contains no discussion to duplicate; an absent deletion flag
+on an empty collection is not a reason to stop. Read further only for missing
+content or unfinished pagination, following the shared duplicate-check policy.
+Never evade markers.
 
 Then create EACH saved comment once, sequentially. Inspect its actual returned
 thread ID, content and anchor. The same batch checks cover subsequent comments;

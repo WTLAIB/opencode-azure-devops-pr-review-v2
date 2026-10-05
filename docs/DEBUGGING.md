@@ -47,6 +47,7 @@ configuration, or HTTP headers.
 | `NN-azpr-ROLE.response.json` | Captured visible model response, finish state, and available error data. |
 | `NN-azpr-ROLE.result.json` | Validation outcome, finding/output corrections, observations, and timing. |
 | `report.md` | Deterministically rendered report when available. |
+| `comment-plan.json` | Exact prepared comments, anchors, offsets, skip reasons and target before optional publication; diagnostic only, not a restorable authorization. |
 | `draft.md` | Incomplete, explicitly unconfirmed draft when available. |
 | `result.json` | Final status, failure, stage records, cleanup state, and logging warnings. |
 
@@ -60,6 +61,25 @@ result together. Distinguish host/session failure, provider failure, MCP failure
 output parsing, evidence validation, final rendering, and model factual quality.
 Compare the original response with the parsed result and verifier handoff. Do not
 infer a cause from the final status alone.
+
+`Comment planning incomplete: ...` includes the planner's optional `reason`.
+When the model returns INCOMPLETE without a reason, the receipt says so instead
+of guessing. The completed review remains available for an explicit new comment
+command; there is no automatic model retry. A publisher error is different: its
+attempt ledger is uncertain and cannot be retried through that review.
+
+For an empty-discussion failure, inspect the actual tool result and whether it
+was a full response. A complete unfiltered empty comment collection is not an
+unknown missing body; it contains no discussion text to duplicate. Summary-only
+responses, pagination gaps and read errors remain distinct. Thread IDs and source
+coordinates do not prove that an existing comment survives. No runtime Azure
+response classifier or blanket permission override is involved.
+
+Run IDs address the latest 20 completed reviews in process memory. Restart or
+eviction removes their plans and attempt state without removing host history or
+debug files. Those files are retained with no automatic purge and cannot restore
+publication authorization. `returnReport: full` displays the result and its exact
+comment commands; it does not persist a publishable review or change eligibility.
 
 ## Session completion and context limits
 

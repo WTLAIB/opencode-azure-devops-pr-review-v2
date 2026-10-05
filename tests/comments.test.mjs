@@ -23,6 +23,24 @@ test('plan validates format and creates a stable marker, not provider evidence',
   assert.match(a.plan.comments[0].content,/<!-- azpr-comment:[a-f0-9]{32} -->$/);
   assert.equal(a.plan.comments[0].args,undefined);
 });
+test('incomplete plans expose an optional reason without manufacturing a usable plan', () => {
+  for (const reason of [undefined, 'The current HEAD differs from the reviewed commit.']) {
+    const result = { status: 'INCOMPLETE', comments: [], skipped: [], ...(reason ? { reason } : {}) };
+    assert.throws(() => validateCommentPlan(result, review()), error => {
+      assert.ok(error.message.includes(reason ?? 'The model did not explain'));
+      assert.match(error.message, /No comments were published/);
+      return true;
+    });
+  }
+  for (const reason of [false, {}, '']) {
+    assert.equal(validateCommentPlan({ ...draft(), reason }, review()).comments.length, 1);
+    assert.throws(() => validateCommentPlan({ status: 'INCOMPLETE', comments: [], skipped: [], reason }, review()), /The model did not explain/);
+  }
+  const valid = draft(); valid.reason = 'All required checks passed.';
+  const saved = validateCommentPlan(valid, review());
+  assert.equal(saved.comments.length, 1);
+  assert.doesNotMatch(saved.comments[0].content, /All required checks/);
+});
 test('saved positions use line-local offsets derived from the existing anchor',()=>{
   for(const [anchor,endLine,endOffset] of [['    first\n  last',3,6],['😀x',2,3],['first\r\n',3,1]]) {
     const d=draft();Object.assign(d.comments[0],{anchor,endLine});

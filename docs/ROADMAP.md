@@ -40,8 +40,11 @@ historical evidence and do not certify this adapter.
   roles, with design tradeoffs and test-coverage advice retained in the report.
   No topic checklist, additional model round or completion gate is introduced.
 - Comment previews include all eligible findings without a numerical quota;
-  publication needs the saved preview and explicit `--publish`, with no config
-  switch. Host auxiliary selections are always preserved. Obsolete settings and
+  explicit `--publish` prepares and saves a plan if needed, then publishes in one
+  command. The review ID is optional within its origin/report session, and report
+  footers include exact commands. Complete empty discussion collections do not
+  block planning; model-supplied failure reasons remain visible. No config
+  switch is needed. Host auxiliary selections are always preserved. Obsolete settings and
   model-authored output-repair paths are removed; `/pr-check` stays standalone.
 
 ## Project verification

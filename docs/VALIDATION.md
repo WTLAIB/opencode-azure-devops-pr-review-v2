@@ -12,6 +12,44 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-06 direct comment commands and planning diagnostics
+
+A retained real COMPLETE review had three confirmed medium findings, but its
+planner returned an unexplained empty INCOMPLETE response after 38 successful
+read operations, including 35 empty comment collections. No publisher started.
+Confusion about historical empty threads is plausible, not a proven account of
+the model's decision; the original response contained no reason.
+
+The updated shared guidance distinguishes complete empty collections and explicit
+deletions from omitted summary fields, incomplete pagination and unavailable
+non-deleted comment bodies. An optional planner reason is exposed locally without
+becoming a new eligibility field or a published comment. Missing/non-text reasons
+do not invalidate an otherwise usable READY plan. No Azure tool/schema classifier
+or automatic model retry was introduced.
+
+`/pr-comment --publish` now plans and publishes in one explicitly requested
+workflow when no saved preview exists; preview remains optional. The ID may be
+omitted in the originating conversation, and the completed report and comment
+result sessions can route commands back to that origin. Full and receipt reports
+include exact commands. Review retention remains the latest 20 completed reviews
+in process memory, with no TTL or restoration from history/diagnostic files.
+
+Syntax checks and 430/430 offline tests passed. The final source's actual OpenCode
+2.0.22 fresh/replacement fixtures each passed with 65 loopback provider requests,
+13 fixture MCP calls and four one-time host permission approvals. They exercise
+direct publication from a report session, exact saved-plan transfer, an explained
+planning failure with no publisher, stop-on-publisher-error, and unavailable cache
+after restart. Unit tests also cover optional preview, full report commands,
+origin isolation, eviction, empty plans, cancellation and explicit replanning.
+
+An initial fixture run reached the new flows but failed an outdated MCP count
+assertion (12 instead of 13 after adding a planning-failure case). Its evidence
+was retained and the expectation corrected. A later change ensured malformed
+optional diagnostic reasons cannot discard usable plans; final fixtures cover
+the resulting source. No real model/Azure request, live publication, UI rendering
+check, or daily installation is implied by this validation. Live adherence to
+the clarified empty-thread policy remains unmeasured.
+
 ## 2026-10-05 snapshot argument labels
 
 The next live pair had one successful three-comment delivery, independently

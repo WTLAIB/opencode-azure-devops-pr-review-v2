@@ -563,22 +563,132 @@ test('provider-rejected preview preserves the completed review, starts no publis
   assert.doesNotMatch(failed, /PRIVATE_PROVIDER_DETAIL|PRIVATE_BODY/);
   assert.deepEqual((await resultLog(failed)).stages[0].execution.provider, { status: 403, toolCallsObserved: 0 });
   assert.equal(f.prompts().length, 4);
-  await assert.rejects(f.command('pr-comment', id + ' --publish'), /Preview first/);
-  assert.equal(f.prompts().length, 4);
+  const rejectedPublish = await f.command('pr-comment', id + ' --publish');
+  assert.match(rejectedPublish, /] INCOMPLETE/);
+  assert.match(rejectedPublish, /The review is retained/);
+  assert.equal(f.prompts().length, 5, 'A new explicit publish command may try planning once, without automatically repeating a failed plan.');
   assert.equal(f.calls.some(call => call.kind === 'executed-tool' && call.tool === 'fixture_mcp_write'), false);
   rejectPlan = false;
   assert.match(await f.command('pr-comment', id), /] PREVIEW/);
-  assert.equal(f.prompts().length, 5, 'An explicitly requested new preview reuses the original COMPLETE review.');
+  assert.equal(f.prompts().length, 6, 'An explicitly requested new preview reuses the original COMPLETE review.');
 });
 
-test('comment publication needs a saved preview and explicit publish without a config switch',async t=>{
+test('a separate preview remains optional and publication still requires explicit publish',async t=>{
   const f=await fixture(t,{}),receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
-  await assert.rejects(f.command('pr-comment',id+' --publish'),/Preview first/);
   await assert.rejects(f.command('pr-comment',id,'other-origin'),/unavailable/);
   assert.match(await f.command('pr-comment',id),/] PREVIEW/);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
   assert.match(await f.command('pr-comment',id+' --publish'),/] MODEL_REPORTED_POSTED/);await assert.rejects(f.command('pr-comment',id+' --publish'),/already had a publication/);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,1);
+});
+
+test('direct publication prepares once, saves exact content and uses no new review round', async t => {
+  const f = await fixture(t), receipt = await f.command(), id = /AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  const published = await f.command('pr-comment', '--publish');
+  assert.match(published, /] MODEL_REPORTED_POSTED/);
+  assert.match(published, new RegExp('source review=' + id));
+  assert.match(published, /Comments prepared: 1/);
+  assert.deepEqual(f.prompts().slice(3).map(p => f.sessions.get(p.sessionID).agent), ['azpr-review-comment-plan', 'azpr-review-comment-publish']);
+  const packet = JSON.parse(f.prompts().at(-1).text);
+  assert.ok(published.includes(packet.comments[0].content));
+  assert.deepEqual(Object.keys(packet).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
+  assert.equal(f.calls.filter(c => c.kind === 'executed-tool' && c.tool === 'fixture_mcp_write').length, 1);
+  await assert.rejects(f.command('pr-comment', '--publish'), /already had a publication/);
+});
+
+test('full report delivery ends with commands for that exact cached review', async t => {
+  const f = await fixture(t, { settings(s) { s.returnReport = 'full'; s.outputLanguage = 'zh-TW'; } });
+  const receipt = await f.command(), id = /AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  const report = /<azpr_report_data>\n([\s\S]*?)\n<\/azpr_report_data>/.exec(receipt)[1];
+  const footer = report.slice(report.lastIndexOf('## PR 留言'));
+  assert.ok(footer.includes(`/pr-comment ${id} --publish`));
+  assert.ok(footer.includes(`/pr-comment ${id}`));
+  assert.match(footer, /重啟後清除/);
+  const reportSession = (await resultLog(receipt)).stages.at(-1).sessionID;
+  assert.ok(f.notices.some(n => n.sessionID === reportSession && n.text.includes(footer)));
+  assert.match(await f.command('pr-comment', id, reportSession), /] PREVIEW/);
+  assert.equal(f.prompts().length, 4, 'Displaying the full report adds no model request.');
+});
+
+test('implicit review selection uses the current origin while report sessions retain their own review', async t => {
+  const f = await fixture(t);
+  const first = await f.command(), firstID = /AZPR ([a-f0-9]{8})/.exec(first)[1];
+  const reportSession = (await resultLog(first)).stages.at(-1).sessionID;
+  const second = await f.command('pr-deep'), secondID = /AZPR ([a-f0-9]{8})/.exec(second)[1];
+  await f.command('pr-review', PR, 'other-origin');
+  assert.match(await f.command('pr-comment', ''), new RegExp('source review=' + secondID));
+  assert.equal(f.sessions.get(f.prompts().at(-1).sessionID).agent, 'azpr-deep-comment-plan');
+  assert.match(await f.command('pr-comment', '', reportSession), new RegExp('source review=' + firstID));
+  assert.equal(f.calls.filter(c => c.kind === 'create').at(-1).parentID, 'ordinary');
+  const previewSession = f.prompts().at(-1).sessionID;
+  assert.match(await f.command('pr-comment', '--publish', previewSession), new RegExp('source review=' + firstID));
+  await assert.rejects(f.command('pr-comment', secondID, reportSession), /unavailable/);
+  await assert.rejects(f.command('pr-review', PR, reportSession), /ordinary development session/);
+});
+
+test('missing or invalid selection never creates a model session', async t => {
+  const f = await fixture(t);
+  for (const args of ['', '--publish', 'bad-id', '--publish 12345678', '12345678 --publish --publish']) {
+    await assert.rejects(f.command('pr-comment', args), /unavailable|Usage/);
+  }
+  assert.equal(f.prompts().length, 0);
+});
+
+test('memory eviction explains unavailable reviews without falling back to another ID', async t => {
+  const f = await fixture(t);
+  const first = await f.command(), firstID = /AZPR ([a-f0-9]{8})/.exec(first)[1];
+  for (let i = 0; i < 20; i++) await f.command();
+  const before = f.prompts().length;
+  await assert.rejects(f.command('pr-comment', firstID), /latest 20.*restarting clears/i);
+  assert.equal(f.prompts().length, before);
+  assert.match(await f.command('pr-comment', ''), /] PREVIEW/);
+});
+
+test('planner reasons reach receipts and diagnostics while failed direct publication makes no writes', async t => {
+  let fail = true;
+  const reason = '討論清單的下一頁讀取被拒絕，無法確認是否已有相同留言。';
+  const f = await fixture(t, { result({ role, result }) {
+    return fail && role.endsWith('comment-plan') ? { status: 'INCOMPLETE', comments: [], skipped: [], reason } : result;
+  } });
+  const receipt = await f.command(), id = /AZPR ([a-f0-9]{8})/.exec(receipt)[1];
+  const failed = await f.command('pr-comment', '--publish');
+  assert.match(failed, /] INCOMPLETE/); assert.ok(failed.includes(reason));
+  assert.match(failed, /a new review is not required/);
+  assert.ok((await resultLog(failed)).stages[0].error.includes(reason));
+  assert.equal(f.calls.some(c => c.tool === 'fixture_mcp_write'), false);
+  assert.equal(f.prompts().length, 4);
+  fail = false;
+  const published = await f.command('pr-comment', id + ' --publish');
+  assert.match(published, /] MODEL_REPORTED_POSTED/);
+  assert.equal(f.prompts().length, 6);
+});
+
+test('direct empty publication preserves skip reasons and starts no publisher', async t => {
+  const f = await fixture(t, { result({ role, packet, result }) {
+    if (role.endsWith('comment-plan')) return { status: 'READY', comments: [], skipped: packet.findings.map(f => ({ findingId: f.id, reason: 'Existing non-deleted discussion.' })) };
+    return result;
+  } });
+  await f.command();
+  const receipt = await f.command('pr-comment', '--publish');
+  assert.match(receipt, /] NOTHING_TO_POST/);
+  assert.match(receipt, /Existing non-deleted discussion/);
+  assert.equal(f.prompts().length, 4);
+  assert.equal(f.calls.some(c => c.tool === 'fixture_mcp_write'), false);
+});
+
+test('cancelling direct publication during planning never starts a publisher', async t => {
+  const started = deferred(), release = deferred();
+  const f = await fixture(t, { async during({ session }) {
+    if (session.agent.endsWith('comment-plan')) { started.resolve(); await release.promise; }
+  } });
+  const review = await f.command(), reportSession = (await resultLog(review)).stages.at(-1).sessionID;
+  const publishing = f.command('pr-comment', '--publish', reportSession);
+  await started.promise;
+  await f.command('pr-stop', '', reportSession);
+  const receipt = await publishing; release.resolve();
+  assert.match(receipt, /] CANCELLED/);
+  assert.equal(f.calls.some(c => c.tool === 'fixture_mcp_write'), false);
+  assert.equal(f.prompts().length, 4);
 });
 
 test('all twelve eligible findings reach the saved preview and explicitly requested publication',async t=>{

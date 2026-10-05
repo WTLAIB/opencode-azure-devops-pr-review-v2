@@ -152,6 +152,12 @@ before a stage starts still revoke the workflow. Manual cancellation and an
 explicit timeout stop pending work; there is no new default deadline.
 Origin/PR locks prevent duplicate review or publication workflows.
 Report retention is in-memory and bounded by report count, never evidence size.
+The latest 20 completed reviews survive until eviction or plugin/process exit;
+there is no TTL or restoration from debug files. A comment command may omit its
+review ID and select the latest completed review from its own origin only.
+Completed report/comment-result sessions route explicit commands back to that
+same origin for locking, permissions and child creation. This does not authorize
+ordinary prompts to resume a revoked reviewer or cross-conversation selection.
 
 ## Review delivery and publication assessment
 
@@ -256,7 +262,14 @@ does not certify TUI display. See [debugging](DEBUGGING.md#output-and-report-pre
 COMPLETE same-origin reviews enter the comment cache. Preview verifies
 eligible corrected findings, anchors, severity and exact content with AI
 attribution. Preview displays the full comment count without a numerical quota.
-Explicit --publish requires a saved preview; no separate config switch applies.
+Explicit --publish reuses a saved preview or runs planning and publication in one
+workflow. The planner must finish with a validated saved plan before any publisher
+starts. The stages share the command's cancellation/deadline and origin/PR locks;
+no additional reviewer or automatic retry is introduced. Empty plans return
+NOTHING_TO_POST with skip reasons and no publisher. A planning failure retains
+the review and exposes an optional model-supplied reason, or states that none was
+provided. The report footer supplies exact direct/preview commands and memory
+retention limits. No separate config switch applies.
 The saved plan adds line-local character offsets derived from its existing
 anchor. This does not add fields the planner must generate or inspect MCP schemas
 in code; the publisher translates the saved positions to the available tool.

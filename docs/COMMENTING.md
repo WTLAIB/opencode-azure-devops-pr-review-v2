@@ -58,7 +58,11 @@ must explain the skip locally rather than omit essential conditions to fit.
 
 ## Preview and publish
 
-A COMPLETE review can enter comment preview in its original session/process.
+A COMPLETE review can enter comment planning from its original conversation or
+its report/comment-result sessions in the same process. The ID is optional;
+omitting it selects the latest completed review in that conversation. A report
+session remains associated with its own review, even after a newer review runs
+in the origin. Other conversations cannot select it.
 The planner may return one strict JSON plan surrounded by explanatory text or
 code examples. Local extraction accepts that unique plan and retains the notes
 in its session and optional stage diagnostics; notes are not appended to posted
@@ -75,8 +79,10 @@ PARTIAL, STALE and interrupted final results remain readable but do not enter th
 comment cache. COMPLETE is not automatic publication or a guarantee that an
 eligible, nonduplicate inline comment exists.
 
-Publication has no separate configuration switch. It requires a saved preview
-and an explicit `--publish` in the same original session/process.
+Publication has no separate configuration switch. Explicit `--publish` uses an
+existing saved preview, or runs the planner once and saves the validated plan
+before publishing in the same command. A separate preview command is optional.
+An INCOMPLETE/failed plan starts no publisher and retains the completed review.
 Comment roles inherit shell/read/search permissions from OpenCode for local
 verification. They add no allow rule: host asks and denials remain effective.
 This also removes the plugin's shell-schema difference associated with a tested
@@ -88,13 +94,17 @@ prose. Initial reviewers use the same language so the verifier does not need to
 switch from an English handoff. Structured keys, identifiers and source quotes
 remain unchanged. Language compliance is model behavior, not a completion gate.
 
-From the same original conversation/process:
+From the original conversation or its report session, without remembering an ID:
 
 ```text
 /pr-review https://dev.azure.com/ORG/PROJECT/_git/REPO/pullrequest/123
-/pr-comment <completed-review-id>
-/pr-comment <completed-review-id> --publish
+/pr-comment --publish
 ```
+
+For an optional preview, use `/pr-comment` first. Both commands accept a specific
+ID: `/pr-comment <review-id>` and `/pr-comment <review-id> --publish`. Every
+COMPLETE report ends with these exact commands for that report. `returnReport`
+only changes where the report is displayed, not eligibility or required steps.
 
 The preview shows the comment count, complete saved content (body, AI/model
 disclosure, marker), locations, and skip reasons even in receipt mode. There is
@@ -111,7 +121,9 @@ check missing source and mutable PR/discussion state. It helps avoid inventing
 anchor text from a finding description. Prefer a concise anchor; exact longer
 ranges are accepted instead of failing on an arbitrary five-line maximum.
 
-Inspect it before requesting publication. The publisher receives only the target,
+When using preview, inspect it before requesting publication. Direct publication
+returns the prepared comments and any attempt outcomes; a publisher failure also
+retains the exact prepared content for inspection. The publisher receives only the target,
 snapshot, output language and saved comments, including their exact content,
 anchors and coordinates. The full review, findings and tool-text collection stay
 with planning. The publisher sends saved content without translation or relocation.
@@ -226,11 +238,46 @@ Prompts forbid blind retries. A push or new discussion can race the last check.
 Cancellation cannot undo already dispatched operations; no remote rollback or
 deletion is attempted.
 
-Completed reviews/previews are actionable only in this process (latest 20 reviews).
-Restarting clears that cache, not OpenCode history. Empty plans start no publisher
-and do not request a summary thread.
+## Retention
+
+Completed reviews, source observations, prepared plans and attempt records are
+kept only in this plugin instance's process memory, across its conversations.
+The cache holds the latest 20 completed reviews; the next completion evicts the
+oldest. There is no elapsed-time expiry, background disk purge, or run-ID file
+database. Unloading the plugin or restarting the process clears the memory cache.
+OpenCode retains its own history independently. Optional debug files have no
+automatic deletion and must be removed deliberately by their owner.
+
+An unavailable ID never falls back to another review. Empty plans start no
+publisher and do not request a summary thread.
 Optional debug files preserve a private diagnostic copy but cannot restore a
 publication authorization or plan after restart.
+
+## Empty discussions and planning failures
+
+Duplicate checks compare remaining comment text. Explicitly deleted records
+are ignored, while surviving comments in partially deleted threads and resolved
+discussions still count. Historical IDs, status codes and line coordinates alone
+are not duplicate findings. Prefer documented full responses over summaries that
+omit comment bodies or deletion fields.
+
+A successful, complete, unfiltered comment collection with zero items provides
+no discussion text to compare; an empty thread may remain listed. Its absence of
+a deletion flag does not block planning, and the model need not prove why it is
+empty. Do not individually reread collections that are already complete. Missing
+summary fields, unfinished pagination, truncation, denied reads, and a non-deleted
+comment with an unavailable body still need a supported read or a specific
+explanation. The runtime does not interpret MCP tool names or classify Azure
+response schemas; this is shared planner/publisher guidance, not a write firewall.
+
+An unsupported individual finding belongs in `skipped` with a reason, allowing
+other comments to proceed. Zero eligible comments is a READY empty plan. A real
+batch-wide verification gap may return INCOMPLETE with an optional `reason`.
+The reason appears in the local receipt and private diagnostics, never in a PR
+comment. Legacy INCOMPLETE output without a reason explicitly says the model did
+not explain the gap; the plugin does not invent a cause. No failure launches an
+automatic repair request. A fresh explicit comment command may replan the same
+review if no publication attempt occurred.
 
 ## Customization
 

@@ -53,6 +53,7 @@ let forbiddenFetches = 0;
 let child;
 let logs = '';
 let rejectNextPlan = true;
+let incompleteNextPlan = false;
 let commentShellProbe;
 const continuedResponses = new Map();
 const expectedPublishedText = [];
@@ -103,6 +104,10 @@ const provider = createServer(async (request, response) => {
       path: snapshot.files[0], startLine: 2, endLine: 2, anchor: 'fixture-source',
       body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
     skipped: [...payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })), ...payload.dispositions.filter(item=>item.status!=='CONFIRMED').map(item=>({findingId:item.id,reason:item.reason}))] };
+  if (incompleteNextPlan && payload?.target && payload.findings && hasResult) {
+    final = { status: 'INCOMPLETE', comments: [], skipped: [], reason: 'Fixture discussion pagination is incomplete.' };
+    incompleteNextPlan = false;
+  }
   const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
   const projectVerification = userContext.startsWith('project-');
   const localComment = payload?.target && commentShellProbe;
@@ -368,25 +373,31 @@ try {
   assert.equal(continuedResponses.size, 0);
   const reviewID = /\[AZPR ([a-f0-9]{8})\]/.exec(workflowReceipts.at(-1).receipt)[1];
   const beforeRejectedPlan = requests.length;
-  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID, delivery: 'steer' });
+  assert.match(workflowReceipts.at(-1).receipt, new RegExp('/pr-comment ' + reviewID + ' --publish'));
+  const savedReport = await readFile(join(reviewDebug, 'report.md'), 'utf8');
+  assert.match(savedReport, new RegExp('/pr-comment ' + reviewID + ' --publish'));
+  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: '', delivery: 'steer' });
   const rejectedPlan = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
   assert.match(rejectedPlan, /\] INCOMPLETE/);
   assert.match(rejectedPlan, /HTTP 403; 0 tool calls observed/);
   assert.doesNotMatch(rejectedPlan, /PRIVATE_PROVIDER_DIAGNOSTIC/);
   assert.equal(requests.length, beforeRejectedPlan + 1, 'Provider rejection must not trigger a repair or fallback request.');
-  await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /Preview first/);
-  assert.equal(requests.length, beforeRejectedPlan + 1, 'A failed preview must not authorize a publisher.');
   workflowReceipts.push({ command: 'pr-comment', suffix: 'provider-rejected-preview', receipt: rejectedPlan });
-  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID, delivery: 'steer' });
-  const preview = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
-  assert.match(preview, /\] PREVIEW/);
-  workflowReceipts.push({ command: 'pr-comment', suffix: 'smoke-review-preview', receipt: preview });
+  incompleteNextPlan = true;
+  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+  const incompletePlan = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
+  assert.match(incompletePlan, /\] INCOMPLETE/);
+  assert.match(incompletePlan, /Fixture discussion pagination is incomplete/);
+  assert.match(incompletePlan, /The review is retained/);
+  assert.equal(requests.length, beforeRejectedPlan + 3, 'A failed direct plan must not start a publisher or retry itself.');
+  workflowReceipts.push({ command: 'pr-comment --publish', suffix: 'planner-explained-failure', receipt: incompletePlan });
   const beforePublication = requests.length;
-  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' });
-  const publication = (await api(`/api/session/${reviewOrigin}/inbox`)).data.at(-1)?.payload?.text;
+  await api(`/api/session/${continuedStage.sessionID}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+  const publication = (await api(`/api/session/${continuedStage.sessionID}/inbox`)).data.at(-1)?.payload?.text;
   assert.match(publication, /\] INCOMPLETE/); assert.match(publication, /publisher tool failed/i);
   assert.match(publication, /UNKNOWN/);
-  assert.equal(requests.length, beforePublication + 1, 'A publisher tool error must prevent another model request.');
+  assert.equal(requests.length, beforePublication + 3, 'Direct publication plans once, then a publisher tool error must prevent another model request.');
+  assert.match(publication, /Comments prepared: 1/);
   const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
   assert.deepEqual(Object.keys(publicationPayload).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
   const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
@@ -395,7 +406,9 @@ try {
   assert.match(plannerPayload.reviewToolText[0].text, /HEAD \(PR source\)/);
   assert.match(plannerPayload.reviewToolText[0].text, /1 \|   fixture-source\n2 \| \n3 \| fixture-third-line/);
   const publicationDebug = /Private debug directory: ([^\n]+)/.exec(publication)[1];
-  const publicationStage = JSON.parse(await readFile(join(publicationDebug, '01-azpr-review-comment-publish.result.json'), 'utf8'));
+  const publicationStage = JSON.parse(await readFile(join(publicationDebug, '02-azpr-review-comment-publish.result.json'), 'utf8'));
+  const savedPlan = JSON.parse(await readFile(join(publicationDebug, 'comment-plan.json'), 'utf8'));
+  assert.deepEqual(publicationPayload.comments, savedPlan.comments);
   assert.equal(publicationStage.toolErrors.length, 1);
   assert.match(publicationStage.toolErrors[0].error.message, /Fixture publication tool failed/);
   assert.doesNotMatch(publication, /Fixture publication tool failed/);
@@ -404,7 +417,7 @@ try {
   assert.equal(publicationPayload.comments[0].anchor, '  fixture-source');
   assert.equal(publicationPayload.comments[0].startLine, 1);
   assert.equal(publicationPayload.comments[0].endLine, 1);
-  assert.match(preview, /Fixture candidate declined by verifier/);
+  assert.match(publication, /Fixture candidate declined by verifier/);
   await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /already had a publication/);
   workflowReceipts.push({ command: 'pr-comment --publish', suffix: 'publisher-error', receipt: publication });
   await invokeReview('pr-review', 'smoke-prose', /\] PARTIAL/);
@@ -532,7 +545,7 @@ try {
   assert.equal(requests.length, beforeCancel + 1, 'Manual cancellation must not restart the fake provider.');
   workflowReceipts.push({ command: 'pr-check + pr-stop', suffix: 'hang-smoke', receipt: cancellationReceipt });
   const mcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(mcpCalls.length, 12, 'Source workflows, project preview and cancellation sibling use fixture MCP.');
+  assert.equal(mcpCalls.length, 13, 'Source workflows, explained planning failure, project preview and cancellation sibling use fixture MCP.');
   for (const call of mcpCalls) {
     assert.equal(call.name, 'read_fixture');
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
@@ -553,7 +566,7 @@ try {
     catch { return false; }
   }).length;
   assert.ok([1, 2].includes(cancellationSiblingRequests), 'Cancellation may stop the sibling before or after its tool-result response.');
-  assert.equal(requests.length - cancellationSiblingRequests, 57);
+  assert.equal(requests.length - cancellationSiblingRequests, 59);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {
@@ -578,6 +591,9 @@ try {
   await stopHost();
   url = await startHost();
   await api('/api/session', { title: 'Restart fixture origin', location: { directory: directories.work } });
+  const beforeExpiredReview = requests.length;
+  await assert.rejects(api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: reviewID + ' --publish', delivery: 'steer' }), /restarting clears/i);
+  assert.equal(requests.length, beforeExpiredReview, 'Restarted history does not recreate a publication cache or launch a reviewer.');
   for (let attempt = 0; attempt < 50; attempt++) {
     const catalog = await api('/api/mcp');
     if (catalog.data?.some(server => server.name === 'fixture' && server.status?.status === 'connected')) break;
@@ -585,7 +601,7 @@ try {
   }
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
-  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 12);
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 13);
   console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, projectVerification: true, projectSwitch: true, hostPermissionApprovals: permissionReplies.length, hostPermissionDenial: true, pendingApprovalCancellation: true, foregroundCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();

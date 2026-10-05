@@ -107,7 +107,17 @@ The independent V1 repository and installation are outside this project's scope.
 - Reports/receipts use synthetic notices with resume:false. Never run a model
   to reformat them. Queue acknowledgment is distinct from actual UI display.
 - Comment publication needs a same-origin completed review, saved preview,
-  explicit --publish. Preview has no numerical comment quota. The removed
+  explicit --publish. A single explicit publish command may prepare/save the plan
+  and then publish; a separate preview command is optional. Omitted IDs select
+  only the latest completed review in that conversation; associated report
+  sessions route commands to the same origin and permissions. Keep exact commands
+  in the report footer and disclose process-memory retention (latest 20 reviews,
+  no TTL, cleared at unload/restart; diagnostics/history do not restore authority).
+  Complete empty discussion collections do not require deletion flags for absent
+  comments. Distinguish them from missing summary fields, pagination gaps and
+  read errors without a tool/action classifier. Preserve optional planner failure
+  reasons locally; missing reasons do not authorize guessed success or retries.
+  Preview has no numerical comment quota. The removed
   comments, auxiliaryModels and outputRetries settings must not return as hidden
   switches, caps or extra model requests. Track uncertainty before writes,
   revoke publication grants on any observed tool error, prohibit automatic

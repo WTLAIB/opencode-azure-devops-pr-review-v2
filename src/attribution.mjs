@@ -9,6 +9,15 @@ function words(language) {
   if (!/^zh(?:-|$)/i.test(language)) return vocabulary.en;
   return new Intl.Locale(language).maximize().script === 'Hant' ? vocabulary.tw : vocabulary.cn;
 }
+export function renderCommentActions(id, language) {
+  const locale = words(language);
+  const labels = locale === vocabulary.tw
+    ? ['PR 留言', '直接準備並發布留言', '只看留言預覽', '也可省略 ID：`/pr-comment --publish`。原對話會選最近完成的 review；本報告對話會選本份報告。僅預覽請用 `/pr-comment`。', 'Review 與預覽保存在目前程序記憶體（最近 20 份）；重啟後清除，歷史報告不會還原發布資料。']
+    : locale === vocabulary.cn
+      ? ['PR 留言', '直接准备并发布留言', '只看留言预览', '也可省略 ID：`/pr-comment --publish`。原对话会选最近完成的 review；本报告对话会选本份报告。仅预览请用 `/pr-comment`。', 'Review 与预览保存在当前进程内存（最近 20 份）；重启后清除，历史报告不会还原发布数据。']
+      : ['PR comments', 'Prepare and publish comments', 'Preview comments only', 'You can omit the ID: `/pr-comment --publish` selects the latest completed review in the original conversation, or this review in its report session. Use `/pr-comment` for preview only.', 'Reviews and previews stay in this process memory (latest 20 reviews); restarting clears them. Historical reports do not restore publication data.'];
+  return `## ${labels[0]}\n\n${labels[1]}:\n\n\`\`\`text\n/pr-comment ${id} --publish\n\`\`\`\n\n${labels[2]}: \`/pr-comment ${id}\`\n\n${labels[3]}\n\n${labels[4]}`;
+}
 export function reviewProvenance(run) {
   return { mode: run.profile, stages: run.stages.filter(s => s.status !== 'FAILED' && ROLES[s.role]?.order !== undefined).sort((a, b) => ROLES[a.role].order - ROLES[b.role].order).map(s => ({ role: s.role, model: s.model, findings: s.result?.findings?.length })) };
 }
@@ -101,7 +110,6 @@ export function renderReceipt(run, report, status, error, settings) {
   let body = `[AZPR ${run.id}] ${status}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}\n`;
   if (run.stages.some(s => s.outputFormatCorrections?.length)) body += '\nOutput format notice: a review envelope was extracted, syntax was normalized locally, or unstructured review text was retained. No model request was added for formatting. Inspect outputFormatCorrections, review limitations and the original response. Recovery does not establish source accuracy.\n';
   if (run.publicationUnavailable) body += '\nThis review retains useful results with limitations. Automatic PR comment preparation is unavailable because the complete publication evidence contract was not established.\n';
-  if (['review', 'deep'].includes(run.mode) && status === 'COMPLETE') body += `\nComment preview: /pr-comment ${run.id}\nPreview checks the current PR, source anchors and existing discussions. Publishing requires the saved preview and an explicit --publish command.\n`;
   if (run.stages.some(s => s.pendingLocations?.length)) body += '\nPending location notice: initial candidates omitted locations and were passed to the verifier. No location was guessed. Missing locations do not discard the review; findings without complete publication evidence cannot be posted. This notice does not claim they were resolved.\n';
   if (run.draft) body += '\nIncomplete draft notice: available initial observations remain unconfirmed because final adjudication did not complete. This draft is not a completed review or input for PR comments. Failed final claims are not accepted findings.\n';
   if (run.stages.length) body += '\nTool completion does not prove source validity. Error/truncation counters neither audit content nor establish recovered reads; inspect the original tool results and evidence.\n';
@@ -122,6 +130,7 @@ export function renderReceipt(run, report, status, error, settings) {
       body += '\nNo report body is enclosed in this receipt. Inspect the queued report or saved diagnostic Markdown; original model JSON is separate from the rendered report. Do not resume a reviewer session to retrieve it.\n';
     }
   } else body += '\nNo report body is enclosed in this receipt.\n';
+  if (['review', 'deep'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage) + '\n';
   body += `\nThis command has ended and all reviewer grants have been revoked. outputLanguage=${settings.outputLanguage}.`;
   return body;
 }
