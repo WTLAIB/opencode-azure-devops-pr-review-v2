@@ -42,7 +42,7 @@ configuration, or HTTP headers.
 | Artifact | What it records |
 | --- | --- |
 | `run.json` | Run identity, settings relevant to execution, start time, and privacy notice. |
-| `readiness.json` | Checked role slots and connected MCP count; source access remains unassessed. |
+| `readiness.json` | Checked role slots, connected MCP count and direct-tool registration observation/timing; source access remains unassessed. |
 | `NN-azpr-ROLE.request.json` | Stage identity, literal payload, and applicable instructions. |
 | `NN-azpr-ROLE.response.json` | Captured visible model response, finish state, and available error data. |
 | `NN-azpr-ROLE.result.json` | Validation outcome, finding/output corrections, observations, and timing. |
@@ -277,9 +277,15 @@ tools. In the pinned host, connection and tool-registry reconciliation are separ
 and the public tool-list API reads the current registry. See the pinned host
 [registration implementation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/tool/mcp.ts)
 and [catalog implementation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/tool.ts).
-A single catalog read is
-not a registration barrier. Inspect the initial context and subsequent tool lists
-before attributing missing source to model capability. Do not infer Azure identity
-or tool availability from connection status, add a guessed delay, or retry models
-to hide this failure. The source-supported sibling/final result remains usable;
-startup readiness still needs a host-supported settlement solution.
+A single catalog read is not a registration barrier. Before inference, readiness
+now observes the public tool catalog for direct tools in connected servers' host
+namespaces, using the pinned host's namespace encoding. It polls local metadata
+every 50 ms for at most five seconds, returning immediately when tools appear.
+This is a cancellable startup grace period, not a model iteration/time limit or
+new refusal: unavailable/unobserved registration is recorded and the existing
+workflow continues. It does not reload servers, retry a model or add permissions.
+Namespace observation does not classify MCP actions, prove Azure source access,
+or override role-filtered tool exposure. Source-supported sibling/final results
+remain usable. Inspect original contexts and tool history when a provider still
+acts as though tools are missing. Never troubleshoot by exposing credentials or
+printing the host configuration; native shell retains ordinary host authority.

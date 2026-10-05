@@ -448,27 +448,33 @@ function embeddedObjects(content) {
 
 /** Choose one identifiable review, never one of competing review submissions.
  * Incidental JSON/code examples and every surrounding character remain data. */
-function embeddedReview(content, blocks, parse) {
+function embeddedReview(content, blocks, parse, commentPlan = false) {
   let outside = '', end = 0;
   for (const block of blocks) {
     outside += content.slice(end, block.start) + ' '.repeat(block.end - block.start); end = block.end;
   }
   outside += content.slice(end);
   const candidates = [];
+  const identifiable = commentPlan
+    ? value => isObject(value) && ['comments', 'skipped'].some(key => Object.hasOwn(value, key))
+    : looksLikeReview;
+  const sections = commentPlan ? ['status', 'comments', 'skipped']
+    : [...reviewSections, 'status', 'snapshot', 'currentHead', 'currentBase'];
+  const statuses = commentPlan ? ['READY', 'INCOMPLETE'] : ['COMPLETE', 'PARTIAL', 'INCOMPLETE', 'STALE'];
   for (const block of [...blocks.filter(block => block.json), ...embeddedObjects(outside)]) {
     let parsed;
     try { parsed = parse(block.text); } catch { /* Do not overlook an unfinished competing review. */ }
     const firstKey = /^\{\s*["'“]?([A-Za-z_$][\w$ -]*?)["'”]?\s*:/.exec(block.text)?.[1];
-    const unfinishedReview = !parsed && firstKey && [...reviewSections, 'status', 'snapshot', 'currentHead', 'currentBase']
+    const unfinishedReview = !parsed && firstKey && sections
       .some(key => canonicalKey(key) === canonicalKey(firstKey));
     const verdict = isObject(parsed?.envelope) && Object.entries(parsed.envelope).some(([key, value]) =>
-      canonicalKey(key) === 'status' && ['COMPLETE', 'PARTIAL', 'INCOMPLETE', 'STALE'].includes(canonicalEnum(value)));
-    if (looksLikeReview(parsed?.envelope) || verdict || unfinishedReview) candidates.push({ ...block, parsed });
+      canonicalKey(key) === 'status' && statuses.includes(canonicalEnum(value)));
+    if (identifiable(parsed?.envelope) || verdict || unfinishedReview) candidates.push({ ...block, parsed });
   }
-  if (candidates.length !== 1 || !looksLikeReview(candidates[0].parsed?.envelope)) return;
+  if (candidates.length !== 1 || !identifiable(candidates[0].parsed?.envelope)) return;
   const selected = candidates[0];
   return { ...selected.parsed,
-    corrections: [...selected.parsed.corrections, { action: 'extract-review-envelope' }],
+    corrections: [...selected.parsed.corrections, { action: commentPlan ? 'extract-comment-plan-envelope' : 'extract-review-envelope' }],
     surroundingText: (content.slice(0, selected.start) + content.slice(selected.end)).trim() };
 }
 
@@ -481,6 +487,7 @@ function parseReport(response, role) {
   if (['length', 'content-filter', 'error', 'cancelled'].includes(response.info?.finish)) throw new Error(`Reviewer output did not finish successfully (finish=${finish}); no partial response or output recovery was accepted.`);
   const allowRecovery = response.info?.finish === 'stop' &&
     ['initial', 'final'].includes(ROLES[role]?.format);
+  const commentPlan = response.info?.finish === 'stop' && ROLES[role]?.format === 'comment-plan';
   let result, corrections = [];
   let content = visibleText(response).trim();
   if (!content) throw new Error(`Empty reviewer output (finish=${finish}); inspect the session export or debug response.`);
@@ -506,8 +513,8 @@ function parseReport(response, role) {
         surroundingText = outsideFence.trim();
       } catch { /* Retain the entire text in the review fallback. */ }
     }
-    if (parsed === undefined && allowRecovery) {
-      parsed = embeddedReview(content, blocks, parse);
+    if (parsed === undefined && (allowRecovery || commentPlan)) {
+      parsed = embeddedReview(content, blocks, parse, commentPlan);
       surroundingText = parsed?.surroundingText;
     }
     if (parsed === undefined) throw new Error(`Reviewer did not return the required JSON envelope (characters=${content.length}; finish=${finish}). Partial output remains in its session. Inspect the private session or debug response. No automatic retry.`);

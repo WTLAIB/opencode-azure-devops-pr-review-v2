@@ -226,10 +226,42 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     }
     const connected = servers.data.filter(server => server.status?.status === 'connected').length;
     run.readiness = { checkedModelSlots: slots, connectedMcpServers: connected, sourceAccess: 'not-assessed' };
-    await run.debug.write('readiness.json', run.readiness);
     // The public status catalog has no server config or tool provenance. Do not
     // infer Azure identity, direct-tool exposure, permissions or evidence truth.
     if (!connected) throw new Error('[AZPR] No MCP server is connected. Check host MCP status/authentication and codemode:false before starting another review.');
+    // In 2.0.22, connected status can precede direct-tool registration. Give the
+    // host catalog a short, cancellable opportunity to catch up before inference.
+    // This is an observation grace period, not a new refusal or source-access gate.
+    const began = performance.now();
+    const namespaces = new Set(servers.data.filter(server => server.status?.status === 'connected' && typeof server.name === 'string')
+      .map(server => server.name.replace(/[^a-zA-Z0-9_-]/g, '_')));
+    const registration = { status: 'unavailable', directTools: 0, polls: 0, waitMs: 0 };
+    if (namespaces.size && typeof context.tool?.list === 'function') {
+      do {
+        let catalog;
+        try { catalog = await bounded(() => context.tool.list(), run.controller.signal); }
+        catch (error) {
+          if (run.controller.signal.aborted) throw error;
+          registration.status = 'unavailable';
+          break;
+        }
+        registration.polls++;
+        if (!Array.isArray(catalog)) break;
+        registration.directTools = catalog.filter(tool => namespaces.has(tool.options?.namespace) && tool.options?.codemode === false).length;
+        registration.status = registration.directTools ? 'observed' : 'not-observed';
+        if (registration.directTools || performance.now() - began >= 5000) break;
+        await new Promise((resolve, reject) => {
+          const signal = run.controller.signal;
+          const aborted = () => { clearTimeout(timer); signal.removeEventListener('abort', aborted); reject(abortError(signal)); };
+          const timer = setTimeout(() => { signal.removeEventListener('abort', aborted); resolve(); }, 50);
+          signal.addEventListener('abort', aborted, { once: true });
+          if (signal.aborted) aborted();
+        });
+      } while (run.active);
+    }
+    registration.waitMs = Math.round(performance.now() - began);
+    run.readiness.toolRegistration = registration;
+    await run.debug.write('readiness.json', run.readiness);
   }
   async function abortSession(run, id) {
     try { await deadline(signal => interruptSession(context, { sessionID: id, signal }), 5000); }
@@ -304,7 +336,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (!run.active) throw new Error('Review stopped before output validation.');
       if (!g.messages || !g.calls) throw new Error('Required V2 prompt/context hooks were not observed; review cannot be accepted.');
       record.completedTools = g.completedTools.size;
-      ({ envelope, corrections: syntaxCorrections } = readReviewOutput(answer, role));
+      const parsed = readReviewOutput(answer, role);
+      ({ envelope, corrections: syntaxCorrections } = parsed);
+      if (spec.stage === 'comment-plan' && parsed.surroundingText) record.surroundingText = parsed.surroundingText;
       record.outputCharacters = JSON.stringify(envelope).length;
       validatingOutput = true;
       // Review quality gaps are reported by the review adapters, not retried or

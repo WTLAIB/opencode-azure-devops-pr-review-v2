@@ -12,6 +12,28 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-05 comment-plan extraction and tool registration
+
+The next live round again completed both reviews. One retained an unavailable
+initial review and reached preview, but its valid JSON plan was rejected because
+following verification notes contained dictionary examples. No publisher started.
+The other delivered three comments with exact saved text and source/line-local
+coordinates; all were deleted and absence confirmed. The 29 review-stage commit
+content reads matched independent reference bytes. Initial tool registration
+still lagged connected status and caused unnecessary local troubleshooting.
+
+The subsequent local changes extract one unambiguous strict comment plan and
+observe direct-tool registration before inference. Syntax and 404/404 offline
+tests passed. Actual OpenCode 2.0.22 fresh and replacement fixtures each passed
+with 62 fake-provider requests, 12 fixture MCP calls and four one-time approvals.
+The fixtures deliberately withheld tool registration for about half a second;
+production readiness observed its return before reviewer inference. They also
+exercised a comment plan followed by dictionary-bearing notes without publishing
+those notes. Cancellation, permission and publisher-error checks still pass.
+An offline replay recovered all three original failed-preview comments with
+exact anchors; this neither changes the historical failure nor restores its
+publication cache. Live acceptance of these latest changes remains pending.
+
 ## 2026-10-05 numbered source-display checks
 
 A subsequent live round produced two COMPLETE reviews. One profile delivered

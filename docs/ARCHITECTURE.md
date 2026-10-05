@@ -216,13 +216,17 @@ Fenced extraction consumes Markdown blocks in order, so a code example closing
 fence cannot swallow the next JSON block. It selects a unique review-shaped
 object and retains surrounding prose/examples. Another complete or unfinished
 review candidate, including a status-only verdict, prevents automatic selection.
-An incidental dictionary literal is not a competing review. Settings, source
-checks and publication receipts do not use this review-only extraction.
+An incidental dictionary literal is not a competing review. Comment preview
+also extracts a unique strict plan object while retaining surrounding notes in
+its session and optional stage record. It uses the same ambiguity checks without
+review syntax repair or field normalization. Settings, source checks and
+publication receipts do not use this extraction.
 
 All review recovery uses local normalization and the existing review rounds.
 There are no model requests for status, location, disposition or final-content
-repair. Standalone source checks, settings and comment operations continue to
-use strict parsing. Raw responses, failures and limitations are kept.
+repair. Standalone source checks, settings and publication receipts continue to
+use strict parsing. Comment-plan structure and semantic validation remain
+unchanged after extraction. Raw responses, failures and limitations are kept.
 
 ## Presentation, comments and diagnostics
 

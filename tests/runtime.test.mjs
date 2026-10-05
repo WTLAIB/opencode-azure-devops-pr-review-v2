@@ -68,7 +68,7 @@ async function fixture(t, opts = {}) {
         return {dispose(){commands.clear();for(const [id,value] of before) commands.set(id,value);}};
       },
     },
-    tool:{hook:hook('tool')},
+    tool:{hook:hook('tool'),async list(){return [{name:'fixture_mcp_read',options:{namespace:'arbitrary-server',codemode:false}}];}},
     session:{
       hook:hook('session'),
       async create(input) {
@@ -177,6 +177,41 @@ test('numbered text is scoped to active project roles and preserves raw/native/o
   assert.equal(event.result, result);
 });
 test('disabled plugin registers nothing',async t=>{const f=await fixture(t,{settings(s){s.enabled=false;}});assert.equal(f.commands.size,1);assert.equal(f.agents.size,1);assert.equal(f.hooks.size,0);});
+test('connected MCP registration settles before the first reviewer prompt', async t => {
+  let polls = 0;
+  const f = await fixture(t, { context({ context }) { context.tool.list = async () => ++polls < 3 ? []
+    : [{ name: 'no_known_action_name', options: { namespace: 'arbitrary-server', codemode: false } }]; },
+    beforePrompt() { assert.ok(polls >= 3); } });
+  assert.match(await f.command(), /\] COMPLETE/);
+  assert.equal(f.prompts().length, 3);
+});
+test('tool-catalog observation failure does not add a review refusal', async t => {
+  const f = await fixture(t, { context({ context }) { context.tool.list = async () => { throw new Error('PRIVATE_CATALOG_ERROR'); }; } });
+  assert.match(await f.command(), /\] COMPLETE/);
+});
+test('cancelling tool-registration waiting starts no reviewer', async t => {
+  const waiting = deferred();
+  const f = await fixture(t, { context({ context }) { context.tool.list = async () => { waiting.resolve(); return []; }; } });
+  const pending = f.command(); await waiting.promise;
+  await f.command('pr-stop', '');
+  assert.match(await pending, /\] CANCELLED/);
+  assert.equal(f.prompts().length, 0);
+});
+test('comment-plan notes survive locally without entering saved publication content', async t => {
+  const notes = 'PRIVATE_PLANNER_NOTE: {"observed": 7}';
+  const f = await fixture(t, { answer({ answer, role }) {
+    if (role.endsWith('comment-plan')) answer.content[0].text = '```json\n' + answer.content[0].text + '\n```\n' + notes;
+  } });
+  const receipt = await f.command(); const id = /\[AZPR ([a-f0-9]+)\]/.exec(receipt)[1];
+  const preview = await f.command('pr-comment', id); assert.match(preview, /\] PREVIEW/);
+  const record = (await resultLog(preview)).stages[0];
+  assert.equal(record.surroundingText, notes);
+  assert.equal(record.outputFormatCorrections[0].action, 'extract-comment-plan-envelope');
+  assert.match(await f.command('pr-comment', id + ' --publish'), /\] MODEL_REPORTED_POSTED/);
+  const publication = JSON.parse(f.prompts().at(-1).text);
+  assert.ok(publication.comments.every(comment => !comment.content.includes('PRIVATE_PLANNER_NOTE')));
+  assert.equal(f.prompts().length, 5);
+});
 for(const kind of ['agent','command']) test(`${kind} collision preserves existing definition`,async t=>{
   const original={name:'pr-check',id:'azpr-review-check',system:'Keep me'};let map;
   await assert.rejects(fixture(t,{context({agents,commands}){map=kind==='agent'?agents:commands;map.set(kind==='agent'?'azpr-review-check':'pr-check',original);}}),/conflict/i);

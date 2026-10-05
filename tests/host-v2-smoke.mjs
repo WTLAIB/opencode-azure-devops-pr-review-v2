@@ -113,6 +113,7 @@ const provider = createServer(async (request, response) => {
   let content = JSON.stringify(final);
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
   if (userContext === 'smoke-review' && payload.reviews) content = 'Example: fn({"item": 3}).\n```json\n' + content + '\n```';
+  if (payload?.target && payload.findings && !payload.comments) content = '```json\n' + content + '\n```\nLocal verification notes: {"example": 7}.';
   if (userContext === 'smoke-prose' && (parsed.model === 'functional' || payload.reviews)) {
     content = payload.reviews ? 'Useful final prose with an unresolved evidence gap.' : 'Useful initial prose about a reachable fixture issue.';
   }
@@ -172,6 +173,12 @@ export default { id: 'azpr.fixture.smoke', async setup(ctx) {
   });
   await ctx.tool.hook('execute.before', event => { if(event.agent === 'fixture-helper') observations.before.push(event.tool); });
   await ctx.tool.hook('execute.after', event => { if(event.agent === 'fixture-helper') observations.after.push({tool:event.tool,status:event.status}); });
+  await ctx.command.transform(editor => editor.add({ name:'fixture-delay-tools', description:'Temporarily withhold fixture registration', async execute() {
+    const held = await ctx.tool.transform(editor => {
+      for (const tool of editor.list()) if (tool.options?.namespace === 'fixture') editor.remove(tool.id);
+    });
+    setTimeout(() => { void held.dispose(); }, 500);
+  }}));
   await ctx.command.transform(editor => editor.add({ name:'fixture-smoke', description:'Local deterministic host fixture', async execute(input) {
     try {
       for (let attempt=0;attempt<50;attempt++) {
@@ -321,7 +328,12 @@ try {
     return created.data.id;
   };
   await invokeReview('pr-check', 'smoke-check', /\] READY/);
+  await api(`/api/session/${origin.id}/command`, { name: 'fixture-delay-tools', text: '', delivery: 'steer' });
   const reviewOrigin = await invokeReview('pr-review', 'smoke-review', /\] COMPLETE/);
+  const reviewDebug = /Private debug directory: ([^\n]+)/.exec(workflowReceipts.at(-1).receipt)[1];
+  const settledTools = JSON.parse(await readFile(join(reviewDebug, 'readiness.json'), 'utf8')).toolRegistration;
+  assert.equal(settledTools.status, 'observed');
+  assert.ok(settledTools.polls > 1, 'Production readiness must observe delayed registration before inference.');
   const languageRequests = requests.filter(request => {
     try { return JSON.parse(request.body.messages.findLast(message => message.role === 'user').content).userContext === 'smoke-review'; }
     catch { return false; }

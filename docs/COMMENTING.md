@@ -59,6 +59,14 @@ must explain the skip locally rather than omit essential conditions to fit.
 ## Preview and publish
 
 A COMPLETE review can enter comment preview in its original session/process.
+The planner may return one strict JSON plan surrounded by explanatory text or
+code examples. Local extraction accepts that unique plan and retains the notes
+in its session and optional stage diagnostics; notes are not appended to posted
+comments. Competing or unfinished plan objects and duplicate JSON keys still
+fail. This does not repair plan syntax, invent missing fields, change findings,
+relax semantic validation or start another model request. Publication receipts
+and configuration keep their existing parsing rules.
+
 There is no additional veto based on initial coverage disclosures or incomplete
 initial reviewers after the independent verifier passes the final evidence,
 identity/version and original-ID checks. Retained limitations accompany the

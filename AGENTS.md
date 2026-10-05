@@ -57,6 +57,10 @@ The independent V1 repository and installation are outside this project's scope.
   Plain multiline tool text may receive a numbered model-facing display through
   the public result hook. Preserve raw output, wrappers, errors and truncation;
   numbering is not provenance or a new source/eligibility gate.
+  Startup may observe direct-tool registration through public host namespaces;
+  this is metadata synchronization, never MCP action classification or a source
+  certificate. The bounded observation grace period must not become a refusal,
+  model retry, hidden review-stage budget or permission override.
 - Pursue exact PR identity/SHAs, full discovered-path coverage, counterevidence,
   original-ID decisions and a final version recheck. Review quality gaps produce
   visible limitations, not wholesale result loss. Preserve all useful observations
