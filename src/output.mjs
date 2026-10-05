@@ -48,10 +48,12 @@ export function stageFormat(role) {
     status: status('READY', 'INCOMPLETE'),
     comments: array(object({ findingId: string, severity: status('high', 'medium'), path: string, startLine: { type: 'integer' }, endLine: { type: 'integer' }, anchor: string, body: string })),
     skipped: array(object({ findingId: string, reason: string })),
-  });
+    summary: { ...string, description: 'Optional public-safe checks and limitations, including actual test execution status. No counts, new findings, private diagnostics or publication claims; the runtime adds the summary index.' },
+  }, ['status', 'comments', 'skipped']);
   else if (kind === 'comment-publish') schema = object({
     status: status('DONE', 'INCOMPLETE'), posted: array(object({ findingId: string, threadId: { type: ['string', 'integer'] } })),
-  });
+    summaryThreadId: { type: ['string', 'integer'], description: 'Actual returned general-summary thread ID, only after checking its create result.' },
+  }, ['status', 'posted']);
   else schema = object({ status: status('COMPLETE', 'PARTIAL'),
     snapshot: { ...prSnapshot, description: 'Required for COMPLETE. Establish it from the requested PR, without a preflight or ancestry search. Omit only for PARTIAL when PR metadata is unavailable.' },
     coverage: coverageSchema, findings: array(initialFinding),

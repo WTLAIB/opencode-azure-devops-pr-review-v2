@@ -328,7 +328,7 @@ review tool text with arguments and numbered display. This can contain source
 code and PR data, so it follows the same private-diagnostics handling as other
 request payloads. Empty observations do not block planning; the model may read
 missing data normally. They are not proof of correct source selection or copying.
-Publisher requests contain the saved target, snapshot, language and comments only.
+Publisher requests contain the saved target, snapshot, language, summary and inline comments only.
 Numbered displays may include snapshot argument labels when that stage already
 knows a selected snapshot. Compare the original arguments and bytes if HEAD/BASE
 reasoning is wrong: a matching string does not certify selector semantics or the
@@ -353,3 +353,18 @@ indentation/quote display and uniquely locatable counted lines. It cannot certif
 full-file content or provenance. `locationRestorations` keeps original/restored
 coordinates; ambiguous matches stay untouched. Known excluded verifier IDs can appear in skipped
 notes without enabling a comment for those IDs.
+
+
+## Summary and inline publication
+
+Inspect `comment-plan.json` for the saved general summary and inline comments.
+The summary marker has a separate attempt entry (`kind: summary`), while inline
+entries retain finding IDs. `summaryThreadId` is model-reported; Azure readback
+is still necessary for independent confirmation. A missing summary result or
+any uncertain inline write leaves the batch incomplete. Do not retry, delete or
+rewrite the summary to conceal partial publication.
+
+Optional planner summary prose contributes public-safe verification limits only.
+Counts and the index come from corrected findings. Missing/malformed prose uses
+an explicit fallback; neither it nor a Summary heading proves factual quality.
+Inspect checked example calculations and expected/actual results separately.

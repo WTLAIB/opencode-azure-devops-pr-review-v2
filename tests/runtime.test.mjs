@@ -100,7 +100,7 @@ async function fixture(t, opts = {}) {
           else if(spec.format==='initial') result={status:'COMPLETE',snapshot:clone(SNAP),coverage:{files:[...SNAP.files],gaps:[]},findings:[finding(`${spec.prefix}-1`)],report:`PRIVATE_INITIAL_${spec.prefix}`};
           else if(spec.format==='final') result={status:'COMPLETE',snapshot:clone(SNAP),currentHead:SNAP.head,currentBase:SNAP.base,confirmed:packet.reviews.flatMap(r=>r.findings).map(f=>({...f,reason:'Independently verified.'})),merged:[],rejected:[],needsInfo:[],newFindings:[],report:'FINAL_REPORT'};
           else if(spec.stage==='comment-plan') result={status:'READY',comments:packet.findings.slice(0,1).map(f=>({findingId:f.id,severity:f.severity,path:SNAP.files[0],startLine:12,endLine:12,anchor:'fixture code',body:`issue (${f.severity}): fixture defect\n\nTrigger, impact and correction.`})),skipped:packet.findings.slice(1).map(f=>({findingId:f.id,reason:'Duplicate concern.'}))};
-          else if(spec.stage==='comment-publish') {await invoke(session.id,'fixture_mcp_write');result={status:'DONE',posted:packet.comments.map(f=>({findingId:f.findingId,threadId:101}))};}
+          else if(spec.stage==='comment-publish') {await invoke(session.id,'fixture_mcp_write');result={status:'DONE',summaryThreadId:100,posted:packet.comments.map((f,i)=>({findingId:f.findingId,threadId:101+i}))};}
           result=await opts.result?.({result,role,packet,session})??result;
           const answer={id:`answer_${++seq}`,type:'assistant',agent:role,model:clone(session.model),finish:'stop',time:{created:Date.now(),completed:Date.now()},content:[{type:'text',text:JSON.stringify(result)}]};
           await opts.answer?.({answer,packet,role});
@@ -213,7 +213,7 @@ test('comment-plan notes survive locally without entering saved publication cont
   assert.equal(record.outputFormatCorrections[0].action, 'extract-comment-plan-envelope');
   assert.match(await f.command('pr-comment', id + ' --publish'), /\] MODEL_REPORTED_POSTED/);
   const publication = JSON.parse(f.prompts().at(-1).text);
-  assert.deepEqual(Object.keys(publication).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
+  assert.deepEqual(Object.keys(publication).sort(), ['comments', 'outputLanguage', 'snapshot', 'summary', 'target']);
   assert.equal(JSON.parse(f.prompts().at(-2).text).report, 'FINAL_REPORT');
   assert.ok(publication.comments.every(comment => !comment.content.includes('PRIVATE_PLANNER_NOTE')));
   assert.equal(f.prompts().length, 5);
@@ -587,11 +587,11 @@ test('direct publication prepares once, saves exact content and uses no new revi
   const published = await f.command('pr-comment', '--publish');
   assert.match(published, /] MODEL_REPORTED_POSTED/);
   assert.match(published, new RegExp('source review=' + id));
-  assert.match(published, /Comments prepared: 1/);
+  assert.match(published, /Inline comments prepared: 1/);
   assert.deepEqual(f.prompts().slice(3).map(p => f.sessions.get(p.sessionID).agent), ['azpr-review-comment-plan', 'azpr-review-comment-publish']);
   const packet = JSON.parse(f.prompts().at(-1).text);
   assert.ok(published.includes(packet.comments[0].content));
-  assert.deepEqual(Object.keys(packet).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
+  assert.deepEqual(Object.keys(packet).sort(), ['comments', 'outputLanguage', 'snapshot', 'summary', 'target']);
   assert.equal(f.calls.filter(c => c.kind === 'executed-tool' && c.tool === 'fixture_mcp_write').length, 1);
   await assert.rejects(f.command('pr-comment', '--publish'), /already had a publication/);
 });
@@ -663,17 +663,18 @@ test('planner reasons reach receipts and diagnostics while failed direct publica
   assert.equal(f.prompts().length, 6);
 });
 
-test('direct empty publication preserves skip reasons and starts no publisher', async t => {
+test('direct summary-only publication preserves skip reasons', async t => {
   const f = await fixture(t, { result({ role, packet, result }) {
     if (role.endsWith('comment-plan')) return { status: 'READY', comments: [], skipped: packet.findings.map(f => ({ findingId: f.id, reason: 'Existing non-deleted discussion.' })) };
     return result;
   } });
   await f.command();
   const receipt = await f.command('pr-comment', '--publish');
-  assert.match(receipt, /] NOTHING_TO_POST/);
+  assert.match(receipt, /] MODEL_REPORTED_POSTED/);
   assert.match(receipt, /Existing non-deleted discussion/);
-  assert.equal(f.prompts().length, 4);
-  assert.equal(f.calls.some(c => c.tool === 'fixture_mcp_write'), false);
+  assert.match(receipt, /PR summary: MODEL_REPORTED_POSTED/);
+  assert.equal(f.prompts().length, 5);
+  assert.equal(f.calls.some(c => c.tool === 'fixture_mcp_write'), true);
 });
 
 test('cancelling direct publication during planning never starts a publisher', async t => {
@@ -704,18 +705,18 @@ test('all twelve eligible findings reach the saved preview and explicitly reques
   }});
   const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
   const preview=await f.command('pr-comment',id);
-  assert.match(preview,/] PREVIEW/);assert.match(preview,/Comments prepared: 12/);
-  assert.equal((preview.match(/<!-- azpr-comment:/g)??[]).length,12);
+  assert.match(preview,/] PREVIEW/);assert.match(preview,/Inline comments prepared: 12/);
+  assert.equal((preview.match(/<!-- azpr-comment:/g)??[]).length,13);
   assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
   const published=await f.command('pr-comment',id+' --publish');
   assert.match(published,/] MODEL_REPORTED_POSTED/);
   const packet=JSON.parse(f.prompts().at(-1).text);
   assert.equal(packet.comments.length,12);
   for(const comment of packet.comments) assert.ok(preview.includes(comment.content));
-  assert.equal((published.match(/; thread=101/g)??[]).length,12);
+  assert.equal((published.match(/; thread=/g)??[]).length,13);
 });
 
-test('an empty saved preview starts no publisher even with explicit publish',async t=>{
+test('a saved preview with no inline findings still publishes its summary',async t=>{
   const f=await fixture(t,{result({role,packet,result}){
     if(ROLES[role].stage==='comment-plan') {
       result.comments=[];result.skipped=packet.findings.map(item=>({findingId:item.id,reason:'Already discussed.'}));
@@ -723,11 +724,11 @@ test('an empty saved preview starts no publisher even with explicit publish',asy
     return result;
   }});
   const receipt=await f.command(),id=/AZPR ([a-f0-9]{8})/.exec(receipt)[1];
-  assert.match(await f.command('pr-comment',id),/Comments prepared: 0/);
+  assert.match(await f.command('pr-comment',id),/Inline comments prepared: 0/);
   const before=f.prompts().length;
-  assert.match(await f.command('pr-comment',id+' --publish'),/] NOTHING_TO_POST/);
-  assert.equal(f.prompts().length,before);
-  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,0);
+  assert.match(await f.command('pr-comment',id+' --publish'),/] MODEL_REPORTED_POSTED/);
+  assert.equal(f.prompts().length,before+1);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,1);
 });
 
 for(const failure of ['execution','metadata','result']) test(`publisher ${failure} error revokes authorization before another request or tool`,async t=>{

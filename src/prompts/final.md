@@ -8,6 +8,10 @@ from your own commit-matched source before using the initials' before/after stor
 Apply the common HEAD/BASE evidence pair to findings and important exclusions;
 matching snapshot SHAs alone do not make a report's version interpretation correct.
 Check reachable triggers, callers, safeguards and the strongest plausible counterexample.
+Independently recompute decisive example values from the inputs. Agreement between
+initial reviewers or a test's expected assertion cannot validate arithmetic or
+behavior. Keep the short expected/actual derivation in the corrected finding;
+remove ancillary claims that the check does not support.
 Do not launch additional agents or trade coverage for speed.
 
 Initial reports may be PARTIAL, contain extra fields or include literal output
@@ -62,6 +66,10 @@ Recount source lines yourself at the exact commit, including blank lines/comment
 and excluding transport wrappers; do not inherit the representative's offsets.
 Resolve discrepancies in confirmed findings. Missing location is not a refutation:
 use NEEDS_INFO when you cannot establish it; use INCOMPLETE for unfinished work.
+
+Keep useful, source-supported documentation, type-invariant or simplification
+advice in report as optional recommendations when it is not a defect. Do not
+create mandatory topic sections, scores, praise or new finding IDs to fill space.
 
 ## Final freshness
 

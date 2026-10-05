@@ -834,3 +834,60 @@ The original failed plan replays with all three exact anchors after 38 becomes 3
 this does not recreate a cache or run another model. Syntax/415 offline tests and
 fresh/replacement OpenCode 2.0.22 fixtures pass (63 local provider requests and 12 MCP
 calls each), including actual saved publisher coordinates after line restoration.
+
+
+## PR summaries and readable review output (2026-10-06)
+
+The report now leads with a deterministic issue index. Explicit comment publication
+saves and posts a general PR summary plus labelled inline findings, with separate
+summary attempt state and a model-reported thread ID. Optional verification prose
+is not a new completion requirement. Tests cover summary-only plans, exact saved
+text restoration, distinct thread IDs, missing summary confirmation and partial
+publication without retries. Exact coordinates stay exclusive to inline comments.
+
+Syntax and 436 offline tests pass. Final-source fresh and replacement OpenCode
+2.0.22 fixtures each pass with 65 local fake-provider requests and 13 fixture MCP
+calls. These establish host/session/permission behavior, not live model accuracy
+or Azure rendering. No dependencies or daily settings were changed.
+
+The first live sample completed review and publication, but both initials reversed
+BASE/HEAD behavior; the independent verifier corrected the findings and timezone
+calculation. It is retained as a quality failure. The second sample still mixed
+versions in initials and a local reproduction, missed one defect in verification,
+and stopped on a publisher create error. Independent Azure readback found no new
+comments from that failed publication. Neither sample counts toward acceptance.
+All 52 audited immutable source reads across these two samples matched the
+operator's independent commit reference. No programmatic source-comparison gate
+or additional model stage was introduced in response.
+
+A free-model sample was rejected after a provider interruption introduced a host
+continuation outside the accepted correlation pattern; it never reached comment
+planning. A later sample completed review and four exact publications, but the
+following sample again reversed source behavior and produced a false timezone
+calculation. The operator cancelled that comment workflow after two read calls
+and before any create; independent Azure snapshots confirmed no writes. These
+failures reset acceptance rather than being removed from the record.
+
+The final prompt revision moves a shorter literal HEAD/BASE expression pair to
+the opening section and removes its later repetition. It applies to material
+exclusions as well as findings. This changes prompt ordering and clarity without
+a source-comparison algorithm, new output field or additional model stage.
+
+Live acceptance used eight actual reviews. The last three consecutive cycles used
+identical final runtime/prompt bytes and completed review, direct
+`pr-comment --publish`, and independent Azure readback. Each posted one general
+summary and three medium inline findings. Saved text, markers, thread IDs,
+coordinates and exact-HEAD anchors matched. The operator cleared prior comments
+before each cycle and retained the final batch. Two setup read failures were
+recorded separately; no review was dispatched during either failed preflight,
+and no deletion was retried after uncertainty.
+
+All visible stages in those final three cycles preserved BASE/HEAD direction.
+Some initials still made a timezone arithmetic error, corrected by the verifier
+before publication. Local verifier counterevidence also included an overbroad
+equal-instant stability claim; it was absent from the public comments and remains
+a recorded quality limitation. Acceptance establishes these sampled workflows
+and checked public findings, not perfect reviewer prose or general factual
+reliability. Azure Markdown was checked through API content/coordinates, not a
+rendered browser UI. Final runtime bytes match all three accepted installations
+and both final-source actual-host fixtures. Daily installation was not updated.

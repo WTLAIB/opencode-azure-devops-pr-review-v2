@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport } from './session.mjs';
-import { commentTarget, confirmedFindings, recordPublishResult, restoreSavedCommentText, targetKey, validateCommentPlan } from './comments.mjs';
+import { commentTarget, confirmedFindings, publicationItems, recordPublishResult, restoreSavedCommentText, targetKey, validateCommentPlan } from './comments.mjs';
 import {
   COMMANDS, ROLES, PROMPTS, nativeToolPermissions, projectToolRole, roleFor, initialRoles, buildAgents,
   validateSettings,
@@ -507,7 +507,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     if (review.attempts.size) throw new Error('[AZPR] This review already had a publication attempt. Inspect Azure before starting a new review; automatic retry is disabled.');
     const renderPlan = () => {
       const comments = review.plan.comments.map(c => `### ${c.findingId} — ${c.path}:${c.startLine}-${c.endLine}\n\n${c.content}`).join('\n\n') || 'No new actionable inline comments to post.';
-      return `Comments prepared: ${review.plan.comments.length}\n\n${comments}\n\nSkipped findings:\n` + (review.plan.skipped.map(s => `- ${s.findingId}: ${s.reason}`).join('\n') || '- None.');
+      return `${review.plan.summary?.content ?? ''}\n\nInline comments prepared: ${review.plan.comments.length}\n\n${comments}\n\nSkipped findings:\n` + (review.plan.skipped.map(s => `- ${s.findingId}: ${s.reason}`).join('\n') || '- None.');
     };
     let planning = false;
     const { run, status, report, failure } = await workflow({ origin: review.origin, mode: 'comment', profile: review.profile, review, lockKey: targetKey(review.target) }, async run => {
@@ -515,7 +515,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         planning = true;
         run.phase = 'comment preview';
         review.plan = null; // Never leave an obsolete preview after a failed refresh.
-        const payload = { target: review.target, snapshot: review.snapshot, report: review.final.report,
+        const payload = { reviewId: review.id, target: review.target, snapshot: review.snapshot, report: review.final.report,
           reviewToolText: (review.toolText ?? []).map(({ tool, text }) => ({ tool, text })),
           outputLanguage: review.outputLanguage, provenance: review.provenance,
           reviewWarnings: review.final.reviewWarnings,
@@ -538,15 +538,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       const report = renderPlan();
       await run.debug.write('comment-plan.json', { sourceReview: review.id, target: review.target, snapshot: review.snapshot, ...review.plan });
       if (!publish) return { status: 'PREVIEW', report: report + `\n\nPublication was not requested. To post this exact preview: /pr-comment ${review.id} --publish` };
-      if (!review.plan.comments.length) return { status: 'NOTHING_TO_POST', report: report + '\n\nNo publisher was started.' };
+      if (!publicationItems(review.plan).length) return { status: 'NOTHING_TO_POST', report: report + '\n\nNo publisher was started.' };
       if (!run.active || run.controller.signal.aborted) throw abortError(run.controller.signal);
       run.phase = 'comment publication';
       // Mark the saved batch uncertain BEFORE a publisher can run, including
       // when this explicit --publish command prepared the plan itself.
-      for (const c of review.plan.comments) review.attempts.set(c.marker, { findingId: c.findingId, state: 'UNKNOWN' });
+      for (const c of publicationItems(review.plan)) review.attempts.set(c.marker, { ...(c.kind === 'summary' ? { kind: 'summary' } : { findingId: c.findingId }), state: 'UNKNOWN' });
       let allReported = false;
       await stage(run, roleFor(run.profile, 'comment-publish'), { target: review.target, snapshot: review.snapshot,
-        outputLanguage: review.outputLanguage, comments: clone(review.plan.comments) }, (result, record) => {
+        outputLanguage: review.outputLanguage, summary: clone(review.plan.summary), comments: clone(review.plan.comments) }, (result, record) => {
         if (!record.completedTools) throw new Error('Publisher did not complete any tool call. Publication remains unverified; inspect Azure.');
         allReported = recordPublishResult(result, review);
         return allReported ? result : { ...result, status: 'INCOMPLETE' };
@@ -556,7 +556,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     });
     for (const stage of run.stages) review.reportSessions.add(stage.sessionID);
     if (planning || (!publish && status !== 'PREVIEW')) review.plan = null;
-    const ledger = [...review.attempts.values()].map(a => `- ${a.findingId}: ${a.state}${a.threadId ? `; thread=${a.threadId}` : '; inspect Azure before retrying'}`).join('\n');
+    const ledger = [...review.attempts.values()].map(a => `- ${a.kind === 'summary' ? 'PR summary' : a.findingId}: ${a.state}${a.threadId ? `; thread=${a.threadId}` : '; inspect Azure before retrying'}`).join('\n');
     // Preview is intentionally visible regardless of the full-review returnReport setting.
     const safe = (report || (review.plan && review.attempts.size ? renderPlan() : '')).replaceAll('</azpr_comment_data>', '&lt;/azpr_comment_data&gt;');
     const retry = failure && !review.attempts.size ? `\nThe review is retained. After addressing the cause, explicitly request /pr-comment ${review.id} or /pr-comment ${review.id} --publish; a new review is not required.\n` : '';
@@ -733,7 +733,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       await checkRole(g.role, g.run.controller.signal);
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
       if (ROLES[g.role]?.stage === 'comment-publish') {
-        const restored = restoreSavedCommentText(event.input, g.run.review.plan.comments);
+        const restored = restoreSavedCommentText(event.input, publicationItems(g.run.review.plan));
         event.input = restored.input;
         g.savedTextRestorations.push(...restored.restored);
       }

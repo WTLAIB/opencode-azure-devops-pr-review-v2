@@ -1,6 +1,6 @@
 # Human-readable Azure PR comments
 
-`/pr-comment` is a separate, opt-in workflow for turning a completed review into a small number of actionable inline discussions. Review prompts instruct models not to modify anything; MCP permissions are governed by OpenCode. Planning and explicit publication use the originating review's risk model: `models.review.risk` or `models.deep.risk`. This profile stays attached to the saved review even if another mode runs afterward. Comments do not rerun the reviewers or switch profiles. Check the selected model's actual cost; no role implies a pricing tier.
+`/pr-comment` is a separate, opt-in workflow for turning a completed review into one PR summary and actionable inline discussions. Review prompts instruct models not to modify anything; MCP permissions are governed by OpenCode. Planning and explicit publication use the originating review's risk model: `models.review.risk` or `models.deep.risk`. This profile stays attached to the saved review even if another mode runs afterward. Comments do not rerun the reviewers or switch profiles. Check the selected model's actual cost; no role implies a pricing tier.
 
 ## Policy and rationale
 
@@ -8,20 +8,20 @@ The policy draws on three public practices:
 
 - [Google's review-comment guidance](https://google.github.io/eng-practices/review/reviewer/comments.html): explain the reason, be constructive, and distinguish important changes from optional advice. Here, comments describe the triggering condition and impact, then suggest a focused correction or test.
 - [Conventional Comments](https://conventionalcomments.org/): structured labels make feedback easier to scan. Here, `issue (high):` and `issue (medium):` identify actionable defects. These are this project's severity labels, not Azure votes or assertions that a merge is blocked.
-- [Microsoft's Azure PR guidance](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops): use line-specific discussion for local code issues. Here, publish inline only; keep the long report and all skipped findings in OpenCode.
+- [Microsoft's Azure PR guidance](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops): use line-specific discussion for local code issues. Here, keep local issues inline and add a separate compact PR summary; the complete evidence, decision ledger and skip reasons remain in OpenCode.
 
 The following limits are project choices, not universal standards:
 
 | Rule | Default |
 | --- | --- |
-| Eligibility | Confirmed high/medium-impact defects only |
+| Eligibility | Summary indexes confirmed findings; inline comments require high/medium-impact defects |
 | Volume | No numerical comment quota; one publishing attempt per review |
 | Comment size | At most 1,200 body characters, plus runtime AI/model disclosure and a hidden deduplication marker |
 | Anchor | Smallest useful exact range in a changed HEAD file; no fixed line-count maximum |
-| Structure | Short issue title; triggering condition and impact; correction or regression test |
+| Structure | Observable issue title; Summary; Evidence; Suggested fix |
 | Language | Shared `outputLanguage` for the final report and comment prose; identifiers and machine-readable labels unchanged |
 | Duplicates | One root cause per thread; skip non-deleted discussions, including resolved ones |
-| Exclusions | Speculation, unanswered questions, cosmetic nits, optional refactoring, praise, and no-issues summaries |
+| Exclusions | Speculation, unanswered questions, cosmetic nits, optional refactoring, praise, and unsupported clean bills of health |
 | Unlocatable findings | Explain the skip locally; never invent an inline location |
 
 An explicit deletion record is not an existing discussion or marker. Enumerate
@@ -34,9 +34,17 @@ Deletion interpretation remains model policy, not an MCP response parser.
 Example body (shown in English; the actual body uses the shared `outputLanguage` setting):
 
 ```text
-issue (high): Missing records bypass the fallback
+issue (high): **Missing records bypass the fallback**
+
+**Summary**
+
+An empty lookup fails a previously supported request.
+
+**Evidence**
 
 When the lookup returns no record, this property access throws before the fallback runs. A previously supported request then returns an error.
+
+**Suggested fix**
 
 Check for a missing record before dereferencing it, and add a regression test for an empty lookup result.
 ```
@@ -124,7 +132,7 @@ ranges are accepted instead of failing on an arbitrary five-line maximum.
 When using preview, inspect it before requesting publication. Direct publication
 returns the prepared comments and any attempt outcomes; a publisher failure also
 retains the exact prepared content for inspection. The publisher receives only the target,
-snapshot, output language and saved comments, including their exact content,
+snapshot, output language, saved general summary and inline comments, including their exact content,
 anchors and coordinates. The full review, findings and tool-text collection stay
 with planning. The publisher sends saved content without translation or relocation.
 It checks current PR identity/HEAD and complete discussions once before the batch,
@@ -248,8 +256,9 @@ database. Unloading the plugin or restarting the process clears the memory cache
 OpenCode retains its own history independently. Optional debug files have no
 automatic deletion and must be removed deliberately by their owner.
 
-An unavailable ID never falls back to another review. Empty plans start no
-publisher and do not request a summary thread.
+An unavailable ID never falls back to another review. A plan with no inline
+comments still contains a publishable general summary. It never asserts approval
+or that zero findings proves defect-free code.
 Optional debug files preserve a private diagnostic copy but cannot restore a
 publication authorization or plan after restart.
 
@@ -271,7 +280,7 @@ explanation. The runtime does not interpret MCP tool names or classify Azure
 response schemas; this is shared planner/publisher guidance, not a write firewall.
 
 An unsupported individual finding belongs in `skipped` with a reason, allowing
-other comments to proceed. Zero eligible comments is a READY empty plan. A real
+other comments to proceed. Zero eligible inline comments is a READY summary-only plan. A real
 batch-wide verification gap may return INCOMPLETE with an optional `reason`.
 The reason appears in the local receipt and private diagnostics, never in a PR
 comment. Legacy INCOMPLETE output without a reason explicitly says the model did
@@ -295,8 +304,10 @@ before updating. Never commit private settings, model IDs, or PR data.
 3. Confirm the final report and preview use outputLanguage and the requested
    review context. Inspect actual tool history: review and preview should make
    no modifications, but this is not guaranteed by the plugin.
-4. Publish one saved comment. Check its actual Azure target, text, line anchor,
-   marker, and thread ID; do not rely solely on MODEL_REPORTED_POSTED.
+4. Publish the saved summary and eligible inline comments. Check their actual
+   Azure target, exact text, markers and distinct thread IDs. Verify inline
+   anchors and that the summary has no file context; do not rely solely on
+   MODEL_REPORTED_POSTED.
 5. Test unavailable tools, stale HEAD, existing discussions, cancellation, and
    denied writes. The model should stop; the workflow must not retry a batch.
 6. Use a review where the verifier narrows an initial claim or lowers its severity.
@@ -335,3 +346,40 @@ retains original and restored coordinates. This cannot bypass attempted-finding
 or duplicate-discussion policy. Offsets are computed from
 that saved exact text. These formatting restorations do not alter comment body
 claims or authorize publication.
+
+
+## PR summary and readable inline format
+
+Each saved plan contains one general summary with no file coordinates or finding
+ID, followed by eligible inline comments. The runtime renders counts and an
+issue/location index from corrected findings, ordered by severity. The optional
+planner `summary` text adds public-safe checks and limitations in outputLanguage:
+source inspection, test reading, actual execution and unexecuted advice must be
+distinguished. It adds no findings, publication counts, private diagnostics or
+new model round. Missing/malformed optional prose uses an honest fallback, not a
+new completion gate. The summary includes the review ID, exact HEAD, disclosure
+and a unique marker; low-severity findings may appear in this index but cannot
+be promoted into inline issues. Full source/decision details remain local.
+
+A summary is created once per completed review only under `--publish`, as part
+of the same saved plan and publication-attempt ledger. Existing summaries are
+never edited/deleted. The publisher returns `summaryThreadId` separately from
+`posted` finding IDs. Every required item must be reported before the batch is
+MODEL_REPORTED_POSTED; this is not independent provider verification. Partial
+writes remain visible without retry. A new version-labelled index does not
+replace or reopen existing discussions, and contains no claimed write count
+that could become false if later writes fail.
+
+Inline titles describe an observable consequence. Compact bold Summary, Evidence
+and Suggested fix labels guide reading; prose follows outputLanguage. Use the
+smallest useful example and correction; avoid redundant title repetition, long
+code blocks, confidence percentages, mandatory praise or merge recommendations.
+Basic Markdown headings, lists, tables and emphasis are used. Collapsible HTML
+or one-click patch suggestions are not required. The 1,200-character inline body
+limit still preserves essential conditions; formatting is guidance, not a new
+model-output rejection gate.
+
+Design references: [Anthropic PR Review Toolkit](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/pr-review-toolkit),
+[CodeRabbit walkthroughs](https://docs.coderabbit.ai/pr-reviews/walkthroughs), and
+[PR-Agent reviews](https://docs.pr-agent.ai/tools/review/). These inform presentation,
+not this plugin's authorization, model topology or provider compatibility.

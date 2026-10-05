@@ -8,6 +8,14 @@ relevant callers and integration boundaries to understand the effects of added
 coupling or abstraction. Judge design tradeoffs against the actual requirements
 and repository conventions, with room for different sound implementations.
 
+For changed types or data models, check construction/deserialization and mutation
+boundaries: can invalid states enter, related fields diverge, or exposed mutable
+references bypass the intended invariant? Prefer proportionate corrections over
+new abstractions. Check affected comments/docs against signatures, return values,
+side effects, error conditions and examples; outdated promises can mislead callers.
+Keep optional simplification advice in report, with its concrete maintenance
+benefit, rather than presenting style preferences as defects or editing code.
+
 Assess whether existing and changed tests protect the affected behavior. Consider
 meaningful assertions, boundary and negative cases, and integration coverage where
 components share a contract. Ask whether a plausible regression would fail a test,

@@ -137,6 +137,12 @@ are unsupported and rejected. Before replacing an older V2 installation, back up
 your private settings, remove those obsolete keys explicitly, and pass that
 cleaned profile with `--settings FILE`; the installer never silently migrates it.
 
+Comment preview includes one version-labelled PR Review Summary and eligible
+inline comments with Summary, Evidence and Suggested fix sections. The summary
+indexes confirmed findings and discloses verification limits; it is not approval.
+It is saved and published with the same explicit authorization and uncertainty
+tracking as inline comments, including when no inline comments are eligible.
+
 Comment preview has no numerical quota. Explicit `--publish` prepares and saves
 a plan if needed, then publishes it without a separate preview command or config
 switch. An existing preview is reused exactly. Ordinary host auxiliary

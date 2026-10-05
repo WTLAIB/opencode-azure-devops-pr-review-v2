@@ -89,3 +89,17 @@ failed runs and private data.
 
 Real reviews, publication, installed-host upgrades and repository publication
 require authorization for the concrete action. They are not implied by tests.
+
+
+## Review readability and targeted coverage
+
+Keep two full-scope initials and one verifier. Explicitly inspect affected
+documentation promises, type construction/mutation invariants and failure
+visibility, while retaining existing architecture and behavioral-test review.
+Useful optional simplification advice stays in the local report; no automatic
+code edits, specialist rounds, numeric scores or mandatory praise are introduced.
+
+Completed reports lead with a deterministic issue index. Comment publication
+uses a saved general PR summary plus labelled inline explanations. Assess both
+workflow reliability and factual examples in authorized live acceptance; a
+successful write is not proof of a correct claim.

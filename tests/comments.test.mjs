@@ -1,15 +1,64 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { commentTarget, confirmedFindings, recordPublishResult, restoreSavedCommentText, validateCommentPlan } from '../src/comments.mjs';
+import { commentTarget, confirmedFindings, publicationItems, recordPublishResult, restoreSavedCommentText, validateCommentPlan } from '../src/comments.mjs';
 
 const snapshot={head:'a'.repeat(40),prId:123,files:['/src/example.ts']};
 const target=commentTarget('https://dev.azure.com/org/project/_git/repo/pullrequest/123',snapshot);
 const draft=()=>({status:'READY',comments:[{findingId:'F-1',severity:'high',path:snapshot.files[0],startLine:2,endLine:2,anchor:'return value.name;',body:'issue (high): Missing null handling\n\nNull input throws. Add a guard and a regression test.'}],skipped:[]});
 const verifiedFinding=()=>({id:'F-1',summary:'Missing guard',evidence:'Null input throws',counterevidence:'The caller allows null on the failing path.',severity:'high',location:'head:/src/example.ts:2',suggestion:'Add a guard and a regression test.'});
-const review=()=>({target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
+const review=()=>({id:'1234abcd',outputLanguage:'en',target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
+test('summary indexes corrected findings and binds one review without an inline anchor', () => {
+  const r=review();r.final.dispositions[0].verifiedFinding.summary='Corrected | title <unsafe>';
+  const a=validateCommentPlan({...draft(),summary:'Source checked; tests not run.'},r).summary;
+  assert.equal(a.kind,'summary');assert.equal(a.findingId,undefined);assert.equal(a.path,undefined);
+  assert.match(a.content,/high: 1/);assert.match(a.content,/Corrected &#124; title &#60;unsafe&#62;/);
+  assert.match(a.content,/Source checked; tests not run/);assert.match(a.content,/1234abcd/);
+  assert.ok(a.content.includes(snapshot.head));assert.doesNotMatch(a.content,/Missing guard/);
+  assert.notEqual(validateCommentPlan(draft(),{...r,id:'5678abcd'}).summary.marker,a.marker);
+});
+test('missing or malformed optional summary prose retains the plan with an honest fallback', () => {
+  for(const summary of [undefined,42,{},'', '<!-- forged -->','x'.repeat(1201)]) {
+    const plan=validateCommentPlan({...draft(),summary},review());
+    assert.equal(plan.comments.length,1);assert.match(plan.summary.content,/No verification summary/);
+    assert.doesNotMatch(plan.summary.content,/forged/);
+  }
+});
+test('summary fallback follows Chinese script and displays explicit structured locations without changing claims', () => {
+  const r=review();r.final.dispositions[0].verifiedFinding.location=JSON.stringify({side:'head',path:'/src/example.ts',lineStart:2,lineEnd:3});
+  const before=JSON.stringify(r.final);
+  for(const [language,text] of [['zh-TW','驗證摘要'],['zh-CN','验证摘要']]) {
+    r.outputLanguage=language;const summary=validateCommentPlan(draft(),r).summary.content;
+    assert.ok(summary.includes(text));assert.match(summary,/head:\/src\/example.ts:2-3/);
+  }
+  assert.equal(JSON.stringify(r.final),before);
+});
+test('zero findings still produce a saved summary without a clean bill of health', () => {
+  const r=review();r.final.dispositions=[];
+  r.plan=validateCommentPlan({status:'READY',comments:[],skipped:[]},r);
+  assert.match(r.plan.summary.content,/No confirmed defects.*does not establish/);
+  assert.equal(recordPublishResult({status:'DONE',posted:[]},r),false);
+  assert.equal(recordPublishResult({status:'DONE',posted:[],summaryThreadId:42},r),true);
+});
+test('summary publication participates in incomplete outcomes and validates before mutation', () => {
+  const r=planned(),before=[...r.attempts];
+  assert.throws(()=>recordPublishResult({status:'DONE',summaryThreadId:42,posted:[{findingId:'F-1',threadId:42}]},r));
+  assert.deepEqual([...r.attempts],before);
+  assert.equal(recordPublishResult({status:'DONE',posted:[{findingId:'F-1',threadId:43}]},r),false);
+  assert.equal(r.attempts.get(r.plan.summary.marker).state,'UNKNOWN');
+  const other=planned();
+  assert.equal(recordPublishResult({status:'INCOMPLETE',summaryThreadId:42,posted:[]},other),false);
+  assert.equal(other.attempts.get(other.plan.comments[0].marker).state,'UNKNOWN');
+});
+test('summary restoration preserves exact saved text without touching a marker search', () => {
+  const plan=planned().plan, saved=plan.summary;
+  const input={content:saved.content.replace('Verification','Changed wording'),search:saved.marker,path:'/unrelated'};
+  const result=restoreSavedCommentText(input,publicationItems(plan));
+  assert.equal(result.input.content,saved.content);assert.equal(result.input.search,saved.marker);
+  assert.equal(result.input.path,input.path);assert.deepEqual(result.restored,['PR summary']);
+});
 function planned(){
   const r=review();r.plan=validateCommentPlan(draft(),r);
-  for(const c of r.plan.comments) r.attempts.set(c.marker,{findingId:c.findingId,state:'UNKNOWN'});
+  for(const c of publicationItems(r.plan)) r.attempts.set(c.marker,{...(c.kind === 'summary' ? {kind:'summary'} : {findingId:c.findingId}),state:'UNKNOWN'});
   return r;
 }
 
@@ -107,8 +156,8 @@ test('attempted findings remain blocked and skipped findings require reasons',()
 });
 test('all reported posts are labeled model-reported, never provider-verified',()=>{
   const r=planned();
-  assert.equal(recordPublishResult({status:'DONE',posted:[{findingId:'F-1',threadId:'thread-42'}]},r),true);
-  assert.deepEqual([...r.attempts.values()],[{findingId:'F-1',state:'MODEL_REPORTED_POSTED',threadId:'thread-42'}]);
+  assert.equal(recordPublishResult({status:'DONE',summaryThreadId:'thread-41',posted:[{findingId:'F-1',threadId:'thread-42'}]},r),true);
+  assert.deepEqual([...r.attempts.values()],[{kind:'summary',state:'MODEL_REPORTED_POSTED',threadId:'thread-41'},{findingId:'F-1',state:'MODEL_REPORTED_POSTED',threadId:'thread-42'}]);
 });
 test('incomplete or empty publication reports retain uncertainty',()=>{
   const r=planned();

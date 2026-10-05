@@ -8,6 +8,13 @@ components. Follow the relevant control and data paths to understand whether
 coupling or boundary changes widen the impact of a failure. Judge the design
 against its actual operating assumptions and safeguards.
 
+Trace how a failure reaches its caller or user. Check whether an exception becomes
+an apparent success, empty result or unjustified fallback, and whether the caller
+can distinguish failure and recover. Assess diagnostic context and actionable
+feedback against project requirements; missing logging alone is not automatically
+a defect, and logs must not expose secrets. Check documented failure guarantees
+against the actual propagation, cleanup and recovery paths.
+
 Assess whether tests protect the important failure behavior, including relevant
 negative, asynchronous, concurrency and recovery scenarios. Consider integration
 coverage at those boundaries, assertions that miss or swallow failures, timing

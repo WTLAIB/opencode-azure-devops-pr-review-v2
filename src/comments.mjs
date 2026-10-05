@@ -1,6 +1,7 @@
 // Tool-agnostic comment plans and explicitly MODEL-REPORTED publication receipts.
 // No MCP name mapping, action/field adapter, or provider-response verification.
 import { createHash } from 'node:crypto';
+import { renderReviewSummary } from './attribution.mjs';
 
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
@@ -46,6 +47,25 @@ export function confirmedFindings(review) {
   return [...confirmed, ...(review.final.newFindings ?? [])];
 }
 
+export function publicationItems(plan) {
+  return [...(plan.summary ? [plan.summary] : []), ...plan.comments];
+}
+
+function summaryComment(review, note) {
+  const tag = `<!-- azpr-comment:${createHash('sha256').update(JSON.stringify([targetKey(review.target), review.id, review.snapshot.head, 'summary'])).digest('hex').slice(0, 32)} -->`;
+  // Optional prose cannot block an otherwise valid plan. Never copy the private
+  // report wholesale, or ask the model to manufacture counts or publication IDs.
+  const valid = nonempty(note) && note.length <= 1200 && !/<!--|-->/.test(note);
+  const fallback = /^zh(?:-|$)/i.test(review.outputLanguage ?? '')
+    ? new Intl.Locale(review.outputLanguage).maximize().script === 'Hant'
+      ? '未提供可用的驗證摘要；請檢視完整 review 的查證與限制。未列出測試結果不代表測試通過。'
+      : '未提供可用的验证摘要；请查看完整 review 的查证与限制。未列出测试结果不代表测试通过。'
+    : 'No verification summary was provided. Consult the full review for checks and limitations; absent test results do not mean tests passed.';
+  const index = renderReviewSummary(confirmedFindings(review), review.outputLanguage ?? 'en');
+  const content = `${index}\n\n**Verification**\n\n${valid ? note.trim() : fallback}\n\nReview: \`${review.id}\` · HEAD: \`${review.snapshot.head}\`${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}`;
+  return { kind: 'summary', marker: tag, content };
+}
+
 function marker(review, finding, comment) {
   const fingerprint = createHash('sha256').update(JSON.stringify([
     targetKey(review.target), review.snapshot.head, comment.path, comment.startLine, comment.endLine,
@@ -88,7 +108,7 @@ function restoreAnchor(comment, review) {
 }
 
 export function validateCommentPlan(result, review) {
-  exactKeys(result, ['status', 'comments', 'skipped', 'reason']);
+  exactKeys(result, ['status', 'comments', 'skipped', 'reason', 'summary']);
   // A diagnostic reason never makes a usable READY plan invalid. Keep the raw
   // value in the response; only nonempty text can explain an incomplete plan.
   if (result.status === 'INCOMPLETE') fail(`Comment planning incomplete: ${nonempty(result.reason) ? result.reason.trim() : 'The model did not explain what could not be verified.'} No comments were published; the completed review remains available.`);
@@ -130,7 +150,7 @@ export function validateCommentPlan(result, review) {
     if (eligible.has(s.findingId)) accounted.add(s.findingId);
   }
   if (accounted.size !== eligible.size) fail('Planner omitted confirmed findings instead of explaining exclusions.');
-  return { comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}),
+  return { summary: summaryComment(review, result.summary), comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}),
     ...(locationRestorations.length ? { locationRestorations } : {}) };
 }
 
@@ -145,8 +165,8 @@ export function restoreSavedCommentText(input, comments) {
       const tags = value.match(/<!-- azpr-comment:[a-f0-9]{32} -->/g) ?? [];
       if (tags.length !== 1 || !value.endsWith(tags[0])) return value;
       const saved = comments.find(comment => comment.marker === tags[0]);
-      if (!saved || !value.startsWith(`issue (${saved.severity}): `) || value === saved.content) return value;
-      restored.push(saved.findingId);
+      if (!saved || !value.startsWith(saved.kind === 'summary' ? '## PR Review Summary' : `issue (${saved.severity}): `) || value === saved.content) return value;
+      restored.push(saved.kind === 'summary' ? 'PR summary' : saved.findingId);
       return saved.content;
     }
     if (Array.isArray(value)) return value.map(visit);
@@ -158,20 +178,26 @@ export function restoreSavedCommentText(input, comments) {
 
 /** Validate only the model's report shape, NEVER claim provider verification. */
 export function recordPublishResult(result, review) {
-  exactKeys(result, ['status', 'posted']);
+  exactKeys(result, ['status', 'posted', 'summaryThreadId']);
   if (!['DONE', 'INCOMPLETE'].includes(result.status) || !Array.isArray(result.posted)) fail('Publisher must return status and posted entries. Inspect Azure; do not retry automatically.');
   const planned = new Map(review.plan.comments.map(c => [c.findingId, c]));
+  const validThread = id => integer(id) || (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,199}$/.test(id));
+  const hasSummary = result.summaryThreadId !== undefined;
+  if (hasSummary && (!review.plan.summary || !validThread(result.summaryThreadId))) fail('Invalid model-reported summary publication.');
   const seen = new Set();
+  const threads = new Set(hasSummary ? [String(result.summaryThreadId)] : []);
   for (const item of result.posted) {
     exactKeys(item, ['findingId', 'threadId']);
     if (!planned.has(item.findingId) || seen.has(item.findingId) ||
-        !(integer(item.threadId) || (typeof item.threadId === 'string' && /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,199}$/.test(item.threadId)))) fail('Invalid model-reported publication entry.');
+        !validThread(item.threadId) || threads.has(String(item.threadId))) fail('Invalid model-reported publication entry.');
     seen.add(item.findingId);
+    threads.add(String(item.threadId));
   }
   // Validate the complete envelope before changing any attempt state.
+  if (hasSummary) review.attempts.set(review.plan.summary.marker, { kind: 'summary', state: 'MODEL_REPORTED_POSTED', threadId: result.summaryThreadId });
   for (const item of result.posted) {
     const comment = planned.get(item.findingId);
     review.attempts.set(comment.marker, { findingId: item.findingId, state: 'MODEL_REPORTED_POSTED', threadId: item.threadId });
   }
-  return result.status === 'DONE' && seen.size === planned.size;
+  return result.status === 'DONE' && seen.size === planned.size && (!review.plan.summary || hasSummary);
 }

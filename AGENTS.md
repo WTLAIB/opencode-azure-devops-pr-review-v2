@@ -126,7 +126,11 @@ The independent V1 repository and installation are outside this project's scope.
   argument strings containing a whole comment with its unique saved marker may
   be restored to saved content. This copies approved text, not MCP operation,
   target or coordinate authorization. Preserve host permissions and uncertainty.
-  Publisher input is the saved target/snapshot/language/comments only. Reuse
+  Publisher input is the saved target/snapshot/language/summary/comments only.
+  Save one general PR summary with its own marker and attempt state per review;
+  it has no finding ID or file anchor. Keep its exact text, counts and version
+  tied to the review. Summary-only plans are publishable; partial summary/inline
+  outcomes remain uncertain without retries, edits or deletions. Reuse
   verified immutable anchors and make mutable PR/discussion checks batch-scoped;
   no mandatory source/metadata reread per comment or repeated review selection.
   Preserve original scalar execution errors in opt-in private diagnostics before

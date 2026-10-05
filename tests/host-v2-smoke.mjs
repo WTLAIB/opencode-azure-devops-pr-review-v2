@@ -397,9 +397,9 @@ try {
   assert.match(publication, /\] INCOMPLETE/); assert.match(publication, /publisher tool failed/i);
   assert.match(publication, /UNKNOWN/);
   assert.equal(requests.length, beforePublication + 3, 'Direct publication plans once, then a publisher tool error must prevent another model request.');
-  assert.match(publication, /Comments prepared: 1/);
+  assert.match(publication, /Inline comments prepared: 1/);
   const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
-  assert.deepEqual(Object.keys(publicationPayload).sort(), ['comments', 'outputLanguage', 'snapshot', 'target']);
+  assert.deepEqual(Object.keys(publicationPayload).sort(), ['comments', 'outputLanguage', 'snapshot', 'summary', 'target']);
   const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
   assert.equal(plannerPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once with the planner, including original arguments.');
   assert.match(plannerPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
@@ -409,6 +409,10 @@ try {
   const publicationStage = JSON.parse(await readFile(join(publicationDebug, '02-azpr-review-comment-publish.result.json'), 'utf8'));
   const savedPlan = JSON.parse(await readFile(join(publicationDebug, 'comment-plan.json'), 'utf8'));
   assert.deepEqual(publicationPayload.comments, savedPlan.comments);
+  assert.deepEqual(publicationPayload.summary, savedPlan.summary);
+  assert.equal(savedPlan.summary.kind, 'summary');
+  assert.equal(savedPlan.summary.path, undefined);
+  assert.match(publication, /PR summary: UNKNOWN/);
   assert.equal(publicationStage.toolErrors.length, 1);
   assert.match(publicationStage.toolErrors[0].error.message, /Fixture publication tool failed/);
   assert.doesNotMatch(publication, /Fixture publication tool failed/);

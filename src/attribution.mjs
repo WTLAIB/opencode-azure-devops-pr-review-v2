@@ -44,6 +44,28 @@ const reportVocabulary = {
 function reportWords(language) {
   return reportVocabulary[words(language) === vocabulary.tw ? 'tw' : words(language) === vocabulary.cn ? 'cn' : 'en'];
 }
+// Display a preserved structured location when its explicit coordinates are
+// unambiguous. This changes no finding, saved anchor or publication eligibility.
+function displayLocation(value) {
+  try {
+    const p = JSON.parse(value);
+    if (p && ['head', 'base'].includes(p.side) && typeof p.path === 'string' && p.path.startsWith('/') &&
+        Number.isSafeInteger(p.lineStart) && p.lineStart > 0 && Number.isSafeInteger(p.lineEnd) && p.lineEnd >= p.lineStart) {
+      return `${p.side}:${p.path}:${p.lineStart}${p.lineEnd === p.lineStart ? '' : '-' + p.lineEnd}`;
+    }
+  } catch { /* Ordinary string locations stay literal. */ }
+  return value;
+}
+// A compact index of existing claims, not another model-authored assessment.
+export function renderReviewSummary(findings, language) {
+  const w = reportWords(language);
+  const cell = value => String(value ?? '—').replace(/[\r\n]+/g, ' ').replace(/[&<>|`*_[\]\\]/g, c => `&#${c.charCodeAt(0)};`);
+  const counts = ['high', 'medium', 'low'].map(level => `${level}: ${findings.filter(f => f.severity === level).length}`).join(' · ');
+  const empty = words(language) === vocabulary.tw ? '未發現可確認缺陷；這不保證程式沒有問題。'
+    : words(language) === vocabulary.cn ? '未发现可确认缺陷；这不保证程序没有问题。' : 'No confirmed defects found; this does not establish that the code is bug-free.';
+  const rows = [...findings].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.severity) - ['high', 'medium', 'low'].indexOf(b.severity)).map(f => `| ${cell(f.severity)} | ${cell(f.id)} — ${cell(f.summary)} | ${cell(displayLocation(f.location))} |`).join('\n');
+  return `## PR Review Summary\n\n${counts}\n\n${rows ? `| Severity | Summary | ${w.location} |\n| --- | --- | --- |\n${rows}` : empty}`;
+}
 const findingFields = ['id', 'summary', 'severity', 'location', 'evidence', 'counterevidence', 'suggestion'];
 function extraOutput(value, known) {
   const entries = Object.entries(value ?? {}).filter(([key, content]) => !known.includes(key) && content !== '' && content !== null);
@@ -56,7 +78,7 @@ function extraOutput(value, known) {
 }
 function renderFinding(finding = {}, w) {
   finding ??= {};
-  return `### ${finding.id || '—'} — ${finding.summary || w.none} (${finding.severity || '—'})\n\n**${w.location}:** ${finding.location || '—'}\n\n**${w.evidence}**\n\n${finding.evidence || w.none}\n\n**${w.counter}**\n\n${finding.counterevidence || w.none}\n\n**${w.suggestion}**\n\n${finding.suggestion || w.none}${extraOutput(finding, findingFields)}`;
+  return `### ${finding.id || '—'} — ${finding.summary || w.none} (${finding.severity || '—'})\n\n**${w.location}:** ${displayLocation(finding.location) || '—'}\n\n**${w.evidence}**\n\n${finding.evidence || w.none}\n\n**${w.counter}**\n\n${finding.counterevidence || w.none}\n\n**${w.suggestion}**\n\n${finding.suggestion || w.none}${extraOutput(finding, findingFields)}`;
 }
 function renderSnapshot(snapshot) {
   if (!snapshot) return 'Snapshot not established.';
@@ -73,7 +95,7 @@ export function renderFinalReport(final, language) {
   const referenceTitle = words(language) === vocabulary.tw ? '初審觀察（參考資料，非最終結論）' : words(language) === vocabulary.cn
     ? '初审观察（参考资料，非最终结论）' : 'Initial observations (reference only, not final conclusions)';
   const extras = extraOutput(final, ['status', 'modelStatus', 'snapshot', 'currentHead', 'currentBase', 'report', 'confirmed', 'merged', 'rejected', 'needsInfo', 'dispositions', 'newFindings', 'unreviewedFindings', 'reviewWarnings', 'contractComplete', 'unstructured', 'unstructuredInitials', 'initialObservations']);
-  return `${final.status !== 'COMPLETE' ? '**' + final.status + ': ' + w.partial + '**\n\n' : ''}## ${w.scope}\n\n${renderSnapshot(final.snapshot)}\n\n- currentHead: \`${final.currentHead ?? ''}\`\n- currentBase: \`${final.currentBase ?? ''}\`\n\n## ${w.overview}\n\n${final.report || w.none}${limitations ? '\n\n' + limitations : ''}${extras}\n\n## ${findingTitle}\n\n${findings.map(f => renderFinding(f, w)).join('\n\n') || w.none}\n\n## ${w.decisions}\n\n${decisions || w.none}${pending ? '\n\n## ' + referenceTitle + '\n\n' + pending : ''}`;
+  return `${final.status !== 'COMPLETE' ? '**' + final.status + ': ' + w.partial + '**\n\n' : renderReviewSummary(findings, language) + '\n\n'}## ${w.overview}\n\n${final.report || w.none}${limitations ? '\n\n' + limitations : ''}${extras}\n\n## ${findingTitle}\n\n${findings.map(f => renderFinding(f, w)).join('\n\n') || w.none}\n\n## ${w.scope}\n\n${renderSnapshot(final.snapshot)}\n\n- currentHead: \`${final.currentHead ?? ''}\`\n- currentBase: \`${final.currentBase ?? ''}\`\n\n## ${w.decisions}\n\n${decisions || w.none}${pending ? '\n\n## ' + referenceTitle + '\n\n' + pending : ''}`;
 }
 
 /** Completed initial responses are retained, with their limitations. Failed final claims never

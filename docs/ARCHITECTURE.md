@@ -265,8 +265,12 @@ attribution. Preview displays the full comment count without a numerical quota.
 Explicit --publish reuses a saved preview or runs planning and publication in one
 workflow. The planner must finish with a validated saved plan before any publisher
 starts. The stages share the command's cancellation/deadline and origin/PR locks;
-no additional reviewer or automatic retry is introduced. Empty plans return
-NOTHING_TO_POST with skip reasons and no publisher. A planning failure retains
+no additional reviewer or automatic retry is introduced. Plans include a deterministic summary index and optional public-safe verification
+prose from the existing planner. No inline findings still permits publishing the
+saved summary. It has its own marker/attempt state, no fake finding or anchor,
+and a separate model-reported thread ID. Missing summary confirmation prevents
+a successful batch result. No additional model request or persistent storage is
+needed. A planning failure retains
 the review and exposes an optional model-supplied reason, or states that none was
 provided. The report footer supplies exact direct/preview commands and memory
 retention limits. No separate config switch applies.
