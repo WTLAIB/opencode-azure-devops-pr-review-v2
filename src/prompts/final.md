@@ -3,8 +3,11 @@
 Inspect the union snapshot paths and both original coverage ledgers, including
 discovery differences. Independently read source, verify each candidate and check
 important excluded changes and requirements even if both finding lists are empty.
-Treat other reports as claims, not proof. Check base/head direction, reachable
-triggers, callers, safeguards and the strongest plausible counterexample.
+Treat other reports as claims, not proof. Establish the proposed HEAD behavior
+from your own commit-matched source before using the initials' before/after story.
+Apply the common HEAD/BASE evidence pair to findings and important exclusions;
+matching snapshot SHAs alone do not make a report's version interpretation correct.
+Check reachable triggers, callers, safeguards and the strongest plausible counterexample.
 Do not launch additional agents or trade coverage for speed.
 
 Initial reports may be PARTIAL, contain extra fields or include literal output

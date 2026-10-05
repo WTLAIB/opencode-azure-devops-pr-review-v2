@@ -12,6 +12,37 @@ with Node.js 22.23.3 and OpenCode 2.0.22. No live Azure/model review or PR publi
 is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
+## 2026-10-06 prompt-only BASE/HEAD direction acceptance
+
+Retained failures showed correct metadata and exact source reads followed by
+reversed version interpretations, including a BASE file tested as claimed HEAD.
+The shared review prompt now keeps request path/commit and returned text together,
+establishes proposed HEAD behavior first, and compares short HEAD/BASE evidence
+pairs within existing fields. Local reproductions must match their claimed source
+text. The verifier applies the same check independently of the initial narrative.
+Only prompts and documentation changed: no comparison engine, data structure,
+persisted source, output field, eligibility gate or model round was added.
+
+Syntax checks and 430/430 offline tests passed. Three newly authorized live
+`pr-review` runs used identical runtime/prompt bytes and one unchanged model
+profile on OpenCode 2.0.22, official MCP 2.9.0 and Ubuntu 22.04.5. All three
+finished COMPLETE. Independent audits matched 55/55 exact-commit source reads,
+12/12 metadata reads and all five materialized source files to their claimed
+versions. All nine visible stage outputs were inspected; no BASE/HEAD reversal
+was observed. The requested three-consecutive-run direction criterion was met,
+and live testing stopped. Tests used temporary installations; the daily package
+and private settings were preserved. No comment command or remote write ran.
+
+This is narrow direction acceptance on one small PR and one model profile, not
+general review-quality certification or an isolated causal estimate. One initial
+was retained as unstructured PARTIAL before a COMPLETE final result. Other
+failures remain: an incorrect equal-instant example survived one final report,
+some initial locations were inaccurate, an initial claimed an unexecuted later
+assertion as an observation, and model commands reused/removed fixed temporary
+paths despite the fresh-directory instruction. Original outputs, tool failures
+and materialized files were retained. These limits were not hidden by the
+direction result or addressed with extra model rounds or new completion gates.
+
 ## 2026-10-06 direct comment commands and planning diagnostics
 
 A retained real COMPLETE review had three confirmed medium findings, but its

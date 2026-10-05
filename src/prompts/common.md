@@ -13,12 +13,15 @@ review. A checkout is optional, never a prerequisite for a useful result.
 
 Choose tests, a small reproduction, counterexamples, static analysis or source
 inspection as useful. Shell, read, glob and grep follow existing host permissions.
-For execution without a checkout, materialize only needed MCP-returned files in
-your own fresh temporary directory, keeping base/head separate and preserving
-the retrieved text. Record repository/path/commit provenance; distinguish an
-exact copy from a reduced or modified reproduction. Missing imports, fixtures
-or dependencies limit that experiment, not source review. If using an existing
-checkout, establish its repository, commit and local changes first.
+For execution without a checkout, copy only needed MCP-returned files into your
+own fresh temporary directory, separated by commit SHA. Match each copied body
+to its own read's path and commit; check the decisive statements against that
+response before running it. Do not reconstruct a claimed HEAD file from memory,
+the other version or a review summary. Record repository/path/commit provenance;
+label reduced or modified reproductions as such. A directory named "head" does
+not establish its contents' version. Missing imports, fixtures or dependencies
+limit that experiment, not source review. For an existing checkout, establish
+its repository, commit and local changes first.
 
 Preserve existing work and other reviewers' temporary files. Commands run with
 real host authority, so do not treat a scratch directory as a sandbox. Execution
@@ -52,10 +55,11 @@ For an initial review, establish snapshot from one PR metadata response:
   lookup hints only. snapshot.repository is a comparison label; do not copy it
   into MCP repositoryId. For calls, follow the operation's schema using the
   server's repository ID/name, not this compound label.
-- head: the full PR-reported source commit SHA; base: its full target comparison
-  commit SHA. Azure PR lastMergeSourceCommit and lastMergeTargetCommit provide
-  these version references. Do not use lastMergeCommit (a synthetic merge), file
-  blob IDs, branch names or commit dates as the snapshot versions.
+- head = lastMergeSourceCommit.commitId: the full source SHA, containing the
+  proposed code to review. base = lastMergeTargetCommit.commitId: the full target
+  SHA used for comparison. Keep this mapping fixed even when the proposed code
+  is worse. Neither lastMergeCommit (a synthetic merge), file blob IDs, branch
+  names nor commit dates establish these snapshot versions.
 - scope: "pr"; files: the changed paths returned for this PR, including required
   rename/deletion paths. Request the PR's change list explicitly. If a getter has
   an include-changed-files option (for example includeChangedFiles), enable it;
@@ -141,11 +145,21 @@ obtained in your own session, including when recounting lines. Retrieve again fo
 missing content, paging or the final PR freshness check. Another reviewer's source
 claims are not proof that your own reads succeeded.
 
-Label comparisons explicitly: base = snapshot.base (target reference), head =
-snapshot.head (source). Check returned versions; retrieval order is not version
-order. Pair the relevant guard/statement on both sides and trace the same trigger
-through each. Check this direction even when excluding an equivalent rewrite.
-Put concise before/after evidence in findings and important exclusions in report.
+### Keep source and comparison evidence attached
+
+Associate each returned body with its own request's repository, path and commit,
+checking returned version information when available. Batched response order,
+PR title/description, apparent code quality and another reviewer's labels cannot
+assign a side. Displayed HEAD/BASE labels describe arguments, not certified bytes.
+
+Establish what the proposed HEAD code actually does before judging the change.
+For a material finding or exclusion, use a short pair in existing evidence/report:
+HEAD (source SHA): decisive statement and behavior; BASE (target SHA): corresponding
+statement and behavior. Trace the same trigger through those statements. Derive
+"added", "removed", "fixed" or "regressed" from that pair, not from an expected
+improvement story. If a claimed HEAD safeguard exists only in BASE, it cannot
+refute a HEAD defect. Apply the same check before returning zero findings. Reuse
+already-read source; no additional output field or source-read round is required.
 
 Quality takes priority over speed. Do not skip a requested review because a PR
 is small, automated, a draft, or already has comments. Do not sample files or

@@ -335,6 +335,17 @@ reasoning is wrong: a matching string does not certify selector semantics or the
 returned revision. Substring/key-name matches do not produce labels; both labels
 remain visible if the same value matches both references.
 
+Correct snapshot SHAs do not establish correct BASE/HEAD interpretation. When a
+report reverses a change, correlate each decisive statement with its own tool
+request's path/commit and returned body, then inspect the original initial and
+verifier answers, including exclusions. The shared prompt establishes proposed
+HEAD behavior first and compares it with a short BASE evidence pair in existing
+fields. A PR title or an apparent improvement cannot assign the source side.
+For model-created test files, compare the actual contents with the claimed
+commit; a directory named `head` or passing tests is not version evidence.
+Keep a corrected final verdict separate from an initial reversal. This guidance
+adds no source-comparison code, persisted data, output fields or model rounds.
+
 
 For comment `anchorRestorations`, compare the retained response.json with the
 result.json saved anchor and original captured output. Restoration only fixes
