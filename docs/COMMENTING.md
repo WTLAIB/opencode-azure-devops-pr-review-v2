@@ -1,6 +1,13 @@
 # Human-readable Azure PR comments
 
-`/pr-comment` is a separate, opt-in workflow for turning a completed review into one PR summary and actionable inline discussions. Review prompts instruct models not to modify anything; MCP permissions are governed by OpenCode. Planning and explicit publication use the originating review's risk model: `models.review.risk` or `models.deep.risk`. This profile stays attached to the saved review even if another mode runs afterward. Comments do not rerun the reviewers or switch profiles. Check the selected model's actual cost; no role implies a pricing tier.
+`/pr-comment` turns a completed review into one PR summary and actionable inline
+discussions. Review and planning do not authorize PR writes or changes to existing
+project files; optional local verification follows the
+[project-tool policy](VERIFICATION.md). MCP permissions remain host-owned.
+Planning and publication use the originating review's risk model:
+`models.review.risk` or `models.deep.risk`. This profile stays attached to the
+saved review even if another mode runs afterward. Comments do not rerun reviewers
+or switch profiles. A configured role does not imply a pricing tier.
 
 ## Policy and rationale
 
@@ -12,7 +19,7 @@ The policy draws on three public practices:
 
 The following limits are project choices, not universal standards:
 
-| Rule | Default |
+| Rule | Behavior |
 | --- | --- |
 | Eligibility | Summary indexes confirmed findings; inline comments require high/medium-impact defects |
 | Volume | No numerical comment quota; one publishing attempt per review |
@@ -58,11 +65,65 @@ supplied finding is either in the preview or explicitly skipped with a reason,
 including low-severity findings that cannot be posted. The planner must preserve
 the verified severity; the runtime rejects both promotion and demotion instead
 of silently revising the verifier's conclusion. Preserve the trigger and all
-qualifications when translating a finding into a short comment. The model still
+qualifications when adapting a finding into a short comment. The model still
 assesses relevance and semantic duplicates; the runtime cannot prove those
 judgments or the comment's meaning correct. Inspect the preview.
 If the verified claim cannot fit faithfully within the per-comment body limit, the planner
 must explain the skip locally rather than omit essential conditions to fit.
+
+## PR summary and readable inline format
+
+Each saved plan contains one general summary with no file coordinates or finding
+ID, followed by eligible inline comments. The runtime renders counts and an
+issue/location index from corrected findings, ordered by severity. The optional
+planner `summary` text provides short review notes in outputLanguage, normally
+one or two sentences about the actual review method, test execution/results and
+evidence gaps that affect a conclusion. The section is labelled Review notes in
+English and uses the corresponding Chinese label for Chinese output. Reading
+tests, executing them and running a reduced reproduction remain distinct.
+The verifier carries useful initial-review execution reports into its existing
+report with attribution; the planner does not receive raw native test output.
+Those reports include actual pass/fail outcomes or observed behavior, rather than
+merely acknowledging that earlier results exist.
+Routine identity/anchor/discussion/deletion checks and generic merge-base caveats
+stay out of public notes; a material coverage or attribution limit still belongs
+there. These checks remain required even when omitted from the prose. Notes add
+no findings, repeated counts, private diagnostics or new model round.
+Missing/malformed optional prose uses an honest fallback, not a
+new completion gate. The summary includes the review ID, exact HEAD, disclosure
+and a unique marker; low-severity findings may appear in this index but cannot
+be promoted into inline issues. Full source/decision details remain local.
+
+A general summary is saved during planning, including preview-only commands.
+Its Azure thread is created only under `--publish`, as part of the same
+publication-attempt ledger. Existing summaries are never edited/deleted.
+The publisher returns `summaryThreadId` separately from
+`posted` finding IDs. Every required item must be reported before the batch is
+MODEL_REPORTED_POSTED; this is not independent provider verification. Partial
+writes remain visible without retry. A new version-labelled index does not
+replace or reopen existing discussions, and contains no claimed write count
+that could become false if later writes fail.
+
+Inline titles describe an observable consequence. Compact bold Summary, Evidence
+and Suggested fix labels guide reading; prose follows outputLanguage. Use the
+smallest useful example and correction; avoid redundant title repetition, long
+code blocks, confidence percentages, mandatory praise or merge recommendations.
+Basic Markdown headings, lists, tables and emphasis are used. Collapsible HTML
+or one-click patch suggestions are not required. The 1,200-character inline body
+limit still preserves essential conditions; formatting is guidance, not a new
+model-output rejection gate.
+
+Initial reviewers, the verifier and the planner compose explanations directly
+in outputLanguage. For zh-TW, prompts request natural Taiwanese engineering prose,
+clear triggers/impact/corrections and familiar Chinese descriptions, preserving
+exact identifiers, source quotes, quantities, qualifications and version direction.
+There is no English-first translation or additional polishing pass. The publisher
+still sends the saved text exactly; style guidance cannot authorize rewriting it.
+
+Design references: [Anthropic PR Review Toolkit](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/pr-review-toolkit),
+[CodeRabbit walkthroughs](https://docs.coderabbit.ai/pr-reviews/walkthroughs), and
+[PR-Agent reviews](https://docs.pr-agent.ai/tools/review/). These inform presentation,
+not this plugin's authorization, model topology or provider compatibility.
 
 ## Preview and publish
 
@@ -71,6 +132,9 @@ its report/comment-result sessions in the same process. The ID is optional;
 omitting it selects the latest completed review in that conversation. A report
 session remains associated with its own review, even after a newer review runs
 in the origin. Other conversations cannot select it.
+Two COMPLETE runs in the origin select the second, even for different PRs. A newer
+failed or PARTIAL run does not replace the cached COMPLETE review. Selection never
+combines results or skips a review because it already had a publication attempt.
 The planner may return one strict JSON plan surrounded by explanatory text or
 code examples. Local extraction accepts that unique plan and retains the notes
 in its session and optional stage diagnostics; notes are not appended to posted
@@ -90,11 +154,12 @@ eligible, nonduplicate inline comment exists.
 Publication has no separate configuration switch. Explicit `--publish` uses an
 existing saved preview, or runs the planner once and saves the validated plan
 before publishing in the same command. A separate preview command is optional.
+Repeating `/pr-comment` reruns planning without rerunning review. Once planning
+starts, the previous plan is discarded; a failed plan refresh cannot leave that
+older preview available for publication.
 An INCOMPLETE/failed plan starts no publisher and retains the completed review.
 Comment roles inherit shell/read/search permissions from OpenCode for local
 verification. They add no allow rule: host asks and denials remain effective.
-This also removes the plugin's shell-schema difference associated with a tested
-provider's rejected comment admission. It does not certify provider compatibility.
 A provider rejection creates no saved plan and starts no publisher; it does not
 invalidate the completed review. See [provider diagnostics](DEBUGGING.md#tool-observations-and-permissions).
 Set outputLanguage (for example, zh-TW) to control both final-report and comment
@@ -118,7 +183,7 @@ The preview shows the comment count, complete saved content (body, AI/model
 disclosure, marker), locations, and skip reasons even in receipt mode. There is
 no numerical comment quota: all independently actionable eligible findings can
 be included. Duplicate, low-severity or unsupported findings still need skip
-reasons; removing the count limit does not relax evidence or anchor checks.
+reasons; absence of a quota does not relax evidence or anchor checks.
 The comment planner receives successful multiline tool text captured during the same
 review, with the original request arguments beside numbered rows. Identical
 observations are shared once. This is temporary in-process review data; it needs
@@ -214,6 +279,36 @@ high/medium labels matching the verified finding, body length, changed-file path
 line count, and an explanation for every skipped eligible finding. It adds stable
 markers. These checks are not proof that source lines or findings are correct.
 
+### Ancillary notes and anchor formatting
+
+The planner may retain skipped notes for known MERGED, REJECTED or NEEDS_INFO
+verifier dispositions. They do not become publishable findings or satisfy the
+accounting requirement for an omitted eligible finding. Unknown IDs, duplicate
+entries, conflicting selections and missing reasons still fail validation.
+
+Before saving a plan, the runtime may restore leading/trailing indentation and
+one extra layer of escaped quotation marks in an anchor. It considers only the
+original captured tool output, where argument string
+values contain the exact selected path and HEAD SHA. No tool, action or argument
+field names are classified. All matching observations must agree on one literal
+range. A matching declared location stays preferred. Otherwise one uniquely
+quoted range may correct a counted location before preview and marker/offset
+calculation. The runtime never changes the claimed defect, path or commit, or
+chooses between ambiguous alternative ranges. Missing/ambiguous matches leave
+the planner text untouched; this is no additional completion gate.
+
+Argument-value matching does not prove full-file content or source provenance;
+numbered rows describe the observed text. Existing source
+verification and publication checks still apply. Original model output remains
+in response diagnostics; `anchorRestorations` records changed finding IDs, and
+result/preview diagnostics contain the saved anchors. `locationRestorations`
+retains original and restored coordinates. This cannot bypass attempted-finding
+or duplicate-discussion policy. Offsets are computed from
+that saved exact text. These formatting restorations do not alter comment body
+claims or authorize publication.
+
+### Saved text and publication attempts
+
 Before a publisher tool executes, the runtime restores a whole comment string
 with one recognized saved marker to the saved content. This prevents paraphrasing
 during copying. It does not classify tool names, actions or argument field names,
@@ -283,18 +378,19 @@ An unsupported individual finding belongs in `skipped` with a reason, allowing
 other comments to proceed. Zero eligible inline comments is a READY summary-only plan. A real
 batch-wide verification gap may return INCOMPLETE with an optional `reason`.
 The reason appears in the local receipt and private diagnostics, never in a PR
-comment. Legacy INCOMPLETE output without a reason explicitly says the model did
+comment. INCOMPLETE output without a reason explicitly says the model did
 not explain the gap; the plugin does not invent a cause. No failure launches an
 automatic repair request. A fresh explicit comment command may replan the same
 review if no publication attempt occurred.
 
 ## Customization
 
-Installed instructions are in plugins/azpr-v2/prompts/comment-policy.md,
-comment-plan.md, and comment-publish.md. Review-only instructions remain in
-common.md. Use outputLanguage for localization rather than translating prompts.
-Changing installed settings requires a restart; updating replaces prompt files
-without retaining old copies. Save any policy customization you want to keep
+Installed comment instructions are in `plugins/azpr-v2/prompts/comment-policy.md`,
+`comment-plan.md`, and `comment-publish.md`. Review stages also have shared and
+role-specific prompts; composed language and project-tool policies come from
+`config.mjs`. Use `outputLanguage` for localization rather than translating prompts.
+Restart to load updated settings or instructions. Replacement installs overwrite
+prompt files without retaining old copies. Save any policy customization you want to keep
 before updating. Never commit private settings, model IDs, or PR data.
 
 ## Acceptance test before real use
@@ -302,8 +398,9 @@ before updating. Never commit private settings, model IDs, or PR data.
 1. Use a disposable PR, OpenCode 2.0.22 on Ubuntu 22.04 with official MCP 2.9.0, and approved model/MCP services.
 2. Verify host asks/denies remain in effect for all private stages.
 3. Confirm the final report and preview use outputLanguage and the requested
-   review context. Inspect actual tool history: review and preview should make
-   no modifications, but this is not guaranteed by the plugin.
+   review context. Inspect actual tool history for unauthorized PR writes or
+   changes to existing project files, and distinguish permitted temporary
+   reproductions. Prompt policy is not a write firewall.
 4. Publish the saved summary and eligible inline comments. Check their actual
    Azure target, exact text, markers and distinct thread IDs. Verify inline
    anchors and that the summary has no file context; do not rely solely on
@@ -317,86 +414,3 @@ before updating. Never commit private settings, model IDs, or PR data.
 
 Offline tests exercise orchestration and report/plan validation with mocks, not
 real-model policy compliance, Azure rendering, or live server compatibility.
-
-
-### Ancillary notes and anchor formatting
-
-The planner may retain skipped notes for known MERGED, REJECTED or NEEDS_INFO
-verifier dispositions. They do not become publishable findings or satisfy the
-accounting requirement for an omitted eligible finding. Unknown IDs, duplicate
-entries, conflicting selections and missing reasons still fail validation.
-
-Before saving a plan, the runtime may restore leading/trailing indentation and
-one extra layer of escaped quotation marks in an anchor. It considers only the
-original captured tool output, where argument string
-values contain the exact selected path and HEAD SHA. No tool, action or argument
-field names are classified. All matching observations must agree on one literal
-range. A matching declared location stays preferred. Otherwise one uniquely
-quoted range may correct a counted location before preview and marker/offset
-calculation. The runtime never changes the claimed defect, path or commit, or
-chooses between ambiguous alternative ranges. Missing/ambiguous matches leave
-the planner text untouched; this is no additional completion gate.
-
-Argument-value matching does not prove full-file content or source provenance;
-numbered rows describe the observed text. Existing source
-verification and publication checks still apply. Original model output remains
-in response diagnostics; `anchorRestorations` records changed finding IDs, and
-result/preview diagnostics contain the saved anchors. `locationRestorations`
-retains original and restored coordinates. This cannot bypass attempted-finding
-or duplicate-discussion policy. Offsets are computed from
-that saved exact text. These formatting restorations do not alter comment body
-claims or authorize publication.
-
-
-## PR summary and readable inline format
-
-Each saved plan contains one general summary with no file coordinates or finding
-ID, followed by eligible inline comments. The runtime renders counts and an
-issue/location index from corrected findings, ordered by severity. The optional
-planner `summary` text provides short review notes in outputLanguage, normally
-one or two sentences about the actual review method, test execution/results and
-evidence gaps that affect a conclusion. The section is labelled Review notes in
-English and uses the corresponding Chinese label for Chinese output. Reading
-tests, executing them and running a reduced reproduction remain distinct.
-The verifier carries useful initial-review execution reports into its existing
-report with attribution; the planner does not receive raw native test output.
-Those reports include actual pass/fail outcomes or observed behavior, rather than
-merely acknowledging that earlier results exist.
-Routine identity/anchor/discussion/deletion checks and generic merge-base caveats
-stay out of public notes; a material coverage or attribution limit still belongs
-there. These checks remain required even when omitted from the prose. Notes add
-no findings, repeated counts, private diagnostics or new model round.
-Missing/malformed optional prose uses an honest fallback, not a
-new completion gate. The summary includes the review ID, exact HEAD, disclosure
-and a unique marker; low-severity findings may appear in this index but cannot
-be promoted into inline issues. Full source/decision details remain local.
-
-A summary is created once per completed review only under `--publish`, as part
-of the same saved plan and publication-attempt ledger. Existing summaries are
-never edited/deleted. The publisher returns `summaryThreadId` separately from
-`posted` finding IDs. Every required item must be reported before the batch is
-MODEL_REPORTED_POSTED; this is not independent provider verification. Partial
-writes remain visible without retry. A new version-labelled index does not
-replace or reopen existing discussions, and contains no claimed write count
-that could become false if later writes fail.
-
-Inline titles describe an observable consequence. Compact bold Summary, Evidence
-and Suggested fix labels guide reading; prose follows outputLanguage. Use the
-smallest useful example and correction; avoid redundant title repetition, long
-code blocks, confidence percentages, mandatory praise or merge recommendations.
-Basic Markdown headings, lists, tables and emphasis are used. Collapsible HTML
-or one-click patch suggestions are not required. The 1,200-character inline body
-limit still preserves essential conditions; formatting is guidance, not a new
-model-output rejection gate.
-
-Initial reviewers, the verifier and the planner compose explanations directly
-in outputLanguage. For zh-TW, prompts request natural Taiwanese engineering prose,
-clear triggers/impact/corrections and familiar Chinese descriptions, preserving
-exact identifiers, source quotes, quantities, qualifications and version direction.
-There is no English-first translation or additional polishing pass. The publisher
-still sends the saved text exactly; style guidance cannot authorize rewriting it.
-
-Design references: [Anthropic PR Review Toolkit](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/pr-review-toolkit),
-[CodeRabbit walkthroughs](https://docs.coderabbit.ai/pr-reviews/walkthroughs), and
-[PR-Agent reviews](https://docs.pr-agent.ai/tools/review/). These inform presentation,
-not this plugin's authorization, model topology or provider compatibility.

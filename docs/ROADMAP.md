@@ -1,105 +1,80 @@
 # Roadmap
 
 Target: OpenCode CLI 2.0.22, official Azure DevOps MCP 2.9.0 and Ubuntu 22.04.
-This independent repository implements only V2. Earlier repository results are
-historical evidence and do not certify this adapter.
+This repository implements V2 only. [Current validation](VALIDATION.md) records
+the latest tested runtime; [validation history](VALIDATION_HISTORY.md) preserves
+earlier results without treating retired behavior as current requirements.
 
 ## Implemented
 
-- V2 plugin definition, native command/agent transforms and scoped hooks.
-- Flat V2 session creation, literal inbox correlation, idle/context validation,
-  role/model binding, bounded interruption and non-resuming report notices.
-- Independent two-initial-plus-verifier workflows; JSON recovery and literal
-  review retention, explicit quality limitations, and final evidence/version/ID
-  assessment. Every COMPLETE result can enter same-origin comment preview;
-  initial disclosures do not impose a second eligibility gate.
-- Null default timeout, manual cancellation, lifecycle cleanup, exact-role
-  validation and private native guards, including CodeMode execute.
-- Unique review-envelope extraction from prose, JSON fences and code examples,
-  with all surrounding text retained and competing review objects left ambiguous.
-- Local punctuation/key/shape recovery, continuation after incomplete initials,
-  visible UNREVIEWED decisions and readable partial reports without extra model
-  requests. Explicit comment preview/publish retains uncertain-attempt lockout.
-- V2 package installer, current-layout defaults, conflict refusal, rollback and
-  archival removal. No V1 migration, templates or installed-user configuration edit.
-- Offline contract/installation/session/runtime tests and an isolated exact-host
-  fixture using deterministic local fake services. Fresh and replacement package
-  discovery passed on Ubuntu 22.04.5 with OpenCode 2.0.22; see VALIDATION for scope.
-- Shared V2 model-request authorization across primary and auxiliary kinds;
-  private compaction fails before a lossy summary request. Ordinary auxiliary
-  behavior is preserved, including across the host restart regression.
-- Cancellable catalog/settings preflight, selected-model tool-capability checks,
-  MCP connection diagnostics, and value-free request-kind/retry observations.
-- Pinned exact-host fresh/replacement fixtures included in CI in addition to
-  offline tests. Local fixture success and a completed CI run are separate evidence.
-- Controlled live reviews completed with official MCP 2.9.0 and the selected
-  models. Source/version fidelity is checked separately from review quality;
-  successes, partial inputs and earlier failures are retained. See VALIDATION
-  for the exact source revision, findings and remaining limitations.
-- Architecture boundaries and test-quality directions in both existing initial
-  roles, with design tradeoffs and test-coverage advice retained in the report.
-  No topic checklist, additional model round or completion gate is introduced.
-- Comment previews include all eligible findings without a numerical quota;
-  explicit `--publish` prepares and saves a plan if needed, then publishes in one
-  command. The review ID is optional within its origin/report session, and report
-  footers include exact commands. Complete empty discussion collections do not
-  block planning; model-supplied failure reasons remain visible. No config
-  switch is needed. Host auxiliary selections are always preserved. Obsolete settings and
-  model-authored output-repair paths are removed; `/pr-check` stays standalone.
+- Native V2 commands, hidden role/model-bound sessions, literal inbox correlation,
+  active grants, cancellation and non-resuming report notices. Host-owned ordinary
+  agents, permissions and auxiliary model choices remain intact.
+- Two independent full-scope initial reviewers followed by one source-verifying
+  verifier in both normal and deep modes. Architecture, behavioral tests,
+  documentation promises, type invariants and failure visibility are part of
+  their existing scope; no specialist model rounds are added.
+- Local review-envelope and syntax/key/shape recovery, literal retention of
+  ambiguous or partial output, explicit unavailable-stage notices and original-ID
+  accounting. Missing decisions remain UNREVIEWED. Every validated COMPLETE review
+  can enter same-origin comment planning despite disclosed initial limitations.
+- Optional native project verification under inherited host permissions. MCP
+  supplies remote PR source; no checkout, clone, repository mapping, custom
+  execution platform or mandatory test quota is required.
+- One deterministic issue index in the report and saved PR summary, with optional
+  reader-facing review notes. Existing stages author directly in outputLanguage;
+  natural prose and attributed execution results are prompt guidance, not an
+  additional translation or polishing stage.
+- Compact Summary/Evidence/Suggested fix inline comments for verified high/medium
+  findings. Low findings remain in the index. No numerical comment quota or
+  automatic promotion of severity is used.
+- Optional preview followed by explicit publication, or direct
+  `/pr-comment --publish` that prepares and saves a plan first. Omitted IDs select
+  the latest COMPLETE review in the origin, or the review associated with a result
+  session. Saved content, explicit authority and uncertain-attempt lockout remain.
+- Complete-empty-discussion guidance, visible optional planning-failure reasons,
+  captured review text for planning, numbered source displays and narrow literal
+  anchor restoration. These features do not certify source provenance or classify
+  MCP operations.
+- Latest-20 completed-review cache in process memory, no time TTL, no authority
+  restored from history/debug files after restart. Optional diagnostics preserve
+  visible failures without recording reasoning or full host configuration.
+- Source-only standalone readiness, cancellable model/MCP preflight, a bounded
+  direct-tool registration observation period, exact-role/native-tool guards and
+  private auxiliary-request rejection, including after restart.
+- V2 installation, current-layout settings preservation, conflict refusal,
+  rollback and archival removal; offline tests and exact-host fresh/replacement
+  fixtures in CI. Controlled live review/publication acceptance is recorded
+  separately from fake-service and CI results.
 
-## Project verification
+## Remaining validation and quality work
 
-Initial reviewers and the verifier choose tests or other checks in the current
-OpenCode project, using native shell/read/search with inherited host permissions.
-MCP supplies remote source; no checkout, clone or local Git history is required.
-Optional experiments use needed retrieved files with commit provenance in fresh
-temporary directories, or an existing checkout whose state is explicitly checked.
-There is no custom execution platform, repository mapping, extra review round or
-mandatory test quota. Failed or unavailable tests preserve useful source review.
-The real project can be affected by permitted commands; tested versions, local
-changes and cancellation limitations must be disclosed. See
-[project verification](VERIFICATION.md).
-
-## Acceptance still required
-
-1. Repeat environment acceptance for other installations/providers; the observed
-   MCP 2.9.0/SDK 15.1.3 connection and selected-model result apply to the tested
-   environment only. Provider schema admission remains a separate constraint.
-2. With separate authorization, assess additional model samples and PRs against
-   the retained factual, tool-policy and presentation limitations. Do not treat
-   a COMPLETE workflow as general model-quality acceptance.
-3. Verify actual TUI notice rendering and recovery navigation. Queue acknowledgment
-   and headless content inspection do not establish every UI presentation detail.
-4. Expand PR scale/language/model coverage only with evidence and consent. A single
-   successful review never certifies arbitrary enterprise PRs or later versions.
+1. Test additional authorized PRs, languages and model profiles. Priorities include
+   BASE/HEAD interpretation, decisive arithmetic, original-ID completeness,
+   severity consistency and accurate attribution of reproduced behavior.
+2. Assess review-note usefulness and natural language across more examples,
+   including actual tests, reduced reproductions and missing evidence. Avoid
+   generic process inventories or summaries that erase earlier execution results.
+3. Verify actual TUI notice rendering, result navigation and rendered Azure
+   comments. Queue acknowledgement and API content/coordinate checks have narrower
+   scope than a user-interface test.
+4. Repeat environment acceptance for other installations/providers and any future
+   host/MCP upgrade. Provider admission, quotas, source pagination and context
+   limits need their own evidence; the current small-PR samples are not broad
+   compatibility or reliability certification.
 
 ## Quality principles
 
-Accept documented model/server limitations. Diagnose raw evidence before adding
-prompt text for an existing rule. Test overclaims about permanence/recovery, equal
-instants represented by different timezone offsets, and repeated report content.
-Keep fixes consistent across findings and distinguish exact source execution from
-modified reproductions. Instruction changes are not measured model-quality gains;
-later authorized samples must be audited against the original evidence.
-Prefer usable results with honest limitations over discarding reviews for format
-or quality gaps. Do not add model/PR/MCP-version exceptions, more model rounds,
-mandatory fields, hidden evidence caps or fabricated evidence. Keep execution
-integrity and publication checks separate from review delivery. Preserve historical
-failed runs and private data.
+Diagnose original evidence before adding instructions for a rule the model already
+ignored. Preserve failed samples, initial errors and partial publications. Separate
+execution success, source fidelity, factual quality and presentation; a COMPLETE
+status or successful write proves none of the others by itself.
 
-Real reviews, publication, installed-host upgrades and repository publication
-require authorization for the concrete action. They are not implied by tests.
+Prefer prompt clarity and useful results with honest limitations. Keep exact code
+and version provenance, coherent corrections and attributed test outcomes. Do not
+add model/PR/MCP-version exceptions, extra rounds, mandatory fields, hidden budgets,
+comparison machinery or a second completion gate to conceal model limitations.
 
-
-## Review readability and targeted coverage
-
-Keep two full-scope initials and one verifier. Explicitly inspect affected
-documentation promises, type construction/mutation invariants and failure
-visibility, while retaining existing architecture and behavioral-test review.
-Useful optional simplification advice stays in the local report; no automatic
-code edits, specialist rounds, numeric scores or mandatory praise are introduced.
-
-Completed reports lead with a deterministic issue index. Comment publication
-uses a saved general PR summary plus labelled inline explanations. Assess both
-workflow reliability and factual examples in authorized live acceptance; a
-successful write is not proof of a correct claim.
+Native commands have real host authority; the plugin is not a sandbox. No live
+review, publication, deletion, installed-host upgrade or repository publication is
+implied by a local test. Follow the user's current authorization for each action.

@@ -8,13 +8,13 @@ establish provider acceptance, Azure source validity, or report quality.
 ## Enable local diagnostics
 
 Edit the installed `plugins/azpr-v2/settings.json`, keeping the existing model
-choices. For example, change these fields in the current settings object:
+choices and output language. For example, change these fields in the current
+settings object:
 
 ```json
 {
   "debug": { "enabled": true, "directory": "" },
-  "returnReport": "full",
-  "outputLanguage": "en"
+  "returnReport": "full"
 }
 ```
 
@@ -75,11 +75,13 @@ responses, pagination gaps and read errors remain distinct. Thread IDs and sourc
 coordinates do not prove that an existing comment survives. No runtime Azure
 response classifier or blanket permission override is involved.
 
-Run IDs address the latest 20 completed reviews in process memory. Restart or
-eviction removes their plans and attempt state without removing host history or
+Only COMPLETE review IDs select entries in the latest-20 review cache; check and
+comment command IDs do not identify a new review. Restart or eviction removes
+their plans and attempt state without removing host history or
 debug files. Those files are retained with no automatic purge and cannot restore
-publication authorization. `returnReport: full` displays the result and its exact
-comment commands; it does not persist a publishable review or change eligibility.
+publication authorization. Both full reports and COMPLETE receipts provide exact
+comment commands. `returnReport: full` also displays the complete report; it does
+not persist a publishable review or change eligibility.
 
 ## Session completion and context limits
 
@@ -108,7 +110,7 @@ compares timestamp duration with monotonic timing; a large difference is a clue
 for investigating suspension or clock changes, not proof of the interruption
 cause and not permission to retry or claim a successful response.
 
-Private compaction now fails at the V2 model-request boundary before any summary
+Private compaction fails at the V2 model-request boundary before any summary
 request is sent. Transient `session.generate` and title requests are also denied
 for private reviewers. A missing exact input remains a failure even if a later
 host or plugin changes compaction behavior. Ordinary sessions are unaffected.
@@ -130,7 +132,7 @@ Offsets are zero-based UTF-16 positions in the selected JSON body. Inspect
 `reviewWarnings` and the original response for quality or structural gaps.
 Extra fields remain available; known key spelling and enum case can be normalized.
 `extract-review-envelope` records selection of a unique review object from prose
-or code fences. Braces in ordinary code examples no longer block selection.
+or code fences. Braces in ordinary code examples do not block selection.
 Surrounding text remains attached; competing review candidates or duplicate
 keys retain the complete literal output instead.
 A missing, malformed or duplicate initial/new-verifier ID receives a runtime tracking ID rather than
@@ -144,8 +146,8 @@ its available observations appear in a PARTIAL report. A failed verifier executi
 retains available initial observations as an incomplete draft. Missing details do
 not become guessed evidence, a confirmed finding or a fabricated fresh SHA.
 
-COMPLETE means the final verifier passed its evidence and version checks and the
-review can enter comment preview in the original session/process. Initial
+COMPLETE means the final verifier passed structured evidence and version checks,
+and the review can enter comment preview in the original session/process. Initial
 limitations do not impose another eligibility gate. Read the limitations even
 when the workflow completes; preview still rechecks anchors and duplicates. A partial/stale report or incomplete
 draft includes its body even when returnReport is receipt. Synthetic notices use
@@ -169,7 +171,7 @@ are not repaired by asking a formatting model to regenerate a review.
 
 Initial reviewers, the verifier and comment roles use native shell/read/search under OpenCode's
 normal permissions. Check the active project's host rules and pending approval
-requests when execution is unavailable. Comment roles now inherit those same
+requests when execution is unavailable. Comment roles inherit those same
 project permissions; standalone readiness still denies shell/search. All private roles deny CodeMode `execute`, native editing, delegation
 and public web tools. Set MCP `codemode: false` for direct tools. See
 [the CodeMode boundary and MCP limitations](AZURE_MCP.md).
@@ -185,32 +187,13 @@ metadata; raw provider error messages and response bodies stay in private eviden
 A zero observed-tool count describes the admitted assistant context, not a network
 or billing audit. Check the original error before attributing a 401/403 to Azure.
 
-On 2026-10-05, isolated comment-plan admission probes on 2.0.22 held the selected
-model, role, system and input constant. With MCP discovery settled, exposing shell
-under an ask permission succeeded; removing shell under deny produced HTTP 403.
-Both probes executed zero tools. An earlier deny probe also failed, but MCP was
-still connecting, so its tool catalog is not a controlled comparison. This
-demonstrates compatibility sensitivity in that tested provider/profile, not the
-provider's internal rule or a requirement to execute shell. Those probes kept production
-comment-role denials intact. A later five-cycle comparison again saw three
-provider rejections before any comment tool call. Following the user's request
-to relax unnecessary restrictions, comment roles now inherit host project-tool
-permissions, including real shell execution. This is not an isolation guarantee;
-host asks and denials still apply. Never spoof client identity. End-to-end
-provider/publication acceptance still requires a separately authorized live test.
-An alternative provider/model needs explicit selection and a cost check.
-
-Historical note, before native project verification: an authorized 2.0.22 live test received a provider HTTP 403 before any tool call
-with `shellToolPermission: "deny"`. The same selected models were admitted after
-using the existing `"ask"` option in an isolated test profile; the runtime guard
-still blocked shell execution and the installed personal settings stayed intact.
-This matches [upstream reports about permission-dependent free-tier rejection](https://github.com/anomalyco/opencode/issues/51241).
-It is a provider admission limitation, not an Azure authentication failure or
-proof that shell ran. Inspect the original error before changing permissions;
-never change models or spoof client headers to recover. The old shellToolPermission
-setting is now removed. Review roles inherit actual host permissions, while
-standalone readiness retains native execution denials. The comment-role policy
-has since changed as described above.
+Provider admission can depend on the exposed tool schema and host permissions.
+Earlier controlled probes are preserved in
+[validation history](VALIDATION_HISTORY.md#historical-provider-permission-probes);
+they do not justify restoring removed settings or bypassing a denial. Current
+comment roles inherit real host project-tool permissions. Check actual catalog
+availability and provider access separately, without spoofing client identity or
+silently changing models. A catalog entry is not proof of usable quota or cost.
 
 If initial snapshots disagree, inspect the original metadata and labels before
 retrying. The common label uses `organization/project-id/repository-id`, with
@@ -283,11 +266,11 @@ cancellation stops acceptance and the plugin's grants, while cleanup explicitly
 interrupts and waits. Preserve uncertainty if that cleanup fails. There is no
 plugin spending cap, iteration cap, or stage-character cap. Host context limits,
 MCP pagination, server-side truncation, and service limits remain independent.
+
 ## Project verification
 
-There is no `azpr_verify` tool or `verification` configuration. OpenCode's native
-tools operate in the current project. Inspect the child session's location,
-inherited permissions, approval requests and actual tool result. No plugin repo
+OpenCode's native tools operate in the current project. Inspect the child session's
+location, inherited permissions, approval requests and actual tool result. No plugin repo
 mapping or root filesystem is needed. A local checkout or Git history is optional;
 MCP supplies the remote source. Models may save needed retrieved files in fresh
 temporary directories, recording source commits and any reproduction changes.
@@ -298,19 +281,17 @@ Distinguish tool execution failure from a test command's nonzero exit. Read the
 output and tested state before interpreting either; a shell pipeline can return
 zero even when a test fails. Neither creates a new review completion requirement.
 The host session retains native command results; debug stage records expose tool
-counts and errors. The custom `verification-N.json` ledger is historical only.
+counts and errors. There is no separate plugin execution ledger.
 See [project verification](VERIFICATION.md) for permissions and cancellation scope.
 
 ## Connected MCP before tool registration
 
-A controlled five-cycle comparison observed initial contexts with only native
-tools even though MCP status was connected; later contexts exposed the server's
-tools. In the pinned host, connection and tool-registry reconciliation are separate,
+In the pinned host, connection and tool-registry reconciliation are separate,
 and the public tool-list API reads the current registry. See the pinned host
 [registration implementation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/tool/mcp.ts)
 and [catalog implementation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/tool.ts).
 A single catalog read is not a registration barrier. Before inference, readiness
-now observes the public tool catalog for direct tools in connected servers' host
+observes the public tool catalog for direct tools in connected servers' host
 namespaces, using the pinned host's namespace encoding. It polls local metadata
 every 50 ms for at most five seconds, returning immediately when tools appear.
 This is a cancellable startup grace period, not a model iteration/time limit or
@@ -322,6 +303,7 @@ remain usable. Inspect original contexts and tool history when a provider still
 acts as though tools are missing. Never troubleshoot by exposing credentials or
 printing the host configuration; native shell retains ordinary host authority.
 
+## Source versions and anchors
 
 Planner request diagnostics include `reviewToolText`: already observed successful
 review tool text with arguments and numbered display. This can contain source
@@ -346,14 +328,12 @@ commit; a directory named `head` or passing tests is not version evidence.
 Keep a corrected final verdict separate from an initial reversal. This guidance
 adds no source-comparison code, persisted data, output fields or model rounds.
 
-
 For comment `anchorRestorations`, compare the retained response.json with the
 result.json saved anchor and original captured output. Restoration only fixes
 indentation/quote display and uniquely locatable counted lines. It cannot certify
 full-file content or provenance. `locationRestorations` keeps original/restored
 coordinates; ambiguous matches stay untouched. Known excluded verifier IDs can appear in skipped
 notes without enabling a comment for those IDs.
-
 
 ## Summary and inline publication
 

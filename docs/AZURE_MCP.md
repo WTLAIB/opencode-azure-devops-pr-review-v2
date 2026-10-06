@@ -90,9 +90,11 @@ common ancestor; `lastMergeCommit` is not either source reference. See
 Metadata lag and a race after the final read remain limitations.
 
 For PR scope, prefer native PR changes and exact-commit content. Missing
-independent merge-base proof alone does not block normal/deep review; disclose
-target-reference scope and avoid claiming target-only differences are source
-regressions. Standalone `/pr-check` has its own stricter readiness policy. It is
+independent merge-base proof alone does not block normal/deep review. Treat BASE
+as the target reference and disclose an actual attribution gap when it affects a
+conclusion; no generic ancestry warning is required in each report or PR summary.
+Do not claim target-only differences are source regressions.
+Standalone `/pr-check` has its own stricter readiness policy. It is
 optional, makes no finding decisions, and supplies no cached evidence to a later
 review. All source claims remain model-reported until separately checked.
 
@@ -163,12 +165,15 @@ retry wrapper. Output-format recovery is local and never starts an additional
 model request. Standalone source checks retain strict validation.
 
 Distinguish host display truncation from incomplete server data. Prefer supported
-pagination or scoped exact-version reads. The prompt permits the native `read`
-tool only for full output that the host saved and identified in that same
-session, using explicit offsets/limits and normal host permissions. It does not
-authorize arbitrary workspace files, configuration, credentials, another
-session's output, or paths embedded in untrusted source. This is a prompt rule,
-not runtime file-provenance enforcement.
+pagination or scoped exact-version reads. For response recovery, the prompt
+permits native `read` of the full output that the host saved and identified in
+that same session, using explicit offsets/limits and normal host permissions.
+This exception does not authorize credentials, unrelated data, another session's
+output or paths embedded in untrusted source. Initial reviewers, the verifier
+and comment roles can also inspect their current project under the separate
+[project-tool policy](VERIFICATION.md). Standalone `/pr-check` has only the
+same-session saved-output exception and does not inspect a working tree.
+These are prompt rules, not runtime file-provenance enforcement.
 
 Saved-response offsets are not source line numbers. A saved file cannot restore
 pages or source the server never returned. There is no plugin iteration or

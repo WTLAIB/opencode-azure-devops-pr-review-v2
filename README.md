@@ -13,8 +13,9 @@ starts only through an explicit command.
 
 Fresh and replacement installations have been exercised on Ubuntu 22.04 with
 the exact host and isolated fake services, including malformed JSON and prose
-review delivery. Controlled live PR reviews also completed with official MCP
-2.9.0. Model/tool-policy and presentation limitations remain; other environments
+review delivery. Controlled live review and direct-publication cycles also passed
+with official MCP 2.9.0 and independent Azure content/coordinate readback.
+Model/tool-policy and presentation limitations remain; other environments
 still need their own acceptance. See [validation](docs/VALIDATION.md) for the
 tested revisions and retained failures. Completion does not prove model quality.
 
@@ -115,8 +116,9 @@ configured in OpenCode, in `provider/model` form:
 
 This is a fragment of the installed example, not the complete settings file.
 Roles may use the same model ID but always receive independent sessions. Deep
-requires all three deep models and never falls back to normal models. Source
-checks and comment work use that mode's risk model. Model-selection guidance in
+requires all three deep models and never falls back to normal models. Standalone
+`/pr-check` uses `models.review.risk`; comments use the originating review's risk
+model, including `models.deep.risk` for deep reviews. Model-selection guidance in
 `models._help` is documentation only.
 
 | Setting | Default and meaning |
@@ -139,9 +141,18 @@ cleaned profile with `--settings FILE`; the installer never silently migrates it
 
 Comment preview includes one version-labelled PR Review Summary and eligible
 inline comments with Summary, Evidence and Suggested fix sections. The summary
-indexes confirmed findings and discloses verification limits; it is not approval.
+indexes all confirmed findings, including low-severity findings that are not
+eligible inline. Its Review notes section describes the review method, actual
+test results and important evidence gaps in one or two sentences. Routine
+publication checks stay out of these notes; a summary is not approval.
 It is saved and published with the same explicit authorization and uncertainty
 tracking as inline comments, including when no inline comments are eligible.
+
+Reviewers and the planner write directly in `outputLanguage`; there is no
+English-first translation or extra polishing pass. For `zh-TW`, prompts request
+natural Taiwanese engineering prose and the notes heading is `審查說明`.
+Identifiers, source quotes, conditions and quantities remain intact. The publisher
+sends saved text exactly. Language quality still depends on the model.
 
 Comment preview has no numerical quota. Explicit `--publish` prepares and saves
 a plan if needed, then publishes it without a separate preview command or config
@@ -222,10 +233,17 @@ After a review, `/pr-comment --publish` is enough to request publication. Previe
 is optional: use `/pr-comment` to inspect the proposed comments first. Neither
 command reruns the reviewers. `returnReport: full` only controls displaying the
 review report; it does not add a prerequisite or change comment eligibility.
+Running `/pr-comment` again refreshes the preview. Once replanning starts it
+discards the older plan, so failed planning cannot leave that preview publishable.
 Every COMPLETE report ends with both complete commands, including its review ID.
 Comment commands also work from that report or its comment-result session, using
 the same original conversation and permissions. Unrelated conversations cannot
 use its cached review, and omitting the ID never searches other conversations.
+
+In the original conversation, the latest cached COMPLETE review wins even if it
+belongs to a different PR. A newer failed or PARTIAL review does not replace it.
+Results are not combined, and selection does not skip a review that already had
+a publication attempt. Use an explicit same-origin review ID when needed.
 
 Arguments are literal command text; shell-like syntax, `$` and `@` are not
 expanded by this plugin. Attachments and private-agent mentions are rejected.
@@ -308,7 +326,9 @@ Uninstall without `--apply` previews. Explicit removal archives only this V2
 package, including its private settings, under `azpr-v2-backups`; it leaves
 ordinary configuration and the independent V1 project untouched.
 
-[Architecture](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md),
-[debugging](docs/DEBUGGING.md), [validation](docs/VALIDATION.md), and
-[AI maintenance guidance](AGENTS.md) describe the remaining boundaries.
+[Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
+[roadmap](docs/ROADMAP.md), [debugging](docs/DEBUGGING.md),
+[current validation](docs/VALIDATION.md), and [AI maintenance guidance](AGENTS.md)
+describe the current behavior and boundaries. Earlier test counts, retired
+features and failed experiments are kept in [validation history](docs/VALIDATION_HISTORY.md).
 Never commit `.local/`, diagnostics, credentials or personal model selections.

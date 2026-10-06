@@ -119,7 +119,6 @@ no plugin model request and cannot recover cancellation, failed final sessions,
 tool execution between fragments or missing admission. Check/comment roles keep
 the strict transport path.
 
-
 Recognized provider failures expose only the HTTP error status and the number
 of tool calls observed in admitted assistant context. Authentication/authorization
 statuses point to provider access and role/tool compatibility, not JSON repair.
@@ -184,8 +183,8 @@ MCP remains the source for remote PR identity, paths and exact-commit content;
 no local Git repository or history is required. Models do not clone/fetch for
 review. They may save needed MCP-returned files in fresh temporary directories
 for experiments, preserving provenance and distinguishing modified reproductions.
-This replaces the custom isolated executor; no repository mappings, root filesystems, subprocess launcher,
-resource settings or runtime verification ledger remain. Relevant commands and
+No repository mapping, root filesystem, custom execution tool or separate
+verification ledger is required. Relevant commands and
 observations belong in the existing review evidence/report fields, with original
 tool results in the host session. The verifier must attribute initial observations
 and establish the PR evidence independently.
@@ -216,9 +215,10 @@ remapped by this recovery. Missing evidence is never fabricated. The verifier is
 all candidates independently. Omitted original decisions become explicit runtime
 UNREVIEWED rows, with the full original observations shown in the report.
 
-Strict validators assess structured evidence, full identity/versions, coverage,
-source/counterevidence and original-ID decisions. Review quality defects produce
+Runtime validators check supplied structured evidence, full identity/versions,
+coverage and original-ID decisions. Missing required evidence produces visible
 limitations and a readable PARTIAL result instead of throwing away the review.
+These checks do not independently read source or prove the model's claims true.
 A model-declared stale review or changed current SHAs remains STALE. An absent
 snapshot may be displayed from initial metadata, explicitly labelled as such;
 missing current SHAs are never copied from an older snapshot.
@@ -265,24 +265,28 @@ attribution. Preview displays the full comment count without a numerical quota.
 Explicit --publish reuses a saved preview or runs planning and publication in one
 workflow. The planner must finish with a validated saved plan before any publisher
 starts. The stages share the command's cancellation/deadline and origin/PR locks;
-no additional reviewer or automatic retry is introduced. Plans include a deterministic summary index and optional reader-facing review
-notes from the existing planner: actual checks/tests and material evidence limits,
+no additional reviewer or automatic retry is introduced. Repeating preview runs
+the planner again and clears the previous plan before that refresh; publishing
+reuses an existing saved plan. Plans include a deterministic summary index and
+optional reader-facing review notes from the existing planner: actual checks/tests and material evidence limits,
 excluding routine publication bookkeeping. Shared language instructions request
 natural explanations during existing stages, without a translation model pass.
-No inline findings still permits publishing the
-saved summary. It has its own marker/attempt state, no fake finding or anchor,
+No inline findings still permits publishing the saved summary.
+It has its own marker/attempt state, no fake finding or anchor,
 and a separate model-reported thread ID. Missing summary confirmation prevents
 a successful batch result. No additional model request or persistent storage is
-needed. A planning failure retains
-the review and exposes an optional model-supplied reason, or states that none was
-provided. The report footer supplies exact direct/preview commands and memory
+needed. Verifier instructions require useful earlier execution outcomes in the
+report with attribution; the planner does not receive initial reports or raw
+native execution output. A planning failure retains the review and exposes an
+optional model-supplied reason, or states that none was provided.
+The report footer supplies exact direct/preview commands and memory
 retention limits. No separate config switch applies.
 The saved plan adds line-local character offsets derived from its existing
 anchor. This does not add fields the planner must generate or inspect MCP schemas
 in code; the publisher translates the saved positions to the available tool.
-Publisher input contains only the target, snapshot, output language and saved
-comments. Full report/finding/source observations remain planner context. Current
-PR and discussion checks apply once to the batch; preview-verified immutable
+Publisher input contains only the target, snapshot, output language, saved
+general summary and inline comments. Full report/finding/source observations
+remain planner context. Current PR and discussion checks apply once to the batch; preview-verified immutable
 anchors need no mandatory reread. Models read further when evidence is missing
 or uncertain, without adding a stage or a request budget.
 Before publication, mark every planned item uncertain; results can only update
@@ -291,6 +295,16 @@ explicit error result during publication synchronously revokes grants before
 interruption is awaited. This stops subsequent authorized model/tool requests
 without classifying MCP actions; it cannot recall calls already dispatched.
 No automatic retry or independent provider verification is claimed.
+
+Successful multiline review tool text is retained with its observed request
+arguments for same-origin comment planning. The existing display
+eligibility excludes flagged failures, truncation and unsupported wrappers;
+native project-tool output is excluded. Identical tool/arguments/raw-text
+observations are deduplicated, with no source-content classification or new
+model request. The completed-review cache owns this temporary data and drops it
+with the review; no checkout, persisted cache or repository map is introduced.
+Captured text is data, not source/commit certification or a new eligibility gate.
+Initials remain independent and the verifier retains its existing source checks.
 
 Optional diagnostics persist requests, visible answers, stage results and rendered
 reports under private permissions; never provider reasoning or full host config.
@@ -314,14 +328,3 @@ that source/API and an isolated actual-host fixture before changing the target.
 The [V2 plugin guide](https://opencode.ai/v2/docs/build/plugins/) describes the
 public model; exact-version source and runtime evidence determine this adapter's
 claims. Model/provider/MCP/OS acceptance remains separate from host API tests.
-
-
-Successful multiline review tool text is retained with its observed request
-arguments for same-origin comment planning. The existing display
-eligibility excludes flagged failures, truncation and unsupported wrappers;
-native project-tool output is excluded. Identical tool/arguments/raw-text
-observations are deduplicated, with no source-content classification or new
-model request. The completed-review cache owns this temporary data and drops it
-with the review; no checkout, persisted cache or repository map is introduced.
-Captured text is data, not source/commit certification or a new eligibility gate.
-Initials remain independent and the verifier retains its existing source checks.

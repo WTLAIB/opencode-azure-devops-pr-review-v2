@@ -61,11 +61,16 @@ Another reviewer's test result must be attributed, not presented as an independe
 execution. Original native tool output remains in the OpenCode session; debug
 stage records count tool outcomes but are not a separate execution ledger.
 
-## Updating an older installation
+The verifier carries useful earlier execution outcomes into its existing report:
+what ran, the tested revision when known, pass/fail or observed behavior, and
+material limits. Attribute results that the verifier did not rerun. Merely saying
+that earlier results were retained, or that the verifier did not rerun tests,
+loses information needed by the comment planner. The planner receives this report
+for review-method and test details, not the initial reports or raw native output.
+Its public Review notes distinguish source inspection, test reading, reduced
+reproductions and project test execution. Missing execution information does not
+establish either that no tests ran or that tests passed.
 
-The former `verification` and `shellToolPermission` settings are removed. Back up
-private settings and remove those keys before an explicitly authorized replacement
-installation. The installer rejects them instead of silently changing execution
-policy. Existing private root filesystems, backups and historical verification
-records are not removed by this source change. OpenCode must load the updated
-installation before this behavior becomes active.
+For supported settings and replacement instructions, see
+[configuration](../README.md#configuration). Retired execution mechanisms and
+their original results are kept in [validation history](VALIDATION_HISTORY.md).
