@@ -6,6 +6,12 @@ import { renderReviewSummary } from './attribution.mjs';
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
 const integer = v => Number.isSafeInteger(v) && v > 0;
+const inlineSeverityIcons = { high: '🔴', medium: '🟡' };
+const hasInlineTitle = (text, severity) => {
+  const cue = inlineSeverityIcons[severity];
+  const label = `issue (${severity}): `;
+  return text.startsWith(`${cue} ${severity}: `) || text.startsWith(`${cue} ${label}`) || text.startsWith(label);
+};
 const fail = message => { throw new Error(`[AZPR comments] ${message}`); };
 const exactKeys = (value, keys) => {
   if (!object(value) || Object.keys(value).some(key => !keys.includes(key))) fail('Unsupported plan or report fields.');
@@ -126,7 +132,7 @@ export function validateCommentPlan(result, review) {
     if ([...review.attempts.values()].some(a => a.findingId === c.findingId)) fail('This finding was already attempted; skip it instead of changing its wording or anchor.');
     accounted.add(c.findingId);
     if (!['high', 'medium'].includes(c.severity) || !nonempty(c.body) || c.body.length > 1200 ||
-        !c.body.startsWith(`issue (${c.severity}): `) || /<!--|-->/.test(c.body)) fail('Invalid severity, title, or comment length.');
+        !hasInlineTitle(c.body, c.severity) || /<!--|-->/.test(c.body)) fail('Invalid severity, title, or comment length.');
     if (!review.snapshot.files.includes(c.path) || !c.path.startsWith('/') || /[\r\n\0]/.test(c.path) ||
         !integer(c.startLine) || !integer(c.endLine) || c.endLine < c.startLine) fail('Use a changed HEAD file and a positive, ordered line range.');
     if (!nonempty(c.anchor) || c.anchor.split(/\r?\n/).length !== c.endLine - c.startLine + 1) fail('Supply exact anchor text for the selected range. The model must verify it against source.');
@@ -168,7 +174,7 @@ export function restoreSavedCommentText(input, comments) {
       if (!saved || value === saved.content) return value;
       const wholeComment = saved.kind === 'summary'
         ? value.startsWith('## PR Review Summary') || /^🤖 [^\r\n]+\r?\n\r?\n## PR Review Summary(?:\r?\n|$)/.test(value)
-        : value.startsWith(`issue (${saved.severity}): `);
+        : hasInlineTitle(value, saved.severity);
       if (!wholeComment) return value;
       restored.push(saved.kind === 'summary' ? 'PR summary' : saved.findingId);
       return saved.content;

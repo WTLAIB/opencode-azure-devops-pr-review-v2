@@ -53,7 +53,7 @@ not facts: replace its placeholders with supported content in outputLanguage.
       "startLine": 12,
       "endLine": 12,
       "anchor": "Exact text of the selected line(s), joined with newline, without trailing newline",
-      "body": "issue (high): 🔴 **Short observable defect title in the configured outputLanguage**\n\n**📝 Summary**\nConcrete trigger and impact.\n\n**🔎 Evidence**\nMinimal supporting source fact or checked expected/actual example.\n\n**💡 Suggested fix**\nPractical correction and, when useful, a focused regression case."
+      "body": "🔴 high: **Short observable defect title in the configured outputLanguage**\n\n**📝 Summary**\nConcrete trigger and impact.\n\n**🔎 Evidence**\nMinimal supporting source fact or checked expected/actual example.\n\n**💡 Suggested fix**\nPractical correction and, when useful, a focused regression case."
     }
   ],
   "skipped": [{"findingId":"R-1","reason":"Already discussed in thread 42; same cause and correction."}]

@@ -11,13 +11,11 @@ and quality gaps retain useful results with visible limitations. Ordinary develo
 agents, model selections, and provider credentials remain host-owned. A review
 starts only through an explicit command.
 
-Fresh and replacement installations have been exercised on Ubuntu 22.04 with
-the exact host and isolated fake services, including malformed JSON and prose
-review delivery. Controlled live review and direct-publication cycles also passed
-with official MCP 2.9.0 and independent Azure content/coordinate readback.
-Model/tool-policy and presentation limitations remain; other environments
-still need their own acceptance. See [validation](docs/VALIDATION.md) for the
-tested revisions and retained failures. Completion does not prove model quality.
+Validation covers offline checks, exact-host fresh/replacement fixtures and
+authorized live review/publication with independent Azure readback. See
+[current validation](docs/VALIDATION.md) for the tested revision and remaining
+limits. Earlier runs are preserved in [validation history](docs/VALIDATION_HISTORY.md).
+A completed workflow does not prove model quality or compatibility with other environments.
 
 ## Requirements and installation
 
@@ -139,8 +137,9 @@ are unsupported and rejected. Before replacing an older V2 installation, back up
 your private settings, remove those obsolete keys explicitly, and pass that
 cleaned profile with `--settings FILE`; the installer never silently migrates it.
 
-Comment preview includes one PR Review Summary and eligible
-inline comments with 📝 Summary, 🔎 Evidence and 💡 Suggested fix sections. The
+Comment preview includes one PR Review Summary and eligible inline comments.
+Inline titles start with `🔴 high:` or `🟡 medium:`, followed by
+📝 Summary, 🔎 Evidence and 💡 Suggested fix sections. The
 summary indexes all confirmed findings, including low-severity findings that
 are not eligible inline, with 🔴 high, 🟡 medium and 🔵 low severity labels.
 Other emojis are optional and left to the planner's judgment. Optional Review

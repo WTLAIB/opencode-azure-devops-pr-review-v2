@@ -21,12 +21,13 @@ earlier results without treating retired behavior as current requirements.
 - Optional native project verification under inherited host permissions. MCP
   supplies remote PR source; no checkout, clone, repository mapping, custom
   execution platform or mandatory test quota is required.
-- One deterministic issue index in the report and saved PR summary, with optional
-  reader-facing review notes for useful PR-wide context. Test/process narration is
-  not required in the summary. Existing stages author directly in outputLanguage,
+- One deterministic issue index in the report and saved PR summary, with a leading
+  robot/AI/model disclosure and optional brief purpose or change overview before
+  the index. Review IDs and commit SHAs stay in local records. Test/process narration
+  is not required in the summary. Existing stages author directly in outputLanguage,
   without an additional translation or polishing stage.
-- Compact Summary/Evidence/Suggested fix inline comments for verified high/medium
-  findings. Low findings remain in the index. No numerical comment quota or
+- Leading severity icons and compact Summary/Evidence/Suggested fix inline comments
+  for verified high/medium findings. Low findings remain in the index. No numerical comment quota or
   automatic promotion of severity is used.
 - Optional preview followed by explicit publication, or direct
   `/pr-comment --publish` that prepares and saves a plan first. Omitted IDs select

@@ -4,7 +4,7 @@ import { commentTarget, confirmedFindings, publicationItems, recordPublishResult
 
 const snapshot={head:'a'.repeat(40),prId:123,files:['/src/example.ts']};
 const target=commentTarget('https://dev.azure.com/org/project/_git/repo/pullrequest/123',snapshot);
-const draft=()=>({status:'READY',comments:[{findingId:'F-1',severity:'high',path:snapshot.files[0],startLine:2,endLine:2,anchor:'return value.name;',body:'issue (high): Missing null handling\n\nNull input throws. Add a guard and a regression test.'}],skipped:[]});
+const draft=()=>({status:'READY',comments:[{findingId:'F-1',severity:'high',path:snapshot.files[0],startLine:2,endLine:2,anchor:'return value.name;',body:'🔴 high: Missing null handling\n\nNull input throws. Add a guard and a regression test.'}],skipped:[]});
 const verifiedFinding=()=>({id:'F-1',summary:'Missing guard',evidence:'Null input throws',counterevidence:'The caller allows null on the failing path.',severity:'high',location:'head:/src/example.ts:2',suggestion:'Add a guard and a regression test.'});
 const review=()=>({id:'1234abcd',outputLanguage:'en',target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
 test('summary indexes corrected findings and binds one review without an inline anchor', () => {
@@ -96,6 +96,22 @@ test('plan validates format and creates a stable marker, not provider evidence',
   assert.equal(a.plan.comments[0].marker,b.plan.comments[0].marker);
   assert.match(a.plan.comments[0].content,/<!-- azpr-comment:[a-f0-9]{32} -->$/);
   assert.equal(a.plan.comments[0].args,undefined);
+  for (const [severity, icon] of [['high','🔴'],['medium','🟡']]) {
+    const r=review();r.final.dispositions[0].verifiedFinding.severity=severity;
+    let marker;
+    for (const title of [`${icon} ${severity}: `,`${icon} issue (${severity}): `,`issue (${severity}): `,`issue (${severity}): ${icon} `]) {
+      const d=draft();Object.assign(d.comments[0],{severity,body:`${title}A concrete defect\n\nIts trigger and correction.`});
+      const saved=validateCommentPlan(d,r).comments[0];
+      assert.equal(saved.body,d.comments[0].body);
+      assert.ok(saved.content.startsWith(d.comments[0].body));
+      if (marker) assert.equal(saved.marker,marker);
+      marker=saved.marker;
+    }
+    for (const title of [`🔵 ${severity}: `,`${icon} low: `,`${icon}\n${severity}: `,`🔵 issue (${severity}): `,`${icon} issue (low): `,'An unlabelled title: ']) {
+      const d=draft();Object.assign(d.comments[0],{severity,body:title+'A defect'});
+      assert.throws(()=>validateCommentPlan(d,r),/Invalid severity, title/);
+    }
+  }
 });
 test('incomplete plans expose an optional reason without manufacturing a usable plan', () => {
   for (const reason of [undefined, 'The current HEAD differs from the reviewed commit.']) {
@@ -157,7 +173,7 @@ test('comments use corrected verifier claims rather than the original candidates
   r.final.dispositions[0].verifiedFinding={...verifiedFinding(),summary:'Narrowed trigger',evidence:'Only the optional integration supplies null.',severity:'medium'};
   assert.deepEqual(confirmedFindings(r),[r.final.dispositions[0].verifiedFinding]);
   assert.notEqual(confirmedFindings(r)[0].summary,r.findings[0].summary);
-  const d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('(high)','(medium)');
+  const d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('🔴 high','🟡 medium');
   assert.equal(validateCommentPlan(d,r).comments[0].severity,'medium');
   assert.throws(()=>validateCommentPlan(draft(),r),/severity must match/);
   delete r.final.dispositions[0].verifiedFinding;
@@ -172,7 +188,7 @@ test('a planner cannot change verified severity or promote low findings into com
     assert.throws(()=>validateCommentPlan(d,r),/severity must match/);
     assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:id,reason:'Not selected for publication.'}]},r).comments.length,0);
   }
-  const r=review(), d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('(high)','(medium)');
+  const r=review(), d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('🔴 high','🟡 medium');
   assert.throws(()=>validateCommentPlan(d,r),/severity must match/);
 });
 test('attempted findings remain blocked and skipped findings require reasons',()=>{
@@ -205,19 +221,28 @@ for(const posted of [[{findingId:'X-1',threadId:42}],[{findingId:'F-1',threadId:
 }
 
 test('publisher strings with one saved marker are restored without changing target or coordinates', () => {
-  const comments = planned().plan.comments, saved = comments[0];
-  const changed = saved.content.replace('Add a guard', 'Please add a guard');
-  const input = { target: 'repo', where: { line: 2, offset: 1 }, arbitrary: [{ value: changed }], untouched: 'read' };
-  const original = structuredClone(input);
-  const normalized = restoreSavedCommentText(input, comments);
-  assert.deepEqual(normalized.input, { ...input, arbitrary: [{ value: saved.content }] });
-  assert.deepEqual(normalized.restored, ['F-1']);
-  assert.deepEqual(input, original);
-  assert.deepEqual(restoreSavedCommentText(normalized.input, comments).restored, []);
+  for (const [severity, icon] of [['high','🔴'],['medium','🟡']]) {
+    const titles=[`${icon} ${severity}: `,`${icon} issue (${severity}): `,`issue (${severity}): `,`issue (${severity}): ${icon} `];
+    for (const title of titles) {
+      const r=review(),d=draft();r.final.dispositions[0].verifiedFinding.severity=severity;
+      Object.assign(d.comments[0],{severity,body:title+'Missing null handling\n\nAdd a guard.'});
+      const comments=validateCommentPlan(d,r).comments,saved=comments[0];
+      for (const copiedTitle of titles) {
+        const changed=copiedTitle+saved.content.slice(title.length).replace('Add a guard','Please add a guard');
+        const input={target:'repo',where:{line:2,offset:1},arbitrary:[{value:changed}],untouched:'read'};
+        const original=structuredClone(input),normalized=restoreSavedCommentText(input,comments);
+        assert.deepEqual(normalized.input,{...input,arbitrary:[{value:saved.content}]});
+        assert.deepEqual(normalized.restored,['F-1']);
+        assert.deepEqual(input,original);
+        assert.deepEqual(restoreSavedCommentText(normalized.input,comments).restored,[]);
+      }
+    }
+  }
 });
 test('publisher restoration leaves ambiguous, unknown and search-only strings untouched', () => {
   const comments = planned().plan.comments, saved = comments[0];
-  for (const value of [saved.marker, 'search ' + saved.marker, saved.content + saved.marker,
+  for (const value of [saved.marker, 'search ' + saved.marker, '🔴 ' + saved.marker, saved.content + saved.marker,
+    saved.content.replace('🔴 high: ', '🟡 medium: '),
     saved.content.replace(saved.marker, '<!-- azpr-comment:' + '0'.repeat(32) + ' -->'), saved.content + ' trailing text']) {
     assert.deepEqual(restoreSavedCommentText({ value }, comments), { input: { value }, restored: [] });
   }

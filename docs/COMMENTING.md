@@ -14,7 +14,7 @@ or switch profiles. A configured role does not imply a pricing tier.
 The policy draws on three public practices:
 
 - [Google's review-comment guidance](https://google.github.io/eng-practices/review/reviewer/comments.html): explain the reason, be constructive, and distinguish important changes from optional advice. Here, comments describe the triggering condition and impact, then suggest a focused correction or test.
-- [Conventional Comments](https://conventionalcomments.org/): structured labels make feedback easier to scan. Here, `issue (high):` and `issue (medium):` identify actionable defects. These are this project's severity labels, not Azure votes or assertions that a merge is blocked.
+- [Conventional Comments](https://conventionalcomments.org/): structured labels make feedback easier to scan. This project uses the compact `🔴 high:` and `🟡 medium:` severity labels for actionable defects. These are project-specific labels, not the Conventional Comments syntax, Azure votes or assertions that a merge is blocked.
 - [Microsoft's Azure PR guidance](https://learn.microsoft.com/en-us/azure/devops/repos/git/review-pull-requests?view=azure-devops): use line-specific discussion for local code issues. Here, keep local issues inline and add a separate compact PR summary; the complete evidence, decision ledger and skip reasons remain in OpenCode.
 
 The following limits are project choices, not universal standards:
@@ -41,7 +41,7 @@ Deletion interpretation remains model policy, not an MCP response parser.
 Example body (shown in English; the actual body uses the shared `outputLanguage` setting):
 
 ```text
-issue (high): 🔴 **Missing records bypass the fallback**
+🔴 high: **Missing records bypass the fallback**
 
 **📝 Summary**
 
@@ -129,8 +129,8 @@ limit still preserves essential conditions; formatting is guidance, not a new
 model-output rejection gate.
 
 Severity cues are 🔴 high, 🟡 medium and 🔵 low, alongside the text labels.
-The runtime adds them to the issue index; inline titles place their cue after
-the `issue (severity): ` prefix. Other emojis are optional and left to the
+The runtime adds them to the issue index; inline titles start with
+`🔴 high: ` or `🟡 medium: `. Other emojis are optional and left to the
 planner's judgment.
 
 Initial reviewers, the verifier and the planner compose explanations directly
@@ -337,6 +337,9 @@ during copying. It does not classify tool names, actions or argument field names
 and leaves other arguments, coordinates, marker-only searches and ambiguous or
 unknown marker strings untouched. Diagnostic `savedTextRestorations` records
 finding IDs without copying argument values. Host permissions still apply.
+Compact severity titles and earlier `issue (severity):` titles, with or without
+a leading severity icon, are recognized. Formatting guidance does not reject an
+otherwise valid earlier title or rewrite saved text.
 
 Reading source, checking HEAD/identity, finding duplicate discussions, using only
 create operations, selecting the intended target/coordinates and verifying the

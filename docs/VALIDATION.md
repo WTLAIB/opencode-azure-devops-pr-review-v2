@@ -10,105 +10,43 @@ pending status are preserved in [validation history](VALIDATION_HISTORY.md).
 They do not override the current behavior documented in [README](../README.md).
 Private raw artifacts, credentials and personal settings stay outside Git.
 
-## Latest summary metadata and overview acceptance
+## Latest compact comment-title acceptance
 
-On 2026-10-07, the summary metadata/overview update passed its first actual normal
-review and direct `pr-comment --publish` cycle, within a new allowance of at most
-five cycles. The daily installation and test host used the same 17 runtime/prompt
-files, existing `openai/gpt-5.6-luna` / `zh-TW` settings, OpenCode 2.0.22 and official
-MCP 2.9.0. Private settings and dependencies remained unchanged.
+On 2026-10-07, the compact `🔴 high:` / `🟡 medium:` inline-title update passed
+one complete normal review and direct `pr-comment --publish` cycle with
+`openai/gpt-5.6-luna` and `zh-TW`. The environment was OpenCode 2.0.22, official
+MCP 2.9.0, Node 22.23.3 and Ubuntu 22.04.5. Two review attempts were started within
+a five-attempt allowance: the first was cancelled before planning/publication
+when the requested title format changed; the second completed and was accepted.
 
-The preceding four comments were backed up and cleared before review. Independent
-Azure readback confirmed one summary and three medium inline comments, including
-their exact saved text, markers, coordinates and HEAD source anchors. The summary
-opens with a refactoring overview supported by the PR title/description and has
-no visible Review ID or HEAD metadata. The saved review, snapshot and unique
-summary marker retain the version binding. The successful comments were retained
-and testing stopped after one actual cycle.
+Existing comments were backed up and cleared before review. Independent Azure
+readback confirmed one summary and three medium inline comments. All inline
+titles began with `🟡 medium:`; saved text, markers, coordinates and exact HEAD
+anchors matched. The summary retained its leading robot/AI/model disclosure and
+omitted visible Review/HEAD metadata. The successful batch was retained and live
+testing stopped. This record grants no further review, publication or cleanup.
 
 Syntax, all 436 offline tests and documentation checks passed. Regression checks
-cover omitted public metadata, review/HEAD marker binding, optional localized
-notes, reading order and exact saved-text restoration. Actual-host fake-provider
-fixtures and rendered-browser checks were not repeated for these bytes.
+cover compact and earlier title forms, matching severity, stable markers and
+exact saved-text restoration without changing targets or coordinates. All 17
+daily runtime/prompt files matched the tested source; private settings and
+protected repositories remained unchanged. Owned test hosts stopped, and no
+dependencies were upgraded.
 
-The risk initial reversed HEAD and BASE despite receiving correct source content
-and reported no findings. The verifier independently established the correct
-versions and confirmed all three functional findings; the published claims and
-UTC example were checked independently. Tool-read failures, the false initial
-report, generic test suggestions and technical wording remain in the evidence.
-Acceptance does not establish zero model errors or consistently polished prose.
+The risk initial was PARTIAL after unavailable AGENTS reads. The verifier had
+project-selection read errors before obtaining the correct source; successful
+decisive HEAD/BASE responses matched independently inspected source byte-for-byte.
+The published examples, including UTC arithmetic, were checked independently.
+These tool failures remain in the evidence. Model reviewers did not execute
+project tests; native comment-stage calls inspected saved MCP output. The summary
+still included a test-status sentence and technical terminology. This sample does
+not establish zero model errors or uniformly polished prose.
 
-## Earlier summary layout acceptance
-
-On 2026-10-07, the preceding summary layout passed one actual normal review followed
-by direct `pr-comment --publish` on the disposable PR, using
-`openai/gpt-5.6-luna` and `zh-TW`. This was the first review in a separately
-authorized allowance of at most five cycles; testing stopped after acceptance.
-Existing comments were backed up and cleared before the review. The accepted
-summary and three medium inline comments were retained.
-
-The daily V2 installation was updated, with all 17 runtime/prompt files matching
-the tested source. Existing settings and other private configuration remained
-unchanged. The acceptance used a fresh OpenCode 2.0.22 process with the same
-installed bytes and official MCP 2.9.0; it did not update host dependencies.
-
-Independent Azure readback matched saved text, markers, file coordinates and
-exact HEAD anchors. The summary begins with the robot/AI/model disclosure and
-places optional context before the counts and issue table. Severity symbols and
-inline reading labels were present. Review/test-process narration is not required;
-the example described the affected behavior and a next step.
-
-Syntax, all 436 offline tests and documentation checks passed. The actual-host
-fake-provider fresh/replacement fixtures were not repeated for these bytes; the
-earlier fixture evidence below has a different scope. A private harness startup
-failed on a missing evidence directory before any model or Azure operation; it
-was corrected and preserved separately from the actual review count.
-
-One initial reviewer misstated two different UTC instants as equal. The verifier
-corrected that error, and the published example was checked independently. The
-summary's next-step sentence remains generic and some technical terminology
-remains; this single accepted sample does not establish zero model errors,
-consistently polished prose or broad compatibility. No rendered-browser check
-or repository commit/push is claimed for this acceptance.
-
-## Earlier runtime and host evidence
-
-Recorded on 2026-10-06 for runtime and prompts committed as
-[`b2047e1`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/b2047e11abf33a903343a6a21469fb3c783986fe).
-The presentation acceptance above supersedes this revision's review-note layout.
-The host-fixture and live results below remain evidence for these earlier bytes;
-they were not rerun as part of the later presentation changes.
-
-| Check | Recorded result | Scope |
-| --- | --- | --- |
-| Syntax and offline tests | PASS; 436 passed, 0 failed | Local contract, runtime, output, permission and installer checks |
-| Actual OpenCode fresh installation | PASS; 65 loopback fake-provider requests, 13 fixture MCP calls | Installed package discovery and host workflows on OpenCode 2.0.22 / Ubuntu 22.04.5 |
-| Actual OpenCode replacement | PASS; 64 loopback fake-provider requests, 13 fixture MCP calls | Replacement and host workflows; private fixture settings preserved |
-| Live review and direct publication | Final cycles 23-25 passed consecutively, out of 25 authorized review attempts | Identical runtime/prompt bytes, ordinary review commands and `openai/gpt-5.6-luna` on one disposable PR |
-| Independent Azure readback | Saved text, markers, thread IDs and coordinates matched; inline anchors matched exact HEAD source | API content and coordinates, not browser rendering |
-| Source correspondence | All 17 runtime files matched both host fixtures and all three accepted live installations | No claim that another installed copy has been updated |
-
-The host fixture permits the cancellation sibling to make one or two requests;
-that timing window accounts for the 65/64 totals. A private aggregation script
-initially assumed 65 for both. Its failure was preserved and the report corrected
-to the actual passing fixture results, without relaxing the test assertions.
-Other earlier fixture and live failures remain in the history and private evidence.
-Local results do not establish the status of a particular GitHub Actions run.
-
-The live acceptance required COMPLETE review, a valid saved plan, direct
-`pr-comment --publish`, independent remote readback, useful review notes and no
-observed material false example or BASE/HEAD reversal in the published findings.
-The final cycle posted one summary and two medium inline comments; its third
-confirmed finding was rated low and remained in the summary. Earlier comments
-were backed up and cleared under that task's explicit authorization. The final
-batch was retained and testing stopped. This record grants no further reviews,
-publication or cleanup.
-
-The final three notes distinguish source/test inspection from execution. Those
-reviews did not execute tests; one disclosed a failed test-file read. Earlier
-reduced reproductions exercised attributed-result reporting separately. All owned
-live test hosts stopped, while daily installation, private settings, dependencies
-and the protected repositories remained unchanged in that acceptance task.
+Exact-host fake-provider fixtures were not rerun locally for these bytes;
+rendered-browser behavior was not checked. CI runs the fresh/replacement fixtures
+separately after push, and its result must be checked for the exact commit.
+Earlier runtime, presentation and CI records are preserved in
+[validation history](VALIDATION_HISTORY.md#presentation-acceptance-through-98619e5).
 
 ## Known limits
 

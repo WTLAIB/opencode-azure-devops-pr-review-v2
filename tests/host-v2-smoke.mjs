@@ -102,7 +102,7 @@ const provider = createServer(async (request, response) => {
   if (payload?.target && payload.findings && !payload.comments) final = { status: 'READY',
     comments: payload.findings.slice(0, 1).map(item => ({ findingId: item.id, severity: item.severity,
       path: snapshot.files[0], startLine: 2, endLine: 2, anchor: 'fixture-source',
-      body: 'issue (high): Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
+      body: '🔴 high: Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
     skipped: [...payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })), ...payload.dispositions.filter(item=>item.status!=='CONFIRMED').map(item=>({findingId:item.id,reason:item.reason}))] };
   if (incompleteNextPlan && payload?.target && payload.findings && hasResult) {
     final = { status: 'INCOMPLETE', comments: [], skipped: [], reason: 'Fixture discussion pagination is incomplete.' };
