@@ -891,3 +891,144 @@ and checked public findings, not perfect reviewer prose or general factual
 reliability. Azure Markdown was checked through API content/coordinates, not a
 rendered browser UI. Final runtime bytes match all three accepted installations
 and both final-source actual-host fixtures. Daily installation was not updated.
+
+
+## Reader-focused review notes (2026-10-06)
+
+The optional summary note now asks for the review method, actual test execution
+and results, and evidence limits that affect a conclusion. Routine publication
+checks, repeated findings and generic ancestry disclaimers stay out of that prose.
+The heading and honest missing-note fallback follow the configured English or
+Chinese language. Existing authoring stages request direct, natural explanations;
+there is no English-first translation pass or publisher rewrite.
+
+A first live sample completed review and four publications but failed readability
+acceptance: the note repeated findings and an unhelpful common-ancestor warning.
+The captured planner context did contain the new instructions. The verifier also
+omitted an initial reviewer's executed reproductions from its report, which is
+the planner's only report input. The existing verifier report now preserves useful
+reported execution with attribution, separating it from independently checked
+results and project tests. No new field, stored artifact or model stage is added.
+
+The second sample still copied the generic warning and later stopped on an MCP
+create error. Independent Azure readback confirmed three saved comments and no
+fourth comment. Publication was not retried. The final prompt revision removes
+the verifier's unconditional ancestry-warning instruction while retaining actual
+comparison and attribution limits. Saved-text, role, source, cancellation and
+publication-uncertainty controls are unchanged.
+
+A third sample completed four exact publications without the ancestry warning,
+but its note repeated the finding count and public prose still copied ordinary
+English terms. It did not count toward acceptance. The planner now has a concrete
+two-sentence format example, explicitly labelled as structure rather than evidence.
+Language guidance distinguishes immutable identifiers/source quotes from finding
+prose that should be rewritten naturally. The optional field and fallback remain;
+these are prompt instructions, not a semantic output filter or rejection gate.
+
+Syntax and 436 offline tests pass. Final-source fresh and replacement OpenCode
+2.0.22 fixtures pass with 65 and 64 local fake-provider requests respectively,
+and 13 fixture MCP calls each. The difference is the cancellation sibling's
+permitted one-or-two-request timing window; the remaining request groups match.
+Their installed runtime bytes match the final prompt revision. These fixtures
+establish host integration separately from live model/Azure behavior.
+
+Two subsequent cycles completed review and four exact publications. The following
+cycle omitted three original-ID decisions from the verifier result. The runtime
+correctly retained it as PARTIAL with UNREVIEWED observations and never started
+comment planning or publication. Independent Azure snapshots were unchanged after
+the pre-cycle cleanup. This failure reset the acceptance streak; no decision was
+inferred and no additional model request or relaxed guard was added.
+
+Another cycle completed and published successfully, then a later planner again
+included discussion/deletion checks in the note. The verifier had correctly
+preserved an initial reviewer's attributed reproduction result, but the planner
+replaced it with a no-rerun disclaimer. The operator stopped publication; Azure
+readback confirmed two saved comments and no remaining planned items. That sample
+did not count as a pass. The note instructions now explicitly select facts from
+the completed code-review report, separate from the planner's own preparation.
+
+That initial reproduction ran nine reconstructed tests against two source files
+that independently matched their exact commits: HEAD had three failures with test
+exit 1; BASE passed with exit 0. The outer shell exited 0 after reporting both
+statuses. Rewritten test files, raw output and the model's fixed temporary-path
+reuse are preserved; this is not an original full-repository test-suite claim.
+
+Two later cycles passed, but the following verifier and saved inline example
+retained a false numerical equality from both initials. The operator stopped
+publication before any create tool started; independent Azure snapshots were
+unchanged. That failure reset the streak even though the review status was COMPLETE.
+An experimental revision moved the existing numerical-normalization instruction
+near the opening HEAD/BASE rule. The next two samples reversed version behavior
+in initial exclusions despite correct source reads. One was stopped before any
+publication; the next had already posted all four saved items when cancellation
+was acknowledged. Both fail acceptance and retain their raw evidence. These
+observations do not establish that prompt ordering caused the mistakes.
+
+The numerical-rule experiment was removed, restoring the smaller previously
+tested prompt while retaining all review-note and language changes. Its 17 runtime
+files and affected tests match the earlier passing automated checks exactly;
+both actual-host fixture installations were hash-checked again. No comparison
+algorithm, required field, extra model stage or mandatory execution was introduced.
+
+The next cycle passed, followed by another loss of useful execution details. An
+initial reviewer ran three reduced reproductions against exact HEAD source in a
+fresh temporary directory; all three failed with test exit 1. An earlier invocation
+failed to import its test module and is preserved separately. The verifier and
+planner merely acknowledged that earlier results existed, omitting their outcome.
+The operator stopped publication; independent readback found two saved items and
+no remaining planned comments. This resets the streak. The verifier's existing
+report instructions now define execution outcomes explicitly: what ran, revision
+when known, pass/fail or observed behavior, material limits and attribution.
+
+Four further samples used a generic supplementary request for a small reproduction
+when feasible. One reversed versions while rebuilding source, then reported a
+passing reproduction of BASE-like behavior as HEAD evidence; captured MCP bodies
+were correct. Another completed review, four exact publications and useful public
+reproduction notes, with five copied source files matching their selected commits.
+The next retained the false numerical equality despite executing the correct HEAD
+source: observing returned order did not validate the example's premise. Both
+failed factual samples were stopped before publication.
+
+A permitted free-model comparison confirmed catalog availability, tool support
+and zero listed input/output prices, but requested broad temporary-directory
+access under the inherited host permissions. The operator rejected that request;
+the initial stage failed, and a later verifier request for the same access led to
+cancellation. No permissions were expanded and no comment workflow started.
+Source-writing literals and diagnostics remain available even where that model
+removed its temporary files before operator inspection. These results do not
+establish a general model-quality ranking. Subsequent acceptance uses ordinary
+review commands without the supplementary reproduction request.
+
+Two ordinary-command cycles then completed review and four exact publications,
+but the next verifier again omitted the second initial reviewer's original-ID
+decisions. The runtime kept those observations UNREVIEWED, returned PARTIAL and
+never invoked comment planning. A short generic merge-row example now illustrates
+the existing ledger requirement: duplicate observations still need their own
+structured decisions. No field, quota, inferred decision or model request was added.
+
+The final revision reached three consecutive accepted cycles (23, 24 and 25),
+using identical runtime/prompt bytes, ordinary review commands and
+`openai/gpt-5.6-luna`. In total, 25 actual reviews were used within the authorized
+50-review limit, including the one free-model comparison. Each accepted cycle
+completed review, saved a valid plan and completed direct `pr-comment --publish`.
+Independent Azure readback matched every saved item's text, marker and coordinates;
+inline anchors matched exact HEAD source. Earlier comments were backed up and
+cleared before each cycle. The final summary and two eligible inline comments
+remain posted; the third confirmed finding was rated low in that sample and stays
+in the summary index, as required by the existing publication policy.
+
+Accepted notes describe review method and test status without routine publication
+inventories. One sample retains a failed test-file read as an evidence limitation.
+The final three reviews did not execute tests and do not claim that tests passed.
+Earlier reduced reproductions exercise the attributed-result reporting guidance
+separately. Initial arithmetic errors were corrected before publication, but
+ancillary errors remain in some local counterevidence and are preserved privately.
+Minor repeated coverage/count wording, literal terminology and severity variation
+also remain. Acceptance covers the published claims and workflow; it does not
+certify every initial/local sentence, natural-language consistency or general
+model accuracy. Azure API content/coordinate checks are not a rendered browser test.
+
+Live testing stopped at acceptance. Daily installation, private settings,
+dependencies and the protected repositories remain unchanged. No new comparison
+algorithm, persistent data, output requirement, model round or publication retry
+was introduced.

@@ -56,13 +56,16 @@ function summaryComment(review, note) {
   // Optional prose cannot block an otherwise valid plan. Never copy the private
   // report wholesale, or ask the model to manufacture counts or publication IDs.
   const valid = nonempty(note) && note.length <= 1200 && !/<!--|-->/.test(note);
-  const fallback = /^zh(?:-|$)/i.test(review.outputLanguage ?? '')
-    ? new Intl.Locale(review.outputLanguage).maximize().script === 'Hant'
-      ? '未提供可用的驗證摘要；請檢視完整 review 的查證與限制。未列出測試結果不代表測試通過。'
-      : '未提供可用的验证摘要；请查看完整 review 的查证与限制。未列出测试结果不代表测试通过。'
-    : 'No verification summary was provided. Consult the full review for checks and limitations; absent test results do not mean tests passed.';
+  const chinese = /^zh(?:-|$)/i.test(review.outputLanguage ?? '');
+  const traditional = chinese && new Intl.Locale(review.outputLanguage).maximize().script === 'Hant';
+  const heading = chinese ? traditional ? '審查說明' : '审查说明' : 'Review notes';
+  const fallback = chinese
+    ? traditional
+      ? '未提供審查方式與測試執行情況，不能據此判定測試通過。'
+      : '未提供审查方式与测试执行情况，不能据此判定测试通过。'
+    : 'Review method and test execution details were not provided. No test outcome is established.';
   const index = renderReviewSummary(confirmedFindings(review), review.outputLanguage ?? 'en');
-  const content = `${index}\n\n**Verification**\n\n${valid ? note.trim() : fallback}\n\nReview: \`${review.id}\` · HEAD: \`${review.snapshot.head}\`${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}`;
+  const content = `${index}\n\n**${heading}**\n\n${valid ? note.trim() : fallback}\n\nReview: \`${review.id}\` · HEAD: \`${review.snapshot.head}\`${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}`;
   return { kind: 'summary', marker: tag, content };
 }
 

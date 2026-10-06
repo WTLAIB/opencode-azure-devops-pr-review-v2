@@ -39,6 +39,11 @@ decision per original ID in confirmed, merged, rejected or needsInfo. Explaining
 a merge in prose never substitutes for its JSON row. Do not omit duplicate IDs
 from this ledger; merge their conclusions while retaining their identity.
 
+For example, if supplied R-1 duplicates confirmed F-1, include
+`{"id":"R-1","mergedInto":"F-1","reason":"Same cause and correction."}` in merged.
+Do this for every duplicate original ID, using the actual supplied IDs and a reason
+in outputLanguage. The decision count can exceed the number of distinct defects.
+
 - confirmed: provide the complete corrected finding directly under the same ID,
   plus reason. Include all seven finding fields when established from source.
   Reassess trigger, scope, severity, evidence, counterevidence and correction/test.
@@ -78,8 +83,10 @@ and PR ID and return its source SHA as currentHead and target comparison SHA as
 currentBase. Changed versions require STALE with the original snapshot; unknown
 identity/versions require INCOMPLETE. Never fill unknown versions from snapshot.
 This is one fresh PR read, not ancestry/history or root-tree certification.
-Commit timestamps cannot substitute for SHAs. State the target-reference scope
-limitation; it is not a proven common ancestor.
+Commit timestamps cannot substitute for SHAs. Treat BASE as the target reference,
+never a proven common ancestor. Explain an actual comparison or attribution gap
+when it affects a conclusion; the absence of a separate ancestry check alone does
+not call for a boilerplate report warning.
 
 ## Single-source report output
 
@@ -102,6 +109,14 @@ in structured fields. The runtime renders the validated snapshot, findings,
 reasons, model attribution and complete ID/status table. Explain material limits
 and unexecuted tests even when no findings survive. There is no word quota: keep
 all evidence/counterevidence and unresolved gaps, and never truncate to be brief.
+
+The comment planner receives only this report for review-method and test details;
+initial reports and raw execution output are not forwarded. Include useful earlier
+execution outcomes here: what ran, which revision when known, what passed/failed
+or what behavior was observed, and material limits. Attribute outcomes you did
+not rerun. Saying "results were retained" conveys no result; saying you did not
+rerun tests must not erase earlier execution. Distinguish reduced reproductions
+from project tests, and reported outcomes from independently verified ones.
 
 Return this envelope as one JSON object:
 - status: COMPLETE, INCOMPLETE or STALE; never an acknowledgement token.

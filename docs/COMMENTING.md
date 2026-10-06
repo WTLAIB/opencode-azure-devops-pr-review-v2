@@ -353,10 +353,20 @@ claims or authorize publication.
 Each saved plan contains one general summary with no file coordinates or finding
 ID, followed by eligible inline comments. The runtime renders counts and an
 issue/location index from corrected findings, ordered by severity. The optional
-planner `summary` text adds public-safe checks and limitations in outputLanguage:
-source inspection, test reading, actual execution and unexecuted advice must be
-distinguished. It adds no findings, publication counts, private diagnostics or
-new model round. Missing/malformed optional prose uses an honest fallback, not a
+planner `summary` text provides short review notes in outputLanguage, normally
+one or two sentences about the actual review method, test execution/results and
+evidence gaps that affect a conclusion. The section is labelled Review notes in
+English and uses the corresponding Chinese label for Chinese output. Reading
+tests, executing them and running a reduced reproduction remain distinct.
+The verifier carries useful initial-review execution reports into its existing
+report with attribution; the planner does not receive raw native test output.
+Those reports include actual pass/fail outcomes or observed behavior, rather than
+merely acknowledging that earlier results exist.
+Routine identity/anchor/discussion/deletion checks and generic merge-base caveats
+stay out of public notes; a material coverage or attribution limit still belongs
+there. These checks remain required even when omitted from the prose. Notes add
+no findings, repeated counts, private diagnostics or new model round.
+Missing/malformed optional prose uses an honest fallback, not a
 new completion gate. The summary includes the review ID, exact HEAD, disclosure
 and a unique marker; low-severity findings may appear in this index but cannot
 be promoted into inline issues. Full source/decision details remain local.
@@ -378,6 +388,13 @@ Basic Markdown headings, lists, tables and emphasis are used. Collapsible HTML
 or one-click patch suggestions are not required. The 1,200-character inline body
 limit still preserves essential conditions; formatting is guidance, not a new
 model-output rejection gate.
+
+Initial reviewers, the verifier and the planner compose explanations directly
+in outputLanguage. For zh-TW, prompts request natural Taiwanese engineering prose,
+clear triggers/impact/corrections and familiar Chinese descriptions, preserving
+exact identifiers, source quotes, quantities, qualifications and version direction.
+There is no English-first translation or additional polishing pass. The publisher
+still sends the saved text exactly; style guidance cannot authorize rewriting it.
 
 Design references: [Anthropic PR Review Toolkit](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/pr-review-toolkit),
 [CodeRabbit walkthroughs](https://docs.coderabbit.ai/pr-reviews/walkthroughs), and

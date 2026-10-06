@@ -364,7 +364,11 @@ is still necessary for independent confirmation. A missing summary result or
 any uncertain inline write leaves the batch incomplete. Do not retry, delete or
 rewrite the summary to conceal partial publication.
 
-Optional planner summary prose contributes public-safe verification limits only.
+Optional planner summary prose contributes brief review method, actual test
+execution/results and material evidence limits. Routine publication bookkeeping
+belongs in local diagnostics, not these reader-facing notes. Inspect the planner's
+original `summary` when notes are noisy: the runtime adds the localized heading
+and preserves the prose; it does not semantically filter or translate it.
 Counts and the index come from corrected findings. Missing/malformed prose uses
 an explicit fallback; neither it nor a Summary heading proves factual quality.
 Inspect checked example calculations and expected/actual results separately.

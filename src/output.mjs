@@ -48,7 +48,7 @@ export function stageFormat(role) {
     status: status('READY', 'INCOMPLETE'),
     comments: array(object({ findingId: string, severity: status('high', 'medium'), path: string, startLine: { type: 'integer' }, endLine: { type: 'integer' }, anchor: string, body: string })),
     skipped: array(object({ findingId: string, reason: string })),
-    summary: { ...string, description: 'Optional public-safe checks and limitations, including actual test execution status. No counts, new findings, private diagnostics or publication claims; the runtime adds the summary index.' },
+    summary: { ...string, description: 'Optional one or two sentences from the completed code-review report: review method and test execution/results, attributing earlier reported reproductions. Exclude your comment-planning checks, finding recaps/counts and private diagnostics. Keep evidence gaps affecting a conclusion; the runtime adds the index.' },
   }, ['status', 'comments', 'skipped']);
   else if (kind === 'comment-publish') schema = object({
     status: status('DONE', 'INCOMPLETE'), posted: array(object({ findingId: string, threadId: { type: ['string', 'integer'] } })),

@@ -19,16 +19,16 @@ test('summary indexes corrected findings and binds one review without an inline 
 test('missing or malformed optional summary prose retains the plan with an honest fallback', () => {
   for(const summary of [undefined,42,{},'', '<!-- forged -->','x'.repeat(1201)]) {
     const plan=validateCommentPlan({...draft(),summary},review());
-    assert.equal(plan.comments.length,1);assert.match(plan.summary.content,/No verification summary/);
+    assert.equal(plan.comments.length,1);assert.match(plan.summary.content,/Review method and test execution details were not provided/);
     assert.doesNotMatch(plan.summary.content,/forged/);
   }
 });
 test('summary fallback follows Chinese script and displays explicit structured locations without changing claims', () => {
   const r=review();r.final.dispositions[0].verifiedFinding.location=JSON.stringify({side:'head',path:'/src/example.ts',lineStart:2,lineEnd:3});
   const before=JSON.stringify(r.final);
-  for(const [language,text] of [['zh-TW','驗證摘要'],['zh-CN','验证摘要']]) {
+  for(const [language,text,heading] of [['zh-TW','測試執行情況','審查說明'],['zh-CN','测试执行情况','审查说明'],['en','test execution details','Review notes']]) {
     r.outputLanguage=language;const summary=validateCommentPlan(draft(),r).summary.content;
-    assert.ok(summary.includes(text));assert.match(summary,/head:\/src\/example.ts:2-3/);
+    assert.ok(summary.includes(text));assert.ok(summary.includes(`**${heading}**`));assert.match(summary,/head:\/src\/example.ts:2-3/);
   }
   assert.equal(JSON.stringify(r.final),before);
 });
@@ -51,7 +51,7 @@ test('summary publication participates in incomplete outcomes and validates befo
 });
 test('summary restoration preserves exact saved text without touching a marker search', () => {
   const plan=planned().plan, saved=plan.summary;
-  const input={content:saved.content.replace('Verification','Changed wording'),search:saved.marker,path:'/unrelated'};
+  const input={content:saved.content.replace('Review notes','Changed wording'),search:saved.marker,path:'/unrelated'};
   const result=restoreSavedCommentText(input,publicationItems(plan));
   assert.equal(result.input.content,saved.content);assert.equal(result.input.search,saved.marker);
   assert.equal(result.input.path,input.path);assert.deepEqual(result.restored,['PR summary']);
