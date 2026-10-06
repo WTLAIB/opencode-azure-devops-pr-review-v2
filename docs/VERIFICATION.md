@@ -65,11 +65,12 @@ The verifier carries useful earlier execution outcomes into its existing report:
 what ran, the tested revision when known, pass/fail or observed behavior, and
 material limits. Attribute results that the verifier did not rerun. Merely saying
 that earlier results were retained, or that the verifier did not rerun tests,
-loses information needed by the comment planner. The planner receives this report
-for review-method and test details, not the initial reports or raw native output.
-Its public Review notes distinguish source inspection, test reading, reduced
-reproductions and project test execution. Missing execution information does not
-establish either that no tests ran or that tests passed.
+loses information needed by the comment planner. The planner receives this report,
+not the initial reports or raw native output, to interpret the evidence supporting
+findings. Review methods and test results need no separate account in the public
+summary. When execution evidence is used, distinguish source inspection, test
+reading, reduced reproductions and project test execution. Missing execution
+information does not establish either that no tests ran or that tests passed.
 
 For supported settings and replacement instructions, see
 [configuration](../README.md#configuration). Retired execution mechanisms and

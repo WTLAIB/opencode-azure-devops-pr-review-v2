@@ -57,14 +57,15 @@ function displayLocation(value) {
   return value;
 }
 // A compact index of existing claims, not another model-authored assessment.
-export function renderReviewSummary(findings, language) {
+export function renderReviewSummary(findings, language, introduction = '') {
   const w = reportWords(language);
+  const severityIcons = { high: '🔴', medium: '🟡', low: '🔵' };
   const cell = value => String(value ?? '—').replace(/[\r\n]+/g, ' ').replace(/[&<>|`*_[\]\\]/g, c => `&#${c.charCodeAt(0)};`);
   const counts = ['high', 'medium', 'low'].map(level => `${level}: ${findings.filter(f => f.severity === level).length}`).join(' · ');
   const empty = words(language) === vocabulary.tw ? '未發現可確認缺陷；這不保證程式沒有問題。'
     : words(language) === vocabulary.cn ? '未发现可确认缺陷；这不保证程序没有问题。' : 'No confirmed defects found; this does not establish that the code is bug-free.';
-  const rows = [...findings].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.severity) - ['high', 'medium', 'low'].indexOf(b.severity)).map(f => `| ${cell(f.severity)} | ${cell(f.id)} — ${cell(f.summary)} | ${cell(displayLocation(f.location))} |`).join('\n');
-  return `## PR Review Summary\n\n${counts}\n\n${rows ? `| Severity | Summary | ${w.location} |\n| --- | --- | --- |\n${rows}` : empty}`;
+  const rows = [...findings].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.severity) - ['high', 'medium', 'low'].indexOf(b.severity)).map(f => `| ${severityIcons[f.severity] ?? ''} ${cell(f.severity)} | ${cell(f.id)} — ${cell(f.summary)} | ${cell(displayLocation(f.location))} |`).join('\n');
+  return `## PR Review Summary\n\n${introduction ? `${introduction}\n\n` : ''}${counts}\n\n${rows ? `| Severity | Summary | ${w.location} |\n| --- | --- | --- |\n${rows}` : empty}`;
 }
 const findingFields = ['id', 'summary', 'severity', 'location', 'evidence', 'counterevidence', 'suggestion'];
 function extraOutput(value, known) {

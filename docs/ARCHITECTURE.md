@@ -268,8 +268,13 @@ starts. The stages share the command's cancellation/deadline and origin/PR locks
 no additional reviewer or automatic retry is introduced. Repeating preview runs
 the planner again and clears the previous plan before that refresh; publishing
 reuses an existing saved plan. Plans include a deterministic summary index and
-optional reader-facing review notes from the existing planner: actual checks/tests and material evidence limits,
-excluding routine publication bookkeeping. Shared language instructions request
+optional reader-facing review notes from the existing planner before the index.
+These begin with a supported purpose or change overview and may add shared impact
+or supported fix priorities. Review IDs and commit SHAs remain in local records;
+the summary marker still binds the review and exact HEAD without a visible metadata line.
+Review methods and test results need no separate account;
+missing/malformed notes omit that section without affecting the saved summary.
+Routine publication bookkeeping stays local. Shared language instructions request
 natural explanations during existing stages, without a translation model pass.
 No inline findings still permits publishing the saved summary.
 It has its own marker/attempt state, no fake finding or anchor,

@@ -22,9 +22,9 @@ earlier results without treating retired behavior as current requirements.
   supplies remote PR source; no checkout, clone, repository mapping, custom
   execution platform or mandatory test quota is required.
 - One deterministic issue index in the report and saved PR summary, with optional
-  reader-facing review notes. Existing stages author directly in outputLanguage;
-  natural prose and attributed execution results are prompt guidance, not an
-  additional translation or polishing stage.
+  reader-facing review notes for useful PR-wide context. Test/process narration is
+  not required in the summary. Existing stages author directly in outputLanguage,
+  without an additional translation or polishing stage.
 - Compact Summary/Evidence/Suggested fix inline comments for verified high/medium
   findings. Low findings remain in the index. No numerical comment quota or
   automatic promotion of severity is used.
@@ -52,9 +52,9 @@ earlier results without treating retired behavior as current requirements.
 1. Test additional authorized PRs, languages and model profiles. Priorities include
    BASE/HEAD interpretation, decisive arithmetic, original-ID completeness,
    severity consistency and accurate attribution of reproduced behavior.
-2. Assess review-note usefulness and natural language across more examples,
-   including actual tests, reduced reproductions and missing evidence. Avoid
-   generic process inventories or summaries that erase earlier execution results.
+2. Assess review-note usefulness and natural language across more examples.
+   Notes should add PR-wide context beyond the findings, without generic process
+   inventories; relevant execution evidence remains with findings and local reports.
 3. Verify actual TUI notice rendering, result navigation and rendered Azure
    comments. Queue acknowledgement and API content/coordinate checks have narrower
    scope than a user-interface test.

@@ -9,26 +9,43 @@ const verifiedFinding=()=>({id:'F-1',summary:'Missing guard',evidence:'Null inpu
 const review=()=>({id:'1234abcd',outputLanguage:'en',target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
 test('summary indexes corrected findings and binds one review without an inline anchor', () => {
   const r=review();r.final.dispositions[0].verifiedFinding.summary='Corrected | title <unsafe>';
-  const a=validateCommentPlan({...draft(),summary:'Source checked; tests not run.'},r).summary;
+  r.attribution='AI-generated review; not human review or approval. Models: `fixture/reviewer`';
+  const plan=validateCommentPlan({...draft(),summary:'The affected callers accept optional input.'},r), a=plan.summary;
+  assert.ok(a.content.startsWith(`🤖 ${r.attribution}\n\n## PR Review Summary\n`));
+  assert.equal(a.content.split(r.attribution).length,2);
+  assert.equal(plan.comments[0].content,`${draft().comments[0].body}\n\n---\n${r.attribution}\n\n${plan.comments[0].marker}`);
   assert.equal(a.kind,'summary');assert.equal(a.findingId,undefined);assert.equal(a.path,undefined);
   assert.match(a.content,/high: 1/);assert.match(a.content,/Corrected &#124; title &#60;unsafe&#62;/);
-  assert.match(a.content,/Source checked; tests not run/);assert.match(a.content,/1234abcd/);
-  assert.ok(a.content.includes(snapshot.head));assert.doesNotMatch(a.content,/Missing guard/);
+  assert.match(a.content,/The affected callers accept optional input\./);
+  assert.ok(a.content.indexOf('**Review notes**') < a.content.indexOf('high: 1'));
+  assert.ok(a.content.indexOf('The affected callers accept optional input.') < a.content.indexOf('| Severity |'));
+  assert.ok(!a.content.includes(r.id));assert.ok(!a.content.includes(snapshot.head));
+  assert.doesNotMatch(a.content,/Missing guard|Review:|HEAD:/);
   assert.notEqual(validateCommentPlan(draft(),{...r,id:'5678abcd'}).summary.marker,a.marker);
+  assert.notEqual(validateCommentPlan(draft(),{...r,snapshot:{...snapshot,head:'b'.repeat(40)}}).summary.marker,a.marker);
 });
-test('missing or malformed optional summary prose retains the plan with an honest fallback', () => {
-  for(const summary of [undefined,42,{},'', '<!-- forged -->','x'.repeat(1201)]) {
-    const plan=validateCommentPlan({...draft(),summary},review());
-    assert.equal(plan.comments.length,1);assert.match(plan.summary.content,/Review method and test execution details were not provided/);
-    assert.doesNotMatch(plan.summary.content,/forged/);
+test('missing or malformed optional notes retain the summary without process boilerplate', () => {
+  for(const outputLanguage of ['en','zh-TW','zh-CN']) {
+    const r={...review(),outputLanguage};
+    const expected=validateCommentPlan(draft(),r);
+    assert.match(expected.summary.content,/## PR Review Summary/);
+    assert.match(expected.summary.content,/Missing guard/);
+    assert.ok(!expected.summary.content.includes(snapshot.head));
+    assert.ok(!expected.summary.content.includes(r.id));
+    assert.ok(expected.summary.content.endsWith(expected.summary.marker));
+    assert.doesNotMatch(expected.summary.content,/Review notes|審查說明|审查说明|test|測試|测试/i);
+    for(const summary of [undefined,null,42,{},'', ' \n ', '<!-- forged -->','x'.repeat(1201)]) {
+      assert.deepEqual(validateCommentPlan({...draft(),summary},r),expected);
+    }
   }
 });
-test('summary fallback follows Chinese script and displays explicit structured locations without changing claims', () => {
+test('optional review notes follow Chinese script and preserve structured locations and claims', () => {
   const r=review();r.final.dispositions[0].verifiedFinding.location=JSON.stringify({side:'head',path:'/src/example.ts',lineStart:2,lineEnd:3});
   const before=JSON.stringify(r.final);
-  for(const [language,text,heading] of [['zh-TW','測試執行情況','審查說明'],['zh-CN','测试执行情况','审查说明'],['en','test execution details','Review notes']]) {
-    r.outputLanguage=language;const summary=validateCommentPlan(draft(),r).summary.content;
+  for(const [language,text,heading] of [['zh-TW','呼叫端允許省略輸入。','審查說明'],['zh-CN','调用方允许省略输入。','审查说明'],['en','The callers accept optional input.','Review notes']]) {
+    r.outputLanguage=language;const summary=validateCommentPlan({...draft(),summary:` ${text} `},r).summary.content;
     assert.ok(summary.includes(text));assert.ok(summary.includes(`**${heading}**`));assert.match(summary,/head:\/src\/example.ts:2-3/);
+    assert.ok(summary.indexOf(text) < summary.indexOf('| Severity |'));
   }
   assert.equal(JSON.stringify(r.final),before);
 });
@@ -50,11 +67,19 @@ test('summary publication participates in incomplete outcomes and validates befo
   assert.equal(other.attempts.get(other.plan.comments[0].marker).state,'UNKNOWN');
 });
 test('summary restoration preserves exact saved text without touching a marker search', () => {
-  const plan=planned().plan, saved=plan.summary;
-  const input={content:saved.content.replace('Review notes','Changed wording'),search:saved.marker,path:'/unrelated'};
-  const result=restoreSavedCommentText(input,publicationItems(plan));
-  assert.equal(result.input.content,saved.content);assert.equal(result.input.search,saved.marker);
-  assert.equal(result.input.path,input.path);assert.deepEqual(result.restored,['PR summary']);
+  for (const attribution of [undefined,'AI-generated review; not human approval. Models: `fixture/reviewer`']) {
+    for (const summary of [undefined,'The affected callers accept optional input.']) {
+      const plan=validateCommentPlan({...draft(),summary},{...review(),attribution}), saved=plan.summary;
+      const changed=saved.content.replace('Missing guard','Changed finding').replace('Review notes','Changed wording').replace('fixture/reviewer','fixture/changed');
+      const relocated=changed.slice(changed.indexOf('## PR Review Summary'));
+      for (const content of [changed,changed.replaceAll('\n','\r\n'),relocated]) {
+        const input={content,search:saved.marker,robotSearch:`🤖 ${saved.marker}`,headingInSearch:`search\n\n## PR Review Summary\n\n${saved.marker}`,path:'/unrelated'};
+        const result=restoreSavedCommentText(input,publicationItems(plan));
+        assert.deepEqual(result.input,{...input,content:saved.content});
+        assert.deepEqual(result.restored,['PR summary']);
+      }
+    }
+  }
 });
 function planned(){
   const r=review();r.plan=validateCommentPlan(draft(),r);

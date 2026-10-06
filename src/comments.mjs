@@ -59,13 +59,10 @@ function summaryComment(review, note) {
   const chinese = /^zh(?:-|$)/i.test(review.outputLanguage ?? '');
   const traditional = chinese && new Intl.Locale(review.outputLanguage).maximize().script === 'Hant';
   const heading = chinese ? traditional ? '審查說明' : '审查说明' : 'Review notes';
-  const fallback = chinese
-    ? traditional
-      ? '未提供審查方式與測試執行情況，不能據此判定測試通過。'
-      : '未提供审查方式与测试执行情况，不能据此判定测试通过。'
-    : 'Review method and test execution details were not provided. No test outcome is established.';
-  const index = renderReviewSummary(confirmedFindings(review), review.outputLanguage ?? 'en');
-  const content = `${index}\n\n**${heading}**\n\n${valid ? note.trim() : fallback}\n\nReview: \`${review.id}\` · HEAD: \`${review.snapshot.head}\`${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${tag}`;
+  const notes = valid ? `**${heading}**\n\n${note.trim()}` : '';
+  const index = renderReviewSummary(confirmedFindings(review), review.outputLanguage ?? 'en', notes);
+  const disclosure = review.attribution ? `🤖 ${review.attribution}\n\n` : '';
+  const content = `${disclosure}${index}\n\n${tag}`;
   return { kind: 'summary', marker: tag, content };
 }
 
@@ -168,7 +165,11 @@ export function restoreSavedCommentText(input, comments) {
       const tags = value.match(/<!-- azpr-comment:[a-f0-9]{32} -->/g) ?? [];
       if (tags.length !== 1 || !value.endsWith(tags[0])) return value;
       const saved = comments.find(comment => comment.marker === tags[0]);
-      if (!saved || !value.startsWith(saved.kind === 'summary' ? '## PR Review Summary' : `issue (${saved.severity}): `) || value === saved.content) return value;
+      if (!saved || value === saved.content) return value;
+      const wholeComment = saved.kind === 'summary'
+        ? value.startsWith('## PR Review Summary') || /^🤖 [^\r\n]+\r?\n\r?\n## PR Review Summary(?:\r?\n|$)/.test(value)
+        : value.startsWith(`issue (${saved.severity}): `);
+      if (!wholeComment) return value;
       restored.push(saved.kind === 'summary' ? 'PR summary' : saved.findingId);
       return saved.content;
     }

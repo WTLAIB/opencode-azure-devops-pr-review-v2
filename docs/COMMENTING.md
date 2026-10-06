@@ -25,7 +25,7 @@ The following limits are project choices, not universal standards:
 | Volume | No numerical comment quota; one publishing attempt per review |
 | Comment size | At most 1,200 body characters, plus runtime AI/model disclosure and a hidden deduplication marker |
 | Anchor | Smallest useful exact range in a changed HEAD file; no fixed line-count maximum |
-| Structure | Observable issue title; Summary; Evidence; Suggested fix |
+| Structure | Observable issue title; 📝 Summary; 🔎 Evidence; 💡 Suggested fix |
 | Language | Shared `outputLanguage` for the final report and comment prose; identifiers and machine-readable labels unchanged |
 | Duplicates | One root cause per thread; skip non-deleted discussions, including resolved ones |
 | Exclusions | Speculation, unanswered questions, cosmetic nits, optional refactoring, praise, and unsupported clean bills of health |
@@ -41,17 +41,17 @@ Deletion interpretation remains model policy, not an MCP response parser.
 Example body (shown in English; the actual body uses the shared `outputLanguage` setting):
 
 ```text
-issue (high): **Missing records bypass the fallback**
+issue (high): 🔴 **Missing records bypass the fallback**
 
-**Summary**
+**📝 Summary**
 
 An empty lookup fails a previously supported request.
 
-**Evidence**
+**🔎 Evidence**
 
 When the lookup returns no record, this property access throws before the fallback runs. A previously supported request then returns an error.
 
-**Suggested fix**
+**💡 Suggested fix**
 
 Check for a missing record before dereferencing it, and add a regression test for an empty lookup result.
 ```
@@ -76,23 +76,38 @@ must explain the skip locally rather than omit essential conditions to fit.
 Each saved plan contains one general summary with no file coordinates or finding
 ID, followed by eligible inline comments. The runtime renders counts and an
 issue/location index from corrected findings, ordered by severity. The optional
-planner `summary` text provides short review notes in outputLanguage, normally
-one or two sentences about the actual review method, test execution/results and
-evidence gaps that affect a conclusion. The section is labelled Review notes in
-English and uses the corresponding Chinese label for Chinese output. Reading
-tests, executing them and running a reduced reproduction remain distinct.
+planner `summary` text appears before the counts and index in outputLanguage.
+In one or two sentences, it starts with the purpose supported by the PR description
+or requirements, or a brief change overview when intent is unknown. It may then
+connect related findings to their shared impact or identify a supported fix
+priority. These are useful options, not required categories; limitations belong here only when
+they materially qualify the conclusions. The section is labelled
+Review notes in English and uses the corresponding Chinese label for Chinese
+output. Review methods, test execution and reproduction results are not required
+summary topics; relevant evidence belongs with the findings it supports.
 The verifier carries useful initial-review execution reports into its existing
 report with attribution; the planner does not receive raw native test output.
 Those reports include actual pass/fail outcomes or observed behavior, rather than
 merely acknowledging that earlier results exist.
 Routine identity/anchor/discussion/deletion checks and generic merge-base caveats
-stay out of public notes; a material coverage or attribution limit still belongs
-there. These checks remain required even when omitted from the prose. Notes add
+stay out of public notes. Mention coverage or attribution limits only when they
+materially qualify the conclusions. Publication checks remain required even when
+omitted from the prose. Notes add
 no findings, repeated counts, private diagnostics or new model round.
-Missing/malformed optional prose uses an honest fallback, not a
-new completion gate. The summary includes the review ID, exact HEAD, disclosure
-and a unique marker; low-severity findings may appear in this index but cannot
+Missing/malformed optional prose leaves out the notes section, retaining the
+summary without a process disclaimer or new completion gate. The summary includes
+the disclosure and a unique marker bound to the review and exact HEAD. Review IDs
+and commit SHAs remain in the saved review and local records, without a visible
+metadata line in the PR summary. Low-severity findings may appear in this index but cannot
 be promoted into inline issues. Full source/decision details remain local.
+
+This summary guidance draws on the brief context and PR-wide feedback in
+[n8n's review skill](https://github.com/n8n-io/n8n/blob/master/.agents/skills/human-like-code-review/SKILL.md),
+the behavior and dependency context in
+[CodeRabbit's walkthrough guidance](https://www.coderabbit.ai/blog/explainable-prs-and-smarter-reviewer-routing),
+and the ordered actions in
+[Anthropic's PR Review Toolkit](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/pr-review-toolkit/commands/review-pr.md).
+Only those presentation ideas are adopted; they add no review stage or required field.
 
 A general summary is saved during planning, including preview-only commands.
 Its Azure thread is created only under `--publish`, as part of the same
@@ -100,18 +115,23 @@ publication-attempt ledger. Existing summaries are never edited/deleted.
 The publisher returns `summaryThreadId` separately from
 `posted` finding IDs. Every required item must be reported before the batch is
 MODEL_REPORTED_POSTED; this is not independent provider verification. Partial
-writes remain visible without retry. A new version-labelled index does not
+writes remain visible without retry. A new review's index does not
 replace or reopen existing discussions, and contains no claimed write count
 that could become false if later writes fail.
 
-Inline titles describe an observable consequence. Compact bold Summary, Evidence
-and Suggested fix labels guide reading; prose follows outputLanguage. Use the
+Inline titles describe an observable consequence. Compact bold 📝 Summary, 🔎 Evidence
+and 💡 Suggested fix labels guide reading; prose follows outputLanguage. Use the
 smallest useful example and correction; avoid redundant title repetition, long
 code blocks, confidence percentages, mandatory praise or merge recommendations.
 Basic Markdown headings, lists, tables and emphasis are used. Collapsible HTML
 or one-click patch suggestions are not required. The 1,200-character inline body
 limit still preserves essential conditions; formatting is guidance, not a new
 model-output rejection gate.
+
+Severity cues are 🔴 high, 🟡 medium and 🔵 low, alongside the text labels.
+The runtime adds them to the issue index; inline titles place their cue after
+the `issue (severity): ` prefix. Other emojis are optional and left to the
+planner's judgment.
 
 Initial reviewers, the verifier and the planner compose explanations directly
 in outputLanguage. For zh-TW, prompts request natural Taiwanese engineering prose,
@@ -225,10 +245,12 @@ described below can copy a uniquely matching captured range and correct a counte
 location. The saved preview remains the exact
 publication input, and its location still needs review.
 
-Every saved comment ends with one short disclosure: it is an AI-generated review,
+Every saved comment includes one short disclosure: it is an AI-generated review,
 not human review or approval, followed by the distinct selected provider/model IDs
 from the review stages and comment preparation/publication. Repeated model IDs
-appear once. For example, using placeholder IDs:
+appear once. The general summary starts with this disclosure, prefixed by 🤖,
+before its title and issue list. Inline comments keep their existing disclosure
+footer. For example, using placeholder IDs:
 
 ```text
 AI-generated review; not human review or approval. Models: `provider/model-a`, `provider/model-b`
@@ -239,7 +261,7 @@ the per-role model ledger and review method. The runtime generates attribution
 from invoked review stages, not from the planner's prose; unused configured
 models are not listed. This disclosure also applies when the MCP uses a personal
 account. Check company policy before publishing. The publisher preserves the
-entire saved footer. Exact remote content still depends on model/MCP compliance;
+entire saved disclosure. Exact remote content still depends on model/MCP compliance;
 inspect Azure.
 
 The workflow does not start a publisher without explicit --publish. This is not

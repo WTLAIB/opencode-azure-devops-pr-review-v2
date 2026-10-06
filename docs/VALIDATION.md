@@ -10,11 +10,74 @@ pending status are preserved in [validation history](VALIDATION_HISTORY.md).
 They do not override the current behavior documented in [README](../README.md).
 Private raw artifacts, credentials and personal settings stay outside Git.
 
-## Latest runtime evidence
+## Latest summary metadata and overview acceptance
+
+On 2026-10-07, the summary metadata/overview update passed its first actual normal
+review and direct `pr-comment --publish` cycle, within a new allowance of at most
+five cycles. The daily installation and test host used the same 17 runtime/prompt
+files, existing `openai/gpt-5.6-luna` / `zh-TW` settings, OpenCode 2.0.22 and official
+MCP 2.9.0. Private settings and dependencies remained unchanged.
+
+The preceding four comments were backed up and cleared before review. Independent
+Azure readback confirmed one summary and three medium inline comments, including
+their exact saved text, markers, coordinates and HEAD source anchors. The summary
+opens with a refactoring overview supported by the PR title/description and has
+no visible Review ID or HEAD metadata. The saved review, snapshot and unique
+summary marker retain the version binding. The successful comments were retained
+and testing stopped after one actual cycle.
+
+Syntax, all 436 offline tests and documentation checks passed. Regression checks
+cover omitted public metadata, review/HEAD marker binding, optional localized
+notes, reading order and exact saved-text restoration. Actual-host fake-provider
+fixtures and rendered-browser checks were not repeated for these bytes.
+
+The risk initial reversed HEAD and BASE despite receiving correct source content
+and reported no findings. The verifier independently established the correct
+versions and confirmed all three functional findings; the published claims and
+UTC example were checked independently. Tool-read failures, the false initial
+report, generic test suggestions and technical wording remain in the evidence.
+Acceptance does not establish zero model errors or consistently polished prose.
+
+## Earlier summary layout acceptance
+
+On 2026-10-07, the preceding summary layout passed one actual normal review followed
+by direct `pr-comment --publish` on the disposable PR, using
+`openai/gpt-5.6-luna` and `zh-TW`. This was the first review in a separately
+authorized allowance of at most five cycles; testing stopped after acceptance.
+Existing comments were backed up and cleared before the review. The accepted
+summary and three medium inline comments were retained.
+
+The daily V2 installation was updated, with all 17 runtime/prompt files matching
+the tested source. Existing settings and other private configuration remained
+unchanged. The acceptance used a fresh OpenCode 2.0.22 process with the same
+installed bytes and official MCP 2.9.0; it did not update host dependencies.
+
+Independent Azure readback matched saved text, markers, file coordinates and
+exact HEAD anchors. The summary begins with the robot/AI/model disclosure and
+places optional context before the counts and issue table. Severity symbols and
+inline reading labels were present. Review/test-process narration is not required;
+the example described the affected behavior and a next step.
+
+Syntax, all 436 offline tests and documentation checks passed. The actual-host
+fake-provider fresh/replacement fixtures were not repeated for these bytes; the
+earlier fixture evidence below has a different scope. A private harness startup
+failed on a missing evidence directory before any model or Azure operation; it
+was corrected and preserved separately from the actual review count.
+
+One initial reviewer misstated two different UTC instants as equal. The verifier
+corrected that error, and the published example was checked independently. The
+summary's next-step sentence remains generic and some technical terminology
+remains; this single accepted sample does not establish zero model errors,
+consistently polished prose or broad compatibility. No rendered-browser check
+or repository commit/push is claimed for this acceptance.
+
+## Earlier runtime and host evidence
 
 Recorded on 2026-10-06 for runtime and prompts committed as
 [`b2047e1`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/b2047e11abf33a903343a6a21469fb3c783986fe).
-Documentation-only changes do not imply a new live acceptance run.
+The presentation acceptance above supersedes this revision's review-note layout.
+The host-fixture and live results below remain evidence for these earlier bytes;
+they were not rerun as part of the later presentation changes.
 
 | Check | Recorded result | Scope |
 | --- | --- | --- |
@@ -163,9 +226,10 @@ change private settings, switch models or upgrade installed tools.
    and respect the requested retention or cleanup scope. Do not alter daily
    installations or unrelated repositories to make acceptance pass.
 
-For readability, review notes should explain method, actual execution/results and
-material evidence gaps, with attributed earlier results where appropriate. Inline
-comments should preserve the verified trigger, impact and correction under compact
+For readability, optional review notes should add useful PR-wide context beyond
+the issue index. Review methods and test results are not required summary topics;
+relevant evidence belongs with the findings it supports. Inline comments should
+preserve the verified trigger, impact and correction under compact
 Summary, Evidence and Suggested fix labels. Assess these model instructions
 against the actual text; headings and a successful write do not prove quality.
 

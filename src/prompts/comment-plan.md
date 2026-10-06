@@ -9,19 +9,18 @@ findings; planning selects faithful comments and anchors without rerunning it.
 
 ## Author-facing review notes
 
-Use the supplied report's facts about the completed CODE REVIEW for the optional
-summary: one or two short sentences about its method and test execution/results.
-Your own comment-planning activity is not part of that review. Distinguish project
-tests, reduced reproductions and source inspection. Keep a reported reproduction's
-result with attribution to the initial reviewer when the verifier did not rerun
-it; replacing that result with "I did not rerun tests" loses useful information.
-Include an evidence gap only when it limits a conclusion, naming the affected
-behavior. Missing execution information is not proof that no tests ran.
+Use summary for one or two short sentences before the issue index. Begin with the
+change's purpose when supported by the PR description or requirements; otherwise
+briefly describe what changed, without guessing the author's intent. Use the
+completed review and available PR context. If useful, add shared impact or a
+supported fix priority beyond the individual issue rows. Do not fill a fixed
+checklist or repeat the findings. Mention a limitation only when it materially
+qualifies the conclusions; omit summary when there is nothing useful to add.
 
-The runtime already lists findings and counts. Keep that recap, identity/anchor
-checks, discussion/deletion checks and generic merge-base caveats out of summary,
-even when the report includes them. Successful publication checks remain required.
-Retain material coverage/attribution uncertainty without private diagnostics.
+Testing and reproductions support finding evidence; their execution and results
+are not a required summary topic. Do not repeat findings/counts or narrate the
+review process. Routine identity/anchor/discussion/deletion checks and generic
+merge-base caveats stay out of summary; required publication checks still apply.
 
 ## Source and comment planning
 
@@ -41,12 +40,11 @@ unclear, skip it with a reason instead of inventing a corrected claim here.
 
 Rank by actual impact. Include all independently actionable eligible findings (possibly zero); there is no numerical comment quota. Skip every ID in attemptedFindings and skip duplicates by meaning, including human-written discussions without an AZPR marker. Read existing marker-bearing threads too. Do not move an anchor or change wording to evade duplicate checks. Every supplied finding must appear exactly once in comments or skipped. For duplicates within this batch, choose one representative and explain the other IDs in skipped. New verifier findings are eligible only if supplied in findings; do not extract arbitrary prose into new IDs.
 
-Return exactly this JSON envelope. The example illustrates structure, not facts:
-replace its checks and test status with supported results in outputLanguage.
+Return this JSON envelope; summary is optional. The example illustrates structure,
+not facts: replace its placeholders with supported content in outputLanguage.
 ```json
 {
   "status": "READY",
-  "summary": "The reviewers inspected the changed code and its callers. Tests were not run.",
   "comments": [
     {
       "findingId": "F-1",
@@ -55,7 +53,7 @@ replace its checks and test status with supported results in outputLanguage.
       "startLine": 12,
       "endLine": 12,
       "anchor": "Exact text of the selected line(s), joined with newline, without trailing newline",
-      "body": "issue (high): **Short observable defect title in the configured outputLanguage**\n\n**Summary**\nConcrete trigger and impact.\n\n**Evidence**\nMinimal supporting source fact or checked expected/actual example.\n\n**Suggested fix**\nPractical correction and, when useful, a focused regression case."
+      "body": "issue (high): 🔴 **Short observable defect title in the configured outputLanguage**\n\n**📝 Summary**\nConcrete trigger and impact.\n\n**🔎 Evidence**\nMinimal supporting source fact or checked expected/actual example.\n\n**💡 Suggested fix**\nPractical correction and, when useful, a focused regression case."
     }
   ],
   "skipped": [{"findingId":"R-1","reason":"Already discussed in thread 42; same cause and correction."}]
@@ -83,16 +81,17 @@ AI/model disclosure and deduplication marker outside that body limit; do not
 generate your own attribution footer. It will be visible in the saved plan.
 
 The runtime builds one PR Review Summary from the corrected findings, with counts,
-issue/location index, review ID, HEAD, attribution and a unique marker. Do not
-generate those fields or pretend the summary is a finding. The optional summary
+issue/location index, attribution and a unique marker. Review IDs and commit SHAs
+stay in local records; do not include them in the summary prose. Do not generate
+the runtime fields or pretend the summary is a finding. The optional summary
 string adds the review notes described above, up to 1,200 characters. Missing or
-malformed optional prose uses an honest fallback, without an extra model request.
+malformed optional prose leaves out that section, without an extra model request.
 Existing discussions
-suppress duplicate inline comments, not the new review's version-labelled index.
+suppress duplicate inline comments, not the new review's index.
 
-Use Summary, Evidence and Suggested fix as compact bold labels in each body.
+Use 📝 Summary, 🔎 Evidence and 💡 Suggested fix as compact bold labels in each body.
 Keep the prose in outputLanguage; these reading labels may remain English. Make
 the title a concrete outcome rather than an abstract topic. The summary sentence
 adds the trigger/impact, rather than just repeating the title. Evidence contains
-only enough detail to check the claim. Avoid decorative badges, confidence scores,
-empty sections, long code blocks, or turning suggestions into observed results.
+only enough detail to check the claim. Avoid confidence scores, empty sections,
+long code blocks, or turning suggestions into observed results.

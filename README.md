@@ -139,14 +139,23 @@ are unsupported and rejected. Before replacing an older V2 installation, back up
 your private settings, remove those obsolete keys explicitly, and pass that
 cleaned profile with `--settings FILE`; the installer never silently migrates it.
 
-Comment preview includes one version-labelled PR Review Summary and eligible
-inline comments with Summary, Evidence and Suggested fix sections. The summary
-indexes all confirmed findings, including low-severity findings that are not
-eligible inline. Its Review notes section describes the review method, actual
-test results and important evidence gaps in one or two sentences. Routine
-publication checks stay out of these notes; a summary is not approval.
+Comment preview includes one PR Review Summary and eligible
+inline comments with 📝 Summary, 🔎 Evidence and 💡 Suggested fix sections. The
+summary indexes all confirmed findings, including low-severity findings that
+are not eligible inline, with 🔴 high, 🟡 medium and 🔵 low severity labels.
+Other emojis are optional and left to the planner's judgment. Optional Review
+notes appear before the index, starting with the purpose supported by the PR
+description or requirements, or a brief change overview when intent is unknown.
+A second sentence may add shared impact or a supported priority for fixes.
+The planner chooses useful context rather than filling a fixed checklist.
+Review IDs and commit SHAs remain in local records, without a public metadata line.
+Review methods and test results need no separate account; missing notes leave
+out that section. Routine publication checks stay out of these notes; a summary
+is not approval.
 It is saved and published with the same explicit authorization and uncertainty
 tracking as inline comments, including when no inline comments are eligible.
+The summary starts with a 🤖 AI/model disclosure above its title and issue list.
+Inline comments keep the disclosure below their bodies.
 
 Reviewers and the planner write directly in `outputLanguage`; there is no
 English-first translation or extra polishing pass. For `zh-TW`, prompts request

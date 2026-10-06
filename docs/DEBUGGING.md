@@ -344,11 +344,14 @@ is still necessary for independent confirmation. A missing summary result or
 any uncertain inline write leaves the batch incomplete. Do not retry, delete or
 rewrite the summary to conceal partial publication.
 
-Optional planner summary prose contributes brief review method, actual test
-execution/results and material evidence limits. Routine publication bookkeeping
-belongs in local diagnostics, not these reader-facing notes. Inspect the planner's
+Optional planner summary prose precedes the issue index with useful PR-wide
+context: a supported purpose or change overview, then useful shared impact or fix
+priorities. Review IDs and commit SHAs stay in local records; their absence from
+the public summary does not remove the saved review/HEAD binding. Review
+methods and test results need no separate account. Routine
+publication bookkeeping belongs in local diagnostics. Inspect the planner's
 original `summary` when notes are noisy: the runtime adds the localized heading
 and preserves the prose; it does not semantically filter or translate it.
-Counts and the index come from corrected findings. Missing/malformed prose uses
-an explicit fallback; neither it nor a Summary heading proves factual quality.
+Counts and the index come from corrected findings. Missing/malformed prose omits
+the notes section while retaining the summary; a heading does not prove quality.
 Inspect checked example calculations and expected/actual results separately.
