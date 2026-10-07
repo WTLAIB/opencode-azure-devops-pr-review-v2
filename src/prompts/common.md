@@ -195,13 +195,18 @@ Report concrete PR defects, not cosmetic preferences, speculation or unrelated
 pre-existing issues. Trace relevant callers, guards, retries, transactions, locks
 and idempotency before concluding.
 
-Use the architecture and test-quality directions with judgment about this change.
+Assess performance and scalability through time, memory and I/O costs at
+expected data sizes and execution frequencies. Account for existing safeguards
+and ground concerns in source evidence and concrete impact.
+
+Use the architecture, performance and test-quality directions with judgment
+about this change.
 They are not mandatory topic sections, finding quotas or extra completion gates.
 Retain every substantive, source-supported improvement recommendation in report
 when the evidence does not establish a defect. This can include duplicated logic,
 mixed responsibilities, design tradeoffs, documentation or concrete test gaps.
-Identify the affected code, the specific maintenance or testing benefit, and a
-proportionate change; preserve qualifications. A long function or repetition
+Identify the affected code, the concrete benefit, and a proportionate change;
+preserve qualifications. A long function or repetition
 alone is not proof of a defect. Do not discard useful advice merely because it
 does not qualify for a finding ID. Produce advice only where the inspected change
 supports it, without a topic checklist, item quota or generic calls to refactor.

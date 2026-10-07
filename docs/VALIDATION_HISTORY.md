@@ -1275,3 +1275,90 @@ rendered-browser behavior was not checked. CI runs the fresh/replacement fixture
 separately after push, and its result must be checked for the exact commit.
 Earlier runtime, presentation and CI records are preserved in
 [validation history](VALIDATION_HISTORY.md#presentation-acceptance-through-98619e5).
+
+## Summary-advice acceptance and local performance guidance — archived 2026-10-08
+
+The following records preserve their original scope. The summary-advice/settings
+acceptance belongs to `8fc9d52c1a67cfb6bfa1c6efdfbad6d308c52022`;
+[CI run 37689098541](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/runs/37689098541)
+passed for that commit. The local performance directions were subsequently
+installed and accepted as recorded in [current validation](VALIDATION.md).
+The earlier local-only and pending-delivery statements are historical.
+
+## Local performance guidance — 2026-10-08
+
+The shared reviewer/verifier prompt now gives general performance and scalability
+directions: time, memory and I/O costs, expected workload, existing safeguards,
+source evidence and concrete impact. Existing finding and recommendation rules
+apply. Syntax and all 443 offline tests passed; this does not demonstrate
+real-model detection of performance issues.
+
+This local prompt update has not been installed, run against live models/Azure,
+committed or pushed. The latest live acceptance below and its successful CI
+belong to `8fc9d52c1a67cfb6bfa1c6efdfbad6d308c52022`, before this update.
+
+## Latest acceptance: summary advice and settings documentation — 2026-10-08
+
+Retained source-supported improvement recommendations can now appear in a
+conditional summary section. Confirmed findings without inline coverage receive
+useful details or references to existing substantive discussions. The existing
+initial/verifier reports carry this material into optional planner
+`summaryDetails`; no extra model round, required field or topic quota was added.
+Model-selection help moved to README and schema descriptions. Installation
+removes legacy `models._help` with a notice while preserving operational settings;
+existing files remain readable by the runtime.
+
+Two real normal-review and direct `pr-comment --publish` cycles ran within a
+five-cycle allowance, using `openai/gpt-5.6-luna`, `zh-TW`, OpenCode 2.0.22,
+official MCP 2.9.0, Node 22.23.3 and Ubuntu 22.04.5. Existing comments were backed
+up and cleared before each review. The first cycle completed and published, but
+failed presentation acceptance because a planner-authored code example retained
+extra JSON escape characters. Independent readback confirmed that the publisher
+copied the saved text exactly. A three-line planner clarification requests a
+single JSON encoding layer; the second cycle passed with the corrected examples.
+No runtime text rewrite, additional model stage or new required field was added.
+A separate private-runner directory error occurred before either review started;
+its original failure and correction are preserved.
+
+Independent Azure readback confirmed one summary and three medium inline comments
+from the accepted cycle. Saved content, markers, coordinates and exact HEAD
+anchors matched. Inline titles began with `🟡 medium:`; the summary began with its
+robot/AI/model disclosure and omitted visible Review/HEAD metadata. The published
+examples were independently checked against immutable source. The successful
+batch was retained and live testing stopped. This record grants no further
+review, publication or cleanup.
+
+The final report retained no independent non-defect recommendation in this
+sample, so no improvement section was expected. Positive advice retention,
+suggestions-only publication and non-inline finding details remain covered by
+offline fixtures, not demonstrated by this live sample. The accepted summary
+still repeated some finding locations/counts, and inline test suggestions could
+be more specific. A false ancillary equal-instant ordering statement remains in
+local verifier counterevidence, outside the published text. All seven decisive
+source reads matched the independently inspected source byte-for-byte; six other
+tool errors remain recorded. This acceptance does not certify every local report
+sentence or establish zero model errors.
+
+Model reviewers did not execute project tests. Native comment-stage calls
+inspected saved MCP responses. Separately, operator checks ran the existing
+nine-test fulfillment suite against isolated source copies: all nine passed on
+the target-reference source, while three failed on PR HEAD. These checks and
+focused published-example reproductions support the independent audit; they are
+not model-run tests or the target project's full test suite.
+
+Syntax and all 443 offline tests passed after the prompt correction. Seven added
+regressions cover summary detail/advice retention, optional malformed detail,
+marker escaping, exact saved-text publication, the five existing stage handoffs,
+legacy settings compatibility, cleanup with source/value preservation and
+malformed-help rejection. Fresh-install and rollback checks also cover legacy
+help; already-clean settings retain their bytes. Documentation, whitespace and
+private-data checks passed. Daily runtime/prompt files match the accepted source;
+only documentation-only help was removed from settings, with other values and
+private host files preserved. Protected repositories remain unchanged, test hosts
+stopped, and no dependencies were upgraded.
+
+Exact-host fake-provider fixtures were not rerun locally for these bytes.
+CI runs the fresh/replacement fixtures separately after push; its result must be
+checked for the exact commit. Rendered-browser behavior was not checked. Earlier
+acceptances, local-only snapshots and failures remain in
+[validation history](VALIDATION_HISTORY.md).

@@ -180,6 +180,11 @@ gates. Useful design tradeoffs and test gaps can remain in the existing report
 without being promoted into confirmed defects. The verifier adjudicates concrete
 findings through the existing evidence contract; no additional model round is used.
 
+Shared reviewer/verifier guidance also considers performance and scalability:
+time, memory and I/O costs at expected data sizes and call frequencies, existing
+safeguards, source evidence and practical impact. Conclusions use the same
+finding and improvement-advice rules as other review topics.
+
 Reviewers use their current OpenCode project for model-chosen verification methods,
 including tests, reproductions and static inspection. OpenCode child sessions
 [inherit the origin's location and session permissions](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/session.ts#L254).

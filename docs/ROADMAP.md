@@ -11,7 +11,7 @@ earlier results without treating retired behavior as current requirements.
   active grants, cancellation and non-resuming report notices. Host-owned ordinary
   agents, permissions and auxiliary model choices remain intact.
 - Two independent full-scope initial reviewers followed by one source-verifying
-  verifier in both normal and deep modes. Architecture, behavioral tests,
+  verifier in both normal and deep modes. Architecture, performance, behavioral tests,
   documentation promises, type invariants and failure visibility are part of
   their existing scope; no specialist model rounds are added.
 - Local review-envelope and syntax/key/shape recovery, literal retention of
