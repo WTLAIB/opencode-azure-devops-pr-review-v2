@@ -1187,3 +1187,91 @@ reviews did not execute tests; one disclosed a failed test-file read. Earlier
 reduced reproductions exercised attributed-result reporting separately. All owned
 live test hosts stopped, while daily installation, private settings, dependencies
 and the protected repositories remained unchanged in that acceptance task.
+
+## Compact-title acceptance and pre-delivery local updates — archived 2026-10-08
+
+The records below preserve their original scope and pending status. The compact
+comment-title acceptance belongs to `7820082c2ced77c6b404c515b5cff220e5f676ba`;
+[CI run 37541229742](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/runs/37541229742)
+succeeded for that commit. The two local updates were subsequently installed and
+accepted together as recorded in [current validation](VALIDATION.md). Their older
+statements about installation, live testing and delivery are historical.
+
+## Local settings-documentation cleanup — 2026-10-08
+
+Model-selection help now lives in README and schema descriptions. New settings
+omit `models._help`. Existing files remain readable, and installation omits
+that retired documentation with a notice while retaining operational values.
+The schema marks the legacy field deprecated; it is never a model instruction.
+
+Syntax and all 443 offline tests passed, including the preceding summary-feedback
+changes. Three added regressions cover legacy read compatibility with identical
+agent instructions, cleanup from supplied/replacement settings and stale
+defaults, source-file preservation, and refusal to discard malformed help data.
+Existing fresh-install and failed-replacement checks now also verify the absent
+help field and exact rollback of older settings containing it. Already-clean
+settings retain their bytes. Installation tests use disposable directories.
+
+Documentation, whitespace and private-data checks passed. These local changes
+have not been installed in the daily plugin, run against live models/Azure,
+committed, pushed or tested with the exact-host fixtures. Prior live acceptance
+does not cover either of these local updates.
+
+## Local summary-feedback update — 2026-10-08
+
+The local update carries retained non-defect recommendations into a conditional
+Improvement suggestions section and explains confirmed findings without inline
+coverage. It uses the existing initial/verifier report fields and optional
+planner `summaryDetails`, without another review round or required field.
+Suggestions remain separate from defect counts and do not require topic quotas.
+
+Syntax and all 440 offline tests passed. Four added regressions cover detail
+beyond the short introduction's limit, all supplied suggestions, low-severity
+explanations, suggestions-only publication, malformed/absent optional details,
+quoted marker text, saved-text restoration and report-to-planner-to-publisher
+handoff. The fixture confirms five existing stages and exact saved summary
+content without exposing private diagnostic prose to the publisher. These are
+mock data-flow checks, not proof of real-model recommendation completeness.
+
+Documentation, whitespace and private-data checks passed. This update has not
+been installed in the daily plugin, run against live models/Azure, committed,
+pushed or tested with the exact-host fixtures. The latest live acceptance below
+belongs to `7820082c2ced77c6b404c515b5cff220e5f676ba`, not these local changes.
+
+## Latest live acceptance: compact comment titles
+
+On 2026-10-07, the compact `🔴 high:` / `🟡 medium:` inline-title update passed
+one complete normal review and direct `pr-comment --publish` cycle with
+`openai/gpt-5.6-luna` and `zh-TW`. The environment was OpenCode 2.0.22, official
+MCP 2.9.0, Node 22.23.3 and Ubuntu 22.04.5. Two review attempts were started within
+a five-attempt allowance: the first was cancelled before planning/publication
+when the requested title format changed; the second completed and was accepted.
+
+Existing comments were backed up and cleared before review. Independent Azure
+readback confirmed one summary and three medium inline comments. All inline
+titles began with `🟡 medium:`; saved text, markers, coordinates and exact HEAD
+anchors matched. The summary retained its leading robot/AI/model disclosure and
+omitted visible Review/HEAD metadata. The successful batch was retained and live
+testing stopped. This record grants no further review, publication or cleanup.
+
+Syntax, all 436 offline tests and documentation checks passed. Regression checks
+cover compact and earlier title forms, matching severity, stable markers and
+exact saved-text restoration without changing targets or coordinates. All 17
+daily runtime/prompt files matched the tested source; private settings and
+protected repositories remained unchanged. Owned test hosts stopped, and no
+dependencies were upgraded.
+
+The risk initial was PARTIAL after unavailable AGENTS reads. The verifier had
+project-selection read errors before obtaining the correct source; successful
+decisive HEAD/BASE responses matched independently inspected source byte-for-byte.
+The published examples, including UTC arithmetic, were checked independently.
+These tool failures remain in the evidence. Model reviewers did not execute
+project tests; native comment-stage calls inspected saved MCP output. The summary
+still included a test-status sentence and technical terminology. This sample does
+not establish zero model errors or uniformly polished prose.
+
+Exact-host fake-provider fixtures were not rerun locally for these bytes;
+rendered-browser behavior was not checked. CI runs the fresh/replacement fixtures
+separately after push, and its result must be checked for the exact commit.
+Earlier runtime, presentation and CI records are preserved in
+[validation history](VALIDATION_HISTORY.md#presentation-acceptance-through-98619e5).

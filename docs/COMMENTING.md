@@ -21,15 +21,15 @@ The following limits are project choices, not universal standards:
 
 | Rule | Behavior |
 | --- | --- |
-| Eligibility | Summary indexes confirmed findings; inline comments require high/medium-impact defects |
-| Volume | No numerical comment quota; one publishing attempt per review |
-| Comment size | At most 1,200 body characters, plus runtime AI/model disclosure and a hidden deduplication marker |
+| Eligibility | Summary indexes confirmed findings and separately carries retained non-defect suggestions; inline comments require high/medium-impact defects |
+| Volume | No numerical comment or suggestion quota; one publishing attempt per review |
+| Comment size | Inline bodies and the optional summary introduction each allow 1,200 characters; additional summary details have no plugin length cap |
 | Anchor | Smallest useful exact range in a changed HEAD file; no fixed line-count maximum |
 | Structure | Observable issue title; 📝 Summary; 🔎 Evidence; 💡 Suggested fix |
 | Language | Shared `outputLanguage` for the final report and comment prose; identifiers and machine-readable labels unchanged |
 | Duplicates | One root cause per thread; skip non-deleted discussions, including resolved ones |
-| Exclusions | Speculation, unanswered questions, cosmetic nits, optional refactoring, praise, and unsupported clean bills of health |
-| Unlocatable findings | Explain the skip locally; never invent an inline location |
+| Inline exclusions | Speculation, unanswered questions, cosmetic nits, optional refactoring, praise, and unsupported clean bills of health; supported improvements belong in the summary |
+| Unlocatable findings | Explain the skip locally and retain the supported issue and its location limit in the summary; never invent coordinates |
 
 An explicit deletion record is not an existing discussion or marker. Enumerate
 all threads, ignore explicitly deleted comments, and still inspect any remaining
@@ -59,17 +59,20 @@ Check for a missing record before dereferencing it, and add a regression test fo
 The final verifier's `verifiedFinding` for each `CONFIRMED` original and its
 structured `newFindings` (`V-*`) are passed to the planner. These are the corrected,
 verified claims, not the original candidates. `NEEDS_INFO`, `REJECTED`, and
-`MERGED` originals are not published. A new concern mentioned only in free-form
-report text is not automatically converted into a publishable finding. Every
+`MERGED` originals are not published as separate defects. A new concern mentioned
+only in free-form report text is not automatically converted into a finding ID
+or inline defect. Supported non-defect recommendations retained in the final
+report are carried separately into the summary. Every
 supplied finding is either in the preview or explicitly skipped with a reason,
-including low-severity findings that cannot be posted. The planner must preserve
+including low-severity findings that cannot be posted inline. The planner must preserve
 the verified severity; the runtime rejects both promotion and demotion instead
 of silently revising the verifier's conclusion. Preserve the trigger and all
 qualifications when adapting a finding into a short comment. The model still
 assesses relevance and semantic duplicates; the runtime cannot prove those
 judgments or the comment's meaning correct. Inspect the preview.
 If the verified claim cannot fit faithfully within the per-comment body limit, the planner
-must explain the skip locally rather than omit essential conditions to fit.
+must explain the skip locally and preserve its useful explanation in the summary
+rather than omit essential conditions to fit.
 
 ## PR summary and readable inline format
 
@@ -98,8 +101,44 @@ Missing/malformed optional prose leaves out the notes section, retaining the
 summary without a process disclaimer or new completion gate. The summary includes
 the disclosure and a unique marker bound to the review and exact HEAD. Review IDs
 and commit SHAs remain in the saved review and local records, without a visible
-metadata line in the PR summary. Low-severity findings may appear in this index but cannot
-be promoted into inline issues. Full source/decision details remain local.
+metadata line in the PR summary. Low-severity findings appear in this index but
+cannot be promoted into inline issues. The complete source/decision ledger and
+private diagnostics remain local.
+
+Optional planner `summaryDetails` Markdown follows the index, with sections only
+when there is useful content:
+
+- **Additional finding details** explains confirmed findings without a proposed
+  inline comment, including low severity: affected code, supported trigger and
+  impact, and a correction. A reference to an actual existing substantive
+  discussion can avoid repeating that explanation. Material source/location
+  gaps remain visible rather than becoming invented coordinates or certainty.
+- **💡 Improvement suggestions** contains every distinct source-supported
+  non-defect recommendation retained by the verifier. Each identifies affected
+  code, the concrete benefit and a proportionate change, preserving conditions
+  and tradeoffs. Duplicated logic, mixed responsibilities and test gaps are
+  possible subjects, not a checklist to populate. A long function alone does
+  not establish a defect. Suggestions have no finding IDs or defect severity
+  and are excluded from defect counts.
+
+For zh-TW, the example headings are `補充問題說明` and `💡 改善建議`.
+Equivalent advice is combined without losing distinct concerns. No empty
+heading, top-N selection or total character quota applies to these details;
+the short introduction and each inline body retain their own 1,200-character
+limits. A summary with suggestions and zero confirmed defects is valid.
+The planner checks coverage across the proposed summary, inline comments and
+existing discussions, using the existing review. It does not copy the private
+report wholesale or resurrect rejected initial hypotheses.
+
+Recommendations travel through the existing initial and verifier `report`
+fields; only the final report reaches the planner. The verifier must evaluate
+and carry useful advice forward, not leave it solely in an initial report.
+`summaryDetails` is optional, so older plans and absent/malformed text do not
+gain a new completion gate. The runtime preserves the provided detail without
+the introduction's cap, displaying quoted HTML comments literally to preserve
+one active runtime marker. It does not certify that the model retained every
+recommendation or that the advice is sound. Check actual model output for loss
+between stages, not just successful plan validation.
 
 This summary guidance draws on the brief context and PR-wide feedback in
 [n8n's review skill](https://github.com/n8n-io/n8n/blob/master/.agents/skills/human-like-code-review/SKILL.md),
@@ -108,6 +147,12 @@ the behavior and dependency context in
 and the ordered actions in
 [Anthropic's PR Review Toolkit](https://github.com/anthropics/claude-plugins-official/blob/main/plugins/pr-review-toolkit/commands/review-pr.md).
 Only those presentation ideas are adopted; they add no review stage or required field.
+Separating suggestions from defects also follows the Toolkit's Suggestions
+section and [Conventional Comments](https://conventionalcomments.org/), which
+asks suggestions to explain both the change and its benefit.
+[PR-Agent's review guidance](https://docs.pr-agent.ai/tools/review/) keeps findings
+that cannot be anchored inline visible in the summary. These ideas do not add
+mandatory topic sections, scores, praise or merge verdicts.
 
 A general summary is saved during planning, including preview-only commands.
 Its Azure thread is created only under `--publish`, as part of the same
@@ -434,8 +479,13 @@ before updating. Never commit private settings, model IDs, or PR data.
    denied writes. The model should stop; the workflow must not retry a batch.
 6. Use a review where the verifier narrows an initial claim or lowers its severity.
    Check that the preview uses the corrected conditions and impact; a low-severity
-   finding must be skipped, not promoted. The runtime validates severity equality,
+   finding must stay in the summary, not be promoted inline. The runtime validates severity equality,
    but faithful comment wording still needs human inspection.
+7. Include concrete non-defect recommendations and a confirmed finding without
+   inline coverage. Compare retained final-report advice and confirmed findings
+   with the summary, inline comments and existing discussions: no distinct useful
+   feedback should disappear. Check a suggestions-only review too. Advice must
+   stay separate from defect counts, and absent topics must not produce filler.
 
 Offline tests exercise orchestration and report/plan validation with mocks, not
 real-model policy compliance, Azure rendering, or live server compatibility.

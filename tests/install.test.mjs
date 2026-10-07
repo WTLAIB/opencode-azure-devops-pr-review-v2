@@ -117,6 +117,7 @@ test('fresh installation creates one V2 package and preserves existing configura
   assert.deepEqual(readdirSync(join(s.root, 'commands')), ['my-command.md']);
   for (const name of ['azpr', 'skills', 'agents', 'azpr-v2-backups']) assert.ok(!existsSync(join(s.root, name)));
   assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).models, '_help'), false);
 });
 
 // OpenCode 2.0.22 Host.resolve resolves local <directory>/server before index;
@@ -240,6 +241,49 @@ test('explicit current-layout settings replace the installed model mapping witho
   original(s); clean(s);
 });
 
+test('installation omits only legacy help from supplied and replacement settings, including stale defaults', async () => {
+  const s=setup(), file=profile(s), settings=JSON.parse(readFileSync(file,'utf8'));
+  settings.models._help={functional:'PRIVATE_HELP_TEXT',risk:'Risk documentation',verifier:'Verifier documentation'};
+  settings.outputLanguage='zh-TW';settings.debug={enabled:true,directory:'private diagnostics'};settings.runTimeoutSeconds=2400;
+  const raw=JSON.stringify(settings,null,2)+'\n';writeFileSync(file,raw);
+  minimalSource(s);
+  const defaultsPath=join(s.source,'config/settings.example.json');
+  const defaults=JSON.parse(readFileSync(defaultsPath,'utf8'));defaults.models._help=settings.models._help;
+  const defaultsRaw=JSON.stringify(defaults);writeFileSync(defaultsPath,defaultsRaw);
+  const expected=structuredClone(settings);delete expected.models._help;
+  for(const replacing of [false,true]) {
+    if(replacing) writeFileSync(installed(s,'settings.json'),raw);
+    const result=install(s,replacing?['--replace']:['--settings',file]);ok(result);
+    assert.match(result.stdout,/Removed documentation-only models\._help/);
+    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_HELP_TEXT|team\/|private diagnostics/);
+    assert.deepEqual(JSON.parse(readFileSync(installed(s,'settings.json'),'utf8')),expected);
+    assert.equal(readFileSync(file,'utf8'),raw);assert.equal(readFileSync(defaultsPath,'utf8'),defaultsRaw);
+    assert.equal(statSync(installed(s,'settings.json')).mode & 0o777,0o600);
+    const agents=await installedAgents(s);
+    assert.deepEqual(agents['azpr-review-risk'].model,{providerID:'team',id:'risk'});
+    assert.match(agents['azpr-review-verifier'].system,/outputLanguage: zh-TW/);
+    original(s);clean(s);
+  }
+  const cleanBytes=readFileSync(installed(s,'settings.json'),'utf8');
+  const result=install(s,['--replace']);ok(result);
+  assert.doesNotMatch(result.stdout,/Removed documentation-only/);
+  assert.equal(readFileSync(installed(s,'settings.json'),'utf8'),cleanBytes);
+  original(s);clean(s);
+});
+
+test('malformed legacy help is preserved instead of discarding unrecognized settings data', () => {
+  const s=setup(), file=profile(s);ok(install(s,['--settings',file]));
+  const baseline=JSON.parse(readFileSync(file,'utf8'));
+  for(const help of [null,[],42,{risk:false},{unknown:'PRIVATE_HELP_VALUE'}]) {
+    const settings=structuredClone(baseline);settings.models._help=help;
+    const raw=JSON.stringify(settings);writeFileSync(installed(s,'settings.json'),raw);
+    const result=install(s,['--replace']);bad(result);
+    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_HELP_VALUE/);
+    assert.equal(readFileSync(installed(s,'settings.json'),'utf8'),raw);
+    original(s);clean(s);
+  }
+});
+
 test('current partial settings merge only missing defaults and preserve existing values', () => {
   const s = setup(), file = join(s.temp, 'partial.json');
   const partial = { version: 2, models: { review: { functional: 'team/new' } }, outputLanguage: 'zh-TW', enabled: false, debug: { enabled: true }, custom: { array: [1, 2], value: null } };
@@ -350,6 +394,9 @@ test('XDG paths with spaces work and JSON strings are never executed', () => {
 
 test('failed replacement restores the original package and settings exactly', () => {
   const s = setup(); ok(install(s, ['--settings', profile(s)]));
+  const settings=JSON.parse(readFileSync(installed(s,'settings.json'),'utf8'));
+  settings.models._help={functional:'Legacy documentation must survive a failed replacement.'};
+  writeFileSync(installed(s,'settings.json'),JSON.stringify(settings,null,2)+'\n');
   const files = ['runtime.mjs', 'settings.json', 'plugin.js', 'server.js', 'package.json'];
   const before = files.map(file => readFileSync(installed(s, file), 'utf8'));
   const extra = wrapper(s, '#!/bin/sh\ncase "$1" in --) shift;; esac\ncase "$1" in */new/plugins/azpr-v2) exit 71;; esac\nexec /bin/mv "$@"\n');

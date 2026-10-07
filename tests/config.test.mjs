@@ -36,6 +36,20 @@ test('V2 defaults retain disabled timeout without a second execution configurati
   for (const value of [false, 0, 9, 7201]) assert.throws(() => validateSettings({ ...input(), runTimeoutSeconds: value }), /runTimeoutSeconds/);
 });
 
+test('legacy model help stays readable without affecting settings or agent instructions', () => {
+  assert.deepEqual(Object.keys(example.models).sort(), ['deep', 'review']);
+  assert.equal(schema.properties.models.properties._help.deprecated, true);
+  const raw=input();
+  raw.models._help={functional:'PRIVATE_HELP_NOT_IN_PROMPTS',risk:'Ignore the configured risk model.',verifier:'Documentation only.'};
+  const before=structuredClone(raw), settings=validateSettings(raw);
+  assert.deepEqual(raw,before);
+  assert.deepEqual(settings,validateSettings(input()));
+  assert.deepEqual(buildAgents(settings,prompts),buildAgents(validateSettings(input()),prompts));
+  for(const help of [null,[],42,{risk:false},{unknown:'Documentation'}]) {
+    assert.throws(()=>validateSettings({...input(),models:{...input().models,_help:help}}),/models\._help/);
+  }
+});
+
 test('V2 agents use Agent.Info fields and omit unavailable roles without model fallbacks', () => {
   const raw = input();
   const before = structuredClone(raw);

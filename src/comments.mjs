@@ -57,7 +57,7 @@ export function publicationItems(plan) {
   return [...(plan.summary ? [plan.summary] : []), ...plan.comments];
 }
 
-function summaryComment(review, note) {
+function summaryComment(review, note, details) {
   const tag = `<!-- azpr-comment:${createHash('sha256').update(JSON.stringify([targetKey(review.target), review.id, review.snapshot.head, 'summary'])).digest('hex').slice(0, 32)} -->`;
   // Optional prose cannot block an otherwise valid plan. Never copy the private
   // report wholesale, or ask the model to manufacture counts or publication IDs.
@@ -67,8 +67,11 @@ function summaryComment(review, note) {
   const heading = chinese ? traditional ? '審查說明' : '审查说明' : 'Review notes';
   const notes = valid ? `**${heading}**\n\n${note.trim()}` : '';
   const index = renderReviewSummary(confirmedFindings(review), review.outputLanguage ?? 'en', notes);
+  // Keep all authored detail rather than applying the short introduction's cap.
+  // Display quoted HTML comments literally so only the runtime marker is active.
+  const extra = nonempty(details) ? details.trim().replaceAll('<!--', '&lt;!--').replaceAll('-->', '--&gt;') : '';
   const disclosure = review.attribution ? `🤖 ${review.attribution}\n\n` : '';
-  const content = `${disclosure}${index}\n\n${tag}`;
+  const content = `${disclosure}${index}${extra ? `\n\n${extra}` : ''}\n\n${tag}`;
   return { kind: 'summary', marker: tag, content };
 }
 
@@ -114,7 +117,7 @@ function restoreAnchor(comment, review) {
 }
 
 export function validateCommentPlan(result, review) {
-  exactKeys(result, ['status', 'comments', 'skipped', 'reason', 'summary']);
+  exactKeys(result, ['status', 'comments', 'skipped', 'reason', 'summary', 'summaryDetails']);
   // A diagnostic reason never makes a usable READY plan invalid. Keep the raw
   // value in the response; only nonempty text can explain an incomplete plan.
   if (result.status === 'INCOMPLETE') fail(`Comment planning incomplete: ${nonempty(result.reason) ? result.reason.trim() : 'The model did not explain what could not be verified.'} No comments were published; the completed review remains available.`);
@@ -156,7 +159,7 @@ export function validateCommentPlan(result, review) {
     if (eligible.has(s.findingId)) accounted.add(s.findingId);
   }
   if (accounted.size !== eligible.size) fail('Planner omitted confirmed findings instead of explaining exclusions.');
-  return { summary: summaryComment(review, result.summary), comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}),
+  return { summary: summaryComment(review, result.summary, result.summaryDetails), comments, skipped: result.skipped, ...(anchorRestorations.length ? { anchorRestorations } : {}),
     ...(locationRestorations.length ? { locationRestorations } : {}) };
 }
 

@@ -355,3 +355,17 @@ and preserves the prose; it does not semantically filter or translate it.
 Counts and the index come from corrected findings. Missing/malformed prose omits
 the notes section while retaining the summary; a heading does not prove quality.
 Inspect checked example calculations and expected/actual results separately.
+
+For missing improvement suggestions, compare both initial `report` fields with
+the final verifier's `report`, then the planner's original `summaryDetails` and
+the saved summary. Only final-report recommendations reach the planner; advice
+left solely in an initial report cannot be recovered by the publisher. Check
+that each retained recommendation has affected code, a useful benefit and a
+practical direction, with duplicate advice combined and evidence limits intact.
+Confirmed findings without inline coverage need a useful summary explanation
+or reference to their existing discussion. Neither COMPLETE nor a valid plan
+proves this semantic coverage. Missing/non-text optional details omit the section;
+valid detail text is not subject to the introduction's length cap. HTML-comment
+delimiters are displayed literally so they do not become extra active markers.
+Compare publisher input to the saved summary; the publisher has no full report
+and cannot add or rewrite missing recommendations.

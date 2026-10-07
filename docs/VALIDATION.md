@@ -10,43 +10,71 @@ pending status are preserved in [validation history](VALIDATION_HISTORY.md).
 They do not override the current behavior documented in [README](../README.md).
 Private raw artifacts, credentials and personal settings stay outside Git.
 
-## Latest compact comment-title acceptance
+## Latest acceptance: summary advice and settings documentation — 2026-10-08
 
-On 2026-10-07, the compact `🔴 high:` / `🟡 medium:` inline-title update passed
-one complete normal review and direct `pr-comment --publish` cycle with
-`openai/gpt-5.6-luna` and `zh-TW`. The environment was OpenCode 2.0.22, official
-MCP 2.9.0, Node 22.23.3 and Ubuntu 22.04.5. Two review attempts were started within
-a five-attempt allowance: the first was cancelled before planning/publication
-when the requested title format changed; the second completed and was accepted.
+Retained source-supported improvement recommendations can now appear in a
+conditional summary section. Confirmed findings without inline coverage receive
+useful details or references to existing substantive discussions. The existing
+initial/verifier reports carry this material into optional planner
+`summaryDetails`; no extra model round, required field or topic quota was added.
+Model-selection help moved to README and schema descriptions. Installation
+removes legacy `models._help` with a notice while preserving operational settings;
+existing files remain readable by the runtime.
 
-Existing comments were backed up and cleared before review. Independent Azure
-readback confirmed one summary and three medium inline comments. All inline
-titles began with `🟡 medium:`; saved text, markers, coordinates and exact HEAD
-anchors matched. The summary retained its leading robot/AI/model disclosure and
-omitted visible Review/HEAD metadata. The successful batch was retained and live
-testing stopped. This record grants no further review, publication or cleanup.
+Two real normal-review and direct `pr-comment --publish` cycles ran within a
+five-cycle allowance, using `openai/gpt-5.6-luna`, `zh-TW`, OpenCode 2.0.22,
+official MCP 2.9.0, Node 22.23.3 and Ubuntu 22.04.5. Existing comments were backed
+up and cleared before each review. The first cycle completed and published, but
+failed presentation acceptance because a planner-authored code example retained
+extra JSON escape characters. Independent readback confirmed that the publisher
+copied the saved text exactly. A three-line planner clarification requests a
+single JSON encoding layer; the second cycle passed with the corrected examples.
+No runtime text rewrite, additional model stage or new required field was added.
+A separate private-runner directory error occurred before either review started;
+its original failure and correction are preserved.
 
-Syntax, all 436 offline tests and documentation checks passed. Regression checks
-cover compact and earlier title forms, matching severity, stable markers and
-exact saved-text restoration without changing targets or coordinates. All 17
-daily runtime/prompt files matched the tested source; private settings and
-protected repositories remained unchanged. Owned test hosts stopped, and no
-dependencies were upgraded.
+Independent Azure readback confirmed one summary and three medium inline comments
+from the accepted cycle. Saved content, markers, coordinates and exact HEAD
+anchors matched. Inline titles began with `🟡 medium:`; the summary began with its
+robot/AI/model disclosure and omitted visible Review/HEAD metadata. The published
+examples were independently checked against immutable source. The successful
+batch was retained and live testing stopped. This record grants no further
+review, publication or cleanup.
 
-The risk initial was PARTIAL after unavailable AGENTS reads. The verifier had
-project-selection read errors before obtaining the correct source; successful
-decisive HEAD/BASE responses matched independently inspected source byte-for-byte.
-The published examples, including UTC arithmetic, were checked independently.
-These tool failures remain in the evidence. Model reviewers did not execute
-project tests; native comment-stage calls inspected saved MCP output. The summary
-still included a test-status sentence and technical terminology. This sample does
-not establish zero model errors or uniformly polished prose.
+The final report retained no independent non-defect recommendation in this
+sample, so no improvement section was expected. Positive advice retention,
+suggestions-only publication and non-inline finding details remain covered by
+offline fixtures, not demonstrated by this live sample. The accepted summary
+still repeated some finding locations/counts, and inline test suggestions could
+be more specific. A false ancillary equal-instant ordering statement remains in
+local verifier counterevidence, outside the published text. All seven decisive
+source reads matched the independently inspected source byte-for-byte; six other
+tool errors remain recorded. This acceptance does not certify every local report
+sentence or establish zero model errors.
 
-Exact-host fake-provider fixtures were not rerun locally for these bytes;
-rendered-browser behavior was not checked. CI runs the fresh/replacement fixtures
-separately after push, and its result must be checked for the exact commit.
-Earlier runtime, presentation and CI records are preserved in
-[validation history](VALIDATION_HISTORY.md#presentation-acceptance-through-98619e5).
+Model reviewers did not execute project tests. Native comment-stage calls
+inspected saved MCP responses. Separately, operator checks ran the existing
+nine-test fulfillment suite against isolated source copies: all nine passed on
+the target-reference source, while three failed on PR HEAD. These checks and
+focused published-example reproductions support the independent audit; they are
+not model-run tests or the target project's full test suite.
+
+Syntax and all 443 offline tests passed after the prompt correction. Seven added
+regressions cover summary detail/advice retention, optional malformed detail,
+marker escaping, exact saved-text publication, the five existing stage handoffs,
+legacy settings compatibility, cleanup with source/value preservation and
+malformed-help rejection. Fresh-install and rollback checks also cover legacy
+help; already-clean settings retain their bytes. Documentation, whitespace and
+private-data checks passed. Daily runtime/prompt files match the accepted source;
+only documentation-only help was removed from settings, with other values and
+private host files preserved. Protected repositories remain unchanged, test hosts
+stopped, and no dependencies were upgraded.
+
+Exact-host fake-provider fixtures were not rerun locally for these bytes.
+CI runs the fresh/replacement fixtures separately after push; its result must be
+checked for the exact commit. Rendered-browser behavior was not checked. Earlier
+acceptances, local-only snapshots and failures remain in
+[validation history](VALIDATION_HISTORY.md).
 
 ## Known limits
 
@@ -90,7 +118,7 @@ count for the tested revision rather than copying an older count.
 | Permissions | Exact role/model binding, active grants, inherited host rules, native denials, ordinary-session preservation and cancellation |
 | Review delivery | Partial/unavailable initials, independent verification, frame conflicts, original-ID accounting and readable incomplete results |
 | Output | Local review recovery, retained ambiguity, no lost observations, strict settings/check/comment contracts |
-| Comments | Same-origin selection, optional preview/direct publish, saved summary and inline text, severity/anchor checks, uncertain-attempt lockout |
+| Comments | Same-origin selection, optional preview/direct publish, retained summary advice and non-inline details, saved text, severity/anchor checks, uncertain-attempt lockout |
 | Diagnostics | Private output, original failures/corrections, safe paths, timing and source-validity limitations |
 | Installation | Exact file list, generated package entry, current settings, conflict refusal, rollback and archival removal |
 
@@ -170,6 +198,9 @@ relevant evidence belongs with the findings it supports. Inline comments should
 preserve the verified trigger, impact and correction under compact
 Summary, Evidence and Suggested fix labels. Assess these model instructions
 against the actual text; headings and a successful write do not prove quality.
+Compare final retained improvement recommendations and confirmed findings with
+the actual summary, inline text and existing substantive discussions. Check for
+lost advice across stages, unjustified defect severity and filler topic sections.
 
 A release report distinguishes offline checks, exact-host fixtures, live service
 behavior, factual/presentation quality and remote publication. Mark unexercised

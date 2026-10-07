@@ -62,6 +62,8 @@ export function validateSettings(raw) {
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('enabled must be boolean.');
   if (raw.$schema !== undefined && typeof raw.$schema !== 'string') throw new Error('$schema must be a string.');
   keys(raw.models, ['_help', 'review', 'deep'], 'models');
+  // Read legacy documentation without requiring a settings edit to start up.
+  // New settings omit it; only the installer removes it, with a notice.
   if (raw.models._help !== undefined) {
     keys(raw.models._help, MODEL_SLOTS, 'models._help');
     if (Object.values(raw.models._help).some(value => typeof value !== 'string')) throw new Error('models._help values must be documentation strings.');

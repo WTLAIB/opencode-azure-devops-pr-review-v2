@@ -39,8 +39,9 @@ reporting a regression. Keep open questions distinct from evidence-backed
 candidates. Preserve evidence even if it makes the report longer.
 
 Keep report for important exclusions with paired base/head evidence, material
-corrections, unresolved questions and unexecuted tests. Snapshot, coverage and
-findings already record versions, paths, gaps and full evidence; do not repeat
+corrections, substantive improvement recommendations, unresolved questions and
+unexecuted tests. Snapshot, coverage and findings already record versions, paths,
+gaps and full evidence; do not repeat
 their inventory or add a candidate-summary section. Explain a material limitation
 without duplicating its entire ledger. State when tests were not run even if no
 other caveat remains. Write checkable conclusions, not discarded example drafts.

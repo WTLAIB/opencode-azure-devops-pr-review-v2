@@ -24,7 +24,8 @@
         "_help": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Documentation only; never forwarded as model instructions.",
+          "deprecated": true,
+          "description": "Legacy documentation only, accepted for existing files. Omitted from new settings and removed during installation. Read README model-selection guidance instead; this field never affects model instructions.",
           "properties": {
             "functional": {
               "type": "string"

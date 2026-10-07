@@ -197,9 +197,16 @@ and idempotency before concluding.
 
 Use the architecture and test-quality directions with judgment about this change.
 They are not mandatory topic sections, finding quotas or extra completion gates.
-Keep useful design tradeoffs, test gaps and focused verification advice in report
-when the evidence does not establish a defect. A missing test alone does not make
-an otherwise completed review incomplete; disclose the unprotected behavior.
+Retain every substantive, source-supported improvement recommendation in report
+when the evidence does not establish a defect. This can include duplicated logic,
+mixed responsibilities, design tradeoffs, documentation or concrete test gaps.
+Identify the affected code, the specific maintenance or testing benefit, and a
+proportionate change; preserve qualifications. A long function or repetition
+alone is not proof of a defect. Do not discard useful advice merely because it
+does not qualify for a finding ID. Produce advice only where the inspected change
+supports it, without a topic checklist, item quota or generic calls to refactor.
+A missing test alone does not make an otherwise completed review incomplete;
+disclose the unprotected behavior.
 
 Give each field one job: summary states the defect; evidence shows the changed
 behavior, reachable trigger and observed or source-derived impact; counterevidence

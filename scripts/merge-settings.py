@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check current settings and add missing defaults without exposing private values."""
+"""Check settings, omit retired help and add defaults without exposing private values."""
 import json
 import math
 import sys
@@ -58,6 +58,13 @@ def current_settings(existing):
         raise ValueError("Legacy model settings are unsupported.")
     if any(key in models and not isinstance(models[key], dict) for key in ("review", "deep")):
         raise ValueError("Model roles must use the current nested layout.")
+    if "_help" in models:
+        help_text = models["_help"]
+        if not isinstance(help_text, dict) or any(
+            key not in ("functional", "risk", "verifier") or not isinstance(value, str)
+            for key, value in help_text.items()
+        ):
+            raise ValueError("Legacy model help must contain only role documentation strings.")
     if any(key in existing for key in ("steps", "maxStageCharacters", "structuredOutput", "azure", "comments", "auxiliaryModels", "outputRetries", "verification", "shellToolPermission")):
         raise ValueError("Removed settings are unsupported.")
 
@@ -72,8 +79,13 @@ def main():
         raw, existing = load(source_path)
         current_settings(defaults)
         current_settings(existing)
+        # Remove only the retired documentation, not model choices or other values.
+        # A stale defaults file must not add it back. Source files stay untouched.
+        removed_help = "_help" in existing.get("models", {})
+        existing.get("models", {}).pop("_help", None)
+        defaults.get("models", {}).pop("_help", None)
         added = merge(existing, defaults)
-        content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added else raw
+        content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added or removed_help else raw
         with open(destination, "x", encoding="utf-8") as stream:
             stream.write(content)
     except (ValueError, OSError, UnicodeError, RecursionError):
@@ -81,6 +93,8 @@ def main():
         print("ERROR: Settings must be readable, valid JSON objects with unique keys, finite numbers, and the current version-2 nested model layout without removed settings. No installed files were replaced. Fix the selected settings file or choose --settings FILE.", file=sys.stderr)
         return 1
     print("Settings defaults added: " + (", ".join(added) if added else "none."))
+    if removed_help:
+        print("Removed documentation-only models._help; see README.md for model-selection guidance.")
     return 0
 
 

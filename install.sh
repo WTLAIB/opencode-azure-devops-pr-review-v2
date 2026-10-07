@@ -13,8 +13,9 @@ usage() {
 Usage: sh install.sh [--settings FILE] [--replace] [--config-dir DIR]
   --settings    Select a trusted version-2 JSON profile and add missing defaults.
   --replace     Replace this V2 integration without keeping an installation backup.
-                Preserve existing values and add missing defaults.
+                Preserve operational settings and add missing defaults.
   --config-dir  OpenCode configuration directory (default: XDG_CONFIG_HOME/opencode).
+Retired models._help documentation is omitted with a notice.
 Python 3 (standard library only) is required to merge JSON safely.
 No npm install, pip packages, jq, sudo, or network access is required.
 README.md, docs/, uninstall.sh, and config/settings.schema.json are optional.

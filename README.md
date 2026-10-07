@@ -50,8 +50,9 @@ For a replacement of this V2 package:
 sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ```
 
-Existing current-layout settings retain their values; only absent defaults are
-filled in. Old layouts and removed settings are rejected, without migration.
+Existing current-layout operational settings retain their values; absent defaults
+are filled in. Retired `models._help` documentation is omitted with a notice.
+Old layouts and other removed settings are rejected, without migration.
 Runtime validation is authoritative. Replacement retains no routine installation
 backup; failure recovery preserves the previous package or reports its retained
 recovery location. Unrelated backups and private history are untouched.
@@ -116,12 +117,31 @@ This is a fragment of the installed example, not the complete settings file.
 Roles may use the same model ID but always receive independent sessions. Deep
 requires all three deep models and never falls back to normal models. Standalone
 `/pr-check` uses `models.review.risk`; comments use the originating review's risk
-model, including `models.deep.risk` for deep reviews. Model-selection guidance in
-`models._help` is documentation only.
+model, including `models.deep.risk` for deep reviews.
+
+Model-selection guidance belongs here and in the schema's editor descriptions,
+not in user settings. Both initial reviewers inspect the full PR independently;
+their focus differs:
+
+| Role | Focus and useful model capabilities |
+| --- | --- |
+| `functional` | Requirements, boundaries, state changes, API compatibility and regressions. Prefer strong code comprehension in the project's language. |
+| `risk` | Failures, retries, concurrency, authorization and data consistency. Prefer evidence-based reasoning across call paths and reliable MCP tools. This model also handles source checks and comments for its mode. |
+| `verifier` | Independently check both initial reviews against source, seek counterevidence, merge duplicates and produce the final report. Prefer strong evidence judgment, long-context handling and instruction following; this role must not just summarize or vote. |
+
+All roles benefit from reliable tool use and clear structured reviews, with
+approved data handling and acceptable cost. Role instructions live in
+`src/prompts/`; changing descriptive text is not a configuration mechanism.
+New settings contain no `models._help`. Existing files with that field remain
+readable, but it is ignored as before and marked deprecated in the schema.
+The installer removes this documentation-only field from the installed copy
+with a notice, preserving operational values and any supplied source profile.
+Already-clean complete settings retain their original bytes on replacement.
 
 | Setting | Default and meaning |
 | --- | --- |
-| `version` | `2`, the current settings layout. |
+| `$schema` | Editor schema reference for validation and hints; metadata, not a review option. |
+| `version` | Fixed at `2` to identify the settings layout; metadata, not a tuning option. |
 | `enabled` | `true`; false registers no private roles or commands. |
 | `returnReport` | `receipt`; `full` also returns the rendered report to the original conversation. |
 | `outputLanguage` | `en`; shared by initial reviews, the final report and comments. Use `zh-TW` for Traditional Chinese. |
@@ -151,6 +171,15 @@ Review IDs and commit SHAs remain in local records, without a public metadata li
 Review methods and test results need no separate account; missing notes leave
 out that section. Routine publication checks stay out of these notes; a summary
 is not approval.
+After the index, the summary explains confirmed findings without an inline
+comment, including low severity, and presents retained non-defect recommendations
+under a separate Improvement suggestions heading. Each suggestion identifies
+the affected code, a concrete benefit and a practical direction. Equivalent
+advice is combined, while every distinct supported recommendation retained by
+the verifier is carried forward. Sections appear only when there is content;
+no architecture/testing checklist or suggestion quota is required. Suggestions
+do not receive defect severity or inflate the issue counts. A review with no
+confirmed defects can still have useful suggestions.
 It is saved and published with the same explicit authorization and uncertainty
 tracking as inline comments, including when no inline comments are eligible.
 The summary starts with a 🤖 AI/model disclosure above its title and issue list.

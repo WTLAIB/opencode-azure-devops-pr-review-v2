@@ -72,9 +72,15 @@ and excluding transport wrappers; do not inherit the representative's offsets.
 Resolve discrepancies in confirmed findings. Missing location is not a refutation:
 use NEEDS_INFO when you cannot establish it; use INCOMPLETE for unfinished work.
 
-Keep useful, source-supported documentation, type-invariant or simplification
-advice in report as optional recommendations when it is not a defect. Do not
-create mandatory topic sections, scores, praise or new finding IDs to fill space.
+Evaluate the initial reports' non-defect recommendations against the inspected
+source too. Retain every distinct recommendation that remains useful in report,
+including your own supported improvements, with affected code, concrete benefit,
+suggested direction and qualifications. Merge equivalent advice without losing
+distinct concerns; discard refuted or irrelevant advice. The comment planner
+receives only this final report for such recommendations, so do not leave them
+only in an initial report or omit them merely because they are not bugs. Keep
+them separate from confirmed findings and unresolved questions. Do not create
+mandatory topic sections, scores, praise or new finding IDs to fill space.
 
 ## Final freshness
 
@@ -103,7 +109,8 @@ states the missing evidence. Preserve distinct triggers/impacts when merging.
 
 Correct locations in the finding once; describe a correction elsewhere only when
 it materially changes interpretation. report adds important exclusions with paired
-base/head evidence, material corrections, open questions and testing/scope limitations.
+base/head evidence, material corrections, retained improvement recommendations,
+open questions and testing/scope limitations.
 Do not restate identity, SHAs, coverage inventories or finding decisions already
 in structured fields. The runtime renders the validated snapshot, findings,
 reasons, model attribution and complete ID/status table. Explain material limits

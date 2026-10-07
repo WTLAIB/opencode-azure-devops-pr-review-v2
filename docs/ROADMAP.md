@@ -27,8 +27,12 @@ earlier results without treating retired behavior as current requirements.
   is not required in the summary. Existing stages author directly in outputLanguage,
   without an additional translation or polishing stage.
 - Leading severity icons and compact Summary/Evidence/Suggested fix inline comments
-  for verified high/medium findings. Low findings remain in the index. No numerical comment quota or
+  for verified high/medium findings. Low findings remain in the summary. No numerical comment quota or
   automatic promotion of severity is used.
+- Conditional summary details for confirmed findings without inline coverage
+  and every distinct non-defect recommendation retained by the verifier. Advice
+  travels through existing report fields, with no mandatory topic checklist,
+  suggestion quota, new defect IDs or extra model round. Empty sections are omitted.
 - Optional preview followed by explicit publication, or direct
   `/pr-comment --publish` that prepares and saves a plan first. Omitted IDs select
   the latest COMPLETE review in the origin, or the review associated with a result
@@ -43,10 +47,13 @@ earlier results without treating retired behavior as current requirements.
 - Source-only standalone readiness, cancellable model/MCP preflight, a bounded
   direct-tool registration observation period, exact-role/native-tool guards and
   private auxiliary-request rejection, including after restart.
-- V2 installation, current-layout settings preservation, conflict refusal,
+- V2 installation, current-layout operational settings preservation, conflict refusal,
   rollback and archival removal; offline tests and exact-host fresh/replacement
   fixtures in CI. Controlled live review/publication acceptance is recorded
   separately from fake-service and CI results.
+- Model-selection guidance in README and schema descriptions. New settings omit
+  documentation-only `models._help`; installation removes the legacy field with
+  a notice, while runtime readers remain compatible with existing files.
 
 ## Remaining validation and quality work
 
@@ -56,6 +63,9 @@ earlier results without treating retired behavior as current requirements.
 2. Assess review-note usefulness and natural language across more examples.
    Notes should add PR-wide context beyond the findings, without generic process
    inventories; relevant execution evidence remains with findings and local reports.
+   Check that supported improvement advice survives the initial/verifier/planner
+   handoffs and appears in Azure, including reviews with no confirmed defects.
+   Local fixtures verify data flow, not real-model recommendation completeness.
 3. Verify actual TUI notice rendering, result navigation and rendered Azure
    comments. Queue acknowledgement and API content/coordinate checks have narrower
    scope than a user-interface test.

@@ -6,6 +6,15 @@ Use the configured outputLanguage for human-facing comment titles, explanations,
 
 Publish one general summary per review, plus inline comments for confirmed, evidence-backed high/medium-impact defects only. Do not turn uncertainty, optional refactoring, style preferences, praise, or a clean bill of health into defect comments. The summary indexes confirmed findings (including low-severity findings that are not eligible inline), with an optional supported purpose or change overview before that index; review methods and test results need no separate account. Zero findings is not approval. A severity label describes impact, not a reviewer vote or merge decision. One root cause per thread; combine duplicate findings and skip existing non-deleted discussions even if resolved/closed. Resolved does not mean deleted. Never reopen, delete or resolve someone else's thread. Deletion does not clear attemptedFindings or authorize retrying an uncertain publication.
 
+The general summary also carries substantive non-defect recommendations retained
+by the final verifier, separately from the defect index. They are improvement
+suggestions, not low-severity bugs or merge conditions. Preserve every distinct
+retained recommendation, with affected code, a concrete benefit and a suggested
+direction. Include useful explanations for confirmed findings not covered inline,
+including low severity. Do not require a section for every review topic or invent
+advice to populate an empty section. The complete local report is not a public
+comment template; keep private diagnostics and unsupported initial claims local.
+
 For duplicate checks, inspect actual remaining comment text, not historical thread
 IDs, status numbers or source coordinates. Prefer the tool's documented full
 response option when a summary omits comments or deletion state. An explicitly

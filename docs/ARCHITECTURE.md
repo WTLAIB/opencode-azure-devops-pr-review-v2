@@ -38,7 +38,11 @@ nine prompts and private settings. The Python settings helper runs only during
 installation. No top-level loader or
 Markdown command expansion is involved. Optional docs/schema/uninstaller do not
 change runtime requirements. The installer merges missing current defaults;
-obsolete profiles/keys fail instead of being migrated. See README's exact list.
+retired `models._help` documentation is omitted with a notice, without changing
+operational values or a supplied source file. Runtime/schema readers still accept
+that legacy documentation, but new settings omit it. Model-selection guidance
+belongs in README and schema descriptions. Other obsolete profiles/keys fail
+instead of being migrated. See README's exact list.
 
 ## Explicit commands and private roles
 
@@ -274,6 +278,16 @@ or supported fix priorities. Review IDs and commit SHAs remain in local records;
 the summary marker still binds the review and exact HEAD without a visible metadata line.
 Review methods and test results need no separate account;
 missing/malformed notes omit that section without affecting the saved summary.
+Optional planner `summaryDetails` adds Markdown after the index: explanations
+for confirmed findings without inline coverage and a separate section for every
+distinct retained non-defect recommendation. The existing initial/verifier
+`report` fields carry advice; the planner receives only the final report and
+does not derive new defect IDs from it. Sections are conditional, with no topic
+checklist, item quota or extra model stage. Detail text has no plugin length cap;
+the introduction and inline bodies keep their separate limits. The runtime
+escapes quoted HTML-comment delimiters and saves the complete detail as part of
+the same single general-summary item. Missing optional detail is not a new gate
+or proof that no advice was found; semantic completeness remains model behavior.
 Routine publication bookkeeping stays local. Shared language instructions request
 natural explanations during existing stages, without a translation model pass.
 No inline findings still permits publishing the saved summary.

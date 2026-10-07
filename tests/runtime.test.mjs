@@ -677,6 +677,37 @@ test('direct summary-only publication preserves skip reasons', async t => {
   assert.equal(f.calls.some(c => c.tool === 'fixture_mcp_write'), true);
 });
 
+test('retained non-defect advice reaches a saved summary and publication without another review', async t => {
+  const advice={F:'/src/Main.java：集中共用的輸入解析，避免兩個入口日後支援不同格式。',R:'/src/Main.java：將輸出格式化獨立成函式，方便單獨測試；目前行為符合需求。'};
+  const summaryDetails=`### 💡 改善建議\n\n- ${advice.F}\n- ${advice.R}`;
+  const finalReport=`${summaryDetails}\n\nPrivate diagnostic: FIXTURE_SOURCE_READ_RECOVERED`;
+  const f=await fixture(t,{settings(s){s.outputLanguage='zh-TW';},result({role,packet,result}){
+    const spec=ROLES[role];
+    if(spec.format==='initial') {result.findings=[];result.report=advice[spec.prefix];}
+    if(spec.format==='final') {
+      assert.deepEqual(packet.reviews.map(r=>r.report).sort(),Object.values(advice).sort());
+      result.report=finalReport;
+    }
+    if(spec.stage==='comment-plan') {
+      assert.equal(packet.report,finalReport);assert.deepEqual(packet.findings,[]);
+      result.summaryDetails=summaryDetails;
+    }
+    return result;
+  }});
+  assert.match(await f.command(),/] COMPLETE/);
+  const preview=await f.command('pr-comment','');
+  assert.match(preview,/] PREVIEW/);assert.ok(preview.includes(summaryDetails));
+  assert.equal(f.calls.some(c=>c.tool==='fixture_mcp_write'),false);
+  assert.match(await f.command('pr-comment','--publish'),/] MODEL_REPORTED_POSTED/);
+  assert.equal(f.prompts().length,5);
+  const packet=JSON.parse(f.prompts().at(-1).text);
+  assert.deepEqual(Object.keys(packet).sort(),['comments','outputLanguage','snapshot','summary','target']);
+  assert.deepEqual(packet.comments,[]);assert.ok(preview.includes(packet.summary.content));
+  assert.ok(packet.summary.content.includes(summaryDetails));
+  assert.doesNotMatch(packet.summary.content,/FIXTURE_SOURCE_READ_RECOVERED/);
+  assert.equal(f.calls.filter(c=>c.kind==='executed-tool'&&c.tool==='fixture_mcp_write').length,1);
+});
+
 test('cancelling direct publication during planning never starts a publisher', async t => {
   const started = deferred(), release = deferred();
   const f = await fixture(t, { async during({ session }) {

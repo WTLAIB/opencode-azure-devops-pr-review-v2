@@ -22,6 +22,36 @@ are not a required summary topic. Do not repeat findings/counts or narrate the
 review process. Routine identity/anchor/discussion/deletion checks and generic
 merge-base caveats stay out of summary; required publication checks still apply.
 
+## Preserve useful feedback in the summary
+
+Use optional summaryDetails for Markdown after the runtime's issue index. Keep
+the brief purpose/change overview in summary. Include only sections with content:
+
+- Additional finding details: explain every confirmed finding that will not have
+  a proposed inline comment, including low severity, with its supported location,
+  trigger/impact and correction. If an existing substantive discussion already
+  covers it, a brief reference to the actual returned discussion is sufficient.
+  If source or anchoring checks leave a gap, state that specific limit instead of
+  inventing coordinates or restating a contradicted claim as established fact.
+- Improvement suggestions: carry every distinct non-defect recommendation retained
+  in the final report. Identify affected files/functions where supported, what
+  could improve, why it helps and a proportionate direction. Preserve conditions
+  and tradeoffs. Do not assign defect severity, invent finding IDs or repeat a
+  confirmed defect's correction as a separate non-defect recommendation.
+
+Use localized headings, for example `### Additional finding details` and
+`### 💡 Improvement suggestions`; for zh-TW use `### 補充問題說明` and
+`### 💡 改善建議`. Merge equivalent advice while retaining distinct concerns.
+Do not silently select only the top few items or omit advice because it is not a
+bug. Keep each item concise without a total item or character quota for this
+field. Do not fill architecture/testing/documentation categories by rote, add
+empty headings or generic advice, copy the private report wholesale, or include
+run IDs, commit SHAs, rejected hypotheses or private diagnostics. Omit
+summaryDetails when there is no additional finding explanation or retained advice.
+Before returning, compare the final findings and retained recommendations with
+the proposed summary, inline comments and existing discussions for lost substance.
+This uses the existing review, not a new review or model request.
+
 ## Source and comment planning
 
 reviewToolText contains successful text observations already captured during this
@@ -40,8 +70,11 @@ unclear, skip it with a reason instead of inventing a corrected claim here.
 
 Rank by actual impact. Include all independently actionable eligible findings (possibly zero); there is no numerical comment quota. Skip every ID in attemptedFindings and skip duplicates by meaning, including human-written discussions without an AZPR marker. Read existing marker-bearing threads too. Do not move an anchor or change wording to evade duplicate checks. Every supplied finding must appear exactly once in comments or skipped. For duplicates within this batch, choose one representative and explain the other IDs in skipped. New verifier findings are eligible only if supplied in findings; do not extract arbitrary prose into new IDs.
 
-Return this JSON envelope; summary is optional. The example illustrates structure,
+Return this JSON envelope; summary and summaryDetails are optional. The example illustrates structure,
 not facts: replace its placeholders with supported content in outputLanguage.
+Use a single JSON encoding layer for Markdown strings. After decoding, code
+examples must contain the intended source characters, not extra backslashes
+introduced while quoting JSON.
 ```json
 {
   "status": "READY",
@@ -75,7 +108,7 @@ failed". For example:
 ```
 The reason is local diagnostic text, never a PR comment. Older output without a
 reason remains readable and explicitly reports that the model gave no reason.
-No publishable plan will be saved for INCOMPLETE. The body limit is 1,200
+No publishable plan will be saved for INCOMPLETE. The inline body limit is 1,200
 characters; anchors and skip explanations stay local. The runtime appends the
 AI/model disclosure and deduplication marker outside that body limit; do not
 generate your own attribution footer. It will be visible in the saved plan.
@@ -86,8 +119,10 @@ stay in local records; do not include them in the summary prose. Do not generate
 the runtime fields or pretend the summary is a finding. The optional summary
 string adds the review notes described above, up to 1,200 characters. Missing or
 malformed optional prose leaves out that section, without an extra model request.
-Existing discussions
-suppress duplicate inline comments, not the new review's index.
+summaryDetails adds the supported feedback described above after that index;
+neither optional field changes defect counts, inline eligibility or publication
+authorization. Existing discussions suppress duplicate inline comments, not the
+new review's index.
 
 Use 📝 Summary, 🔎 Evidence and 💡 Suggested fix as compact bold labels in each body.
 Keep the prose in outputLanguage; these reading labels may remain English. Make

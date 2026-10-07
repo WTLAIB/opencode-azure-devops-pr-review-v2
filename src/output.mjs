@@ -42,13 +42,14 @@ export function stageFormat(role) {
     merged: array(object({ id: string, mergedInto: string, reason: string })),
     rejected: array(object({ id: string, reason: string })),
     needsInfo: array(object({ id: string, reason: string })),
-    newFindings: array(finding), report: { ...string, description: 'Brief independent checks, important exclusions, open questions and testing/scope limitations in outputLanguage. Do not repeat findings or disposition reasons: the runtime renders those structured fields.' },
+    newFindings: array(finding), report: { ...string, description: 'Important exclusions, all retained source-supported improvement recommendations, open questions and testing/scope limitations in outputLanguage. Recommendations identify affected code, the concrete benefit and a proportionate change without claiming a defect. Do not repeat findings or disposition reasons: the runtime renders those structured fields.' },
   });
   else if (kind === 'comment-plan') schema = object({
     status: status('READY', 'INCOMPLETE'),
     comments: array(object({ findingId: string, severity: status('high', 'medium'), path: string, startLine: { type: 'integer' }, endLine: { type: 'integer' }, anchor: string, body: string })),
     skipped: array(object({ findingId: string, reason: string })),
     summary: { ...string, description: 'Optional one or two sentences before the issue index. Begin with the purpose supported by the PR description or requirements; otherwise describe what changed without guessing intent. Add shared impact or a supported fix priority only when useful. Use the completed review and available PR context; omit when there is nothing to add. Exclude finding recaps/counts, review-process narration, run IDs, commit SHAs and private diagnostics; preserve limitations that materially qualify conclusions.' },
+    summaryDetails: { ...string, description: 'Optional Markdown after the issue index, in outputLanguage. Carry every distinct non-defect improvement recommendation retained in the final report, with affected code, benefit, suggested direction and qualifications. Separately explain confirmed findings not covered inline, including low severity, or point to their existing substantive discussion. Use only sections with actual content; no topic checklist, invented findings, defect severity for advice, item quota or private report dump. Preserve material evidence limits.' },
   }, ['status', 'comments', 'skipped']);
   else if (kind === 'comment-publish') schema = object({
     status: status('DONE', 'INCOMPLETE'), posted: array(object({ findingId: string, threadId: { type: ['string', 'integer'] } })),

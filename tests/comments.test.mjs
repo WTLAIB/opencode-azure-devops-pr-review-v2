@@ -56,6 +56,46 @@ test('zero findings still produce a saved summary without a clean bill of health
   assert.equal(recordPublishResult({status:'DONE',posted:[]},r),false);
   assert.equal(recordPublishResult({status:'DONE',posted:[],summaryThreadId:42},r),true);
 });
+test('summary details retain all advice and non-inline explanations beyond the introduction limit', () => {
+  const r=review(), low={...verifiedFinding(),id:'V-1',severity:'low',summary:'Diagnostic omits the input name'};
+  r.final.newFindings=[low];
+  const advice=Array.from({length:12},(_,i)=>`- /src/handler-${i+1}.ts: Move its repeated input parsing into the existing shared parser, so supported input formats can be updated consistently without changing this handler's behavior.`).join('\n');
+  const summaryDetails=`### Additional finding details\n\n- V-1: /src/example.ts:2 omits the input name on invalid input, making diagnosis harder. Include the name in the diagnostic.\n\n### 💡 Improvement suggestions\n\n${advice}`;
+  assert.ok(summaryDetails.length>1200);
+  const plan=validateCommentPlan({...draft(),summary:'These handlers accept optional inputs.',summaryDetails,skipped:[{findingId:'V-1',reason:'Low severity stays in the summary.'}]},r);
+  assert.ok(plan.summary.content.includes(summaryDetails));
+  assert.ok(plan.summary.content.indexOf(summaryDetails)>plan.summary.content.indexOf(low.summary));
+  assert.match(plan.summary.content,/high: 1.*medium: 0.*low: 1/);
+  assert.equal(plan.comments.length,1);assert.equal(publicationItems(plan).length,2);
+  assert.deepEqual(confirmedFindings(r).map(f=>f.id),['F-1','V-1']);
+  assert.equal(plan.summary.marker,validateCommentPlan({...draft(),skipped:plan.skipped},r).summary.marker);
+});
+test('advice-only summaries need no finding IDs, severity or empty topic sections', () => {
+  const r=review();r.final.dispositions=[];
+  const empty={status:'READY',comments:[],skipped:[]};
+  const baseline=validateCommentPlan(empty,r);
+  for(const summaryDetails of [undefined,null,42,{},[],true,'',' \n ']) {
+    assert.deepEqual(validateCommentPlan({...empty,summaryDetails},r),baseline);
+  }
+  assert.doesNotMatch(baseline.summary.content,/Improvement suggestions|Additional finding details/);
+  const summaryDetails='### 💡 Improvement suggestions\n\n- /src/example.ts: Separate parsing from response formatting to make the formats independently testable; the current behavior is supported.';
+  r.plan=validateCommentPlan({...empty,summaryDetails},r);
+  assert.ok(r.plan.summary.content.includes(summaryDetails));
+  assert.match(r.plan.summary.content,/No confirmed defects.*does not establish/);
+  assert.equal(publicationItems(r.plan).length,1);
+  assert.equal(recordPublishResult({status:'DONE',posted:[],summaryThreadId:42},r),true);
+});
+test('summary details quote HTML comments literally and survive saved-text restoration', () => {
+  const quoted='<!-- azpr-comment:'+ 'c'.repeat(32)+' -->';
+  const summaryDetails=`### 💡 Improvement suggestions\n\nExplain the template marker \`${quoted}\` in /src/example.ts for future maintainers.`;
+  const plan=validateCommentPlan({...draft(),summaryDetails},review()), saved=plan.summary;
+  assert.ok(saved.content.includes(quoted.replace('<!--','&lt;!--').replace('-->','--&gt;')));
+  assert.equal((saved.content.match(/<!-- azpr-comment:/g)??[]).length,1);
+  const input={content:saved.content.replace('Explain the template marker','Changed advice'),search:saved.marker,path:'/unrelated'};
+  const result=restoreSavedCommentText(input,publicationItems(plan));
+  assert.deepEqual(result.input,{...input,content:saved.content});
+  assert.deepEqual(result.restored,['PR summary']);
+});
 test('summary publication participates in incomplete outcomes and validates before mutation', () => {
   const r=planned(),before=[...r.attempts];
   assert.throws(()=>recordPublishResult({status:'DONE',summaryThreadId:42,posted:[{findingId:'F-1',threadId:42}]},r));
