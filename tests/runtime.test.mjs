@@ -267,18 +267,34 @@ test('shell and foreign tools are hidden and refused; shell is forced to deny th
   assert.equal(event.effect, 'deny');
   const own = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: [join(f.stateDirectory, 'data', 'x', '*')], effect: 'ask' });
   assert.equal(own.effect, 'allow');
-  const foreign = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: ['/etc/*'], effect: 'ask' });
-  assert.equal(foreign.effect, 'ask');
+  // Unattended private sessions never wait for approval: a repository path used with a native tool is refused at once.
+  const foreign = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: ['/scale_lab/*'], effect: 'ask' });
+  assert.equal(foreign.effect, 'deny');
+  assert.match(foreign.message, /PR repository paths such as \/src\/app\.ts are read with azpr_read_file/);
+  const secret = await f.emit('permission', 'evaluate', { agent: 'azpr-review-verifier', action: 'read', resources: ['/project/.env'], effect: 'ask' });
+  assert.equal(secret.effect, 'deny');
+  assert.match(secret.message, /run unattended/);
+  const allowed = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'read', resources: ['/project/a.ts'], effect: 'allow' });
+  assert.equal(allowed.effect, 'allow');
+  const ordinaryAsk = await f.emit('permission', 'evaluate', { agent: 'build', action: 'external_directory', resources: ['/etc/*'], effect: 'ask' });
+  assert.equal(ordinaryAsk.effect, 'ask', 'Ordinary sessions keep the host decision.');
   const ordinary = await f.emit('permission', 'evaluate', { agent: 'build', action: 'shell', resources: ['*'], effect: 'allow' });
   assert.equal(ordinary.effect, 'allow');
 });
 
-test('shell: "inherit" keeps the host decision and exposes the tool', async t => {
+test('shell: "inherit" keeps the host decision and exposes the tool; only an allowed shell may wait for approval', async t => {
   const f = await fixture(t, { settings(s) { s.shell = 'inherit'; } });
   await f.command();
   assert.ok(f.sessionsFor('azpr-review-functional')[0].visibleTools.includes('shell'));
   const event = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'shell', resources: ['*'], effect: 'allow' });
   assert.equal(event.effect, 'allow');
+  const prompted = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'shell', resources: ['*'], effect: 'ask' });
+  assert.equal(prompted.effect, 'ask', 'With inherit, the host may ask the user for shell commands.');
+  const other = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: ['/repo/*'], effect: 'ask' });
+  assert.equal(other.effect, 'deny', 'Nothing but shell may wait for approval.');
+  const g = await fixture(t, { settings(s) { s.shell = 'ask'; } });
+  const ask = await g.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'shell', resources: ['*'], effect: 'allow' });
+  assert.equal(ask.effect, 'ask', 'shell: "ask" is the explicit opt-in to approvals.');
 });
 
 test('a hung Azure DevOps read is aborted, retried and reported without blocking the review', async t => {

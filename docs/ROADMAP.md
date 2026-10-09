@@ -79,16 +79,21 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
 
 ## Remaining validation work
 
-1. Run a full real-model review of a large Azure DevOps PR: sharded reviews,
-   overflow splits and verifier sharding. A one-file PR passed review and
-   publication with read-back, and a 316-file PR passed `/pr-check` with a
-   complete change list (see [validation](VALIDATION.md)).
+1. Plan and publish comments for a large PR. A 316-file PR passed a full
+   real-model review (26 initial and 4 verification sessions, all COMPLETE) and
+   a one-file PR passed publication with read-back (see
+   [validation](VALIDATION.md)).
 2. Confirm that a PAT limited to Code (Read) and Pull Request Threads
    (Read & write) is sufficient.
 3. Measure how often correction turns and retries happen per model, and tune
    `workflow` defaults from those numbers.
-4. Check rendered comments, inline anchors and summaries in the Azure UI.
-5. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
+4. Reduce the input-token cost of initial reviews: the 316-file review used
+   about 7.4 million input tokens, mostly tool output re-sent with every model
+   request of long initial sessions. Candidates are a tool that returns HEAD
+   and BASE hunks instead of two full files, smaller shards and provider prompt
+   caching; measure before changing defaults.
+5. Check rendered comments, inline anchors and summaries in the Azure UI.
+6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
 
 ## Quality principles

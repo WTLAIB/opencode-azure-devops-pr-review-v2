@@ -493,3 +493,20 @@ test('replacement moves the retired mcp limits into azure and never prints the P
   assert.equal(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).azure.pat, TEAM_PAT);
   original(s); clean(s);
 });
+
+test('a closed output pipe never leaves a lock or a staged copy of private settings', () => {
+  const s = setup(); ok(install(s, ['--settings', profile(s)]));
+  const quoted = value => `'${value.replaceAll("'", "'\\''")}'`;
+  for (const args of [['--replace'], ['--replace', '--settings', profile(s)]]) {
+    // `head -c 1` closes the pipe after one byte, as `| head -1` did in a live run.
+    const result = spawnSync('/bin/sh', ['-c', `sh ${quoted(join(pkg, 'install.sh'))} --config-dir ${quoted(s.root)} ${args.map(quoted).join(' ')} 2>&1 | head -c 1 >/dev/null`], { encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, 0, result.stderr);
+    clean(s);
+    assert.ok(existsSync(installed(s, 'runtime.mjs')) && existsSync(installed(s, 'settings.json')));
+    assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
+  }
+  const removal = spawnSync('/bin/sh', ['-c', `sh ${quoted(join(pkg, 'uninstall.sh'))} --config-dir ${quoted(s.root)} --apply 2>&1 | head -c 1 >/dev/null`], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(removal.status, 0, removal.stderr);
+  clean(s);
+  assert.ok(!existsSync(installed(s, 'runtime.mjs')), 'The package was archived.');
+});

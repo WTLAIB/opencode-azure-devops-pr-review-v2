@@ -18,6 +18,7 @@ lock=$root/.azpr-v2-install.lock
 mkdir "$lock" 2>/dev/null || { printf 'Installation lock exists: %s\n' "$lock" >&2; exit 1; }
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT
 trap 'exit 130' HUP INT TERM
+trap '' PIPE
 for sub in plugins plugins/azpr-v2 azpr-v2-backups; do
   [ ! -L "$root/$sub" ] || { printf 'Resolve symlink manually: %s\n' "$sub" >&2; exit 1; }
 done
@@ -43,5 +44,7 @@ if ! mv -- "$target" "$backup/plugins/azpr-v2"; then
   printf 'Archive failed; inspect the source and destination before retrying.\n' >&2
   exit 1
 fi
+{
 printf 'Archived: %s\nRestart OpenCode.\n' "$backup"
 printf 'Saved reviews stay in %s/opencode/azpr-v2; delete that directory yourself when no longer needed.\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
+} 2>/dev/null || true

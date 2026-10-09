@@ -718,15 +718,24 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (capabilities.permissionHook) {
       // Enforce the shell setting and allow reads of AZPR's own private data,
       // regardless of permission rules the host appends after this plugin.
+      // Private reviewers run unattended: a request that would wait for
+      // approval is refused at once. Only shell keeps host approvals, and only
+      // when the user allowed it (shell: "ask" or "inherit").
       registrations.push(await context.permission.hook('evaluate', event => {
         if (!privateAgent(event.agent)) return;
-        if (event.action === 'shell' && ownRole(event.agent)) {
+        if (event.action === 'shell') {
           if (settings.shell === 'deny') { event.effect = 'deny'; event.message = 'AZPR settings deny shell for private reviewers (shell: "deny").'; }
           else if (settings.shell === 'ask' && event.effect === 'allow') event.effect = 'ask';
         }
         if (event.action === 'external_directory' && Array.isArray(event.resources) && event.resources.length &&
             event.resources.every(resource => typeof resource === 'string' && resource.replace(/[*?].*$/, '').startsWith(store.root + '/'))) {
           event.effect = 'allow';
+        }
+        if (event.effect === 'ask' && !(event.action === 'shell' && settings.shell !== 'deny')) {
+          event.effect = 'deny';
+          event.message = event.action === 'external_directory'
+            ? 'AZPR reviewers cannot use paths outside the local OpenCode project. PR repository paths such as /src/app.ts are read with azpr_read_file and azpr_list_files, not with native read, glob or grep.'
+            : 'AZPR reviewers run unattended and cannot wait for an approval, so this request is denied.';
         }
       }));
     }

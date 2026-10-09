@@ -89,6 +89,9 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
+# A closed output pipe (for example `| head`) must not kill the installer before
+# cleanup: writes then fail instead, and a failure before success rolls back.
+trap '' PIPE
 
 # Refuse conflicts rather than trying to rewrite JSONC.
 for config in "$root/opencode.json" "$root/opencode.jsonc" "$root/config.json"; do
@@ -153,6 +156,8 @@ mkdir -p "$root/plugins"
 printf '%s\n' "$target" >> "$stage/installed"
 mv -- "$stage/new/$target" "$root/$target"
 success=1
+# Informational output only; an unwritable output must not fail a completed install.
+{
 printf '\nAzure PR Review installed (target host: @opencode/cli 2.0.22; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
@@ -161,3 +166,4 @@ cat <<'TXT'
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
 Settings have not been API-validated. The plugin refuses incomplete configuration.
 TXT
+} 2>/dev/null || true

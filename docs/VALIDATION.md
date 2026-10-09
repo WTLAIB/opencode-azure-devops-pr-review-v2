@@ -14,14 +14,15 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 227 tests across settings (including the
+`npm run check` and `npm test` pass: 228 tests across settings (including the
 `mcp` → `azure` migration), host helpers, session transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
 logged), the reviewers' tools, output acceptance and correction prompts, comment
 validation and markers, planning and publication, review sharding, persistence,
-rendering, installation and the runtime integration (fake host plus a fake Azure
-DevOps REST service).
+rendering, installation (including an output pipe closed mid-install, which
+used to leave the lock and a staged copy of the previous settings) and the
+runtime integration (fake host plus a fake Azure DevOps REST service).
 
 ## REST API version check
 
@@ -47,6 +48,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | `/pr-comment` | PREVIEW, then `--publish` POSTED one summary and one inline comment with markers and file context. |
 | Restart | After restarting the host, `/pr-comment --publish` returned POSTED with ALREADY_PRESENT, no new writes and no model request. |
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
+| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. |
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
 | Private sessions | Generate and compaction on a private session sent no provider request; ordinary generation still worked. |
 | TUI | New and existing TUI sessions kept their origin and cancelled from the same TUI. |
@@ -93,10 +95,38 @@ the first attempt. The test comments were deleted after the read-back.
 `/pr-check` of PR #3 (316 changed files) returned READY with all 316 files as a
 complete list and the merge base; through MCP 2.9.0 the runtime saw 100.
 
+## Live run: large PR (Azure DevOps Services, real model)
+
+PR kevin888y/OpenCode #3 (316 changed files), the same models, language and
+service; `/pr-review` only, nothing was posted.
+
+The first attempt stalled 45 seconds in: in four reviewer sessions the model ran
+native `grep` on the repository path `/scale_lab`, OpenCode asked for
+`external_directory` approval, and the unattended private sessions waited for
+30 minutes until the run was stopped (about 950,000 input tokens were spent).
+Private sessions now refuse at once any request that would wait for an approval
+(shell excepted when the `shell` setting allows it) and point the model to the
+azpr tools; the exact-host smoke test reproduces the `grep` and passes.
+
+The second attempt was COMPLETE:
+
+| Property | Observed |
+| --- | --- |
+| Duration | 626 s: initial review 541 s, verification 80 s |
+| Initial review | 26 sessions (2 roles × 13 shards of up to 25 files), all COMPLETE; no correction turn, stage retry, overflow, tool failure or blocked tool; about 1,550 tool calls |
+| Verification | 4 sessions, all COMPLETE without a correction turn; 48 candidates → 25 confirmed (7 high, 17 medium, 1 low), 23 merged duplicates, none rejected |
+| Azure DevOps | 593 REST calls: 587 file versions each fetched once (the run cache served every other read), one 404 for a path the model guessed, no retry needed; median 259 ms, p95 1.0 s |
+| Approval prompts | None |
+| Tokens | About 7.44 million input tokens (about 280,000 per initial session, 32,000 per verification session) and 79,000 output tokens |
+
+One duplicate remained in the report (`F-2001` and `R-2001`, the same cause in
+`worker_capacity.py`): count-based verification shards had put that file's two
+findings into different verifiers. Verification shards now end only between
+files; a unit test reproduces the 48-finding distribution.
+
 ## Not yet validated
 
-- A full real-model review of a large PR (for example PR #3): sharding, overflow
-  splits and verifier sharding on real data.
+- Comment planning and publication on a large PR (25 confirmed findings).
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.

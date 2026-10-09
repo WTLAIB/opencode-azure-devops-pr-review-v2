@@ -147,6 +147,11 @@ input snapshot; \`version\` is "head" (default), "base" or a full commit SHA:
 Batch independent reads and reuse what you already read. Calls are queued,
 time-limited and retried by the runtime.
 
+Native read, glob and grep see only the local OpenCode project and AZPR's
+private data files, never the PR repository: a repository path such as
+/src/app.ts exists only through the azpr tools. There is no repository-wide
+search; list folders and read the candidate files instead.
+
 A failed read is not evidence. Do not repeat a request that failed as not found,
 refused or invalid; a timeout or throttling error was already retried, so report
 the gap. The "N | " prefixes of file reads are line numbers, not source text.
@@ -155,7 +160,7 @@ Never use public web tools, delegation, file edits or session or model controls.
 AZPR's tools are read-only; the runtime alone posts comments.`;
 
 const shellPolicy = shell => shell === 'deny'
-  ? '\n\n# Local commands\nShell is unavailable in this session. Read and search tools may inspect the current project when useful.'
+  ? '\n\n# Local commands\nShell is unavailable in this session. Native read, glob and grep may inspect the local OpenCode project when useful; it is not the PR repository.'
   : `\n\n# Local commands\nShell may be available under OpenCode permissions${shell === 'ask' ? ' (each command asks the user)' : ''}. Use it only for optional, focused verification in a fresh temporary directory with files copied from AZPR tool reads at the exact SHA. Commands run with real host authority: never modify existing project files, install packages, use credentials or contact services. Report what ran and its actual result.`;
 
 const COMMENT_DATA_POLICY = `

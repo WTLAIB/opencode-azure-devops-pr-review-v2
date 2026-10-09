@@ -60,8 +60,10 @@ After preflight, hooks never re-read settings or catalogs.
 3. **Overflow** — private sessions may not compact. A compaction request (or a
    413) marks the stage as `overflow`; the runtime splits that shard in half
    and runs both halves (labels `shard 1/5a`, `1/5b`).
-4. **Verification** — findings are grouped by file into shards of
-   `workflow.shardFindings`. Each verifier decides its assigned IDs and may
+4. **Verification** — findings are grouped by file into shards of at most
+   `workflow.shardFindings`; shards end only between files, so every finding on
+   a file reaches the same verifier (a file is split only when it alone has
+   more findings than a shard holds). Each verifier decides its assigned IDs and may
    merge into any original ID. Missing or invalid decisions trigger a repair
    turn asking only for those IDs; leftovers become UNREVIEWED (or NEEDS_INFO
    for incomplete confirmations).
@@ -133,8 +135,12 @@ the run, role, model and a pending prompt (text + nonce). Hooks enforce it:
 - `model.request`: only primary requests after an authorized context; compaction,
   generation and title requests are refused (compaction marks overflow).
 - `retry`: host retries continue only while the grant is active.
-- `permission` `evaluate`: enforces the `shell` setting for private roles and
-  allows reads of AZPR's own private data directory.
+- `permission` `evaluate`: enforces the `shell` setting for private roles,
+  allows reads of AZPR's own private data directory and refuses at once any
+  other request that would wait for an approval (private sessions run
+  unattended); only shell under `shell: "ask"` or `"inherit"` may wait. A
+  native read, glob or grep on a repository path is refused with a pointer to
+  the azpr tools.
 - `tool.execute.before`: refuses any tool outside the allowlist and delegation.
 - `tool.execute.after`: records tool outcomes and pages large comment-tool
   results into private files.

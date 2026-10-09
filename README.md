@@ -139,7 +139,7 @@ planning uses the review's risk model.
 | `azure.concurrency` | `3` simultaneous Azure DevOps calls across all AZPR commands. |
 | `azure.callTimeoutSeconds` | `120`; a hung call is aborted and its slot released (reads are retried). |
 | `workflow.shardFiles` | `25` changed files per initial-review session. |
-| `workflow.shardFindings` | `15` findings per verification session. |
+| `workflow.shardFindings` | At most `15` findings per verification session; one file's findings stay in the same session (a file is split only when it alone has more). |
 | `workflow.parallelSessions` | `4` reviewer sessions at once within a command. |
 | `workflow.repairAttempts` | `2` correction turns when an answer breaks the output contract. |
 | `workflow.stageRetries` | `1` new-session retry after a transient failure (provider 429/5xx, interrupted stream). |

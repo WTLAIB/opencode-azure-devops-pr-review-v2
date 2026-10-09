@@ -21,6 +21,14 @@ test('shard helpers keep directories together and group findings by file', () =>
   const groups = shardFindings([finding('R-1', '/z.ts'), finding('F-2', '/a.ts'), finding('F-1', '/a.ts')], 2);
   assert.deepEqual(groups.map(group => group.map(f => f.id)), [['F-1', 'F-2'], ['R-1']]);
   assert.deepEqual(shardFindings([], 3), [[]]);
+  // Shards end between files: two reviewers' findings on one file stay together (PR #3 split worker_capacity.py).
+  const live = Array.from({ length: 24 }, (_, file) => ['F', 'R'].map(role => finding(`${role}-${1001 + file}`, `/p/f${String(file).padStart(2, '0')}.py`))).flat();
+  const shards = shardFindings(live, 15);
+  assert.deepEqual(shards.map(group => group.length), [14, 14, 14, 6]);
+  for (const group of shards) assert.ok(group.every(f => live.filter(other => locationPath(other.location) === locationPath(f.location)).every(other => group.includes(other))));
+  // Only a single file with more findings than a shard is split.
+  const crowded = [...Array.from({ length: 5 }, (_, i) => finding(`F-${i + 1}`, '/big.py')), finding('R-1', '/small.py')];
+  assert.deepEqual(shardFindings(crowded, 2).map(group => group.map(f => f.id)), [['F-1', 'F-2'], ['F-3', 'F-4'], ['F-5'], ['R-1']]);
 });
 
 test('runPool keeps order and bounds parallelism', async () => {
@@ -73,11 +81,13 @@ test('initial reviews are sharded per role with disjoint ID ranges, then verifie
     [['/a/1.ts', '/a/2.ts'], ['/b/1.ts', '/b/2.ts'], ['/c.ts']]);
   assert.deepEqual(final.findings.map(x => x.id).sort(), ['F-1', 'F-1001', 'F-2001', 'R-1', 'R-1001', 'R-2001']);
   const verifiers = f.calls.filter(call => call.role === 'azpr-review-verifier');
-  assert.equal(verifiers.length, 2);
+  // Two findings per file and three per shard: each file's findings stay in one verification session.
+  assert.equal(verifiers.length, 3);
+  for (const call of verifiers) assert.equal(new Set(call.payload.assignment.findings.map(x => locationPath(x.location))).size, 1);
   assert.equal(final.status, 'COMPLETE');
   assert.equal(final.dispositions.length, 6);
   assert.ok(final.dispositions.every(d => d.status === 'REJECTED'));
-  assert.match(final.report, /Verification shard 1\/2/);
+  assert.match(final.report, /Verification shard 1\/3/);
   assert.equal(final.coverage['azpr-review-risk'].covered, 5);
   assert.ok(f.notices.some(message => /6 session\(s\)/.test(message)));
 });

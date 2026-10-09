@@ -15,6 +15,12 @@ The default protects you from prompt injection: reviewers read untrusted PR
 content, and an injected instruction must not be able to run commands on your
 machine.
 
+Private reviewers run unattended, so no other request may wait for an approval:
+anything the host would ask about (for example a native read, glob or grep
+outside the local project, which is what a PR repository path like
+`/src/app.ts` looks like to OpenCode) is refused at once with an explanation.
+Reviewers read the PR repository only through AZPR's tools.
+
 When shell is allowed, reviewers may run focused checks — existing tests, a
 small reproduction, static analysis — in a fresh temporary directory with files
 copied from AZPR tool reads at the exact commit. Commands run with real host

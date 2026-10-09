@@ -23,12 +23,31 @@ export function locationPath(location) {
   return match ? match[1] : '';
 }
 
-/** Group findings for verification by file so related claims share a session. */
+/**
+ * Group findings for verification by file so related claims share a session:
+ * shards end only between files. One file's findings are split only when that
+ * file alone has more findings than a shard holds.
+ */
 export function shardFindings(findings, size) {
   if (!findings.length) return [[]];
   const sorted = [...findings].sort((a, b) => locationPath(a.location).localeCompare(locationPath(b.location)) || a.id.localeCompare(b.id, undefined, { numeric: true }));
+  const files = [];
+  for (const finding of sorted) {
+    const path = locationPath(finding.location);
+    if (files.at(-1)?.path === path) files.at(-1).findings.push(finding);
+    else files.push({ path, findings: [finding] });
+  }
   const shards = [];
-  for (let index = 0; index < sorted.length; index += size) shards.push(sorted.slice(index, index + size));
+  let current = [];
+  for (const { findings: group } of files) {
+    if (current.length && current.length + group.length > size) { shards.push(current); current = []; }
+    if (group.length > size) {
+      for (let index = 0; index < group.length; index += size) shards.push(group.slice(index, index + size));
+      continue;
+    }
+    current.push(...group);
+  }
+  if (current.length) shards.push(current);
   return shards;
 }
 

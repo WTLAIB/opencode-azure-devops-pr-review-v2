@@ -59,7 +59,8 @@ const provider = createServer(async (request, response) => {
   for await (const chunk of request) body += chunk;
   const parsed = JSON.parse(body);
   const sessionID = request.headers['x-opencode-session-id'];
-  requests.push({ path: request.url, model: parsed.model, sessionID, tools: (parsed.tools ?? []).map(tool => tool.function?.name), last: textOf(lastUser(parsed.messages)).slice(0, 200) });
+  requests.push({ path: request.url, model: parsed.model, sessionID, tools: (parsed.tools ?? []).map(tool => tool.function?.name), last: textOf(lastUser(parsed.messages)).slice(0, 200),
+    lastTool: textOf(parsed.messages?.findLast(message => message.role === 'tool')?.content).slice(0, 600) });
   let payload;
   try { payload = JSON.parse(textOf(firstUser(parsed.messages))); } catch { /* ordinary chat */ }
   const repair = textOf(lastUser(parsed.messages)).startsWith('AZPR runtime');
@@ -75,6 +76,8 @@ const provider = createServer(async (request, response) => {
   if (payload?.assignment?.files && !payload.assignment.findingIds) {
     const files = payload.assignment.files;
     if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
+    // A reviewer mistaking a repository path for a local one must get an answer, not a pending approval.
+    else if (toolResults === 1 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/scale_lab' } };
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
   } else if (payload?.assignment?.findingIds) {
     const findings = payload.assignment.findings;
@@ -215,6 +218,9 @@ try {
   assert.ok(reviewRequests.every(request => ['azpr_read_file', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
   assert.ok(reviewRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools are hidden from private reviewers.');
   assert.ok(azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === 'b'.repeat(40)), 'A reviewer read HEAD through azpr_read_file.');
+  assert.ok(reviewRequests.some(request => request.model === 'functional' && /outside the local OpenCode project/.test(request.lastTool)),
+    'A native grep on a repository path is refused with guidance instead of waiting for approval.');
+  assert.equal((await api('/api/permission/request')).data?.length ?? 0, 0, 'No private session waits for an approval.');
   const verifierRequests = reviewRequests.filter(request => request.model === 'verifier');
   assert.equal(new Set(verifierRequests.map(request => request.sessionID)).size, 1, 'The repair turn stays in the verifier session.');
   assert.ok(verifierRequests.some(request => request.last.startsWith('AZPR runtime')), 'The verifier received a correction request.');

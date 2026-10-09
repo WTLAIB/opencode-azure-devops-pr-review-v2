@@ -124,6 +124,7 @@ test('prompts: one JSON transport, shared tool policy, shell guidance and langua
     assert.match(agent.system, /one valid JSON object/);
     assert.match(agent.system, /azpr_read_file[\s\S]*azpr_list_files[\s\S]*azpr_pr_threads/);
     assert.match(agent.system, /the runtime alone posts comments/);
+    assert.match(agent.system, /never the PR repository/);
     assert.doesNotMatch(agent.system, /MCP|repo_file|repo_pull_request/);
     assert.match(agent.system, /Shell is unavailable in this session/);
     assert.match(agent.system, /outputLanguage: zh-TW/);
