@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createReviewSession, createRuntimeSession, requestReview as sendReview, interruptSession, appendReport, classifyFailure, restartIndex } from '../src/session.mjs';
+import { createReviewSession, requestReview as sendReview, interruptSession, appendReport, classifyFailure, restartIndex } from '../src/session.mjs';
 
 const sessionID = 'ses_review';
 const input = 'https://example.test/pr/2 literal $ARGUMENTS `pwd` @private.txt';
@@ -325,15 +325,6 @@ test('failure classification drives stage retries and shard splitting', () => {
   assert.equal(classifyFailure(failure({ terminalOutcome: 'interrupted', interrupted: true })), 'permanent');
   assert.equal(classifyFailure(Object.assign(new Error('x'), { contextChanged: true })), 'transient');
   assert.equal(classifyFailure(new Error('bad request')), 'permanent');
-});
-
-test('runtime sessions are model-less children bound to the runtime agent', async () => {
-  const { context, calls } = host({ create: async value => ({ id: 'ses_runtime', ...value }) });
-  const made = await createRuntimeSession(context, { origin: 'ses_origin', title: 'runtime', agent: 'azpr-runtime' });
-  assert.equal(made.id, 'ses_runtime');
-  assert.deepEqual(calls[0].args[0], { parentID: 'ses_origin', title: 'runtime', agent: 'azpr-runtime' });
-  const wrong = host({ create: async value => ({ id: 'ses_runtime', ...value, agent: 'build' }) });
-  await assert.rejects(createRuntimeSession(wrong.context, { origin: 'ses_origin', title: 'runtime', agent: 'azpr-runtime' }), /runtime session/);
 });
 
 test('a model that restarts its answer after a stream interruption keeps only the restarted text', async () => {

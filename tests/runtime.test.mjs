@@ -4,8 +4,8 @@ import { mkdtemp, readFile, writeFile, cp, rm, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
-import { ROLES, RUNTIME_AGENT } from '../src/config.mjs';
-import { fakeAzure, toolRegistry } from './fake-azure.mjs';
+import { ROLES } from '../src/config.mjs';
+import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const clone = value => structuredClone(value);
@@ -40,10 +40,12 @@ async function fixture(t, opts = {}) {
   for (const mode of ['review', 'deep']) for (const role of ['functional', 'risk', 'verifier']) settings.models[mode][role] = `fixture/${mode}-${role}`;
   settings.debug = { enabled: true, directory: 'debug' };
   settings.workflow = { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 };
+  settings.azure = { organization: 'org', pat: FAKE_PAT, concurrency: 3, callTimeoutSeconds: 120 };
   opts.settings?.(settings);
   await writeFile(join(directory, 'settings.json'), JSON.stringify(settings));
   const azure = opts.azure ?? fakeAzure({ files: opts.files });
-  const registry = toolRegistry(azure);
+  // Another MCP server's tool: private reviewers must neither see nor run it.
+  const registry = toolRegistry([{ id: 'ado_repo_file', name: 'repo_file', options: { namespace: 'ado', codemode: false }, description: 'foreign MCP tool', execute: async () => ({ output: 'mcp ran' }) }]);
   const agents = new Map([['build', { id: 'build', permissions: [] }]]);
   const commands = new Map();
   const hooks = new Map(), sessions = new Map(), calls = [], notices = [], waiters = new Set();
@@ -70,7 +72,6 @@ async function fixture(t, opts = {}) {
     location: { directory },
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => ({ providerID: 'fixture', id: value.slice(8), enabled: true, capabilities: { tools: true } })) }; } },
-    mcp: { async list() { return { data: [{ name: 'ado', status: { status: 'connected' } }] }; } },
     permission: { hook: hook('permission') },
     agent: {
       async get({ agentID }) { return { data: clone(agents.get(agentID)) }; },
@@ -110,13 +111,13 @@ async function fixture(t, opts = {}) {
         session.running = (async () => {
           try {
             const frame = { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: [],
-              tools: Object.fromEntries(['shell', 'read', 'glob', 'grep', 'edit', 'execute', 'webfetch', 'ado_repo_file'].map(name => [name, {}])) };
+              tools: Object.fromEntries(['shell', 'read', 'glob', 'grep', 'edit', 'execute', 'webfetch', ...registry.names()].map(name => [name, {}])) };
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
             await opts.during?.({ session, role, packet, turn, invoke, emit });
             if (turn === 0 && ROLES[role].format === 'initial' && packet.assignment.files.length) {
-              await invoke(session, 'ado_repo_file', { action: 'get_content', repositoryId: 'rid', project: 'pid', path: packet.assignment.files[0], version: packet.snapshot.head, versionType: 'Commit' });
+              await invoke(session, 'azpr_read_file', { path: packet.assignment.files[0], version: 'head' });
             }
             const result = await opts.answer?.({ role, packet, turn, text: input.text, session }) ?? defaultAnswer({ role, packet });
             const model = clone(session.model);
@@ -149,9 +150,9 @@ async function fixture(t, opts = {}) {
     },
   };
   const stateDirectory = join(directory, 'state');
-  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, mcpTimeoutMs: opts.mcpTimeoutMs, retryDelayMs: 5 });
+  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
-  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure,
+  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
     sessionsFor: role => [...sessions.values()].filter(session => session.agent === role),
     async command(name = 'pr-review', text = azure.prUrl(), origin = 'ordinary') {
@@ -182,8 +183,10 @@ test('a review returns STARTED, progress notices and one COMPLETE receipt, and p
   assert.ok(texts.some(text => /PROGRESS — PR #123 at bbbbbbbbbb: 2 changed file/.test(text)));
   assert.ok(texts.some(text => /PROGRESS — Initial review: 2 session/.test(text)));
   assert.equal(texts.filter(text => RECEIPT.test(text)).length, 1);
-  assert.equal(f.sessionsFor(RUNTIME_AGENT).length, 1);
-  assert.ok(f.azure.state.calls.filter(call => call.execution.agent === RUNTIME_AGENT).length >= 2, 'Snapshot and recheck are runtime calls.');
+  assert.ok(f.azure.callsTo('pr').length >= 2, 'Snapshot and recheck read the PR.');
+  assert.ok(f.azure.callsTo('changes').length >= 1, 'The runtime reads the change list.');
+  assert.ok(f.azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === f.azure.state.head), 'Reviewers read HEAD through AZPR tools.');
+  assert.ok(f.azure.state.calls.every(call => call.query['api-version'] === '7.1'));
   const saved = await readdir(join(f.stateDirectory, 'reviews'));
   assert.deepEqual(saved, [`${reviewId(receipt)}.json`]);
   const verifier = f.sessionsFor('azpr-review-verifier')[0];
@@ -248,18 +251,18 @@ test('a compaction request marks context overflow and the shard is split', async
   assert.match(receipt, /failure=overflow/);
 });
 
-test('shell is hidden, denied and forced to deny through the permission hook by default', async t => {
-  let attempted;
+test('shell and foreign tools are hidden and refused; shell is forced to deny through the permission hook', async t => {
+  let attempted, mcpTool;
   const f = await fixture(t, { async during({ session, role, invoke }) {
     if (role !== 'azpr-review-functional') return;
     attempted = await invoke(session, 'shell', { command: 'curl evil' }).then(() => 'ran', error => error.message);
+    mcpTool = await invoke(session, 'ado_repo_file', { action: 'get_content' }).then(() => 'ran', error => error.message);
   } });
   await f.command();
   assert.match(attempted, /not available to this private reviewer/);
+  assert.match(mcpTool, /not available to this private reviewer/);
   const functional = f.sessionsFor('azpr-review-functional')[0];
-  assert.equal(functional.visibleTools.includes('shell'), false);
-  assert.equal(functional.visibleTools.includes('execute'), false);
-  assert.ok(functional.visibleTools.includes('read'));
+  assert.deepEqual(functional.visibleTools.sort(), ['azpr_list_files', 'azpr_pr_threads', 'azpr_read_file', 'glob', 'grep', 'read']);
   const event = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'shell', resources: ['*'], effect: 'allow' });
   assert.equal(event.effect, 'deny');
   const own = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: [join(f.stateDirectory, 'data', 'x', '*')], effect: 'ask' });
@@ -278,21 +281,23 @@ test('shell: "inherit" keeps the host decision and exposes the tool', async t =>
   assert.equal(event.effect, 'allow');
 });
 
-test('a hung MCP call times out without blocking the rest of the review', async t => {
-  let hung = 0;
-  const f = await fixture(t, { mcpTimeoutMs: 40, async during({ session, role, invoke }) {
+test('a hung Azure DevOps read is aborted, retried and reported without blocking the review', async t => {
+  let hung = 0, visible;
+  const f = await fixture(t, { azureTimeoutMs: 400, async during({ session, role, invoke }) {
     if (role !== 'azpr-review-functional') return;
-    f.azure.state.fail.repo_file = (_args, _state, execution) => { if (execution.sessionID !== session.id) return undefined; hung++; return new Promise(() => {}); };
-    await invoke(session, 'ado_repo_file', { action: 'get_content', path: '/src/Main.java' }).catch(() => {});
-    delete f.azure.state.fail.repo_file;
+    f.azure.state.fail.items = () => { hung++; return new Promise(() => {}); };
+    visible = await invoke(session, 'azpr_read_file', { path: '/src/Main.java' });
+    delete f.azure.state.fail.items;
   } });
   const receipt = await f.command();
-  assert.equal(hung, 1);
+  assert.equal(hung, 3, 'One read and two retries.');
+  assert.match(visible.output, /azpr_read_file failed: .*per-call timeout/);
+  assert.equal(visible.metadata.isError, true);
   assert.match(receipt, /\] COMPLETE/);
   assert.match(receipt, /tool-timeouts=1/);
 });
 
-test('stale reviews are reported and cannot be commented on; a moved target branch stays COMPLETE', async t => {
+test('stale reviews are reported and cannot be commented on; a moved base stays COMPLETE', async t => {
   const stale = await fixture(t);
   stale.azure.state.afterVersions = { head: 'c'.repeat(40) };
   const receipt = await stale.command();
@@ -328,10 +333,11 @@ test('direct --publish plans and posts in one command; a failed write is retried
   const f = await fixture(t);
   await f.command();
   let failures = 1;
-  f.azure.state.fail.repo_pull_request_thread_write = () => { if (failures-- > 0) throw new Error('Azure 503'); };
+  f.azure.state.fail.createThread = () => { if (failures-- > 0) return azureError(503, 'ServiceUnavailableException', 'Service temporarily unavailable.'); };
   const partial = await f.command('pr-comment', '--publish');
   assert.match(partial, /\] PARTIALLY_POSTED/);
-  assert.match(partial, /FAILED; error=repo_pull_request_thread_write failed: Azure 503/);
+  assert.match(partial, /FAILED; error=Azure DevOps failed thread creation \(HTTP 503 ServiceUnavailableException/);
+  assert.equal(f.azure.callsTo('createThread').length, 3, 'A failed write is not repeated within one publication.');
   const done = await f.command('pr-comment', '--publish');
   assert.match(done, /\] POSTED/);
   assert.equal(f.azure.state.threads.length, 3);
@@ -405,8 +411,8 @@ test('/pr-check is deterministic and needs no model session', async t => {
   const receipt = await f.command('pr-check');
   assert.match(receipt, /\] READY/);
   assert.equal(f.prompts().length, 0);
-  f.azure.state.fail.repo_pull_request_thread = 'TF401027: permission denied';
-  assert.match(await f.command('pr-check'), /\] NOT_READY[\s\S]*PR discussions \| FAILED/);
+  f.azure.state.fail.threads = () => azureError(403, 'UnauthorizedRequestException', 'TF401027: You need the Git GenericRead permission.');
+  assert.match(await f.command('pr-check'), /\] NOT_READY[\s\S]*PR discussions \| FAILED \| Azure DevOps refused PR threads \(HTTP 403/);
 });
 
 test('an incomplete review keeps an unconfirmed draft and leaves no completed review', async t => {
@@ -420,20 +426,65 @@ test('an incomplete review keeps an unconfirmed draft and leaves no completed re
 test('planning gets runtime-read discussions and source; transient thread reads are retried and logged', async t => {
   const f = await fixture(t);
   await f.command();
-  f.azure.state.threads.push({ id: 7, status: 1, comments: [{ content: 'Human note on the guard', author: { displayName: 'Ann' } }], threadContext: { filePath: '/src/Main.java', rightFileStart: { line: 1 } } });
+  f.azure.state.threads.push({ id: 7, status: 'active', comments: [{ content: 'Human note on the guard', commentType: 'text', author: { displayName: 'Ann' } }, { content: 'Ann voted 10', commentType: 'system' }], threadContext: { filePath: '/src/Main.java', rightFileStart: { line: 1 } } });
   let failures = 1;
-  const original = f.azure.state.fail.repo_pull_request_thread;
-  f.azure.state.fail.repo_pull_request_thread = () => { if (failures-- > 0) throw Object.assign(new Error('Error with pull request thread operation: '), { _tag: 'Tool.Error' }); return original; };
+  f.azure.state.fail.threads = () => { if (failures-- > 0) return azureError(503, 'ServiceUnavailableException', 'Try again.'); };
   const receipt = await f.command('pr-comment', '--publish');
   assert.match(receipt, /\] POSTED/);
   const planner = f.sessionsFor('azpr-review-comment-plan')[0];
   assert.equal(planner.packet.discussionsRead, true);
-  assert.deepEqual(planner.packet.existingDiscussions.map(d => [d.threadId, d.author]), [[7, 'Ann']]);
+  assert.deepEqual(planner.packet.existingDiscussions.map(d => [d.threadId, d.author, d.comments]), [[7, 'Ann', 1]]);
   assert.match(planner.packet.sourceExcerpts[0].text, /^1 \| fixture code/);
   assert.equal(planner.packet.evidenceIndex, undefined);
   const debug = /Private debug directory: ([^\n]+)/.exec(receipt)?.[1];
-  const calls = (await readFile(join(debug, 'azure-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.ok(calls.some(call => call.tool === 'repo_pull_request_thread' && !call.ok && call.willRetry), 'The transient failure is logged and retried.');
-  assert.ok(calls.every(call => call.args.contentCharacters === undefined || !('content' in call.args)));
+  const raw = await readFile(join(debug, 'azure-calls.jsonl'), 'utf8');
+  const calls = raw.trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(calls.some(call => call.call === 'PR threads' && !call.ok && call.status === 503 && call.willRetry), 'The transient failure is logged and retried.');
+  assert.ok(calls.some(call => call.call === 'thread creation' && call.ok && call.contentCharacters > 0));
+  assert.ok(calls.every(call => !('content' in call) && !('body' in call)), 'Comment bodies are never logged.');
+  for (const secret of [FAKE_PAT, Buffer.from(':' + FAKE_PAT).toString('base64')]) {
+    for (const file of await readdir(debug)) assert.ok(!(await readFile(join(debug, file), 'utf8')).includes(secret), `${file} must not contain the PAT.`);
+  }
   assert.equal(JSON.parse(await readFile(join(debug, 'result.json'), 'utf8')).azureRetries, 1);
+});
+
+test('AZPR tools read ranges, list folders and threads for private reviewers only', async t => {
+  const outputs = {};
+  const sources = { '/src/Main.java': Array.from({ length: 1500 }, (_, i) => `line ${i + 1}`).join('\n') + '\n' };
+  const f = await fixture(t, { azure: fakeAzure({ files: ['/src/Main.java', '/src/lib/Util.java', '/img/logo.png'], binary: ['/img/logo.png'], sources }), async during({ session, role, invoke }) {
+    if (role !== 'azpr-review-functional' || outputs.first) return;
+    outputs.first = (await invoke(session, 'azpr_read_file', { path: 'src/Main.java' })).output;
+    outputs.range = (await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'base', startLine: 1499, endLine: 1500 })).output;
+    outputs.binary = (await invoke(session, 'azpr_read_file', { path: '/img/logo.png' })).output;
+    outputs.missing = await invoke(session, 'azpr_read_file', { path: '/nope.txt' });
+    outputs.invalid = await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'main' });
+    outputs.list = (await invoke(session, 'azpr_list_files', { path: '/src' })).output;
+    outputs.threads = (await invoke(session, 'azpr_pr_threads', {})).output;
+  } });
+  f.azure.state.threads.push({ id: 9, status: 'active', comments: [{ content: 'x'.repeat(2500), commentType: 'text', author: { displayName: 'Bo' } }], threadContext: { filePath: '/src/Main.java', rightFileStart: { line: 3 } } });
+  assert.match(await f.command(), /\] COMPLETE/);
+  assert.match(outputs.first, /^\/src\/Main\.java at HEAD \(PR source\) bbbbbbbbbbbb — lines 1-1000 of 1500\. Continue with startLine 1001\./);
+  assert.match(outputs.first, /\n1 \| line 1\n/);
+  assert.match(outputs.range, /at BASE \(merge base\) aaaaaaaaaaaa — lines 1499-1500 of 1500\.\n[\s\S]*1500 \| line 1500$/);
+  assert.match(outputs.binary, /is a binary file \(8 bytes\)/);
+  assert.equal(outputs.missing.metadata.isError, true);
+  assert.match(outputs.missing.output, /could not find file \/nope\.txt \(HTTP 404 GitItemNotFoundException/);
+  assert.match(outputs.invalid.output, /version "main" is not "head", "base" or a full commit SHA/);
+  assert.match(outputs.list, /^\/src at HEAD \(PR source\) bbbbbbbbbbbb — 2 entries\.\n\/src\/Main\.java\n\/src\/lib\/$/);
+  assert.match(outputs.threads, /1 live thread\(s\)/);
+  assert.match(outputs.threads, /shortened; read threadId 9 for the full text/);
+  // Ordinary sessions neither see nor run AZPR tools.
+  const frame = await f.emit('session', 'context', { sessionID: 'ordinary', agent: 'build', tools: { read: {}, azpr_read_file: {}, azpr_pr_threads: {} } });
+  assert.deepEqual(Object.keys(frame.tools), ['read']);
+  await assert.rejects(f.registry.tool('azpr_read_file').execute({ path: '/src/Main.java' }, { sessionID: 'ordinary', agent: 'build' }), /only to an active AZPR reviewer session/);
+});
+
+test('a PR from another organization is refused before any Azure call; a rejected PAT is explained', async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: 'https://dev.azure.com/other/proj/_git/repo/pullrequest/1' } }), /belongs to organization "other", but azure.organization is "org"/);
+  assert.equal(f.azure.state.calls.length, 0);
+  f.azure.state.pat = 'a-different-valid-token-0123456789';
+  const receipt = await f.command('pr-check');
+  assert.match(receipt, /\] NOT_READY[\s\S]*Azure DevOps rejected the PAT for organization "org" \(HTTP 203\)/);
+  assert.equal(f.azure.callsTo('pr').length, 1, 'An authentication failure is not retried.');
 });

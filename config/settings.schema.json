@@ -150,30 +150,38 @@
       "default": true,
       "description": "Queue short PROGRESS notices to the invoking conversation during long reviews and publication. They never start a model response."
     },
-    "mcp": {
+    "azure": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Azure DevOps MCP access shared by all AZPR workflows in one OpenCode process.",
+      "required": [
+        "organization",
+        "pat"
+      ],
+      "description": "Azure DevOps REST access (api-version 7.1) shared by all AZPR workflows in one OpenCode process. No MCP server is used.",
       "properties": {
-        "server": {
+        "organization": {
           "type": "string",
-          "default": "",
-          "maxLength": 200,
-          "description": "Name of the OpenCode MCP server running @azure-devops/mcp. Empty detects the single server that exposes repo_pull_request."
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,49}$",
+          "description": "Azure DevOps organization name: the <org> in https://dev.azure.com/<org>. PR URLs of other organizations are refused."
+        },
+        "pat": {
+          "type": "string",
+          "minLength": 20,
+          "description": "Personal access token for that organization (scopes: Code Read; Pull Request Threads Read & write). Sent only to https://dev.azure.com/<org> and never logged. Keep this file private (mode 600)."
         },
         "concurrency": {
           "type": "integer",
           "minimum": 1,
           "maximum": 8,
           "default": 3,
-          "description": "Simultaneous MCP calls across all AZPR workflows. This limits parallelism, never total work."
+          "description": "Simultaneous Azure DevOps calls across all AZPR workflows. This limits parallelism, never total work."
         },
         "callTimeoutSeconds": {
           "type": "integer",
           "minimum": 10,
           "maximum": 1800,
           "default": 120,
-          "description": "Per-call timeout. A hung call is abandoned and its slot released so other reviews keep running."
+          "description": "Per-call timeout. A hung call is aborted and its slot released so other reviews keep running; reads are retried."
         }
       }
     },

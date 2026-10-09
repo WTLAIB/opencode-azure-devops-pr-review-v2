@@ -9,7 +9,7 @@ import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
 import { ROLES } from '../src/config.mjs';
 import { validateSettings } from '../src/config.mjs';
-import { fakeAzure } from './fake-azure.mjs';
+import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 
 const finding = (id, path = '/src/a.ts') => ({ id, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', location: `head:${path}:3`, severity: 'medium', suggestion: 's' });
 
@@ -34,12 +34,11 @@ async function context(t, { files, workflow = {}, behave }) {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-review-work-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const azure = fakeAzure({ files });
-  const tools = new Map(azure.definitions().map(tool => [tool.name, { ...tool, namespace: 'ado' }]));
-  const client = createAzureClient({ server: () => ({ namespace: 'ado', tools }), queue: createToolQueue({ concurrency: 3, timeoutMs: 1000 }), agent: 'azpr-runtime' });
-  const settings = validateSettings({ version: 2, models: { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' } }, workflow });
+  const client = createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 3, timeoutMs: 1000 }), fetch: azure.fetch, retryDelayMs: 1 });
+  const settings = validateSettings({ version: 2, models: { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' } }, workflow, azure: { organization: 'org', pat: FAKE_PAT } });
   const store = await createCommentData({ root: directory });
   const calls = [], notices = [];
-  const run = { id: 'run12345', profile: 'review', active: true, runtimeSessionID: 'ses_runtime', controller: new AbortController(), stages: [] };
+  const run = { id: 'run12345', profile: 'review', active: true, controller: new AbortController(), stages: [] };
   const runStage = async (stageRun, role, payload, handler, options) => {
     calls.push({ role, payload, label: options.label });
     let evaluation, text;
@@ -99,13 +98,13 @@ test('a shard that overflows its context is split in half and retried', async t 
   assert.ok(f.notices.some(message => /splitting the shard/.test(message)));
 });
 
-test('only a changed source commit makes a review STALE; a moved target branch is a warning', async t => {
+test('only a changed source commit makes a review STALE; a moved base is a warning', async t => {
   const behave = async ({ role, payload }) => ROLES[role].format === 'initial' ? initial(payload, [finding(`${ROLES[role].prefix}-1`)]) : verdicts(payload);
   const moved = await context(t, { files: ['/src/a.ts'], behave });
   moved.azure.state.afterVersions = { base: 'd'.repeat(40) };
   const drift = await runReview(moved.ctx, moved.run, moved.request);
   assert.equal(drift.status, 'COMPLETE');
-  assert.ok(drift.reviewWarnings.some(message => /target branch moved/.test(message)));
+  assert.ok(drift.reviewWarnings.some(message => /PR base moved during the review/.test(message)));
   const changed = await context(t, { files: ['/src/a.ts'], behave });
   changed.azure.state.afterVersions = { head: 'c'.repeat(40) };
   const stale = await runReview(changed.ctx, changed.run, changed.request);
@@ -155,7 +154,9 @@ test('an incomplete Azure file list asks reviewers to discover paths and records
     }
     return verdicts(payload);
   } });
-  f.azure.state.filesComplete = false;
+  // The REST inventory is complete unless it exceeds the paging bound; simulate that.
+  const snapshot = f.ctx.azure.snapshot;
+  f.ctx.azure = { ...f.ctx.azure, snapshot: async (...args) => ({ ...(await snapshot(...args)), filesComplete: false }) };
   const final = await runReview(f.ctx, f.run, f.request);
   assert.deepEqual(final.discoveredFiles, ['/hidden.ts']);
   assert.ok(final.reviewWarnings.some(message => /incomplete changed-file list/.test(message)));

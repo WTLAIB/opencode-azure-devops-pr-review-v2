@@ -1,7 +1,7 @@
 # AI development guide
 
 This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.0.22`), the official `@azure-devops/mcp` (tested with 2.9.0)
+`@opencode/cli@2.0.22`), the Azure DevOps Services REST API (api-version 7.1)
 and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
@@ -18,8 +18,12 @@ backups and failure records. Never upload `.local/`.
 **Deterministic facts are code; judgment is model work.**
 - PR identity, commit SHAs, the changed-file list, version rechecks, existing
   threads and all Azure DevOps writes go through `azure.mjs`, which calls the
-  connected MCP server's `repo_*` tools via captured executors and the private
-  `azpr-runtime` agent. Keep MCP tool names in `azure.mjs` only.
+  REST API with `azure.organization` and `azure.pat` from AZPR's settings. Keep
+  REST paths and the pinned api-version in `azure.mjs` only; never log, echo or
+  persist the PAT, and send it only to the organization's REST endpoint.
+- Models read the repository only through the read-only tools in
+  `review-tools.mjs`, registered with `codemode: false`; private roles see an
+  explicit tool allowlist and ordinary sessions never see AZPR's tools.
 - Models review, verify and plan comment text. They never echo identity or SHAs
   and never write to Azure DevOps.
 
@@ -34,7 +38,7 @@ backups and failure records. Never upload `.local/`.
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
-- All AZPR MCP traffic shares the queue in `tool-queue.mjs` (concurrency and
+- All AZPR Azure DevOps traffic shares the queue in `tool-queue.mjs` (concurrency and
   per-call timeout). Release slots in `finally`; never depend on a hook running.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
   compact, and a compaction request means "split this shard".
@@ -72,7 +76,7 @@ Detect capabilities; do not assume them.
 
 ## Verification and delivery
 
-Run `npm run check` and `npm test`. For changes touching hooks, sessions, MCP or
+Run `npm run check` and `npm test`. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
 `--replace`) and `node tests/host-v2-comment-scale.mjs <opencode binary>`.
 Installer tests must preserve unrelated files and private settings, reject

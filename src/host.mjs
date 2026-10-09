@@ -30,9 +30,6 @@ export function recordOf(value) {
   return isRecord(value) ? value : null;
 }
 
-/** MCP namespaces are sanitized the same way OpenCode names MCP tools. */
-export const sanitizeNamespace = name => String(name).replace(/[^a-zA-Z0-9_-]/g, '_');
-
 export function hostVersion(context) {
   return typeof context?.app?.version === 'string' ? context.app.version : 'unknown';
 }
@@ -45,7 +42,6 @@ export function hostCapabilities(context) {
     tested: version === TESTED_HOST_VERSION,
     permissionHook: fn('permission.hook'),
     toolTransform: fn('tool.transform'),
-    toolList: fn('tool.list'),
     sessionRemove: fn('session.remove'),
   };
 }

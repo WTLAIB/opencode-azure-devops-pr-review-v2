@@ -22,7 +22,7 @@ export function discussionDigest(threads) {
   for (const thread of threads ?? []) {
     if (thread?.isDeleted === true) continue;
     const comments = (Array.isArray(thread?.comments) ? thread.comments : [])
-      .filter(comment => comment?.isDeleted !== true && typeof comment?.content === 'string' && comment.content.trim());
+      .filter(comment => comment?.isDeleted !== true && comment?.commentType !== 'system' && typeof comment?.content === 'string' && comment.content.trim());
     if (!comments.length) continue;
     const context = thread.threadContext ?? {};
     const first = comments[0];
@@ -60,7 +60,7 @@ export function sourceWindow(text, { start = null, end = null, context = 25, who
 }
 
 async function planningInput(review, store, findings, report, work, continuation, prepared, extras) {
-  const { files, changes, description, ...snapshot } = review.snapshot;
+  const { files, changes, description, snapshotWarnings, iteration, ...snapshot } = review.snapshot;
   const sources = extras.sourceExcerpts ?? [];
   const covered = new Set(sources.flatMap(item => item.findingIds));
   const needsEvidence = findings.some(finding => !covered.has(finding.id));
@@ -139,7 +139,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         const fetched = [];
         for (const [path, pending] of sourceText) {
           const text = await pending;
-          if (text !== null) fetched.push({ tool: 'azpr-runtime', input: { path, version: review.snapshot.head }, output: text });
+          if (text !== null) fetched.push({ tool: 'runtime', input: { path, version: review.snapshot.head }, output: text });
         }
         return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head)] };
       };

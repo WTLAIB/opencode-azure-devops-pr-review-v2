@@ -14,17 +14,17 @@ trigger pipelines, and do not access unrelated data or secrets.
 
 `snapshot` was read deterministically from Azure DevOps by the runtime:
 - `head` is the PR source commit: the proposed code under review.
-- `base` is the PR target commit used for comparison. It is the target branch
-  state, not a proven merge base: differences that exist only on the target
-  are not regressions introduced by this PR.
-- `repositoryId` and `projectId` identify the repository for MCP calls.
+- `base` is the merge base Azure DevOps compares the PR with (`baseKind`
+  "merge-base"): differences that exist only on the target branch are not part
+  of this PR. When `baseKind` is "target", Azure reported no merge base and
+  `base` is the target branch tip, so target-only differences can appear.
 - `files` lists the changed paths (possibly as an azprData reference). When
   `filesComplete` is false, Azure returned only part of the list.
 - `title` and `description` state the author's intent; `userContext` is the
   requester's extra guidance for this command only.
 
-Do not re-derive, echo or second-guess these values. Read source at exactly
-`head` and `base`.
+Do not re-derive, echo or second-guess these values. Read source with AZPR's
+tools at version "head" and "base".
 
 ## HEAD versus BASE
 

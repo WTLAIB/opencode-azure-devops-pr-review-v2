@@ -1,163 +1,172 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import {
-  AZURE_TOOLS, buildSnapshot, changeTypes, createAzureClient, decodeToolResult, markersInThreads, parsePullRequestUrl,
-  prStatus, selectAzureServer, targetKey, transientAzureError, toolText,
+  API_VERSION, buildSnapshot, changeTypes, createAzureClient, isBinary, latestIteration, markersInThreads, prStatus, prVersions, restBaseUrl,
 } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
-import { fakeAzure } from './fake-azure.mjs';
+import { fakeAzure, azureError, FAKE_PAT } from './fake-azure.mjs';
 
-const target = parsePullRequestUrl('https://dev.azure.com/org/proj/_git/repo/pullrequest/123');
-const pr = (extra = {}) => ({
-  pullRequestId: 123, status: 1, title: 'T', description: 'D', url: 'https://dev.azure.com/org/pid/_apis/git/repositories/rid/pullRequests/123',
+const target = { organization: 'org', project: 'proj', repository: 'repo', pullRequestId: 123 };
+const H = 'A'.repeat(40), M = 'B'.repeat(40), T = 'C'.repeat(40);
+const pr = (extra = {}) => ({ pullRequestId: 123, status: 'active', title: 'T', description: 'D', isDraft: false,
   repository: { id: 'rid', name: 'repo', project: { id: 'pid', name: 'proj' } },
-  lastMergeSourceCommit: { commitId: 'B'.repeat(40) }, lastMergeTargetCommit: { commitId: 'a'.repeat(40) },
-  changedFilesSummary: { changeEntries: [
-    { changeType: 2, item: { path: '/src/a.ts' } },
-    { changeType: 'delete', item: { path: 'src/gone.ts' } },
-    { changeType: 10, item: { path: '/src/new.ts' }, originalPath: '/src/old.ts' },
-    { changeType: 1, item: { path: '/src', isFolder: true } },
-    { changeType: 2, item: { path: '/src/a.ts' } },
-  ], fileCount: 5 },
-  ...extra,
-});
+  lastMergeSourceCommit: { commitId: H }, lastMergeTargetCommit: { commitId: T }, sourceRefName: 'refs/heads/f', targetRefName: 'refs/heads/main', ...extra });
+const iterations = [{ id: 1, sourceRefCommit: { commitId: 'd'.repeat(40) }, commonRefCommit: { commitId: M } },
+  { id: 2, sourceRefCommit: { commitId: H }, commonRefCommit: { commitId: M }, targetRefCommit: { commitId: T } }];
+const run = () => ({ id: 'run1', controller: new AbortController() });
+const client = (azure, options = {}) => createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 2000 }),
+  retryDelayMs: 1, fetch: options.fetch ?? azure.fetch, onCall: options.onCall });
 
-test('snapshot comes from one PR read: identity, lowercased SHAs, normalized unique paths and change types', () => {
-  const snapshot = buildSnapshot(pr(), target);
-  assert.equal(snapshot.head, 'b'.repeat(40));
-  assert.equal(snapshot.repositoryId, 'rid');
-  assert.equal(snapshot.projectId, 'pid');
-  assert.equal(snapshot.status, 'active');
-  assert.deepEqual(snapshot.files, ['/src/a.ts', '/src/gone.ts', '/src/new.ts']);
-  assert.deepEqual(snapshot.changes[2], { path: '/src/new.ts', changeType: ['edit', 'rename'], originalPath: '/src/old.ts' });
+test('snapshot: latest iteration head against its merge base, lowercased SHAs, normalized unique paths and change types', () => {
+  const snapshot = buildSnapshot({ pr: pr(), iterations, complete: true, changes: [
+    { changeTrackingId: 1, item: { path: '/src/a.ts' }, changeType: 'edit' },
+    { changeTrackingId: 2, item: { path: 'src/b.ts' }, changeType: 'rename, edit', originalPath: '/src/old-b.ts' },
+    { item: { path: '/src', isFolder: true, gitObjectType: 'tree' }, changeType: 'edit' },
+    { item: { path: '/src/a.ts' }, changeType: 'edit' },
+  ] }, target);
+  assert.equal(snapshot.head, H.toLowerCase());
+  assert.equal(snapshot.base, M.toLowerCase());
+  assert.equal(snapshot.baseKind, 'merge-base');
+  assert.equal(snapshot.iteration, 2);
+  assert.deepEqual(snapshot.files, ['/src/a.ts', '/src/b.ts']);
+  assert.deepEqual(snapshot.changes[1], { path: '/src/b.ts', changeType: ['rename', 'edit'], originalPath: '/src/old-b.ts' });
   assert.equal(snapshot.filesComplete, true);
-  assert.equal(buildSnapshot(pr({ changedFilesSummary: { changeEntries: [], nextSkip: 100, nextTop: 100 } }), target).filesComplete, false);
-  assert.equal(buildSnapshot(pr({ changedFilesSummary: {} }), target).filesComplete, false);
+  assert.deepEqual([snapshot.projectId, snapshot.repositoryId, snapshot.status], ['pid', 'rid', 'active']);
+  assert.deepEqual(snapshot.snapshotWarnings, []);
 });
 
-test('snapshot refuses a different PR, a missing merge evaluation or another organization', () => {
-  assert.throws(() => buildSnapshot(pr({ pullRequestId: 9 }), target), /returned PR 9/);
-  assert.throws(() => buildSnapshot(pr({ lastMergeSourceCommit: undefined }), target), /no source\/target commit yet/);
-  assert.throws(() => buildSnapshot(pr({ url: 'https://dev.azure.com/other/pid/_apis/git/repositories/rid/pullRequests/123' }), target), /organization "other"/);
-  assert.throws(() => buildSnapshot(null, target), /no pull request object/);
+test('snapshot warnings: no merge base falls back to the target tip; a lagging merge and multiple merge bases are named', () => {
+  const noBase = buildSnapshot({ pr: pr({ lastMergeSourceCommit: { commitId: 'e'.repeat(40) }, hasMultipleMergeBases: true }),
+    iterations: [{ id: 1, sourceRefCommit: { commitId: H } }], changes: [], complete: true }, target);
+  assert.equal(noBase.base, T.toLowerCase());
+  assert.equal(noBase.baseKind, 'target');
+  assert.equal(noBase.snapshotWarnings.length, 3);
+  assert.match(noBase.snapshotWarnings.join(' '), /not finished merging the latest push[\s\S]*no merge base[\s\S]*multiple merge bases/);
+  assert.throws(() => buildSnapshot({ pr: pr({ pullRequestId: 9 }), iterations, changes: [], complete: true }, target), /returned PR 9 instead of 123/);
+  assert.throws(() => buildSnapshot({ pr: pr({ lastMergeSourceCommit: null, lastMergeTargetCommit: null }), iterations: [], changes: [], complete: true }, target), /no source\/base commit yet/);
 });
 
-test('enum helpers understand numeric and string forms', () => {
-  assert.deepEqual(changeTypes(18), ['edit', 'delete']);
+test('enum, iteration and binary helpers', () => {
+  assert.deepEqual(changeTypes(2), ['edit']);
+  assert.deepEqual(changeTypes(8 | 2), ['edit', 'rename']);
   assert.deepEqual(changeTypes('rename, edit'), ['rename', 'edit']);
-  assert.equal(prStatus(3), 'completed');
-  assert.equal(prStatus('Abandoned'), 'abandoned');
-  assert.equal(targetKey(target), targetKey(parsePullRequestUrl('https://dev.azure.com/ORG/Proj/_git/REPO/pullrequest/123')));
-});
-
-test('server selection finds the one Azure namespace, honours mcpServer and requires codemode:false', () => {
-  const tools = (namespace, codemode = false) => Object.values(AZURE_TOOLS).map(name => ({ id: `${namespace}_${name}`, name, namespace, codemode, execute() {} }));
-  assert.equal(selectAzureServer(tools('ado')).namespace, 'ado');
-  assert.throws(() => selectAzureServer([]), /No connected MCP server exposes Azure DevOps/);
-  assert.throws(() => selectAzureServer([...tools('a'), ...tools('b')]), /Set "mcpServer"/);
-  assert.equal(selectAzureServer([...tools('a'), ...tools('my_ado')], 'my.ado').namespace, 'my_ado');
-  assert.throws(() => selectAzureServer(tools('a'), 'missing'), /does not expose/);
-  assert.throws(() => selectAzureServer(tools('ado').slice(0, 1)), /lacks/);
-  assert.throws(() => selectAzureServer(tools('ado', true)), /codemode:false/);
-});
-
-test('tool results decode JSON text and keep plain text', () => {
-  assert.deepEqual(decodeToolResult({ output: { a: 1 } }), { a: 1 });
-  assert.deepEqual(decodeToolResult({ output: '[1,2]' }), [1, 2]);
-  assert.equal(decodeToolResult({ output: 'source\ntext' }), 'source\ntext');
-  assert.deepEqual(decodeToolResult({ output: null, content: [{ type: 'text', text: '{"b":2}' }] }), { b: 2 });
+  assert.equal(prStatus(1), 'active');
+  assert.equal(prStatus('Completed'), 'completed');
+  assert.equal(latestIteration([{ id: 3 }, { id: 7 }, { id: 5 }]).id, 7);
+  assert.equal(latestIteration([]), null);
+  assert.deepEqual(prVersions(pr(), iterations), { head: H.toLowerCase(), base: M.toLowerCase(), baseKind: 'merge-base', iteration: 2, status: 'active' });
+  assert.equal(isBinary(Buffer.from('text\nonly')), false);
+  assert.equal(isBinary(Buffer.from([0x47, 0x00, 0x48])), true);
 });
 
 test('markers are found in live comments only', () => {
-  const marker = '<!-- azpr-comment:' + 'a'.repeat(32) + ' -->';
+  const marker = id => `<!-- azpr-comment:${id.repeat(32)} -->`;
   const found = markersInThreads([
-    { id: 1, comments: [{ content: `text\n\n${marker}` }] },
-    { id: 2, isDeleted: true, comments: [{ content: '<!-- azpr-comment:' + 'b'.repeat(32) + ' -->' }] },
-    { id: 3, comments: [{ isDeleted: true, content: '<!-- azpr-comment:' + 'c'.repeat(32) + ' -->' }] },
+    { id: 1, comments: [{ content: `a ${marker('a')}` }] },
+    { id: 2, isDeleted: true, comments: [{ content: marker('b') }] },
+    { id: 3, comments: [{ content: marker('c'), isDeleted: true }, { content: `${marker('d')}` }] },
   ]);
-  assert.deepEqual([...found], [[marker, 1]]);
+  assert.deepEqual([...found.entries()], [[marker('a'), 1], [marker('d'), 3]]);
 });
 
-function client(azure, options = {}) {
-  const tools = new Map(azure.definitions().map(tool => [tool.name, { ...tool, namespace: 'ado' }]));
-  const queue = createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 1000 });
-  const run = { id: 'run1', runtimeSessionID: 'ses_runtime', controller: new AbortController() };
+test('base URL overrides are accepted only for loopback test servers', () => {
+  assert.equal(restBaseUrl(), 'https://dev.azure.com');
+  assert.equal(restBaseUrl('http://127.0.0.1:4100/'), 'http://127.0.0.1:4100');
+  for (const bad of ['https://evil.example', 'http://10.0.0.1:80', 'http://user:p@127.0.0.1:1', 'ftp://127.0.0.1']) assert.throws(() => restBaseUrl(bad), /loopback test server/);
+});
+
+test('client: pinned api-version and Basic PAT, paged change list, threads and exact thread bodies', async () => {
+  const azure = fakeAzure({ files: Array.from({ length: 2500 }, (_, i) => `/src/f${String(i).padStart(4, '0')}.ts`) });
+  const c = client(azure), r = run();
+  const snapshot = await c.snapshot(r, target);
+  assert.equal(snapshot.files.length, 2500);
+  assert.equal(snapshot.filesComplete, true);
+  assert.deepEqual(azure.callsTo('changes').map(call => [call.query.$top, call.query.$skip]), [['2000', undefined], ['2000', '2000']]);
+  assert.ok(azure.state.calls.every(call => call.query['api-version'] === API_VERSION));
+  assert.equal(snapshot.base, azure.state.base);
+  assert.deepEqual(await c.versions(r, snapshot), { head: azure.state.head, base: azure.state.base, baseKind: 'merge-base', iteration: 1, status: 'active' });
+  const summary = await c.createThread(r, snapshot, { kind: 'summary', content: 'Summary <!-- azpr-comment:' + 'a'.repeat(32) + ' -->' });
+  const inline = await c.createThread(r, snapshot, { kind: 'inline', path: '/src/f0001.ts', startLine: 2, startOffset: 1, endLine: 3, endOffset: 9, content: 'Inline' });
+  assert.deepEqual([summary.contentMatches, inline.contentMatches], [true, true]);
+  const [first, second] = azure.callsTo('createThread').map(call => call.body);
+  assert.deepEqual(first, { comments: [{ parentCommentId: 0, content: 'Summary <!-- azpr-comment:' + 'a'.repeat(32) + ' -->', commentType: 1 }], status: 1 });
+  assert.deepEqual(second.threadContext, { filePath: '/src/f0001.ts', rightFileStart: { line: 2, offset: 1 }, rightFileEnd: { line: 3, offset: 9 } });
+  assert.equal(second.pullRequestThreadContext, undefined, 'Azure DevOps fills the iteration context itself.');
+  assert.equal((await c.threads(r, snapshot)).length, 2);
+  assert.equal(r.azureCalls, azure.state.calls.length);
+});
+
+test('client errors: a rejected PAT and not-found are permanent; 5xx, throttling and network failures retry reads only', async () => {
   const records = [];
-  return { run, records, api: createAzureClient({ server: () => ({ namespace: 'ado', tools }), queue, agent: 'azpr-runtime', retryDelayMs: 1,
-    onCall: (_run, record) => records.push(record) }) };
-}
-
-test('client reads the snapshot, pages threads to the end and creates exact threads', async () => {
-  const azure = fakeAzure({ files: ['/src/Main.java'] });
-  const { run, api } = client(azure);
-  const snapshot = await api.snapshot(run, parsePullRequestUrl(azure.prUrl()));
-  assert.equal(snapshot.prId, 123);
-  assert.equal(azure.state.calls[0].execution.agent, 'azpr-runtime');
-  assert.equal(azure.state.calls[0].execution.sessionID, 'ses_runtime');
-  for (let i = 0; i < 205; i++) azure.state.threads.push({ id: i + 1, comments: [{ content: `c${i}` }] });
-  const threads = await api.threads(run, snapshot);
-  assert.equal(threads.length, 205);
-  assert.deepEqual(azure.state.calls.filter(c => c.name === 'repo_pull_request_thread').map(c => [c.args.skip, c.args.top]), [[0, 1000]], 'One call fetches every thread.');
-  for (let i = 205; i < 1500; i++) azure.state.threads.push({ id: i + 1, comments: [{ content: `c${i}` }] });
-  assert.equal((await api.threads(run, snapshot)).length, 1500);
-  assert.deepEqual(azure.state.calls.filter(c => c.name === 'repo_pull_request_thread').slice(1).map(c => c.args.skip), [0, 1000], 'A full page continues.');
-  const created = await api.createThread(run, snapshot, { kind: 'inline', path: '/src/Main.java', startLine: 2, endLine: 2, startOffset: 1, endOffset: 4, content: 'Exact text' });
-  assert.deepEqual(created, { threadId: 1000, contentMatches: true });
-  const write = azure.state.calls.at(-1);
-  assert.equal(write.args.rightFileStartLine, 2);
-  assert.equal(write.args.filePath, '/src/Main.java');
-  const summary = await api.createThread(run, snapshot, { kind: 'summary', content: 'Summary' });
-  assert.equal(azure.state.calls.at(-1).args.filePath, undefined);
-  assert.equal(summary.threadId, 1001);
-  const versions = await api.versions(run, snapshot);
-  assert.deepEqual(versions, { head: 'b'.repeat(40), base: 'a'.repeat(40), status: 'active' });
-});
-
-test('client errors name the tool; timeouts are uncertain; missing thread IDs are uncertain writes', async () => {
   const azure = fakeAzure();
-  const { run, api } = client(azure, { timeoutMs: 50 });
-  azure.state.fail.repo_pull_request = 'TF401180: The requested pull request was not found.';
-  await assert.rejects(api.snapshot(run, parsePullRequestUrl(azure.prUrl())), error => /repo_pull_request failed: TF401180/.test(error.message) && error.uncertain === false);
-  azure.state.fail.repo_pull_request = () => new Promise(() => {});
-  await assert.rejects(api.snapshot(run, parsePullRequestUrl(azure.prUrl())), error => /failed after 3 attempts: .*did not finish within/.test(error.message) && error.uncertain === true);
-  azure.state.fail.repo_pull_request_thread_write = () => ({ output: { comments: [] } });
-  await assert.rejects(api.createThread(run, { repositoryId: 'rid', projectId: 'pid', prId: 123 }, { kind: 'summary', content: 'x' }), error => error.uncertain === true);
-  azure.state.fail.repo_pull_request_thread = () => ({ output: 'not a list' });
-  await assert.rejects(api.threads(run, { repositoryId: 'rid', projectId: 'pid', prId: 123 }), /unexpected response/);
+  const c = client(azure, { onCall: (_run, record) => records.push(record) });
+  const r = run();
+  const snapshot = await c.snapshot(r, target);
+
+  azure.state.fail.threads = () => azureError(503, 'ServiceUnavailableException', 'Busy.');
+  await assert.rejects(c.threads(r, snapshot), error => error.kind === 'server' && /HTTP 503 ServiceUnavailableException: Busy\.\) after 3 attempts\.$/.test(error.message));
+  assert.equal(azure.callsTo('threads').length, 3);
+  let throttled = 0;
+  azure.state.fail.threads = () => (throttled++ ? undefined : { ...azureError(429, 'RequestBlockedException', 'Slow down.'), headers: { 'content-type': 'application/json', 'retry-after': '0' } });
+  assert.equal((await c.threads(r, snapshot)).length, 0);
+  delete azure.state.fail.threads;
+
+  azure.state.fail.createThread = () => azureError(503, 'ServiceUnavailableException', 'Busy.');
+  await assert.rejects(c.createThread(r, snapshot, { kind: 'summary', content: 'x' }), error => error.transient && !error.uncertain);
+  assert.equal(azure.callsTo('createThread').length, 1, 'Writes are never retried.');
+  delete azure.state.fail.createThread;
+
+  await assert.rejects(c.fileContent(r, snapshot, '/missing.txt', snapshot.head), error => error.kind === 'not-found' && /HTTP 404 GitItemNotFoundException: TF401174/.test(error.message));
+  assert.equal(azure.callsTo('items').length, 1);
+
+  azure.state.pat = 'another-valid-token-0123456789abc';
+  await assert.rejects(c.threads(r, snapshot), error => error.kind === 'auth' && /rejected the PAT for organization "org" \(HTTP 203\)/.test(error.message));
+  assert.equal(azure.callsTo('threads').length, 6, 'Authentication failures are not retried.');
+  const serialized = JSON.stringify(records);
+  assert.ok(!serialized.includes(FAKE_PAT) && !serialized.includes(Buffer.from(':' + FAKE_PAT).toString('base64')));
+  assert.ok(records.some(record => record.call === 'PR threads' && record.status === 503 && record.willRetry === true));
+
+  let failures = 0;
+  const flaky = async (url, init) => {
+    if (failures++ < 1) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+    return azure.fetch(url, init);
+  };
+  const d = client(azure, { fetch: flaky });
+  azure.state.pat = FAKE_PAT;
+  assert.equal((await d.threads(r, snapshot)).length, 0);
+  failures = 0;
+  await assert.rejects(d.createThread(r, snapshot, { kind: 'summary', content: 'x' }), error => error.kind === 'network' && error.uncertain === true);
 });
 
-test('transient read failures are retried; deterministic failures and writes are not', async () => {
-  assert.equal(transientAzureError(new Error('Error with pull request thread operation: ')), true, 'An empty detail is a network-level failure.');
-  assert.equal(transientAzureError(Object.assign(new Error('slow'), { timeout: true })), true);
-  assert.equal(transientAzureError(new Error('read ECONNRESET')), true);
-  for (const message of ['TF401180: The requested pull request was not found.', 'Request failed (403) Forbidden', 'repositoryId is required for get', 'No items found at path: /']) {
-    assert.equal(transientAzureError(new Error(message)), false, message);
-  }
+test('client timeouts abort the request, retry reads and mark writes uncertain', async () => {
   const azure = fakeAzure();
-  const { run, api, records } = client(azure);
-  const snapshot = { repositoryId: 'rid', projectId: 'pid', prId: 123 };
-  let failures = 2;
-  azure.state.fail.repo_pull_request_thread = () => { if (failures-- > 0) throw Object.assign(new Error('Error with pull request thread operation: '), { _tag: 'Tool.Error' }); };
-  assert.deepEqual(await api.threads(run, snapshot), []);
-  assert.equal(run.azureRetries, 2);
-  assert.deepEqual(records.map(r => [r.tool, r.attempt, r.ok, r.willRetry ?? null]),
-    [['repo_pull_request_thread', 1, false, true], ['repo_pull_request_thread', 2, false, true], ['repo_pull_request_thread', 3, true, null]]);
-  assert.deepEqual(records[2].args, { action: 'list', pullRequestId: 123, top: 1000, skip: 0 });
-  azure.state.fail.repo_pull_request_thread = 'TF401027: You need the Git permission.';
-  const before = azure.state.calls.length;
-  await assert.rejects(api.threads(run, snapshot), /TF401027/);
-  assert.equal(azure.state.calls.length, before + 1, 'Permission errors are not retried.');
-  let writes = 0;
-  azure.state.fail.repo_pull_request_thread_write = () => { writes++; throw new Error('Error with pull request thread write operation: '); };
-  await assert.rejects(api.createThread(run, snapshot, { kind: 'summary', content: 'x' }));
-  assert.equal(writes, 1, 'Writes are never retried.');
-  assert.equal(records.at(-1).args.contentCharacters, 1, 'Logs never contain comment bodies.');
+  const c = client(azure, { timeoutMs: 30 });
+  const r = run();
+  const snapshot = await c.snapshot(r, target);
+  let aborted = 0;
+  const hang = (_call, _state) => new Promise(() => {});
+  azure.state.fail.threads = hang;
+  const original = azure.fetch;
+  const watching = client(azure, { timeoutMs: 30, fetch: (url, init) => { init.signal.addEventListener('abort', () => aborted++); return original(url, init); } });
+  await assert.rejects(watching.threads(r, snapshot), error => error.kind === 'timeout' && error.transient);
+  assert.equal(aborted, 3, 'Each timed-out attempt aborts its HTTP request.');
+  azure.state.fail.createThread = hang;
+  await assert.rejects(c.createThread(r, snapshot, { kind: 'summary', content: 'x' }), error => error.kind === 'timeout' && error.uncertain === true);
 });
 
-test('file content keeps the literal text even when it looks like JSON', async () => {
-  const azure = fakeAzure({ sources: { '/package.json': '{\n  "name": "x"\n}\n' } });
-  const { run, api } = client(azure);
-  azure.state.fail.repo_file = args => ({ output: JSON.parse(azure.state.sources[args.path]), content: [{ type: 'text', text: azure.state.sources[args.path] }] });
-  assert.equal(await api.fileContent(run, { repositoryId: 'rid', projectId: 'pid', prId: 123 }, '/package.json', 'b'.repeat(40)), '{\n  "name": "x"\n}\n');
-  assert.equal(toolText({ output: { a: 1 } }), '{"a":1}');
+test('file reads: exact text, binary detection, oversized files and a per-run cache', async () => {
+  const azure = fakeAzure({ files: ['/a.json', '/logo.png'], binary: ['/logo.png'], sources: { '/a.json': '{"literal": true}\n' } });
+  const c = client(azure), r = run();
+  const snapshot = await c.snapshot(r, target);
+  assert.equal(await c.fileContent(r, snapshot, '/a.json', snapshot.head), '{"literal": true}\n');
+  assert.equal(await c.fileContent(r, snapshot, 'a.json', snapshot.head), '{"literal": true}\n');
+  assert.equal(azure.callsTo('items').length, 1, 'The second read is served from the run cache.');
+  const binary = await c.readFile(r, snapshot, '/logo.png', snapshot.head);
+  assert.deepEqual([binary.binary, binary.size], [true, 8]);
+  await assert.rejects(c.fileContent(r, snapshot, '/logo.png', snapshot.head), /binary file/);
+  const big = client(azure, { fetch: async () => new Response('x', { status: 200, headers: { 'content-type': 'application/octet-stream', 'content-length': String(11 * 1024 * 1024) } }) });
+  assert.equal((await big.readFile(run(), snapshot, '/a.json', snapshot.head)).tooLarge, true);
+  const listing = await c.listItems(r, snapshot, '/', snapshot.head);
+  assert.deepEqual(listing.map(item => item.path), ['/', '/a.json', '/logo.png']);
 });

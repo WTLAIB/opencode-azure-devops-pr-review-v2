@@ -463,27 +463,3 @@ export function parseReviewRequest(raw) {
   const target = parsePullRequestUrl(match[1]);
   return { request: raw, prUrl: match[1], userContext: match[2] ?? '', target };
 }
-
-/** A display aid, not a source/commit certificate. Keep the raw output intact. */
-export function numberToolText(result, input, snapshot) {
-  if (typeof result?.output !== 'string' || !result.output.includes('\n') ||
-      result.isError === true || result.metadata?.isError === true || result.metadata?.truncated === true) return result;
-  if (result.content !== undefined && (!Array.isArray(result.content) || result.content.length !== 1 ||
-      result.content[0]?.type !== 'text' || result.content[0].text !== result.output)) return result;
-  const lines = result.output.split('\n');
-  if (lines.at(-1) === '') lines.pop(); // A terminal newline does not add a source line.
-  const numbered = lines.map((line, index) => `${index + 1} | ${line.replace(/\r$/, '')}`).join('\n');
-  let request = '';
-  const values = new Set();
-  try { if (input !== undefined) request = `\nRequest arguments: ${JSON.stringify(input, (_key, value) => {
-    if (typeof value === 'string') values.add(value);
-    return value;
-  })}`; }
-  catch { return result; }
-  const matches = [['head', 'HEAD (PR source)'], ['base', 'BASE (PR target)']]
-    .filter(([key]) => typeof snapshot?.[key] === 'string' && snapshot[key] && values.has(snapshot[key]))
-    .map(([, label]) => label);
-  if (matches.length) request += `\nVersion argument: ${matches.join('; ')}.`;
-  return { ...result, content: [{ ...(result.content?.[0] ?? {}), type: 'text',
-    text: `AZPR numbered tool text (display only).${request}\nThe N | prefixes count returned lines; they are not part of the text.\n\n${numbered}` }] };
-}

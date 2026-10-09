@@ -1,5 +1,6 @@
 import { withCommandCompletion } from './host-command.mjs';
-/** Opt-in exact-host scale fixture. Fake loopback models and Azure MCP only.
+import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
+/** Opt-in exact-host scale fixture. Fake loopback models and Azure DevOps REST only.
  * node tests/host-v2-comment-scale.mjs /absolute/path/opencode
  * 120 changed files are reviewed in shards; one shard reports a nearly full
  * context so the host attempts compaction, which AZPR refuses and splits the
@@ -34,14 +35,14 @@ const provider = createServer(async (request, response) => {
     let payload; try { payload = JSON.parse(textOf(users[0]?.content)); } catch { /* summaries etc. */ }
     const results = input.messages.filter(m => m.role === 'tool').length;
     requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: payload?.assignment?.files?.length, work: payload?.commentWork?.kind, toolResults: results, requestCharacters: body.length });
-    const fileTool = input.tools?.find(t => t.function.description === 'AZPR fake repo_file')?.function.name;
+    const fileTool = input.tools?.find(t => t.function.name === 'azpr_read_file')?.function.name;
     let call, final, usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
     if (payload?.assignment?.files && !payload.assignment.findingIds) {
       const assigned = payload.assignment.files;
       // The first functional shard is "too large": report a nearly full context after its read.
       const tooLarge = input.model === 'functional' && assigned.length > 15 && assigned[0] === files[0];
       if (!results && fileTool) {
-        call = { name: fileTool, arguments: { action: 'get_content', repositoryId: payload.snapshot.repositoryId, project: payload.snapshot.projectId, path: assigned[0], version: payload.snapshot.head, versionType: 'Commit' } };
+        call = { name: fileTool, arguments: { path: assigned[0], version: 'head' } };
         if (tooLarge) { usage = { prompt_tokens: 59000, completion_tokens: 10, total_tokens: 59010 }; overflowShards++; }
       } else {
         const prefix = input.model === 'functional' ? 'F' : 'R', first = Number(payload.assignment.firstFindingId.split('-')[1]);
@@ -67,48 +68,23 @@ const provider = createServer(async (request, response) => {
 });
 provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
 const providerURL = `http://127.0.0.1:${provider.address().port}/v1`;
-const mcpPath = join(fixture, 'ado-mcp.mjs'), statePath = join(fixture, 'ado-state.json');
-await writeFile(statePath, JSON.stringify({ threads: [], nextThread: 1000, writes: 0 }));
-await writeFile(mcpPath, `import { createInterface } from 'node:readline';
-import { readFileSync, writeFileSync } from 'node:fs';
-const statePath = ${JSON.stringify(statePath)}, files = ${JSON.stringify(files)};
-const pr = { pullRequestId: 321, status: 1, title: 'Scale PR', description: '', url: 'https://dev.azure.com/fixture/pid/_apis/git/repositories/rid/pullRequests/321',
-  repository: { id: 'rid', name: 'repository', project: { id: 'pid', name: 'project' } },
-  lastMergeSourceCommit: { commitId: '${'b'.repeat(40)}' }, lastMergeTargetCommit: { commitId: '${'a'.repeat(40)}' } };
-const tool = name => ({ name, description: 'AZPR fake ' + name, inputSchema: { type: 'object', properties: {}, additionalProperties: true } });
-const text = value => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] });
-for await (const line of createInterface({ input: process.stdin })) {
-  if (!line.trim()) continue;
-  const req = JSON.parse(line); if (req.id === undefined) continue;
-  let result = {};
-  if (req.method === 'initialize') result = { protocolVersion: req.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'scale-ado', version: '1' } };
-  if (req.method === 'tools/list') result = { tools: ['repo_pull_request', 'repo_pull_request_thread', 'repo_pull_request_thread_write', 'repo_file'].map(tool) };
-  if (req.method === 'tools/call') {
-    const { name, arguments: args } = req.params, state = JSON.parse(readFileSync(statePath, 'utf8'));
-    if (name === 'repo_pull_request') result = text({ ...pr, ...(args.includeChangedFiles ? { changedFilesSummary: { changeEntries: files.map(path => ({ changeType: 2, item: { path } })), fileCount: files.length } } : {}) });
-    if (name === 'repo_file') result = text('fixture code\\nsecond line\\n');
-    if (name === 'repo_pull_request_thread') result = text(state.threads.slice(args.skip ?? 0, (args.skip ?? 0) + (args.top ?? 100)));
-    if (name === 'repo_pull_request_thread_write') {
-      const thread = { id: state.nextThread++, comments: [{ content: args.content }], threadContext: args.filePath ? { filePath: args.filePath } : null };
-      state.threads.push(thread); state.writes++; writeFileSync(statePath, JSON.stringify(state)); result = text(thread);
-    }
-  }
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) + '\\n');
-}
-`);
+const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 321, files, sources: Object.fromEntries(files.map(path => [path, 'fixture code\nsecond line\n'])) });
+const adoServer = createServer((request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
+adoServer.listen(0, '127.0.0.1'); await once(adoServer, 'listening');
+const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
 const settings = JSON.parse(await readFile(join(root, 'config/settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 settings.workflow = { ...settings.workflow, shardFiles: 24, shardFindings: 15, parallelSessions: 4 };
+settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });
 assert.equal(install.status, 0, install.stderr);
 await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/risk',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'fixture-only' },
-    models: Object.fromEntries(['functional', 'risk', 'verifier'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } },
-  mcp: { servers: { ado: { type: 'local', command: [process.execPath, mcpPath], codemode: false } } } }));
+    models: Object.fromEntries(['functional', 'risk', 'verifier'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } }));
 const password = randomUUID();
-const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_CONFIG_HOME: join(fixture, 'xdg-config'), XDG_DATA_HOME: dirs.data, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state, TMPDIR: dirs.tmp, OPENCODE_TEST_HOME: dirs.home, OPENCODE_CONFIG_DIR: dirs.config, OPENCODE_PASSWORD: password, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1' };
+const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_CONFIG_HOME: join(fixture, 'xdg-config'), XDG_DATA_HOME: dirs.data, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state, TMPDIR: dirs.tmp, OPENCODE_TEST_HOME: dirs.home, OPENCODE_CONFIG_DIR: dirs.config, OPENCODE_PASSWORD: password, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1', AZPR_TEST_AZURE_BASE_URL: azureURL };
 try {
   child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await Promise.race([new Promise((resolveReady, reject) => { child.once('error', reject); child.once('exit', code => reject(new Error('Host exited ' + code))); child.stdout.on('data', data => { logs += data; const match = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) resolveReady(match[1]); }); child.stderr.on('data', data => { logs += data; }); }),
@@ -116,7 +92,6 @@ try {
   const rawApi = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300000) }); const raw = await response.text(); if (!response.ok) throw new Error(`${path}: ${response.status} ${raw}`); return raw ? JSON.parse(raw) : undefined; };
   const api = withCommandCompletion(rawApi, 300000);
   const origin = (await api('/api/session', { title: 'Scale fixture', location: { directory: dirs.work } })).data;
-  for (let i = 0; i < 100; i++) { if ((await api('/api/mcp')).data.some(s => s.status?.status === 'connected')) break; await new Promise(r => setTimeout(r, 100)); }
   const latest = async () => (await api(`/api/session/${origin.id}/inbox`)).data.at(-1).payload.text;
   await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
   const receipt = await latest();
@@ -137,19 +112,20 @@ try {
   await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
   const posted = await latest();
   assert.match(posted, /\] POSTED/, posted);
-  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  const state = azure.state;
   assert.equal(state.threads.length, 21, '20 high findings inline plus one summary; 10 low findings stay in the summary.');
   const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
   assert.equal(planner.length, 8, '30 findings in planning pages of four.');
   await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
   assert.match(await latest(), /ALREADY_PRESENT/);
-  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).writes, 21, 'A second publish writes nothing.');
+  assert.equal(azure.callsTo('createThread').length, 21, 'A second publish writes nothing.');
   console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
     riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, plannerSessions: planner.length, threads: state.threads.length, providerRequests: requests.length,
-    maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)) }, null, 2));
+    maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
   provider.closeAllConnections(); await new Promise(resolveDone => provider.close(resolveDone));
+  adoServer.closeAllConnections(); await new Promise(resolveDone => adoServer.close(resolveDone));
   await writeFile(join(fixture, 'host.log'), logs); await writeFile(join(fixture, 'requests.json'), JSON.stringify(requests, null, 2));
   console.error('Private scale evidence: ' + fixture);
 }

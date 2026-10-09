@@ -14,10 +14,11 @@ import { PROMPTS } from '../src/config.mjs';
 
 const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
 const destination = 'plugins/azpr-v2';
+const TEAM_PAT = 'team-private-pat-0123456789abcdef';
 const requiredFiles = [
   'install.sh', 'scripts/merge-settings.py', 'config/settings.example.json',
   ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs',
-    'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'review-work.mjs', 'store.mjs'].map(name => 'src/' + name),
+    'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'review-tools.mjs', 'review-work.mjs', 'store.mjs'].map(name => 'src/' + name),
   ...['common', 'functional', 'risk', 'deep', 'final', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
@@ -66,7 +67,7 @@ async function installedAgents(s) {
   const settings = validateSettings(JSON.parse(readFileSync(join(s.root, destination, 'settings.json'), 'utf8')));
   const prompts = Object.fromEntries(names.map(name => [name, readFileSync(join(s.root, destination, 'prompts', name + '.md'), 'utf8')]));
   const agents = buildAgents(settings, prompts);
-  assert.equal(Object.keys(agents).length, 9);
+  assert.equal(Object.keys(agents).length, 8);
   return agents;
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr + (result.error ?? '')); }
@@ -81,6 +82,7 @@ function profile(s) {
   const settings = JSON.parse(readFileSync(join(pkg, 'config/settings.example.json'), 'utf8'));
   Object.assign(settings.models.review, { functional: 'team/functional', risk: 'team/risk', verifier: 'team/verifier' });
   Object.assign(settings.models.deep, { functional: 'team/deep-functional', risk: 'team/deep-risk', verifier: 'team/deep-verifier' });
+  Object.assign(settings.azure, { organization: 'team', pat: TEAM_PAT });
   const file = join(s.temp, 'team.json');
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   return file;
@@ -138,7 +140,7 @@ test('local directory entry resolves and loads from a minimal fresh install', as
   const s = setup(); minimalSource(s);
   ok(install(s, ['--settings', profile(s)]));
   await loadDirectoryEntry(s);
-  assert.equal(readdirSync(installed(s, '')).length, 19); // 15 JS modules + entry + metadata + settings + prompts
+  assert.equal(readdirSync(installed(s, '')).length, 20); // 16 JS modules + entry + metadata + settings + prompts
   original(s); clean(s);
 });
 
@@ -164,8 +166,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('25-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 25);
+test('26-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 26);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
@@ -256,7 +258,7 @@ test('installation omits only legacy help from supplied and replacement settings
     if(replacing) writeFileSync(installed(s,'settings.json'),raw);
     const result=install(s,replacing?['--replace']:['--settings',file]);ok(result);
     assert.match(result.stdout,/Removed documentation-only models\._help/);
-    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_HELP_TEXT|team\/|private diagnostics/);
+    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_HELP_TEXT|team\/|private diagnostics|team-private-pat/);
     assert.deepEqual(JSON.parse(readFileSync(installed(s,'settings.json'),'utf8')),expected);
     assert.equal(readFileSync(file,'utf8'),raw);assert.equal(readFileSync(defaultsPath,'utf8'),defaultsRaw);
     assert.equal(statSync(installed(s,'settings.json')).mode & 0o777,0o600);
@@ -327,7 +329,7 @@ for (const invalid of [
   { version: 1 }, { version: 3 }, { version: true }, { version: '2' },
   { models: { freeA: 'private/old' } }, { version: 2, models: { freeB: 'private/old' } },
   { version: 2, models: { deep: 'private/old' } }, { models: null },
-  { steps: { initial: 60 } }, { maxStageCharacters: null }, { structuredOutput: false }, { azure: {} },
+  { steps: { initial: 60 } }, { maxStageCharacters: null }, { structuredOutput: false }, { mcp: 'legacy' }, { azure: 'legacy' },
   { comments: { enabled: false, maxComments: 5 } }, { auxiliaryModels: "preserve" }, { outputRetries: 0 },
 ]) test(`removed settings and V1 profiles are rejected without migration: ${JSON.stringify(invalid)}`, () => {
   const s = setup(); ok(install(s)); const file = installed(s, 'settings.json'), raw = JSON.stringify(invalid); writeFileSync(file, raw);
@@ -469,4 +471,25 @@ test('uninstall without a V2 installation preserves old integrations and creates
   ok(uninstall(s, ['--apply']));
   assert.equal(readFileSync(join(s.root, 'plugins/azpr/settings.json'), 'utf8'), 'OLD_PROFILE');
   assert.ok(!existsSync(join(s.root, 'azpr-v2-backups'))); original(s); clean(s);
+});
+
+test('replacement moves the retired mcp limits into azure and never prints the PAT', async () => {
+  const s = setup(), file = profile(s); ok(install(s, ['--settings', file]));
+  const settings = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
+  delete settings.azure;
+  settings.mcp = { server: 'ado', concurrency: 5, callTimeoutSeconds: 300 };
+  writeFileSync(installed(s, 'settings.json'), JSON.stringify(settings, null, 2));
+  const result = install(s, ['--replace']); ok(result);
+  assert.match(result.stdout, /Moved mcp\.concurrency\/callTimeoutSeconds to azure/);
+  const migrated = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
+  assert.equal(Object.hasOwn(migrated, 'mcp'), false);
+  assert.deepEqual(migrated.azure, { concurrency: 5, callTimeoutSeconds: 300, organization: '', pat: '' });
+  assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
+  // A configured PAT survives replacement byte for byte and is never echoed.
+  migrated.azure.organization = 'team'; migrated.azure.pat = TEAM_PAT;
+  writeFileSync(installed(s, 'settings.json'), JSON.stringify(migrated, null, 2) + '\n');
+  const again = install(s, ['--replace']); ok(again);
+  assert.doesNotMatch(again.stdout + again.stderr, /team-private-pat/);
+  assert.equal(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).azure.pat, TEAM_PAT);
+  original(s); clean(s);
 });

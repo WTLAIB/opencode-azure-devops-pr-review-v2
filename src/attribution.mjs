@@ -140,7 +140,7 @@ export function renderIncompleteDraft(stages, failure, language) {
 export function renderCheckReport(snapshot, checks, readiness) {
   const rows = checks.map(c => `| ${c.name} | ${c.ok ? 'ok' : 'FAILED'} | ${String(c.detail ?? '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').slice(0, 300)} |`).join('\n');
   const models = readiness?.checkedModelSlots?.length ? `\n\nModels checked: ${readiness.checkedModelSlots.join(', ')} (profile ${readiness.profile}).` : '';
-  return `## Source readiness\n\n${snapshot ? `${snapshot.organization}/${snapshot.project}/${snapshot.repository} · PR #${snapshot.prId} · ${snapshot.status}${snapshot.title ? ` · "${snapshot.title}"` : ''}\n\n- head: \`${snapshot.head}\`\n- base: \`${snapshot.base}\`\n- changed files: ${snapshot.files.length} (${snapshot.filesComplete ? 'complete list' : 'partial list; reviewers will look for the rest'})\n\n` : ''}| Check | Result | Detail |\n| --- | --- | --- |\n${rows}${models}\n\nREADY means AZPR can read this PR through the connected MCP server; it is not a review or an approval.`;
+  return `## Source readiness\n\n${snapshot ? `${snapshot.organization}/${snapshot.project}/${snapshot.repository} · PR #${snapshot.prId} · ${snapshot.status}${snapshot.title ? ` · "${snapshot.title}"` : ''}\n\n- head: \`${snapshot.head}\`\n- base: \`${snapshot.base}\`${snapshot.baseKind === 'target' ? ' (target branch tip; no merge base reported)' : ' (merge base)'}\n- changed files: ${snapshot.files.length} (${snapshot.filesComplete ? 'complete list' : 'partial list; reviewers will look for the rest'})\n\n` : ''}| Check | Result | Detail |\n| --- | --- | --- |\n${rows}${models}\n\nREADY means AZPR can read this PR through the Azure DevOps REST API with the configured PAT; it is not a review or an approval.`;
 }
 
 /** Publication ledger rows for receipts. */
@@ -179,7 +179,7 @@ export function renderReceipt(run, report, status, error, settings) {
   body += renderDiagnosticNotices(run);
   if (run.compatibility && !run.compatibility.tested && run.compatibility.version !== 'unknown') body += `\nHost notice: OpenCode ${run.compatibility.version} differs from the tested ${TESTED_HOST_VERSION}; capabilities were detected at runtime.\n`;
   body += run.mode === 'check'
-    ? '\nStatus: READY means AZPR can read the PR through MCP; it does not review or approve the PR.\n'
+    ? '\nStatus: READY means AZPR can read the PR through the Azure DevOps REST API; it does not review or approve the PR.\n'
     : run.mode === 'comment'
       ? ''
       : '\nStatus: COMPLETE means verification produced structured decisions and the PR source did not change; findings without a usable decision are listed as UNREVIEWED. STALE means the source changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
@@ -201,9 +201,9 @@ export function renderDiagnosticNotices(run) {
   const notices = [];
   const sum = key => run.stages.reduce((n, s) => n + (s[key] ?? 0), 0);
   const blocked = sum('blockedNativeToolCalls'), failures = sum('toolFailures'), timeouts = sum('toolTimeouts');
-  if (blocked) notices.push(`\nNative tool notice: ${blocked} attempt(s) to use a tool this role may not use were blocked before execution.\n`);
+  if (blocked) notices.push(`\nTool notice: ${blocked} attempt(s) to use a tool this role may not use were blocked before execution.\n`);
   if (failures) notices.push(`\nTool error notice: ${failures} tool call(s) failed. A completed review does not erase these; inspect the original tool results.\n`);
-  if (timeouts) notices.push(`\nTool timeout notice: ${timeouts} MCP call(s) exceeded the per-call timeout and were abandoned.\n`);
+  if (timeouts) notices.push(`\nTool timeout notice: ${timeouts} Azure DevOps read(s) exceeded the per-call timeout after retries and were abandoned.\n`);
   if (run.abortUnconfirmed) notices.push('\nCancellation warning: OpenCode did not confirm session settlement. Requests already sent may still be running or billed.\n');
   if (run.debug?.directory) notices.push(`\nPrivate debug directory: ${run.debug.directory}\n`);
   for (const warning of run.debug?.warnings ?? []) notices.push(`Debug warning: ${warning}\n`);

@@ -1,10 +1,11 @@
 /**
- * AZPR opt-in OpenCode adapter. No npm dependencies, model SDK or Azure client.
+ * AZPR opt-in OpenCode adapter. No npm dependencies or model SDK.
  *
  * Commands start private, role-bound sessions for model work. Deterministic
  * facts (PR identity, commit SHAs, changed files, version rechecks, existing
- * threads and comment creation) are runtime code that calls the user's
- * connected Azure DevOps MCP tools directly.
+ * threads and comment creation) are runtime code that calls the Azure DevOps
+ * REST API with AZPR's own organization and PAT. Reviewers read the repository
+ * through AZPR's read-only tools, which use the same client.
  */
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,15 +13,16 @@ import { isDeepStrictEqual } from 'node:util';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { createReviewSession, createRuntimeSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, ROLES, PROMPTS, RUNTIME_AGENT, roleFor, privateAgent, commentRole, hiddenTools, buildAgents, validateSettings } from './config.mjs';
-import { parseUniqueJSON, parseReviewRequest, numberToolText, visibleText } from './output.mjs';
+import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
+import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings } from './config.mjs';
+import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest } from './comment-work.mjs';
 import { publicationItems } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
-import { AZURE_TOOLS, createAzureClient, selectAzureServer, targetKey } from './azure.mjs';
+import { API_VERSION, createAzureClient, restBaseUrl, targetKey } from './azure.mjs';
+import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
 import { hostCapabilities, listOf, recordOf, requireMethods } from './host.mjs';
@@ -59,7 +61,9 @@ async function deadline(operation, milliseconds) {
 
 /**
  * Session/command-scoped integration.
- * `options` (offline tests only): stateDirectory, mcpTimeoutMs, retryDelayMs.
+ * `options` (offline tests only): stateDirectory, azureTimeoutMs, retryDelayMs,
+ * azureBaseUrl and fetch. A base URL override (also AZPR_TEST_AZURE_BASE_URL for
+ * exact-host fixtures) must be a loopback test server.
  */
 export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, options = {}) {
   const settingsPath = join(baseDirectory, 'settings.json');
@@ -71,9 +75,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const commentLocks = new Set();   // PR targets with an active comment command
   const openStores = new Map();     // data directory -> store promise
   const jobs = new Set();
-  const mcpTools = new Map();       // captured MCP executors by tool ID
   const registrations = [];
-  let toolTransform, disposed = false;
+  let disposed = false;
 
   // Settings are read once; a changed file only blocks new runs.
   const raw = await readFile(settingsPath, 'utf8');
@@ -86,10 +89,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     [name, await readFile(join(baseDirectory, 'prompts', `${name}.md`), 'utf8')])));
   const agents = buildAgents(settings, prompts);
   const state = { raw, settings, agents, fingerprints: {}, registrationPermissions: {}, agentsPinned: false };
-  const queue = createToolQueue({ concurrency: settings.mcp.concurrency, timeoutMs: options.mcpTimeoutMs ?? settings.mcp.callTimeoutSeconds * 1000 });
+  const queue = createToolQueue({ concurrency: settings.azure.concurrency, timeoutMs: options.azureTimeoutMs ?? settings.azure.callTimeoutSeconds * 1000 });
   const retryDelayMs = options.retryDelayMs ?? 1000;
-  const azure = createAzureClient({ server: () => selectAzureServer([...mcpTools.values()], settings.mcp.server), queue, agent: RUNTIME_AGENT,
-    retryDelayMs, onCall: (run, record) => { void run.debug?.append?.('azure-calls.jsonl', JSON.stringify({ at: new Date().toISOString(), ...record })); } });
+  const baseUrl = restBaseUrl(options.azureBaseUrl ?? process.env.AZPR_TEST_AZURE_BASE_URL);
+  const azure = createAzureClient({ organization: settings.azure.organization, pat: settings.azure.pat, baseUrl, queue, retryDelayMs, fetch: options.fetch,
+    onCall: (run, record) => { void run.debug?.append?.('azure-calls.jsonl', JSON.stringify({ at: new Date().toISOString(), ...record })); } });
   // An unwritable state directory must not disable the plugin: fall back to a
   // per-user directory under the system temporary directory.
   let storeFallback;
@@ -156,46 +160,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return g;
   }
 
-  /** Register the MCP capture/queue transform after the host discovered tools. */
-  async function ensureToolTransform() {
-    toolTransform ??= Promise.resolve(context.tool.transform(editor => {
-      mcpTools.clear();
-      for (const { id, name, options: toolOptions } of editor.list()) {
-        if (!toolOptions?.namespace) continue;
-        editor.update(id, tool => {
-          const original = tool.execute;
-          mcpTools.set(id, { id, name: tool.name ?? name, namespace: toolOptions.namespace, codemode: toolOptions.codemode === true, execute: original });
-          tool.execute = async (input, execution) => {
-            if (!seenSessions.has(execution.sessionID) && !privateAgent(execution.agent)) return original(input, execution);
-            const g = grants.get(execution.sessionID);
-            if (!g?.run.active || g.role !== execution.agent) throw new Error('[AZPR] Review tool authorization expired.');
-            try {
-              return await queue.run(() => original(input, execution), { signal: g.run.controller.signal, label: id });
-            } catch (error) {
-              if (error?.timeout) g.toolTimeouts++;
-              const call = `${execution.id}:${id}`;
-              if (grants.get(execution.sessionID) === g && !g.terminalTools.has(call)) {
-                g.terminalTools.set(call, 'error');
-                g.failedTools.add(call);
-                g.timing?.toolEnded(call, 'error');
-                g.toolErrorDetails?.push(diagnosticToolError({ tool: id, status: 'error', error }));
-              }
-              throw error;
-            }
-          };
-        });
-      }
-    })).then(registration => { registrations.push(registration); return registration; },
-      error => { toolTransform = undefined; throw error; });
-    await toolTransform;
-  }
-
-  /** Model and MCP catalogs only; no inference is submitted. */
+  /** The model catalog only; no inference is submitted. */
   async function readiness(run) {
-    requireMethods(context, ['model.list', 'mcp.list'], 'readiness checks');
-    const [models, servers] = await bounded(() => Promise.all([context.model.list(), context.mcp.list()]), run.controller.signal);
-    const modelRows = listOf(models), serverRows = listOf(servers);
-    if (!modelRows || !serverRows) throw new Error('[AZPR] Invalid model/MCP catalogs.');
+    requireMethods(context, ['model.list'], 'readiness checks');
+    const modelRows = listOf(await bounded(() => context.model.list(), run.controller.signal));
+    if (!modelRows) throw new Error('[AZPR] Invalid model catalog.');
     const slots = run.mode === 'comment' ? ['risk'] : ['functional', 'risk', 'verifier'];
     const problems = [];
     for (const slot of slots) {
@@ -204,24 +173,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (matches.length !== 1) problems.push(`The selected ${run.profile}.${slot} model (${selected}) is unavailable in the host catalog.`);
       else if (matches[0].capabilities?.tools !== true) problems.push(`The selected ${run.profile}.${slot} model does not advertise tool support.`);
     }
-    const connected = serverRows.filter(server => server.status?.status === 'connected');
-    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems, connectedMcpServers: connected.length };
+    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems,
+      azure: { organization: settings.azure.organization, apiVersion: API_VERSION } };
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
-    if (!connected.length) throw new Error('[AZPR] No MCP server is connected. Check the host MCP status and authentication.');
-    // Connected status can precede tool registration; observe briefly.
-    const began = performance.now();
-    if (typeof context.tool?.list === 'function') {
-      for (let polls = 0; ; polls++) {
-        let catalog;
-        try { catalog = await bounded(() => context.tool.list(), run.controller.signal); }
-        catch (error) { if (run.controller.signal.aborted) throw error; break; }
-        const tools = listOf(catalog) ?? [];
-        if (tools.some(tool => tool.name === AZURE_TOOLS.pullRequest && tool.options?.namespace) || performance.now() - began >= 5000) break;
-        await sleep(50, run.controller.signal);
-      }
-    }
-    run.readiness.registrationWaitMs = Math.round(performance.now() - began);
-    await ensureToolTransform();
   }
 
   async function preflight(run) {
@@ -232,12 +186,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await checkCommands(signal);
     await pinAgents(signal);
     await readiness(run);
-    const server = selectAzureServer([...mcpTools.values()], settings.mcp.server);
-    run.azureServer = server.namespace;
-    const runtime = await bounded(() => createRuntimeSession(context, { origin: run.origin, title: `[AZPR ${run.id}] Azure DevOps`, agent: RUNTIME_AGENT, signal }), signal);
-    seenSessions.add(runtime.id);
-    run.runtimeSessionID = runtime.id;
-    await run.debug.write('readiness.json', { ...run.readiness, azureServer: run.azureServer, host: capabilities,
+    await run.debug.write('readiness.json', { ...run.readiness, ...(baseUrl === 'https://dev.azure.com' ? {} : { azureBaseUrl: baseUrl }), host: capabilities,
       stateDirectory: store.root, ...(storeFallback ? { stateDirectoryFallback: storeFallback } : {}) });
   }
 
@@ -511,7 +460,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function runCheck(run, request) {
     const checks = [];
     for (const problem of run.readiness?.modelProblems ?? []) checks.push({ name: 'Model', ok: false, detail: problem });
-    checks.push({ name: 'Azure DevOps MCP server', ok: true, detail: run.azureServer });
+    checks.push({ name: 'Azure DevOps REST', ok: true, detail: `organization ${settings.azure.organization}, api-version ${API_VERSION}` });
     let snapshot;
     try {
       snapshot = await azure.snapshot(run, request.target);
@@ -526,7 +475,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     for (const [name, change, version] of [['HEAD source read', sample('head', 'delete'), snapshot.head], ['BASE source read', sample('base', 'add'), snapshot.base]]) {
       if (!change) { checks.push({ name, ok: true, detail: 'No applicable file in the change list.' }); continue; }
       const path = change.changeType.includes('rename') && version === snapshot.base && change.originalPath ? change.originalPath : change.path;
-      try { await azure.fileContent(run, snapshot, path, version); checks.push({ name, ok: true, detail: `${path} at ${version.slice(0, 12)}` }); }
+      try {
+        const file = await azure.readFile(run, snapshot, path, version);
+        checks.push({ name, ok: true, detail: `${path} at ${version.slice(0, 12)}${file.binary ? ' (binary)' : file.tooLarge ? ' (too large to review)' : ''}` });
+      }
       catch (error) { if (!run.active) throw error; checks.push({ name, ok: false, detail: errorText(error) }); }
     }
     try { const threads = await azure.threads(run, snapshot); checks.push({ name: 'PR discussions', ok: true, detail: `${threads.length} thread(s) readable` }); }
@@ -538,6 +490,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (seenSessions.has(input.sessionID)) throw new Error('[AZPR] Start a new review from your ordinary development session, not a reviewer session.');
     if (!text(input.sessionID) || !text(input.arguments) || input.arguments.length > 16000) throw new Error(`[AZPR] Usage: /${input.command} <Azure PR URL> [your context]`);
     const request = parseReviewRequest(input.arguments);
+    if (request.target.organization.toLowerCase() !== settings.azure.organization.toLowerCase()) {
+      throw new Error(`[AZPR] The PR belongs to organization "${request.target.organization}", but azure.organization is "${settings.azure.organization}". Use a PAT and settings for that organization.`);
+    }
     if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] All three models.deep roles must be configured before /pr-deep${settings.deepPartial ? ' (only some are set)' : ''}. No fallback to review models.`);
     const profile = mode === 'deep' ? 'deep' : 'review';
     const { run, status, report, failure, review } = await workflow({ origin: input.sessionID, notifySession: input.sessionID, mode, profile,
@@ -644,6 +599,37 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return executeReview(mode, input, output, dispatch);
   }
 
+  // ------------------------------------------------------ reviewer tools
+  /**
+   * Run one AZPR tool for an authorized private session. Failures are returned
+   * as visible tool errors so the model can report the gap.
+   */
+  async function executeReviewTool(name, input, execution) {
+    const g = grants.get(execution?.sessionID);
+    if (!g?.run.active || g.role !== execution?.agent) throw new Error('[AZPR] AZPR tools are available only to an active AZPR reviewer session.');
+    const snapshot = g.referenceSnapshot;
+    if (!snapshot) throw new Error('[AZPR] No PR snapshot is available for this reviewer.');
+    let outcome;
+    try {
+      outcome = await runReviewTool(name, clone(input ?? {}), { azure, run: g.run, snapshot });
+    } catch (error) {
+      if (!g.run.active || g.run.controller.signal.aborted) throw error;
+      if (error?.kind === 'timeout') g.toolTimeouts++;
+      const message = `${name} failed: ${errorText(error)}`;
+      return { output: message, content: [{ type: 'text', text: message }], metadata: { isError: true } };
+    }
+    if (outcome.observation && ['initial', 'final'].includes(ROLES[g.role].format)) {
+      // Keep observed source text with its request for anchor checks in comment planning.
+      try {
+        const observation = await captureObservation(await dataFor(g.run), name, { path: outcome.observation.path, version: outcome.observation.version }, outcome.observation.text);
+        g.run.toolText.set(observation.key, observation);
+      } catch {
+        g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.');
+      }
+    }
+    return { output: outcome.text, content: [{ type: 'text', text: outcome.text }] };
+  }
+
   // --------------------------------------------------------- registration
   try {
     // V2's command editor.add replaces an existing entry; refuse conflicts.
@@ -681,11 +667,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.admitted++;
     }));
     registrations.push(await context.session.hook('context', async event => {
-      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
+      const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
+      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) {
+        // AZPR's PAT-backed tools exist only for its private reviewers.
+        if (tools) for (const name of REVIEW_TOOL_NAMES) delete tools[name];
+        return;
+      }
       const g = authorize(event.sessionID, event.agent, event.model);
       if (!g.admitted) throw new Error('[AZPR] Missing authorized reviewer input.');
-      // Hide tools this role may never run, so the model does not waste turns on them.
-      if (event.tools && typeof event.tools === 'object') for (const name of hiddenTools(g.role, settings.shell)) delete event.tools[name];
+      // Show only the tools this role may run, so the model does not waste turns on others.
+      const allowed = new Set(allowedTools(g.role, settings.shell));
+      if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
       if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
         event.system?.push?.({ type: 'text', text: 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
@@ -747,7 +739,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.toolCalls.set(call, event.tool);
       g.toolArgumentCharacters.set(call, JSON.stringify(event.input ?? {}).length);
       g.timing?.toolStarted(call, event.tool);
-      if (hiddenTools(g.role, settings.shell).includes(event.tool)) {
+      if (!allowedTools(g.role, settings.shell).includes(event.tool)) {
         g.blockedNativeCalls.set(call, event.tool);
         throw new Error(`[AZPR] ${event.tool} is not available to this private reviewer.`);
       }
@@ -765,19 +757,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         if (result?.metadata?.isError === true || result?.isError === true) g.reportedToolErrors.add(call);
         if (result?.metadata?.truncated === true) g.truncatedTools.add(call);
         if (!g.reportedToolErrors.has(call) && !g.truncatedTools.has(call)) g.completedTools.add(call);
-        const native = ['shell', 'read', 'glob', 'grep'].includes(event.tool);
-        if (!native) {
-          event.result = numberToolText(result, event.input, g.referenceSnapshot);
-          if (event.result !== result && ['initial', 'final'].includes(ROLES[g.role]?.format)) {
-            // Keep observed source text with its request for anchor checks in comment planning.
-            try {
-              const observation = await captureObservation(await dataFor(g.run), event.tool, clone(event.input), result.output);
-              g.run.toolText.set(observation.key, observation);
-            } catch {
-              g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.');
-            }
-          }
-        }
       }
       if (g.failedTools.has(call) || g.reportedToolErrors.has(call)) g.toolErrorDetails?.push(diagnosticToolError(event));
       if (commentRole(g.role) && status !== 'error' && event.result) {
@@ -797,6 +776,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         } catch {
           g.run.debug.warnings.push('A comment tool result could not be saved privately; it stays in the session.');
         }
+      }
+    }));
+    registrations.push(await context.tool.transform(editor => {
+      for (const definition of reviewToolDefinitions()) {
+        if (editor.get(definition.name)) throw new Error(`[AZPR] Tool name conflict: ${definition.name}`);
+        // OpenCode exposes only codemode:false tools directly; others hide behind CodeMode execute.
+        editor.add({ ...definition, options: { codemode: false }, output: {}, execute: (input, execution) => executeReviewTool(definition.name, input, execution) });
       }
     }));
     registrations.push(await context.command.transform(editor => {

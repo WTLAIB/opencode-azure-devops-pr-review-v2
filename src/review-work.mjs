@@ -48,7 +48,7 @@ export async function runPool(tasks, limit, worker) {
 
 /** The snapshot fields every model stage receives. Large lists are packed. */
 export async function snapshotForModel(snapshot, store) {
-  const { files, changes, description, ...rest } = snapshot;
+  const { files, changes, description, snapshotWarnings, iteration, ...rest } = snapshot;
   return { ...rest, fileCount: files.length, files: await store.pack(files), description: await store.pack(description ?? '', 4000) };
 }
 
@@ -74,7 +74,7 @@ export async function runReview(ctx, run, request) {
   const store = await ctx.dataFor(run);
   const snapshot = await azure.snapshot(run, request.target);
   run.snapshot = snapshot;
-  const warnings = [];
+  const warnings = [...(snapshot.snapshotWarnings ?? [])];
   if (snapshot.status !== 'active') warnings.push(`The PR status is ${snapshot.status}.`);
   if (!snapshot.filesComplete) warnings.push('Azure DevOps returned an incomplete changed-file list; reviewers were asked to find the remaining paths, which are not verified as complete.');
   progress(run, `PR #${snapshot.prId} at ${snapshot.head.slice(0, 10)}: ${snapshot.files.length} changed file(s)${snapshot.filesComplete ? '' : ' (partial list)'}.`);
@@ -196,7 +196,7 @@ export async function runReview(ctx, run, request) {
   try {
     const now = await azure.versions(run, snapshot);
     freshness = { ...now, checkedAt: new Date().toISOString() };
-    if (now.base && now.base !== snapshot.base) warnings.push(`The target branch moved during the review (${snapshot.base.slice(0, 10)} → ${now.base.slice(0, 10)}). Findings describe the PR source; target-only changes are not attributed to it.`);
+    if (now.base && now.base !== snapshot.base) warnings.push(`The PR base moved during the review (${snapshot.base.slice(0, 10)} → ${now.base.slice(0, 10)}). Findings describe the PR source compared with the reviewed base.`);
     if (now.status !== 'active') warnings.push(`The PR is now ${now.status}.`);
   } catch (error) {
     if (!run.active) throw error;

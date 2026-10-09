@@ -64,18 +64,19 @@ wins over the planner's label.
 
 ## Publication
 
-Publication is deterministic runtime code using the MCP server's
-`repo_pull_request`, `repo_pull_request_thread` and
-`repo_pull_request_thread_write` tools:
+Publication is deterministic runtime code using the Azure DevOps REST API
+(api-version 7.1; see [Azure DevOps access](AZURE_DEVOPS.md)):
 
-1. Read the PR. Refuse if it is not active (INCOMPLETE) or if its source commit
-   differs from the reviewed head (STALE).
-2. List every thread (paged to the end) and collect AZPR markers from live
-   comments.
+1. Read the PR and its iterations. Refuse if it is not active (INCOMPLETE) or if
+   its source commit differs from the reviewed head (STALE).
+2. List every thread (one request returns all of them) and collect AZPR markers
+   from live comments.
 3. For each saved item: skip it when its marker exists (`ALREADY_PRESENT`),
-   otherwise create it with the exact saved content and coordinates (`POSTED`).
-   Each result is saved immediately. A failed item does not stop the others
-   (`FAILED`); a timed-out create is `UNCERTAIN`.
+   otherwise create it with the exact saved content and right-side coordinates
+   (`POSTED`); Azure DevOps attaches the iteration context itself. Each result
+   is saved immediately. A failed item does not stop the others (`FAILED`); a
+   create whose outcome is unknown (timeout or a lost connection) is
+   `UNCERTAIN`. Writes are never retried automatically.
 4. List the threads again: created and uncertain items whose marker is present
    become `VERIFIED`; an uncertain item without a marker becomes `FAILED`.
 

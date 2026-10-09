@@ -1,6 +1,6 @@
 # Local verification and shell access
 
-Private reviewers read the remote PR through MCP. The current OpenCode project
+Private reviewers read the remote PR through AZPR's REST-backed tools. The current OpenCode project
 does not need a checkout or Git history, and reviews never clone or fetch.
 
 ## The `shell` setting
@@ -17,7 +17,7 @@ machine.
 
 When shell is allowed, reviewers may run focused checks — existing tests, a
 small reproduction, static analysis — in a fresh temporary directory with files
-copied from MCP reads at the exact commit. Commands run with real host
+copied from AZPR tool reads at the exact commit. Commands run with real host
 authority; this is not a filesystem, process or network sandbox. Native edit,
 write and patch tools stay denied, but those denials do not stop an approved
 shell command from writing files.

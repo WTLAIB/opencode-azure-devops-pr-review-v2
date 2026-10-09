@@ -35,13 +35,13 @@ inspection (stale scratch data is still removed after 24 hours).
 | File | What it records |
 | --- | --- |
 | `run.json` | Run identity, relevant settings and start time. |
-| `readiness.json` | Checked model slots, connected MCP servers, the selected Azure server and host capabilities. |
+| `readiness.json` | Checked model slots, the Azure DevOps organization and api-version, and host capabilities. |
 | `NN-ROLE.request.json` | Stage identity, the literal payload and the role instructions. |
 | `NN-ROLE.response.json`, `NN-ROLE.response-repairN.json` | Visible answers of the first turn and each correction turn. |
 | `NN-ROLE.result.json` | Status, repairs, unresolved issues, corrections, tool observations, failure class and timing. |
 | `report.md` / `draft.md` | Rendered report or unconfirmed draft. |
 | `comment-plan.json` | The saved plan with exact content, anchors, offsets and markers. |
-| `azure-calls.jsonl` | Every runtime Azure DevOps call: tool, argument summary, attempt, duration, outcome, error and whether it will be retried. |
+| `azure-calls.jsonl` | Every Azure DevOps REST call, from the runtime and the reviewers' AZPR tools: method, call, file path or change page, attempt, HTTP status or error kind, duration, bytes, and whether it will be retried. Never credentials or comment bodies. |
 | `result.json` | Final status, every stage record, Azure call and retry counts, and warnings. |
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
 
@@ -69,6 +69,9 @@ Common receipts:
 
 | Message | Next step |
 | --- | --- |
+| `Azure DevOps rejected the PAT for organization …` | Renew or correct `azure.pat` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart OpenCode. |
+| `Azure DevOps refused … (HTTP 403 …)` | Add the missing PAT scope or project/repository access. |
+| `azpr_read_file failed: …` in a stage's tool errors | The model asked for a missing path or invalid range; the review continues and reports the gap. |
 | `settings.json changed since OpenCode loaded it` | Restart OpenCode. Running commands were unaffected. |
 | `Host configuration changed private agent …` | Another config or plugin changed an `azpr-*` agent; resolve it and reload. |
 | `No completed review is available for this conversation` | Run the comment command in the review's conversation, or run a new review. |

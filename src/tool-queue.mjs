@@ -1,10 +1,10 @@
 /**
- * Bounded MCP execution shared by every private workflow in this plugin.
+ * Bounded Azure DevOps execution shared by every AZPR workflow in this plugin.
  *
- * - `concurrency` limits simultaneous MCP calls; it never limits total work.
- * - Each call has its own timeout. A timed-out call releases its slot at once,
- *   so one hung MCP request can no longer freeze every review in the process.
- *   The host cannot cancel the underlying request; its late result is ignored.
+ * - `concurrency` limits simultaneous calls; it never limits total work.
+ * - Each call has its own timeout. A timed-out call releases its slot at once
+ *   and its operation's signal is aborted, so one hung request cannot freeze
+ *   every review in the process.
  * - Slots are released in `finally`, never by a host hook that might not run.
  */
 export class ToolTimeoutError extends Error {
@@ -49,24 +49,32 @@ export function createToolQueue({ concurrency = 3, timeoutMs = 120000 } = {}) {
     });
   }
 
-  /** Run one MCP operation inside a slot, bounded by its timeout and signal. */
-  async function run(operation, { signal, timeoutMs = limits.timeoutMs, label = 'MCP tool call' } = {}) {
+  /**
+   * Run one operation inside a slot, bounded by its timeout and signal. The
+   * operation receives a signal that aborts on timeout or cancellation.
+   */
+  async function run(operation, { signal, timeoutMs = limits.timeoutMs, label = 'Azure DevOps call' } = {}) {
     await acquire(signal);
+    const controller = new AbortController();
     let timer, onAbort;
     try {
-      const work = Promise.resolve().then(operation);
-      // A result that arrives after a timeout or cancellation is ignored.
-      work.catch(() => {});
-      const guards = [work];
+      const guards = [];
       if (timeoutMs) guards.push(new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new ToolTimeoutError(label, timeoutMs)), timeoutMs);
+        timer = setTimeout(() => {
+          const error = new ToolTimeoutError(label, timeoutMs);
+          controller.abort(error);
+          reject(error);
+        }, timeoutMs);
       }));
       if (signal) guards.push(new Promise((_, reject) => {
-        onAbort = () => reject(abortReason(signal));
+        onAbort = () => { controller.abort(abortReason(signal)); reject(abortReason(signal)); };
         if (signal.aborted) onAbort();
         else signal.addEventListener('abort', onAbort, { once: true });
       }));
-      return await Promise.race(guards);
+      const work = Promise.resolve().then(() => operation(controller.signal));
+      // A result that arrives after a timeout or cancellation is ignored.
+      work.catch(() => {});
+      return await Promise.race([work, ...guards]);
     } finally {
       clearTimeout(timer);
       if (onAbort) signal.removeEventListener('abort', onAbort);

@@ -1,10 +1,8 @@
+import { REVIEW_TOOL_NAMES } from './review-tools.mjs';
+
 // One catalog owns mode, role, model slot, prompt, output kind and stage order.
 export const MODES = Object.freeze(['review', 'deep']);
 export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'review', 'pr-deep': 'deep', 'pr-stop': 'stop', 'pr-comment': 'comment' });
-
-// Hidden agent used only for runtime-owned Azure DevOps MCP calls. It never
-// receives a prompt; host permission rules for MCP tools apply to it.
-export const RUNTIME_AGENT = 'azpr-runtime';
 
 // Native tools no private role may use. Shell is governed by the `shell` setting.
 export const NATIVE_TOOL_PERMISSIONS = Object.freeze({
@@ -14,6 +12,8 @@ export const NATIVE_TOOL_PERMISSIONS = Object.freeze({
 });
 export const BLOCKED_NATIVE_TOOLS = Object.freeze(Object.keys(NATIVE_TOOL_PERMISSIONS));
 export const SHELL_MODES = Object.freeze(['deny', 'ask', 'inherit']);
+// Native tools every private role may use besides AZPR's own Azure DevOps tools.
+export const READ_TOOLS = Object.freeze(['read', 'glob', 'grep']);
 
 const MODEL_SLOTS = ['functional', 'risk', 'verifier'];
 const stages = {
@@ -28,19 +28,22 @@ export const ROLES = Object.freeze(Object.fromEntries(MODES.flatMap(mode => Obje
 export const PROMPTS = Object.freeze([...new Set(['common', 'comment-policy', 'deep', ...Object.values(stages).map(spec => spec.prompt)])]);
 export const initialRoles = mode => Object.entries(ROLES).filter(([, spec]) => spec.mode === mode && spec.format === 'initial').map(([role]) => role);
 export const commentRole = role => ROLES[role]?.comment === true;
-export const privateAgent = name => typeof name === 'string' && (Object.hasOwn(ROLES, name) || name === RUNTIME_AGENT);
+export const privateAgent = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
 
 /** Native permissions for one private role, including the configured shell policy. */
 export function nativeToolPermissions(role, shell = 'deny') {
-  if (role === RUNTIME_AGENT) return { ...NATIVE_TOOL_PERMISSIONS, shell: 'deny', read: 'deny', glob: 'deny', grep: 'deny' };
   return { ...NATIVE_TOOL_PERMISSIONS, ...(shell === 'inherit' ? {} : { shell }) };
 }
-/** Tools hidden from a role's model requests: everything it may never run. */
-export const hiddenTools = (role, shell) => Object.entries(nativeToolPermissions(role, shell))
-  .filter(([, effect]) => effect === 'deny').map(([name]) => name);
+/**
+ * The only tools a private role sees or runs: AZPR's read-only Azure DevOps
+ * tools, native read/search tools and, when allowed, shell. Every other tool
+ * (other MCP servers, edits, web, delegation) is hidden and refused.
+ */
+export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
+  ? [...REVIEW_TOOL_NAMES, ...READ_TOOLS, ...(shell === 'deny' ? [] : ['shell'])] : [];
 
 const DEFAULTS = Object.freeze({
-  mcp: Object.freeze({ server: '', concurrency: 3, callTimeoutSeconds: 120 }),
+  azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120 }),
   workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 }),
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
@@ -68,8 +71,11 @@ function languageTag(value) {
 
 /** Validate local values only; model pricing, access and quality are external. */
 export function validateSettings(raw) {
+  if (raw !== null && typeof raw === 'object' && Object.hasOwn(raw, 'mcp')) {
+    throw new Error('settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.pat, and remove mcp.');
+  }
   keys(raw, ['$schema', 'version', 'enabled', 'models', 'debug', 'outputLanguage', 'returnReport', 'runTimeoutSeconds',
-    'shell', 'progressNotices', 'mcp', 'workflow'], 'settings');
+    'shell', 'progressNotices', 'azure', 'workflow'], 'settings');
   if (raw.version !== 2) throw new Error('settings.version must be 2. Use the V2 settings example; older host layouts are not supported.');
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('enabled must be boolean.');
   if (raw.$schema !== undefined && typeof raw.$schema !== 'string') throw new Error('$schema must be a string.');
@@ -100,10 +106,16 @@ export function validateSettings(raw) {
   if (!SHELL_MODES.includes(shell)) throw new Error('shell must be deny, ask or inherit.');
   const progressNotices = withDefault(raw.progressNotices, true);
   if (typeof progressNotices !== 'boolean') throw new Error('progressNotices must be boolean.');
-  const mcp = { ...DEFAULTS.mcp, ...(raw.mcp === undefined ? {} : (keys(raw.mcp, Object.keys(DEFAULTS.mcp), 'mcp'), raw.mcp)) };
-  if (typeof mcp.server !== 'string' || mcp.server.length > 200 || /[\0\r\n]/.test(mcp.server)) throw new Error('mcp.server must be an MCP server name, or empty to detect it.');
-  integer(mcp.concurrency, 'mcp.concurrency', 1, 8);
-  integer(mcp.callTimeoutSeconds, 'mcp.callTimeoutSeconds', 10, 1800);
+  const azure = { ...DEFAULTS.azure, ...(raw.azure === undefined ? {} : (keys(raw.azure, Object.keys(DEFAULTS.azure), 'azure'), raw.azure)) };
+  // Never echo the PAT in an error.
+  if (typeof azure.organization !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,49}$/.test(azure.organization)) {
+    throw new Error('azure.organization must be your Azure DevOps organization name (the <org> in https://dev.azure.com/<org>).');
+  }
+  if (typeof azure.pat !== 'string' || !/^[\x21-\x7e]{20,1024}$/.test(azure.pat) || /REPLACE|YOUR_/i.test(azure.pat)) {
+    throw new Error('azure.pat must be an Azure DevOps personal access token for azure.organization (scopes: Code Read; Pull Request Threads Read & write).');
+  }
+  integer(azure.concurrency, 'azure.concurrency', 1, 8);
+  integer(azure.callTimeoutSeconds, 'azure.callTimeoutSeconds', 10, 1800);
   const workflow = { ...DEFAULTS.workflow, ...(raw.workflow === undefined ? {} : (keys(raw.workflow, Object.keys(DEFAULTS.workflow), 'workflow'), raw.workflow)) };
   integer(workflow.shardFiles, 'workflow.shardFiles', 1, 1000);
   integer(workflow.shardFindings, 'workflow.shardFindings', 1, 500);
@@ -111,7 +123,7 @@ export function validateSettings(raw) {
   integer(workflow.repairAttempts, 'workflow.repairAttempts', 0, 3);
   integer(workflow.stageRetries, 'workflow.stageRetries', 0, 2);
   return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '' },
-    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, mcp, workflow,
+    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, azure, workflow,
     deepReady: deepConfigured === MODEL_SLOTS.length,
     deepPartial: deepConfigured > 0 && deepConfigured < MODEL_SLOTS.length };
 }
@@ -125,29 +137,26 @@ export function languagePrompt(role, language) {
 
 // Shared tool guidance; role prompts do not repeat it.
 const TOOL_POLICY = `# Tools
-Use the connected Azure DevOps MCP tools directly with the IDs from the input
-snapshot: repositoryId, projectId and the exact commit SHAs. File content comes
-from repo_file get_content with version=<sha> and versionType=Commit; pull
-request data and discussions come from repo_pull_request and
-repo_pull_request_thread. repo_file list_directory does not accept commit SHAs
-(it treats the version as a branch name), so do not use it for commit-exact
-reads; use the changed-file list and get_content instead. Batch independent
-reads and reuse what you already read. Calls are queued and time-limited by the
-runtime.
+Read the PR repository with AZPR's tools. They always use the repository of the
+input snapshot; \`version\` is "head" (default), "base" or a full commit SHA:
+- azpr_read_file: one file as numbered lines, at most 1000 per call; use
+  startLine/endLine for other ranges of long files.
+- azpr_list_files: the entries of one folder (recursive: true for all descendants).
+- azpr_pr_threads: the PR's discussion threads; filter by path, or pass
+  threadId for one thread with complete comments.
+Batch independent reads and reuse what you already read. Calls are queued,
+time-limited and retried by the runtime.
 
-A failed read is not evidence. Do not repeat an identical request after an
-authentication, permission, parameter or not-found error; retry a timeout or
-explicitly transient error at most once, then report the gap. When a response
-is truncated, page or narrow the request; OpenCode may also save the full output
-to a file you can read with explicit offset/limit. Text tool results may carry an
-AZPR numbered view: the "N |" prefixes count returned lines and are not source.
+A failed read is not evidence. Do not repeat a request that failed as not found,
+refused or invalid; a timeout or throttling error was already retried, so report
+the gap. The "N | " prefixes of file reads are line numbers, not source text.
 
-Never use CodeMode execute, public web tools, delegation, file edits or session
-or model controls. Never write to Azure DevOps: the runtime alone posts comments.`;
+Never use public web tools, delegation, file edits or session or model controls.
+AZPR's tools are read-only; the runtime alone posts comments.`;
 
 const shellPolicy = shell => shell === 'deny'
   ? '\n\n# Local commands\nShell is unavailable in this session. Read and search tools may inspect the current project when useful.'
-  : `\n\n# Local commands\nShell may be available under OpenCode permissions${shell === 'ask' ? ' (each command asks the user)' : ''}. Use it only for optional, focused verification in a fresh temporary directory with files copied from MCP reads at the exact SHA. Commands run with real host authority: never modify existing project files, install packages, use credentials or contact services. Report what ran and its actual result.`;
+  : `\n\n# Local commands\nShell may be available under OpenCode permissions${shell === 'ask' ? ' (each command asks the user)' : ''}. Use it only for optional, focused verification in a fresh temporary directory with files copied from AZPR tool reads at the exact SHA. Commands run with real host authority: never modify existing project files, install packages, use credentials or contact services. Report what ran and its actual result.`;
 
 const COMMENT_DATA_POLICY = `
 
@@ -176,13 +185,6 @@ export function buildAgents(settings, prompts) {
       '\n\n# Output\nReturn one valid JSON object, optionally inside a single ```json fence, with no other JSON objects in the answer. Escape quotes and newlines inside strings. If the runtime reports a problem with your answer, return the corrected JSON it asks for.',
     permissions: permissionRules(role, settings.shell),
   }]));
-  agents[RUNTIME_AGENT] = {
-    id: RUNTIME_AGENT, name: RUNTIME_AGENT,
-    description: 'Private runtime identity for AZPR Azure DevOps calls; never prompted.',
-    mode: 'primary', hidden: true,
-    request: { settings: {}, headers: {}, body: {} },
-    permissions: permissionRules(RUNTIME_AGENT, 'deny'),
-  };
   return agents;
 }
 

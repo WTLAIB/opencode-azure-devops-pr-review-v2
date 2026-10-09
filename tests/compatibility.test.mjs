@@ -38,19 +38,22 @@ test('URL identity separates organization, project and repository and rejects un
   ]) assert.throws(() => parseReviewRequest(url), /\[AZPR\]/, url);
 });
 
-test('removed settings cannot configure a V1 transport or an MCP mapping', async () => {
+test('removed settings cannot configure a V1 transport; the retired mcp section names its replacement', async () => {
   const s = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
   s.models = { review: { functional: 'fixture/a', risk: 'fixture/b', verifier: 'fixture/c' } };
-  for (const key of ['azure', 'structuredOutput', 'steps', 'maxStageCharacters']) {
+  s.azure = { organization: 'org', pat: 'fixture-pat-0123456789abcdef' };
+  for (const key of ['structuredOutput', 'steps', 'maxStageCharacters']) {
     assert.throws(() => validateSettings({ ...s, [key]: false }), /Unknown setting/);
   }
+  assert.throws(() => validateSettings({ ...s, mcp: { server: 'ado' } }), /settings\.mcp is no longer used/);
 });
 
-test('Azure DevOps MCP tool names live only in azure.mjs and the prompts', async () => {
-  const files = (await readdir(new URL('../src/', import.meta.url))).filter(name => /\.m?js$/.test(name) && name !== 'azure.mjs');
+test('Azure DevOps REST paths and the api-version live only in azure.mjs; no MCP tool names remain', async () => {
+  const files = (await readdir(new URL('../src/', import.meta.url))).filter(name => /\.m?js$/.test(name));
   for (const file of files) {
     const source = await readFile(new URL('../src/' + file, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /['"`]repo_(?:pull_request|file)\w*['"`]/, file);
+    if (file !== 'azure.mjs') assert.doesNotMatch(source, /_apis\/|api-version=/, file);
   }
 });
 
@@ -63,7 +66,7 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   const capabilities = hostCapabilities({ app: { version: '2.0.22' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
   assert.equal(capabilities.permissionHook, true);
-  assert.equal(capabilities.toolList, false);
+  assert.equal(capabilities.toolTransform, true);
   assert.equal(hostCapabilities({}).version, 'unknown');
   const errored = { type: 'assistant', error: { type: 'provider.api' }, retry: { attempt: 1 } };
   assert.equal(isHostContinuation({ type: 'synthetic', text: HOST_CONTINUATION_TEXT }), true);

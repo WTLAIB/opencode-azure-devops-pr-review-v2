@@ -2,7 +2,9 @@
 
 AZPR is a source-only OpenCode V2 plugin. Model work runs in private,
 role-bound child sessions; deterministic facts and every Azure DevOps write are
-runtime code that calls the user's connected `@azure-devops/mcp` tools directly.
+runtime code that calls the Azure DevOps Services REST API (api-version 7.1)
+with the organization and PAT from AZPR's own settings. Reviewers read the
+repository through AZPR's own read-only tools, which use the same client.
 
 ## Components
 
@@ -13,8 +15,9 @@ runtime code that calls the user's connected `@azure-devops/mcp` tools directly.
 | `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
 | `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies and agent compilation. |
 | `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations, failure classification, interrupt and synthetic notices. |
-| `src/tool-queue.mjs` | Bounded MCP concurrency with per-call timeouts, shared by model tool calls and runtime calls. |
-| `src/azure.mjs` | PR URL parsing, Azure server selection, snapshot construction and the deterministic MCP client (PR, threads, file content, thread creation). |
+| `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
+| `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
+| `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_file`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
 | `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, merge and the final version recheck. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
 | `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
@@ -37,19 +40,19 @@ to the invoking conversation with up to three attempts and is written to
 planning pages, posting). Notices never start a model response.
 
 Each workflow first runs one **preflight**: `settings.json` must be unchanged
-since load, reserved commands must still be ours, private agents are pinned, the
-selected models must exist and support tools, an MCP server must be connected,
-and the Azure server is selected from the captured tools. A model-less runtime
-session (agent `azpr-runtime`) is created for the run's Azure calls. After
-preflight, hooks never re-read settings or catalogs.
+since load, reserved commands must still be ours, private agents are pinned and
+the selected models must exist and support tools. Review commands refuse a PR
+URL whose organization differs from `azure.organization` before any request.
+After preflight, hooks never re-read settings or catalogs.
 
 ### Review
 
-1. **Snapshot** — `repo_pull_request get` with `includeChangedFiles` gives PR
-   identity, `lastMergeSourceCommit` (head), `lastMergeTargetCommit` (base),
-   repository/project IDs, title, description and the change list. The
-   organization in the response must match the PR URL. A paged change list is
-   marked incomplete and reviewers are asked to report missing paths.
+1. **Snapshot** — the PR (identity, status, title, description, repository and
+   project IDs), its iterations and every page of the latest iteration's
+   changes (2,000 per request). Head is the latest iteration's source commit;
+   base is its common commit (merge base), the comparison Azure DevOps shows,
+   falling back to the target tip with a warning when Azure reports none. A
+   lagging merge or multiple merge bases are reported as warnings.
 2. **Initial reviews** — changed files are sorted and cut into shards of
    `workflow.shardFiles`. For each role and shard a private session reviews the
    assigned files with a finding-ID range (`F-1…`, `F-1001…`) so IDs never
@@ -62,12 +65,12 @@ preflight, hooks never re-read settings or catalogs.
    merge into any original ID. Missing or invalid decisions trigger a repair
    turn asking only for those IDs; leftovers become UNREVIEWED (or NEEDS_INFO
    for incomplete confirmations).
-5. **Recheck** — a fresh PR read compares versions. A changed head is STALE; a
-   changed base only adds a warning. A failed recheck is a warning because
-   publication rechecks the head anyway.
+5. **Recheck** — a fresh PR and iteration read compares versions. A changed
+   head is STALE; a changed base only adds a warning. A failed recheck is a
+   warning because publication rechecks the head anyway.
 
-COMPLETE reviews are cached (newest 20) and persisted with their observed
-source excerpts, so `/pr-comment` works after a restart in the same conversation.
+COMPLETE reviews are cached (newest 20) and persisted with the source the
+reviewers read, so `/pr-comment` works after a restart in the same conversation.
 
 ### Stage attempts
 
@@ -107,50 +110,59 @@ read deterministically; findings and earlier pages are inline. A page usually
 finishes in one model request without tools.
 
 Publication (runtime) rechecks that the PR is active and the head unchanged,
-lists every thread, skips items whose marker exists, creates the rest, records
-each result immediately, and reads all markers back (`VERIFIED`). Creation
-results are `POSTED`, `ALREADY_PRESENT`, `FAILED`, `UNCERTAIN` (resolved by
-read-back) or `UNVERIFIED`. Re-running publication is safe.
+lists every thread, skips items whose marker exists, creates the rest with
+`POST …/threads` (right-side `threadContext` for inline items; Azure DevOps adds
+the iteration context itself), records each result immediately, and reads all
+markers back (`VERIFIED`). Creation results are `POSTED`, `ALREADY_PRESENT`,
+`FAILED`, `UNCERTAIN` (resolved by read-back) or `UNVERIFIED`. Re-running
+publication is safe.
 
 ## Authorization and isolation
 
 Private roles (`azpr-<mode>-functional|risk|verifier|comment-plan`) are hidden
-primary agents with explicit models; `azpr-runtime` has no model and never
-receives a prompt. Every private session gets a grant with the run, role, model
-and a pending prompt (text + nonce). Hooks enforce it:
+primary agents with explicit models. Every private session gets a grant with
+the run, role, model and a pending prompt (text + nonce). Hooks enforce it:
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
   cannot be mentioned or delegated.
-- `context`: tools the role may never use are removed from the request; comment
-  pages that read too much get their tools removed to force a checkpoint.
+- `context`: private requests keep only the role's allowlist — AZPR's three
+  tools, native read/glob/grep and shell when the `shell` setting allows it;
+  every other tool (other MCP servers, edits, web, delegation, CodeMode) is
+  removed. Ordinary sessions lose only AZPR's tools. Comment pages that read too
+  much get their tools removed to force a checkpoint.
 - `model.request`: only primary requests after an authorized context; compaction,
   generation and title requests are refused (compaction marks overflow).
 - `retry`: host retries continue only while the grant is active.
 - `permission` `evaluate`: enforces the `shell` setting for private roles and
   allows reads of AZPR's own private data directory.
-- `tool.execute.before`: refuses hidden native tools and delegation.
-- `tool.execute.after`: numbers plain source text, saves observed review source
-  for anchor checks and pages large comment-tool results into private files.
+- `tool.execute.before`: refuses any tool outside the allowlist and delegation.
+- `tool.execute.after`: records tool outcomes and pages large comment-tool
+  results into private files.
 
-Runtime Azure reads (PR, threads, file content) retry transient failures twice
-with backoff — the MCP server reports network errors with an empty message —
-while authentication, permission, validation and not-found errors and every
-write fail at once. Threads are read in one call (`top: 1000`). With debug
-enabled each runtime call is logged to `azure-calls.jsonl` (tool, argument
-summary, attempt, duration, outcome; never comment bodies).
+AZPR registers its tools with `codemode: false` (OpenCode offers only such
+tools directly). A tool runs only for an active grant and always on the run's
+snapshot repository; it returns numbered, bounded text and, for file reads,
+saves the full observed source for comment anchor checks. Failures come back as
+visible tool errors so the model can report the gap.
 
-The plugin wraps every namespaced tool executor so private model calls share the
-MCP queue (concurrency and per-call timeout) with runtime calls; ordinary
-sessions are untouched. Slots are released in `finally`, never by a hook.
+Every Azure DevOps call — runtime or tool — goes through one queue
+(`azure.concurrency`) with a per-call timeout that aborts the HTTP request.
+Reads retry network errors, timeouts, throttling (honouring `Retry-After`) and
+5xx twice with backoff; authentication (HTTP 203 sign-in page or 401),
+permission, validation and not-found errors and every write fail at once. Files
+are cached per run. With debug enabled each call is logged to
+`azure-calls.jsonl` (method, call, path or range, attempt, status, duration,
+outcome; never comment bodies or credentials). Slots are released in
+`finally`, never by a hook.
 
 Shell is denied by default. With `shell: "ask"` or `"inherit"` reviewers may run
 commands under host permissions; that is real host authority, not a sandbox.
-Read-only use of MCP tools by reviewers is a prompt policy; only the runtime
-writes to Azure DevOps.
+Reviewers have no Azure DevOps write tool at all; only the runtime writes.
 
 ## Compatibility
 
 `host.mjs` normalizes list/record response shapes, detects optional capabilities
-(`permission.hook`, `tool.list`) and holds the host continuation text. Receipts
-note when the detected OpenCode version differs from the tested one. The Azure
-tool names live only in `azure.mjs`.
+(`permission.hook`, `tool.transform`) and holds the host continuation text.
+Receipts note when the detected OpenCode version differs from the tested one.
+REST paths and the pinned api-version live only in `azure.mjs`; see
+[Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.

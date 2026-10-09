@@ -1,12 +1,14 @@
 import { withCommandCompletion } from './host-command.mjs';
+import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /**
  * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
- * Isolated directories, a loopback deterministic provider and a fake stdio
- * Azure DevOps MCP (repo_* tools with persistent thread state). Covers the
- * deterministic source check, a full review with a verifier repair turn, comment
- * preview and idempotent publication across a host restart, cancellation, and
- * private auxiliary-request denial. It does not validate a real provider,
- * the official Azure MCP or visual rendering quality.
+ * Isolated directories, a loopback deterministic provider, a loopback fake
+ * Azure DevOps REST service (api-version 7.1, persistent thread state) and one
+ * foreign stdio MCP server. Covers the deterministic source check, a full
+ * review in which reviewers read through AZPR's tools while foreign tools stay
+ * hidden, a verifier repair turn, comment preview and idempotent publication
+ * across a host restart, cancellation, and private auxiliary-request denial.
+ * It does not validate a real provider, real Azure DevOps or visual rendering.
  */
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
@@ -32,6 +34,7 @@ const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 settings.outputLanguage = 'zh-TW';
+settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings, null, 2));
 const install = args => {
   const result = spawnSync('/bin/sh', [join(sourceRoot, 'install.sh'), '--config-dir', directories.config, ...args], { encoding: 'utf8', timeout: 15000 });
@@ -66,12 +69,12 @@ const provider = createServer(async (request, response) => {
     response.write(': fixture waits for cancellation\n\n');
     return;
   }
-  const fileTool = parsed.tools?.find(tool => tool.function?.description === 'AZPR fake repo_file')?.function.name;
+  const fileTool = parsed.tools?.find(tool => tool.function?.name === 'azpr_read_file')?.function.name;
   let call, final = 'Ordinary fixture answer.';
   const finding = (id, path) => ({ id, summary: '缺少防護會遺失狀態', evidence: 'HEAD: `fixture code` 略過防護。BASE: 有防護。', counterevidence: '呼叫端沒有再次檢查。', location: `head:${path}:1`, severity: 'high', suggestion: '恢復防護並加上回歸測試。' });
   if (payload?.assignment?.files && !payload.assignment.findingIds) {
     const files = payload.assignment.files;
-    if (!toolResults && fileTool) call = { name: fileTool, arguments: { action: 'get_content', repositoryId: payload.snapshot.repositoryId, project: payload.snapshot.projectId, path: files[0], version: payload.snapshot.head, versionType: 'Commit' } };
+    if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
   } else if (payload?.assignment?.findingIds) {
     const findings = payload.assignment.findings;
@@ -94,44 +97,24 @@ provider.listen(0, '127.0.0.1');
 await once(provider, 'listening');
 const providerURL = `http://127.0.0.1:${provider.address().port}/v1`;
 
-// ---------------------------------------------------------------- fake MCP
-const mcpPath = join(fixture, 'ado-mcp.mjs'), mcpState = join(fixture, 'ado-state.json'), mcpCalls = join(fixture, 'mcp-calls.jsonl');
-await writeFile(mcpState, JSON.stringify({ threads: [], nextThread: 1000 }));
-await writeFile(mcpPath, `import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-const statePath = ${JSON.stringify(mcpState)};
-const pr = { pullRequestId: 123, status: 1, title: 'Fixture PR', description: '修正狀態處理', url: 'https://dev.azure.com/fixture/pid/_apis/git/repositories/rid/pullRequests/123',
-  repository: { id: 'rid', name: 'repository', project: { id: 'pid', name: 'project' } },
-  lastMergeSourceCommit: { commitId: '${'b'.repeat(40)}' }, lastMergeTargetCommit: { commitId: '${'a'.repeat(40)}' } };
-const schema = properties => ({ type: 'object', properties: Object.fromEntries(properties.map(name => [name, {}])), required: ['action'] });
-const tools = [
-  { name: 'repo_pull_request', description: 'AZPR fake repo_pull_request', inputSchema: schema(['action', 'repositoryId', 'pullRequestId', 'project', 'includeChangedFiles']) },
-  { name: 'repo_pull_request_thread', description: 'AZPR fake repo_pull_request_thread', inputSchema: schema(['action', 'repositoryId', 'pullRequestId', 'project', 'top', 'skip']) },
-  { name: 'repo_pull_request_thread_write', description: 'AZPR fake repo_pull_request_thread_write', inputSchema: schema(['action', 'repositoryId', 'pullRequestId', 'project', 'content', 'status', 'filePath', 'rightFileStartLine', 'rightFileStartOffset', 'rightFileEndLine', 'rightFileEndOffset']) },
-  { name: 'repo_file', description: 'AZPR fake repo_file', inputSchema: schema(['action', 'repositoryId', 'project', 'path', 'version', 'versionType']) },
-];
-const text = value => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] });
+// ------------------------------------------------- fake Azure DevOps REST
+const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 123, files: ['/src/fixture.js', '/src/other.js'] });
+const adoServer = createServer((request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
+adoServer.listen(0, '127.0.0.1');
+await once(adoServer, 'listening');
+const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
+
+// A foreign MCP server: ordinary sessions see its tool, private reviewers must not.
+const foreignPath = join(fixture, 'foreign-mcp.mjs');
+await writeFile(foreignPath, `import { createInterface } from 'node:readline';
 for await (const line of createInterface({ input: process.stdin })) {
   if (!line.trim()) continue;
   const request = JSON.parse(line);
   if (request.id === undefined) continue;
   let result = {};
-  if (request.method === 'initialize') result = { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'azpr-fake-ado', version: '1.0.0' } };
-  else if (request.method === 'tools/list') result = { tools };
-  else if (request.method === 'tools/call') {
-    const { name, arguments: args } = request.params;
-    appendFileSync(${JSON.stringify(mcpCalls)}, JSON.stringify({ name, args }) + '\\n');
-    const state = JSON.parse(readFileSync(statePath, 'utf8'));
-    if (name === 'repo_pull_request') result = text({ ...pr, ...(args.includeChangedFiles ? { changedFilesSummary: { changeEntries: [{ changeType: 2, item: { path: '/src/fixture.js' } }, { changeType: 2, item: { path: '/src/other.js' } }], fileCount: 2 } } : {}) });
-    else if (name === 'repo_file') result = text('fixture code\\nsecond line of ' + args.path + '\\n');
-    else if (name === 'repo_pull_request_thread') result = text(state.threads.slice(args.skip ?? 0, (args.skip ?? 0) + (args.top ?? 100)));
-    else if (name === 'repo_pull_request_thread_write') {
-      const thread = { id: state.nextThread++, status: 'active', comments: [{ id: 1, content: args.content }], threadContext: args.filePath ? { filePath: args.filePath } : null };
-      state.threads.push(thread);
-      writeFileSync(statePath, JSON.stringify(state));
-      result = text(thread);
-    }
-  }
+  if (request.method === 'initialize') result = { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'foreign', version: '1.0.0' } };
+  else if (request.method === 'tools/list') result = { tools: [{ name: 'lookup', description: 'Foreign fixture tool', inputSchema: { type: 'object', properties: {} } }] };
+  else if (request.method === 'tools/call') result = { content: [{ type: 'text', text: 'foreign result' }] };
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
 }
 `);
@@ -142,7 +125,7 @@ await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   update: 'disable', snapshots: false, warming: false, model: 'fixture/fixture',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'fixture-only' },
     models: Object.fromEntries(['fixture', 'functional', 'risk', 'verifier'].map(id => [id, { limit: { context: 100000, output: 4000 } }])) } },
-  mcp: { servers: { ado: { type: 'local', command: [process.execPath, mcpPath], codemode: false } } },
+  mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false } } },
 }, null, 2));
 
 // ------------------------------------------------------------------- host
@@ -152,6 +135,7 @@ const env = {
   XDG_CONFIG_HOME: join(fixture, 'xdg-config'), XDG_DATA_HOME: directories.data, XDG_CACHE_HOME: directories.cache, XDG_STATE_HOME: directories.state,
   TMPDIR: directories.tmp, OPENCODE_TEST_HOME: directories.home, OPENCODE_CONFIG_DIR: directories.config, OPENCODE_PASSWORD: password,
   OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1',
+  AZPR_TEST_AZURE_BASE_URL: azureURL,
 };
 const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 const stopHost = async () => {
@@ -174,8 +158,7 @@ const startHost = async () => {
   });
   return Promise.race([ready, new Promise((_, reject) => setTimeout(() => reject(new Error('Fixture host startup timeout')), 30000).unref())]);
 };
-const mcpLog = async () => (await readFile(mcpCalls, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-const threads = async () => JSON.parse(await readFile(mcpState, 'utf8')).threads;
+const threads = async () => azure.state.threads;
 
 try {
   let url = await startHost();
@@ -189,7 +172,7 @@ try {
   assert.equal((await api('/api/info')).version, '2.0.22');
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
-      if ((await api('/api/mcp')).data?.some(server => server.name === 'ado' && server.status?.status === 'connected')) return;
+      if ((await api('/api/mcp')).data?.some(server => server.name === 'foreign' && server.status?.status === 'connected')) return;
       await new Promise(resolveReady => setTimeout(resolveReady, 100));
     }
     throw new Error('Fixture MCP did not connect.');
@@ -229,13 +212,15 @@ try {
     assert.ok(!request.tools.includes('shell'), 'Shell is hidden from private reviewers by default.');
     assert.ok(!request.tools.includes('execute'), 'CodeMode execute is hidden.');
   }
-  assert.ok(reviewRequests.some(request => request.tools.some(name => /repo_file/.test(name))), 'Reviewers see the Azure MCP tools.');
+  assert.ok(reviewRequests.every(request => ['azpr_read_file', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
+  assert.ok(reviewRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools are hidden from private reviewers.');
+  assert.ok(azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === 'b'.repeat(40)), 'A reviewer read HEAD through azpr_read_file.');
   const verifierRequests = reviewRequests.filter(request => request.model === 'verifier');
   assert.equal(new Set(verifierRequests.map(request => request.sessionID)).size, 1, 'The repair turn stays in the verifier session.');
   assert.ok(verifierRequests.some(request => request.last.startsWith('AZPR runtime')), 'The verifier received a correction request.');
-  const runtimeReads = (await mcpLog()).filter(call => call.name === 'repo_pull_request');
-  assert.ok(runtimeReads.some(call => call.args.includeChangedFiles === true), 'The runtime reads the snapshot itself.');
-  assert.ok(runtimeReads.length >= 2, 'The runtime rechecks versions after verification.');
+  assert.ok(azure.callsTo('changes').length >= 1, 'The runtime reads the change list itself.');
+  assert.ok(azure.callsTo('pr').length >= 3, 'The runtime reads the PR for the snapshot and rechecks versions after verification.');
+  assert.ok(azure.state.calls.every(call => call.query['api-version'] === '7.1'), 'Every REST call pins api-version 7.1.');
   const saved = await readdir(join(directories.state, 'opencode', 'azpr-v2', 'reviews'));
   assert.ok(saved.includes(`${reviewID}.json`), 'Completed reviews are persisted.');
   results.review = 'COMPLETE with verifier repair turn, hidden shell and persisted review';
@@ -256,12 +241,12 @@ try {
   url = await startHost();
   await waitForMcp();
   const beforeRepublish = requests.length;
-  const writesBefore = (await mcpLog()).filter(call => call.name === 'repo_pull_request_thread_write').length;
+  const writesBefore = azure.callsTo('createThread').length;
   await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
   const republished = await latest(reviewOrigin);
   assert.match(republished, /\] POSTED/, republished);
   assert.match(republished, /ALREADY_PRESENT/);
-  assert.equal((await mcpLog()).filter(call => call.name === 'repo_pull_request_thread_write').length, writesBefore, 'No duplicate comments after a restart.');
+  assert.equal(azure.callsTo('createThread').length, writesBefore, 'No duplicate comments after a restart.');
   assert.equal(requests.length, beforeRepublish, 'Re-publishing a saved plan needs no model.');
   results.comments = 'PREVIEW, POSTED, restart, re-run ALREADY_PRESENT without duplicates';
 
@@ -288,6 +273,17 @@ try {
   assert.equal(typeof generated.data.text, 'string');
   results.auxiliary = 'private denied, ordinary allowed';
 
+  // Ordinary conversations keep foreign tools and never see AZPR's PAT-backed tools.
+  const chat = await newOrigin('Ordinary chat');
+  const beforeChat = requests.length;
+  await api(`/api/session/${chat}/prompt`, { text: 'Ordinary chat positive control' });
+  await api(`/api/experimental/session/${chat}/wait`, {});
+  const chatRequest = requests.slice(beforeChat).find(request => request.sessionID === chat);
+  assert.ok(chatRequest, 'The ordinary chat reached the provider.');
+  assert.ok(chatRequest.tools.some(name => /lookup/.test(name)), 'Ordinary sessions keep foreign MCP tools.');
+  assert.ok(!chatRequest.tools.some(name => name.startsWith('azpr_')), 'Ordinary sessions never see AZPR tools.');
+  results.toolScopes = 'AZPR tools only in private sessions; foreign MCP tools only in ordinary sessions';
+
   // 6. Actual TUI: the invoking conversation stays the origin and can cancel.
   const tui = spawn('python3', [join(sourceRoot, 'tests', 'tui-background.py'), binary, url, directories.work, fixture],
     { env: { ...env, AZPR_TUI_HOLD_SECONDS: process.env.AZPR_TUI_HOLD_SECONDS ?? '2' } });
@@ -297,11 +293,14 @@ try {
   assert.equal((await once(tui, 'exit'))[0], 0, tuiOutput);
   results.tui = 'new and existing sessions cancelled from the same TUI';
 
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace' : 'fresh', host: '2.0.22', providerRequests: requests.length, mcpCalls: (await mcpLog()).length, results, fixture }, null, 2));
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace' : 'fresh', host: '2.0.22', providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
 } finally {
   await stopHost();
   provider.closeAllConnections();
   await new Promise(resolveClosed => provider.close(resolveClosed));
+  adoServer.closeAllConnections();
+  await new Promise(resolveClosed => adoServer.close(resolveClosed));
+  await writeFile(join(fixture, 'azure-calls.json'), JSON.stringify(azure.state.calls, null, 2));
   await writeFile(join(fixture, 'host.log'), logs);
   await writeFile(join(fixture, 'provider-requests.json'), JSON.stringify(requests, null, 2));
   console.error(`Private fixture evidence: ${fixture}`);

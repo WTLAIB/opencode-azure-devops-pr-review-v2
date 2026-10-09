@@ -16,10 +16,10 @@ tool call at all:
   the PR with its path, line, author and the start of its first comment.
   Deleted threads are already excluded.
 
-Read more only when these do not answer a question: repo_file get_content at
-`snapshot.head` for lines outside an excerpt, repo_pull_request_thread when you
-need a full comment body or `discussionsRead` is false, and `evidenceIndex`
-(present only when some finding has no excerpt).
+Read more only when these do not answer a question: azpr_read_file at version
+"head" for lines outside an excerpt, azpr_pr_threads when you need a full
+comment body or `discussionsRead` is false, and `evidenceIndex` (present only
+when some finding has no excerpt).
 
 ## Anchors
 

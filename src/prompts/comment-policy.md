@@ -18,7 +18,7 @@ findings:
 - Skip a finding (with a local reason) when it cannot be anchored reliably, its
   claim cannot be stated faithfully within the length limit, or an existing
   discussion (human or bot, not deleted) already covers the same issue. Read the
-  existing threads with repo_pull_request_thread to check this; resolved threads
+  existing threads with azpr_pr_threads to check this; resolved threads
   still count as discussions.
 
 Inline body format, in outputLanguage, at most 1,200 characters:

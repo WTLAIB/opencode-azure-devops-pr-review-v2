@@ -8,7 +8,7 @@ import { createCommentData } from '../src/comment-data.mjs';
 import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
 import { publicationItems } from '../src/comments.mjs';
-import { fakeAzure } from './fake-azure.mjs';
+import { fakeAzure, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const head = 'b'.repeat(40);
 const finding = (id, severity = 'high') => ({ id, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', location: 'head:/src/Main.java:2', severity, suggestion: 's' });
@@ -95,9 +95,8 @@ test('CONTINUE checkpoints keep finished work and stop when no progress is made'
 });
 
 function publisher(azure) {
-  const tools = new Map(azure.definitions().map(tool => [tool.name, { ...tool, namespace: 'ado' }]));
-  const api = createAzureClient({ server: () => ({ namespace: 'ado', tools }), queue: createToolQueue({ concurrency: 2, timeoutMs: 1000 }), agent: 'azpr-runtime' });
-  return { api, run: { id: 'run1', active: true, runtimeSessionID: 'ses_runtime', controller: new AbortController() } };
+  const api = createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: 1000 }), fetch: azure.fetch, retryDelayMs: 1 });
+  return { api, run: { id: 'run1', active: true, controller: new AbortController() } };
 }
 async function plannedReview(t, azure) {
   const ctx = await setup(t, [finding('F-1'), finding('F-2')], azure);
@@ -117,7 +116,7 @@ test('publication posts exact saved text, reads every marker back, and is idempo
   assert.deepEqual(azure.state.threads.map(thread => thread.comments[0].content), publicationItems(review.plan).map(item => item.content));
   assert.ok([...review.publication.values()].every(entry => entry.state === 'VERIFIED' && entry.threadId));
   assert.ok(persisted >= 3);
-  const writes = () => azure.state.calls.filter(call => call.name === 'repo_pull_request_thread_write').length;
+  const writes = () => azure.callsTo('createThread').length;
   const before = writes();
   const second = await publishPlan({ run, review, azure: api });
   assert.equal(second.status, 'POSTED');
@@ -130,7 +129,7 @@ test('a failed write leaves a partial result that a later run completes without 
   const { review } = await plannedReview(t, azure);
   const { api, run } = publisher(azure);
   let failures = 1;
-  azure.state.fail.repo_pull_request_thread_write = () => { if (failures-- > 0) throw new Error('Azure 503'); };
+  azure.state.fail.createThread = () => { if (failures-- > 0) return azureError(503, 'ServiceUnavailableException', 'Busy.'); };
   const first = await publishPlan({ run, review, azure: api });
   assert.equal(first.status, 'PARTIALLY_POSTED');
   assert.equal(azure.state.threads.length, 2);
@@ -144,9 +143,9 @@ test('an uncertain write that did land is confirmed by read-back', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
   const { api, run } = publisher(azure);
-  azure.state.fail.repo_pull_request_thread_write = args => {
-    azure.state.threads.push({ id: 77, comments: [{ content: args.content }] });
-    return { output: { comments: [] } };
+  azure.state.fail.createThread = call => {
+    azure.state.threads.push({ id: 77, comments: [{ content: call.body.comments[0].content }] });
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comments: [] }) };
   };
   const result = await publishPlan({ run, review, azure: api });
   assert.equal(result.status, 'POSTED');
@@ -161,9 +160,9 @@ test('publication refuses a changed source commit or an inactive PR before writi
   const stale = await publishPlan({ run, review, azure: api });
   assert.equal(stale.status, 'STALE');
   azure.state.head = head;
-  azure.state.status = 3;
+  azure.state.status = 'completed';
   assert.equal((await publishPlan({ run, review, azure: api })).status, 'INCOMPLETE');
-  assert.equal(azure.state.calls.filter(call => call.name === 'repo_pull_request_thread_write').length, 0);
+  assert.equal(azure.callsTo('createThread').length, 0);
 });
 
 test('the discussion digest lists only live threads, compactly', () => {
@@ -173,6 +172,7 @@ test('the discussion digest lists only live threads, compactly', () => {
     { id: 2, status: 1, isDeleted: true, comments: [{ content: 'gone' }] },
     { id: 3, status: 2, comments: [{ isDeleted: true, content: 'deleted' }, { content: `Real question about   the guard ${marker}`, author: { displayName: 'Ann' } }], threadContext: { filePath: '/a.ts', rightFileStart: { line: 9 } } },
     { id: 4, status: 1, comments: [{ content: 'x'.repeat(500) }] },
+    { id: 5, status: 'active', comments: [{ content: 'Ann voted 10', commentType: 'system' }] },
   ]);
   assert.deepEqual(digest.map(d => d.threadId), [3, 4]);
   assert.deepEqual(digest[0], { threadId: 3, status: 2, path: '/a.ts', line: 9, author: 'Ann', comments: 1, azpr: true, excerpt: 'Real question about the guard' });

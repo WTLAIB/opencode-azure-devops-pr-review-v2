@@ -80,16 +80,6 @@ export async function createReviewSession(context, { origin, title, role, model,
   return made;
 }
 
-/** A model-less child session that only carries runtime MCP calls. */
-export async function createRuntimeSession(context, { origin, title, agent, signal }) {
-  const api = sessionApi(context, ['create']);
-  const made = await cancellable(() => api.create({ parentID: origin, title, agent }), signal);
-  if (!record(made) || !textValue(made.id) || made.id === origin || made.parentID !== origin || made.agent !== agent) {
-    throw new Error('[AZPR] OpenCode V2 did not create the runtime session for Azure DevOps calls.');
-  }
-  return made;
-}
-
 function normalizeAnswer(message, sessionID) {
   return {
     info: {

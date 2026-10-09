@@ -1,13 +1,16 @@
 # OpenCode Azure DevOps PR Review — V2
 
 Explicit, independent Azure DevOps PR reviews for **`@opencode/cli`** (tested with
-**2.0.22**), the official **`@azure-devops/mcp`** (tested with **2.9.0**) and
-**Ubuntu 22.04**. The plugin uses the OpenCode V2 plugin/session API.
+**2.0.22**) and **Ubuntu 22.04**, using the **Azure DevOps Services REST API**
+(api-version **7.1**) with a personal access token from AZPR's own settings. No
+MCP server is needed. The plugin uses the OpenCode V2 plugin/session API.
 
 How a review works:
 
-1. The runtime reads the PR deterministically through your Azure DevOps MCP
-   server: identity, source/target commit SHAs and the changed-file list.
+1. The runtime reads the PR deterministically from Azure DevOps: identity, the
+   latest iteration's source commit and merge base, and the complete
+   changed-file list. Reviewers read the repository through AZPR's own
+   read-only tools at exact commits.
 2. Two full-scope reviewers (functional and risk) review the changed files in
    bounded **shards**. A shard that fills its model context is split in half
    and run again instead of failing.
@@ -16,7 +19,7 @@ How a review works:
    short **correction turn** in the same session; whatever is still unusable is
    downgraded per finding (UNREVIEWED, NEEDS_INFO) instead of discarding the review.
 4. The runtime rechecks the PR versions. Only a changed **source** commit makes
-   the review STALE; a moved target branch is reported as a warning.
+   the review STALE; a moved base is reported as a warning.
 5. `/pr-comment` plans comments with a model, then the runtime posts the saved
    text itself, skipping comments that already exist and reading every created
    comment back from Azure DevOps. Re-running a publish is safe.
@@ -32,9 +35,9 @@ not; earlier runs are kept in [validation history](docs/VALIDATION_HISTORY.md).
 
 ## Requirements and installation
 
-Node.js **22.12 or later in the 22.x line** is recommended for the MCP server.
-The installer needs POSIX `sh` and Python 3's standard library; the plugin has
-no npm dependencies, build step, provider SDK or Azure client of its own.
+The installer needs POSIX `sh` and Python 3's standard library; the plugin has no
+npm dependencies, build step or provider SDK. It calls the Azure DevOps REST API
+with the runtime's built-in `fetch`.
 
 ```sh
 sh install.sh --config-dir /absolute/path/to/v2-opencode-config
@@ -42,13 +45,13 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config
 
 The installer creates `plugins/azpr-v2/` with a generated ESM `package.json`
 and a `server.js` entry that re-exports `plugin.js`. It never edits the main
-OpenCode configuration, credentials, provider choices or MCP connections, and it
-refuses conflicting V1 files, reserved command names and unowned packages. A
-clean install with placeholder model IDs is not ready until you fill in the
-settings below.
+OpenCode configuration, provider choices or MCP connections, and it refuses
+conflicting V1 files, reserved command names and unowned packages. A clean
+install with placeholder model IDs and an empty PAT is not ready until you fill
+in the settings below.
 
 To replace an existing V2 installation (current settings are kept, new defaults
-are added):
+are added, and a retired `mcp` section is moved into `azure`):
 
 ```sh
 sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
@@ -57,7 +60,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **25 files** are sufficient:
+These **26 files** are sufficient:
 
 ```text
 install.sh
@@ -76,6 +79,7 @@ src/attribution.mjs
 src/host.mjs
 src/tool-queue.mjs
 src/azure.mjs
+src/review-tools.mjs
 src/review-work.mjs
 src/store.mjs
 src/prompts/common.md
@@ -104,6 +108,10 @@ settings they started with.
       "verifier": "YOUR_PROVIDER/YOUR_VERIFIER_MODEL"
     },
     "deep": { "functional": "", "risk": "", "verifier": "" }
+  },
+  "azure": {
+    "organization": "YOUR_ORGANIZATION",
+    "pat": "YOUR_PERSONAL_ACCESS_TOKEN"
   }
 }
 ```
@@ -126,9 +134,10 @@ planning uses the review's risk model.
 | `runTimeoutSeconds` | `null` (no whole-command timer); an integer 10–7200 enables one. |
 | `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode. `inherit`: host permissions decide. |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
-| `mcp.server` | `""` detects the single MCP server that exposes `repo_pull_request`; set the server name if you have several. |
-| `mcp.concurrency` | `3` simultaneous MCP calls across all AZPR commands. |
-| `mcp.callTimeoutSeconds` | `120`; a hung MCP call is abandoned and its slot released. |
+| `azure.organization` | Required. The `<org>` of `https://dev.azure.com/<org>`; PR URLs of other organizations are refused. |
+| `azure.pat` | Required. A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**. Sent only to `https://dev.azure.com/<org>` and never logged. |
+| `azure.concurrency` | `3` simultaneous Azure DevOps calls across all AZPR commands. |
+| `azure.callTimeoutSeconds` | `120`; a hung call is aborted and its slot released (reads are retried). |
 | `workflow.shardFiles` | `25` changed files per initial-review session. |
 | `workflow.shardFindings` | `15` findings per verification session. |
 | `workflow.parallelSessions` | `4` reviewer sessions at once within a command. |
@@ -136,35 +145,26 @@ planning uses the review's risk model.
 | `workflow.stageRetries` | `1` new-session retry after a transient failure (provider 429/5xx, interrupted stream). |
 | `debug.enabled` / `debug.directory` | `false` / `""`; see [debugging](docs/DEBUGGING.md). |
 
-`steps`, `maxStageCharacters`, `structuredOutput`, `azure`, `comments`,
+`steps`, `maxStageCharacters`, `structuredOutput`, `comments`,
 `auxiliaryModels`, `outputRetries`, `verification` and `shellToolPermission`
-are unsupported and rejected. There is deliberately no per-stage step cap; see
-the [roadmap](docs/ROADMAP.md#deferred) for why.
+are unsupported and rejected; `mcp` is retired (the installer moves its limits
+into `azure`). There is deliberately no per-stage step cap; see the
+[roadmap](docs/ROADMAP.md#deferred) for why.
 
-### MCP server
+### Azure DevOps access
 
-Connect the official Azure DevOps MCP server in OpenCode's own configuration
-with **`codemode: false`** so its tools are direct tools:
+AZPR talks to the Azure DevOps Services REST API itself (api-version 7.1). Create
+a PAT scoped to **one organization** (global "all accessible organizations"
+PATs stop working on 2026-12-01) with **Code: Read** and **Pull Request Threads:
+Read & write**, put it in `azure.pat` of the installed `settings.json` (the
+installer keeps that file at mode 600) and restart OpenCode. Keep the PAT out of
+this repository and out of shared settings profiles.
 
-```json
-{
-  "mcp": {
-    "servers": {
-      "ado": {
-        "type": "local",
-        "command": ["npx", "-y", "@azure-devops/mcp@2.9.0", "YOUR_ORGANIZATION"],
-        "codemode": false
-      }
-    }
-  }
-}
-```
-
-AZPR calls its `repo_pull_request`, `repo_pull_request_thread`,
-`repo_pull_request_thread_write` and `repo_file` tools itself, through a private
-model-less runtime agent, so host permission rules for those tools apply. The
-server owns authentication; never put a PAT or provider key in this repository.
-See [Azure MCP setup](docs/AZURE_MCP.md).
+Reviewers read source through three read-only AZPR tools (`azpr_read_file`,
+`azpr_list_files`, `azpr_pr_threads`) that are visible only in AZPR's private
+sessions; other tools, including other MCP servers, are hidden from them. See
+[Azure DevOps access](docs/AZURE_DEVOPS.md) for the API list, versions and
+troubleshooting.
 
 ## Commands
 
@@ -231,12 +231,13 @@ sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config --apply
 ```
 
 The host fixtures run a real OpenCode binary with a loopback fake model provider
-and a fake Azure DevOps MCP in disposable directories under `.local/`.
+and a loopback fake Azure DevOps REST service in disposable directories under
+`.local/`.
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
-[Azure MCP](docs/AZURE_MCP.md), [verification](docs/VERIFICATION.md),
+[Azure DevOps access](docs/AZURE_DEVOPS.md), [verification](docs/VERIFICATION.md),
 [debugging](docs/DEBUGGING.md), [roadmap](docs/ROADMAP.md),
 [current validation](docs/VALIDATION.md) and [AI maintenance guidance](AGENTS.md)
 describe the current behavior. Never commit `.local/`, diagnostics, credentials

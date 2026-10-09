@@ -23,8 +23,9 @@
   "runTimeoutSeconds": null,
   "shell": "deny",
   "progressNotices": true,
-  "mcp": {
-    "server": "",
+  "azure": {
+    "organization": "",
+    "pat": "",
     "concurrency": 3,
     "callTimeoutSeconds": 120
   },
