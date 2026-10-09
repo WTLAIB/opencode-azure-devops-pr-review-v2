@@ -48,9 +48,9 @@ When planning, skip with a local explanation if a claim cannot be stated faithfu
 within the comment limit. Do not drop triggering conditions or qualifications
 just to fit; the complete finding remains in the local review report.
 
-Use a changed file at the reviewed HEAD and the smallest useful RIGHT-side range. Prefer a few lines; a longer exact range is acceptable when needed for context. Use the private evidence index or an available read operation to obtain complete source at snapshot.head; a large response can remain in its saved file while you read the relevant ranges and necessary surrounding context. Verify the defect actually applies to those lines and quote them exactly in the plan's anchor field. Do not invent line numbers or use base-file coordinates. Skip deleted-only files, binary files, source that remains truncated after supported continuation, and findings that cannot be reliably anchored. Explain every skipped confirmed finding locally.
+When authoring a plan (commentWork.kind "plan"), use a changed file at the reviewed HEAD and the smallest useful RIGHT-side range. Prefer a few lines; a longer exact range is acceptable when needed for context. Use the private evidence index or an available read operation to obtain complete source at snapshot.head; a large response can remain in its saved file while you read the relevant ranges and necessary surrounding context. Verify the defect actually applies to those lines and quote them exactly in the plan's anchor field. Do not invent line numbers or use base-file coordinates. Skip deleted-only files, binary files, source that remains truncated after supported continuation, and findings that cannot be reliably anchored. Explain every skipped confirmed finding locally.
 
-During planning, use appropriate available MCP read operations to verify the current PR identity
+During plan authoring, use appropriate available MCP read operations to verify the current PR identity
 and HEAD, read source at the exact reviewed commit, and enumerate ALL existing
 threads with complete pagination and no status/author filters. Inspect all
 existing discussions, not just this bot's markers. A single thread's comments
@@ -58,6 +58,9 @@ are not proof that all threads were checked. Choose parameter names and values
 from the actual tool schemas; do not assume a fixed API family. Publication uses
 the saved plan and the batch checks in the publisher instructions; it does not
 repeat finding selection, source reconstruction or per-comment metadata reads.
+Read-only publication-check sessions likewise reuse the saved immutable anchors;
+they only recheck mutable PR state and current discussions. An unchanged HEAD does
+not require source to be fetched again in each new session.
 
 The plugin coordinates models and validates the plan format; it does not police
 MCP names, actions, arguments, or output schemas. You must honor the task's

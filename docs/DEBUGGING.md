@@ -50,6 +50,7 @@ configuration, or HTTP headers.
 | `comment-plan.json` | Exact prepared comments, anchors, offsets, skip reasons and target before optional publication; diagnostic only, not a restorable authorization. |
 | `draft.md` | Incomplete, explicitly unconfirmed draft when available. |
 | `result.json` | Final status, failure, stage records, cleanup state, and logging warnings. |
+| `delivery.json` | Whether the final origin receipt was queued; a queue acknowledgment is not proof of UI rendering. |
 
 The numeric prefix reflects stage creation order; the two initial sessions run
 concurrently. A response file may be absent if no response was captured. Missing
@@ -176,8 +177,9 @@ project permissions; standalone readiness still denies shell/search. All private
 and public web tools. Set MCP `codemode: false` for direct tools. See
 [the CodeMode boundary and MCP limitations](AZURE_MCP.md).
 
-A forbidden native attempt is prevented before execution. Two distinct blocked
-attempts in a stage stop the run. These observations must remain visible even
+A forbidden native attempt is prevented before execution. The first blocked
+publisher attempt stops publication; two distinct attempts in another stage stop
+the run. These observations must remain visible even
 when no forbidden operation executed. They are different from MCP tool failures
 and provider rejection before any tool request.
 
@@ -203,7 +205,9 @@ requested PR. It does not guess name/ID equivalence. The final verifier must
 establish the expected requested frame and current versions; a valid final
 result can proceed to comment preview with initial warnings preserved.
 
-`toolObservations` summarizes matching V2 execution hooks. Completed/error counts
+`toolObservations` summarizes matching V2 execution observations. The legacy
+`afterHook` field includes terminal outcomes captured by the public namespaced
+executor as well as `execute.after`; exceptions can bypass the latter. Completed/error counts
 are execution observations, while `reportedErrors` and `truncated` record explicit
 result flags. Counts overlap; do not add them as unique failures. `withoutOutcome`
 means a registered call has no observed outcome. `unverifiedResults` means only
@@ -217,6 +221,13 @@ private output paths, or inferred causes. Inspect original host tool history to
 check exact versions and distinguish directory selector failures, content-read
 failures, search-service errors, and actual recovery.
 
+When a verifier returns a valid strict subset of the admitted snapshot paths with
+identical repository, PR, HEAD, BASE and scope, the runtime keeps the full admitted
+inventory and stores `reportedSnapshotFiles` beside a visible warning. This
+repairs an inventory echo, not reviewed coverage. Missing/malformed snapshots,
+unknown paths, changed identity/versions and unfinished evidence/decisions remain
+subject to their existing completion guards.
+
 With debug enabled, `toolErrors` also retains the tool name and scalar execution
 error name/type/message/status observed before grant revocation. Interruption can
 otherwise replace the original host tool error with an aborted outcome. Explicit
@@ -226,6 +237,21 @@ data and reasoning; receipts do not echo them. Error messages may still contain
 sensitive text, so do not publish the diagnostic files.
 
 ## Timing, cancellation, and large output
+
+The command HTTP response acknowledges admission, not completion. Correlate the
+`STARTED` run ID with its later terminal receipt and `result.json`. Commands no
+longer hold that HTTP request open for the full review/publication duration.
+In the pinned TUI, a failed command submitted from a new conversation can close
+its tab through the host's setup-recovery path. An old long-running command's
+HTTP 499 therefore does not establish that its background review stopped or that
+the stored session was deleted. Check session history and private diagnostics.
+Use `/pr-stop` for cancellation; disconnecting or closing a tab is insufficient.
+
+One private MCP tool executes at a time across plugin workflows. Later calls wait and are
+not retried or treated as missing evidence. This backpressure does not establish
+the cause of Azure timeouts or make network/server failures recoverable. Inspect
+original errors, argument values and completed results; do not infer throttling
+without service evidence. Tool timing includes queue waiting.
 
 `requestObservations` separates primary, compaction, generate, title and unknown
 request-kind hooks, authorized primary preparations, rejections, and host retry
@@ -308,7 +334,8 @@ printing the host configuration; native shell retains ordinary host authority.
 Planner request diagnostics now include `evidenceIndex`, not embedded
 `reviewToolText`. Its private JSONL entries retain original arguments and exact
 output references. `reportReference`, `priorPlanning` and `workEvidence` point to
-complete report text, completed fragments and prior comment tool observations.
+complete report text, original assigned inputs with completed fragments, and prior
+comment tool observations.
 Empty source observations do not block planning; the model may read missing data.
 These files can contain source code and PR data and require the same protection as
 other private diagnostics. They cannot restore publication authority after restart.
@@ -322,6 +349,17 @@ Large complete tool results are saved and replaced by references before admissio
 to subsequent model history. Read-only checkpoints preserve exact records in new
 sessions; host compaction remains blocked. A CONTINUE checkpoint is successful
 progress, not a retry of a rejected, interrupted or failed response.
+`checkpointCorrection: "copy-reason-to-continuation"` means a successfully
+completed CONTINUE response supplied its handoff as `reason` and omitted
+`continuation`. The original text/status remain recorded; explicit invalid
+continuations and failures remain rejected, and progress checks still apply.
+Planning pages contain at most four findings as well as the text-size bound.
+Inspect pending IDs, retained summary details and distinct original tool input/result
+records when a checkpoint reports no progress; a different continuation sentence
+or session ID does not reset this guard. A forced checkpoint may finish with READY.
+An apparent pause with no new model requests can be an inherited host permission
+prompt to read or search the private artifact directory; check pending permissions
+first. A read approval does not necessarily authorize a later grep/glob request.
 Publisher inputs include only assigned saved items, target, relevant paths,
 language and work metadata. Inspect `comment-plan.json` for the complete approved
 content; a large publisher text placeholder must restore to that exact text in

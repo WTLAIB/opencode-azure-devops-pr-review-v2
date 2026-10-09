@@ -53,6 +53,26 @@ instead of being migrated. See README's exact list.
 ordinary-agent model invocation. Matching text in a normal chat, PR comment or
 MCP result cannot grant access. Reserved command/agent conflicts fail closed.
 
+The callback registers the run and its origin/PR locks before queuing a `STARTED`
+notice. It releases a start barrier only after that notice is acknowledged, then
+returns without waiting for the workflow. Tracked background jobs retain the
+same authorization, cancellation, deadline and final-result handling. A failed
+start notice admits no model work. Final receipts target the invoking session;
+no navigation or model resume is requested. Disposal revokes runs and settles
+owned jobs before removing registrations. HTTP disconnect is not cancellation.
+
+A shared queue admits one private MCP execution at a time across workflows,
+including both initials and subsequent stages. It does not classify MCP operations
+or cap total work. Queued calls recheck their grant before executing; cancellation
+rejects waiters. Publisher failures revoke grants before a waiting call may run.
+Observed tool timing includes time waiting for an execution slot.
+The public tool transform wraps namespaced executors after initial discovery;
+native tools retain host scheduling. A slot starts at execution, not the before
+hook: unavailable or denied schemas can bypass the host's after hook. Execution
+exceptions release their slot, while successful executions retain it through
+output validation and the after hook. Bounded interruption also releases abandoned
+slots. The queue neither changes schemas nor grants permission to execute.
+
 `ctx.agent.transform` creates hidden primary agents with explicit provider/model
 references and composed system text. Unconfigured deep roles are absent.
 The host's post-configuration phase applies global/project
@@ -213,7 +233,10 @@ JSON is preferred, not a prerequisite for retaining useful review content.
 Completed stop-finish responses use an iterative grammar-aware recovery pass for
 trailing/missing commas, missing colons or terminal structure delimiters, redundant
 root closers, single/smart quotes, quoted literal controls, bare object keys and
-JSON comments. String content is preserved; incomplete values, array holes and
+JSON comments. Paired unescaped double quotes inside closed single-line Markdown
+code spans may be escaped, with original offsets recorded. This review-only repair
+does not cross JSON members or apply to keys, unfinished spans or comment output.
+String content is preserved; incomplete values, array holes and
 conflicting duplicate keys are not silently repaired. Ambiguous JSON and prose
 are retained literally for verification or report presentation. Failed execution,
 context mismatch and truncation remain separate from correctable syntax.
@@ -312,15 +335,24 @@ in code; the publisher translates the saved positions to the available tool.
 Publisher input contains the target, relevant snapshot paths, language, assigned
 saved items and page metadata. Large saved text is copied by marker before tool
 execution. Read-only sessions check every publication page before the first write;
+their separate input contains saved claims and current-check observations, without
+planning reports, coverage warnings, source indexes or anchor reconstruction.
+The checker only verifies mutable PR state and discussions at the unchanged HEAD;
 each publisher rechecks mutable PR metadata and reuses immutable anchors. Original
 source/tool bytes stay in private files with scoped references, not in every
-admission. See [comment work pages](COMMENTING.md#large-pr-work-pages).
+admission. Planning assigns at most four findings per page as well as bounding
+text size, retains each original input with its completed output, and rejects
+repeated checkpoints without distinct work. There is no aggregate work quota.
+See [comment work pages](COMMENTING.md#large-pr-work-pages).
 Before publication, mark every planned item uncertain; results can only update
-that ledger to model-reported outcomes. Any observed execution-hook error or
-explicit error result during publication synchronously revokes grants before
+that ledger to model-reported outcomes. Any V2 terminal error, native denial
+or explicit error result during publication synchronously revokes grants before
 interruption is awaited. This stops subsequent authorized model/tool requests
 without classifying MCP actions; it cannot recall calls already dispatched.
 No automatic retry or independent provider verification is claimed.
+Native shell tools can complete with a nonzero command exit status. The runtime
+does not infer command semantics from exit codes; these remain visible command
+results, distinct from V2 tool errors and explicit error-result flags.
 
 Successful multiline review tool text is retained with its observed request
 arguments in private files for same-origin comment planning. The existing display

@@ -108,6 +108,24 @@ semantics. Keep organization and project distinct. Optional searches do not need
 empty search strings. Branch get may require a short branch name; do not blindly
 copy refs/heads/... from PR metadata into every operation.
 
+Copy complete project/repository IDs and commit SHAs literally from the retained
+snapshot; do not reconstruct similar-looking identifiers. When the actual schema
+accepts either names or IDs, reuse established unambiguous project/repository
+names from the requested target or returned metadata instead of repeatedly
+retyping opaque IDs. Preserve the same resolved identity and exact commit SHA;
+do not invent aliases or infer that a parameter accepts names. Process source in
+manageable groups and reuse exact reads. A large PR is not a reason to dispatch
+every remaining file simultaneously. The runtime queues simultaneous MCP tool calls;
+queued calls are still pending work, not evidence of failure or absent files.
+After a service timeout, settle the current group and follow the read-recovery
+rules below before scheduling more work against the same unavailable source.
+
+A paged change response is an incomplete inventory. Use documented continuation
+when available; list-PR pagination does not imply change-list pagination. Existing
+PR-linked path inventories or other documented change operations can supply
+additional candidates. Keep their provenance and any remaining coverage gaps
+visible; neither a first page nor a path manifest proves that source was reviewed.
+
 Prefer PR changed paths -> exact-commit file content. Start with the returned
 paths; do not list the root or probe a branch tip to rediscover an available
 change list. Extra context or guidance discovery needs a concrete review purpose.
@@ -245,14 +263,15 @@ manufacture issues to fill a quota; zero findings does not prove bug-free code.
 ## Submission check
 
 Reconcile the final localized claims with already-read source and actual outputs.
-For an example that decides a finding, state a short checkable derivation in the
-existing evidence: normalize quantities/units/time offsets to the same basis,
-then show expected versus actual behavior. Recompute test expectations rather
-than trusting their names, comments or another report. If this cannot be checked,
-omit the example or disclose the unresolved claim; do not assert its result.
-Use an available calculation or reproduction when useful, without a mandatory
-execution step. Distinguish a test's first executed failing assertion from later
-predicted effects. A testing disclaimer does not repair a false factual statement.
+Prefer a short source/contract derivation in existing evidence. If a numerical
+example is needed, normalize quantities/units/time offsets and use an observed
+calculation or reproduction of the complete expression to establish calculated
+expected/actual values. Test names, expected assertions and other reports are not
+observed results. Without that check, omit calculated values and retain the
+supported source-level explanation; disclose any claim that remains unresolved.
+Execution is optional: a finding established from source does not need a numerical
+example or a test run. Distinguish a test's first executed failing assertion from
+later predicted effects. A testing disclaimer does not repair a false statement.
 
 Read the proposed fix as a whole, including required imports, guards and input
 types. Related findings must not recommend contradictory changes. Use real API

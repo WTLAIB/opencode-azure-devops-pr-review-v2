@@ -7,6 +7,16 @@ const target=commentTarget('https://dev.azure.com/org/project/_git/repo/pullrequ
 const draft=()=>({status:'READY',comments:[{findingId:'F-1',severity:'high',path:snapshot.files[0],startLine:2,endLine:2,anchor:'return value.name;',body:'🔴 high: Missing null handling\n\nNull input throws. Add a guard and a regression test.'}],skipped:[]});
 const verifiedFinding=()=>({id:'F-1',summary:'Missing guard',evidence:'Null input throws',counterevidence:'The caller allows null on the failing path.',severity:'high',location:'head:/src/example.ts:2',suggestion:'Add a guard and a regression test.'});
 const review=()=>({id:'1234abcd',outputLanguage:'en',target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
+test('repo-relative inventory paths match rooted Azure comment paths without broad path normalization',()=>{
+  const r={...review(),snapshot:{...snapshot,files:['src/example.ts']}};
+  const before=structuredClone(r.snapshot);
+  assert.equal(validateCommentPlan(draft(),r).comments[0].path,'/src/example.ts');
+  assert.deepEqual(r.snapshot,before);
+  for(const path of ['src/example.ts','/src/other.ts','/SRC/example.ts','/src/../src/example.ts','//src/example.ts']) {
+    const value=draft();value.comments[0].path=path;
+    assert.throws(()=>validateCommentPlan(value,r),/changed HEAD file/);
+  }
+});
 test('summary indexes corrected findings and binds one review without an inline anchor', () => {
   const r=review();r.final.dispositions[0].verifiedFinding.summary='Corrected | title <unsafe>';
   r.attribution='AI-generated review; not human review or approval. Models: `fixture/reviewer`';

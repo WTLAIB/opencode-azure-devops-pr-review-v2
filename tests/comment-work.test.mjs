@@ -71,6 +71,18 @@ test('one huge verified field becomes a reference instead of an oversized single
   });
 });
 
+test('many short findings get small independent working sets without losing any finding', async t => {
+  const store=await storeFor(t),review=reviewFor(24),assignments=[];
+  const plan=await prepareComments(review,store,async(payload,validate)=>{
+    assert.ok(payload.findings.length<=4);
+    assignments.push(payload.findings.map(f=>f.id));
+    return validate(ready(payload),{});
+  });
+  assert.equal(assignments.length,6);
+  assert.deepEqual(assignments.flat(),review.final.dispositions.map(f=>f.id));
+  assert.equal(plan.comments.length,24);
+});
+
 test('successful checkpoints retain completed comments and advice without repeating their assignment', async t => {
   const store = await storeFor(t), review = reviewFor(3);
   let calls = 0;
@@ -80,11 +92,78 @@ test('successful checkpoints retain completed comments and advice without repeat
     assert.deepEqual(payload.findings.map(f => f.id), ['F-1', 'F-2']);
     assert.match(payload.continuation, /cursor is 2/);
     assert.ok(payload.priorPlanning);
+    const references=(await store.read(payload.priorPlanning)).trim().split('\n').map(JSON.parse);
+    const previous=JSON.parse(await store.read(references[0]));
+    assert.deepEqual(previous.input.findings.map(f=>f.id),['F-0','F-1','F-2']);
+    assert.equal(previous.result.comments[0].findingId,'F-0');
     return validate({ ...ready(payload), summaryDetails: 'Advice two.' }, {});
   });
   assert.equal(calls, 2);
   assert.equal(plan.comments.length, 3);
   assert.match(plan.summary.content, /Advice one\.[\s\S]*Advice two\./);
+});
+
+for(const checking of [false,true]) test(`${checking?'publication checks':'planning'} reject reworded checkpoints with identical read records`,async t=>{
+  const store=await storeFor(t),review=reviewFor();let calls=0;
+  review.plan=await prepareComments(review,store,(payload,validate)=>validate(ready(payload),{}));
+  await assert.rejects((checking?checkPublication:prepareComments)(review,store,async(payload,validate)=>{
+    calls++;
+    (review.commentEvidence??=[]).push({sessionID:`new-${calls}`,tool:'read',
+      input:calls===1?{file:'same-file',offset:1}:{offset:1,file:'same-file'},result:{sha256:'same-exact-output'}});
+    return validate({status:'CONTINUE',comments:[],skipped:[],continuation:`Reworded continuation ${calls}`},{completedTools:1});
+  }),/without progress/);
+  assert.equal(calls,2);
+  assert.equal(review.attempts.size,0);
+});
+
+test('checkpoints can advance through distinct original read ranges without a total session cap',async t=>{
+  const store=await storeFor(t),review=reviewFor();let calls=0;
+  const plan=await prepareComments(review,store,async(payload,validate)=>{
+    calls++;
+    (review.commentEvidence??=[]).push({tool:'read',input:{file:'source',offset:calls},result:{sha256:`page-${calls}`}});
+    return validate(calls<12?{status:'CONTINUE',comments:[],skipped:[],continuation:`Next source range ${calls+1}`} : ready(payload),{});
+  });
+  assert.equal(calls,12);assert.equal(plan.comments.length,1);
+});
+
+for (const checking of [false, true]) test(`${checking ? 'publication checks' : 'planning'} preserve a successful checkpoint handoff supplied as reason`, async t => {
+  const store = await storeFor(t), review = reviewFor();
+  if (checking) review.plan = await prepareComments(review, store, (payload, validate) => validate(ready(payload), {}));
+  const raw = { status: 'CONTINUE', comments: [], skipped: [], reason: 'Read original record abc, offset 2 next; no finding completed.' };
+  const before = structuredClone(raw), record = { completedTools: 1 }; let calls = 0;
+  await (checking ? checkPublication : prepareComments)(review, store, async (payload, validate) => {
+    if (++calls === 1) {
+      const result = await validate(raw, record);
+      assert.equal(result.reason, raw.reason);
+      return result;
+    }
+    assert.equal(payload.continuation, raw.reason);
+    return validate(checking ? { status: 'READY', comments: [], skipped: [] } : ready(payload), { completedTools: 1 });
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(raw, before);
+  assert.equal(record.checkpointCorrection, 'copy-reason-to-continuation');
+  assert.equal(review.attempts.size, 0);
+});
+
+for (const checking of [false, true]) test(`${checking ? 'publication checks' : 'planning'} do not turn missing, invalid or failed handoffs into progress`, async t => {
+  const store = await storeFor(t), review = reviewFor();
+  if (checking) review.plan = await prepareComments(review, store, (payload, validate) => validate(ready(payload), {}));
+  for (const fields of [
+    { status: 'CONTINUE', reason: '' },
+    { status: 'CONTINUE', reason: 'Unfinished work', continuation: '' },
+    { status: 'CONTINUE', reason: 'Unfinished work', continuation: null },
+    { status: 'INCOMPLETE', reason: 'Required source unavailable' },
+  ]) {
+    const record = { completedTools: 1 }; let calls = 0;
+    await assert.rejects((checking ? checkPublication : prepareComments)(review, store, (payload, validate) => {
+      calls++;
+      return validate({ ...fields, comments: [], skipped: [] }, record);
+    }), /checkpoint|incomplete/i);
+    assert.equal(calls, 1);
+    assert.equal(record.checkpointCorrection, undefined);
+    assert.equal(review.attempts.size, 0);
+  }
 });
 
 for (const kind of ['repeat', 'unassigned', 'failure']) test(`checkpoint ${kind} fails closed without silently retrying or saving a partial plan`, async t => {
@@ -114,6 +193,34 @@ test('publication checks can page with exact cursors and reject incomplete check
   assert.equal(review.attempts.size, 0);
   await assert.rejects(checkPublication(review, store, (payload, validate) => validate({ status: 'INCOMPLETE', comments: [], skipped: [], reason: 'HEAD changed.' }, { completedTools: 1 })), /HEAD changed/);
   assert.equal(review.attempts.size, 0);
+});
+
+test('publication checks carry saved claims and their own exact reads without restarting source review',async t=>{
+  const store=await storeFor(t),review=reviewFor();
+  review.plan=await prepareComments(review,store,(payload,validate)=>validate(ready(payload),{}));
+  review.snapshot={...review.snapshot,files:[...review.snapshot.files,'/unassigned.ts']};
+  review.final.report='Earlier coverage limitations';review.final.reviewWarnings=['Initial source unavailable'];
+  review.commentEvidence=[{tool:'earlier_source',input:{path:'/source.ts'},result:{sha256:'original-plan-source'}}];
+  let calls=0;
+  await checkPublication(review,store,async(payload,validate)=>{
+    calls++;
+    for(const key of ['report','reportReference','reviewWarnings','dispositions','evidenceIndex','priorPlanning']) assert.equal(Object.hasOwn(payload,key),false);
+    assert.deepEqual(payload.snapshot.files,['/source.ts']);
+    assert.equal(payload.commentWork.immutableAnchorsVerified,true);
+    const inline=payload.savedItems.find(item=>item.kind!=='summary');
+    assert.equal(inline.content,review.plan.comments[0].content);
+    for(const key of ['anchor','startLine','endLine','startOffset','endOffset']) assert.equal(Object.hasOwn(inline,key),false);
+    if(calls===1){
+      assert.equal(payload.workEvidence,undefined);
+      review.commentEvidence.push({tool:'current_discussions',input:{cursor:7},result:{sha256:'discussion-page'}});
+      return validate({status:'CONTINUE',comments:[],skipped:[],continuation:'Next discussion cursor 8.'},{completedTools:1});
+    }
+    const records=(await store.read(payload.workEvidence)).trim().split('\n').map(JSON.parse);
+    assert.deepEqual(records,review.commentEvidence.slice(1));
+    assert.match(payload.continuation,/cursor 8/);
+    return validate({status:'READY',comments:[],skipped:[]},{completedTools:1});
+  });
+  assert.equal(calls,2);assert.equal(review.attempts.size,0);
 });
 
 test('publication receipts reject repeated thread IDs across pages without overwriting earlier outcomes', async t => {

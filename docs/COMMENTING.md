@@ -249,12 +249,20 @@ disclosure, marker), locations, and skip reasons even in receipt mode. There is
 no numerical comment quota: all independently actionable eligible findings can
 be included. Duplicate, low-severity or unsupported findings still need skip
 reasons; absence of a quota does not relax evidence or anchor checks.
+Evidence guidance prefers the source expression and its contract. Calculated
+example values are optional and require an observed calculation or reproduction;
+otherwise the comment should retain the supported source-level explanation without
+those numbers. This adds no mandatory test run or execution-based completion gate,
+and the runtime does not independently certify generated factual statements.
 The comment planner receives references to successful multiline tool observations
 from the same review, with original arguments and exact raw text. Identical
 observations are stored once. Native review output and flagged failed/truncated
 results are excluded from this source-sharing index. Observations remain untrusted;
 match path/commit and obtain missing evidence through MCP. No checkout or clone is
 required. Anchors have no arbitrary line-count maximum.
+The inventory may retain repository-relative paths while Azure coordinates use
+a leading slash. Membership accepts only this spelling difference; it does not
+resolve dot segments, change case or accept a path absent from the inventory.
 
 ### Large PR work pages
 
@@ -268,7 +276,7 @@ Each planning session receives:
 - The exact review target, snapshot, language and assigned verified findings.
 - One exact final-report segment plus a reference to the full report for boundary
   context. Final dispositions omit their duplicate `verifiedFinding` objects.
-- References to source observations, prior completed plan fragments and original
+- References to source observations, prior assigned inputs and completed plan fragments, and original
   tool results from earlier comment sessions. Large fields and path lists are
   references too. Native read/search still requires inherited host permission.
 
@@ -279,15 +287,32 @@ complete wrappers, truncation flags and original bytes; it cannot make an incomp
 MCP response complete. Never load the whole evidence catalog just because it exists.
 
 Findings, report segments and publication items are grouped around 12,000 serialized
-characters. An indivisible large field is referenced rather than cut off. Tool
+characters. Planning pages also contain at most four findings, because even short
+findings may require substantial source inspection. Every remaining finding gets
+another page; this working-set bound is not a comment quota. An indivisible large
+field is referenced rather than cut off. Tool
 results larger than this are saved before the host adds their display to model
 history. Smaller tool results are also retained for later sessions. A read-only
-session asks for a successful `CONTINUE` checkpoint after roughly 48,000 visible
-input/tool characters or eight primary requests. The next exact admission carries
+session asks for one successful checkpoint after roughly 48,000 visible
+input/tool characters or eight primary requests. It may return `READY` if its
+assigned work is already complete; otherwise it returns `CONTINUE`. The next exact admission carries
 remaining assignments, references and a cursor. This is explicit workflow progress,
 not host compaction, recovery of failed execution, or a whole-review budget. There
 is no aggregate cap on files, findings, sessions or retained advice. Repeated
-checkpoints without progress fail visibly rather than loop forever.
+checkpoints without new assignments completed, retained summary details or distinct
+tool input/result records fail visibly. Rewording a continuation or moving identical
+reads into another session does not count as progress. Earlier exact inputs remain
+available after a finding has been completed or skipped.
+A successful `CONTINUE` with no `continuation` field may supply its exact handoff
+under `reason`. The runtime copies that text without changing the original field
+or status and records the correction. An explicit invalid continuation, missing
+handoff, failed response or `INCOMPLETE` result is not repaired this way. All
+accounting, evidence and repeated-progress checks still apply.
+
+Reading or searching private artifacts may prompt for the host's `external_directory`
+permission when the cache is outside the current project. Approve only the
+intended artifact read/search using the normal host controls. The plugin does not add a
+permission grant; an unattended host can wait for this approval.
 
 The runtime validates completed fragments and accounts for every eligible finding
 exactly once before saving the whole plan. It retains all authored detail. Semantic
@@ -296,7 +321,11 @@ cancelled page saves no partially publishable plan; the completed review remains
 
 Before any write, fresh read-only sessions check current PR identity/HEAD and all
 unfiltered discussions for every saved publication page. They can checkpoint while
-paging large discussion collections. Only when every page passes does the runtime
+paging large discussion collections. Their inputs contain saved claims/markers,
+the target/snapshot and original reads from this checking phase. They omit initial
+coverage warnings, source indexes, reports and anchor-coordinate reconstruction;
+the saved immutable anchors are reused at an unchanged HEAD. These checks do not
+repeat plan authoring or source review. Only when every page passes does the runtime
 mark the entire plan UNKNOWN and start sequential publisher sessions. A publisher
 receives only its assigned saved items, target, language, relevant paths/coordinates
 and page metadata. It rechecks mutable PR identity/HEAD and reuses immutable anchors.

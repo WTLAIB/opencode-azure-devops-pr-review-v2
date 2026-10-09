@@ -164,8 +164,8 @@ export function renderDiagnosticNotices(run) {
   const failures = run.stages.reduce((n, s) => n + (s.toolFailures ?? 0), 0);
   const reported = run.stages.reduce((n, s) => n + (s.toolObservations?.reportedErrors ?? 0), 0);
   const truncated = run.stages.reduce((n, s) => n + (s.toolObservations?.truncated ?? 0), 0);
-  if (blocked) notices.push(`\nNative tool notice: ${blocked} prohibited native attempt(s) were blocked before execution. Two distinct attempts in one stage stop the run. MCP read-only behavior still depends on prompt policy and host/server permissions.\n`);
-  if (failures) notices.push(`\nTool error notice: ${failures} failure(s) were observed through V2 terminal execution hooks. The plugin did not retry those calls or infer their causes. A completed review does not erase recovered errors; inspect the original tool results.\n`);
+  if (blocked) notices.push(`\nNative tool notice: ${blocked} prohibited native attempt(s) were blocked before execution. The first publisher attempt, or two distinct attempts in another stage, stop the run. MCP read-only behavior still depends on prompt policy and host/server permissions.\n`);
+  if (failures) notices.push(`\nTool error notice: ${failures} failure(s) were observed through V2 terminal execution observations. The plugin did not retry those calls or infer their causes. A completed review does not erase recovered errors; inspect the original tool results.\n`);
   if (reported || truncated) notices.push(`\nTool result notice: ${reported} result(s) explicitly signalled an error; ${truncated} result(s) signalled truncation. These counts can overlap execution errors and each other; they are not additional unique failures or inferred causes.\n`);
   if (run.abortUnconfirmed) notices.push('\nCancellation warning: OpenCode did not confirm session settlement. Requests already sent may still be running or billed.\n');
   if (run.debug?.directory) notices.push(`\nPrivate debug directory: ${run.debug.directory}\n`);

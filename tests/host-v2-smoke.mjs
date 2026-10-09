@@ -1,9 +1,11 @@
+import { withCommandCompletion } from './host-command.mjs';
 /**
  * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
  * Uses isolated directories, a loopback deterministic provider, and a fake stdio
  * MCP. Covers session helpers, full review, native guards, and cancellation.
  * The ordinary-agent shell positive control writes only inside its own fixture.
- * This does not validate a real provider, official Azure MCP, or TUI rendering.
+ * Includes actual TUI origin-retention/cancellation probes. It does not validate
+ * a real provider, official Azure MCP, or visual rendering quality.
  */
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, access, readdir } from 'node:fs/promises';
@@ -55,6 +57,7 @@ let logs = '';
 let rejectNextPlan = true;
 let incompleteNextPlan = false;
 let commentShellProbe;
+let publisherNativeProbe = false;
 const continuedResponses = new Map();
 const expectedPublishedText = [];
 const provider = createServer(async (request, response) => {
@@ -99,7 +102,7 @@ const provider = createServer(async (request, response) => {
     final.confirmed=final.confirmed.filter(item=>item.id!=='R-1');
   }
   if (userContext === 'smoke-review' && parsed.model === 'risk') final.coverage.gaps = ['Tests were not executed in this source-only fixture.'];
-  if (payload?.target && payload.findings && !payload.comments) final = { status: 'READY',
+  if (payload?.commentWork?.kind === 'plan') final = { status: 'READY',
     comments: payload.findings.slice(0, 1).map(item => ({ findingId: item.id, severity: item.severity,
       path: snapshot.files[0], startLine: 2, endLine: 2, anchor: 'fixture-source',
       body: '🔴 high: Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
@@ -109,23 +112,26 @@ const provider = createServer(async (request, response) => {
     final = { status: 'INCOMPLETE', comments: [], skipped: [], reason: 'Fixture discussion pagination is incomplete.' };
     incompleteNextPlan = false;
   }
-  const forced = userContext.includes('force-shell') ? 'shell' : userContext.includes('force-execute') ? 'execute' : undefined;
+  const forced = userContext.includes('force-shell') ? 'shell'
+    : userContext.includes('force-execute') || (publisherNativeProbe && payload?.comments) ? 'execute' : undefined;
   const projectVerification = userContext.startsWith('project-');
   const localComment = payload?.target && commentShellProbe;
   const hanging = userContext === 'hang-verification' && parsed.model === 'functional';
   const priorToolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
   const toolName = projectVerification || hanging || shellControl || (localComment && !hasResult) ? 'shell' : forced ?? tool?.function.name;
   const publisher = Boolean(payload?.comments);
-  const callTool = toolName && (forced || publisher ? priorToolResults < 2 : !hasResult);
+  const readErrorProbe = userContext === 'read-error-probe';
+  const callTool = toolName && (forced || publisher || readErrorProbe ? priorToolResults < 2 : !hasResult);
   const args = localComment && !hasResult ? { command: nodeCommand(`const fs=require('node:fs'); const project=fs.readFileSync('project-marker.txt','utf8'); fs.writeFileSync(${JSON.stringify(commentShellProbe + '.json')},JSON.stringify({cwd:process.cwd(),project})); console.log('COMMENT_PROJECT:'+project);`), description: 'Local comment verification fixture' }
     : projectVerification ? { command: nodeCommand(`const fs=require('node:fs'); const cwd=process.cwd(); const project=fs.readFileSync('project-marker.txt','utf8'); fs.writeFileSync(${JSON.stringify(userContext + '-' + parsed.model + '.json')},JSON.stringify({cwd,project,role:${JSON.stringify(parsed.model)}})); console.log('PROJECT_REPRODUCTION:'+project); process.exit(${parsed.model === 'risk' ? 7 : 0});`), description: 'Local project verification fixture' }
     : hanging ? { command: nodeCommand(`process.title=${JSON.stringify(verificationMarker)}; require('node:fs').writeFileSync('running.pid',String(process.pid)); setInterval(()=>{},1000)`), description: 'Cancellable foreground project fixture' }
     : shellControl ? { command: `touch ${shellQuote(join(fixture, 'SHELL_CONTROL_EXECUTED'))}`, description: 'Harmless fixture shell positive control' }
     : forced === 'shell' ? { command: `touch ${shellQuote(join(fixture, 'NATIVE_EXECUTED'))}`, description: 'Fixture forbidden shell' }
     : forced === 'execute' ? { code: `return await fetch(${JSON.stringify(providerURL + '/forbidden')})` }
-    : { value: publisher ? 'publisher-error' : 'fixture-source', ...(payload?.prUrl ? { anyPath: snapshot.files[0], anyRevision: snapshot.head } : {}), ...(publisher ? { payload: payload.comments[0].content.replace('Restore the guard', 'Please restore the guard') } : {}) };
+    : { value: publisher || (readErrorProbe && priorToolResults === 0) ? 'publisher-error' : 'fixture-source', ...(payload?.prUrl ? { anyPath: snapshot.files[0], anyRevision: snapshot.head } : {}), ...(publisher ? { payload: payload.comments[0].content.replace('Restore the guard', 'Please restore the guard') } : {}) };
   if (publisher && callTool && toolName !== 'shell') expectedPublishedText.push(payload.comments[0].content);
   let content = JSON.stringify(final);
+  if (readErrorProbe && parsed.model === 'risk') content = content.replace('Fixture read returned the source marker.', 'HEAD checks `"scope:write" in permissions`.');
   if (userContext === 'smoke-review' && parsed.model === 'functional') content += '}';
   if (userContext === 'smoke-review' && payload.reviews) content = 'Example: fn({"item": 3}).\n```json\n' + content + '\n```';
   if (payload?.target && payload.findings && !payload.comments) content = '```json\n' + content + '\n```\nLocal verification notes: {"example": 7}.';
@@ -140,7 +146,7 @@ const provider = createServer(async (request, response) => {
     content = content.slice(0, split); incomplete = true;
   }
   const delta = callTool
-    ? { tool_calls: [{ index: 0, id: forced ? 'call_fixture_forbidden_' + (priorToolResults + 1) : 'call_fixture_read', type: 'function', function: { name: toolName, arguments: JSON.stringify(args) } }] }
+    ? { tool_calls: [{ index: 0, id: forced || readErrorProbe ? 'call_fixture_' + (priorToolResults + 1) : 'call_fixture_read', type: 'function', function: { name: toolName, arguments: JSON.stringify(args) } }] }
     : { content };
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   const emit = value => response.write(`data: ${JSON.stringify(value)}\n\n`);
@@ -271,12 +277,13 @@ const startHost = async () => {
 };
 try {
   let url = await startHost();
-  const api = async (path, body, directory = directories.work) => {
+  const rawApi = async (path, body, directory = directories.work) => {
     const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directory }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(45000) });
     const raw = await response.text();
     if (!response.ok) throw new Error(`Fixture API ${path}: ${response.status} ${raw}`);
     return raw ? JSON.parse(raw) : undefined;
   };
+  const api = withCommandCompletion(rawApi);
   const info = await api('/api/info');
   assert.equal(info.version, '2.0.22');
   const made = await api('/api/session', { title: 'Fixture origin', location: { directory: directories.work } });
@@ -609,7 +616,34 @@ try {
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
   assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 14);
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, projectVerification: true, projectSwitch: true, hostPermissionApprovals: permissionReplies.length, hostPermissionDenial: true, pendingApprovalCancellation: true, foregroundCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
+  await invokeReview('pr-review', 'read-error-probe', /\] COMPLETE/);
+  const readErrorDebug = /Private debug directory: ([^\n]+)/.exec(workflowReceipts.at(-1).receipt)[1];
+  const readErrorResult = JSON.parse(await readFile(join(readErrorDebug, 'result.json'), 'utf8'));
+  assert.ok(readErrorResult.stages.every(stage => stage.completedTools === 1 && stage.toolFailures === 1),
+    'A failed MCP read must remain visible while a later source read can finish in the same stage.');
+  assert.deepEqual(readErrorResult.stages.find(stage => stage.role.endsWith('-risk')).outputFormatCorrections.map(item => item.action),
+    ['escape-inline-code-quote', 'escape-inline-code-quote']);
+  const nativePublishOrigin = await invokeReview('pr-review', 'publisher-native-probe', /\] COMPLETE/);
+  publisherNativeProbe = true;
+  await api(`/api/session/${nativePublishOrigin}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+  publisherNativeProbe = false;
+  const nativePublishReceipt = (await api(`/api/session/${nativePublishOrigin}/inbox`)).data.at(-1).payload.text;
+  assert.match(nativePublishReceipt, /\] INCOMPLETE/);
+  assert.match(nativePublishReceipt, /publisher native tool was denied/);
+  const nativePublishDebug = /Private debug directory: ([^\n]+)/.exec(nativePublishReceipt)[1];
+  const nativePublishResult = JSON.parse(await readFile(join(nativePublishDebug, 'result.json'), 'utf8'));
+  const deniedPublisher = nativePublishResult.stages.find(stage => stage.stage === 'comment-publish');
+  assert.equal(deniedPublisher.blockedNativeToolCalls, 1);
+  assert.equal(deniedPublisher.completedTools, 0);
+  const tui = spawn('python3', [join(sourceRoot, 'tests', 'tui-background.py'), binary, url, directories.work, fixture],
+    { env: { ...env, AZPR_TUI_HOLD_SECONDS: process.env.AZPR_TUI_HOLD_SECONDS ?? '2' } });
+  let tuiOutput = '';
+  tui.stdout.on('data', data => { tuiOutput += data; });
+  tui.stderr.on('data', data => { tuiOutput += data; });
+  assert.equal((await once(tui, 'exit'))[0], 0, tuiOutput);
+  await writeFile(join(fixture, 'tui.log'), tuiOutput);
+  const finalMcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length;
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: finalMcpCalls, projectVerification: true, projectSwitch: true, hostPermissionApprovals: permissionReplies.length, hostPermissionDenial: true, pendingApprovalCancellation: true, foregroundCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();
   provider.closeAllConnections();

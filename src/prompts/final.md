@@ -8,10 +8,11 @@ from your own commit-matched source before using the initials' before/after stor
 Apply the common HEAD/BASE evidence pair to findings and important exclusions;
 matching snapshot SHAs alone do not make a report's version interpretation correct.
 Check reachable triggers, callers, safeguards and the strongest plausible counterexample.
-Independently recompute decisive example values from the inputs. Agreement between
-initial reviewers or a test's expected assertion cannot validate arithmetic or
-behavior. Keep the short expected/actual derivation in the corrected finding;
-remove ancillary claims that the check does not support.
+Prefer a source/contract derivation over unnecessary calculated example values.
+For an example that is needed, establish its values independently under the common
+submission check; agreement between initial reviewers or an expected assertion
+does not validate arithmetic or behavior. Remove unsupported ancillary numbers
+while preserving the independently established defect and its qualifications.
 Do not launch additional agents or trade coverage for speed.
 
 Initial reports may be PARTIAL, contain extra fields or include literal output
@@ -22,6 +23,16 @@ conflict, resolve them against the requested PR before combining observations.
 Review unstructured candidates too; use newFindings for independently verified
 issues that have no runtime tracking ID. Return available conclusions and clear
 limitations even when an initial reviewer failed or some checks remain unfinished.
+
+Final status describes this verification, not certification that every PR path
+was inspected. Use COMPLETE after independently resolving the available candidate
+ledger, checking material counterevidence and exclusions, and confirming current
+identity/versions. Keep inherited discovery/coverage gaps explicit in report;
+those gaps alone do not invalidate source-supported conclusions or require
+INCOMPLETE. A resolved needsInfo decision may identify unavailable evidence, but
+must not be presented as a confirmed defect. Use INCOMPLETE when your own
+verification or required identity/freshness checks remain unfinished. Never
+invent evidence or silently omit pending candidates to obtain COMPLETE.
 
 Before your first source reads, identify the changed base/head files and needed
 supporting paths already named in the initial evidence. Treat those paths as

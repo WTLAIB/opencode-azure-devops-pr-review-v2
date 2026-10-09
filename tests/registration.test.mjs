@@ -56,11 +56,15 @@ async function fixture(t, existingCommands = []) {
         return { id: 'queued', sessionID: input.sessionID, type: 'synthetic', payload: { text: input.text }, delivery: 'queue' };
       },
     },
-    tool: { hook: async () => registration() },
+    tool: { hook: async () => registration(), transform: async () => registration() },
   };
   return { context, directory, raw, agents, commands, calls,
     setup: () => setupAzurePrReview(context, directory),
-    invoke: name => commands.get(name).execute({ sessionID: 'origin', prompt: { text: pr }, delivery: 'queue' }),
+    invoke: async name => {
+      const before=calls.reports.length;
+      await commands.get(name).execute({ sessionID: 'origin', prompt: { text: pr }, delivery: 'queue' });
+      while(!calls.reports.slice(before).some(text=>/^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/.test(text))) await new Promise(resolve=>setImmediate(resolve));
+    },
   };
 }
 

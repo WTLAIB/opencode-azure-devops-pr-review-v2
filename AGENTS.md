@@ -97,6 +97,11 @@ The independent V1 repository and installation are outside this project's scope.
   explicit authorization. Normalized formatting warnings alone cannot downgrade
   validated final evidence. A readable PARTIAL report is useful, not fabricated
   completeness. Missing fields and execution failures remain explicit.
+  A valid verifier snapshot with identical identity/versions may omit a subset
+  of the admitted paths when echoing the inventory. Retain the complete admitted
+  inventory with the original echo and a visible warning; this is not reviewed
+  coverage. Do not repair changed identity/versions, unknown paths, malformed
+  snapshots, evidence or decisions through this rule.
 - No reviewer iteration or stage-character budgets, configurable or hidden.
   runTimeoutSeconds defaults null. Preserve explicit finite timeout, manual
   cancellation, lifecycle disposal and bounded SDK cleanup.
@@ -111,6 +116,12 @@ The independent V1 repository and installation are outside this project's scope.
   policy proves file provenance; saved-response offsets are not source line numbers.
 - Reports/receipts use synthetic notices with resume:false. Never run a model
   to reformat them. Queue acknowledgment is distinct from actual UI display.
+  Commands acknowledge STARTED before background model work. Preserve origin/PR
+  locks, start-notice failure handling, independent workflow lifetime, explicit
+  cancellation and disposal. HTTP admission must not wait for review completion.
+  Serialize private MCP execution across the plugin instance, without total-work
+  caps, retries, MCP operation classification or a permission override. Queued
+  calls must stop after grant revocation, including publication failures.
 - Comment publication needs a same-origin completed review, saved preview,
   explicit --publish. A single explicit publish command may prepare/save the plan
   and then publish; a separate preview command is optional. Omitted IDs select
@@ -125,7 +136,13 @@ The independent V1 repository and installation are outside this project's scope.
   Preview has no numerical comment quota. The removed
   comments, auxiliaryModels and outputRetries settings must not return as hidden
   switches or total caps. Comment work pages may use additional short sessions;
-  preserve complete finding/advice accounting and fail visibly without progress. Track uncertainty before writes,
+  bound assigned findings per page as well as text size, without an aggregate quota.
+  Preserve exact prior inputs/results and complete finding/advice accounting.
+  A successful CONTINUE may copy its exact reason into a missing continuation,
+  recording the correction without changing status or replacing an explicit field.
+  Failed execution and invalid explicit continuations remain failures.
+  Reworded checkpoints or identical reads in another session are not progress.
+  Track uncertainty before writes,
   revoke publication grants on any observed tool error, prohibit automatic
   retries and label results model-reported. Derive line-local offsets from saved
   anchors; do not ask the planner for additional coordinate fields. Publisher
@@ -142,6 +159,10 @@ The independent V1 repository and installation are outside this project's scope.
   outcomes remain uncertain without retries, edits or deletions. Reuse
   verified immutable anchors and make mutable PR/discussion checks batch-scoped;
   no mandatory source/metadata reread per comment or repeated review selection.
+  Read-only publication checks receive saved claims/markers and only that phase's
+  original observations. Keep planning coverage warnings, source indexes and
+  coordinate reconstruction out of this phase; unchanged immutable anchors are
+  reused while current PR state and discussions are checked before writes.
   Preserve original scalar execution errors in opt-in private diagnostics before
   interrupting; do not copy tool arguments, result bodies or provider internals.
   Known non-confirmed dispositions may remain skipped notes, never eligible posts.

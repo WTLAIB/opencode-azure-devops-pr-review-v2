@@ -24,12 +24,12 @@ export function textPages(text, size = PAGE_CHARACTERS) {
   return pages;
 }
 
-export function itemPages(items, size = PAGE_CHARACTERS) {
+export function itemPages(items, size = PAGE_CHARACTERS, maxItems = Infinity) {
   const pages = [];
   let page = [], characters = 0;
   for (const item of items) {
     const length = json(item).length;
-    if (page.length && characters + length > size) { pages.push(page); page = []; characters = 0; }
+    if (page.length && (characters + length > size || page.length >= maxItems)) { pages.push(page); page = []; characters = 0; }
     page.push(item); characters += length;
   }
   if (page.length) pages.push(page);

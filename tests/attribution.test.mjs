@@ -54,7 +54,7 @@ test('diagnostic notices distinguish prevented native attempts from overlapping 
   value.abortUnconfirmed = true;
   const notices = renderDiagnosticNotices(freeze(value));
   assert.match(notices, /Native tool notice: 1.*blocked before execution/);
-  assert.match(notices, /Tool error notice: 1.*V2 terminal execution hooks/);
+  assert.match(notices, /Tool error notice: 1.*V2 terminal execution observations/);
   assert.match(notices, /Tool result notice: 1.*1 result\(s\) signalled truncation.*can overlap/);
   assert.match(notices, /did not confirm session settlement/);
   assert.doesNotMatch(notices, /PRIVATE_|invalid tool|StructuredOutput|host events/);

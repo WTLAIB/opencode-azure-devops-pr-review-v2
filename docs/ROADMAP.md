@@ -10,6 +10,12 @@ earlier results without treating retired behavior as current requirements.
 - Native V2 commands, hidden role/model-bound sessions, literal inbox correlation,
   active grants, cancellation and non-resuming report notices. Host-owned ordinary
   agents, permissions and auxiliary model choices remain intact.
+- Immediate STARTED admission with tracked background workflow ownership, final
+  receipt delivery to the invoking conversation, and actual new/existing TUI
+  cancellation probes. Long reviews no longer hold the command HTTP request.
+- Shared serial MCP execution across private workflows, without total call/file
+  caps or automatic retries. Execution and interruption cleanup prevent declined
+  or unavailable tools from blocking later work; native scheduling stays host-owned.
 - Two independent full-scope initial reviewers followed by one source-verifying
   verifier in both normal and deep modes. Architecture, performance, behavioral tests,
   documentation promises, type invariants and failure visibility are part of
@@ -18,6 +24,12 @@ earlier results without treating retired behavior as current requirements.
   ambiguous or partial output, explicit unavailable-stage notices and original-ID
   accounting. Missing decisions remain UNREVIEWED. Every validated COMPLETE review
   can enter same-origin comment planning despite disclosed initial limitations.
+  Final COMPLETE describes finished evidence verification and candidate decisions;
+  retained discovery/coverage limitations remain visible and are not a full-PR
+  inspection certificate.
+  A shortened verifier inventory echo may retain the admitted path list only
+  when its identity and versions match and every returned path was admitted;
+  the original echo and an explicit warning remain available.
 - Optional native project verification under inherited host permissions. MCP
   supplies remote PR source; no checkout, clone, repository mapping, custom
   execution platform or mandatory test quota is required.

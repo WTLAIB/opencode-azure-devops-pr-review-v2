@@ -1,3 +1,4 @@
+import { withCommandCompletion } from './host-command.mjs';
 /** Opt-in exact-host scale fixture. Fake loopback models/MCP only; no Azure account.
  * node tests/host-v2-comment-scale.mjs /absolute/path/opencode
  * Synthetic completions test transport/accounting, not model review quality.
@@ -46,7 +47,7 @@ const provider = createServer(async (request, response) => {
           call = { name: 'shell', arguments: { command: `${shellQuote(process.execPath)} -e ${shellQuote(code)}`, description: 'Read a bounded original report page' } };
         } else {
           assert.equal(input.tools?.length ?? 0, 0, 'The runtime must finish a long read-only session with a checkpoint.');
-          final = { status: 'CONTINUE', comments: [], skipped: [], continuation: `Read ${results.length} bounded report rows. Complete assigned findings and assigned report segment in the next session.` };
+          final = { status: 'CONTINUE', comments: [], skipped: [], reason: `Read ${results.length} bounded report rows. Complete assigned findings and assigned report segment in the next session.` };
         }
       } else if (!results.length) call = { name: fixtureTool, arguments: { operation: 'discussions', size: 2200000 } };
       else {
@@ -99,7 +100,8 @@ const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_CONFIG_HOME: join(fixt
 try {
   child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await Promise.race([new Promise((resolveReady, reject) => { child.once('error', reject); child.once('exit', code => reject(new Error('Host exited ' + code))); child.stdout.on('data', data => { logs += data; const match = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) resolveReady(match[1]); }); child.stderr.on('data', data => { logs += data; }); }), new Promise((_, reject) => setTimeout(() => reject(new Error('Host startup timed out.')), 30000).unref())]);
-  const api = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300000) }); const text = await response.text(); assert.ok(response.ok, text); return text ? JSON.parse(text) : undefined; };
+  const rawApi = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300000) }); const text = await response.text(); assert.ok(response.ok, text); return text ? JSON.parse(text) : undefined; };
+  const api = withCommandCompletion(rawApi, 300000);
   assert.equal((await api('/api/info')).version, '2.0.22');
   for (const command of ['pr-review', 'pr-deep']) {
     snapshot.prId = command === 'pr-review' ? 123 : 124;
@@ -115,6 +117,7 @@ try {
     assert.ok(result.stages.every(s => s.inputCharacters < 48000 && !s.requestObservations.rejected));
     assert.ok(result.stages.filter(s => s.stage === 'comment-publish').length > 3);
     assert.ok(result.stages.some(s => s.stage === 'comment-plan' && s.modelRequests >= 3 && s.modelRequests <= 9));
+    assert.ok(result.stages.some(s => s.status === 'CONTINUE' && s.checkpointCorrection === 'copy-reason-to-continuation'));
     const first = JSON.parse(await readFile(join(debug, `01-azpr-${command === 'pr-deep' ? 'deep' : 'review'}-comment-plan.request.json`), 'utf8'));
     const index = (await readFile(first.payload.evidenceIndex.file, 'utf8')).trim().split('\n').map(JSON.parse);
     assert.deepEqual(index.map(item => item.output.characters).sort((a, b) => a - b), [120, 2200000, 3307749]);

@@ -11,6 +11,12 @@ and avoid cross-page duplicate comments. Do not omit a distinct recommendation.
 Only produce the brief summary introduction when commentWork.allowSummary is true.
 The runtime assembles all completed pages and checks every final finding before
 saving one complete plan. Large values use azprData references; read them as needed.
+Each planning page has at most four findings, with no limit on the total number
+of pages or comments. Finish this assigned set before consulting other findings.
+For planning pages after page 1, reuse the original PR/discussion observations
+from earlier planning pages when still applicable; a fresh session alone does
+not require refetching them. The later publication-check phase rechecks mutable
+state before any writes. Investigate actual evidence conflicts or changed versions.
 workEvidence indexes original tool arguments and results from earlier comment
 sessions, including small reads. Consult those exact records when checkpoint
 details are insufficient. Each entry identifies its stage and session; earlier
@@ -20,10 +26,17 @@ For kind "publication-check", the savedItems are already approved plan text.
 This is READ ONLY, even though the overall command requested --publish. Check
 current PR identity, active status and exact HEAD, and ALL current unfiltered
 discussion pages for existing saved markers or semantic duplicate inline issues.
+These are the only checks for this kind. The saved plan already verified each
+immutable anchor at snapshot.head; immutableAnchorsVerified records that workflow
+step, not independent source certification. Reuse those anchors. Do not reread
+source, reconstruct coordinates, inspect contracts/tests or reopen review coverage
+merely because this is a fresh session. Missing source text in this session is
+not an evidence gap for these checks. workEvidence contains only original reads
+from this publication-check phase for exact discussion pagination and continuity.
 Do not replan, rewrite saved text, create comments, or add finding/skip entries.
 Return {"status":"READY","comments":[],"skipped":[]} only when these checks
 finish for this page. Return INCOMPLETE with a reason on stale identity/HEAD,
-duplicates or unavailable evidence; no publisher then starts. Return CONTINUE
+duplicates or unavailable current PR/discussion evidence; no publisher then starts. Return CONTINUE
 with exact cursors and unfinished comparisons when more read-only work is needed.
 An older summary's bare index is not a substantive duplicate inline discussion.
 
@@ -31,18 +44,27 @@ For either read-only kind, a successful work checkpoint may return
 {"status":"CONTINUE","comments":[],"skipped":[],"continuation":"Exact private data references, completed checks and remaining work"}.
 Include any fully prepared comments/skips/details in that response; they are
 saved once. Do not repeat them in later pages. A checkpoint does not mean READY.
+priorPlanning retains both the original assigned input and the returned work.
+Include supported summary details for a completed low/skipped finding before
+marking it accounted for. Return exactly one JSON object, never two alternative
+envelopes or a repeated shorter version. If all assigned work is already finished
+when tools are disabled, return READY rather than an unnecessary checkpoint.
 Do not reread earlier pages described by a trustworthy runtime-bound checkpoint
 unless their evidence is missing, mutable or uncertain. Original records remain
 available; checkpoint claims do not certify remote source or discussion coverage.
 
 Choose read operations from the tools actually exposed by OpenCode. Do not
-assume tool names, prefixes, or dispatcher parameters. Enumerate all threads,
-verify current PR metadata, and check each anchor against exact-commit source.
+assume tool names, prefixes, or dispatcher parameters. For kind "plan", enumerate
+all threads, verify current PR metadata, and check each anchor against exact-commit source.
+For kind "publication-check", follow only the mutable-state checks above; the
+remaining planning and source-authoring sections below do not apply.
 If required evidence is unavailable, explain the specific gap with INCOMPLETE
 instead of guessing. A completed review is already the source of eligible
 findings; planning selects faithful comments and anchors without rerunning it.
 
 ## Author-facing review notes
+
+This and the following sections apply only to kind "plan".
 
 Use summary for one or two short sentences before the issue index. Begin with the
 change's purpose when supported by the PR description or requirements; otherwise
@@ -103,6 +125,14 @@ Use the supplied verified finding as the source of the comment's claim, not an
 earlier candidate or a broader sentence in report prose. Keep its severity
 unchanged. If the source checks contradict it or the report leaves its meaning
 unclear, skip it with a reason instead of inventing a corrected claim here.
+Prefer the exact source expression and its contract for evidence. A comment does
+not need calculated example values when those facts already explain the defect.
+Include a calculated expected/actual value only when an observed calculation or
+reproduction establishes it with the complete expression, integer division,
+rounding, operator precedence and contract-valid inputs. Another report's number
+or an expected test assertion is not that observation. Otherwise omit the number
+and explain the supported source-level mismatch. This is an optional example
+rule, not a requirement to execute tests or a reason to drop a supported finding.
 
 Rank by actual impact. Include all independently actionable eligible findings (possibly zero); there is no numerical comment quota. Skip duplicates by meaning, including human-written discussions without an AZPR marker. Read existing marker-bearing threads too. Do not move an anchor or change wording to evade duplicate checks. Every supplied finding must appear exactly once in comments or skipped. For duplicates within this batch, choose one representative and explain the other IDs in skipped. New verifier findings are eligible only if supplied in findings; do not extract arbitrary prose into new IDs.
 

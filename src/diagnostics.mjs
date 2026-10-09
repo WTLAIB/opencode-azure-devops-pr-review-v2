@@ -8,7 +8,7 @@ import { visibleText } from './output.mjs';
  * Value-free observations; counts can overlap and never establish source truth.
  * @typedef {object} ToolObservations
  * @property {number} registered Authorized ordinary before-hook calls.
- * @property {number} afterHook Observed V2 execute.after outcomes, including errors.
+ * @property {number} afterHook Legacy name: terminal outcomes from V2 after hooks or namespaced executor exceptions.
  * @property {number} hostCompleted
  * @property {number} hostErrors
  * @property {number} reportedErrors
@@ -51,7 +51,7 @@ export function diagnosticToolError(event) {
     ...(Object.keys(error).length ? { error } : {}) };
 }
 
-// Local hook intervals, not provider inference/queue time or Azure server time.
+// Local execution observations, not provider inference/queue time or Azure server time.
 // Keep only tool names and offsets: no call IDs, arguments, output or reasoning.
 export function createStageTiming(clock = () => performance.now()) {
   const start = clock(), requests = [], tools = new Map();

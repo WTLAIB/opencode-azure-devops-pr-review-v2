@@ -290,17 +290,33 @@ function reviewJSONCandidate(content) {
   const token = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null/y;
   let i = 0, lastValueEnd = 0;
   const change = (action, offset, replacement = '') => edits.push({ action, offset, replacement });
-  const quoted = () => {
+  const quoted = (codeValues = false) => {
     const start = i, quote = content[i++], close = quote === '“' ? '”' : quote;
-    let value = '';
+    let value = '', codeEnd = -1, escapedCodeQuote = false;
     while (i < content.length) {
       const char = content[i++];
+      if (codeValues && quote === '"' && char === '`' && i - 1 > codeEnd) {
+        const delimiter = /^`+/.exec(content.slice(i - 1))[0];
+        const end = content.indexOf(delimiter, i - 1 + delimiter.length);
+        const span = end < 0 ? '' : content.slice(i - 1 + delimiter.length, end);
+        const unescapedQuotes = [...span.matchAll(/\\.|"/g)].filter(([token]) => token === '"').length;
+        // A closed, single-line Markdown code span gives a literal boundary.
+        // Do not cross JSON members or invent a missing code/string terminator.
+        if (end >= 0 && !/[\r\n]/.test(span) && !/"\s*:/.test(span) && unescapedQuotes % 2 === 0) {
+          codeEnd = end + delimiter.length - 1;
+        }
+      }
       if (char === close) {
+        if (i - 1 < codeEnd) {
+          value += char; escapedCodeQuote = true;
+          change('escape-inline-code-quote', i - 1, '\\"');
+          continue;
+        }
         const raw = content.slice(start, i);
-        if (quote === '"') {
+        if (quote === '"' && !escapedCodeQuote) {
           try { JSON.parse(raw); return raw; } catch { /* Literal controls only. */ }
         }
-        change('normalize-string-delimiters-or-controls', start);
+        if (!escapedCodeQuote || /[\u0000-\u001f]/.test(raw)) change('normalize-string-delimiters-or-controls', start);
         return JSON.stringify(value);
       }
       if (char !== '\\') { value += char; continue; }
@@ -370,7 +386,7 @@ function reviewJSONCandidate(content) {
       pieces.push(char); i++; continue;
     }
     if (['"', "'", '“'].includes(char)) {
-      const value = quoted(); if (value === undefined) return; pieces.push(value);
+      const value = quoted(true); if (value === undefined) return; pieces.push(value);
     } else {
       token.lastIndex = i;
       const match = token.exec(content); if (!match) return;
@@ -862,6 +878,22 @@ export function acceptFinalReview(value, expected, originals, prUrl) {
   if (!result.snapshot && expected) {
     result.snapshot = structuredClone(expected);
     note(notes, 'The displayed snapshot comes from the initial reviews; the verifier omitted its snapshot.');
+  }
+  if (verifierSnapshot && expected) {
+    try {
+      const reported = validateSnapshot(snapshotView(result.snapshot));
+      const admitted = validateSnapshot(snapshotView(expected));
+      const sameIdentity = ['repository', 'prId', 'base', 'head', 'scope'].every(key => reported[key] === admitted[key]);
+      const paths = new Set(admitted.files);
+      if (sameIdentity && reported.files.length < paths.size && reported.files.every(path => paths.has(path))) {
+        // The input inventory is retained data, not a verifier coverage claim.
+        // Preserve the model's echo; never repair identity, versions, evidence,
+        // new/different paths or missing finding decisions through this rule.
+        result.reportedSnapshotFiles = [...result.snapshot.files];
+        result.snapshot = { ...result.snapshot, files: [...admitted.files] };
+        note(notes, `The verifier omitted ${paths.size - reported.files.length} admitted snapshot path(s); the original inventory was retained. This does not mark those paths as reviewed.`);
+      }
+    } catch { /* Incomplete or conflicting snapshots retain the strict guard. */ }
   }
   result.currentHead = reviewSHA(result.currentHead);
   result.currentBase = reviewSHA(result.currentBase);

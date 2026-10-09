@@ -139,6 +139,9 @@ export function validateCommentPlan(result, review) {
   if (result.status === 'INCOMPLETE') fail(`Comment planning incomplete: ${nonempty(result.reason) ? result.reason.trim() : 'The model did not explain what could not be verified.'} No comments were published; the completed review remains available.`);
   if (result.status !== 'READY' || !Array.isArray(result.comments) || !Array.isArray(result.skipped)) fail('Planner did not return a READY comment plan.');
   const eligible = new Map(confirmedFindings(review).map(f => [f.id, f]));
+  // Snapshots may retain repo-relative paths; Azure comment coordinates use a
+  // leading slash. Match that spelling only, without resolving dots or aliases.
+  const changedPaths = new Set(review.snapshot.files.map(path => path.startsWith('/') ? path : '/' + path));
   const accounted = new Set();
   const knownExcluded = new Set(review.final.dispositions.filter(d => d.status !== 'CONFIRMED').map(d => d.id));
   const skippedIds = new Set(), anchorRestorations = [], locationRestorations = [];
@@ -152,7 +155,7 @@ export function validateCommentPlan(result, review) {
     accounted.add(c.findingId);
     if (!['high', 'medium'].includes(c.severity) || !nonempty(c.body) || c.body.length > 1200 ||
         !hasInlineTitle(c.body, c.severity) || /<!--|-->/.test(c.body)) fail('Invalid severity, title, or comment length.');
-    if (!review.snapshot.files.includes(c.path) || !c.path.startsWith('/') || /[\r\n\0]/.test(c.path) ||
+    if (!changedPaths.has(c.path) || !c.path.startsWith('/') || /[\r\n\0]/.test(c.path) ||
         !integer(c.startLine) || !integer(c.endLine) || c.endLine < c.startLine) fail('Use a changed HEAD file and a positive, ordered line range.');
     if (!nonempty(c.anchor) || c.anchor.split(/\r?\n/).length !== c.endLine - c.startLine + 1) fail('Supply exact anchor text for the selected range. The model must verify it against source.');
     const restored = restoreAnchor(c, review), { anchor } = restored;

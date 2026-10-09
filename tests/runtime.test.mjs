@@ -28,7 +28,8 @@ async function fixture(t, opts = {}) {
   const globalPermissions = [{action:'fixture_mcp_write',resource:'*',effect:'deny'}];
   const agents = new Map([['build',{id:'build',system:'Ordinary developer rules',permissions:clone(globalPermissions)}]]);
   const commands = new Map([['existing',{name:'existing',execute(){}}]]);
-  const hooks = new Map(), sessions = new Map(), calls = [], notices = [];
+  const hooks = new Map(), sessions = new Map(), calls = [], notices = [], noticeWaiters = new Set();
+  const toolTransforms = new Set();
   let seq = 0;
   const emit = async (domain,name,event) => { for (const fn of hooks.get(`${domain}:${name}`) ?? []) await fn(event); };
   const hook = domain => async (name,fn) => {
@@ -36,10 +37,15 @@ async function fixture(t, opts = {}) {
     list.push(fn); hooks.set(key,list);
     return {dispose(){hooks.set(key,list.filter(item => item !== fn));}};
   };
+  const executeTool = async (event, execute) => {
+    const tool = {id:event.tool,name:event.tool,options:{namespace:'arbitrary-server',codemode:false},execute};
+    for (const transform of toolTransforms) transform({list:()=>[tool],update(id,update){assert.equal(id,tool.id);update(tool);}});
+    return tool.execute(event.input,event);
+  };
   const invoke = async (id,tool='fixture_mcp_read',result={output:'fixture source',metadata:{}},status='completed',input={secret:'PRIVATE_INPUT'}) => {
     const session=sessions.get(id), event={sessionID:id,agent:session.agent,messageID:`assistant_${seq}`,id:`call_${++seq}`,tool,input};
     await emit('tool','execute.before',event);
-    calls.push({kind:'executed-tool',tool,sessionID:id});
+    await executeTool(event,async()=>{calls.push({kind:'executed-tool',tool,sessionID:id});return result;});
     await emit('tool','execute.after',{...event,status,...(status==='error'?{error:new Error('PRIVATE_ERROR')}:{result})});
     return result;
   };
@@ -68,7 +74,7 @@ async function fixture(t, opts = {}) {
         return {dispose(){commands.clear();for(const [id,value] of before) commands.set(id,value);}};
       },
     },
-    tool:{hook:hook('tool'),async list(){return [{name:'fixture_mcp_read',options:{namespace:'arbitrary-server',codemode:false}}];}},
+    tool:{hook:hook('tool'),async transform(fn){toolTransforms.add(fn);return {dispose(){toolTransforms.delete(fn);}};},async list(){return [{name:'fixture_mcp_read',options:{namespace:'arbitrary-server',codemode:false}}];}},
     session:{
       hook:hook('session'),
       async create(input) {
@@ -93,7 +99,7 @@ async function fixture(t, opts = {}) {
           await opts.beforeContext?.({frame,emit,session,packet,agents});
           if(!opts.skipContextHook) await emit('session','context',frame);
           if(!opts.skipModelHook) await emit('session','model.request',{sessionID:session.id,agent:role,model:clone(session.model),kind:'primary',headers:{}});
-          await opts.during?.({frame,emit,context,invoke,session,packet,calls,agents});
+          await opts.during?.({frame,emit,context,invoke,executeTool,session,packet,calls,agents});
           if(!opts.skipTool) await invoke(session.id);
           let result;
           if(spec.stage==='check') result={status:'READY',snapshot:{...clone(SNAP),scope:'cumulative'},sourceAccess:{diff:'fixture'},requirements:'Fixture requirement',report:'Source access ready.'};
@@ -117,17 +123,149 @@ async function fixture(t, opts = {}) {
       async wait({sessionID}) {await sessions.get(sessionID).running;},
       async context({sessionID}) {return clone(sessions.get(sessionID).history);},
       async interrupt({sessionID,resume}) {calls.push({kind:'interrupt',sessionID,resume});const s=sessions.get(sessionID);s.outcome='interrupted';s.stopped.resolve();return {interrupted:true};},
-      async synthetic(input) {notices.push(clone(input));return {id:`notice_${++seq}`,type:'synthetic',sessionID:input.sessionID,delivery:input.delivery,payload:{text:input.text,description:input.description}};},
+      async synthetic(input) {notices.push(clone(input));for(const notify of noticeWaiters) notify();return {id:`notice_${++seq}`,type:'synthetic',sessionID:input.sessionID,delivery:input.delivery,payload:{text:input.text,description:input.description}};},
     },
   };
   opts.context?.({context,agents,commands});
   const cleanup=await setupAzurePrReview(context,directory);t.after(cleanup);
   return {directory,settings,agents,commands,sessions,hooks,calls,notices,context,emit,invoke,cleanup,
     prompts:()=>calls.filter(c=>c.kind==='prompt'),
-    async command(name='pr-review',text=PR,origin='ordinary') {await commands.get(name).execute({sessionID:origin,prompt:{text},delivery:'steer'});return notices.filter(n=>n.sessionID===origin).at(-1)?.text;},
+    async command(name='pr-review',text=PR,origin='ordinary') {
+      const before=notices.length;
+      await commands.get(name).execute({sessionID:origin,prompt:{text},delivery:'steer'});
+      const started=notices.slice(before).find(n=>n.sessionID===origin&&/\] STARTED /.test(n.text));
+      if (!started) return notices.filter(n=>n.sessionID===origin).at(-1)?.text;
+      const prefix=started.text.split(']')[0]+']';
+      return new Promise(resolve=>{
+        const check=()=>{const done=notices.slice(before).find(n=>n.sessionID===origin&&n.text.startsWith(prefix)&&/^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/.test(n.text));if(done){noticeWaiters.delete(check);resolve(done.text);}};
+        noticeWaiters.add(check);check();
+      });
+    },
   };
 }
 const resultLog=async receipt=>JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1],'result.json'),'utf8'));
+
+test('command admission returns before long work, retains its origin, and delivers one terminal receipt', async t => {
+  const entered=deferred(), release=deferred();
+  const f=await fixture(t,{async during(){entered.resolve();await release.promise;}});
+  t.after(()=>release.resolve());
+  await f.commands.get('pr-review').execute({sessionID:'ordinary',prompt:{text:PR}});
+  const started=f.notices.find(n=>n.sessionID==='ordinary');
+  assert.match(started.text,/\] STARTED \/pr-review/);
+  await entered.promise;
+  assert.equal(f.notices.filter(n=>n.sessionID==='ordinary').length,1);
+  await assert.rejects(f.commands.get('pr-review').execute({sessionID:'ordinary',prompt:{text:PR}}),/already running/);
+  t.mock.timers.enable({apis:['setTimeout']});
+  t.mock.timers.tick(360000);
+  assert.equal(f.calls.filter(c=>c.kind==='interrupt').length,0);
+  release.resolve();
+  t.mock.timers.reset();
+  while(!f.notices.some(n=>n.sessionID==='ordinary'&&/\] COMPLETE\n/.test(n.text))) await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.notices.filter(n=>n.sessionID==='ordinary').length,2);
+  assert.equal(f.calls.filter(c=>c.kind==='interrupt'&&c.sessionID==='ordinary').length,0);
+});
+
+test('failed start notice admits no model work and releases the origin', async t => {
+  let reject=true;
+  const f=await fixture(t,{context({context}){const original=context.session.synthetic;context.session.synthetic=async input=>{
+    if(reject&&input.text.includes('] STARTED ')){reject=false;throw new Error('Fixture notice unavailable');}
+    return original(input);
+  };}});
+  await assert.rejects(f.command(),/Fixture notice unavailable/);
+  assert.equal(f.prompts().length,0);
+  // Wait for the failed admission's terminal notice, not an arbitrary delay.
+  while(!f.notices.some(n=>/\] INCOMPLETE\n/.test(n.text))) await new Promise(resolve=>setImmediate(resolve));
+  assert.match(await f.command(),/\] COMPLETE/);
+});
+
+for(const cancel of [false,true]) test(`shared tool backpressure ${cancel?'cancels queued calls':'finishes every queued call'} across both initials`,async t=>{
+  const full=deferred(), release=deferred();let active=0,peak=0,executed=0;
+  const f=await fixture(t,{skipTool:true,async during({session,emit,executeTool}){
+    if(ROLES[session.agent].format!=='initial')return;
+    await Promise.allSettled(Array.from({length:9},async(_,i)=>{
+      const event={sessionID:session.id,agent:session.agent,messageID:'batch',id:`batch-${i}`,tool:'fixture_source',input:{}};
+      await emit('tool','execute.before',event);
+      await executeTool(event,async()=>{
+        executed++;active++;peak=Math.max(peak,active);if(active===1)full.resolve();
+        await release.promise;active--;
+        return {output:'source'};
+      });
+      await emit('tool','execute.after',{...event,status:'completed',result:{output:'source'}});
+    }));
+  }});
+  t.after(()=>release.resolve());
+  const running=f.command();await full.promise;
+  assert.equal(executed,1);assert.equal(peak,1);
+  if(cancel) await f.command('pr-stop','');
+  release.resolve();const receipt=await running;
+  assert.equal(executed,cancel?1:18);assert.equal(peak,1);
+  assert.match(receipt,cancel?/\] CANCELLED/:/\] COMPLETE/);
+});
+
+test('a denied execution without an after-hook cannot strand a queued call in the same turn',async t=>{
+  let denied=false;
+  const f=await fixture(t,{async during({session,emit,executeTool}){
+    if(denied)return;denied=true;
+    const events=['denied','queued'].map(id=>({sessionID:session.id,agent:session.agent,id,tool:'fixture_source',input:{}}));
+    await Promise.all(events.map(async(event,index)=>{
+      await emit('tool','execute.before',event);
+      if(index===0) await assert.rejects(executeTool(event,async()=>{throw new Error('Host permission declined');}),/Host permission declined/);
+      else {
+        await executeTool(event,async()=>({output:'source'}));
+        await emit('tool','execute.after',{...event,status:'completed',result:{output:'source'}});
+      }
+    }));
+  }});
+  assert.match(await f.command(),/\] COMPLETE/);
+});
+
+test('an interrupted initial without an after-hook cannot strand the shared tool slot',async t=>{
+  let failed=false;
+  const f=await fixture(t,{async during({session,emit,executeTool}){
+    if(failed||ROLES[session.agent].format!=='initial')return;
+    failed=true;
+    const event={sessionID:session.id,agent:session.agent,id:'missing-outcome',tool:'fixture_source',input:{}};
+    await emit('tool','execute.before',event);
+    await executeTool(event,async()=>({output:'source'}));
+    throw new Error('Fixture session failed without delivering the tool after-hook');
+  }});
+  const receipt=await f.command();
+  assert.match(receipt,/\] COMPLETE/);
+  assert.equal(f.prompts().length,3);
+  assert.ok((await resultLog(receipt)).stages.some(s=>s.toolObservations.withoutOutcome===1));
+});
+
+test('cancelling one origin releases shared execution to another origin',async t=>{
+  const occupied=deferred(),release=deferred();let first=true;
+  const f=await fixture(t,{async during({session,emit,executeTool}){
+    if(!first)return;first=false;
+    const event={sessionID:session.id,agent:session.agent,id:'held',tool:'fixture_source',input:{}};
+    await emit('tool','execute.before',event);
+    await executeTool(event,async()=>{occupied.resolve();await release.promise;return {output:'source'};});
+  }});
+  t.after(()=>release.resolve());
+  const left=f.command('pr-review',PR,'left');await occupied.promise;
+  const right=f.command('pr-review',PR,'right');
+  await f.command('pr-stop','','left');release.resolve();
+  assert.match(await left,/\] CANCELLED/);
+  assert.match(await right,/\] COMPLETE/);
+});
+
+test('a publisher failure revokes every queued tool before execution',async t=>{
+  let executed=0;
+  const f=await fixture(t,{async during({session,emit,executeTool}){
+    if(ROLES[session.agent].stage!=='comment-publish')return;
+    await Promise.allSettled(Array.from({length:8},async(_,i)=>{
+      const event={sessionID:session.id,agent:session.agent,id:`publish-${i}`,tool:'fixture_mcp_write',input:{}};
+      await emit('tool','execute.before',event);
+      await executeTool(event,async()=>{executed++;return {output:'source'};});
+      await emit('tool','execute.after',{...event,status:'error',error:new Error('Fixture write outcome unknown')});
+    }));
+  }});
+  await f.command();const receipt=await f.command('pr-comment','--publish');
+  assert.match(receipt,/\] INCOMPLETE/);assert.equal(executed,1);
+  assert.match(receipt,/UNKNOWN/);
+});
 
 for(const mode of ['review','deep']) test(`V2 ${mode} preserves literal context and uses independent full-scope sessions`,async t=>{
   const f=await fixture(t,{settings(s){s.outputLanguage='zh-TW';}}),receipt=await f.command(mode==='deep'?'pr-deep':'pr-review',PR+' literal !`not-run` @../../secret $HOME\ncheck this');
@@ -729,8 +867,11 @@ test('all twelve eligible findings reach the saved preview and explicitly reques
     if(ROLES[role].format==='initial') result.findings=Array.from({length:6},(_,i)=>finding(`${ROLES[role].prefix}-${i+1}`));
     if(ROLES[role].stage==='comment-plan') {
       assert.equal(Object.hasOwn(packet,'maxComments'),false);
-      result.comments=packet.findings.map((item,i)=>({findingId:item.id,severity:item.severity,path:SNAP.files[0],
-        startLine:i+1,endLine:i+1,anchor:`fixture branch ${i+1}`,body:`issue (${item.severity}): Defect ${item.id}\n\nIndependent trigger, impact and correction ${i+1}.`}));
+      result.comments=packet.findings.map(item=>{
+        const line=Number(item.id.split('-').at(-1))+(item.id.startsWith('R-')?6:0);
+        return {findingId:item.id,severity:item.severity,path:SNAP.files[0],
+          startLine:line,endLine:line,anchor:`fixture branch ${line}`,body:`issue (${item.severity}): Defect ${item.id}\n\nIndependent trigger, impact and correction ${line}.`};
+      });
       result.skipped=[];
     }
     return result;
@@ -887,14 +1028,14 @@ test('project tools require literal admission and an authorized model request', 
   assert.equal(f.calls.filter(call => call.kind === 'executed-tool' && call.tool !== 'fixture_mcp_read').length, 0);
 });
 
-test('a publisher denied CodeMode loses its grants before another tool can start', async t => {
+for (const afterHook of [true, false]) test(`a publisher denied CodeMode loses its grants ${afterHook ? 'with' : 'without'} an after hook`, async t => {
   let denied = false;
   const f = await fixture(t, {
     async during({ session, emit, invoke }) {
       if (ROLES[session.agent].stage !== 'comment-publish') return;
       const event = { sessionID: session.id, agent: session.agent, id: 'publisher-denied-execute', tool: 'execute', input: { code: '1 + 1' } };
       await assert.rejects(emit('tool', 'execute.before', event), /Native tool denied/);
-      await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture CodeMode') });
+      if (afterHook) await emit('tool', 'execute.after', { ...event, status: 'error', error: new Error('Denied fixture CodeMode') });
       await assert.rejects(invoke(session.id, 'fixture_mcp_write'), /authorization expired/);
       denied = true;
     },

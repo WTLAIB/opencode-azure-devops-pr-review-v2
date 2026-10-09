@@ -11,6 +11,15 @@ and quality gaps retain useful results with visible limitations. Ordinary develo
 agents, model selections, and provider credentials remain host-owned. A review
 starts only through an explicit command.
 
+Review, check and comment commands acknowledge `STARTED` promptly and continue
+in the current OpenCode process. The final receipt returns to the invoking
+conversation without starting an ordinary model response or changing sessions.
+Use the displayed `/pr-stop <run-id>` to cancel. Closing a tab or disconnecting
+its HTTP client does not cancel admitted work; unloading the plugin does.
+Private MCP tool calls execute one at a time across this plugin instance's workflows;
+queued calls wait without a total file, call or duration limit. Host permissions and
+configured whole-run timeouts still apply.
+
 Validation covers offline checks, exact-host fresh/replacement fixtures and
 authorized live review/publication with independent Azure readback. See
 [current validation](docs/VALIDATION.md) for the tested revision and remaining

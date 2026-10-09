@@ -56,6 +56,37 @@ test('failed, truncated and interrupted execution cannot become a completed pros
   assert.throws(() => readReviewOutput(value, 'azpr-review-functional'));
 });
 
+test('unescaped quotes inside a closed inline code span retain literal finding text and inventory', () => {
+  const value=initial();
+  value.snapshot.files.push('/second.js');value.coverage.files.push('/second.js');
+  value.findings[0].evidence='BASE accepts `"write:orders" in scopes`; HEAD accepts any scope.';
+  const raw=JSON.stringify(value).replace('\\"write:orders\\"','"write:orders"');
+  const parsed=readReviewOutput(response(raw),'azpr-review-functional');
+  assert.deepEqual(parsed.envelope,value);
+  assert.deepEqual(parsed.corrections.map(item=>item.action),['escape-inline-code-quote','escape-inline-code-quote']);
+  assert.equal(acceptInitialReview(parsed.envelope,'F',PR).status,'COMPLETE');
+  assert.deepEqual(acceptInitialReview(parsed.envelope,'F',PR).snapshot.files,value.snapshot.files);
+  for(const correction of parsed.corrections) assert.equal(raw[correction.offset],'"');
+  assert.throws(()=>parseUniqueJSON(raw));
+  for(const role of ['azpr-review-check','azpr-review-comment-plan','azpr-review-comment-publish']) {
+    assert.throws(()=>parseReviewJSONReport(response(raw),role));
+  }
+});
+
+test('inline code quote recovery does not absorb JSON members, duplicate keys or unfinished spans', () => {
+  for(const raw of [
+    '{"status":"COMPLETE","report":"unclosed `"code"}',
+    '{"status":"COMPLETE","report":"`"odd`"}',
+    '{"status":"COMPLETE","report":"`one` then "literal" and `two`"}',
+    '{"status":"COMPLETE","report":"`","findings":[],"report":"`"}',
+    '{"status":"COMPLETE","report":"`"code"`","report":"second"}',
+    '{"status":"COMPLETE","report":"`"code"`"}{"status":"PARTIAL","findings":[]}',
+  ]) {
+    assert.throws(()=>parse(raw));
+    assert.equal(readReviewOutput(response(raw),'azpr-review-functional').envelope.report,raw);
+  }
+});
+
 test('a JSON code example in a prose review does not replace the actual review', () => {
   const raw = 'The changed default disables the guard. Example:\n```json\n{"enabled":false}\n```\nThe caller does not restore it.';
   const parsed = readReviewOutput(response(raw), 'azpr-review-functional');
@@ -219,6 +250,42 @@ test('a missing verifier snapshot or conflicting aliases still cannot be declare
 test('normalizing the verifier snapshot key preserves its own established identity', () => {
   const value = final(); value.Snapshot = value.snapshot; delete value.snapshot;
   assert.equal(acceptFinalReview(value, snapshot, [finding('F-1')], PR).status, 'COMPLETE');
+});
+
+test('a shortened snapshot echo retains the admitted inventory without claiming coverage', () => {
+  const value = final(), original = structuredClone(value);
+  const admitted = { ...snapshot, files: [...snapshot.files, ...Array.from({length:2000}, (_,i)=>`/extra/${i}.js`)] };
+  const accepted = acceptFinalReview(value, admitted, [finding('F-1')], PR);
+  assert.equal(accepted.status, 'COMPLETE');
+  assert.deepEqual(accepted.snapshot.files, admitted.files);
+  assert.deepEqual(accepted.reportedSnapshotFiles, value.snapshot.files);
+  assert.deepEqual(value, original);
+  assert.match(renderFinalReport(accepted, 'en'), /omitted 2000 admitted snapshot path\(s\)/);
+  assert.match(accepted.reviewWarnings.join(' '), /does not mark those paths as reviewed/);
+});
+
+test('inventory retention cannot repair changed identity, unknown paths or malformed snapshots', () => {
+  const admitted = { ...snapshot, files: [...snapshot.files, '/other.js'] };
+  for (const change of [
+    s=>{s.repository='other/project/repo';},s=>{s.prId++;},s=>{s.head='c'.repeat(40);},
+    s=>{s.base='c'.repeat(40);},s=>{s.scope='cumulative';},
+    s=>{s.files=['/unknown.js'];},s=>{s.files=[];},s=>{delete s.files;},
+  ]) {
+    const value=final();change(value.snapshot);
+    const accepted=acceptFinalReview(value,admitted,[finding('F-1')],PR);
+    assert.notEqual(accepted.status,'COMPLETE');
+    assert.equal(accepted.reportedSnapshotFiles,undefined);
+  }
+});
+
+test('retaining known inventory never fills missing evidence, decisions or freshness', () => {
+  const admitted={...snapshot,files:[...snapshot.files,'/other.js']};
+  for(const change of [v=>{delete v.confirmed[0].evidence;},v=>{v.confirmed=[];},v=>{v.currentHead='';}]){
+    const value=final();change(value);
+    const accepted=acceptFinalReview(value,admitted,[finding('F-1')],PR);
+    assert.equal(accepted.status,'PARTIAL');
+    assert.deepEqual(accepted.snapshot.files,admitted.files);
+  }
 });
 
 test('quote wrappers around full SHAs are formatting, not invented versions', () => {

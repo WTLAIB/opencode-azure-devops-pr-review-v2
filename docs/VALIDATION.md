@@ -10,17 +10,23 @@ pending status are preserved in [validation history](VALIDATION_HISTORY.md).
 They do not override the current behavior documented in [README](../README.md).
 Private raw artifacts, credentials and personal settings stay outside Git.
 
-## Latest local validation: large comment work pages — 2026-10-09
+## Latest validation: background commands and large PR recovery — 2026-10-10
 
-The comment workflow now stores original evidence and tool results privately,
-assigns bounded planning/report pages, accepts successful read-only checkpoints,
-checks all publication pages before writes, and publishes saved items through
-short independent sessions under one attempt ledger. It does not enable host
-compaction or add initial/verifier review rounds.
+Native commands now acknowledge STARTED promptly and retain workflow ownership
+in the plugin until completion, cancellation or unload. Private MCP execution is
+serialized without a total call/file budget. Native tools keep host scheduling;
+execution exceptions and bounded interruption release abandoned slots. Publisher
+failures and native denials revoke the remaining publication grants immediately.
 
-Local syntax checks and 456 offline tests passed. Exact OpenCode 2.0.22 fresh and
-replacement fixtures passed against deterministic loopback models and stdio MCP.
-A separate actual-host scale fixture completed both normal and deep review plus
+Syntax checks and 480 offline tests passed. Exact OpenCode 2.0.22 fresh and
+replacement fixtures passed, including original/other-project permissions,
+missing after hooks, a failed MCP read followed by a successful read, publication
+failure lockout, cancellation, and restart behavior. Actual PTY/TUI probes passed
+for new and existing conversations. A new conversation remained selected for
+320 seconds and successfully submitted `/pr-stop` from that same TUI, crossing
+the earlier observed approximately 315-second command-disconnect point.
+
+The actual-host scale fixture completed normal and deep review plus
 `pr-comment --publish`, each with:
 
 | Observed fixture property | Result |
@@ -28,27 +34,109 @@ A separate actual-host scale fixture completed both normal and deep review plus
 | Retained source characters (UTF-16) | 5,507,869, including individual 3,307,749 and 2,200,000 character responses |
 | Changed paths / inline comments | 6,001 / 70, plus one complete general summary |
 | Retained distinct report advice | All 400 fixture entries |
-| Comment sessions | 30 across planning, checkpoints, publication checks and publishing |
-| Largest admitted work payload | 20,859 characters |
-| Largest full comment provider request | 69,992 characters, including instructions, tools and accumulated messages |
-| Saved text / source | Exact file bytes and every saved outgoing comment matched |
+| Comment sessions | 45 across planning, checkpoints, publication checks and publishing |
+| Largest admitted work payload | 17,621 characters |
+| Largest full comment provider request | 64,387 characters, including instructions, tools and accumulated messages |
+| Saved source and outgoing text | Exact bytes and every saved comment matched |
 | Compaction/rejected private requests | None during either successful comment workflow |
 
 The fixture risk model has a synthetic 400,000-token context limit. Its functional
-and verifier models have synthetic 4,000,000-token limits so the test can create
-large completed-review evidence independently of comment transport. Synthetic
-usage values and deterministic responses do not measure real tokenization,
-model reasoning, recommendation completeness or real Azure behavior. Output
-restoration and native bounded file reads were exercised on the actual host.
-Service comment-size limits and pathological tool catalogs remain external limits.
+and verifier models use synthetic 4,000,000-token limits to create large completed
+review evidence independently of comment transport. These tests do not measure
+real tokenization, reasoning quality, recommendation completeness or Azure limits.
 
-Environment: Ubuntu 22.04.5, Node 22.23.3 and OpenCode 2.0.22. No live model or Azure
-request was run for this workflow validation. New CI coverage runs the same
-scale fixture on pushed revisions; local passes alone do not establish a remote
-CI result. Delivery records separately verify the installed revision and
-preservation of private settings. Intermediate fixture failures and
-raw artifacts remain in ignored private storage. The earlier live acceptance below
-applies to its previous revision, not these new workflow bytes.
+A shortened final snapshot echo now retains the admitted inventory only when
+its identity/versions match and every returned path belongs to that inventory.
+The original echo and warning remain available. Tests reject unknown paths,
+changed identities/versions and malformed snapshots; restoring the inventory
+cannot repair evidence, missing decisions or freshness. An earlier live output
+was replayed without a model: 31 echoed paths plus two retained admitted paths
+passed the original remaining evidence/version checks without changing raw text.
+This repair does not claim the omitted paths were reviewed.
+
+Controlled live acceptance on a 316-file PR passed on cycle nine within the
+user-authorized ten-cycle limit, using unchanged `openai/gpt-5.6-luna` selections
+and `zh-TW`. Existing test comments were cleared before publication. Independent
+Azure readback confirmed 23 inline comments and one general summary, including
+exact saved text, unique markers, coordinates, immutable HEAD anchors and unchanged
+PR versions. The low-severity finding remained in the summary. All 24 seeded
+policy defects were confirmed; independent operator execution reproduced their
+BASE/HEAD differences and 13 concrete comment examples. These were operator tests,
+not model-run tests. The successful batch was retained and live testing stopped.
+
+The review completed in 638 seconds and direct `pr-comment --publish` in 1,189
+seconds. Their command admissions returned in approximately 67 ms and 8 ms.
+Comment work used 14 sessions: six planning sessions, five publication-check
+sessions including two successful checkpoints, and three publishers. The largest
+admitted comment payload was 10,487 characters. Every checking page finished
+before the first write; exactly 24 create calls were observed. No private
+compaction or rejected model request occurred. All runtime/prompt files matched
+the installed live-test version through completion.
+
+The successful run retained five initial-review tool errors and one out-of-range
+native read during planning; the verifier had no tool errors. Seven native shell
+commands also exited 127 because optional executables were absent, including two
+publisher-side reads. OpenCode reports these shell executions as completed tool
+calls, so the terminal tool-error count does not include them. No Azure write
+failed. Oversized native reads and unavailable commands made the second checking
+page inefficient, but exact artifacts survived both checkpoints and later bounded
+reads completed it. Scoped one-time host approvals permitted reads/searches of
+owned comment artifacts; no persistent host permission was added. Timings include
+this work and are not a throughput benchmark.
+
+The report explicitly limits coverage: it did not individually inspect all 240
+region profiles and every test file. The summary retains minor page wording, and
+UTC prose describes the positive-offset direction less precisely than the cited
+modulo expression. Acceptance establishes the supported core defects and saved
+publication fidelity, not perfect prose, severity consistency or full-PR coverage.
+
+The first eight unsuccessful cycles and their diagnostics are retained privately. The fourth
+completed review but failed planning: 24 short findings shared one page, repeated
+source reads caused checkpoints, and the next response contained two competing
+JSON envelopes. No publisher started. Planning now assigns at most four findings
+per page and retains original inputs with completed fragments. Tests reject
+rephrased checkpoints with identical input/result records while allowing additional
+distinct source pages without a total-session cap.
+The fifth retained a malformed initial review as prose because a code quotation
+was not JSON-escaped; a genuinely changed path in that prose was absent from the
+admitted inventory, and the verifier's added path was rejected. A review-only
+format repair now preserves paired quotes inside closed inline code spans, with
+raw text and correction offsets retained. Replay recovers that initial inventory
+and findings, but does not retroactively certify final verification. Tests retain
+the strict ambiguity/unknown-path guards and require a fresh verifier ledger.
+Comment membership also accepts a leading slash added to a repository-relative
+inventory path; tests reject case changes, dot segments and different files.
+The sixth completed verification and all six planning pages, retaining 23 inline
+comments plus a summary covering all 24 findings. A publication checker repeated
+immutable source reads under overlapping plan/check instructions, then failed on
+one unnecessary source read. No publisher started. Its input now excludes planning
+reports, source indexes, coverage warnings and coordinate reconstruction; instructions
+scope source authoring to planning and current PR/discussion checks to this phase.
+Tests retain this phase's exact pagination observations and reject stale/incomplete
+checks before any writes. Two imprecise phrases in that unpublished plan were also
+recorded; independently reproducing core defects does not certify every sentence.
+The seventh completed verification, all five planning pages and the first
+publication-check page. Independent operator inspection caught a wrong calculated
+example repeated from the verifier, and cancelled before any publisher started.
+The saved defect and correction were valid, but that number was not. Guidance now
+prefers source/contract evidence and omits calculated examples without an observed
+calculation or reproduction. This remains prompt guidance, not a factual validator
+or mandatory test gate. The cycle found 20 of 24 seeded regressions; the four
+misses remain recorded separately from workflow completion.
+The eighth completed review but its second planning page placed a successful
+CONTINUE handoff in `reason` instead of `continuation`. The original strict field
+check stopped before publication. A narrow correction now copies that exact text
+only when continuation is absent; negative tests retain invalid-field, failure
+and no-progress guards. No status is promoted to READY and no failed model stream
+is recovered. The ninth cycle used this correction from startup; its two actual
+checkpoints supplied the standard field, while the exact-host scale fixture
+separately exercised the corrected alias through full publication.
+
+Environment: Ubuntu 22.04.5, Node 22.23.3, OpenCode 2.0.22 and official Azure MCP
+2.9.0. The host, MCP server and personal model selections were not upgraded or
+replaced. Public CI runs fake services; live acceptance and independent Azure
+readback are recorded separately. Credentials, source fixtures, raw failures and
+personal configuration are excluded from Git.
 
 ## Previous live acceptance: general performance guidance — 2026-10-08
 
