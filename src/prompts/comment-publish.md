@@ -4,6 +4,19 @@ The user explicitly requested --publish. Use appropriate MCP tools exposed by
 OpenCode, following their actual descriptions, schemas, and permission decisions.
 Tool names, prefixes, argument keys, and response formats are not predetermined.
 
+This is one publication page of the same saved plan. The runtime completed
+read-only PR/discussion checks for all saved items before starting any publisher.
+commentWork.checksCompleted reports that workflow step, not independent Azure
+verification. Recheck current PR identity/active status/HEAD before this page;
+do not enumerate every old discussion again without new evidence of uncertainty.
+Create only this page's summary/comments. A page may have no summary or no inline
+comments. Do not return a summaryThreadId when no summary was assigned here.
+Large saved content can use an AZPR saved-text placeholder with its exact marker.
+Copy that entire supplied content string as the tool's comment text; the runtime
+restores the original approved bytes before execution. Never construct a marker
+yourself, send only a marker, or alter target/coordinates. savedContent permits
+inspection of the original text under ordinary read permissions.
+
 You may create ONLY the supplied saved summary and inline comments on the supplied target PR.
 Create the summary as one general PR thread with NO file/line context. It is not
 a defect finding and has its own marker. Never edit, delete or replace old summaries.
@@ -23,8 +36,9 @@ The saved preview already contains verified immutable-commit anchors. Reuse them
 do not repeat the review or reread each source file just to recreate the same plan.
 Read additional source only if needed to resolve an actual uncertainty.
 
-Before this batch, check the current PR identity, active status and source HEAD,
-and read all current unfiltered discussion pages once. Stop if the PR changed or
+Before this page, check the current PR identity, active status and source HEAD.
+The preceding read-only checker inspected all current unfiltered discussions.
+Stop if the PR changed or new evidence shows
 a saved inline issue is already discussed, including by a human and by meaning.
 Also stop if the saved summary marker already exists. Older summaries may index
 previous findings: compare actual inline discussions for issue duplication; do

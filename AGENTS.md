@@ -18,7 +18,7 @@ The independent V1 repository and installation are outside this project's scope.
 - Use the exact V2 plugin definition and domain transforms/hooks. Do not add a
   V1 adapter, command template, native StructuredOutput path or migration layer.
 - Both normal/deep modes have functional and risk full-scope initial reviewers,
-  followed by an independent source-verifying verifier. Do not add model rounds,
+  followed by an independent source-verifying verifier. Do not add review model rounds,
   fallback models or model-specific/PR-specific/MCP-version-specific fixes.
 - Source checks use separate readiness rules. Explicit native commands alone
   authorize private sessions. Preserve ordinary agents, provider configuration,
@@ -30,7 +30,9 @@ The independent V1 repository and installation are outside this project's scope.
   initial/final session may include the pinned host incomplete-stream text
   continuation: verify the failed-text/retry/synthetic/final-stop sequence, keep
   raw fragments, join literal text only, then apply ordinary review validation.
-  No plugin retry or continuation recovery for comment/check roles. Successfully
+  No plugin retry or failed-stream recovery for comment/check roles. Successful
+  read-only comment work may checkpoint into a fresh, fully bound session with
+  exact original records and remaining assignments; this is not host compaction. Successfully
   completed PARTIAL reviews and prose are useful inputs. Exclude reasoning.
 - The exact Promise adapter does not forward cancellation request options.
   Revoke grants synchronously, interrupt then wait, bound cleanup, and disclose
@@ -67,7 +69,8 @@ The independent V1 repository and installation are outside this project's scope.
   Successful multiline review tool observations may be shared with the same-origin comment planner
   together with original arguments. Keep them as untrusted temporary data;
   exclude native tool output and flagged errors/truncation, deduplicate identical
-  observations, and do not introduce cloning, source classification or model calls.
+  observations, and do not introduce cloning or source classification. Store large observations
+  in private files; give comment work scoped references, never the whole cache.
   Startup may observe direct-tool registration through public host namespaces;
   this is metadata synchronization, never MCP action classification or a source
   certificate. The bounded observation grace period must not become a refusal,
@@ -101,7 +104,9 @@ The independent V1 repository and installation are outside this project's scope.
   explicitly transient logical reads, plus at most one unknown-cause idempotent
   read per stage with fixed arguments/target/version/deadline. Never retry writes,
   authorization/parameter/not-found failures, truncation or empty searches.
-- Host-saved output may be read only under the documented same-session policy.
+- Host-saved output follows the documented same-session policy. Runtime-supplied
+  comment artifacts additionally permit same-origin reads across work sessions,
+  with original records, version qualifications and inherited permissions.
   Initial/verifier roles may also inspect their current project. Neither prompt
   policy proves file provenance; saved-response offsets are not source line numbers.
 - Reports/receipts use synthetic notices with resume:false. Never run a model
@@ -119,14 +124,18 @@ The independent V1 repository and installation are outside this project's scope.
   reasons locally; missing reasons do not authorize guessed success or retries.
   Preview has no numerical comment quota. The removed
   comments, auxiliaryModels and outputRetries settings must not return as hidden
-  switches, caps or extra model requests. Track uncertainty before writes,
+  switches or total caps. Comment work pages may use additional short sessions;
+  preserve complete finding/advice accounting and fail visibly without progress. Track uncertainty before writes,
   revoke publication grants on any observed tool error, prohibit automatic
   retries and label results model-reported. Derive line-local offsets from saved
   anchors; do not ask the planner for additional coordinate fields. Publisher
   argument strings containing a whole comment with its unique saved marker may
   be restored to saved content. This copies approved text, not MCP operation,
   target or coordinate authorization. Preserve host permissions and uncertainty.
-  Publisher input is the saved target/snapshot/language/summary/comments only.
+  Publisher input is the saved target/relevant snapshot paths/language, assigned
+  summary/comments and page metadata only. Large saved text uses marker restoration.
+  Finish all read-only publication checks before marking the whole plan UNKNOWN.
+  Stop remaining pages on any publisher failure; one attempt covers every page.
   Save one general PR summary with its own marker and attempt state per review;
   it has no finding ID or file anchor. Keep its exact text, counts and version
   tied to the review. Summary-only plans are publishable; partial summary/inline

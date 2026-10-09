@@ -217,7 +217,7 @@ comment cache. COMPLETE is not automatic publication or a guarantee that an
 eligible, nonduplicate inline comment exists.
 
 Publication has no separate configuration switch. Explicit `--publish` uses an
-existing saved preview, or runs the planner once and saves the validated plan
+existing saved preview, or completes the planning pages and saves the validated plan
 before publishing in the same command. A separate preview command is optional.
 Repeating `/pr-comment` reruns planning without rerunning review. Once planning
 starts, the previous plan is discarded; a failed plan refresh cannot leave that
@@ -249,33 +249,73 @@ disclosure, marker), locations, and skip reasons even in receipt mode. There is
 no numerical comment quota: all independently actionable eligible findings can
 be included. Duplicate, low-severity or unsupported findings still need skip
 reasons; absence of a quota does not relax evidence or anchor checks.
-The comment planner receives successful multiline tool text captured during the same
-review, with the original request arguments beside numbered rows. Identical
-observations are shared once. This is temporary in-process review data; it needs
-no checkout, clone, repository mapping or additional model request. Native
-shell/read output and flagged failed/truncated results are not cached here.
-Observed text is not certified provenance: select the matching commit/path and
-check missing source and mutable PR/discussion state. It helps avoid inventing
-anchor text from a finding description. Prefer a concise anchor; exact longer
-ranges are accepted instead of failing on an arbitrary five-line maximum.
+The comment planner receives references to successful multiline tool observations
+from the same review, with original arguments and exact raw text. Identical
+observations are stored once. Native review output and flagged failed/truncated
+results are excluded from this source-sharing index. Observations remain untrusted;
+match path/commit and obtain missing evidence through MCP. No checkout or clone is
+required. Anchors have no arbitrary line-count maximum.
 
-When using preview, inspect it before requesting publication. Direct publication
-returns the prepared comments and any attempt outcomes; a publisher failure also
-retains the exact prepared content for inspection. The publisher receives only the target,
-snapshot, output language, saved general summary and inline comments, including their exact content,
-anchors and coordinates. The full review, findings and tool-text collection stay
-with planning. The publisher sends saved content without translation or relocation.
-It checks current PR identity/HEAD and complete discussions once before the batch,
-then creates comments sequentially. It reuses preview-verified immutable anchors;
-additional reads are for missing or uncertain evidence, not a mandatory repeated
-source/PR/thread scan for each comment. Complete returned discussions and explicit
-deletion records do not need individual rereads. These remain model instructions,
-not an independently enforced remote-state certificate.
-The runtime derives `startOffset` and `endOffset` from the saved anchor using
-the Azure SDK's one-based, line-local character positions. These are not file
-byte offsets and do not add required fields to the planner's output. The
-publisher maps the complete saved positions to the available tool schema;
-actual remote coordinates still require independent verification.
+### Large PR work pages
+
+The runtime keeps complete evidence in private files, separate from each model's
+working context. This prevents accumulated source responses from becoming one
+multi-million-character `pr-comment` admission. `inputCharacters` measures serialized
+request characters, not actual tokens or just the human-readable report.
+
+Each planning session receives:
+
+- The exact review target, snapshot, language and assigned verified findings.
+- One exact final-report segment plus a reference to the full report for boundary
+  context. Final dispositions omit their duplicate `verifiedFinding` objects.
+- References to source observations, prior completed plan fragments and original
+  tool results from earlier comment sessions. Large fields and path lists are
+  references too. Native read/search still requires inherited host permission.
+
+Data files include SHA-256 and length, plus JSONL pages with UTF-16 offsets so even
+one enormous source line can be read in bounded pieces. These offsets are not
+source lines and hashes do not certify returned versions. The artifact preserves
+complete wrappers, truncation flags and original bytes; it cannot make an incomplete
+MCP response complete. Never load the whole evidence catalog just because it exists.
+
+Findings, report segments and publication items are grouped around 12,000 serialized
+characters. An indivisible large field is referenced rather than cut off. Tool
+results larger than this are saved before the host adds their display to model
+history. Smaller tool results are also retained for later sessions. A read-only
+session asks for a successful `CONTINUE` checkpoint after roughly 48,000 visible
+input/tool characters or eight primary requests. The next exact admission carries
+remaining assignments, references and a cursor. This is explicit workflow progress,
+not host compaction, recovery of failed execution, or a whole-review budget. There
+is no aggregate cap on files, findings, sessions or retained advice. Repeated
+checkpoints without progress fail visibly rather than loop forever.
+
+The runtime validates completed fragments and accounts for every eligible finding
+exactly once before saving the whole plan. It retains all authored detail. Semantic
+advice completeness and duplicate judgments still depend on the model. A failed or
+cancelled page saves no partially publishable plan; the completed review remains.
+
+Before any write, fresh read-only sessions check current PR identity/HEAD and all
+unfiltered discussions for every saved publication page. They can checkpoint while
+paging large discussion collections. Only when every page passes does the runtime
+mark the entire plan UNKNOWN and start sequential publisher sessions. A publisher
+receives only its assigned saved items, target, language, relevant paths/coordinates
+and page metadata. It rechecks mutable PR identity/HEAD and reuses immutable anchors.
+It need not repeat the full discussion scan absent new uncertainty.
+
+Large saved summary text uses a short whole-comment placeholder with its exact
+marker. The existing pre-execution restoration copies the full approved bytes into
+the tool argument. The publisher does not regenerate the summary. The complete
+preview remains available for inspection. Model-reported thread IDs must be unique
+across every page. A failed, incomplete or cancelled publisher stops remaining pages;
+all unreported items stay UNKNOWN and the single-attempt lock remains. No checkpoint
+or automatic retry resumes a write. Service limits, host tool catalogs and provider
+behavior still apply; paging is not a promise of unlimited remote comment size.
+
+When using preview, inspect it before publishing. The runtime derives `startOffset`
+and `endOffset` from saved anchors using one-based, line-local UTF-16 positions.
+The publisher maps those exact positions to the exposed MCP schema. Tool success,
+checkpoint claims and MODEL_REPORTED_POSTED are not independent source or Azure
+verification; inspect actual remote content and coordinates.
 
 For matching plain-text tool responses, review and comment roles see a locally
 numbered view with the original request arguments. This helps locate anchors
@@ -327,7 +367,8 @@ server still enforce their own permissions; the plugin adds no MCP overrides.
 
 Read-response truncation uses the shared output-reading policy: supported
 pagination or bounded Read of a full output file saved and identified by OpenCode
-in this same session, subject to host permissions. Local project verification
+in this same session, subject to host permissions. Runtime-supplied comment data
+references additionally allow same-origin access across comment work sessions. Local project verification
 also follows the shared [project-tool policy](VERIFICATION.md).
 Saved response offsets are not source-file coordinates, and an
 incomplete server response remains incomplete after saving. A partial duplicate
@@ -414,10 +455,13 @@ deletion is attempted.
 ## Retention
 
 Completed reviews, source observations, prepared plans and attempt records are
-kept only in this plugin instance's process memory, across its conversations.
+bound to this plugin instance's process-memory cache, across its conversations.
+Large source/tool bytes and work fragments live in private files. Without debug,
+files are removed at eviction or unload after active commands release them. An
+abrupt process termination may leave private temporary files for manual removal.
+With debug enabled, artifacts are retained with the originating review diagnostics.
 The cache holds the latest 20 completed reviews; the next completion evicts the
-oldest. There is no elapsed-time expiry, background disk purge, or run-ID file
-database. Unloading the plugin or restarting the process clears the memory cache.
+oldest. There is no elapsed-time expiry or run-ID authority database. Unloading the plugin or restarting the process clears the memory cache.
 OpenCode retains its own history independently. Optional debug files have no
 automatic deletion and must be removed deliberately by their owner.
 

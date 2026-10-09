@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport } from './session.mjs';
-import { commentTarget, confirmedFindings, publicationItems, recordPublishResult, restoreSavedCommentText, targetKey, validateCommentPlan } from './comments.mjs';
+import { commentTarget, publicationItems, recordPublishResult, restoreSavedCommentText, targetKey } from './comments.mjs';
 import {
   COMMANDS, ROLES, PROMPTS, nativeToolPermissions, projectToolRole, roleFor, initialRoles, buildAgents,
   validateSettings,
@@ -24,6 +24,8 @@ import {
   readReviewOutput, acceptInitialReview, selectReviewSnapshot, acceptFinalReview,
 } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
+import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
+import { prepareComments, checkPublication, publicationPages, publisherItem } from './comment-work.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices,
@@ -151,6 +153,21 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   const sourceRuns = new Map();
   const completed = new Map(); // At most 20 reports; no provider authentication configuration.
   const commentLocks = new Set();
+  const dataStores = new Set();
+  function dataFor(run) {
+    const owner = run.review ?? run;
+    if (!owner.data) {
+      owner.data = createCommentData(owner.debugDirectory ?? run.debug?.directory);
+      dataStores.add(owner.data);
+    }
+    return owner.data;
+  }
+  async function releaseData(pending) {
+    if (!pending) return;
+    // Cleanup failure must never replace a review/publication outcome.
+    await pending.then(data => data.dispose()).catch(() => {});
+    dataStores.delete(pending);
+  }
   const commandDescription = name => name === 'pr-comment'
     ? 'Preview the latest review; --publish prepares and posts comments. Optional review ID.'
     : `Azure DevOps PR review: ${COMMANDS[name]} (explicit invocation only)`;
@@ -311,6 +328,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(),
       blockedNativeCalls: new Map(),
       savedTextRestorations: [],
+      toolArgumentCharacters: new Map(),
+      visibleCharacters: input.length, checkpointRequested: false,
       toolErrorDetails: state.settings.debug.enabled ? [] : undefined,
       timing: state.settings.debug.enabled ? createStageTiming() : undefined,
     };
@@ -326,6 +345,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
     const instructions = state.agents[role].system;
     Object.assign(record, { inputCharacters: input.length, instructionCharacters: instructions.length,
       remainingRunMsAtStart: remainingRunMs(run) });
+    if (payload.commentWork) record.commentWork = payload.commentWork;
+    if (spec.comment) record.inputFieldCharacters = Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined).map(([key, value]) => [key, JSON.stringify(value).length]));
+    if (spec.stage === 'comment-publish') g.publicationPage = run.publicationPage;
     let envelope, prepared, syntaxCorrections = [], validatingOutput = false;
     try {
       await run.debug.write(`${stem}.request.json`, { ...record, payload, instructions });
@@ -355,7 +377,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       prepared = ['initial', 'final'].includes(spec.format)
         ? { envelope, corrections: [] } : normalizeFindingFormat(envelope, role);
       prepared.corrections = [...syntaxCorrections, ...prepared.corrections];
-      const result = validate(prepared.envelope, record);
+      const result = await validate(prepared.envelope, record);
+      if (!run.active || run.controller.signal.aborted) throw abortError(run.controller.signal);
       if (answer.continuation) {
         record.hostContinuations = answer.continuation.count;
         result.reviewWarnings = [...(result.reviewWarnings ?? []), `OpenCode continued ${answer.continuation.count} incomplete text stream(s); literal fragments were joined after successful completion.`];
@@ -402,6 +425,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (g.toolErrorDetails?.length) record.toolErrors = g.toolErrorDetails;
       if (g.savedTextRestorations.length) record.savedTextRestorations = g.savedTextRestorations;
       record.modelRequests = g.calls;
+      if (spec.comment) record.visibleToolCharacters = g.visibleCharacters - input.length;
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls,
         rejected: g.rejectedRequests, retries: g.retryEvents, transportRequests: 'not-assessed' };
       if (g.firstToolAt) record.firstToolAt = g.firstToolAt;
@@ -492,6 +516,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (run.lockKey) commentLocks.delete(run.lockKey);
       if (run.timing) run.timing.cleanupMs = performance.now() - cleanupStart;
       await finishDiagnostics(run, outcome.status, outcome.report, outcome.failure);
+      if (run.review && !completed.has(run.review.id) && run.review.data && !run.abortUnconfirmed) {
+        await releaseData(run.review.data);
+      }
+      if (!run.review && outcome.status !== 'COMPLETE' && run.data && !run.abortUnconfirmed) {
+        await releaseData(run.data);
+      }
     }
     return { run, ...outcome };
   }
@@ -515,42 +545,40 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         planning = true;
         run.phase = 'comment preview';
         review.plan = null; // Never leave an obsolete preview after a failed refresh.
-        const payload = { reviewId: review.id, target: review.target, snapshot: review.snapshot, report: review.final.report,
-          reviewToolText: (review.toolText ?? []).map(({ tool, text }) => ({ tool, text })),
-          outputLanguage: review.outputLanguage, provenance: review.provenance,
-          reviewWarnings: review.final.reviewWarnings,
-          findings: confirmedFindings(review), dispositions: review.final.dispositions,
-          attemptedFindings: [...review.attempts.values()] };
         review.attribution = commentAttribution(review.provenance, review.outputLanguage, state.settings.models[review.profile].risk);
-        await stage(run, roleFor(run.profile, 'comment-plan'), payload, (result, record) => {
-          review.plan = validateCommentPlan(result, review);
-          if (review.plan.anchorRestorations) record.anchorRestorations = review.plan.anchorRestorations;
-          if (review.plan.locationRestorations) record.locationRestorations = review.plan.locationRestorations;
-          // Diagnostics and preview expose the saved anchors. The original
-          // model envelope remains in response.json, never overwritten.
-          return { ...result, comments: result.comments.map((comment, index) => {
-            const saved = review.plan.comments[index];
-            return { ...comment, anchor: saved.anchor, startLine: saved.startLine, endLine: saved.endLine };
-          }) };
-        });
+        review.plan = await prepareComments(review, await dataFor(run), (payload, validate) =>
+          stage(run, roleFor(run.profile, 'comment-plan'), payload, validate));
         planning = false;
       }
       const report = renderPlan();
       await run.debug.write('comment-plan.json', { sourceReview: review.id, target: review.target, snapshot: review.snapshot, ...review.plan });
       if (!publish) return { status: 'PREVIEW', report: report + `\n\nPublication was not requested. To post this exact preview: /pr-comment ${review.id} --publish` };
       if (!publicationItems(review.plan).length) return { status: 'NOTHING_TO_POST', report: report + '\n\nNo publisher was started.' };
+      const store = await dataFor(run);
+      run.phase = 'publication checks';
+      await checkPublication(review, store, (payload, validate) => stage(run, roleFor(run.profile, 'comment-plan'), payload, validate));
       if (!run.active || run.controller.signal.aborted) throw abortError(run.controller.signal);
       run.phase = 'comment publication';
       // Mark the saved batch uncertain BEFORE a publisher can run, including
       // when this explicit --publish command prepared the plan itself.
       for (const c of publicationItems(review.plan)) review.attempts.set(c.marker, { ...(c.kind === 'summary' ? { kind: 'summary' } : { findingId: c.findingId }), state: 'UNKNOWN' });
-      let allReported = false;
-      await stage(run, roleFor(run.profile, 'comment-publish'), { target: review.target, snapshot: review.snapshot,
-        outputLanguage: review.outputLanguage, summary: clone(review.plan.summary), comments: clone(review.plan.comments) }, (result, record) => {
-        if (!record.completedTools) throw new Error('Publisher did not complete any tool call. Publication remains unverified; inspect Azure.');
-        allReported = recordPublishResult(result, review);
-        return allReported ? result : { ...result, status: 'INCOMPLETE' };
-      });
+      let allReported = true;
+      const pages = publicationPages(review.plan);
+      for (let index = 0; index < pages.length; index++) {
+        const page = pages[index];
+        run.publicationPage = page;
+        await stage(run, roleFor(run.profile, 'comment-publish'), { target: review.target,
+          snapshot: { ...review.snapshot, files: [...new Set(page.comments.map(item => item.path))] },
+          outputLanguage: review.outputLanguage, summary: page.summary && await publisherItem(store, page.summary),
+          comments: await Promise.all(page.comments.map(item => publisherItem(store, item))),
+          commentWork: { kind: 'publish', page: index + 1, pages: pages.length, checksCompleted: true } }, (result, record) => {
+          if (!record.completedTools) throw new Error('Publisher did not complete any tool call. Publication remains unverified; inspect Azure.');
+          const done = recordPublishResult(result, { ...review, plan: page });
+          allReported &&= done;
+          if (!done) throw new Error('A publication page is incomplete; remaining pages were not started. Inspect Azure; never retry the batch automatically.');
+          return result;
+        });
+      }
       return { status: allReported ? 'MODEL_REPORTED_POSTED' : 'INCOMPLETE',
         report: report + '\n\nPublication results are model-reported, not independently verified by this plugin. Inspect Azure before taking further action.' };
     });
@@ -621,12 +649,18 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (verified.status !== 'COMPLETE') run.publicationUnavailable = true;
       const provenance = reviewProvenance(run);
       return { status: verified.status, report: renderReport(run, () => `${renderFinalReport(presented, state.settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, verified, state.settings.outputLanguage)}${verified.status === 'COMPLETE' ? '\n\n' + renderCommentActions(run.id, state.settings.outputLanguage) : ''}`),
-        review: { id: run.id, origin: run.origin, reportSessions: new Set([run.stages.at(-1).sessionID]), profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), toolText: [...run.toolText.values()], attempts: new Map(), plan: null } };
+        review: { id: run.id, origin: run.origin, reportSessions: new Set([run.stages.at(-1).sessionID]), profile: run.profile, request: input.arguments, snapshot: verified.snapshot, outputLanguage: state.settings.outputLanguage, provenance, findings: clone(allFindings), final: clone(presented), toolText: [...run.toolText.values()], data: run.data, debugDirectory: run.debug.directory, attempts: new Map(), plan: null } };
     });
     // A cancelled presentation must not leave a publishable "completed" review.
     if (status === 'COMPLETE' && review) {
       completed.set(run.id, review);
-      if (completed.size > 20) completed.delete(completed.keys().next().value);
+      if (completed.size > 20) {
+        const first = completed.keys().next().value, old = completed.get(first);
+        completed.delete(first);
+        if (old.data && ![...runs.values()].some(active => active.review === old)) {
+          await releaseData(old.data);
+        }
+      }
     }
     else if (review) run.publicationUnavailable = true;
     setCommandResult(output, renderReceipt(run, report, status, failure, state.settings));
@@ -687,6 +721,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
       const g = await authorize(event.sessionID, event.agent, event.model);
       if (!g.messages) throw new Error('[AZPR] Missing authorized reviewer input.');
+      if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 8)) {
+        event.tools = {};
+        event.system.push({ type: 'text', text: 'Finish this read-only work page now. Tools are temporarily unavailable for this final response. Return status CONTINUE with a concise continuation identifying exact data references/cursors, completed checks and remaining work, plus any completed comments/skipped/summaryDetails. Do not claim READY for unfinished work. A new authorized session will continue; do not repeat completed work.' });
+      }
       g.primaryPrepared = true;
     }));
     registrations.push(await context.session.hook('model.request', async event => {
@@ -732,8 +770,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       await current(g.run.controller.signal);
       await checkRole(g.role, g.run.controller.signal);
       if (!g.run.active || grants.get(event.sessionID) !== g) throw new Error('[AZPR] Review tool authorization expired.');
+      const modelArgumentCharacters = JSON.stringify(event.input ?? {}).length;
       if (ROLES[g.role]?.stage === 'comment-publish') {
-        const restored = restoreSavedCommentText(event.input, publicationItems(g.run.review.plan));
+        const restored = restoreSavedCommentText(event.input, publicationItems(g.publicationPage));
         event.input = restored.input;
         g.savedTextRestorations.push(...restored.restored);
       }
@@ -746,6 +785,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       }
       const call = `${event.id}:${event.tool}`;
       g.toolCalls.set(call, event.tool);
+      g.toolArgumentCharacters.set(call, modelArgumentCharacters);
       g.timing?.toolStarted(call, event.tool);
       g.firstToolAt ??= new Date().toISOString();
       // Record denials as observed errors too, so a publisher loses its grants
@@ -760,7 +800,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
       // Direct MCP names, schemas and actions remain host-owned. CodeMode execute
       // is blocked because its fetch builtin has no permission/tool-hook boundary.
     }));
-    registrations.push(await context.tool.hook('execute.after', event => {
+    registrations.push(await context.tool.hook('execute.after', async event => {
       const g = grants.get(event.sessionID), call = `${event.id}:${event.tool}`;
       if (!g?.run.active || g.role !== event.agent || !g.toolCalls.has(call) || g.terminalTools.has(call)) return;
       g.lastToolAt = new Date().toISOString();
@@ -783,8 +823,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
             // Share observed text with comment roles instead of asking them to
             // reconstruct source from finding prose. Keep arguments beside the
             // text; they describe the call, not certified source provenance.
-            const key = JSON.stringify([event.tool, event.input, result.output]);
-            g.run.toolText.set(key, { tool: event.tool, input: clone(event.input), output: result.output, text: event.result.content[0].text });
+            try {
+              const observation = await captureObservation(await dataFor(g.run), event.tool, clone(event.input), result.output);
+              g.run.toolText.set(observation.key, observation);
+            } catch {
+              // Optional sharing cannot invalidate source-supported review.
+              // The planner may read unavailable observations through MCP.
+              g.run.debug.warnings.push('A review tool observation could not be saved for comment planning; original host output remains available.');
+            }
           }
         }
       }
@@ -794,6 +840,25 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
         // Publication cannot rely on a model honoring "do not retry" after an
         // error. Revoke synchronously without classifying MCP names or actions.
         void abortRun(g.run, 'A publisher tool failed. Publication state is uncertain; inspect Azure before another attempt.', 'INCOMPLETE');
+      }
+      if (ROLES[g.role]?.comment && !failed && event.result) {
+        try {
+          const store = await dataFor(g.run);
+          const reference = await store.object(event.result);
+          (g.run.review.commentEvidence ??= []).push({ stage: ROLES[g.role].stage, sessionID: event.sessionID,
+            tool: event.tool, input: await store.pack(event.input), result: reference });
+          let visible = JSON.stringify(event.result);
+          if (visible.length > PAGE_CHARACTERS) {
+            const notice = `AZPR saved this complete observed tool result privately. Read its pages with explicit offset/limit (one or two JSONL rows at a time). Row text is lossless; offsets are UTF-16 positions, not source lines. Original errors, wrappers and truncation flags are inside the saved result; saving does not prove complete source or pagination. ${JSON.stringify(reference)}`;
+            event.result = { ...event.result, output: notice, content: [{ type: 'text', text: notice }] };
+            visible = notice;
+          }
+          g.visibleCharacters += visible.length + (g.toolArgumentCharacters.get(call) ?? 0);
+          if (ROLES[g.role].stage === 'comment-plan' && g.visibleCharacters >= COMMENT_TURN_CHARACTERS) g.checkpointRequested = true;
+        } catch (error) {
+          void abortRun(g.run, 'Private comment data could not be preserved. No further requests are authorized; inspect any publication attempt in Azure.', 'INCOMPLETE');
+          throw error;
+        }
       }
     }));
     registrations.push(await context.command.transform(editor => {
@@ -816,6 +881,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR) {
   return async () => {
     await Promise.allSettled([...runs.values()].map(r => abortRun(r, 'OpenCode V2 plugin unloaded.')));
     completed.clear();
+    await Promise.allSettled([...dataStores].map(async pending => (await pending).dispose()));
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));
   };
 }

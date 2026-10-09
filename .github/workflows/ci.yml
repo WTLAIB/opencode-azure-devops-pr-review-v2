@@ -24,3 +24,5 @@ jobs:
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise replacement package and host lifecycle
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --replace
+      - name: Exercise large normal/deep comment workflows with fake services
+        run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"

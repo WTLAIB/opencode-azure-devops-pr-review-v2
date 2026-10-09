@@ -16,7 +16,7 @@ const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
 const destination = 'plugins/azpr-v2';
 const requiredFiles = [
   'install.sh', 'scripts/merge-settings.py', 'config/settings.example.json',
-  ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'diagnostics.mjs', 'attribution.mjs'].map(name => 'src/' + name),
+  ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs'].map(name => 'src/' + name),
   ...['common', 'check', 'functional', 'risk', 'deep', 'final', 'comment-policy', 'comment-plan', 'comment-publish'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
@@ -137,7 +137,7 @@ test('local directory entry resolves and loads from a minimal fresh install', as
   const s = setup(); minimalSource(s);
   ok(install(s, ['--settings', profile(s)]));
   await loadDirectoryEntry(s);
-  assert.equal(readdirSync(installed(s, '')).length, 12); // 8 JS modules + entry + metadata + settings + prompts
+  assert.equal(readdirSync(installed(s, '')).length, 14); // 10 JS modules + entry + metadata + settings + prompts
   original(s); clean(s);
 });
 
@@ -164,7 +164,7 @@ test('replacement replaces the temporary entry symlink with a generated regular 
 });
 
 test('22-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 20);
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 22);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);

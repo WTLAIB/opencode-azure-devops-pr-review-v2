@@ -10,6 +10,8 @@ it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
 | --- | --- |
 | `src/plugin.js` | V2 default plugin definition and setup entry. |
 | `src/config.mjs` | Strict settings, immutable roles, native denials, compiled Agent.Info. |
+| `src/comment-data.mjs` | Private lossless artifacts, bounded reads and assigned finding scopes. |
+| `src/comment-work.mjs` | Read-only checkpoints, complete plan assembly and saved publication pages. |
 | `src/session.mjs` | Exact V2 create/admit/wait/context/interrupt/synthetic contract. |
 | `src/runtime.mjs` | Command registration, grants, workflow, cancellation and lifecycle. |
 | `src/output.mjs` | Review envelope extraction, syntax recovery, best-effort delivery and final evidence assessment. |
@@ -33,7 +35,7 @@ gate. Display row numbers are source positions only for complete unwrapped files
 models still establish the file/version and interpret the evidence.
 
 The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
-entry re-exporting `plugin.js`, matching package exports, eight JavaScript modules,
+entry re-exporting `plugin.js`, matching package exports, ten JavaScript modules,
 nine prompts and private settings. The Python settings helper runs only during
 installation. No top-level loader or
 Markdown command expansion is involved. Optional docs/schema/uninstaller do not
@@ -288,7 +290,7 @@ for confirmed findings without inline coverage and a separate section for every
 distinct retained non-defect recommendation. The existing initial/verifier
 `report` fields carry advice; the planner receives only the final report and
 does not derive new defect IDs from it. Sections are conditional, with no topic
-checklist, item quota or extra model stage. Detail text has no plugin length cap;
+checklist or item quota. Comment work may span several short sessions. Detail text has no plugin length cap;
 the introduction and inline bodies keep their separate limits. The runtime
 escapes quoted HTML-comment delimiters and saves the complete detail as part of
 the same single general-summary item. Missing optional detail is not a new gate
@@ -298,8 +300,7 @@ natural explanations during existing stages, without a translation model pass.
 No inline findings still permits publishing the saved summary.
 It has its own marker/attempt state, no fake finding or anchor,
 and a separate model-reported thread ID. Missing summary confirmation prevents
-a successful batch result. No additional model request or persistent storage is
-needed. Verifier instructions require useful earlier execution outcomes in the
+a successful batch result. File-backed work pages keep each admission small. Verifier instructions require useful earlier execution outcomes in the
 report with attribution; the planner does not receive initial reports or raw
 native execution output. A planning failure retains the review and exposes an
 optional model-supplied reason, or states that none was provided.
@@ -308,11 +309,12 @@ retention limits. No separate config switch applies.
 The saved plan adds line-local character offsets derived from its existing
 anchor. This does not add fields the planner must generate or inspect MCP schemas
 in code; the publisher translates the saved positions to the available tool.
-Publisher input contains only the target, snapshot, output language, saved
-general summary and inline comments. Full report/finding/source observations
-remain planner context. Current PR and discussion checks apply once to the batch; preview-verified immutable
-anchors need no mandatory reread. Models read further when evidence is missing
-or uncertain, without adding a stage or a request budget.
+Publisher input contains the target, relevant snapshot paths, language, assigned
+saved items and page metadata. Large saved text is copied by marker before tool
+execution. Read-only sessions check every publication page before the first write;
+each publisher rechecks mutable PR metadata and reuses immutable anchors. Original
+source/tool bytes stay in private files with scoped references, not in every
+admission. See [comment work pages](COMMENTING.md#large-pr-work-pages).
 Before publication, mark every planned item uncertain; results can only update
 that ledger to model-reported outcomes. Any observed execution-hook error or
 explicit error result during publication synchronously revokes grants before
@@ -321,12 +323,14 @@ without classifying MCP actions; it cannot recall calls already dispatched.
 No automatic retry or independent provider verification is claimed.
 
 Successful multiline review tool text is retained with its observed request
-arguments for same-origin comment planning. The existing display
+arguments in private files for same-origin comment planning. The existing display
 eligibility excludes flagged failures, truncation and unsupported wrappers;
 native project-tool output is excluded. Identical tool/arguments/raw-text
 observations are deduplicated, with no source-content classification or new
 model request. The completed-review cache owns this temporary data and drops it
-with the review; no checkout, persisted cache or repository map is introduced.
+with the review. Non-debug artifacts are removed after active work releases them;
+debug artifacts remain for inspection. No checkout, durable authority cache or
+repository map is introduced.
 Captured text is data, not source/commit certification or a new eligibility gate.
 Initials remain independent and the verifier retains its existing source checks.
 

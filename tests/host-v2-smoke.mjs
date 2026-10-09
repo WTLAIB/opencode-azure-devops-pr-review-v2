@@ -104,6 +104,7 @@ const provider = createServer(async (request, response) => {
       path: snapshot.files[0], startLine: 2, endLine: 2, anchor: 'fixture-source',
       body: '🔴 high: Fixture guard is missing\n\nThe fixture branch loses state. Restore the guard and test that branch.' })),
     skipped: [...payload.findings.slice(1).map(item => ({ findingId: item.id, reason: 'Duplicate fixture concern.' })), ...payload.dispositions.filter(item=>item.status!=='CONFIRMED').map(item=>({findingId:item.id,reason:item.reason}))] };
+  if (payload?.commentWork?.kind === 'publication-check') final = { status: 'READY', comments: [], skipped: [] };
   if (incompleteNextPlan && payload?.target && payload.findings && hasResult) {
     final = { status: 'INCOMPLETE', comments: [], skipped: [], reason: 'Fixture discussion pagination is incomplete.' };
     incompleteNextPlan = false;
@@ -396,19 +397,20 @@ try {
   const publication = (await api(`/api/session/${continuedStage.sessionID}/inbox`)).data.at(-1)?.payload?.text;
   assert.match(publication, /\] INCOMPLETE/); assert.match(publication, /publisher tool failed/i);
   assert.match(publication, /UNKNOWN/);
-  assert.equal(requests.length, beforePublication + 3, 'Direct publication plans once, then a publisher tool error must prevent another model request.');
+  assert.equal(requests.length, beforePublication + 5, 'Direct publication plans and checks once, then a publisher tool error must prevent another model request.');
   assert.match(publication, /Inline comments prepared: 1/);
   const publicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
-  assert.deepEqual(Object.keys(publicationPayload).sort(), ['comments', 'outputLanguage', 'snapshot', 'summary', 'target']);
+  assert.deepEqual(Object.keys(publicationPayload).sort(), ['commentWork', 'comments', 'outputLanguage', 'snapshot', 'summary', 'target']);
   const plannerPayload = JSON.parse(requests[beforeRejectedPlan].body.messages.findLast(message => message.role === 'user').content);
-  assert.equal(plannerPayload.reviewToolText.length, 1, 'Identical reviewer observations are shared once with the planner, including original arguments.');
-  assert.match(plannerPayload.reviewToolText[0].text, /Request arguments:.*fixture-source/);
-  assert.match(plannerPayload.reviewToolText[0].text, /HEAD \(PR source\)/);
-  assert.match(plannerPayload.reviewToolText[0].text, /1 \|   fixture-source\n2 \| \n3 \| fixture-third-line/);
+  const evidence = (await readFile(plannerPayload.evidenceIndex.file, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(evidence.length, 1, 'Identical reviewer observations are stored once with original arguments.');
+  assert.equal(evidence[0].arguments.value, 'fixture-source');
+  assert.equal(evidence[0].arguments.anyRevision, 'b'.repeat(40));
+  assert.equal(await readFile(evidence[0].output.file, 'utf8'), '  fixture-source\n\nfixture-third-line\n');
   const publicationDebug = /Private debug directory: ([^\n]+)/.exec(publication)[1];
-  const publicationStage = JSON.parse(await readFile(join(publicationDebug, '02-azpr-review-comment-publish.result.json'), 'utf8'));
+  const publicationStage = JSON.parse(await readFile(join(publicationDebug, '03-azpr-review-comment-publish.result.json'), 'utf8'));
   const savedPlan = JSON.parse(await readFile(join(publicationDebug, 'comment-plan.json'), 'utf8'));
-  assert.deepEqual(publicationPayload.comments, savedPlan.comments);
+  assert.deepEqual(publicationPayload.comments, savedPlan.comments.map(({ body, anchor, ...item }) => item));
   assert.deepEqual(publicationPayload.summary, savedPlan.summary);
   assert.equal(savedPlan.summary.kind, 'summary');
   assert.equal(savedPlan.summary.path, undefined);
@@ -418,7 +420,8 @@ try {
   assert.doesNotMatch(publication, /Fixture publication tool failed/);
   assert.equal(publicationPayload.comments[0].startOffset, 1);
   assert.equal(publicationPayload.comments[0].endOffset, 16);
-  assert.equal(publicationPayload.comments[0].anchor, '  fixture-source');
+  assert.equal(savedPlan.comments[0].anchor, '  fixture-source');
+  assert.equal(publicationPayload.comments[0].anchor, undefined);
   assert.equal(publicationPayload.comments[0].startLine, 1);
   assert.equal(publicationPayload.comments[0].endLine, 1);
   assert.match(publication, /Fixture candidate declined by verifier/);
@@ -441,13 +444,13 @@ try {
   await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID, delivery: 'steer' });
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /\] PREVIEW/);
   const localPlanPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
-  assert.deepEqual(localPlanPayload.reviewToolText, [], 'Native shell output is not cached as MCP review text.');
+  assert.equal((await readFile(localPlanPayload.evidenceIndex.file, 'utf8')).trim(), '', 'Native shell output is not cached as MCP review text.');
   assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
   commentShellProbe = 'comment-publish-allowed';
   const beforeLocalPublisher = requests.length;
   await api(`/api/session/${verifiedOrigin}/command`, { name: 'pr-comment', text: verifiedID + ' --publish', delivery: 'steer' });
   assert.match((await api(`/api/session/${verifiedOrigin}/inbox`)).data.at(-1).payload.text, /publisher tool failed/i);
-  assert.equal(requests.length, beforeLocalPublisher + 2, 'Local verification may run, but a later publisher error still stops every subsequent request.');
+  assert.equal(requests.length, beforeLocalPublisher + 4, 'Local verification may run, but a later publisher error still stops every subsequent request.');
   const localPublicationPayload = JSON.parse(requests.at(-1).body.messages.findLast(message => message.role === 'user').content);
   assert.equal(Object.hasOwn(localPublicationPayload, 'reviewToolText'), false);
   assert.deepEqual(JSON.parse(await readFile(join(directories.work, commentShellProbe + '.json'), 'utf8')), { cwd: directories.work, project: 'work' });
@@ -549,7 +552,7 @@ try {
   assert.equal(requests.length, beforeCancel + 1, 'Manual cancellation must not restart the fake provider.');
   workflowReceipts.push({ command: 'pr-check + pr-stop', suffix: 'hang-smoke', receipt: cancellationReceipt });
   const mcpCalls = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.equal(mcpCalls.length, 13, 'Source workflows, explained planning failure, project preview and cancellation sibling use fixture MCP.');
+  assert.equal(mcpCalls.length, 14, 'Source workflows, explained planning failure, project preview and cancellation sibling use fixture MCP.');
   for (const call of mcpCalls) {
     assert.equal(call.name, 'read_fixture');
     assert.ok(['fixture-source', 'publisher-error'].includes(call.arguments.value));
@@ -570,7 +573,7 @@ try {
     catch { return false; }
   }).length;
   assert.ok([1, 2].includes(cancellationSiblingRequests), 'Cancellation may stop the sibling before or after its tool-result response.');
-  assert.equal(requests.length - cancellationSiblingRequests, 59);
+  assert.equal(requests.length - cancellationSiblingRequests, 63);
   const privateSession = requests.find(request => request.body.model === 'risk')?.sessionID;
   assert.ok(privateSession, 'The private check must reach the loopback provider.');
   const privateAuxiliaryDenied = async () => {
@@ -605,7 +608,7 @@ try {
   }
   await ordinaryGenerate();
   await privateAuxiliaryDenied();
-  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 13);
+  assert.equal((await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').length, 14);
   console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace-exports-only' : 'fresh', host: info.version, providerRequests: requests.length, mcpToolCalls: mcpCalls.length, projectVerification: true, projectSwitch: true, hostPermissionApprovals: permissionReplies.length, hostPermissionDenial: true, pendingApprovalCancellation: true, foregroundCancellation: true, nonzeroVerificationPreview: true, shellPositiveControl: true, privateAuxiliaryDenied: true, restartGuard: true, ordinaryAuxiliaryPreserved: true, workflows: workflowReceipts.map(({command,suffix})=>({command,suffix})), forbiddenFetches, actualOS: process.platform, fixture }, null, 2));
 } finally {
   await stopHost();

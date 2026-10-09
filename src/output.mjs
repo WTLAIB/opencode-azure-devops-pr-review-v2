@@ -45,7 +45,8 @@ export function stageFormat(role) {
     newFindings: array(finding), report: { ...string, description: 'Important exclusions, all retained source-supported improvement recommendations, open questions and testing/scope limitations in outputLanguage. Recommendations identify affected code, the concrete benefit and a proportionate change without claiming a defect. Do not repeat findings or disposition reasons: the runtime renders those structured fields.' },
   });
   else if (kind === 'comment-plan') schema = object({
-    status: status('READY', 'INCOMPLETE'),
+    status: status('READY', 'CONTINUE', 'INCOMPLETE'),
+    continuation: { ...string, description: 'For a successful read-only checkpoint: exact data references/cursors, completed checks and remaining work. A fresh authorized session continues; no write or retry is authorized.' },
     comments: array(object({ findingId: string, severity: status('high', 'medium'), path: string, startLine: { type: 'integer' }, endLine: { type: 'integer' }, anchor: string, body: string })),
     skipped: array(object({ findingId: string, reason: string })),
     summary: { ...string, description: 'Optional one or two sentences before the issue index. Begin with the purpose supported by the PR description or requirements; otherwise describe what changed without guessing intent. Add shared impact or a supported fix priority only when useful. Use the completed review and available PR context; omit when there is nothing to add. Exclude finding recaps/counts, review-process narration, run IDs, commit SHAs and private diagnostics; preserve limitations that materially qualify conclusions.' },

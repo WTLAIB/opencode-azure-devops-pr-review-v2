@@ -10,7 +10,47 @@ pending status are preserved in [validation history](VALIDATION_HISTORY.md).
 They do not override the current behavior documented in [README](../README.md).
 Private raw artifacts, credentials and personal settings stay outside Git.
 
-## Latest acceptance: general performance guidance — 2026-10-08
+## Latest local validation: large comment work pages — 2026-10-09
+
+The comment workflow now stores original evidence and tool results privately,
+assigns bounded planning/report pages, accepts successful read-only checkpoints,
+checks all publication pages before writes, and publishes saved items through
+short independent sessions under one attempt ledger. It does not enable host
+compaction or add initial/verifier review rounds.
+
+Local syntax checks and 456 offline tests passed. Exact OpenCode 2.0.22 fresh and
+replacement fixtures passed against deterministic loopback models and stdio MCP.
+A separate actual-host scale fixture completed both normal and deep review plus
+`pr-comment --publish`, each with:
+
+| Observed fixture property | Result |
+| --- | --- |
+| Retained source characters (UTF-16) | 5,507,869, including individual 3,307,749 and 2,200,000 character responses |
+| Changed paths / inline comments | 6,001 / 70, plus one complete general summary |
+| Retained distinct report advice | All 400 fixture entries |
+| Comment sessions | 30 across planning, checkpoints, publication checks and publishing |
+| Largest admitted work payload | 20,859 characters |
+| Largest full comment provider request | 69,992 characters, including instructions, tools and accumulated messages |
+| Saved text / source | Exact file bytes and every saved outgoing comment matched |
+| Compaction/rejected private requests | None during either successful comment workflow |
+
+The fixture risk model has a synthetic 400,000-token context limit. Its functional
+and verifier models have synthetic 4,000,000-token limits so the test can create
+large completed-review evidence independently of comment transport. Synthetic
+usage values and deterministic responses do not measure real tokenization,
+model reasoning, recommendation completeness or real Azure behavior. Output
+restoration and native bounded file reads were exercised on the actual host.
+Service comment-size limits and pathological tool catalogs remain external limits.
+
+Environment: Ubuntu 22.04.5, Node 22.23.3 and OpenCode 2.0.22. No live model or Azure
+request was run for this workflow validation. New CI coverage runs the same
+scale fixture on pushed revisions; local passes alone do not establish a remote
+CI result. Delivery records separately verify the installed revision and
+preservation of private settings. Intermediate fixture failures and
+raw artifacts remain in ignored private storage. The earlier live acceptance below
+applies to its previous revision, not these new workflow bytes.
+
+## Previous live acceptance: general performance guidance — 2026-10-08
 
 The shared reviewer/verifier prompt now considers performance and scalability
 through time, memory and I/O costs, expected workload, existing safeguards,
@@ -121,7 +161,7 @@ sh uninstall.sh --config-dir "$azpr_test_root/config"
 ```
 
 The last command previews removal. Placeholder models do not make this package
-ready for a live review. Compare the eight JavaScript modules and nine prompts
+ready for a live review. Compare the ten JavaScript modules and nine prompts
 to source, inspect the generated regular `server.js` entry/package export and
 check owner-only settings permissions. See the [manual file list](../README.md#manual-copying-without-git).
 

@@ -41,6 +41,10 @@ earlier results without treating retired behavior as current requirements.
   captured review text for planning, numbered source displays and narrow literal
   anchor restoration. These features do not certify source provenance or classify
   MCP operations.
+- File-backed source/report/tool data and short comment work sessions for large PRs.
+  Successful read-only checkpoints retain exact records; every assigned finding
+  is accounted for before one complete plan is saved. All publication checks
+  precede sequential saved-item pages with one uncertain-attempt ledger.
 - Latest-20 completed-review cache in process memory, no time TTL, no authority
   restored from history/debug files after restart. Optional diagnostics preserve
   visible failures without recording reasoning or full host configuration.
@@ -83,7 +87,7 @@ status or successful write proves none of the others by itself.
 
 Prefer prompt clarity and useful results with honest limitations. Keep exact code
 and version provenance, coherent corrections and attributed test outcomes. Do not
-add model/PR/MCP-version exceptions, extra rounds, mandatory fields, hidden budgets,
+add model/PR/MCP-version exceptions, extra review rounds, mandatory fields, hidden review budgets,
 comparison machinery or a second completion gate to conceal model limitations.
 
 Native commands have real host authority; the plugin is not a sandbox. No live

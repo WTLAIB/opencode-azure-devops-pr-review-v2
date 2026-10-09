@@ -305,12 +305,27 @@ printing the host configuration; native shell retains ordinary host authority.
 
 ## Source versions and anchors
 
-Planner request diagnostics include `reviewToolText`: already observed successful
-review tool text with arguments and numbered display. This can contain source
-code and PR data, so it follows the same private-diagnostics handling as other
-request payloads. Empty observations do not block planning; the model may read
-missing data normally. They are not proof of correct source selection or copying.
-Publisher requests contain the saved target, snapshot, language, summary and inline comments only.
+Planner request diagnostics now include `evidenceIndex`, not embedded
+`reviewToolText`. Its private JSONL entries retain original arguments and exact
+output references. `reportReference`, `priorPlanning` and `workEvidence` point to
+complete report text, completed fragments and prior comment tool observations.
+Empty source observations do not block planning; the model may read missing data.
+These files can contain source code and PR data and require the same protection as
+other private diagnostics. They cannot restore publication authority after restart.
+
+`commentWork` identifies plan, publication-check or publish pages. Stage numbers
+vary with data size and checkpoints; identify the role and page instead of assuming
+one planner and one publisher. `inputFieldCharacters` attributes serialized input
+size to each field; `visibleToolCharacters` measures model-visible tool data and
+arguments. These are UTF-16 character observations, not provider token counts.
+Large complete tool results are saved and replaced by references before admission
+to subsequent model history. Read-only checkpoints preserve exact records in new
+sessions; host compaction remains blocked. A CONTINUE checkpoint is successful
+progress, not a retry of a rejected, interrupted or failed response.
+Publisher inputs include only assigned saved items, target, relevant paths,
+language and work metadata. Inspect `comment-plan.json` for the complete approved
+content; a large publisher text placeholder must restore to that exact text in
+`execute.before`. Data pages are transport offsets, not Azure source coordinates.
 Numbered displays may include snapshot argument labels when that stage already
 knows a selected snapshot. Compare the original arguments and bytes if HEAD/BASE
 reasoning is wrong: a matching string does not certify selector semantics or the

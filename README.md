@@ -60,7 +60,7 @@ recovery location. Unrelated backups and private history are untouched.
 ### Manual copying without Git
 
 Keep the following relative paths under one source directory, then run its
-installer. These **20 files** are sufficient:
+installer. These **22 files** are sufficient:
 
 ```text
 install.sh
@@ -72,6 +72,8 @@ src/runtime.mjs
 src/config.mjs
 src/output.mjs
 src/comments.mjs
+src/comment-data.mjs
+src/comment-work.mjs
 src/diagnostics.mjs
 src/attribution.mjs
 src/prompts/common.md
@@ -87,7 +89,7 @@ src/prompts/comment-publish.md
 
 README, `docs/`, the settings schema and `uninstall.sh` are optional installer
 inputs. Include them for local guidance. No `commands/` directory or top-level
-loader is needed. The installed core has 20 files: eight JavaScript modules,
+loader is needed. The installed core has 22 files: ten JavaScript modules,
 nine prompts, settings, generated package metadata, and the generated server entry.
 The Python helper is used by the installer, not installed into the runtime.
 
@@ -337,7 +339,9 @@ because a review completes or a preview exists.
 
 ### Review retention
 
-Publication data is local **process memory**, not a durable run-ID database.
+Publication authority stays in local **process memory**, not a durable run-ID database.
+Large evidence and comment work are private file-backed data; the files cannot
+restore authority after restart.
 Each plugin instance keeps the latest 20 completed reviews, including source
 observations, any prepared plan, and publication-attempt state. A newer completed
 review evicts the oldest when the limit is exceeded. There is no time-based TTL;
@@ -349,6 +353,15 @@ disk until the user removes them; the plugin does not automatically purge those
 files or host history. Neither history nor debug JSON restores publication
 authorization after restart. See [comment retention](docs/COMMENTING.md#retention)
 and [diagnostics](docs/DEBUGGING.md).
+
+Large reviews use file-backed comment data and multiple short sessions. The planner
+receives assigned verified findings, an exact report segment and references to
+original evidence; it no longer embeds the accumulated review tool outputs.
+All findings and retained advice are carried into one saved plan before publishing.
+Read-only checks can checkpoint with exact records and continue in a new session.
+Publishing sends saved items in pages under one attempt ledger, with no automatic
+write retry. These are comment work pages, not additional review rounds or a
+PR-size quota. See [large-PR commenting](docs/COMMENTING.md#large-pr-work-pages).
 
 ## Development and removal
 

@@ -97,6 +97,23 @@ function restoreAnchor(comment, review) {
   const forms = new Set([trim(comment.anchor), trim(comment.anchor.replace(/\\"/g, '"'))]);
   const declared = new Map(), candidates = new Map();
   const count = comment.endLine - comment.startLine + 1;
+  // Check the preferred declared range across every matching observation first.
+  // Bounded split avoids scanning a multi-million-line file for each comment
+  // when its declared range already matches. Conflicting observations still fail
+  // restoration; fallback search never overrides a declared literal match.
+  for (const observation of review.toolText ?? []) {
+    const values = argumentStrings(observation.input);
+    if (!values.includes(comment.path) || !values.includes(review.snapshot.head) || typeof observation.output !== 'string') continue;
+    const lines = observation.output.split(/\r?\n/, comment.endLine + 1);
+    if (lines.length <= comment.endLine && lines.at(-1) === '') lines.pop();
+    const selected = lines.slice(comment.startLine - 1, comment.endLine), anchor = selected.join('\n');
+    if (selected.length === count && forms.has(trim(anchor))) {
+      const range = { anchor, startLine: comment.startLine, endLine: comment.endLine };
+      declared.set(JSON.stringify(range), range);
+    }
+  }
+  if (declared.size) return declared.size === 1 ? [...declared.values()][0]
+    : { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine };
   for (const observation of review.toolText ?? []) {
     const values = argumentStrings(observation.input);
     if (!values.includes(comment.path) || !values.includes(review.snapshot.head) || typeof observation.output !== 'string') continue;
@@ -108,11 +125,10 @@ function restoreAnchor(comment, review) {
       const range = { anchor, startLine: start + 1, endLine: start + count };
       const key = JSON.stringify(range);
       candidates.set(key, range);
-      if (range.startLine === comment.startLine) declared.set(key, range);
+      if (candidates.size > 1) return { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine };
     }
   }
-  const matches = declared.size ? declared : candidates;
-  return matches.size === 1 ? [...matches.values()][0]
+  return candidates.size === 1 ? [...candidates.values()][0]
     : { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine };
 }
 
@@ -198,7 +214,11 @@ export function recordPublishResult(result, review) {
   const hasSummary = result.summaryThreadId !== undefined;
   if (hasSummary && (!review.plan.summary || !validThread(result.summaryThreadId))) fail('Invalid model-reported summary publication.');
   const seen = new Set();
-  const threads = new Set(hasSummary ? [String(result.summaryThreadId)] : []);
+  const threads = new Set([...review.attempts.values()].filter(item => item.state === 'MODEL_REPORTED_POSTED').map(item => String(item.threadId)));
+  if (hasSummary) {
+    if (threads.has(String(result.summaryThreadId))) fail('Duplicate model-reported thread across publication pages.');
+    threads.add(String(result.summaryThreadId));
+  }
   for (const item of result.posted) {
     exactKeys(item, ['findingId', 'threadId']);
     if (!planned.has(item.findingId) || seen.has(item.findingId) ||
