@@ -2,19 +2,32 @@
 
 `commentWork` identifies this work page. Account for every finding in `findings`
 (at most four per page): each one appears exactly once, either in `comments` or
-in `skipped` with a reason. Other pages handle other findings; `priorPlanning`
-references what earlier pages produced so you can avoid duplicates and keep the
-summary consistent.
+in `skipped` with a reason. Other pages handle other findings; `priorPages`
+lists what earlier pages already produced so you can avoid duplicates and keep
+the summary consistent.
+
+The runtime already read what this page normally needs, so most pages need no
+tool call at all:
+
+- `sourceExcerpts`: HEAD source around each finding (`findingIds` says which),
+  as `N | line` rows. `firstLine`/`lastLine`/`totalLines` tell you whether the
+  excerpt is the whole file.
+- `existingDiscussions` (when `discussionsRead` is true): every live thread on
+  the PR with its path, line, author and the start of its first comment.
+  Deleted threads are already excluded.
+
+Read more only when these do not answer a question: repo_file get_content at
+`snapshot.head` for lines outside an excerpt, repo_pull_request_thread when you
+need a full comment body or `discussionsRead` is false, and `evidenceIndex`
+(present only when some finding has no excerpt).
 
 ## Anchors
 
 For each comment choose a changed file at `snapshot.head` and the smallest
 useful line range, then quote those exact lines in `anchor` (joined with
-newlines, no trailing newline, without any "N |" display prefixes). Use
-`evidenceIndex` first: it references source text the reviewers already read,
-with the original request arguments. Read missing source with repo_file at
-`snapshot.head`. Never use base-file coordinates or guess line numbers; skip a
-finding you cannot anchor. Deleted-only and binary files cannot be anchored.
+newlines, no trailing newline) **without** the `N | ` prefixes. Never use base-file
+coordinates or guess line numbers; skip a finding you cannot anchor.
+Deleted-only and binary files cannot be anchored.
 
 ## Summary text
 
@@ -29,7 +42,7 @@ without an inline comment, including low severity) and
 `### 💡 Improvement suggestions` (every distinct non-defect recommendation the
 final report retained, with affected code, benefit and direction). For zh-TW use
 `### 補充問題說明` and `### 💡 改善建議`. The final report segment is in `report`;
-`reportReference` holds the complete original.
+`reportReference`, when present, holds the complete original.
 
 ## Answer
 

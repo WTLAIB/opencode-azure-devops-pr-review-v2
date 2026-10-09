@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE } from '../src/comment-work.mjs';
+import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, discussionDigest, parseLocation, sourceWindow } from '../src/comment-work.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
 import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -164,4 +164,56 @@ test('publication refuses a changed source commit or an inactive PR before writi
   azure.state.status = 3;
   assert.equal((await publishPlan({ run, review, azure: api })).status, 'INCOMPLETE');
   assert.equal(azure.state.calls.filter(call => call.name === 'repo_pull_request_thread_write').length, 0);
+});
+
+test('the discussion digest lists only live threads, compactly', () => {
+  const marker = '<!-- azpr-comment:' + 'a'.repeat(32) + ' -->';
+  const digest = discussionDigest([
+    { id: 1, status: 1, comments: [], threadContext: { filePath: '/a.ts', rightFileStart: { line: 3 } } },
+    { id: 2, status: 1, isDeleted: true, comments: [{ content: 'gone' }] },
+    { id: 3, status: 2, comments: [{ isDeleted: true, content: 'deleted' }, { content: `Real question about   the guard ${marker}`, author: { displayName: 'Ann' } }], threadContext: { filePath: '/a.ts', rightFileStart: { line: 9 } } },
+    { id: 4, status: 1, comments: [{ content: 'x'.repeat(500) }] },
+  ]);
+  assert.deepEqual(digest.map(d => d.threadId), [3, 4]);
+  assert.deepEqual(digest[0], { threadId: 3, status: 2, path: '/a.ts', line: 9, author: 'Ann', comments: 1, azpr: true, excerpt: 'Real question about the guard' });
+  assert.equal(digest[1].excerpt.length, 300);
+});
+
+test('locations and source windows', () => {
+  assert.deepEqual(parseLocation('head:/src/a.ts:12-14'), { path: '/src/a.ts', start: 12, end: 14 });
+  assert.deepEqual(parseLocation('/src/a.ts:7'), { path: '/src/a.ts', start: 7, end: 7 });
+  assert.deepEqual(parseLocation('head:/src/a.ts'), { path: '/src/a.ts', start: null, end: null });
+  assert.equal(parseLocation('somewhere'), null);
+  const small = sourceWindow('a\nb\nc\n', { start: 2 });
+  assert.deepEqual({ ...small, text: small.text.split('\n') }, { firstLine: 1, lastLine: 3, totalLines: 3, text: ['1 | a', '2 | b', '3 | c'] });
+  const big = sourceWindow(Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join('\n'), { start: 500, end: 502, context: 5 });
+  assert.equal(big.firstLine, 495);
+  assert.equal(big.lastLine, 507);
+  assert.match(big.text, /^495 \| line 495/);
+});
+
+test('planning payloads inline source excerpts and the discussion digest; tools are rarely needed', async t => {
+  const { review, store } = await setup(t, [finding('F-1'), finding('F-2')]);
+  const fetched = [];
+  const { invoke, payloads } = stages(async payload => JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }));
+  const plan = await prepareComments(review, store, invoke, {
+    discussions: [{ threadId: 9, path: '/src/Main.java', line: 1, excerpt: 'Existing note' }],
+    fetchSource: async path => { fetched.push(path); return 'fixture code\nsecond line\n'; },
+  });
+  assert.deepEqual(fetched, ['/src/Main.java'], 'Each file is fetched once.');
+  const payload = payloads[0];
+  assert.equal(payload.discussionsRead, true);
+  assert.deepEqual(payload.existingDiscussions, [{ threadId: 9, path: '/src/Main.java', line: 1, excerpt: 'Existing note' }]);
+  assert.deepEqual(payload.sourceExcerpts.map(e => [e.path, e.findingIds, e.firstLine, e.lastLine]), [['/src/Main.java', ['F-1', 'F-2'], 1, 2]]);
+  assert.equal(payload.sourceExcerpts[0].text, '1 | fixture code\n2 | second line');
+  assert.equal(payload.evidenceIndex, undefined, 'No evidence index when every finding has an excerpt.');
+  assert.equal(payload.reportReference, undefined, 'A one-segment report needs no file reference.');
+  assert.equal(typeof payload.findings[0].evidence, 'string', 'Findings are inline.');
+  assert.equal(plan.comments.length, 2);
+  // Without discussions or source the planner is told to read them itself.
+  const other = await setup(t, [finding('F-1')]);
+  const second = stages(async payload => JSON.stringify({ status: 'READY', comments: [comment(payload.findings[0].id)], skipped: [] }));
+  await prepareComments(other.review, other.store, second.invoke, {});
+  assert.equal(second.payloads[0].discussionsRead, false);
+  assert.ok(second.payloads[0].evidenceIndex, 'The evidence index remains available without excerpts.');
 });

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
+  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem,
 } from '../src/output.mjs';
 
 const finding = (id, extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.',
@@ -134,4 +135,48 @@ test('evaluateFinal keeps an unstructured verifier answer visible and asks for t
   assert.equal(result.dispositions[0].status, 'UNREVIEWED');
   assert.deepEqual(repairIds, ['F-1']);
   assert.match(finalRepairPrompt(issues, repairIds, { full: true }), /complete verification JSON object/);
+});
+
+test('unescaped quotes inside inline code are repaired locally and disclosed', () => {
+  const broken = '{"status":"COMPLETE","findings":[],"coverage":{"files":["/a.ts"],"gaps":[]},"report":"HEAD returns `{"stock": s}.copy()` and `x`."}';
+  assert.throws(() => JSON.parse(broken));
+  const parsed = parseModelJSON(broken, { keys: ['status'] });
+  assert.equal(parsed.value.report, 'HEAD returns `{"stock": s}.copy()` and `x`.');
+  assert.deepEqual(parsed.corrections, [{ action: 'escape-quotes-in-code-span', count: 2 }]);
+  const { result, issues } = evaluateInitial(broken, { prefix: 'F', assigned: ['/a.ts'], inventory: ['/a.ts'] });
+  assert.deepEqual(issues, []);
+  assert.ok(result.warnings.some(w => /repaired locally/.test(w)));
+  // A backtick span that crosses JSON members is never touched.
+  assert.equal(escapeCodeSpanQuotes('{"a":"x `y", "b": "z` w"}'), null);
+  assert.equal(escapeCodeSpanQuotes('{"a":"plain"}'), null);
+});
+
+test('a verifier resend after an unparsable answer carries no stale warnings (B1)', () => {
+  const originals = [finding('F-1'), finding('R-1')];
+  const first = evaluateFinal('{"status":"COMPLETE","confirmed":[{"id":"F-1" "summary": "x"}]}', { originals });
+  assert.equal(first.result.structured, false);
+  assert.ok(syntaxProblem(first.issues));
+  assert.match(parseRepairPrompt(first.issues), /identical content: do not shorten/);
+  const resend = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'same' }],
+    rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals, previous: first.result, supplement: Boolean(first.result.structured) });
+  assert.deepEqual(resend.issues, []);
+  assert.deepEqual(resend.result.warnings, [], 'Warnings from the failed first answer must not survive.');
+});
+
+test('a supplement keeps normalization notes but recomputes derived warnings', () => {
+  const originals = [finding('F-1'), finding('R-1')];
+  const first = evaluateFinal(JSON.stringify({ Status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: 'not-an-array', rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.ok(first.result.warnings.some(w => /UNREVIEWED/.test(w)));
+  const merged = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'MERGED', mergedInto: 'F-1', reason: 'same' }] }),
+    { originals, previous: first.result, supplement: true });
+  assert.equal(merged.result.warnings.some(w => /UNREVIEWED/.test(w)), false, 'Resolved items no longer count as unreviewed.');
+  assert.ok(merged.result.warnings.some(w => /non-array review section/i.test(w) || /kept as one entry/.test(w)), 'Normalization notes carry over.');
+});
+
+test('repair prompts: syntax errors ask for the same content; missing JSON asks for the full object', () => {
+  assert.equal(syntaxProblem(['Your answer could not be used: no JSON object was found.']), false);
+  assert.match(initialRepairPrompt(['x could not be parsed'], { parseOnly: true }), /not valid JSON[\s\S]*identical content/);
+  assert.match(initialRepairPrompt(['coverage missing']), /keep the existing wording/);
+  assert.match(finalRepairPrompt(['no JSON object was found'], ['F-1'], { full: true }), /complete verification JSON object/);
+  assert.match(finalRepairPrompt(['bad'], ['F-1'], { parseOnly: true }), /identical content/);
 });

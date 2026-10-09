@@ -54,7 +54,7 @@ Revisit when there is evidence from real runs, for example:
 - a step budget that scales with the shard's file count or changed lines instead
   of a fixed number;
 - a soft limit that first asks the model to finish (as comment pages already do
-  after eight requests) before any hard stop;
+  after twelve requests) before any hard stop;
 - per-stage wall-clock budgets derived from observed timings in `result.json`.
 
 ### Merge-base comparison
@@ -65,14 +65,29 @@ merge base, which would remove target-only differences from the comparison.
 
 ### Complete change lists beyond one page
 
-`repo_pull_request` returns one page of iteration changes. Very large PRs are
-marked incomplete and reviewers discover the rest. A paged changes tool in a
-later MCP version would make the inventory complete and verifiable.
+`repo_pull_request` returns one page of iteration changes (the first 100
+files). Very large PRs are marked incomplete and reviewers discover the rest. A
+paged changes tool in a later MCP version, or the REST path below, would make the
+inventory complete and verifiable.
+
+## Under evaluation: Azure DevOps REST for runtime operations
+
+A read-only comparison on 2026-10-10 (10 calls per operation) favoured direct
+REST over MCP 2.9.0 for the runtime's deterministic operations: 40/40 REST calls
+succeeded with median latencies of 120–270 ms, while direct MCP calls failed 2 of
+30 times with empty error messages at 500–1000 ms. MCP returns only the first
+100 changed files (a 316-file PR listed 100), exposes no merge base and returns
+`{}` for a missing PR; REST pages iteration changes up to 2000 per call and
+provides `commonRefCommit`. The cost is credential handling inside AZPR (PAT
+file, environment variable or Azure CLI token) and calls that bypass OpenCode
+permission rules. Proposed shape: REST when a credential source is configured,
+MCP otherwise; models keep using MCP tools for source reads.
 
 ## Remaining validation work
 
-1. Run the new revision against real Azure DevOps PRs and real models: sharded
-   reviews, correction turns, overflow splits and publication read-back.
+1. Run the new revision against large real Azure DevOps PRs: sharded reviews,
+   overflow splits and verifier sharding. A one-file PR passed review and
+   publication with read-back (see [validation](VALIDATION.md)).
 2. Measure how often correction turns and retries happen per model, and tune
    `workflow` defaults from those numbers.
 3. Check rendered comments, inline anchors and summaries in the Azure UI.

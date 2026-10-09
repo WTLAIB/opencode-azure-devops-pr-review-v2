@@ -150,6 +150,20 @@ function continuedText(turn, enabled) {
 }
 
 /**
+ * Asked to continue an interrupted answer, a model sometimes starts over
+ * instead. A later fragment that opens exactly like the first one is such a
+ * restart: only the text from that fragment on is the answer.
+ */
+export function restartIndex(texts) {
+  const opening = (texts[0] ?? '').trimStart().slice(0, 16);
+  if (opening.length < 8) return 0;
+  for (let index = texts.length - 1; index > 0; index--) {
+    if (texts[index].trimStart().startsWith(opening)) return index;
+  }
+  return 0;
+}
+
+/**
  * Classify a failed stage for the runtime's retry policy.
  * - overflow: the host tried to compact (context full) or the provider rejected size.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
@@ -241,9 +255,11 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (continuation.recovered.size) {
     const fragments = [...continuation.recovered, final].map(message => normalizeAnswer(message, sessionID));
     if (fragments.some(fragment => fragment.parts.some(part => typeof part.text !== 'string'))) throw new Error('[AZPR] Invalid continued reviewer text.');
+    const texts = fragments.map(fragment => fragment.parts.map(part => part.text).join(''));
+    const restartedAt = restartIndex(texts);
     // Keep literal boundaries; the output parser decides whether this is usable.
-    answer.parts = [{ type: 'text', text: fragments.flatMap(fragment => fragment.parts.map(part => part.text)).join('') }];
-    answer.continuation = { count: continuation.recovered.size, fragments };
+    answer.parts = [{ type: 'text', text: texts.slice(restartedAt).join('') }];
+    answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
   aborted(signal);
   return answer;

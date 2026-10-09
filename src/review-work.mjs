@@ -3,7 +3,7 @@
  * sharded verification and a deterministic final version recheck.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt } from './output.mjs';
+import { evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, syntaxProblem } from './output.mjs';
 
 const ID_SPAN = 1000;
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -98,7 +98,7 @@ export async function runReview(ctx, run, request) {
       const result = await runStage(run, task.role, payload, {
         evaluate(answer) {
           const { result, issues } = evaluateInitial(answer, { prefix, assigned: task.files, inventory: snapshot.files, filesComplete: snapshot.filesComplete });
-          return { result, issues, repairPrompt: issues.length ? initialRepairPrompt(issues) : undefined };
+          return { result, issues, repairPrompt: issues.length ? initialRepairPrompt(issues, { parseOnly: !result.structured && syntaxProblem(issues) }) : undefined };
         },
       }, { label: task.count > 1 || task.part ? `shard ${task.index + 1}/${task.count}${task.part ?? ''}` : '' });
       return [{ task, result }];
@@ -161,7 +161,7 @@ export async function runReview(ctx, run, request) {
         evaluate(answer, previous) {
           const { result, issues, repairIds } = evaluateFinal(answer, { originals: task.assigned, allIds, previous, supplement: Boolean(previous?.structured) });
           if (!issues.length) return { result, issues };
-          return { result, issues, repairPrompt: finalRepairPrompt(issues, repairIds, { full: !result.structured, includeNewFindings: issues.some(issue => issue.startsWith('newFindings')) }) };
+          return { result, issues, repairPrompt: finalRepairPrompt(issues, repairIds, { parseOnly: !result.structured && syntaxProblem(issues), full: !result.structured, includeNewFindings: issues.some(issue => issue.startsWith('newFindings')) }) };
         },
       }, { label: task.count > 1 ? `shard ${task.index + 1}/${task.count}` : '' });
       return { task, result };

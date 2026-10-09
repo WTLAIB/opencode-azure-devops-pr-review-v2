@@ -2,7 +2,7 @@
 import { confirmedFindings, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads } from './azure.mjs';
-import { parseModelJSON } from './output.mjs';
+import { parseModelJSON, syntaxProblem } from './output.mjs';
 
 const text = value => typeof value === 'string' && value.trim().length > 0;
 // A short finding can still need substantial source inspection. Bound each
@@ -13,21 +13,75 @@ const canonical = value => Array.isArray(value) ? value.map(canonical)
 const evidenceKeys = review => [...new Set((review.commentEvidence ?? []).map(item =>
   JSON.stringify([item.tool, canonical(item.input), item.result?.sha256])))].sort();
 
-async function planningInput(review, store, findings, report, work, continuation, prepared) {
-  const packedFindings = await Promise.all(findings.map(async finding => Object.fromEntries(await Promise.all(
-    Object.entries(finding).map(async ([key, value]) => [key, await store.pack(value, 3000)])))));
+const MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
+const INLINE_BUDGET = 40000;
+
+/** Live (not deleted) discussions in a compact, model-readable form. */
+export function discussionDigest(threads) {
+  const live = [];
+  for (const thread of threads ?? []) {
+    if (thread?.isDeleted === true) continue;
+    const comments = (Array.isArray(thread?.comments) ? thread.comments : [])
+      .filter(comment => comment?.isDeleted !== true && typeof comment?.content === 'string' && comment.content.trim());
+    if (!comments.length) continue;
+    const context = thread.threadContext ?? {};
+    const first = comments[0];
+    live.push({
+      threadId: thread.id, status: thread.status ?? null,
+      ...(context.filePath ? { path: context.filePath, line: context.rightFileStart?.line ?? context.leftFileStart?.line ?? null } : {}),
+      author: first.author?.displayName ?? first.author?.uniqueName ?? null,
+      comments: comments.length,
+      azpr: comments.some(comment => comment.content.match(MARKER)),
+      excerpt: first.content.replace(MARKER, '').replace(/\s+/g, ' ').trim().slice(0, 300),
+    });
+  }
+  return live;
+}
+
+/** "head:/src/a.ts:12-14" -> { path, start, end }; null when no path. */
+export function parseLocation(location) {
+  const match = /^(?:head|base)?:?(\/[^:]+?)(?::(\d+)(?:-(\d+))?)?\s*$/.exec(String(location ?? '').trim());
+  if (!match) return null;
+  const start = match[2] ? Number(match[2]) : null;
+  return { path: match[1], start, end: match[3] ? Number(match[3]) : start };
+}
+
+/** Numbered source lines: the whole file when small, else a window around the lines. */
+export function sourceWindow(text, { start = null, end = null, context = 25, wholeFileLines = 400 } = {}) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  let first = 1, last = lines.length;
+  if (lines.length > wholeFileLines) {
+    if (start) { first = Math.max(1, start - context); last = Math.min(lines.length, (end ?? start) + context); }
+    else last = wholeFileLines;
+  }
+  return { firstLine: first, lastLine: last, totalLines: lines.length,
+    text: lines.slice(first - 1, last).map((line, index) => `${first + index} | ${line}`).join('\n') };
+}
+
+async function planningInput(review, store, findings, report, work, continuation, prepared, extras) {
   const { files, changes, description, ...snapshot } = review.snapshot;
+  const sources = extras.sourceExcerpts ?? [];
+  const covered = new Set(sources.flatMap(item => item.findingIds));
+  const needsEvidence = findings.some(finding => !covered.has(finding.id));
   return {
     reviewId: review.id,
     snapshot: { ...snapshot, files: await store.pack(files), description: await store.pack(description ?? '', 3000) },
-    outputLanguage: review.outputLanguage, findings: packedFindings,
-    report: await store.pack(report),
-    reportReference: await store.put(review.final.report ?? ''),
+    outputLanguage: review.outputLanguage,
+    findings,
+    // Runtime-read HEAD source around each finding; anchors can come straight from here.
+    sourceExcerpts: await store.pack(sources, INLINE_BUDGET),
+    // Every live thread on the PR, read by the runtime when planning started.
+    existingDiscussions: extras.discussions === null ? undefined : await store.pack(extras.discussions, INLINE_BUDGET / 2),
+    discussionsRead: extras.discussions !== null,
+    report: await store.pack(report, 16000),
+    ...(extras.reportSegments > 1 ? { reportReference: await store.put(review.final.report ?? '') } : {}),
     dispositions: await store.pack(compactDispositions(review.final.dispositions)),
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
-    evidenceIndex: await observationIndex(store, review.toolText ?? []),
-    priorPlanning: prepared.length ? await store.put(prepared.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') : undefined,
-    workEvidence: review.commentEvidence?.length ? await store.put(review.commentEvidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') : undefined,
+    ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
+    ...(prepared.length ? { priorPages: prepared.map(page => ({ comments: page.comments.map(c => ({ findingId: c.findingId, path: c.path, startLine: c.startLine })),
+      skipped: page.skipped.map(item => item.findingId), wroteSummary: Boolean(page.summary) })) } : {}),
+    ...(continuation && review.commentEvidence?.length ? { workEvidence: await store.put(review.commentEvidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
     commentWork: work,
   };
@@ -39,12 +93,33 @@ async function planningInput(review, store, findings, report, work, continuation
  * the whole command.
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
-export async function prepareComments(review, store, invoke, { progress } = {}) {
+export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null } = {}) {
   const all = confirmedFindings(review);
   const groups = itemPages(all, PAGE_CHARACTERS, PLANNING_FINDINGS_PER_PAGE);
   const reports = textPages(review.final.report ?? '');
   const count = Math.max(groups.length, reports.length, 1);
   const pages = [], prepared = [], signatures = new Set();
+  const sourceText = new Map();
+  const source = path => {
+    if (!fetchSource) return Promise.resolve(null);
+    if (!sourceText.has(path)) sourceText.set(path, Promise.resolve().then(() => fetchSource(path)).then(text => typeof text === 'string' ? text : null, () => null));
+    return sourceText.get(path);
+  };
+  async function excerpts(findings) {
+    const windows = new Map();
+    for (const finding of findings) {
+      const location = parseLocation(finding.location);
+      if (!location) continue;
+      const text = await source(location.path);
+      if (text === null) continue;
+      const window = sourceWindow(text, location);
+      const key = `${location.path}:${window.firstLine}-${window.lastLine}`;
+      const entry = windows.get(key) ?? { path: location.path, version: review.snapshot.head, findingIds: [], ...window };
+      entry.findingIds.push(finding.id);
+      windows.set(key, entry);
+    }
+    return [...windows.values()];
+  }
   let summaryWritten = false;
   for (let index = 0; index < count; index++) {
     let pending = groups[index] ?? [], continuation;
@@ -52,19 +127,26 @@ export async function prepareComments(review, store, invoke, { progress } = {}) 
     progress?.(`Planning comments, page ${index + 1}/${count}`);
     do {
       const assigned = pending;
+      const sourceExcerpts = await excerpts(assigned);
       const payload = await planningInput(review, store, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary: !summaryWritten,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, prepared);
+        continuation, pages, { sourceExcerpts, discussions, reportSegments: reports.length });
       const scoped = async answer => {
         const parsed = parseModelJSON(answer, { keys: ['status', 'comments', 'skipped'] });
         const comments = Array.isArray(parsed.value?.comments) ? parsed.value.comments : [];
-        return { ...review, toolText: await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head) };
+        // Source the runtime fetched counts as observed HEAD text for anchor checks.
+        const fetched = [];
+        for (const [path, pending] of sourceText) {
+          const text = await pending;
+          if (text !== null) fetched.push({ tool: 'azpr-runtime', input: { path, version: review.snapshot.head }, output: text });
+        }
+        return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head)] };
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
           const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned });
-          return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues) : undefined };
+          return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
           const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true });

@@ -17,7 +17,7 @@ import { COMMANDS, ROLES, PROMPTS, RUNTIME_AGENT, roleFor, privateAgent, comment
 import { parseUniqueJSON, parseReviewRequest, numberToolText, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
-import { prepareComments, publishPlan } from './comment-work.mjs';
+import { prepareComments, publishPlan, discussionDigest } from './comment-work.mjs';
 import { publicationItems } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { AZURE_TOOLS, createAzureClient, selectAzureServer, targetKey } from './azure.mjs';
@@ -88,7 +88,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const state = { raw, settings, agents, fingerprints: {}, registrationPermissions: {}, agentsPinned: false };
   const queue = createToolQueue({ concurrency: settings.mcp.concurrency, timeoutMs: options.mcpTimeoutMs ?? settings.mcp.callTimeoutSeconds * 1000 });
   const retryDelayMs = options.retryDelayMs ?? 1000;
-  const azure = createAzureClient({ server: () => selectAzureServer([...mcpTools.values()], settings.mcp.server), queue, agent: RUNTIME_AGENT });
+  const azure = createAzureClient({ server: () => selectAzureServer([...mcpTools.values()], settings.mcp.server), queue, agent: RUNTIME_AGENT,
+    retryDelayMs, onCall: (run, record) => { void run.debug?.append?.('azure-calls.jsonl', JSON.stringify({ at: new Date().toISOString(), ...record })); } });
   // An unwritable state directory must not disable the plugin: fall back to a
   // per-user directory under the system temporary directory.
   let storeFallback;
@@ -372,7 +373,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         const answer = await ask(run, g, made.id, prompt, spec);
         answerText = visibleText(answer);
         if (settings.debug.enabled) await run.debug.write(`${stem}.response${turn ? `-repair${turn}` : ''}.json`, diagnosticResponse(answer));
-        if (answer.continuation) record.hostContinuations = (record.hostContinuations ?? 0) + answer.continuation.count;
+        if (answer.continuation) {
+          record.hostContinuations = (record.hostContinuations ?? 0) + answer.continuation.count;
+          if (answer.continuation.restartedAt) record.continuationRestarts = (record.continuationRestarts ?? 0) + 1;
+        }
         evaluation = await handler.evaluate(answerText, evaluation?.result);
         if (!evaluation.issues?.length || !evaluation.repairPrompt || turn >= settings.workflow.repairAttempts) break;
         repairs.push({ issues: evaluation.issues.slice(0, 25) });
@@ -451,7 +455,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (report) await run.debug.write(run.draft ? 'draft.md' : 'report.md', report);
     await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none',
       error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(),
-      readiness: run.readiness, azureCalls: run.azureCalls ?? 0, stages: run.stages, warnings: run.debug.warnings });
+      readiness: run.readiness, azureCalls: run.azureCalls ?? 0, azureRetries: run.azureRetries ?? 0, stages: run.stages, warnings: run.debug.warnings });
   }
 
   /** One owner for locks, deadlines, cancellation, presentation and cleanup. */
@@ -588,8 +592,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         review.commentEvidence = []; // Evidence belongs to the plan being made.
         review.attribution = commentAttribution(review.provenance, review.outputLanguage, settings.models[review.profile].risk);
         const data = await dataFor(run);
+        // Read live discussions once for the planner's duplicate checks; the
+        // planner can still read threads itself if this read fails.
+        let discussions = null;
+        try { discussions = discussionDigest(await azure.threads(run, review.snapshot)); }
+        catch (error) {
+          if (!run.active) throw error;
+          run.debug.warnings.push(`Existing discussions could not be read before planning: ${errorText(error)}`);
+        }
         review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler),
-          { progress: message => progress(run, message) });
+          { progress: message => progress(run, message), discussions,
+            fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
         planning = false;
         await persistReview(review);
@@ -673,7 +686,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (!g.admitted) throw new Error('[AZPR] Missing authorized reviewer input.');
       // Hide tools this role may never run, so the model does not waste turns on them.
       if (event.tools && typeof event.tools === 'object') for (const name of hiddenTools(g.role, settings.shell)) delete event.tools[name];
-      if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 8)) {
+      if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
         event.system?.push?.({ type: 'text', text: 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
       }

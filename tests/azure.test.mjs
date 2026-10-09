@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AZURE_TOOLS, buildSnapshot, changeTypes, createAzureClient, decodeToolResult, markersInThreads, parsePullRequestUrl,
-  prStatus, selectAzureServer, targetKey,
+  prStatus, selectAzureServer, targetKey, transientAzureError, toolText,
 } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
 import { fakeAzure } from './fake-azure.mjs';
@@ -82,7 +82,9 @@ function client(azure, options = {}) {
   const tools = new Map(azure.definitions().map(tool => [tool.name, { ...tool, namespace: 'ado' }]));
   const queue = createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 1000 });
   const run = { id: 'run1', runtimeSessionID: 'ses_runtime', controller: new AbortController() };
-  return { run, api: createAzureClient({ server: () => ({ namespace: 'ado', tools }), queue, agent: 'azpr-runtime' }) };
+  const records = [];
+  return { run, records, api: createAzureClient({ server: () => ({ namespace: 'ado', tools }), queue, agent: 'azpr-runtime', retryDelayMs: 1,
+    onCall: (_run, record) => records.push(record) }) };
 }
 
 test('client reads the snapshot, pages threads to the end and creates exact threads', async () => {
@@ -95,7 +97,10 @@ test('client reads the snapshot, pages threads to the end and creates exact thre
   for (let i = 0; i < 205; i++) azure.state.threads.push({ id: i + 1, comments: [{ content: `c${i}` }] });
   const threads = await api.threads(run, snapshot);
   assert.equal(threads.length, 205);
-  assert.deepEqual(azure.state.calls.filter(c => c.name === 'repo_pull_request_thread').map(c => c.args.skip), [0, 100, 200]);
+  assert.deepEqual(azure.state.calls.filter(c => c.name === 'repo_pull_request_thread').map(c => [c.args.skip, c.args.top]), [[0, 1000]], 'One call fetches every thread.');
+  for (let i = 205; i < 1500; i++) azure.state.threads.push({ id: i + 1, comments: [{ content: `c${i}` }] });
+  assert.equal((await api.threads(run, snapshot)).length, 1500);
+  assert.deepEqual(azure.state.calls.filter(c => c.name === 'repo_pull_request_thread').slice(1).map(c => c.args.skip), [0, 1000], 'A full page continues.');
   const created = await api.createThread(run, snapshot, { kind: 'inline', path: '/src/Main.java', startLine: 2, endLine: 2, startOffset: 1, endOffset: 4, content: 'Exact text' });
   assert.deepEqual(created, { threadId: 1000, contentMatches: true });
   const write = azure.state.calls.at(-1);
@@ -114,9 +119,45 @@ test('client errors name the tool; timeouts are uncertain; missing thread IDs ar
   azure.state.fail.repo_pull_request = 'TF401180: The requested pull request was not found.';
   await assert.rejects(api.snapshot(run, parsePullRequestUrl(azure.prUrl())), error => /repo_pull_request failed: TF401180/.test(error.message) && error.uncertain === false);
   azure.state.fail.repo_pull_request = () => new Promise(() => {});
-  await assert.rejects(api.snapshot(run, parsePullRequestUrl(azure.prUrl())), error => /did not finish within/.test(error.message) && error.uncertain === true);
+  await assert.rejects(api.snapshot(run, parsePullRequestUrl(azure.prUrl())), error => /failed after 3 attempts: .*did not finish within/.test(error.message) && error.uncertain === true);
   azure.state.fail.repo_pull_request_thread_write = () => ({ output: { comments: [] } });
   await assert.rejects(api.createThread(run, { repositoryId: 'rid', projectId: 'pid', prId: 123 }, { kind: 'summary', content: 'x' }), error => error.uncertain === true);
   azure.state.fail.repo_pull_request_thread = () => ({ output: 'not a list' });
   await assert.rejects(api.threads(run, { repositoryId: 'rid', projectId: 'pid', prId: 123 }), /unexpected response/);
+});
+
+test('transient read failures are retried; deterministic failures and writes are not', async () => {
+  assert.equal(transientAzureError(new Error('Error with pull request thread operation: ')), true, 'An empty detail is a network-level failure.');
+  assert.equal(transientAzureError(Object.assign(new Error('slow'), { timeout: true })), true);
+  assert.equal(transientAzureError(new Error('read ECONNRESET')), true);
+  for (const message of ['TF401180: The requested pull request was not found.', 'Request failed (403) Forbidden', 'repositoryId is required for get', 'No items found at path: /']) {
+    assert.equal(transientAzureError(new Error(message)), false, message);
+  }
+  const azure = fakeAzure();
+  const { run, api, records } = client(azure);
+  const snapshot = { repositoryId: 'rid', projectId: 'pid', prId: 123 };
+  let failures = 2;
+  azure.state.fail.repo_pull_request_thread = () => { if (failures-- > 0) throw Object.assign(new Error('Error with pull request thread operation: '), { _tag: 'Tool.Error' }); };
+  assert.deepEqual(await api.threads(run, snapshot), []);
+  assert.equal(run.azureRetries, 2);
+  assert.deepEqual(records.map(r => [r.tool, r.attempt, r.ok, r.willRetry ?? null]),
+    [['repo_pull_request_thread', 1, false, true], ['repo_pull_request_thread', 2, false, true], ['repo_pull_request_thread', 3, true, null]]);
+  assert.deepEqual(records[2].args, { action: 'list', pullRequestId: 123, top: 1000, skip: 0 });
+  azure.state.fail.repo_pull_request_thread = 'TF401027: You need the Git permission.';
+  const before = azure.state.calls.length;
+  await assert.rejects(api.threads(run, snapshot), /TF401027/);
+  assert.equal(azure.state.calls.length, before + 1, 'Permission errors are not retried.');
+  let writes = 0;
+  azure.state.fail.repo_pull_request_thread_write = () => { writes++; throw new Error('Error with pull request thread write operation: '); };
+  await assert.rejects(api.createThread(run, snapshot, { kind: 'summary', content: 'x' }));
+  assert.equal(writes, 1, 'Writes are never retried.');
+  assert.equal(records.at(-1).args.contentCharacters, 1, 'Logs never contain comment bodies.');
+});
+
+test('file content keeps the literal text even when it looks like JSON', async () => {
+  const azure = fakeAzure({ sources: { '/package.json': '{\n  "name": "x"\n}\n' } });
+  const { run, api } = client(azure);
+  azure.state.fail.repo_file = args => ({ output: JSON.parse(azure.state.sources[args.path]), content: [{ type: 'text', text: azure.state.sources[args.path] }] });
+  assert.equal(await api.fileContent(run, { repositoryId: 'rid', projectId: 'pid', prId: 123 }, '/package.json', 'b'.repeat(40)), '{\n  "name": "x"\n}\n');
+  assert.equal(toolText({ output: { a: 1 } }), '{"a":1}');
 });

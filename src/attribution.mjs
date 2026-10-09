@@ -156,6 +156,8 @@ function renderStageReceipt(stage) {
   const counters = [
     ['attempt', stage.attempt > 1 ? stage.attempt : 0],
     ['repair-turns', stage.repairs?.length],
+    ['stream-continuations', stage.hostContinuations],
+    ['continuation-restarts', stage.continuationRestarts],
     ['blocked-native-tools', stage.blockedNativeToolCalls],
     ['observed-tool-errors', stage.toolFailures],
     ['tool-timeouts', stage.toolTimeouts],

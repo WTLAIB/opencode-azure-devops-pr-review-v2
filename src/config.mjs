@@ -129,8 +129,11 @@ Use the connected Azure DevOps MCP tools directly with the IDs from the input
 snapshot: repositoryId, projectId and the exact commit SHAs. File content comes
 from repo_file get_content with version=<sha> and versionType=Commit; pull
 request data and discussions come from repo_pull_request and
-repo_pull_request_thread. Batch independent reads and reuse what you already
-read. Calls are queued and time-limited by the runtime.
+repo_pull_request_thread. repo_file list_directory does not accept commit SHAs
+(it treats the version as a branch name), so do not use it for commit-exact
+reads; use the changed-file list and get_content instead. Batch independent
+reads and reuse what you already read. Calls are queued and time-limited by the
+runtime.
 
 A failed read is not evidence. Do not repeat an identical request after an
 authentication, permission, parameter or not-found error; retry a timeout or

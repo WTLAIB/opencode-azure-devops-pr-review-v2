@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createReviewSession, createRuntimeSession, requestReview as sendReview, interruptSession, appendReport, classifyFailure } from '../src/session.mjs';
+import { createReviewSession, createRuntimeSession, requestReview as sendReview, interruptSession, appendReport, classifyFailure, restartIndex } from '../src/session.mjs';
 
 const sessionID = 'ses_review';
 const input = 'https://example.test/pr/2 literal $ARGUMENTS `pwd` @private.txt';
@@ -334,4 +334,17 @@ test('runtime sessions are model-less children bound to the runtime agent', asyn
   assert.deepEqual(calls[0].args[0], { parentID: 'ses_origin', title: 'runtime', agent: 'azpr-runtime' });
   const wrong = host({ create: async value => ({ id: 'ses_runtime', ...value, agent: 'build' }) });
   await assert.rejects(createRuntimeSession(wrong.context, { origin: 'ses_origin', title: 'runtime', agent: 'azpr-runtime' }), /runtime session/);
+});
+
+test('a model that restarts its answer after a stream interruption keeps only the restarted text', async () => {
+  const turn = continuationTurn();
+  turn[0].error = { type: 'provider.transport', message: 'socket closed' };
+  turn[0].content = [{ type: 'text', text: '{"status":"COMPLETE","report":"first attempt cut off mid-sen' }];
+  turn[2].content = [{ type: 'text', text: '{"status":"COMPLETE","report":"complete second attempt"}' }];
+  const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE","report":"complete second attempt"}' }]);
+  assert.equal(answer.continuation.restartedAt, 1);
+  assert.equal(restartIndex(['{"status":"COM', 'PLETE"}']), 0, 'A real continuation is joined.');
+  assert.equal(restartIndex(['{"a"', '{"a" again']), 0, 'Very short openings are not compared.');
 });

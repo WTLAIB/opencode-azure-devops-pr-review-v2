@@ -114,6 +114,7 @@ test('prompts: one JSON transport, shared tool policy, shell guidance and langua
     assert.match(agent.system, /one valid JSON object/);
     assert.match(agent.system, /Never use CodeMode execute/);
     assert.match(agent.system, /the runtime alone posts comments/);
+    assert.match(agent.system, /list_directory does not accept commit SHAs/);
     assert.match(agent.system, /Shell is unavailable in this session/);
     assert.match(agent.system, /outputLanguage: zh-TW/);
     assert.doesNotMatch(agent.system, /currentHead|currentBase|StructuredOutput/);

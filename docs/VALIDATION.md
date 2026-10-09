@@ -13,7 +13,7 @@ Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 214 tests across settings, host helpers,
+`npm run check` and `npm test` pass: 225 tests across settings, host helpers,
 session transport, the MCP queue, the Azure client and snapshot, output
 acceptance and correction prompts, comment validation and markers, planning and
 publication, review sharding, persistence, rendering, installation and the
@@ -47,12 +47,24 @@ MCP with persistent thread state. Both passed:
 | Publication | 21 threads (20 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
 | Largest provider request | 25,993 characters |
 
+## Live runs (Azure DevOps, real model)
+
+PR kevin888y/OpenCode #2 (one changed file), `openai/gpt-5.6-luna` for all three
+roles, `zh-TW`, through the user's OpenCode service with the installed package.
+
+| Run | `/pr-check` | `/pr-review` | `/pr-comment --publish` | Second publish |
+| --- | --- | --- | --- | --- |
+| 1 (commit 5f23776) | NOT_READY: MCP thread read failed with an empty error | COMPLETE, 186 s; a provider transport error interrupted the verifier, which restarted its answer and needed one correction turn | POSTED 4 items, 125 s; planning took 17 model requests | INCOMPLETE: thread read failed before any write; no duplicates |
+| 2 (fixes for run 1) | READY, 5 s | COMPLETE, 75 s | POSTED 4 items, 25 s; planning took 1 request and no tools | POSTED, all 4 ALREADY_PRESENT |
+
+Both runs confirmed the same three seeded defects; inline comments landed on the
+expected HEAD lines (24, 29, 37) and were read back independently through the
+REST API. Run 2 used about 80,000 input tokens against 241,000 in run 1.
+
 ## Not yet validated
 
-- No live Azure DevOps organization or real model was used for this revision.
-  The fake MCP mirrors the 2.9.0 tool shapes (`repo_pull_request` with
-  `changedFilesSummary`, trimmed thread lists, `create` results) as read from the
-  package source; real responses, permissions and pagination still need a run.
+- Large PRs on real Azure DevOps: PR #3 (316 files) is untested. Through MCP
+  2.9.0 the runtime would see only the first 100 changed files.
 - Real-model behavior of correction turns, shard sizes and verifier sharding is
   unmeasured; defaults may need tuning from live evidence.
 - Rendered comments and anchors in the Azure DevOps UI were not inspected.

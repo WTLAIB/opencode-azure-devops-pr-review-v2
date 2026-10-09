@@ -82,7 +82,14 @@ and cancellations are not retried.
 
 Host stream continuations are accepted for any provider: an errored text-only
 assistant message that the host marked for retry, followed by the host's
-continuation notice and a successful final text, is joined literally.
+continuation notice and a successful final text, is joined literally. When the
+model starts its answer over instead of continuing (a later fragment opens like
+the first), only the restarted text is used.
+
+Before asking for a correction, a narrow local repair escapes unescaped double
+quotes inside closed single-line `code` spans. Corrections for syntax errors ask
+for the same content unchanged; answers without JSON are asked for the full
+object.
 
 ### Comments
 
@@ -93,6 +100,11 @@ HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
 skipped with a reason. The assembled plan stores exact content, offsets and
 markers.
+
+The runtime gives each page what it normally needs: the HEAD source around
+each finding (the whole file when small) and a digest of every live thread, both
+read deterministically; findings and earlier pages are inline. A page usually
+finishes in one model request without tools.
 
 Publication (runtime) rechecks that the PR is active and the head unchanged,
 lists every thread, skips items whose marker exists, creates the rest, records
@@ -119,6 +131,13 @@ and a pending prompt (text + nonce). Hooks enforce it:
 - `tool.execute.before`: refuses hidden native tools and delegation.
 - `tool.execute.after`: numbers plain source text, saves observed review source
   for anchor checks and pages large comment-tool results into private files.
+
+Runtime Azure reads (PR, threads, file content) retry transient failures twice
+with backoff — the MCP server reports network errors with an empty message —
+while authentication, permission, validation and not-found errors and every
+write fail at once. Threads are read in one call (`top: 1000`). With debug
+enabled each runtime call is logged to `azure-calls.jsonl` (tool, argument
+summary, attempt, duration, outcome; never comment bodies).
 
 The plugin wraps every namespaced tool executor so private model calls share the
 MCP queue (concurrency and per-call timeout) with runtime calls; ordinary

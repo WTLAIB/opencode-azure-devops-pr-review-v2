@@ -416,3 +416,24 @@ test('an incomplete review keeps an unconfirmed draft and leaves no completed re
   assert.match(receipt, /Verification did not produce a structured result/);
   await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: '' } }), /No completed review/);
 });
+
+test('planning gets runtime-read discussions and source; transient thread reads are retried and logged', async t => {
+  const f = await fixture(t);
+  await f.command();
+  f.azure.state.threads.push({ id: 7, status: 1, comments: [{ content: 'Human note on the guard', author: { displayName: 'Ann' } }], threadContext: { filePath: '/src/Main.java', rightFileStart: { line: 1 } } });
+  let failures = 1;
+  const original = f.azure.state.fail.repo_pull_request_thread;
+  f.azure.state.fail.repo_pull_request_thread = () => { if (failures-- > 0) throw Object.assign(new Error('Error with pull request thread operation: '), { _tag: 'Tool.Error' }); return original; };
+  const receipt = await f.command('pr-comment', '--publish');
+  assert.match(receipt, /\] POSTED/);
+  const planner = f.sessionsFor('azpr-review-comment-plan')[0];
+  assert.equal(planner.packet.discussionsRead, true);
+  assert.deepEqual(planner.packet.existingDiscussions.map(d => [d.threadId, d.author]), [[7, 'Ann']]);
+  assert.match(planner.packet.sourceExcerpts[0].text, /^1 \| fixture code/);
+  assert.equal(planner.packet.evidenceIndex, undefined);
+  const debug = /Private debug directory: ([^\n]+)/.exec(receipt)?.[1];
+  const calls = (await readFile(join(debug, 'azure-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(calls.some(call => call.tool === 'repo_pull_request_thread' && !call.ok && call.willRetry), 'The transient failure is logged and retried.');
+  assert.ok(calls.every(call => call.args.contentCharacters === undefined || !('content' in call.args)));
+  assert.equal(JSON.parse(await readFile(join(debug, 'result.json'), 'utf8')).azureRetries, 1);
+});

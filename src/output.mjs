@@ -90,37 +90,82 @@ function embeddedObjects(content) {
   return objects;
 }
 
+/**
+ * Narrow local repair for one frequent model slip: unescaped double quotes
+ * inside a closed, single-line `inline code` span within a JSON string, as in
+ * "evidence": "HEAD reads `cfg["x"]`". Spans that look like a JSON member
+ * boundary are left alone. Returns null when nothing applies; the caller still parses and
+ * validates the complete result.
+ */
+export function escapeCodeSpanQuotes(text) {
+  let out = '', inString = false, count = 0;
+  for (let i = 0; i < text.length;) {
+    const char = text[i];
+    if (!inString) { if (char === '"') inString = true; out += char; i++; continue; }
+    if (char === '\\') { out += char + (text[i + 1] ?? ''); i += 2; continue; }
+    if (char === '"') { inString = false; out += char; i++; continue; }
+    if (char === '`') {
+      const delimiter = /^`+/.exec(text.slice(i))[0];
+      const close = text.indexOf(delimiter, i + delimiter.length);
+      const span = close < 0 ? '' : text.slice(i + delimiter.length, close);
+      const bare = [...span.matchAll(/\\.|"/g)].filter(([token]) => token === '"').length;
+      // `", "` or `": "` inside a span is a JSON member boundary, not code.
+      if (close >= 0 && bare && bare % 2 === 0 && !/[\r\n]/.test(span) && !/"\s*[,:]\s*"/.test(span)) {
+        out += delimiter + span.replace(/\\.|"/g, token => token === '"' ? '\\"' : token) + delimiter;
+        count += bare;
+        i = close + delimiter.length;
+        continue;
+      }
+      out += delimiter;
+      i += delimiter.length;
+      continue;
+    }
+    out += char; i++;
+  }
+  return count ? { text: out, count } : null;
+}
+
 function tryParse(candidate) {
-  try {
-    const value = JSON.parse(candidate);
-    rejectDuplicateJSONKeys(candidate, 'the JSON object repeats a key');
-    return { value };
-  } catch (error) { return { error }; }
+  const parse = text => {
+    const value = JSON.parse(text);
+    rejectDuplicateJSONKeys(text, 'the JSON object repeats a key');
+    return value;
+  };
+  try { return { value: parse(candidate) }; }
+  catch (error) {
+    const repaired = escapeCodeSpanQuotes(candidate);
+    if (repaired) {
+      try { return { value: parse(repaired.text), corrections: [{ action: 'escape-quotes-in-code-span', count: repaired.count }] }; }
+      catch { /* Report the original problem. */ }
+    }
+    return { error };
+  }
 }
 
 /**
  * Extract exactly one JSON object from a model answer.
  * @param {string} raw
  * @param {{keys?: string[]}} options canonical keys that identify the expected object
- * @returns {{value?: object, surroundingText?: string, problem?: string}}
+ * @returns {{value?: object, surroundingText?: string, corrections?: object[], problem?: string}}
  */
 export function parseModelJSON(raw, { keys = [] } = {}) {
   const content = String(raw ?? '').trim();
   if (!content) return { problem: 'the answer was empty' };
   const relevant = value => isObject(value) && (!keys.length || Object.keys(value).some(key => keys.includes(canonicalKey(key))));
   const whole = tryParse(content);
-  if (whole.value !== undefined) return relevant(whole.value) ? { value: whole.value } : { problem: 'the answer is JSON but not the expected object' };
+  const accept = (selected, extra = {}) => ({ value: selected.value, ...(selected.corrections ? { corrections: selected.corrections } : {}), ...extra });
+  if (whole.value !== undefined) return relevant(whole.value) ? accept(whole) : { problem: 'the answer is JSON but not the expected object' };
   const blocks = fencedBlocks(content);
   const fenced = blocks.filter(block => block.json).map(block => ({ ...block, ...tryParse(block.text) }));
   const usable = fenced.filter(block => relevant(block.value));
   const surrounding = (selected) => (content.slice(0, selected.start) + content.slice(selected.end)).trim();
-  if (usable.length === 1) return { value: usable[0].value, surroundingText: surrounding(usable[0]) };
+  if (usable.length === 1) return accept(usable[0], { surroundingText: surrounding(usable[0]) });
   if (usable.length > 1) return { problem: `the answer contains ${usable.length} JSON objects; return exactly one` };
   let outside = '', end = 0;
   for (const block of blocks) { outside += content.slice(end, block.start) + ' '.repeat(block.end - block.start); end = block.end; }
   outside += content.slice(end);
   const embedded = embeddedObjects(outside).map(object => ({ ...object, ...tryParse(object.text) })).filter(object => relevant(object.value));
-  if (embedded.length === 1) return { value: embedded[0].value, surroundingText: surrounding(embedded[0]) };
+  if (embedded.length === 1) return accept(embedded[0], { surroundingText: surrounding(embedded[0]) });
   if (embedded.length > 1) return { problem: `the answer contains ${embedded.length} JSON objects; return exactly one` };
   const failure = fenced.length === 1 ? fenced[0].error : content.includes('{') ? whole.error : null;
   return { problem: failure ? `the JSON could not be parsed (${String(failure.message).slice(0, 200)})` : 'no JSON object was found' };
@@ -208,6 +253,7 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
         additionalFiles: [], findings: [], report, warnings: ['The initial answer was not structured; its text is passed to verification as-is.'] },
     };
   }
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
   const source = aliasFields(parsed.value, ['status', 'coverage', 'additionalFiles', 'findings', 'report'], warnings);
   const issues = [];
   const coverage = aliasFields(source.coverage, ['files', 'gaps'], warnings);
@@ -239,7 +285,8 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
   return {
     issues,
     result: { status, structured: true, coverage: { files: covered, gaps }, additionalFiles, findings, report,
-      warnings: [...warnings], ...(parsed.surroundingText ? { surroundingText: parsed.surroundingText } : {}) },
+      warnings: [...warnings], ...(parsed.corrections ? { corrections: parsed.corrections } : {}),
+      ...(parsed.surroundingText ? { surroundingText: parsed.surroundingText } : {}) },
   };
 }
 
@@ -268,8 +315,11 @@ function normalizeDecisionRows(value, warnings) {
  * @param {{originals: object[], allIds?: string[], previous?: object, supplement?: boolean}} options
  */
 export function evaluateFinal(answerText, { originals, allIds = originals.map(f => f.id), previous, supplement = false }) {
-  const warnings = new Set(previous?.warnings ?? []);
+  // A supplement merges into the previous result and keeps its normalization
+  // notes; a full resend starts clean so a failed first answer leaves no trace.
+  const warnings = new Set(supplement && previous?.structured ? previous.baseWarnings ?? [] : []);
   const parsed = parseModelJSON(answerText, { keys: ['status', 'confirmed', 'merged', 'rejected', 'needsinfo', 'newfindings', 'dispositions', 'report'] });
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
   const assignedIds = originals.map(f => f.id);
   if (!parsed.value) {
     if (previous?.structured) {
@@ -318,13 +368,16 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
   });
   const report = supplement && !text(asText(source.report)) ? previous?.report ?? '' : asText(source.report).trim();
   const modelStatus = supplement ? previous?.modelStatus ?? 'UNSPECIFIED' : canonicalEnum(source.status) || 'UNSPECIFIED';
-  const state = { structured: true, modelStatus, decisions: byId, newFindings, report, warnings };
+  const state = { structured: true, modelStatus, decisions: byId, newFindings, report, warnings, corrections: parsed.corrections };
   return { issues, repairIds: [...repairIds], result: finishFinal(state, originals, invalid, [...repairIds]) };
 }
 
 /** Degrade unresolved items per finding; nothing else is discarded. */
 function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
-  const { decisions, warnings } = state;
+  const { decisions } = state;
+  // Normalization notes carry over into a merged supplement; warnings derived
+  // from the current decisions are recomputed every time.
+  const base = [...state.warnings], derived = [];
   const dispositions = [];
   const resolved = new Map();
   for (const original of originals) {
@@ -369,25 +422,35 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
     delete entry.mergedInto;
   }
   const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
-  if (unreviewed) warnings.add(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
+  if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
   const newFindings = state.newFindings.filter(row => !findingProblems(row, { requireLocation: true }).length);
-  if (newFindings.length < state.newFindings.length) warnings.add(`${state.newFindings.length - newFindings.length} new verifier finding(s) were incomplete and are listed in the report only.`);
+  if (newFindings.length < state.newFindings.length) derived.push(`${state.newFindings.length - newFindings.length} new verifier finding(s) were incomplete and are listed in the report only.`);
   return {
     status: !state.structured ? 'PARTIAL' : state.modelStatus === 'INCOMPLETE' ? 'INCOMPLETE' : 'COMPLETE',
     structured: state.structured, modelStatus: state.modelStatus, dispositions, newFindings,
     incompleteNewFindings: state.newFindings.filter(row => !newFindings.includes(row)),
-    report: state.report, warnings: [...warnings],
+    report: state.report, warnings: [...base, ...derived], baseWarnings: base,
+    ...(state.corrections ? { corrections: state.corrections } : {}),
     decisionRows: [...decisions.values()], pendingIds,
   };
 }
 
+// When only the JSON syntax was wrong, the content must come back unchanged:
+// a free-form resend tends to shorten evidence.
+const VERBATIM = 'Send the same answer again with identical content: do not shorten, summarize, reorder or reword any field. Only fix the JSON so it parses: escape every double quote inside a string as \\" (also inside `code`), write line breaks as \\n, and return exactly one JSON object.';
+/** The answer had JSON with a syntax error (as opposed to no JSON at all). */
+export const syntaxProblem = issues => issues.some(issue => /could not be parsed|repeats a key/.test(issue));
+export const parseRepairPrompt = issues => `AZPR runtime: your previous answer was not valid JSON.\n${listIssues(issues)}\n\n${VERBATIM}`;
+
 /** Repair request for an initial review: resend the whole corrected object. */
-export function initialRepairPrompt(issues) {
-  return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). Keep every finding you still stand behind; read more source only if a correction needs it.`;
+export function initialRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). Keep every finding you still stand behind and keep the existing wording of fields that need no correction; read more source only if a correction needs it.`;
 }
 
 /** Repair request for a verifier: only the decisions that are missing or invalid. */
-export function finalRepairPrompt(issues, ids, { includeNewFindings = false, full = false } = {}) {
+export function finalRepairPrompt(issues, ids, { includeNewFindings = false, full = false, parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
   if (full) return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete verification JSON object (status, confirmed, merged, rejected, needsInfo, newFindings, report) with exactly one decision for each assigned finding ID.`;
   return `AZPR runtime: some decisions need correction.\n${listIssues(issues)}\n\nReturn one JSON object {"dispositions": [...]${includeNewFindings ? ', "newFindings": [...]' : ''}} containing decisions only for: ${ids.join(', ')}. Each row has id, status (CONFIRMED, MERGED, REJECTED or NEEDS_INFO) and reason; CONFIRMED rows include "verifiedFinding" with summary, evidence, counterevidence, location, severity and suggestion; MERGED rows include "mergedInto". Earlier decisions are kept.`;
 }

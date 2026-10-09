@@ -18,8 +18,11 @@ export const AZURE_TOOLS = Object.freeze({
   file: 'repo_file',
 });
 export const MARKER_PATTERN = /<!-- azpr-comment:([a-f0-9]{32}) -->/g;
-const THREAD_PAGE = 100;
-const MAX_THREAD_PAGES = 1000;
+// MCP 2.9.0 fetches every thread from Azure on each list call and slices
+// locally, so one large page costs the same server work as a small one.
+const THREAD_PAGE = 1000;
+const MAX_THREAD_PAGES = 100;
+const READ_RETRIES = 2;
 const DESCRIPTION_LIMIT = 8000;
 
 export class AzureError extends Error {
@@ -194,6 +197,41 @@ const errorMessage = error => {
   return message.replace(/\s+/g, ' ').trim().slice(0, 600) || 'unknown MCP error';
 };
 
+const PERMANENT_ERROR = /\b(?:400|401|403|404|409)\b|TF\d{5,6}|not found|no items found|unauthori[sz]ed|forbidden|permission|access denied|does not exist|is required|unknown action|invalid|bad request/i;
+
+/**
+ * Whether a failed idempotent read is worth repeating. The official MCP server
+ * reports failures as "<operation>: <detail>"; an empty detail comes from a
+ * network-level error (for example Node's AggregateError when every address
+ * family fails), which is transient. Authentication, permission, validation
+ * and not-found errors are deterministic and never retried.
+ */
+export function transientAzureError(error) {
+  if (error?.timeout) return true;
+  const message = errorMessage(error);
+  if (/(?:operation|content for '[^']*'):\s*$/i.test(message)) return true;
+  if (PERMANENT_ERROR.test(message)) return false;
+  return true;
+}
+
+/** Arguments worth logging; never comment bodies. */
+function argumentSummary(args) {
+  const summary = {};
+  for (const key of ['action', 'pullRequestId', 'path', 'filePath', 'top', 'skip', 'includeChangedFiles', 'rightFileStartLine', 'rightFileEndLine']) {
+    if (args[key] !== undefined) summary[key] = args[key];
+  }
+  if (typeof args.version === 'string') summary.version = args.version.slice(0, 12);
+  if (typeof args.content === 'string') summary.contentCharacters = args.content.length;
+  return summary;
+}
+
+/** The literal text an MCP tool returned, before OpenCode parsed JSON-looking output. */
+export function toolText(result) {
+  const parts = (Array.isArray(result?.content) ? result.content : []).filter(part => part?.type === 'text').map(part => part.text);
+  if (parts.length) return parts.join('\n');
+  return typeof result?.output === 'string' ? result.output : JSON.stringify(result?.output ?? '');
+}
+
 /** Every existing AZPR marker on the PR, mapped to the thread that carries it. */
 export function markersInThreads(threads) {
   const found = new Map();
@@ -215,20 +253,46 @@ export function markersInThreads(threads) {
  * @param {() => {namespace:string, tools: Map<string, {execute: Function}>}} options.server
  * @param {ReturnType<import('./tool-queue.mjs').createToolQueue>} options.queue
  */
-export function createAzureClient({ server, queue, agent }) {
-  async function call(run, name, args) {
+export function createAzureClient({ server, queue, agent, retryDelayMs = 1000, onCall }) {
+  const pause = (ms, signal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve(); }, ms);
+    const stop = () => { clearTimeout(timer); reject(signal.reason ?? new Error('Cancelled.')); };
+    signal.addEventListener('abort', stop, { once: true });
+  });
+
+  /**
+   * One MCP call through the shared queue. `retry` is only for idempotent
+   * reads; writes are never repeated (publication resolves uncertainty by
+   * reading markers back instead).
+   */
+  async function call(run, name, args, { retry = false, raw = false } = {}) {
     const selected = server();
     const tool = selected.tools.get(name);
     if (!tool) throw new AzureError(`MCP tool ${name} is unavailable on server "${selected.namespace}".`, { tool: name });
     if (!run.runtimeSessionID) throw new AzureError('No runtime session is available for Azure DevOps calls.', { tool: name });
-    const execution = { sessionID: run.runtimeSessionID, agent, messageID: `azpr-${run.id}`, id: `azpr-${randomUUID()}` };
-    run.azureCalls = (run.azureCalls ?? 0) + 1;
-    try {
-      const result = await queue.run(() => tool.execute(args, execution), { signal: run.controller.signal, label: `${selected.namespace}_${name}` });
-      return decodeToolResult(result);
-    } catch (error) {
-      if (run.controller.signal.aborted) throw error;
-      throw new AzureError(`${name} failed: ${errorMessage(error)}`, { tool: name, cause: error, uncertain: Boolean(error?.timeout) });
+    for (let attempt = 1; ; attempt++) {
+      const execution = { sessionID: run.runtimeSessionID, agent, messageID: `azpr-${run.id}`, id: `azpr-${randomUUID()}` };
+      run.azureCalls = (run.azureCalls ?? 0) + 1;
+      const started = performance.now();
+      try {
+        const result = await queue.run(() => tool.execute(args, execution), { signal: run.controller.signal, label: `${selected.namespace}_${name}` });
+        const value = raw ? toolText(result) : decodeToolResult(result);
+        onCall?.(run, { tool: name, args: argumentSummary(args), attempt, ok: true, durationMs: Math.round(performance.now() - started),
+          resultCharacters: toolText(result).length });
+        return value;
+      } catch (error) {
+        if (run.controller.signal.aborted) throw error;
+        const transient = transientAzureError(error);
+        const again = retry && transient && attempt <= READ_RETRIES;
+        onCall?.(run, { tool: name, args: argumentSummary(args), attempt, ok: false, durationMs: Math.round(performance.now() - started),
+          error: errorMessage(error).slice(0, 300), transient, willRetry: again });
+        if (again) {
+          run.azureRetries = (run.azureRetries ?? 0) + 1;
+          await pause(retryDelayMs * (attempt === 1 ? 1 : 3), run.controller.signal);
+          continue;
+        }
+        throw new AzureError(`${name} failed${attempt > 1 ? ` after ${attempt} attempts` : ''}: ${errorMessage(error)}`, { tool: name, cause: error, uncertain: Boolean(error?.timeout) });
+      }
     }
   }
 
@@ -238,25 +302,26 @@ export function createAzureClient({ server, queue, agent }) {
     call,
     /** Read the PR and its changed files into a runtime-owned snapshot. */
     async snapshot(run, target) {
-      const pr = await call(run, AZURE_TOOLS.pullRequest, { action: 'get', repositoryId: target.repository, project: target.project, pullRequestId: target.pullRequestId, includeChangedFiles: true });
+      const pr = await call(run, AZURE_TOOLS.pullRequest, { action: 'get', repositoryId: target.repository, project: target.project, pullRequestId: target.pullRequestId, includeChangedFiles: true }, { retry: true });
       return buildSnapshot(pr, target);
     },
     /** Fresh identity/version read used for the final recheck and before posting. */
     async versions(run, snapshot) {
-      const pr = await call(run, AZURE_TOOLS.pullRequest, { action: 'get', ...scope(snapshot) });
+      const pr = await call(run, AZURE_TOOLS.pullRequest, { action: 'get', ...scope(snapshot) }, { retry: true });
       if (Number(pr?.pullRequestId) !== snapshot.prId) throw new AzureError('The fresh PR read returned a different PR.', { tool: AZURE_TOOLS.pullRequest });
       const head = pr.lastMergeSourceCommit?.commitId, base = pr.lastMergeTargetCommit?.commitId;
       if (!sha(head)) throw new AzureError('The fresh PR read has no source commit.', { tool: AZURE_TOOLS.pullRequest });
       return { head: head.toLowerCase(), base: sha(base) ? base.toLowerCase() : null, status: prStatus(pr.status) };
     },
+    /** Exact file text at a commit (JSON files stay text, not parsed objects). */
     async fileContent(run, snapshot, path, version) {
-      return call(run, AZURE_TOOLS.file, { action: 'get_content', repositoryId: snapshot.repositoryId, project: snapshot.projectId, path, version, versionType: 'Commit' });
+      return call(run, AZURE_TOOLS.file, { action: 'get_content', repositoryId: snapshot.repositoryId, project: snapshot.projectId, path, version, versionType: 'Commit' }, { retry: true, raw: true });
     },
-    /** All threads, following the server's top/skip pagination to the end. */
+    /** All threads in as few calls as possible, continuing only after a full page. */
     async threads(run, snapshot) {
       const threads = [];
       for (let page = 0; page < MAX_THREAD_PAGES; page++) {
-        const rows = await call(run, AZURE_TOOLS.threads, { action: 'list', ...scope(snapshot), top: THREAD_PAGE, skip: page * THREAD_PAGE });
+        const rows = await call(run, AZURE_TOOLS.threads, { action: 'list', ...scope(snapshot), top: THREAD_PAGE, skip: page * THREAD_PAGE }, { retry: true });
         if (!Array.isArray(rows)) throw new AzureError('repo_pull_request_thread returned an unexpected response; existing comments could not be checked.', { tool: AZURE_TOOLS.threads });
         threads.push(...rows);
         if (rows.length < THREAD_PAGE) return threads;

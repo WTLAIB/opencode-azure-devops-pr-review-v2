@@ -1,5 +1,5 @@
 // Opt-in local evidence, NOT a transcript of private reasoning or tool traffic.
-import { mkdir, mkdtemp, lstat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, lstat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, parse, relative, isAbsolute } from 'node:path';
 import { visibleText } from './output.mjs';
@@ -123,7 +123,7 @@ async function ensureDirectory(path) {
 }
 
 export async function createDiagnostics(settings, context, run) {
-  const log = { directory: '', warnings: [], write: async () => {} };
+  const log = { directory: '', warnings: [], write: async () => {}, append: async () => {} };
   if (!settings.debug.enabled) return log;
   try {
     const stateHome = isAbsolute(process.env.XDG_STATE_HOME ?? '') ? process.env.XDG_STATE_HOME : join(homedir(), '.local', 'state');
@@ -135,6 +135,13 @@ export async function createDiagnostics(settings, context, run) {
     const directory = await mkdtemp(join(root, `${run.id}-`));
     await writeFile(join(directory, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
     log.directory = directory;
+    // Line-oriented logs (for example every runtime Azure call) grow during a run.
+    log.append = async (name, line) => {
+      try {
+        if (!/^[a-zA-Z0-9.-]+$/.test(name)) throw new Error('Invalid diagnostic filename.');
+        await appendFile(join(directory, name), line.endsWith('\n') ? line : line + '\n', { mode: 0o600 });
+      } catch { if (!log.warnings.includes(`Could not append ${name}.`)) log.warnings.push(`Could not append ${name}.`); }
+    };
     log.write = async (name, value) => {
       try {
         if (!/^[a-zA-Z0-9.-]+$/.test(name)) throw new Error('Invalid diagnostic filename.');

@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { renderReviewSummary } from './attribution.mjs';
 import { targetKey } from './azure.mjs';
-import { parseModelJSON, canonicalKey } from './output.mjs';
+import { parseModelJSON, canonicalKey, parseRepairPrompt } from './output.mjs';
 
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonempty = v => typeof v === 'string' && v.trim().length > 0;
@@ -117,6 +117,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false }
     return { result: { status: 'READY', comments: [], skipped: assigned.map(f => ({ findingId: f.id, reason: 'The comment planner did not return a usable plan; the finding remains in the summary index.' })), summary: undefined, summaryDetails: '' },
       issues: [], corrections: [{ action: 'skip-unparsed-plan' }] };
   }
+  if (parsed.corrections) corrections.push(...parsed.corrections);
   const value = aliases(parsed.value, ['status', 'comments', 'skipped', 'summary', 'summaryDetails', 'continuation', 'reason']);
   let status = String(value.status ?? '').trim().toUpperCase();
   if (!['READY', 'CONTINUE', 'INCOMPLETE'].includes(status)) {
@@ -200,7 +201,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false }
   return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections };
 }
 
-export function planRepairPrompt(issues) {
+export function planRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
   const listed = issues.slice(0, 25).map(issue => `- ${issue}`).join('\n');
   return `AZPR runtime: this comment plan page needs correction before it can be saved.\n${listed}\n\nReturn the complete corrected JSON object for this page (status, comments, skipped, optional summary and summaryDetails). Keep valid comments unchanged.`;
 }

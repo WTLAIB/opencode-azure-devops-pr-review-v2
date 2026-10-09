@@ -35,12 +35,18 @@ the preview and receipt.
 ## Planning
 
 Planning uses the review's risk model in pages of at most four findings, plus
-segments of the final report for the summary details. Each page receives the
-verified findings, the exact report segment, references to source text the
-reviewers already read (`evidenceIndex`), earlier pages (`priorPlanning`) and
-the private data references it needs. A page that needs more reading returns
-`CONTINUE` with its finished items and a continuation note; a new session
-continues the page. Repeating a checkpoint without progress stops planning.
+segments of the final report for the summary details. Before planning, the
+runtime reads every live thread once and fetches the HEAD source of each
+finding's file. Each page then receives, inline: the verified findings,
+`sourceExcerpts` (numbered HEAD lines around each finding, the whole file when it
+has at most 400 lines), `existingDiscussions` (live threads with path, line,
+author and the start of the first comment), the report segment and a summary of
+earlier pages. Most pages finish in one model request without tools; the
+planner reads more only for lines outside an excerpt or a full comment body.
+A page that needs more reading returns `CONTINUE` with its finished items and a
+continuation note (tools are withdrawn after 12 requests or about 48,000
+characters of tool output); a new session continues the page. Repeating a
+checkpoint without progress stops planning.
 
 Every page is validated item by item:
 

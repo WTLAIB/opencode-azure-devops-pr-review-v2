@@ -41,7 +41,8 @@ inspection (stale scratch data is still removed after 24 hours).
 | `NN-ROLE.result.json` | Status, repairs, unresolved issues, corrections, tool observations, failure class and timing. |
 | `report.md` / `draft.md` | Rendered report or unconfirmed draft. |
 | `comment-plan.json` | The saved plan with exact content, anchors, offsets and markers. |
-| `result.json` | Final status, every stage record, Azure call count and warnings. |
+| `azure-calls.jsonl` | Every runtime Azure DevOps call: tool, argument summary, attempt, duration, outcome, error and whether it will be retried. |
+| `result.json` | Final status, every stage record, Azure call and retry counts, and warnings. |
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
 
 The numeric prefix is stage creation order; shards and verification sessions run
@@ -55,6 +56,8 @@ in parallel.
    - `overflow` means the session needed compaction; the runtime split the shard;
    - `permanent` (authentication, bad request) was not retried;
    - `cancelled` came from `/pr-stop`, a timeout or unload.
+   Receipt counters `stream-continuations` and `continuation-restarts` show
+   interrupted provider streams and answers the model started over.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item.
