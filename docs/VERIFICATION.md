@@ -1,77 +1,33 @@
-# Verification in the current project
+# Local verification and shell access
 
-The two initial reviewers and verifier can use OpenCode's shell, read, glob and
-grep tools in the project where `/pr-review` or `/pr-deep` was invoked. Child
-sessions inherit the origin's location and session permissions. Open the desired
-working directory in OpenCode; it need not contain the PR or a Git repository.
-MCP supplies remote PR metadata, changed paths and exact-commit content. Review
-does not clone/fetch or reconstruct history, and needs no per-repository settings.
+Private reviewers read the remote PR through MCP. The current OpenCode project
+does not need a checkout or Git history, and reviews never clone or fetch.
 
-Models choose the method: existing tests, a focused reproduction, counterexamples,
-static analysis or source inspection. Execution is optional. Failed tests, missing
-dependencies and unavailable execution are useful observations, not another gate
-on a source-supported review or its comment preview. There are still only two
-initial reviewers and one verifier.
+## The `shell` setting
 
-## Permissions and effects
+| Value | Behavior |
+| --- | --- |
+| `deny` (default) | Shell is removed from private reviewers' tool lists and refused if called, regardless of later host rules (enforced through the `permission` hook). Reviewers still read, glob and grep the current project. |
+| `ask` | Shell is offered; every command needs your approval in OpenCode. A background review waits while an approval is pending. |
+| `inherit` | Host permission rules decide, as for any agent. |
 
-The plugin adds no shell/read/search permission override for reviewers or comment roles.
-OpenCode's applicable global, project, private-role and inherited session rules
-decide allow, ask or deny. Rules configured only for another agent such as Build
-are not copied. An ask decision requires normal host approval; a denial must not
-be bypassed. See the pinned host's [permission evaluation](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/permission.ts#L144).
-Standalone readiness retains native shell/search denials. Comment stages may use
-local tools for evidence inspection and coordinate calculations; remote PR access
-and publication still use MCP. Publication keeps its saved-plan authorization and
-stops on observed tool errors, including failures during local verification.
+The default protects you from prompt injection: reviewers read untrusted PR
+content, and an injected instruction must not be able to run commands on your
+machine.
 
-Commands execute in the real project with host authority. This is not a filesystem,
-process or network sandbox: permitted tests may create files, run package scripts
-or reach external services. Reviewers must preserve existing work, use temporary
-files for reproductions and account for two initial reviewers sharing a directory.
-Each experiment should use its own fresh temporary directory, preserving other
-reviewers' files and existing user work.
-Review does not authorize source fixes, repository resets, commits, pushes or PR
-writes. Native edit/write/patch tools remain denied. Those tool denials do not
-prevent an approved shell command from writing files.
+When shell is allowed, reviewers may run focused checks — existing tests, a
+small reproduction, static analysis — in a fresh temporary directory with files
+copied from MCP reads at the exact commit. Commands run with real host
+authority; this is not a filesystem, process or network sandbox. Native edit,
+write and patch tools stay denied, but those denials do not stop an approved
+shell command from writing files.
 
-`/pr-stop`, run timeout and disposal revoke plugin grants and ask OpenCode to
-interrupt and wait for sessions. They do not roll back command side effects or
-promise termination of detached background services. Unconfirmed session cleanup
-remains visible and prevents a usable COMPLETE cache.
+Execution is optional. Failed tests, missing dependencies or unavailable
+execution are observations in the report, not a gate on a source-supported
+finding.
 
-## Evidence
+## Cancellation
 
-Without a checkout, reviewers may materialize only the needed MCP-returned files
-in temporary directories, preserving their content and separating base from head.
-Record each source's repository, path and selected commit. Distinguish running
-exact retrieved code from a reduced or modified reproduction. Missing imports,
-fixtures or dependencies constrain the experiment; a subset does not establish
-that the full project builds or passes its suite. Source inspection remains useful.
-
-If an existing checkout is used, establish its repository, commit and working-tree
-changes first. A different checkout is context, not proof about the PR's exact
-head. No checkout/reset/clean is performed automatically. Azure PR identity,
-changed-path discovery and the final version check still use server evidence.
-
-Describe the command, relevant output, exit status and limitations in the existing
-finding evidence/report fields. No new output fields or test quota are required.
-A successful process exit alone is not proof of correctness or test coverage.
-Another reviewer's test result must be attributed, not presented as an independent
-execution. Original native tool output remains in the OpenCode session; debug
-stage records count tool outcomes but are not a separate execution ledger.
-
-The verifier carries useful earlier execution outcomes into its existing report:
-what ran, the tested revision when known, pass/fail or observed behavior, and
-material limits. Attribute results that the verifier did not rerun. Merely saying
-that earlier results were retained, or that the verifier did not rerun tests,
-loses information needed by the comment planner. The planner receives this report,
-not the initial reports or raw native output, to interpret the evidence supporting
-findings. Review methods and test results need no separate account in the public
-summary. When execution evidence is used, distinguish source inspection, test
-reading, reduced reproductions and project test execution. Missing execution
-information does not establish either that no tests ran or that tests passed.
-
-For supported settings and replacement instructions, see
-[configuration](../README.md#configuration). Retired execution mechanisms and
-their original results are kept in [validation history](VALIDATION_HISTORY.md).
+`/pr-stop`, a configured `runTimeoutSeconds` and plugin unload revoke grants and
+ask OpenCode to interrupt and settle the sessions. They do not roll back command
+side effects or terminate detached background processes.

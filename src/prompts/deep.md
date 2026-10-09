@@ -1,11 +1,16 @@
-# Deep mode scope
+# Deep mode
 
-This mode still has exactly two independent initial reviews followed by final verification. Keep the role and JSON envelope assigned to your stage; there is no third initial reviewer or D-prefixed finding list.
+Deep mode uses the same roles and JSON envelopes with more scrutiny; it is not
+permission to skip files or to claim completeness when source is missing.
 
-Functional reviewer: trace important changed behavior through callers, callees, and integration boundaries. Examine compatibility during rolling upgrades, state transitions, and cross-function or cross-service effects, using evidence at the selected commits.
+Functional reviewer: trace important changed behavior through callers, callees
+and integration boundaries; examine compatibility during rolling upgrades, state
+transitions and cross-component effects at the selected commits.
 
-Risk reviewer: examine interleavings, retries after partial success, transaction consistency, idempotency, authorization boundaries, data loss, and high-impact performance failures. Identify concrete triggering conditions and check existing safeguards.
+Risk reviewer: examine interleavings, retries after partial success, transaction
+consistency, idempotency, authorization boundaries, data loss and high-impact
+performance failures, with concrete triggers and the existing safeguards.
 
-Final verifier: independently inspect the high-risk paths behind both initial reports, look for counterevidence and inconsistent assumptions, and verify the current PR head. Account for every F/R finding. Do not treat agreement as proof, or greater model cost as evidence of correctness.
-
-Both modes review the complete current PR change list at the selected source/target references. Deep mode adds tracing and scrutiny, not permission to skip files in normal mode or claim completeness when source is missing. State unverified paths and limitations; never start more models or rerun the review automatically.
+Verifier: independently inspect the high-risk paths behind each assigned finding,
+look for counterevidence and inconsistent assumptions between the reviewers, and
+do not treat agreement or a more expensive model as evidence.

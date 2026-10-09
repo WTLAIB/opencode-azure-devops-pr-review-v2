@@ -53,7 +53,7 @@
             },
             "risk": {
               "type": "string",
-              "description": "Exact provider/model ID for independent risk review, source checks, and comments. Select for cross-path failure analysis and reliable MCP tool use. Standalone /pr-check uses review.risk."
+              "description": "Exact provider/model ID for independent risk review and comment planning. Select for cross-path failure analysis and reliable MCP tool use."
             },
             "verifier": {
               "type": "string",
@@ -72,7 +72,7 @@
             },
             "risk": {
               "type": "string",
-              "description": "Exact provider/model ID for independent risk review, source checks, and comments. Select for cross-path failure analysis and reliable MCP tool use. Standalone /pr-check uses review.risk. May be empty; deep runs only when all three IDs are configured."
+              "description": "Exact provider/model ID for independent risk review and comment planning. Select for cross-path failure analysis and reliable MCP tool use. May be empty; deep runs only when all three IDs are configured."
             },
             "verifier": {
               "type": "string",
@@ -134,7 +134,90 @@
       "minimum": 10,
       "maximum": 7200,
       "default": null,
-      "description": "Optional whole-command timeout covering all stages and report display. Null or omitted disables the timeout; an explicit integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual cancellation and bounded SDK cleanup remain available. This is not a spending cap."
+      "description": "Optional whole-command timeout covering all stages. Null or omitted disables it; an integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual /pr-stop and per-call MCP timeouts remain available. This is not a spending cap."
+    },
+    "shell": {
+      "enum": [
+        "deny",
+        "ask",
+        "inherit"
+      ],
+      "default": "deny",
+      "description": "Shell access for private reviewers and the comment planner. deny (default): shell is hidden and refused, so reviewers never run commands while reading untrusted PR content. ask: every command needs user approval in OpenCode (a background review waits for it). inherit: host permission rules decide."
+    },
+    "progressNotices": {
+      "type": "boolean",
+      "default": true,
+      "description": "Queue short PROGRESS notices to the invoking conversation during long reviews and publication. They never start a model response."
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Azure DevOps MCP access shared by all AZPR workflows in one OpenCode process.",
+      "properties": {
+        "server": {
+          "type": "string",
+          "default": "",
+          "maxLength": 200,
+          "description": "Name of the OpenCode MCP server running @azure-devops/mcp. Empty detects the single server that exposes repo_pull_request."
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 3,
+          "description": "Simultaneous MCP calls across all AZPR workflows. This limits parallelism, never total work."
+        },
+        "callTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 1800,
+          "default": 120,
+          "description": "Per-call timeout. A hung call is abandoned and its slot released so other reviews keep running."
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Review sharding, repair and retry behavior.",
+      "properties": {
+        "shardFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 25,
+          "description": "Changed files per initial-review session. A shard that hits its context limit is split automatically."
+        },
+        "shardFindings": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 15,
+          "description": "Candidate findings per verification session."
+        },
+        "parallelSessions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4,
+          "description": "Reviewer sessions running at the same time within one command."
+        },
+        "repairAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 2,
+          "description": "Correction turns in the same session when an answer does not meet the output contract. Remaining problems degrade per item."
+        },
+        "stageRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1,
+          "description": "New-session retries after a transient execution failure (provider 429/5xx, interrupted stream)."
+        }
+      }
     }
   }
 }

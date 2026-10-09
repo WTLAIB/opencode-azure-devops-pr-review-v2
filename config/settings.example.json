@@ -20,5 +20,19 @@
     "directory": ""
   },
   "outputLanguage": "en",
-  "runTimeoutSeconds": null
+  "runTimeoutSeconds": null,
+  "shell": "deny",
+  "progressNotices": true,
+  "mcp": {
+    "server": "",
+    "concurrency": 3,
+    "callTimeoutSeconds": 120
+  },
+  "workflow": {
+    "shardFiles": 25,
+    "shardFindings": 15,
+    "parallelSessions": 4,
+    "repairAttempts": 2,
+    "stageRetries": 1
+  }
 }

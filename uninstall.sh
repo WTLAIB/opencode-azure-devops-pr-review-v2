@@ -32,6 +32,7 @@ if [ ! -d "$target" ] || [ ! -f "$target/runtime.mjs" ] || ! grep -Fq 'AZPR opt-
 fi
 if [ "$apply" -eq 0 ]; then
   printf 'Preview: archive plugins/azpr-v2/ from:\n%s\nRe-run with --apply. Existing configuration, credentials, agents, commands, and other plugins are preserved.\n' "$root"
+  printf 'Saved reviews stay in %s/opencode/azpr-v2; delete that directory yourself when no longer needed.\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
   exit 0
 fi
 mkdir -p "$root/azpr-v2-backups"
@@ -43,3 +44,4 @@ if ! mv -- "$target" "$backup/plugins/azpr-v2"; then
   exit 1
 fi
 printf 'Archived: %s\nRestart OpenCode.\n' "$backup"
+printf 'Saved reviews stay in %s/opencode/azpr-v2; delete that directory yourself when no longer needed.\n' "${XDG_STATE_HOME:-$HOME/.local/state}"

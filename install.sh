@@ -34,8 +34,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
-runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs plugin.js'
-prompt_names='common check functional risk deep final comment-policy comment-plan comment-publish'
+runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs review-work.mjs store.mjs plugin.js'
+prompt_names='common functional risk deep final comment-policy comment-plan'
 command_names='pr-check pr-review pr-deep pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
 for file in scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
@@ -157,7 +157,7 @@ printf '\nAzure PR Review installed (target host: @opencode/cli 2.0.22; Ubuntu 2
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
 1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep.
-2. Configure your official @azure-devops/mcp 2.9.0 host connection with codemode: false for direct MCP tools. Existing host permissions still apply; no tool mapping is required.
+2. Connect the official @azure-devops/mcp server (2.9.0 or later) with codemode: false. AZPR calls its repo_* tools directly; host permissions still apply.
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
 Settings have not been API-validated. The plugin refuses incomplete configuration.
 TXT

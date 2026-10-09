@@ -1,353 +1,134 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { commentTarget, confirmedFindings, publicationItems, recordPublishResult, restoreSavedCommentText, validateCommentPlan } from '../src/comments.mjs';
+import {
+  evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
+  INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT,
+} from '../src/comments.mjs';
+import { parsePullRequestUrl } from '../src/azure.mjs';
 
-const snapshot={head:'a'.repeat(40),prId:123,files:['/src/example.ts']};
-const target=commentTarget('https://dev.azure.com/org/project/_git/repo/pullrequest/123',snapshot);
-const draft=()=>({status:'READY',comments:[{findingId:'F-1',severity:'high',path:snapshot.files[0],startLine:2,endLine:2,anchor:'return value.name;',body:'🔴 high: Missing null handling\n\nNull input throws. Add a guard and a regression test.'}],skipped:[]});
-const verifiedFinding=()=>({id:'F-1',summary:'Missing guard',evidence:'Null input throws',counterevidence:'The caller allows null on the failing path.',severity:'high',location:'head:/src/example.ts:2',suggestion:'Add a guard and a regression test.'});
-const review=()=>({id:'1234abcd',outputLanguage:'en',target,snapshot,findings:[verifiedFinding()],final:{dispositions:[{id:'F-1',status:'CONFIRMED',verifiedFinding:verifiedFinding()}]},attempts:new Map()});
-test('repo-relative inventory paths match rooted Azure comment paths without broad path normalization',()=>{
-  const r={...review(),snapshot:{...snapshot,files:['src/example.ts']}};
-  const before=structuredClone(r.snapshot);
-  assert.equal(validateCommentPlan(draft(),r).comments[0].path,'/src/example.ts');
-  assert.deepEqual(r.snapshot,before);
-  for(const path of ['src/example.ts','/src/other.ts','/SRC/example.ts','/src/../src/example.ts','//src/example.ts']) {
-    const value=draft();value.comments[0].path=path;
-    assert.throws(()=>validateCommentPlan(value,r),/changed HEAD file/);
-  }
+const target = parsePullRequestUrl('https://dev.azure.com/org/proj/_git/repo/pullrequest/7');
+const head = 'b'.repeat(40);
+const finding = (id, severity = 'high', extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', location: 'head:/src/a.ts:2', severity, suggestion: 's', ...extra });
+const review = (findings = [finding('F-1')], toolText = []) => ({
+  id: 'abcdef12', target, outputLanguage: 'en', attribution: 'AI-generated review; Models: `x/y`',
+  snapshot: { head, base: 'a'.repeat(40), files: ['/src/a.ts', '/src/b.ts'] },
+  final: { dispositions: findings.map(f => ({ id: f.id, status: 'CONFIRMED', reason: 'ok', verifiedFinding: f })), newFindings: [] },
+  toolText,
 });
-test('summary indexes corrected findings and binds one review without an inline anchor', () => {
-  const r=review();r.final.dispositions[0].verifiedFinding.summary='Corrected | title <unsafe>';
-  r.attribution='AI-generated review; not human review or approval. Models: `fixture/reviewer`';
-  const plan=validateCommentPlan({...draft(),summary:'The affected callers accept optional input.'},r), a=plan.summary;
-  assert.ok(a.content.startsWith(`🤖 ${r.attribution}\n\n## PR Review Summary\n`));
-  assert.equal(a.content.split(r.attribution).length,2);
-  assert.equal(plan.comments[0].content,`${draft().comments[0].body}\n\n---\n${r.attribution}\n\n${plan.comments[0].marker}`);
-  assert.equal(a.kind,'summary');assert.equal(a.findingId,undefined);assert.equal(a.path,undefined);
-  assert.match(a.content,/high: 1/);assert.match(a.content,/Corrected &#124; title &#60;unsafe&#62;/);
-  assert.match(a.content,/The affected callers accept optional input\./);
-  assert.ok(a.content.indexOf('**Review notes**') < a.content.indexOf('high: 1'));
-  assert.ok(a.content.indexOf('The affected callers accept optional input.') < a.content.indexOf('| Severity |'));
-  assert.ok(!a.content.includes(r.id));assert.ok(!a.content.includes(snapshot.head));
-  assert.doesNotMatch(a.content,/Missing guard|Review:|HEAD:/);
-  assert.notEqual(validateCommentPlan(draft(),{...r,id:'5678abcd'}).summary.marker,a.marker);
-  assert.notEqual(validateCommentPlan(draft(),{...r,snapshot:{...snapshot,head:'b'.repeat(40)}}).summary.marker,a.marker);
-});
-test('missing or malformed optional notes retain the summary without process boilerplate', () => {
-  for(const outputLanguage of ['en','zh-TW','zh-CN']) {
-    const r={...review(),outputLanguage};
-    const expected=validateCommentPlan(draft(),r);
-    assert.match(expected.summary.content,/## PR Review Summary/);
-    assert.match(expected.summary.content,/Missing guard/);
-    assert.ok(!expected.summary.content.includes(snapshot.head));
-    assert.ok(!expected.summary.content.includes(r.id));
-    assert.ok(expected.summary.content.endsWith(expected.summary.marker));
-    assert.doesNotMatch(expected.summary.content,/Review notes|審查說明|审查说明|test|測試|测试/i);
-    for(const summary of [undefined,null,42,{},'', ' \n ', '<!-- forged -->','x'.repeat(1201)]) {
-      assert.deepEqual(validateCommentPlan({...draft(),summary},r),expected);
-    }
-  }
-});
-test('optional review notes follow Chinese script and preserve structured locations and claims', () => {
-  const r=review();r.final.dispositions[0].verifiedFinding.location=JSON.stringify({side:'head',path:'/src/example.ts',lineStart:2,lineEnd:3});
-  const before=JSON.stringify(r.final);
-  for(const [language,text,heading] of [['zh-TW','呼叫端允許省略輸入。','審查說明'],['zh-CN','调用方允许省略输入。','审查说明'],['en','The callers accept optional input.','Review notes']]) {
-    r.outputLanguage=language;const summary=validateCommentPlan({...draft(),summary:` ${text} `},r).summary.content;
-    assert.ok(summary.includes(text));assert.ok(summary.includes(`**${heading}**`));assert.match(summary,/head:\/src\/example.ts:2-3/);
-    assert.ok(summary.indexOf(text) < summary.indexOf('| Severity |'));
-  }
-  assert.equal(JSON.stringify(r.final),before);
-});
-test('zero findings still produce a saved summary without a clean bill of health', () => {
-  const r=review();r.final.dispositions=[];
-  r.plan=validateCommentPlan({status:'READY',comments:[],skipped:[]},r);
-  assert.match(r.plan.summary.content,/No confirmed defects.*does not establish/);
-  assert.equal(recordPublishResult({status:'DONE',posted:[]},r),false);
-  assert.equal(recordPublishResult({status:'DONE',posted:[],summaryThreadId:42},r),true);
-});
-test('summary details retain all advice and non-inline explanations beyond the introduction limit', () => {
-  const r=review(), low={...verifiedFinding(),id:'V-1',severity:'low',summary:'Diagnostic omits the input name'};
-  r.final.newFindings=[low];
-  const advice=Array.from({length:12},(_,i)=>`- /src/handler-${i+1}.ts: Move its repeated input parsing into the existing shared parser, so supported input formats can be updated consistently without changing this handler's behavior.`).join('\n');
-  const summaryDetails=`### Additional finding details\n\n- V-1: /src/example.ts:2 omits the input name on invalid input, making diagnosis harder. Include the name in the diagnostic.\n\n### 💡 Improvement suggestions\n\n${advice}`;
-  assert.ok(summaryDetails.length>1200);
-  const plan=validateCommentPlan({...draft(),summary:'These handlers accept optional inputs.',summaryDetails,skipped:[{findingId:'V-1',reason:'Low severity stays in the summary.'}]},r);
-  assert.ok(plan.summary.content.includes(summaryDetails));
-  assert.ok(plan.summary.content.indexOf(summaryDetails)>plan.summary.content.indexOf(low.summary));
-  assert.match(plan.summary.content,/high: 1.*medium: 0.*low: 1/);
-  assert.equal(plan.comments.length,1);assert.equal(publicationItems(plan).length,2);
-  assert.deepEqual(confirmedFindings(r).map(f=>f.id),['F-1','V-1']);
-  assert.equal(plan.summary.marker,validateCommentPlan({...draft(),skipped:plan.skipped},r).summary.marker);
-});
-test('advice-only summaries need no finding IDs, severity or empty topic sections', () => {
-  const r=review();r.final.dispositions=[];
-  const empty={status:'READY',comments:[],skipped:[]};
-  const baseline=validateCommentPlan(empty,r);
-  for(const summaryDetails of [undefined,null,42,{},[],true,'',' \n ']) {
-    assert.deepEqual(validateCommentPlan({...empty,summaryDetails},r),baseline);
-  }
-  assert.doesNotMatch(baseline.summary.content,/Improvement suggestions|Additional finding details/);
-  const summaryDetails='### 💡 Improvement suggestions\n\n- /src/example.ts: Separate parsing from response formatting to make the formats independently testable; the current behavior is supported.';
-  r.plan=validateCommentPlan({...empty,summaryDetails},r);
-  assert.ok(r.plan.summary.content.includes(summaryDetails));
-  assert.match(r.plan.summary.content,/No confirmed defects.*does not establish/);
-  assert.equal(publicationItems(r.plan).length,1);
-  assert.equal(recordPublishResult({status:'DONE',posted:[],summaryThreadId:42},r),true);
-});
-test('summary details quote HTML comments literally and survive saved-text restoration', () => {
-  const quoted='<!-- azpr-comment:'+ 'c'.repeat(32)+' -->';
-  const summaryDetails=`### 💡 Improvement suggestions\n\nExplain the template marker \`${quoted}\` in /src/example.ts for future maintainers.`;
-  const plan=validateCommentPlan({...draft(),summaryDetails},review()), saved=plan.summary;
-  assert.ok(saved.content.includes(quoted.replace('<!--','&lt;!--').replace('-->','--&gt;')));
-  assert.equal((saved.content.match(/<!-- azpr-comment:/g)??[]).length,1);
-  const input={content:saved.content.replace('Explain the template marker','Changed advice'),search:saved.marker,path:'/unrelated'};
-  const result=restoreSavedCommentText(input,publicationItems(plan));
-  assert.deepEqual(result.input,{...input,content:saved.content});
-  assert.deepEqual(result.restored,['PR summary']);
-});
-test('summary publication participates in incomplete outcomes and validates before mutation', () => {
-  const r=planned(),before=[...r.attempts];
-  assert.throws(()=>recordPublishResult({status:'DONE',summaryThreadId:42,posted:[{findingId:'F-1',threadId:42}]},r));
-  assert.deepEqual([...r.attempts],before);
-  assert.equal(recordPublishResult({status:'DONE',posted:[{findingId:'F-1',threadId:43}]},r),false);
-  assert.equal(r.attempts.get(r.plan.summary.marker).state,'UNKNOWN');
-  const other=planned();
-  assert.equal(recordPublishResult({status:'INCOMPLETE',summaryThreadId:42,posted:[]},other),false);
-  assert.equal(other.attempts.get(other.plan.comments[0].marker).state,'UNKNOWN');
-});
-test('summary restoration preserves exact saved text without touching a marker search', () => {
-  for (const attribution of [undefined,'AI-generated review; not human approval. Models: `fixture/reviewer`']) {
-    for (const summary of [undefined,'The affected callers accept optional input.']) {
-      const plan=validateCommentPlan({...draft(),summary},{...review(),attribution}), saved=plan.summary;
-      const changed=saved.content.replace('Missing guard','Changed finding').replace('Review notes','Changed wording').replace('fixture/reviewer','fixture/changed');
-      const relocated=changed.slice(changed.indexOf('## PR Review Summary'));
-      for (const content of [changed,changed.replaceAll('\n','\r\n'),relocated]) {
-        const input={content,search:saved.marker,robotSearch:`🤖 ${saved.marker}`,headingInSearch:`search\n\n## PR Review Summary\n\n${saved.marker}`,path:'/unrelated'};
-        const result=restoreSavedCommentText(input,publicationItems(plan));
-        assert.deepEqual(result.input,{...input,content:saved.content});
-        assert.deepEqual(result.restored,['PR summary']);
-      }
-    }
-  }
-});
-function planned(){
-  const r=review();r.plan=validateCommentPlan(draft(),r);
-  for(const c of publicationItems(r.plan)) r.attempts.set(c.marker,{...(c.kind === 'summary' ? {kind:'summary'} : {findingId:c.findingId}),state:'UNKNOWN'});
-  return r;
-}
+const comment = (extra = {}) => ({ findingId: 'F-1', severity: 'high', path: '/src/a.ts', startLine: 2, endLine: 2, anchor: 'const value = load();', body: '🔴 high: Value is lost\n\nBody.', ...extra });
+const answer = (comments, skipped = [], extra = {}) => JSON.stringify({ status: 'READY', comments, skipped, ...extra });
 
-test('PR target parsing is independent of MCP tools',()=>{
-  assert.deepEqual(commentTarget('https://org.visualstudio.com/DefaultCollection/project/_git/repo/pullrequest/123',snapshot),target);
-  assert.throws(()=>commentTarget('https://dev.azure.com/org/project/_git/repo/pullrequest/124',snapshot));
-});
-test('plan validates format and creates a stable marker, not provider evidence',()=>{
-  const a=planned(),b=planned();
-  assert.equal(a.plan.comments[0].marker,b.plan.comments[0].marker);
-  assert.match(a.plan.comments[0].content,/<!-- azpr-comment:[a-f0-9]{32} -->$/);
-  assert.equal(a.plan.comments[0].args,undefined);
-  for (const [severity, icon] of [['high','🔴'],['medium','🟡']]) {
-    const r=review();r.final.dispositions[0].verifiedFinding.severity=severity;
-    let marker;
-    for (const title of [`${icon} ${severity}: `,`${icon} issue (${severity}): `,`issue (${severity}): `,`issue (${severity}): ${icon} `]) {
-      const d=draft();Object.assign(d.comments[0],{severity,body:`${title}A concrete defect\n\nIts trigger and correction.`});
-      const saved=validateCommentPlan(d,r).comments[0];
-      assert.equal(saved.body,d.comments[0].body);
-      assert.ok(saved.content.startsWith(d.comments[0].body));
-      if (marker) assert.equal(saved.marker,marker);
-      marker=saved.marker;
-    }
-    for (const title of [`🔵 ${severity}: `,`${icon} low: `,`${icon}\n${severity}: `,`🔵 issue (${severity}): `,`${icon} issue (low): `,'An unlabelled title: ']) {
-      const d=draft();Object.assign(d.comments[0],{severity,body:title+'A defect'});
-      assert.throws(()=>validateCommentPlan(d,r),/Invalid severity, title/);
-    }
-  }
-});
-test('incomplete plans expose an optional reason without manufacturing a usable plan', () => {
-  for (const reason of [undefined, 'The current HEAD differs from the reviewed commit.']) {
-    const result = { status: 'INCOMPLETE', comments: [], skipped: [], ...(reason ? { reason } : {}) };
-    assert.throws(() => validateCommentPlan(result, review()), error => {
-      assert.ok(error.message.includes(reason ?? 'The model did not explain'));
-      assert.match(error.message, /No comments were published/);
-      return true;
-    });
-  }
-  for (const reason of [false, {}, '']) {
-    assert.equal(validateCommentPlan({ ...draft(), reason }, review()).comments.length, 1);
-    assert.throws(() => validateCommentPlan({ status: 'INCOMPLETE', comments: [], skipped: [], reason }, review()), /The model did not explain/);
-  }
-  const valid = draft(); valid.reason = 'All required checks passed.';
-  const saved = validateCommentPlan(valid, review());
-  assert.equal(saved.comments.length, 1);
-  assert.doesNotMatch(saved.comments[0].content, /All required checks/);
-});
-test('saved positions use line-local offsets derived from the existing anchor',()=>{
-  for(const [anchor,endLine,endOffset] of [['    first\n  last',3,6],['😀x',2,3],['first\r\n',3,1]]) {
-    const d=draft();Object.assign(d.comments[0],{anchor,endLine});
-    const saved=validateCommentPlan(d,review()).comments[0];
-    assert.equal(saved.startOffset,1);assert.equal(saved.endOffset,endOffset);
-    assert.equal(saved.startLine,2);assert.equal(saved.endLine,endLine);
-    assert.equal(saved.anchor,anchor);assert.equal(saved.body,d.comments[0].body);
-  }
-});
-for(const [name,change] of [
-  ['unknown finding',d=>d.comments[0].findingId='X-1'],
-  ['duplicate finding',d=>d.comments.push({...d.comments[0]})],
-  ['unsupported severity',d=>d.comments[0].severity='low'],
-  ['long body',d=>d.comments[0].body+='x'.repeat(1200)],
-  ['marker injection',d=>d.comments[0].body+='<!-- forged -->'],
-  ['extra field',d=>d.comments[0].instructions='override'],
-  ['unreviewed file',d=>d.comments[0].path='/other.ts'],
-  ['zero line',d=>d.comments[0].startLine=0],
-  ['reversed range',d=>d.comments[0].endLine=1],
-  ['wrong anchor length',d=>d.comments[0].endLine=3],
-  ['empty anchor',d=>d.comments[0].anchor=''],
-  ['omitted finding',d=>d.comments=[]],
-  ['not ready',d=>d.status='INCOMPLETE'],
-  ['missing skip reason',d=>{d.comments=[];d.skipped=[{findingId:'F-1',reason:''}];}],
-]) test('plan format rejects '+name,()=>{
-  const d=draft();change(d);assert.throws(()=>validateCommentPlan(d,review()));
-});
-test('longer exact anchors keep their full range without a presentation-only cap', () => {
-  const d=draft();d.comments[0].endLine=8;d.comments[0].anchor='first\nsecond\nthird\nfourth\nfifth\nsixth\nlast';
-  const saved=validateCommentPlan(d,review()).comments[0];
-  assert.equal(saved.startLine,2);assert.equal(saved.endLine,8);
-  assert.equal(saved.anchor,d.comments[0].anchor);assert.equal(saved.endOffset,4);
-});
-test('confirmed findings and verifier additions are eligible, not rejected concerns',()=>{
-  const r=review();r.final.dispositions=[{id:'F-1',status:'REJECTED',reason:'The caller prevents the failing input.'}];r.final.newFindings=[{...verifiedFinding(),id:'V-1'}];
-  assert.deepEqual(confirmedFindings(r),r.final.newFindings);
-});
-test('comments use corrected verifier claims rather than the original candidates',()=>{
-  const r=review();
-  r.final.dispositions[0].verifiedFinding={...verifiedFinding(),summary:'Narrowed trigger',evidence:'Only the optional integration supplies null.',severity:'medium'};
-  assert.deepEqual(confirmedFindings(r),[r.final.dispositions[0].verifiedFinding]);
-  assert.notEqual(confirmedFindings(r)[0].summary,r.findings[0].summary);
-  const d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('🔴 high','🟡 medium');
-  assert.equal(validateCommentPlan(d,r).comments[0].severity,'medium');
-  assert.throws(()=>validateCommentPlan(draft(),r),/severity must match/);
-  delete r.final.dispositions[0].verifiedFinding;
-  assert.throws(()=>confirmedFindings(r),/missing its verified finding/);
-});
-test('a planner cannot change verified severity or promote low findings into comments',()=>{
-  for(const source of ['original','new']) for(const severity of ['low','medium']) {
-    const r=review(),f={...verifiedFinding(),severity};
-    if(source==='new') {r.final.dispositions=[];r.final.newFindings=[{...f,id:'V-1'}];}
-    else r.final.dispositions[0].verifiedFinding=f;
-    const id=source==='new'?'V-1':'F-1', d=draft();d.comments[0].findingId=id;
-    assert.throws(()=>validateCommentPlan(d,r),/severity must match/);
-    assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:id,reason:'Not selected for publication.'}]},r).comments.length,0);
-  }
-  const r=review(), d=draft();d.comments[0].severity='medium';d.comments[0].body=d.comments[0].body.replace('🔴 high','🟡 medium');
-  assert.throws(()=>validateCommentPlan(d,r),/severity must match/);
-});
-test('attempted findings remain blocked and skipped findings require reasons',()=>{
-  assert.throws(()=>validateCommentPlan(draft(),planned()),/attempted/);
-  assert.equal(validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:'F-1',reason:'Already discussed.'}]},review()).comments.length,0);
-});
-test('all reported posts are labeled model-reported, never provider-verified',()=>{
-  const r=planned();
-  assert.equal(recordPublishResult({status:'DONE',summaryThreadId:'thread-41',posted:[{findingId:'F-1',threadId:'thread-42'}]},r),true);
-  assert.deepEqual([...r.attempts.values()],[{kind:'summary',state:'MODEL_REPORTED_POSTED',threadId:'thread-41'},{findingId:'F-1',state:'MODEL_REPORTED_POSTED',threadId:'thread-42'}]);
-});
-test('incomplete or empty publication reports retain uncertainty',()=>{
-  const r=planned();
-  assert.equal(recordPublishResult({status:'DONE',posted:[]},r),false);
-  assert.equal([...r.attempts.values()][0].state,'UNKNOWN');
-  assert.equal(recordPublishResult({status:'INCOMPLETE',posted:[{findingId:'F-1',threadId:42}]},r),false);
-});
-test('thread IDs cannot inject markup or extra receipt lines',()=>{
-  for(const threadId of ['42\nInjected line','<instruction>','[link](url)']){
-    const r=planned();
-    assert.throws(()=>recordPublishResult({status:'DONE',posted:[{findingId:'F-1',threadId}]},r));
-    assert.equal([...r.attempts.values()][0].state,'UNKNOWN');
-  }
-});
-for(const posted of [[{findingId:'X-1',threadId:42}],[{findingId:'F-1',threadId:0}],[{findingId:'F-1',threadId:''}],[{findingId:'F-1',threadId:42},{findingId:'F-1',threadId:43}],[{findingId:'F-1',threadId:42,verified:true}]]){
-  test('invalid publication entries cannot overwrite uncertain attempt state',()=>{
-    const r=planned();assert.throws(()=>recordPublishResult({status:'DONE',posted},r));
-    assert.equal([...r.attempts.values()][0].state,'UNKNOWN');
-  });
-}
-
-test('publisher strings with one saved marker are restored without changing target or coordinates', () => {
-  for (const [severity, icon] of [['high','🔴'],['medium','🟡']]) {
-    const titles=[`${icon} ${severity}: `,`${icon} issue (${severity}): `,`issue (${severity}): `,`issue (${severity}): ${icon} `];
-    for (const title of titles) {
-      const r=review(),d=draft();r.final.dispositions[0].verifiedFinding.severity=severity;
-      Object.assign(d.comments[0],{severity,body:title+'Missing null handling\n\nAdd a guard.'});
-      const comments=validateCommentPlan(d,r).comments,saved=comments[0];
-      for (const copiedTitle of titles) {
-        const changed=copiedTitle+saved.content.slice(title.length).replace('Add a guard','Please add a guard');
-        const input={target:'repo',where:{line:2,offset:1},arbitrary:[{value:changed}],untouched:'read'};
-        const original=structuredClone(input),normalized=restoreSavedCommentText(input,comments);
-        assert.deepEqual(normalized.input,{...input,arbitrary:[{value:saved.content}]});
-        assert.deepEqual(normalized.restored,['F-1']);
-        assert.deepEqual(input,original);
-        assert.deepEqual(restoreSavedCommentText(normalized.input,comments).restored,[]);
-      }
-    }
-  }
-});
-test('publisher restoration leaves ambiguous, unknown and search-only strings untouched', () => {
-  const comments = planned().plan.comments, saved = comments[0];
-  for (const value of [saved.marker, 'search ' + saved.marker, '🔴 ' + saved.marker, saved.content + saved.marker,
-    saved.content.replace('🔴 high: ', '🟡 medium: '),
-    saved.content.replace(saved.marker, '<!-- azpr-comment:' + '0'.repeat(32) + ' -->'), saved.content + ' trailing text']) {
-    assert.deepEqual(restoreSavedCommentText({ value }, comments), { input: { value }, restored: [] });
-  }
+test('titles are normalized to the verified severity label without double prefixes', () => {
+  assert.equal(normalizeTitle('🔴 High: Title', 'high'), '🔴 high: Title');
+  assert.equal(normalizeTitle('**🟡 medium: Title**', 'medium'), '🟡 medium: **Title**');
+  assert.equal(normalizeTitle('issue (high): Title', 'high'), '🔴 high: Title');
+  assert.equal(normalizeTitle('Plain title', 'medium'), '🟡 medium: Plain title');
 });
 
-test('known rejected findings may remain skipped notes without becoming eligible comments', () => {
-  const r=review(),d=draft();r.final.dispositions.push({id:'R-1',status:'REJECTED',reason:'Wrong version.'});
-  d.skipped.push({findingId:'R-1',reason:'Verifier rejected the reversed source interpretation.'});
-  const plan=validateCommentPlan(d,r);assert.deepEqual(plan.skipped,d.skipped);assert.equal(plan.comments.length,1);
-  d.comments[0].findingId='R-1';assert.throws(()=>validateCommentPlan(d,r),/confirmed findings/);
-});
-test('ancillary skipped notes cannot hide missing eligible findings or invent IDs', () => {
-  const r=review();r.final.dispositions.push({id:'R-1',status:'REJECTED',reason:'Wrong version.'});
-  assert.throws(()=>validateCommentPlan({status:'READY',comments:[],skipped:[{findingId:'R-1',reason:'Rejected.'}]},r),/omitted confirmed/);
-  const d=draft();d.skipped=[{findingId:'unknown',reason:'Unknown note.'}];assert.throws(()=>validateCommentPlan(d,r),/known, unique/);
-});
-test('saved anchors restore indentation and quote display from uniquely matching recorded text', () => {
-  const r=review(),d=draft();
-  const raw='    return { "value": 1 };';
-  d.comments[0].anchor=raw.trim().replaceAll('"',String.fromCharCode(92)+'"');
-  r.toolText=[{input:{arbitrary:{first:snapshot.files[0],second:snapshot.head}},output:'header\n'+raw+'\n'}];
-  const plan=validateCommentPlan(d,r);
-  assert.equal(plan.comments[0].anchor,raw);assert.equal(plan.comments[0].endOffset,raw.length);
-  assert.deepEqual(plan.anchorRestorations,['F-1']);assert.notEqual(d.comments[0].anchor,raw);
-});
-test('anchor restoration does not choose ambiguous text or match other versions', () => {
-  const r=review(),d=draft(),anchor=d.comments[0].anchor;
-  const matching={input:{a:snapshot.files[0],b:snapshot.head},output:'header\n  '+anchor+'\n'};
-  for (const observations of [
-    [{...matching,input:{a:snapshot.files[0],b:'c'.repeat(40)}}],
-    [{...matching,input:{a:'/other.ts',b:snapshot.head}}],
-    [matching,{...matching,output:'header\n    '+anchor+'\n'}],
-    [{...matching,output:'header\n  return other.name;\n'}],
-  ]) {
-    r.toolText=observations;const plan=validateCommentPlan(d,r);
-    assert.equal(plan.comments[0].anchor,anchor);assert.equal(plan.comments[0].startLine,2);
-    assert.equal(plan.anchorRestorations,undefined);
-  }
+test('a clean page is accepted; formatting slips are corrected instead of failing the page', () => {
+  const r = review([finding('F-1'), finding('F-2', 'medium')]);
+  const { result, issues, corrections } = evaluatePlanPage(answer([
+    comment({ severity: 'HIGH', path: 'src/a.ts', body: 'High: lost value <!-- hidden -->' }),
+    comment({ findingId: 'F-2', severity: 'high', startLine: 5, endLine: 9, anchor: 'line five\nline six', body: 'Medium thing' }),
+  ]), { review: r, assigned: r.final.dispositions.map(d => d.verifiedFinding) });
+  assert.deepEqual(issues, []);
+  assert.equal(result.comments[0].path, '/src/a.ts');
+  assert.equal(result.comments[0].body, '🔴 high: lost value &lt;!-- hidden --&gt;');
+  assert.equal(result.comments[1].severity, 'medium', 'The verified severity wins.');
+  assert.equal(result.comments[1].endLine, 6, 'The end line follows the quoted anchor.');
+  assert.ok(corrections.some(c => c.action === 'use-verified-severity'));
+  assert.ok(corrections.some(c => c.action === 'derive-end-line-from-anchor'));
 });
 
-test('a uniquely quoted captured range corrects counted lines before marker and offset calculation', () => {
-  const r=review(),d=draft(),anchor=d.comments[0].anchor;
-  r.toolText=[{input:{path:snapshot.files[0],revision:snapshot.head},output:'header\nother\n  '+anchor+'\n'}];
-  const plan=validateCommentPlan(d,r),saved=plan.comments[0];
-  assert.equal(saved.startLine,3);assert.equal(saved.endLine,3);assert.equal(saved.anchor,'  '+anchor);
-  assert.equal(saved.endOffset,anchor.length+2);
-  assert.deepEqual(plan.locationRestorations,[{findingId:'F-1',original:{startLine:2,endLine:2},restored:{startLine:3,endLine:3}}]);
-  const correct=draft();correct.comments[0].startLine=3;correct.comments[0].endLine=3;correct.comments[0].anchor='  '+anchor;
-  assert.equal(saved.marker,validateCommentPlan(correct,review()).comments[0].marker);
-  assert.equal(d.comments[0].startLine,2);
+test('real problems become repair issues first, then per-item skips on the final pass', () => {
+  const r = review([finding('F-1'), finding('F-2'), finding('F-3')]);
+  const assigned = r.final.dispositions.map(d => d.verifiedFinding);
+  const text = answer([
+    comment({ body: '🔴 high: ' + 'x'.repeat(INLINE_SOFT_LIMIT + 10) }),
+    comment({ findingId: 'F-2', path: '/not/changed.ts' }),
+  ]);
+  const first = evaluatePlanPage(text, { review: r, assigned });
+  assert.ok(first.issues.some(issue => /F-1: body is \d+ characters/.test(issue)));
+  assert.ok(first.issues.some(issue => /F-2: path .* is not a changed file/.test(issue)));
+  assert.ok(first.issues.some(issue => /missing: F-1, F-2, F-3/.test(issue)) || first.issues.some(issue => /missing:.*F-3/.test(issue)));
+  const final = evaluatePlanPage(text, { review: r, assigned, final: true });
+  assert.deepEqual(final.issues, []);
+  assert.deepEqual(final.result.comments.map(c => c.findingId), ['F-1'], 'A long body under the hard limit is kept on the final pass.');
+  assert.deepEqual(final.result.skipped.map(s => s.findingId).sort(), ['F-2', 'F-3']);
+  assert.match(final.result.skipped.find(s => s.findingId === 'F-2').reason, /not a changed file/);
+  const huge = evaluatePlanPage(answer([comment({ body: 'x'.repeat(INLINE_HARD_LIMIT + 1) })]), { review: review(), assigned: [finding('F-1')], final: true });
+  assert.equal(huge.result.comments.length, 0);
+  assert.match(huge.result.skipped[0].reason, /exceeds/);
 });
-test('existing locations stay preferred and multiple alternative locations are not guessed', () => {
-  const r=review(),d=draft(),anchor=d.comments[0].anchor;
-  r.toolText=[{input:{path:snapshot.files[0],revision:snapshot.head},output:'  '+anchor+'\nother\n  '+anchor+'\n'}];
-  assert.equal(validateCommentPlan(d,r).comments[0].startLine,2);
-  d.comments[0].startLine=3;d.comments[0].endLine=3;
-  const plan=validateCommentPlan(d,r);assert.equal(plan.comments[0].startLine,3);assert.equal(plan.locationRestorations,undefined);
+
+test('low-severity and unknown findings never become inline comments', () => {
+  const r = review([finding('F-1', 'low')]);
+  const { result, issues, corrections } = evaluatePlanPage(answer([comment(), comment({ findingId: 'R-9' })]), { review: r, assigned: [finding('F-1', 'low')] });
+  assert.deepEqual(issues, []);
+  assert.equal(result.comments.length, 0);
+  assert.match(result.skipped[0].reason, /Low-severity/);
+  assert.ok(corrections.some(c => c.action === 'drop-unassigned-comment'));
+});
+
+test('CONTINUE checkpoints, INCOMPLETE pages and unparseable answers degrade safely', () => {
+  const r = review([finding('F-1'), finding('F-2')]);
+  const assigned = r.final.dispositions.map(d => d.verifiedFinding);
+  const checkpoint = evaluatePlanPage(JSON.stringify({ status: 'CONTINUE', comments: [comment()], skipped: [], reason: 'Read page 3 of discussions next.' }), { review: r, assigned });
+  assert.equal(checkpoint.result.status, 'CONTINUE');
+  assert.equal(checkpoint.result.continuation, 'Read page 3 of discussions next.');
+  assert.deepEqual(checkpoint.issues, []);
+  const incomplete = evaluatePlanPage(JSON.stringify({ status: 'INCOMPLETE', comments: [comment()], skipped: [], reason: 'Discussions unavailable.' }), { review: r, assigned });
+  assert.equal(incomplete.result.status, 'READY');
+  assert.deepEqual(incomplete.result.skipped.map(s => s.findingId), ['F-2']);
+  assert.match(incomplete.result.skipped[0].reason, /Discussions unavailable/);
+  const broken = evaluatePlanPage('not json', { review: r, assigned });
+  assert.equal(broken.result, null);
+  assert.match(broken.issues[0], /could not be used/);
+  const brokenFinal = evaluatePlanPage('not json', { review: r, assigned, final: true });
+  assert.deepEqual(brokenFinal.result.skipped.map(s => s.findingId), ['F-1', 'F-2']);
+});
+
+test('anchors are restored from observed HEAD text; ambiguous quotes are reported', () => {
+  const observed = [{ input: { path: '/src/a.ts', version: head }, output: 'first\nconst value = load();\nthird\n' }];
+  const restored = restoreAnchor({ path: '/src/a.ts', startLine: 9, endLine: 9, anchor: '  const value = load();' }, { snapshot: { head }, toolText: observed });
+  assert.deepEqual({ startLine: restored.startLine, anchor: restored.anchor, found: restored.found }, { startLine: 2, anchor: 'const value = load();', found: true });
+  const ambiguous = restoreAnchor({ path: '/src/a.ts', startLine: 9, endLine: 9, anchor: 'x' }, { snapshot: { head }, toolText: [{ input: { path: 'src/a.ts', v: head }, output: 'x\nx\n' }] });
+  assert.equal(ambiguous.ambiguous, true);
+  const r = review([finding('F-1')], [{ input: { path: '/src/a.ts', version: head }, output: 'x\nx\n' }]);
+  const page = evaluatePlanPage(answer([comment({ anchor: 'x', startLine: 9, endLine: 9 })]), { review: r, assigned: [finding('F-1')] });
+  assert.ok(page.issues.some(issue => /appears several times/.test(issue)));
+});
+
+test('inline markers depend on PR, path and anchor only; summaries on head and inline markers', () => {
+  const a = inlineMarker(target, { path: '/src/a.ts', anchor: 'const  value = load();' });
+  assert.equal(a, inlineMarker(target, { path: '/src/a.ts', anchor: '   const value = load();  ' }), 'Whitespace changes keep the fingerprint.');
+  assert.notEqual(a, inlineMarker(target, { path: '/src/b.ts', anchor: 'const value = load();' }));
+  assert.notEqual(a, inlineMarker(target, { path: '/src/a.ts', anchor: 'const value = load();' }, 1));
+  assert.notEqual(a, inlineMarker({ ...target, pullRequestId: 8 }, { path: '/src/a.ts', anchor: 'const value = load();' }));
+  assert.match(a, /^<!-- azpr-comment:[a-f0-9]{32} -->$/);
+  assert.equal(summaryMarker(target, head, [a]), summaryMarker(target, head, [a]));
+  assert.notEqual(summaryMarker(target, head, [a]), summaryMarker(target, 'c'.repeat(40), [a]));
+  assert.notEqual(summaryMarker(target, head, [a]), summaryMarker(target, head, []));
+});
+
+test('assemblePlan builds exact saved content, offsets, ordinals and one summary', () => {
+  const r = review([finding('F-1'), finding('F-2'), finding('F-3', 'low')]);
+  const plan = assemblePlan(r, [
+    { comments: [comment(), comment({ findingId: 'F-2', body: '🔴 high: Second issue on the same line' })], skipped: [{ findingId: 'F-3', reason: 'Low severity.' }], summary: 'Purpose of the change.', summaryDetails: '### 💡 Improvement suggestions\n\n- Idea.' },
+  ]);
+  assert.equal(plan.comments.length, 2);
+  assert.notEqual(plan.comments[0].marker, plan.comments[1].marker, 'Two comments on identical lines get distinct ordinals.');
+  for (const item of plan.comments) {
+    assert.ok(item.content.endsWith(item.marker));
+    assert.match(item.content, /AI-generated review/);
+    assert.equal(item.startOffset, 1);
+    assert.equal(item.endOffset, 'const value = load();'.length);
+  }
+  assert.equal(plan.summary.kind, 'summary');
+  assert.match(plan.summary.content, /^🤖 AI-generated review/);
+  assert.match(plan.summary.content, /\*\*Review notes\*\*\n\nPurpose of the change\./);
+  assert.match(plan.summary.content, /F-3/, 'Low findings stay in the index.');
+  assert.match(plan.summary.content, /Improvement suggestions/);
+  assert.deepEqual(publicationItems(plan).map(item => item.kind), ['summary', 'inline', 'inline']);
+  assert.equal(confirmedFindings(r).length, 3);
 });

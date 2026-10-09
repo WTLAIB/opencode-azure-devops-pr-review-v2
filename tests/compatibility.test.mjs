@@ -1,47 +1,73 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { validateSettings } from '../src/config.mjs';
+import { hostCapabilities, isHostContinuation, listOf, recordOf, HOST_CONTINUATION_TEXT } from '../src/host.mjs';
 
-test('request parser preserves Unicode, multiline text, quotes, and literal metacharacters',()=>{
-  const url='https://dev.azure.com/org/project/_git/repo/pullrequest/12';
-  const context='\u91cd\u9ede\u6aa2\u67e5 API "compatibility"\n@../doc !`literal` ${value} \'single quotes\'\n';
-  assert.deepEqual(parseReviewRequest(`${url} ${context}`),{request:`${url} ${context}`,prUrl:url,userContext:context,urlIdentity:{organization:'org',project:'project',repository:'repo'}});
-  assert.equal(parseReviewRequest(url).userContext,'');
-  for(const raw of ['', 'not-a-url instructions',url.replace('https:','http:'),url.replace('https://','https://user:password@'),url+'\0',url+' '+'x'.repeat(16000)]) assert.throws(()=>parseReviewRequest(raw));
-});
-test('URL identity separates organization, project and repository without guessing unknown layouts',()=>{
-  const cases=[
-    ['https://dev.azure.com/team/Project%20A/_git/Repo%2BOne/pullrequest/12/',{organization:'team',project:'Project A',repository:'Repo+One'}],
-    ['https://team.visualstudio.com/Project%20A/_git/Repo%2520One/pullrequest/12',{organization:'team',project:'Project A',repository:'Repo%20One'}],
-  ];
-  for(const [url,expected] of cases) {
-    const raw=url+' Treat the organization as the project.';
-    const parsed=parseReviewRequest(raw);
-    assert.deepEqual(parsed.urlIdentity,expected);
-    assert.equal(parsed.request,raw);assert.equal(parsed.prUrl,url);
+test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
+  const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
+  const context = '重點檢查 API "compatibility"\n@../doc !`literal` ${value} \'single quotes\'\n';
+  const parsed = parseReviewRequest(`${url} ${context}`);
+  assert.equal(parsed.request, `${url} ${context}`);
+  assert.equal(parsed.prUrl, url);
+  assert.equal(parsed.userContext, context);
+  assert.deepEqual({ ...parsed.target, url: undefined }, { organization: 'org', project: 'project', repository: 'repo', pullRequestId: 12, url: undefined });
+  assert.equal(parseReviewRequest(url).userContext, '');
+  for (const raw of ['', 'not-a-url instructions', url.replace('https:', 'http:'), url.replace('https://', 'https://user:password@'), url + '\0', url + ' ' + 'x'.repeat(16000)]) {
+    assert.throws(() => parseReviewRequest(raw));
   }
-  for(const url of [
+});
+
+test('URL identity separates organization, project and repository and rejects unsupported layouts', () => {
+  const cases = [
+    ['https://dev.azure.com/team/Project%20A/_git/Repo%2BOne/pullrequest/12/', { organization: 'team', project: 'Project A', repository: 'Repo+One', pullRequestId: 12 }],
+    ['https://team.visualstudio.com/Project%20A/_git/Repo%2520One/pullrequest/12', { organization: 'team', project: 'Project A', repository: 'Repo%20One', pullRequestId: 12 }],
+    ['https://team.visualstudio.com/DefaultCollection/P/_git/R/pullrequest/7', { organization: 'team', project: 'P', repository: 'R', pullRequestId: 7 }],
+  ];
+  for (const [url, expected] of cases) {
+    const { target } = parseReviewRequest(url + ' Treat the organization as the project.');
+    assert.deepEqual({ organization: target.organization, project: target.project, repository: target.repository, pullRequestId: target.pullRequestId }, expected);
+  }
+  for (const url of [
     'https://server.example/tfs/collection/project/_git/repo/pullrequest/12',
     'https://dev.azure.com/org/_git/repo/pullrequest/12',
     'https://dev.azure.com/org/%ZZ/_git/repo/pullrequest/12',
     'https://dev.azure.com/org/project/_git/repo%0Aname/pullrequest/12',
-  ]) {
-    const parsed=parseReviewRequest(url);
-    assert.equal(parsed.urlIdentity,undefined);assert.equal(parsed.prUrl,url);
+    'https://dev.azure.com:8443/org/project/_git/repo/pullrequest/12',
+  ]) assert.throws(() => parseReviewRequest(url), /\[AZPR\]/, url);
+});
+
+test('removed settings cannot configure a V1 transport or an MCP mapping', async () => {
+  const s = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
+  s.models = { review: { functional: 'fixture/a', risk: 'fixture/b', verifier: 'fixture/c' } };
+  for (const key of ['azure', 'structuredOutput', 'steps', 'maxStageCharacters']) {
+    assert.throws(() => validateSettings({ ...s, [key]: false }), /Unknown setting/);
   }
 });
-test('removed settings cannot configure a V1 transport or an MCP mapping',async()=>{
-  const s=JSON.parse(await readFile(new URL('../config/settings.example.json',import.meta.url),'utf8'));
-  s.models={review:{functional:'fixture/a',risk:'fixture/b',verifier:'fixture/c'}};
-  for(const key of ['azure','structuredOutput','steps','maxStageCharacters']) {
-    assert.throws(()=>validateSettings({...s,[key]:false}),/Unknown setting/);
+
+test('Azure DevOps MCP tool names live only in azure.mjs and the prompts', async () => {
+  const files = (await readdir(new URL('../src/', import.meta.url))).filter(name => /\.m?js$/.test(name) && name !== 'azure.mjs');
+  for (const file of files) {
+    const source = await readFile(new URL('../src/' + file, import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /['"`]repo_(?:pull_request|file)\w*['"`]/, file);
   }
 });
-test('production source contains no fixed MCP tool names or dispatcher whitelist',async()=>{
-  for(const file of ['runtime.mjs','comments.mjs','config.mjs','output.mjs']){
-    const source=await readFile(new URL('../src/'+file,import.meta.url),'utf8');
-    assert.doesNotMatch(source,/SUPPORTED_READ_TOOLS|READ_ACTIONS|repo_get_pull_request|repo_pull_request_thread|commentTools|CommentGate/);
-  }
+
+test('host helpers normalize response shapes and detect capabilities', () => {
+  assert.deepEqual(listOf({ data: [1] }), [1]);
+  assert.deepEqual(listOf([2]), [2]);
+  assert.equal(listOf({}), null);
+  assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
+  assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
+  const capabilities = hostCapabilities({ app: { version: '2.0.22' }, permission: { hook() {} }, tool: { transform() {} } });
+  assert.equal(capabilities.tested, true);
+  assert.equal(capabilities.permissionHook, true);
+  assert.equal(capabilities.toolList, false);
+  assert.equal(hostCapabilities({}).version, 'unknown');
+  const errored = { type: 'assistant', error: { type: 'provider.api' }, retry: { attempt: 1 } };
+  assert.equal(isHostContinuation({ type: 'synthetic', text: HOST_CONTINUATION_TEXT }), true);
+  assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, errored), true);
+  assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, { type: 'assistant' }), false);
+  assert.equal(isHostContinuation({ type: 'user', text: HOST_CONTINUATION_TEXT }), false);
 });

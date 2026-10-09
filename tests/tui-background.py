@@ -31,7 +31,7 @@ for existing in [False, True]:
     label = 'existing' if existing else 'new'
     before = {item['id'] for item in api('/api/session')['data']}
     origin = api('/api/session', {'title': 'TUI existing origin', 'location': {'directory': directory}})['data']['id'] if existing else None
-    prompt = '/pr-check https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 smoke-check hang-smoke'
+    prompt = '/pr-review https://dev.azure.com/fixture/project/_git/repository/pullrequest/123 hang-smoke'
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(directory)
@@ -66,7 +66,7 @@ for existing in [False, True]:
             if not origin:
                 continue
             notices = [item.get('payload', {}).get('text', '') for item in api('/api/session/' + origin + '/inbox')['data']]
-            if not started_at and any('] STARTED /pr-check' in text for text in notices):
+            if not started_at and any('] STARTED /pr-review' in text for text in notices):
                 started_at = time.monotonic()
             if started_at and not stop_sent and time.monotonic() - started_at >= hold:
                 # Sending through the TUI proves that its current conversation is

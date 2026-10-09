@@ -1,390 +1,137 @@
 # Architecture
 
-This is an independent V2 implementation targeting OpenCode 2.0.22, official
-Azure DevOps MCP 2.9.0 and Ubuntu 22.04. The source-only plugin uses host domains;
-it contains no provider client, Azure SDK, MCP dispatcher catalog or V1 shim.
+AZPR is a source-only OpenCode V2 plugin. Model work runs in private,
+role-bound child sessions; deterministic facts and every Azure DevOps write are
+runtime code that calls the user's connected `@azure-devops/mcp` tools directly.
 
 ## Components
 
 | File | Responsibility |
 | --- | --- |
-| `src/plugin.js` | V2 default plugin definition and setup entry. |
-| `src/config.mjs` | Strict settings, immutable roles, native denials, compiled Agent.Info. |
-| `src/comment-data.mjs` | Private lossless artifacts, bounded reads and assigned finding scopes. |
-| `src/comment-work.mjs` | Read-only checkpoints, complete plan assembly and saved publication pages. |
-| `src/session.mjs` | Exact V2 create/admit/wait/context/interrupt/synthetic contract. |
-| `src/runtime.mjs` | Command registration, grants, workflow, cancellation and lifecycle. |
-| `src/output.mjs` | Review envelope extraction, syntax recovery, best-effort delivery and final evidence assessment. |
-| `src/comments.mjs` | Comment target, preview validation, stable markers and uncertain-attempt ledger. |
-| `src/attribution.mjs` | Deterministic reports, provenance, notices and receipts. |
-| `src/diagnostics.mjs` | Optional private evidence files and local timing observations. |
-| `src/prompts/` | Shared policies plus check, review, deep, verifier and comment instructions. |
+| `src/plugin.js` | V2 plugin definition and setup entry. |
+| `src/runtime.mjs` | Registration, hooks, grants, workflows, stage attempts (repair turns and retries), notices, cancellation and lifecycle. |
+| `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
+| `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies and agent compilation. |
+| `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations, failure classification, interrupt and synthetic notices. |
+| `src/tool-queue.mjs` | Bounded MCP concurrency with per-call timeouts, shared by model tool calls and runtime calls. |
+| `src/azure.mjs` | PR URL parsing, Azure server selection, snapshot construction and the deterministic MCP client (PR, threads, file content, thread creation). |
+| `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, merge and the final version recheck. |
+| `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
+| `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
+| `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
+| `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
+| `src/store.mjs` | Persistent reviews, data cleanup and fallback receipt files. |
+| `src/attribution.mjs` | Deterministic reports, provenance, receipts and ledgers. |
+| `src/diagnostics.mjs` | Optional private diagnostic files and stage timing. |
+| `src/prompts/` | Shared review rules, role prompts and comment policy. |
 
-Active review and comment roles receive a numbered display of plain, multiline
-tool text when its single text block exactly matches the raw string output.
-The request arguments stay beside that display to help distinguish source
-versions. When the admitted stage already has a snapshot, exact string argument
-values matching its head/base receive HEAD (PR source) / BASE (PR target reference)
-labels. These label arguments only: they do not certify selector semantics,
-returned bytes or a merge base. No snapshot is invented for independent initials.
-The original output bytes remain unchanged. Native displays, errors,
-truncated results, structured output, wrappers and attachments pass through.
-This uses the public `tool.execute.after` result hook without classifying MCP
-names or actions. It adds no requests, fields, source certificate or completion
-gate. Display row numbers are source positions only for complete unwrapped files;
-models still establish the file/version and interpret the evidence.
+## Commands and workflows
 
-The installer creates one `plugins/azpr-v2` ESM package with a generated `server.js`
-entry re-exporting `plugin.js`, matching package exports, ten JavaScript modules,
-nine prompts and private settings. The Python settings helper runs only during
-installation. No top-level loader or
-Markdown command expansion is involved. Optional docs/schema/uninstaller do not
-change runtime requirements. The installer merges missing current defaults;
-retired `models._help` documentation is omitted with a notice, without changing
-operational values or a supplied source file. Runtime/schema readers still accept
-that legacy documentation, but new settings omit it. Model-selection guidance
-belongs in README and schema descriptions. Other obsolete profiles/keys fail
-instead of being migrated. See README's exact list.
+`ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
+`/pr-stop` and `/pr-comment`. A command validates its arguments, registers a run
+with its origin lock (and a PR lock for comments), queues a `STARTED` notice and
+returns; the workflow continues in the background. The final receipt is queued
+to the invoking conversation with up to three attempts and is written to
+`receipts/` in the state directory if the conversation cannot be reached.
+`PROGRESS` notices report phases (snapshot, shard counts, verification,
+planning pages, posting). Notices never start a model response.
 
-## Explicit commands and private roles
+Each workflow first runs one **preflight**: `settings.json` must be unchanged
+since load, reserved commands must still be ours, private agents are pinned, the
+selected models must exist and support tools, an MCP server must be connected,
+and the Azure server is selected from the captured tools. A model-less runtime
+session (agent `azpr-runtime`) is created for the run's Azure calls. After
+preflight, hooks never re-read settings or catalogs.
 
-`ctx.command.transform` registers five commands. Their callbacks consume literal
-`prompt.text`, reject attachments, and handle the entire workflow without an
-ordinary-agent model invocation. Matching text in a normal chat, PR comment or
-MCP result cannot grant access. Reserved command/agent conflicts fail closed.
+### Review
 
-The callback registers the run and its origin/PR locks before queuing a `STARTED`
-notice. It releases a start barrier only after that notice is acknowledged, then
-returns without waiting for the workflow. Tracked background jobs retain the
-same authorization, cancellation, deadline and final-result handling. A failed
-start notice admits no model work. Final receipts target the invoking session;
-no navigation or model resume is requested. Disposal revokes runs and settles
-owned jobs before removing registrations. HTTP disconnect is not cancellation.
+1. **Snapshot** — `repo_pull_request get` with `includeChangedFiles` gives PR
+   identity, `lastMergeSourceCommit` (head), `lastMergeTargetCommit` (base),
+   repository/project IDs, title, description and the change list. The
+   organization in the response must match the PR URL. A paged change list is
+   marked incomplete and reviewers are asked to report missing paths.
+2. **Initial reviews** — changed files are sorted and cut into shards of
+   `workflow.shardFiles`. For each role and shard a private session reviews the
+   assigned files with a finding-ID range (`F-1…`, `F-1001…`) so IDs never
+   collide. Up to `workflow.parallelSessions` sessions run at once.
+3. **Overflow** — private sessions may not compact. A compaction request (or a
+   413) marks the stage as `overflow`; the runtime splits that shard in half
+   and runs both halves (labels `shard 1/5a`, `1/5b`).
+4. **Verification** — findings are grouped by file into shards of
+   `workflow.shardFindings`. Each verifier decides its assigned IDs and may
+   merge into any original ID. Missing or invalid decisions trigger a repair
+   turn asking only for those IDs; leftovers become UNREVIEWED (or NEEDS_INFO
+   for incomplete confirmations).
+5. **Recheck** — a fresh PR read compares versions. A changed head is STALE; a
+   changed base only adds a warning. A failed recheck is a warning because
+   publication rechecks the head anyway.
 
-A shared queue admits one private MCP execution at a time across workflows,
-including both initials and subsequent stages. It does not classify MCP operations
-or cap total work. Queued calls recheck their grant before executing; cancellation
-rejects waiters. Publisher failures revoke grants before a waiting call may run.
-Observed tool timing includes time waiting for an execution slot.
-The public tool transform wraps namespaced executors after initial discovery;
-native tools retain host scheduling. A slot starts at execution, not the before
-hook: unavailable or denied schemas can bypass the host's after hook. Execution
-exceptions release their slot, while successful executions retain it through
-output validation and the after hook. Bounded interruption also releases abandoned
-slots. The queue neither changes schemas nor grants permission to execute.
+COMPLETE reviews are cached (newest 20) and persisted with their observed
+source excerpts, so `/pr-comment` works after a restart in the same conversation.
 
-`ctx.agent.transform` creates hidden primary agents with explicit provider/model
-references and composed system text. Unconfigured deep roles are absent.
-The host's post-configuration phase applies global/project
-permissions after external transforms. Before use, the adapter validates resolved
-protected fields, retains host permission rules, and pins the complete role
-configuration. Changes to settings or resolved roles require a restart.
+### Stage attempts
 
-Each private session has an active run grant, exact role/model, expected literal
-input and a random admission nonce carried in metadata, outside the model text.
-The prompt/context/tool hooks enforce that grant. Private agent mentions,
-delegation, manual model switching and reuse of stopped sessions are rejected.
-Ordinary sessions pass through without reading plugin settings.
+A stage attempt creates a fresh role-bound session, admits the JSON payload as
+the only prompt, waits for idle and correlates the turn. The handler evaluates
+the answer; if it lists issues and a repair prompt, the runtime sends up to
+`workflow.repairAttempts` correction prompts in the **same** session (each is a
+newly authorized prompt with its own nonce). A transient failure (provider
+408/409/425/429/5xx, missing idle, an unexpected message in the turn) retries
+the stage once in a new session (`workflow.stageRetries`). Permanent failures
+and cancellations are not retried.
 
-An additional `session.model.request` hook covers every V2 model request kind,
-including operations that do not trigger `prompt` or `context`. Only a primary
-request preceded by the granted context hook is authorized. Private generation,
-title and compaction requests fail before provider submission, including after
-completion and after a host restart. No in-memory session ID is needed to reject
-an ungranted private role. Compaction fails early because its summary cannot
-replace the exact admitted input in the current evidence contract.
+Host stream continuations are accepted for any provider: an errored text-only
+assistant message that the host marked for retry, followed by the host's
+continuation notice and a successful final text, is joined literally.
 
-Workflow-owned preflight checks all selected role models through `model.list`
-and reads MCP connection state through `mcp.list`. It records value-free readiness
-counts. The public MCP status schema has no server configuration/tool provenance;
-the adapter does not infer Azure identity or `codemode:false` from a connection.
-No provider fallback, extra inference, MCP action classifier or permission grant
-is introduced. The existing review evidence checks remain authoritative.
+### Comments
 
-Initial reviewers, the verifier and comment roles inherit host shell/read/glob/grep
-permissions. The plugin adds no permission rule for those tools. Standalone
-source readiness still denies shell/search. All private roles deny native editing,
-delegation, skills, public web, interactive questions, host session/model control
-and CodeMode execute. CodeMode's built-in fetch is not permission-gated in the
-target host; use direct MCP tools with codemode:false. See
-[MCP boundaries](AZURE_MCP.md#direct-mcp-tools-are-required).
+Planning (model) uses pages of at most four findings plus report segments, with
+CONTINUE checkpoints when a page needs more reading and a no-progress guard.
+Each page is validated per item: titles, severity labels, path slashes and
+HTML comment markers are normalized; anchors are restored against source text
+observed during the review; real problems get a repair turn; what remains is
+skipped with a reason. The assembled plan stores exact content, offsets and
+markers.
 
-The execution hook enforces these role-specific denials even if later host rules
-expose a prohibited schema. A second distinct prohibited attempt revokes the run;
-a host hook failure can terminate execution on the first. Allowed project tools
-recheck the active reviewer role/model and use the host's permission decision.
-There is no separate plugin shell permission setting.
+Publication (runtime) rechecks that the PR is active and the head unchanged,
+lists every thread, skips items whose marker exists, creates the rest, records
+each result immediately, and reads all markers back (`VERIFIED`). Creation
+results are `POSTED`, `ALREADY_PRESENT`, `FAILED`, `UNCERTAIN` (resolved by
+read-back) or `UNVERIFIED`. Re-running publication is safe.
 
-MCP action meanings remain host/server-owned. The plugin cannot guarantee that a
-reviewer's generic MCP call is read-only. Nor does the saved-output prompt policy
-programmatically prove local-file provenance. These limits must remain explicit.
+## Authorization and isolation
 
-## V2 session lifecycle
+Private roles (`azpr-<mode>-functional|risk|verifier|comment-plan`) are hidden
+primary agents with explicit models; `azpr-runtime` has no model and never
+receives a prompt. Every private session gets a grant with the run, role, model
+and a pending prompt (text + nonce). Hooks enforce it:
 
-1. Create a child session already bound to the exact role/model; verify the
-   returned identity, parent and selection before admitting input.
-2. `session.prompt` returns a queued inbox item, not the final answer. Validate
-   its ID, type, literal payload, metadata and delivery; do not submit again.
-3. `session.wait` waits for idle. Read `session.context` and session info, locating
-   exactly that admitted user message. Require unchanged projected input and no
-   interleaved user/switch/other input. Unrelated synthetic input also fails.
-4. Require a successful terminal idle and complete final assistant text with
-   stop finish, matching granted role/model. Exclude provider reasoning and
-   earlier tool turns. If compaction removed the exact input, fail closed.
-5. Revoke the grant before cleanup. A completed reviewer cannot be resumed by
-   ordinary messages. Raw captured failures remain available in diagnostics.
+- `prompt`: only the exact pending runtime prompt is admitted; private agents
+  cannot be mentioned or delegated.
+- `context`: tools the role may never use are removed from the request; comment
+  pages that read too much get their tools removed to force a checkpoint.
+- `model.request`: only primary requests after an authorized context; compaction,
+  generation and title requests are refused (compaction marks overflow).
+- `retry`: host retries continue only while the grant is active.
+- `permission` `evaluate`: enforces the `shell` setting for private roles and
+  allows reads of AZPR's own private data directory.
+- `tool.execute.before`: refuses hidden native tools and delegation.
+- `tool.execute.after`: numbers plain source text, saves observed review source
+  for anchor checks and pages large comment-tool results into private files.
 
-Initial/final review text may recover the pinned host's incomplete-stream
-continuation when the authoritative context contains the failed text response,
-matching retry metadata, exact host continuation message and direct text
-continuation ending successfully in the same role/model. Only the observed
-missing `finish_reason` protocol is recognized. Literal fragments are joined
-without inserted text; ordinary extraction and final evidence checks still
-apply. Diagnostics preserve visible fragments and disclose recovery. This adds
-no plugin model request and cannot recover cancellation, failed final sessions,
-tool execution between fragments or missing admission. Check/comment roles keep
-the strict transport path.
+The plugin wraps every namespaced tool executor so private model calls share the
+MCP queue (concurrency and per-call timeout) with runtime calls; ordinary
+sessions are untouched. Slots are released in `finally`, never by a hook.
 
-Recognized provider failures expose only the HTTP error status and the number
-of tool calls observed in admitted assistant context. Authentication/authorization
-statuses point to provider access and role/tool compatibility, not JSON repair.
-Raw provider details stay outside the receipt; private diagnostics retain the
-error message/status, while full bodies require the original host response.
-Cancellation stays distinct; no fallback, retry or permission change is
-introduced by this diagnostic.
+Shell is denied by default. With `shell: "ask"` or `"inherit"` reviewers may run
+commands under host permissions; that is real host authority, not a sandbox.
+Read-only use of MCP tools by reviewers is a prompt policy; only the runtime
+writes to Azure DevOps.
 
-There is no whole-run timer when runTimeoutSeconds is null. Explicit finite
-seconds create one deadline shared by all stages. Cancellation
-or disposal revokes grants synchronously, then interrupts and waits for each
-session with bounded cleanup. The Promise adapter ignores extra request options;
-local AbortSignal races are not server cancellation. Track pending admissions
-before interrupt so a delayed prompt cannot start after an idle acknowledgment.
-Unconfirmed settlement is visible in receipts and prevents recovery.
+## Compatibility
 
-The same run signal covers settings reads, command/agent catalog validation,
-initial role pinning and model/MCP preflight. Cancellation can therefore release
-the command and origin lock while a non-cancellable SDK read remains pending.
-Late read results cannot create a reviewer or restore a revoked grant. A pending
-read is distinct from an unconfirmed in-flight model/session interruption.
-Concurrent origins own their initial role reads; cancelling one cannot reject
-another origin's preflight or replace an already pinned role fingerprint.
-
-A completed PARTIAL initial or an admitted execution failure does not cancel
-useful sibling work. Both outcomes reach the existing verifier as available
-observations or an explicit unavailable-stage notice. Failed/interrupted response
-text is not accepted as evidence. Configuration, admission and permission failures
-before a stage starts still revoke the workflow. Manual cancellation and an
-explicit timeout stop pending work; there is no new default deadline.
-Origin/PR locks prevent duplicate review or publication workflows.
-Report retention is in-memory and bounded by report count, never evidence size.
-The latest 20 completed reviews survive until eviction or plugin/process exit;
-there is no TTL or restoration from debug files. A comment command may omit its
-review ID and select the latest completed review from its own origin only.
-Completed report/comment-result sessions route explicit commands back to that
-same origin for locking, permissions and child creation. This does not authorize
-ordinary prompts to resume a revoked reviewer or cross-conversation selection.
-
-## Review delivery and publication assessment
-
-Normal and deep each run two independent initial stages and the existing verifier.
-The runtime retains partial observations, coverage gaps, extra fields and literal
-unstructured text. Available consistent snapshots contribute a union of paths;
-conflicting frames remain visible and are not silently merged. With no usable
-initial snapshot, the verifier receives the PR request and establishes its own.
-The target comparison commit is not a proven merge base.
-
-Both initial roles include architecture and test quality in their review scope.
-Functional review considers responsibilities, dependencies, ownership, interfaces
-and behavioral test coverage. Risk review considers failure/trust boundaries,
-recovery and tests of adverse or concurrent behavior. These are directions for
-model judgment, not mandatory topic sections, finding quotas or extra completion
-gates. Useful design tradeoffs and test gaps can remain in the existing report
-without being promoted into confirmed defects. The verifier adjudicates concrete
-findings through the existing evidence contract; no additional model round is used.
-
-Shared reviewer/verifier guidance also considers performance and scalability:
-time, memory and I/O costs at expected data sizes and call frequencies, existing
-safeguards, source evidence and practical impact. Conclusions use the same
-finding and improvement-advice rules as other review topics.
-
-Reviewers use their current OpenCode project for model-chosen verification methods,
-including tests, reproductions and static inspection. OpenCode child sessions
-[inherit the origin's location and session permissions](https://github.com/anomalyco/opencode/blob/527f0b931d1f9b3ebd34e106c51b31ce5db5b075/packages/core/src/session.ts#L254).
-MCP remains the source for remote PR identity, paths and exact-commit content;
-no local Git repository or history is required. Models do not clone/fetch for
-review. They may save needed MCP-returned files in fresh temporary directories
-for experiments, preserving provenance and distinguishing modified reproductions.
-No repository mapping, root filesystem, custom execution tool or separate
-verification ledger is required. Relevant commands and
-observations belong in the existing review evidence/report fields, with original
-tool results in the host session. The verifier must attribute initial observations
-and establish the PR evidence independently.
-
-Native shell executes with ordinary host authority. The plugin does not guarantee
-filesystem/network isolation or prevent side effects of permitted commands.
-Reviewers must preserve user work and distinguish a dirty/different local checkout
-from the PR commit. Test failure or missing execution does not impose a completion
-gate. Cancellation revokes grants and interrupts/waits for host sessions; it does
-not guarantee termination of detached processes or undo side effects. Unconfirmed
-session settlement still prevents a COMPLETE cache. See
-[project verification](VERIFICATION.md).
-
-JSON is preferred, not a prerequisite for retaining useful review content.
-Completed stop-finish responses use an iterative grammar-aware recovery pass for
-trailing/missing commas, missing colons or terminal structure delimiters, redundant
-root closers, single/smart quotes, quoted literal controls, bare object keys and
-JSON comments. Paired unescaped double quotes inside closed single-line Markdown
-code spans may be escaped, with original offsets recorded. This review-only repair
-does not cross JSON members or apply to keys, unfinished spans or comment output.
-String content is preserved; incomplete values, array holes and
-conflicting duplicate keys are not silently repaired. Ambiguous JSON and prose
-are retained literally for verification or report presentation. Failed execution,
-context mismatch and truncation remain separate from correctable syntax.
-
-Known key spelling, enum case, quoted SHA wrappers and simple section shapes are
-normalized locally. Extra information stays in the result. Missing, malformed or
-duplicate IDs in initial and new-verifier findings receive unique runtime tracking
-IDs, with supplied IDs retained when replaced. Original disposition IDs are never
-remapped by this recovery. Missing evidence is never fabricated. The verifier is asked to verify
-all candidates independently. Omitted original decisions become explicit runtime
-UNREVIEWED rows, with the full original observations shown in the report.
-
-Runtime validators check supplied structured evidence, full identity/versions,
-coverage and original-ID decisions. Missing required evidence produces visible
-limitations and a readable PARTIAL result instead of throwing away the review.
-These checks do not independently read source or prove the model's claims true.
-A model-declared stale review or changed current SHAs remains STALE. An absent
-snapshot may be displayed from initial metadata, explicitly labelled as such;
-missing current SHAs are never copied from an older snapshot.
-
-Every COMPLETE review enters the same-origin comment cache. The independent
-verifier must pass the final evidence, requested snapshot, current-version and
-original-ID checks. Initial coverage disclosures, partial/unavailable initials
-and their frame warnings remain context for verification and comment planning;
-they are not a second publication veto. A corrected section shape can keep its
-warning without downgrading a final result that passes these checks. Borrowed
-verifier identity, conflicting field aliases, missing final evidence/decisions,
-stale versions and unstructured final prose still cannot establish completeness.
-Unconfirmed session settlement makes the workflow INCOMPLETE, avoiding a COMPLETE
-receipt with no comment-cache entry. Completion never publishes automatically.
-
-Fenced extraction consumes Markdown blocks in order, so a code example closing
-fence cannot swallow the next JSON block. It selects a unique review-shaped
-object and retains surrounding prose/examples. Another complete or unfinished
-review candidate, including a status-only verdict, prevents automatic selection.
-An incidental dictionary literal is not a competing review. Comment preview
-also extracts a unique strict plan object while retaining surrounding notes in
-its session and optional stage record. It uses the same ambiguity checks without
-review syntax repair or field normalization. Settings, source checks and
-publication receipts do not use this extraction.
-
-All review recovery uses local normalization and the existing review rounds.
-There are no model requests for status, location, disposition or final-content
-repair. Standalone source checks, settings and publication receipts continue to
-use strict parsing. Comment-plan structure and semantic validation remain
-unchanged after extraction. Raw responses, failures and limitations are kept.
-
-## Presentation, comments and diagnostics
-
-A deterministic renderer formats final findings, dispositions and invoked model
-provenance. Synthetic notices carry full text in their description and use
-resume:false. Receipt mode carries status/session/diagnostic locations; full mode
-also carries the report to the origin. PARTIAL, STALE and incomplete draft bodies
-are included even in receipt mode. Queuing never starts a formatter model and
-does not certify TUI display. See [debugging](DEBUGGING.md#output-and-report-presentation).
-
-COMPLETE same-origin reviews enter the comment cache. Preview verifies
-eligible corrected findings, anchors, severity and exact content with AI
-attribution. Preview displays the full comment count without a numerical quota.
-Explicit --publish reuses a saved preview or runs planning and publication in one
-workflow. The planner must finish with a validated saved plan before any publisher
-starts. The stages share the command's cancellation/deadline and origin/PR locks;
-no additional reviewer or automatic retry is introduced. Repeating preview runs
-the planner again and clears the previous plan before that refresh; publishing
-reuses an existing saved plan. Plans include a deterministic summary index and
-optional reader-facing review notes from the existing planner before the index.
-These begin with a supported purpose or change overview and may add shared impact
-or supported fix priorities. Review IDs and commit SHAs remain in local records;
-the summary marker still binds the review and exact HEAD without a visible metadata line.
-Review methods and test results need no separate account;
-missing/malformed notes omit that section without affecting the saved summary.
-Optional planner `summaryDetails` adds Markdown after the index: explanations
-for confirmed findings without inline coverage and a separate section for every
-distinct retained non-defect recommendation. The existing initial/verifier
-`report` fields carry advice; the planner receives only the final report and
-does not derive new defect IDs from it. Sections are conditional, with no topic
-checklist or item quota. Comment work may span several short sessions. Detail text has no plugin length cap;
-the introduction and inline bodies keep their separate limits. The runtime
-escapes quoted HTML-comment delimiters and saves the complete detail as part of
-the same single general-summary item. Missing optional detail is not a new gate
-or proof that no advice was found; semantic completeness remains model behavior.
-Routine publication bookkeeping stays local. Shared language instructions request
-natural explanations during existing stages, without a translation model pass.
-No inline findings still permits publishing the saved summary.
-It has its own marker/attempt state, no fake finding or anchor,
-and a separate model-reported thread ID. Missing summary confirmation prevents
-a successful batch result. File-backed work pages keep each admission small. Verifier instructions require useful earlier execution outcomes in the
-report with attribution; the planner does not receive initial reports or raw
-native execution output. A planning failure retains the review and exposes an
-optional model-supplied reason, or states that none was provided.
-The report footer supplies exact direct/preview commands and memory
-retention limits. No separate config switch applies.
-The saved plan adds line-local character offsets derived from its existing
-anchor. This does not add fields the planner must generate or inspect MCP schemas
-in code; the publisher translates the saved positions to the available tool.
-Publisher input contains the target, relevant snapshot paths, language, assigned
-saved items and page metadata. Large saved text is copied by marker before tool
-execution. Read-only sessions check every publication page before the first write;
-their separate input contains saved claims and current-check observations, without
-planning reports, coverage warnings, source indexes or anchor reconstruction.
-The checker only verifies mutable PR state and discussions at the unchanged HEAD;
-each publisher rechecks mutable PR metadata and reuses immutable anchors. Original
-source/tool bytes stay in private files with scoped references, not in every
-admission. Planning assigns at most four findings per page as well as bounding
-text size, retains each original input with its completed output, and rejects
-repeated checkpoints without distinct work. There is no aggregate work quota.
-See [comment work pages](COMMENTING.md#large-pr-work-pages).
-Before publication, mark every planned item uncertain; results can only update
-that ledger to model-reported outcomes. Any V2 terminal error, native denial
-or explicit error result during publication synchronously revokes grants before
-interruption is awaited. This stops subsequent authorized model/tool requests
-without classifying MCP actions; it cannot recall calls already dispatched.
-No automatic retry or independent provider verification is claimed.
-Native shell tools can complete with a nonzero command exit status. The runtime
-does not infer command semantics from exit codes; these remain visible command
-results, distinct from V2 tool errors and explicit error-result flags.
-
-Successful multiline review tool text is retained with its observed request
-arguments in private files for same-origin comment planning. The existing display
-eligibility excludes flagged failures, truncation and unsupported wrappers;
-native project-tool output is excluded. Identical tool/arguments/raw-text
-observations are deduplicated, with no source-content classification or new
-model request. The completed-review cache owns this temporary data and drops it
-with the review. Non-debug artifacts are removed after active work releases them;
-debug artifacts remain for inspection. No checkout, durable authority cache or
-repository map is introduced.
-Captured text is data, not source/commit certification or a new eligibility gate.
-Initials remain independent and the verifier retains its existing source checks.
-
-Optional diagnostics persist requests, visible answers, stage results and rendered
-reports under private permissions; never provider reasoning or full host config.
-Tool hook counts/timing do not audit source contents. Missing outcomes remain
-unknown; an MCP error, host truncation and a blocked native attempt are distinct.
-Opt-in `toolErrors` retain scalar execution-error fields before cancellation can
-replace the host outcome with an interruption. They omit arguments, result bodies
-and nested provider data; receipts do not echo these private messages.
-Request-kind observations count hook events and authorized primary preparations,
-not billable HTTP requests. The retry hook preserves the host's proposal during
-ordinary review, rejects it for revoked grants, and
-records only attempt/decision/delay. It never starts or expands a retry policy.
-See [validation](VALIDATION.md) for tests and remaining service/OS acceptance.
-
-## Exact upstream contracts
-
-The inspected host source revision is
-[527f0b931d1f9b3ebd34e106c51b31ce5db5b075](https://github.com/anomalyco/opencode/tree/527f0b931d1f9b3ebd34e106c51b31ce5db5b075).
-The matching npm plugin/schema/API artifacts are 2.0.22. Audit an upgrade against
-that source/API and an isolated actual-host fixture before changing the target.
-The [V2 plugin guide](https://opencode.ai/v2/docs/build/plugins/) describes the
-public model; exact-version source and runtime evidence determine this adapter's
-claims. Model/provider/MCP/OS acceptance remains separate from host API tests.
+`host.mjs` normalizes list/record response shapes, detects optional capabilities
+(`permission.hook`, `tool.list`) and holds the host continuation text. Receipts
+note when the detected OpenCode version differs from the tested one. The Azure
+tool names live only in `azure.mjs`.
