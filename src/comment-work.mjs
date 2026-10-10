@@ -60,7 +60,7 @@ export function sourceWindow(text, { start = null, end = null, context = 25, who
 }
 
 async function planningInput(review, store, findings, report, work, continuation, prepared, extras) {
-  const { files, changes, description, snapshotWarnings, iteration, ...snapshot } = review.snapshot;
+  const { files, changes, description, commits, snapshotWarnings, iteration, ...snapshot } = review.snapshot;
   const sources = extras.sourceExcerpts ?? [];
   const covered = new Set(sources.flatMap(item => item.findingIds));
   const needsEvidence = findings.some(finding => !covered.has(finding.id));

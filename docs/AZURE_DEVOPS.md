@@ -50,9 +50,11 @@ Paths are relative to
 | PR identity, status, title, description, refs | `GET pullRequests/{id}` | Code (Read) |
 | Iterations: latest source commit and merge base (`commonRefCommit`) | `GET pullRequests/{id}/iterations` | Code (Read) |
 | Changed files of the latest iteration against the merge base | `GET pullRequests/{id}/iterations/{n}/changes?$top=2000&$skip=` | Code (Read) |
+| The PR's commit messages (newest 100), reviewer context | `GET pullRequests/{id}/commits?$top=100` | Code (Read) |
 | Discussions, existing markers and read-back | `GET pullRequests/{id}/threads` | Code (Read) or Pull Request Threads |
 | Summary and inline comments | `POST pullRequests/{id}/threads` | Pull Request Threads (Read & write) or Code (Read & write) |
 | File content and folder listings at a commit | `GET items?path=…` / `GET items?scopePath=…&recursionLevel=…` with `versionDescriptor.versionType=commit` | Code (Read) |
+| The whole repository at a commit as a zip, for content search | `GET items?scopePath=/&recursionLevel=Full&$format=zip` with `versionDescriptor.versionType=commit` | Code (Read) |
 
 Azure DevOps Server (on-premises) supports 7.1 from Azure DevOps Server 2022.1,
 but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
@@ -61,10 +63,10 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 ## Who calls what
 
 - **Runtime** (deterministic code): the snapshot (PR, iterations, all change
-  pages), the final version recheck and the pre-publication recheck (PR and
+  pages, commit messages), the final version recheck and the pre-publication recheck (PR and
   iterations), `/pr-check` reads, the discussion digest for comment planning,
   HEAD source excerpts for planning, thread creation and marker read-back.
-- **Reviewers** (models) use five read-only AZPR tools, visible only in AZPR's
+- **Reviewers** (models) use six read-only AZPR tools, visible only in AZPR's
   private sessions and always bound to the run's repository:
   - `azpr_read_diff` — what the PR changed in one file: BASE → HEAD hunks with
     both line numbers, 5 unchanged lines before and 3 after each change
@@ -74,6 +76,15 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
     The diff is computed locally from the two file reads below;
   - `azpr_read_file` — one file at `head`, `base` or a full commit SHA as
     numbered lines, at most 1,000 lines (60,000 characters) per call;
+  - `azpr_search_code` — literal text in the contents of every text file at
+    `head`, `base` or a commit, changed or not, as `path:line: text` matches
+    (at most 100, 20 per file), optionally limited to a folder or a name glob.
+    The runtime downloads the repository once per run and commit as a zip
+    (at most 100 MB) and searches it in memory; files over 2 MB, binary files
+    and anything beyond 256 MB of text are not searched, and ZIP64 or
+    encrypted archives make the tool answer that search is unavailable. Azure
+    DevOps Code Search is not used: it indexes only the default branch, not a
+    PR's source commit;
   - `azpr_find_files` — repository paths by name or glob, from one recursive
     listing per commit and folder (read once per run); names only;
   - `azpr_list_files` — one folder's entries (optionally recursive), at most

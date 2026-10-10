@@ -2,8 +2,8 @@
  * Deterministic Azure DevOps access through the Azure DevOps Services REST API.
  *
  * Every call pins api-version 7.1, the latest released version of each
- * resource AZPR uses (pull requests, iterations, iteration changes, threads and
- * items). The runtime and the reviewers' AZPR tools share this client, so PR
+ * resource AZPR uses (pull requests, iterations, iteration changes, commits,
+ * threads and items). The runtime and the reviewers' AZPR tools share this client, so PR
  * identity, commit SHAs, the changed-file inventory, version rechecks, file
  * reads, existing threads and comment creation are code paths with verifiable
  * results. The organization and its PAT come from AZPR's own settings; the PAT
@@ -19,8 +19,11 @@ const MAX_RETRY_AFTER_MS = 60000;
 const CHANGE_PAGE = 2000;           // The maximum $top of iteration changes.
 const MAX_CHANGE_PAGES = 100;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const FILE_CACHE_CHARACTERS = 64 * 1024 * 1024;
 const DESCRIPTION_LIMIT = 8000;
+const COMMIT_LIMIT = 100;           // Commits of a PR shown to reviewers.
+const COMMIT_MESSAGE_LIMIT = 600;
 
 export class AzureError extends Error {
   /**
@@ -136,7 +139,7 @@ export function prVersions(pr, iterations) {
 }
 
 /** Build the runtime-owned snapshot from the PR, its iterations and the latest iteration's changes. */
-export function buildSnapshot({ pr, iterations, changes, complete }, target) {
+export function buildSnapshot({ pr, iterations, changes, complete, commits }, target) {
   if (pr === null || typeof pr !== 'object' || Array.isArray(pr)) throw new AzureError('Azure DevOps returned no pull request object.');
   const prId = Number(pr.pullRequestId);
   if (prId !== target.pullRequestId) throw new AzureError(`Azure DevOps returned PR ${pr.pullRequestId ?? 'unknown'} instead of ${target.pullRequestId}.`);
@@ -163,6 +166,14 @@ export function buildSnapshot({ pr, iterations, changes, complete }, target) {
     files.set(path, { path, changeType: changeTypes(entry.changeType), ...(original && original !== path ? { originalPath: original } : {}) });
   }
   const description = typeof pr.description === 'string' ? pr.description : '';
+  // The author's account of each commit; a failed read is a warning, not a failed review.
+  if (commits === null) warnings.push('The PR commit list could not be read; reviewers see no commit messages.');
+  const commitList = (Array.isArray(commits) ? commits : []).slice(0, COMMIT_LIMIT).flatMap(commit => {
+    const message = typeof commit?.comment === 'string' ? commit.comment.trim() : '';
+    if (!message) return [];
+    const shortened = message.length > COMMIT_MESSAGE_LIMIT || commit.commentTruncated === true;
+    return [{ id: sha(commit.commitId) ? commit.commitId.slice(0, 12).toLowerCase() : null, message: shortened ? `${message.slice(0, COMMIT_MESSAGE_LIMIT)} […]` : message }];
+  });
   return {
     organization: target.organization,
     project: repository.project?.name ?? target.project,
@@ -183,6 +194,7 @@ export function buildSnapshot({ pr, iterations, changes, complete }, target) {
     scope: 'pr',
     files: [...files.keys()],
     changes: [...files.values()],
+    commits: commitList,
     filesComplete: complete === true,
     snapshotWarnings: warnings,
   };
@@ -254,7 +266,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
     return new AzureError(`Azure DevOps returned HTTP ${status} for ${label}${suffix}.`, { kind: 'unexpected', status, code });
   }
 
-  async function send({ method, url, body, accept }, label, signal) {
+  async function send({ method, url, body, accept, maxBytes = MAX_FILE_BYTES }, label, signal) {
     let response;
     try {
       response = await fetchImpl(url, {
@@ -282,12 +294,26 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       catch (error) { throw new AzureError(`Azure DevOps returned unreadable JSON for ${label}.`, { kind: 'network', transient: true, cause: error }); }
     }
     const length = Number(response.headers.get('content-length'));
-    if (Number.isFinite(length) && length > MAX_FILE_BYTES) {
+    if (Number.isFinite(length) && length > maxBytes) {
       await response.body?.cancel?.().catch(() => {});
       return { tooLarge: true, size: length };
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    return bytes.length > MAX_FILE_BYTES ? { tooLarge: true, size: bytes.length } : { bytes };
+    // Stop reading once the limit is passed; a missing or wrong length cannot exhaust memory.
+    if (!response.body?.getReader) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return bytes.length > maxBytes ? { tooLarge: true, size: bytes.length } : { bytes };
+    }
+    const reader = response.body.getReader(), chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > maxBytes) { await reader.cancel().catch(() => {}); return { tooLarge: true, size }; }
+      chunks.push(value);
+    }
+    const joined = Buffer.concat(chunks, size);
+    return { bytes: new Uint8Array(joined.buffer, joined.byteOffset, joined.byteLength) };
   }
 
   /**
@@ -295,7 +321,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
    * (network, timeout, throttling, 5xx) twice; writes are never repeated
    * because publication resolves uncertainty by reading markers back.
    */
-  async function request(run, { method = 'GET', path, query = {}, body, accept = 'json', label, record = {} }) {
+  async function request(run, { method = 'GET', path, query = {}, body, accept = 'json', maxBytes, label, record = {} }) {
     const url = new URL(`${root}/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
     url.searchParams.set('api-version', API_VERSION);
@@ -305,7 +331,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       const started = performance.now();
       const entry = { method, call: label, ...record, attempt };
       try {
-        const value = await queue.run(signal => send({ method, url, body, accept }, label, signal), { signal: run.controller.signal, label: `Azure DevOps ${label}` });
+        const value = await queue.run(signal => send({ method, url, body, accept, maxBytes }, label, signal), { signal: run.controller.signal, label: `Azure DevOps ${label}` });
         onCall?.(run, { ...entry, ok: true, durationMs: Math.round(performance.now() - started),
           ...(value?.bytes ? { bytes: value.bytes.length } : value?.tooLarge ? { bytes: value.size, tooLarge: true } : {}) });
         return value;
@@ -354,6 +380,17 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
     return { changes, complete: false };
   }
 
+  /** The PR's commits with their messages (newest first); null when they cannot be read. */
+  async function pullRequestCommits(run, scope) {
+    try {
+      const result = await request(run, { path: `${pullRequest(scope)}/commits`, query: { $top: COMMIT_LIMIT }, label: 'PR commits' });
+      return Array.isArray(result?.value) ? result.value : null;
+    } catch (error) {
+      if (run.controller.signal.aborted) throw error;
+      return null;
+    }
+  }
+
   /** Exact bytes of one file at a commit, cached per run. */
   async function readFile(run, snapshot, path, version) {
     const normalized = normalizePath(path);
@@ -386,7 +423,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       const all = await iterations(run, scope);
       const latest = latestIteration(all);
       const listed = latest ? await iterationChanges(run, scope, latest.id) : { changes: [], complete: true };
-      return buildSnapshot({ pr, iterations: all, ...listed }, target);
+      return buildSnapshot({ pr, iterations: all, ...listed, commits: await pullRequestCommits(run, scope) }, target);
     },
     /** Fresh status and versions, used for the final recheck and before posting. */
     async versions(run, snapshot) {
@@ -421,6 +458,12 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
         pending.catch(() => cache.delete(key));
       }
       return cache.get(key);
+    },
+    /** The whole repository at a commit as one zip; `tooLarge` above MAX_ARCHIVE_BYTES. */
+    async archive(run, snapshot, version) {
+      const result = await request(run, { path: `${repo(snapshot)}/items`, accept: 'bytes', maxBytes: MAX_ARCHIVE_BYTES, label: 'repository archive', record: { version: version.slice(0, 12) },
+        query: { scopePath: '/', recursionLevel: 'Full', $format: 'zip', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' } });
+      return result.tooLarge ? { tooLarge: true, size: result.size } : { bytes: result.bytes };
     },
     /** Every thread on the PR (one call; the API returns all of them). */
     async threads(run, snapshot) {

@@ -81,8 +81,9 @@ export async function runPool(tasks, limit, worker) {
 
 /** The snapshot fields every model stage receives. Large lists are packed. */
 export async function snapshotForModel(snapshot, store) {
-  const { files, changes, description, snapshotWarnings, iteration, ...rest } = snapshot;
-  return { ...rest, fileCount: files.length, files: await store.pack(files), description: await store.pack(description ?? '', 4000) };
+  const { files, changes, description, commits, snapshotWarnings, iteration, ...rest } = snapshot;
+  return { ...rest, fileCount: files.length, files: await store.pack(files), description: await store.pack(description ?? '', 4000),
+    commits: await store.pack(commits ?? [], 8000) };
 }
 
 /** Make finding IDs unique across shards; keep the model's ID when it is free. */

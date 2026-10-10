@@ -14,13 +14,18 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 244 tests across settings (including the
+`npm run check` and `npm test` pass: 252 tests across settings (including the
 `mcp` → `azure` migration), host helpers, session transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
-logged), line diffs (minimal edits checked against brute force on random
-inputs, context, enclosing blocks, folded repeats), the reviewers' tools
-(diffs of edited, added, deleted and renamed files, paging, file search),
+logged, commit messages, the repository zip with a streaming size limit),
+content search (zip reading, refused ZIP64, encrypted and damaged archives,
+literal, case and whole-word matching, path filters, result bounds, one archive
+per run and commit), line diffs (minimal edits checked against brute force on random
+inputs, context, enclosing blocks, folded repeats, and every changed line shown
+in a hunk or a folded repeat on random inputs), the reviewers' tools
+(diffs of edited, added, deleted and renamed files, paging, file and content
+search, optional arguments sent as null or blank text),
 output acceptance and correction prompts (including verifier rows judged by
 their own fields, confirmations that move a finding to another file and the
 same-file duplicate check), comment validation and markers (including skips
@@ -50,7 +55,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | Scenario | Observed |
 | --- | --- |
 | `/pr-check` | READY with zero model requests; REST reads only. |
-| `/pr-review` | COMPLETE; reviewers read HEAD through `azpr_read_file`; `shell`, `execute` and the foreign MCP tool were absent from every private model request; the verifier was corrected by one repair turn in the same session; the runtime read the change list and rechecked versions; PROGRESS notices reached the conversation; the review was persisted. |
+| `/pr-review` | COMPLETE; reviewers read HEAD through `azpr_read_file` and searched HEAD's file contents through `azpr_search_code` (one repository zip for the run); `shell`, `execute` and the foreign MCP tool were absent from every private model request; the verifier was corrected by one repair turn in the same session; the runtime read the change list and rechecked versions; PROGRESS notices reached the conversation; the review was persisted. |
 | `/pr-comment` | PREVIEW, then `--publish` POSTED one summary and one inline comment with markers and file context. |
 | Restart | After restarting the host, `/pr-comment --publish` returned POSTED with ALREADY_PRESENT, no new writes and no model request. |
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
@@ -243,14 +248,15 @@ reading rules, all with 8/6:
   V2 put 25 such diffs into every request of a shard, and reviewers still read
   whole files: tokens roughly doubled, so sending diffs upfront was removed.
   V1's plain diffs and the new reading rules cost 49 % more than baseline C.
-- Folding repeated changes brings PR #3's diff volume to 27 % of whole-file
+- Folding repeated changes brings PR #3's diff volume to 29 % of whole-file
   reads (measured offline over all 316 files). V3 used 27–41 % fewer input
   tokens than the baselines in two runs, with all 24 policy defects and the
-  configuration defect found each time.
+  configuration defect found each time. These runs used a diff renderer that
+  dropped the middle of long change blocks (see "Diff defect" below); the
+  offline ratios here are measured with the corrected renderer.
 - Offline over the latest 182 pydantic commits that modified source files (618
-  files), diffs are 4.2 % of whole-file HEAD and BASE reads (median per commit 4
-  %, 90th percentile 9 %), so code-centric PRs should save more; this is not yet
-  validated live.
+  files), diffs are 5.3 % of whole-file HEAD and BASE reads (median per commit 4
+  %, 90th percentile 11 %), so code-centric PRs should save more.
 - The duplicate check ran on a real model: in V1 it merged five duplicates that
   different verifiers had confirmed in one file and kept two different
   configuration findings apart.
@@ -268,7 +274,7 @@ changed hunk (`json_schema.py` declares millisecond temporal values as strings
 although they serialize as numbers) and one outside the diff (a bare
 `MutableSequence` still uses the sequence schema while the PR's new test expects
 a list; the test and the implementation fell into different shards). Offline,
-its diffs are 6.2 % of whole-file HEAD and BASE reads. Both revisions ran with
+its diffs are 7.4 % of whole-file HEAD and BASE reads. Both revisions ran with
 `parallelSessions` 8 and `azure.concurrency` 6; nothing was posted.
 
 | Property | Whole-file reading (`fe0ee7b`) | This revision (`c1de65c`) |
@@ -284,10 +290,55 @@ Diff-based reading kept the result of whole-file reading on real code at an
 eighth of the input tokens and without context overflow. Neither revision
 connects a new test with unchanged code in another shard.
 
+## Live run: content search and commit messages (PR #4, review only)
+
+`azpr_search_code` (literal search over the repository zip of HEAD or BASE) and
+the PR's commit messages were added for the seeded regression outside the diff.
+PR #4 has one commit with a generic message, so the messages carried no
+evidence here. Two runs, same models and settings, nothing posted:
+
+| Property | Run 1 | Run 2 (diff and argument fixes below) |
+| --- | --- | --- |
+| Review | 135 s | 135 s |
+| Input tokens | 0.64 M | 0.55 M |
+| Requests per initial session | 5.25 | 4.25 |
+| Tool calls (diff / file / search) | 70 / 52 / 31 | 70 / 29 / 28 |
+| Failed tool calls | 5 (4 searches with `path: ""`, one 404) | 0 |
+| Repository zips (HEAD, BASE) | 4.10 MB in 1.5 s, 4.09 MB in 1.7 s | same |
+| Seeded regression in a changed hunk | found and confirmed | found and confirmed |
+| Seeded regression outside the diff | missed | missed |
+
+Reviewers used content search for callers, definitions and the code behind
+changed tests (for example `ser_json_temporal`, `as_ser_schema`, `SecretStr`),
+but in both runs the reviewers of the test shard read the new
+`test_bare_mutable_sequence` and never searched for `MutableSequence`; in run 1
+a search for the test's name failed on the blank path. Searching is available
+but not applied to every new test. Offline, a lexical cross-reference from the
+identifiers on added test lines to the non-test files that use them (identifiers
+found in at most three files) points at the seeded line
+(`_generate_schema.py:375`, `MutableSequence` mapped to the sequence schema) and
+adds about 15,600 characters for the whole PR, along with noise from comments.
+
+### Diff defect
+
+Run 1 showed `test_list.py` with HEAD lines 297–298 missing. Hunks were built
+from the first and the last line of each change block, so a block longer than
+the context before and after it (9 lines by default) lost its middle, and a
+repeated block that reached into a hunk was cut instead of folded. In PR #4's 32
+edited files, 451 of 1,111 changed lines (41 %) were not shown; reviewers
+partly compensated with whole-file reads. Every changed block is now shown
+whole (long hunks are still cut at 60,000 characters with a pointer to
+`azpr_read_file`), a repeat that reaches into a hunk is shown in it, and a test
+checks on random inputs that every changed line appears in a hunk or a folded
+repeat. The corrected diffs of PR #4 are 23 % larger; run 2 still used fewer
+tokens because reviewers made fewer whole-file reads. Tool arguments sent as
+`null` or blank text now count as not given.
+
 ## Not yet validated
 
 - Finding a defect whose evidence spans a test and unchanged code in different
-  shards (missed by both reading strategies on PR #4).
+  shards (missed on PR #4 by both reading strategies and in two runs with
+  content search).
 - A live publication with this revision: the rule against skips that rely on
   another finding.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live

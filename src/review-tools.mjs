@@ -9,8 +9,9 @@
  */
 import { isCommitSha, normalizePath } from './azure.mjs';
 import { DIFF_DEFAULTS, diffHunks, renderHunk, splitLines } from './diff.mjs';
+import { repositoryArchive, searchArchive } from './search.mjs';
 
-export const REVIEW_TOOLS = Object.freeze({ readDiff: 'azpr_read_diff', readFile: 'azpr_read_file', findFiles: 'azpr_find_files', listFiles: 'azpr_list_files', threads: 'azpr_pr_threads' });
+export const REVIEW_TOOLS = Object.freeze({ readDiff: 'azpr_read_diff', readFile: 'azpr_read_file', searchCode: 'azpr_search_code', findFiles: 'azpr_find_files', listFiles: 'azpr_list_files', threads: 'azpr_pr_threads' });
 export const REVIEW_TOOL_NAMES = Object.freeze(Object.values(REVIEW_TOOLS));
 export const READ_LINES = 1000;
 const READ_CHARACTERS = 60000;
@@ -47,6 +48,17 @@ export function reviewToolDefinitions() {
         version: versionProperty,
         startLine: { type: 'integer', minimum: 1, description: 'First line to return (default 1).' },
         endLine: { type: 'integer', minimum: 1, description: `Last line to return (default: up to ${READ_LINES} lines from startLine).` },
+      } },
+    },
+    {
+      name: REVIEW_TOOLS.searchCode,
+      description: 'Search the contents of every text file of the repository at an exact commit for literal text (not a regular expression), such as a function, class, type or configuration key: find definitions, callers and the code a test exercises, changed or not. Returns "path:line: text" matches, at most 100 (20 per file).',
+      input: { type: 'object', additionalProperties: false, required: ['query'], properties: {
+        query: { type: 'string', description: 'Literal text to find, 2-200 characters on one line.' },
+        path: { type: 'string', description: 'Limit to a folder such as /src, or a name glob such as "*.py" or "tests/**/*.ts".' },
+        version: versionProperty,
+        caseSensitive: { type: 'boolean', description: 'Match case exactly (default false).' },
+        wholeWord: { type: 'boolean', description: 'Match whole identifiers only (default false).' },
       } },
     },
     {
@@ -217,6 +229,25 @@ export function renderMatches(items, { pattern, path, label, version }) {
   return `${head}.\n${found.slice(0, FIND_RESULTS).join('\n')}${more}`;
 }
 
+/** A path filter: a folder (its files and subfolders) or a glob. */
+function scopeFilter(value) {
+  if (value === undefined) return () => true;
+  if (typeof value !== 'string' || !value.trim() || value.length > 300 || /[\0\r\n]/.test(value)) throw new ToolInputError('path must be a folder such as /src or a glob such as "*.py".');
+  if (/[*?]/.test(value)) return pathMatcher(value.trim());
+  const folder = normalizePath(value.trim()).replace(/\/+$/, '');
+  return folder ? path => path === folder || path.startsWith(folder + '/') : () => true;
+}
+
+/** Search results as "path:line: text", with what was searched. */
+export function renderSearch(result, { query, label, version, archive }) {
+  const notes = [archive.skipped.large && `${archive.skipped.large} file(s) over 2 MB`, archive.truncated && 'files beyond the in-memory limit']
+    .filter(Boolean);
+  const scope = `${result.searched} text file(s) at ${label} ${version.slice(0, 12)}${notes.length ? `; not searched: ${notes.join(', ')}` : ''}`;
+  if (!result.total) return `No match for ${JSON.stringify(query)} in ${scope}. Try a shorter or different name, or find files with azpr_find_files.`;
+  const more = result.total > result.matches.length ? `\nShowing ${result.matches.length} of ${result.total}; narrow with path or wholeWord.` : '';
+  return `${result.total} match(es) for ${JSON.stringify(query)} in ${result.files} file(s) (searched ${scope}).${more}\n${result.matches.map(match => `${match.path}:${match.line}: ${match.text}`).join('\n')}`;
+}
+
 /** Folder entries, folders marked with a trailing slash. */
 export function renderListing(items, { path, label, version }) {
   const entries = (Array.isArray(items) ? items : [])
@@ -263,7 +294,9 @@ export function renderThreads(threads, { path, threadId }) {
  * for file reads, the observed source for later anchor checks.
  */
 export async function runReviewTool(name, input, { azure, run, snapshot }) {
-  const args = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  // Models often send an optional argument as null or "": that means not given.
+  const args = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null && !(typeof value === 'string' && !value.trim())));
   if (name === REVIEW_TOOLS.readDiff) {
     const path = pathArgument(args.path);
     if (args.context !== undefined && (!Number.isInteger(args.context) || args.context < 0 || args.context > 50)) throw new ToolInputError('context must be an integer from 0 to 50.');
@@ -279,6 +312,16 @@ export async function runReviewTool(name, input, { azure, run, snapshot }) {
     const [base, head] = await Promise.all([read(change?.originalPath ?? path, snapshot.base, types.includes('add')), read(path, snapshot.head, types.includes('delete'))]);
     const text = renderDiff({ path, change, base, head, snapshot, context: args.context, fromHunk });
     return { text, ...(typeof head?.text === 'string' ? { observation: { path, version: snapshot.head, text: head.text } } : {}) };
+  }
+  if (name === REVIEW_TOOLS.searchCode) {
+    const query = typeof args.query === 'string' ? args.query : '';
+    if (query.trim().length < 2 || query.length > 200 || /[\0\r\n]/.test(query)) throw new ToolInputError('query must be literal text of 2 to 200 characters on one line.');
+    for (const key of ['caseSensitive', 'wholeWord']) if (args[key] !== undefined && typeof args[key] !== 'boolean') throw new ToolInputError(`${key} must be true or false.`);
+    const include = scopeFilter(args.path);
+    const { sha, label } = resolveVersion(args.version, snapshot);
+    const archive = await repositoryArchive(run, azure, snapshot, sha);
+    if (archive.unavailable) return { text: `Content search is unavailable for this repository: ${archive.unavailable}. Find files with azpr_find_files and read them with azpr_read_file.` };
+    return { text: renderSearch(searchArchive(archive, { query, caseSensitive: args.caseSensitive === true, wholeWord: args.wholeWord === true, include }), { query, label, version: sha, archive }) };
   }
   if (name === REVIEW_TOOLS.findFiles) {
     const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : '';

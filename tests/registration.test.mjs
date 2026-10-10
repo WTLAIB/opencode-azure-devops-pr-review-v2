@@ -107,7 +107,7 @@ test('the deterministic source check needs no model session', async t => {
   assert.match(receipt, /\] READY/);
   assert.match(receipt, /HEAD source read \| ok/);
   assert.equal(f.calls.reviewSessions, 0);
-  assert.deepEqual(new Set(f.azure.state.calls.map(call => call.route)), new Set(['pr', 'iterations', 'changes', 'items', 'threads']));
+  assert.deepEqual(new Set(f.azure.state.calls.map(call => call.route)), new Set(['pr', 'iterations', 'changes', 'commits', 'items', 'threads']));
   assert.ok(f.azure.state.calls.every(call => call.method === 'GET'), '/pr-check never writes.');
 });
 
@@ -144,7 +144,7 @@ test('AZPR tools are registered once and a foreign tool with the same name is re
   const f = await fixture(t);
   t.after(await f.setup());
   const registered = await f.context.tool.list();
-  assert.deepEqual(registered.map(tool => tool.name).sort(), ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file']);
+  assert.deepEqual(registered.map(tool => tool.name).sort(), ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file', 'azpr_search_code']);
   assert.ok(registered.every(tool => tool.options?.codemode === false), 'Direct tools, not CodeMode.');
   const g = await fixture(t);
   await g.context.tool.transform(editor => editor.add({ name: 'azpr_read_file', description: 'other plugin', input: {}, execute: async () => ({}) }));

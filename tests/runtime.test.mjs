@@ -192,6 +192,8 @@ test('a review returns STARTED, progress notices and one COMPLETE receipt, and p
   assert.deepEqual(saved, [`${reviewId(receipt)}.json`]);
   const verifier = f.sessionsFor('azpr-review-verifier')[0];
   assert.ok(f.notices.some(n => n.sessionID === verifier.id && /FINAL_REPORT/.test(n.text)), 'The report is queued to the verifier session.');
+  const initial = [...f.sessions.values()].find(session => session.packet?.assignment?.files);
+  assert.deepEqual(initial.packet.snapshot.commits, [{ id: 'b'.repeat(12), message: 'Fixture change' }], 'Reviewers see the PR commit messages.');
 });
 
 test('commands from the same conversation are refused while a run is active', async t => {
@@ -283,7 +285,7 @@ test('shell and foreign tools are hidden and refused; shell is forced to deny th
   assert.match(attempted, /not available to this private reviewer/);
   assert.match(mcpTool, /not available to this private reviewer/);
   const functional = f.sessionsFor('azpr-review-functional')[0];
-  assert.deepEqual(functional.visibleTools.sort(), ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file', 'glob', 'grep', 'read']);
+  assert.deepEqual(functional.visibleTools.sort(), ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file', 'azpr_search_code', 'glob', 'grep', 'read']);
   const event = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'shell', resources: ['*'], effect: 'allow' });
   assert.equal(event.effect, 'deny');
   const own = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: [join(f.stateDirectory, 'data', 'x', '*')], effect: 'ask' });
@@ -479,6 +481,7 @@ test('planning gets runtime-read discussions and source; transient thread reads 
   assert.deepEqual(planner.packet.existingDiscussions.map(d => [d.threadId, d.author, d.comments]), [[7, 'Ann', 1]]);
   assert.match(planner.packet.sourceExcerpts[0].text, /^1 \| fixture code/);
   assert.equal(planner.packet.evidenceIndex, undefined);
+  assert.equal(planner.packet.snapshot.commits, undefined, 'Commit messages are review context, not planning input.');
   const debug = /Private debug directory: ([^\n]+)/.exec(receipt)?.[1];
   const raw = await readFile(join(debug, 'azure-calls.jsonl'), 'utf8');
   const calls = raw.trim().split('\n').map(line => JSON.parse(line));

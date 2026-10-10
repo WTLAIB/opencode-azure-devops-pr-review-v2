@@ -14,10 +14,11 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   base, the complete changed-file list (paged 2,000 per request) and the final
   version recheck come from REST calls, not model echoes. `/pr-check` is fully
   deterministic.
-- **Reviewer tools.** Models read the repository through five read-only AZPR
+- **Reviewer tools.** Models read the repository through six read-only AZPR
   tools bound to the run's repository: diffs with structure-aware context and
-  folded repeats, whole files, file search by name, folder listings and PR
-  threads. Private sessions see only an allowlist of tools, and ordinary
+  folded repeats, whole files, content search over the exact commit, file
+  search by name, folder listings and PR threads. They also see the PR's commit
+  messages. Private sessions see only an allowlist of tools, and ordinary
   sessions never see AZPR's tools.
 - **Only source changes are stale.** A moved base is a warning; a changed head
   is STALE. Publication rechecks the head before writing.
@@ -102,13 +103,19 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    providers and organizations have been measured; raise both together.
 4. Reduce input tokens further. Reading diffs with folded repeats cut the
    316-file review from 7.5–9.2 to about 5.5 million input tokens and a real
-   35-file code PR from 6.15 to 0.79 million; reviewers still make about 5.5
+   35-file code PR from 6.15 to 0.55–0.79 million; reviewers still make 4–5.5
    model requests per session and each re-sends what was read. Next candidate:
    provider prompt caching (cache reads are 10–16 % of input).
 5. Cross-shard evidence: a new test in one shard that contradicts unchanged
-   code in another shard was missed by both reading strategies. Candidates are
-   keeping tests with the code they exercise when sharding, or a content search
-   tool (Azure DevOps Code Search, where the organization has it).
+   code in another shard is still missed. Content search (`azpr_search_code`,
+   over the repository zip of the exact commit; Azure DevOps Code Search
+   indexes only the default branch) and the PR's commit messages are in place,
+   and reviewers search often, but not for every new test. Next candidate: the
+   runtime cross-references identifiers on added test lines with the non-test
+   files that use them and gives each test file's reviewers those locations
+   (offline it points at the seeded line in PR #4 for about 4,000 tokens per
+   PR; comments must be filtered out), or a check stage dedicated to what new
+   tests assert.
 6. Check rendered comments, inline anchors and summaries in the Azure UI.
 7. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.

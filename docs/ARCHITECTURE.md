@@ -17,8 +17,9 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations, failure classification, interrupt and synthetic notices. |
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
-| `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
+| `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_search_code`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
 | `src/diff.mjs` | Line diffs (Myers) with both line numbers, more context before a change than after, the enclosing block's start, and folding of repeated changes. |
+| `src/search.mjs` | Content search: reads the repository zip of one commit once per run (stored or deflated entries; bounded inflation; ZIP64 and encrypted archives refused), keeps its text files in memory and finds literal text, bounded per file and in total. |
 | `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
 | `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
@@ -53,7 +54,10 @@ After preflight, hooks never re-read settings or catalogs.
    changes (2,000 per request). Head is the latest iteration's source commit;
    base is its common commit (merge base), the comparison Azure DevOps shows,
    falling back to the target tip with a warning when Azure reports none. A
-   lagging merge or multiple merge bases are reported as warnings.
+   lagging merge or multiple merge bases are reported as warnings. The PR's
+   commit messages (newest 100, each shortened to 600 characters) go to the
+   reviewers as the author's claims about each change; the comment planner
+   does not get them.
 2. **Initial reviews** — changed files are sorted and cut into shards of
    `workflow.shardFiles`. For each role and shard a private session reviews the
    assigned files with a finding-ID range (`F-1…`, `F-1001…`) so IDs never

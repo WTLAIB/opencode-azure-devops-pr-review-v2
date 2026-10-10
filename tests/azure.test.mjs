@@ -170,3 +170,38 @@ test('file reads: exact text, binary detection, oversized files and a per-run ca
   const listing = await c.listItems(r, snapshot, '/', snapshot.head);
   assert.deepEqual(listing.map(item => item.path), ['/', '/a.json', '/logo.png']);
 });
+
+test('commits: messages reach the snapshot shortened; an unreadable list is a warning, not a failure', async () => {
+  const long = 'Use list schema for bare MutableSequence\n\n' + 'detail '.repeat(200);
+  const azure = fakeAzure({ commits: [{ commitId: 'c'.repeat(40), comment: long }, { commitId: 'd'.repeat(40), comment: 'Second', commentTruncated: true }, { commitId: 'e'.repeat(40), comment: '  ' }] });
+  const snapshot = await client(azure).snapshot(run(), { ...target, organization: 'org' });
+  assert.equal(snapshot.commits.length, 2, 'Empty messages are left out.');
+  assert.equal(snapshot.commits[0].id, 'c'.repeat(12));
+  assert.match(snapshot.commits[0].message, /^Use list schema for bare MutableSequence\n\ndetail [\s\S]* \[…\]$/);
+  assert.ok(snapshot.commits[0].message.length < 620);
+  assert.equal(snapshot.commits[1].message, 'Second […]');
+  assert.equal(azure.callsTo('commits')[0].query.$top, '100');
+  const failing = fakeAzure();
+  failing.state.fail.commits = () => azureError(500, 'ServerException', 'boom');
+  const degraded = await client(failing).snapshot(run(), target);
+  assert.deepEqual(degraded.commits, []);
+  assert.ok(degraded.snapshotWarnings.some(message => /commit list could not be read/.test(message)));
+  assert.equal(failing.callsTo('commits').length, 3, 'A transient failure is retried like any read.');
+});
+
+test('repository archives download as zip at a commit and stop at the size limit without reading the rest', async () => {
+  const azure = fakeAzure({ files: ['/src/a.ts'], sources: { '/src/a.ts': 'export const a = 1;\n' } });
+  const snapshot = azure.snapshot();
+  const archive = await client(azure).archive(run(), { projectId: 'pid', repositoryId: 'rid', ...snapshot }, snapshot.head);
+  assert.ok(archive.bytes.length > 22);
+  const [call] = azure.callsTo('items');
+  assert.equal(call.query.$format, 'zip');
+  assert.equal(call.query.recursionLevel, 'Full');
+  assert.equal(call.query['versionDescriptor.version'], snapshot.head);
+  let pulled = 0;
+  const endless = new ReadableStream({ pull(controller) { pulled++; controller.enqueue(new Uint8Array(8 * 1024 * 1024)); } });
+  const huge = await client(azure, { fetch: async () => new Response(endless, { status: 200, headers: { 'content-type': 'application/zip' } }) })
+    .archive(run(), { projectId: 'pid', repositoryId: 'rid', ...snapshot }, snapshot.head);
+  assert.equal(huge.tooLarge, true);
+  assert.ok(pulled < 20, 'Reading stops right after the limit.');
+});

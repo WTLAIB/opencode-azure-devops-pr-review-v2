@@ -107,7 +107,7 @@ test('tools: an explicit allowlist of AZPR and read tools; denied natives and sh
   assert.equal(nativeToolPermissions('azpr-review-risk', 'deny').shell, 'deny');
   assert.equal(nativeToolPermissions('azpr-review-risk', 'ask').shell, 'ask');
   assert.equal(Object.hasOwn(nativeToolPermissions('azpr-review-risk', 'inherit'), 'shell'), false);
-  assert.deepEqual(allowedTools('azpr-review-risk', 'deny'), ['azpr_read_diff', 'azpr_read_file', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'read', 'glob', 'grep']);
+  assert.deepEqual(allowedTools('azpr-review-risk', 'deny'), ['azpr_read_diff', 'azpr_read_file', 'azpr_search_code', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'read', 'glob', 'grep']);
   assert.ok(allowedTools('azpr-deep-comment-plan', 'ask').includes('shell'));
   assert.deepEqual(allowedTools('build', 'inherit'), [], 'Ordinary agents are not governed by AZPR.');
   for (const name of [...BLOCKED_NATIVE_TOOLS, 'ado_repo_file', 'repo_pull_request_thread_write']) assert.equal(allowedTools('azpr-review-risk', 'inherit').includes(name), false, name);

@@ -78,6 +78,7 @@ const provider = createServer(async (request, response) => {
     if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
     // A reviewer mistaking a repository path for a local one must get an answer, not a pending approval.
     else if (toolResults === 1 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/scale_lab' } };
+    else if (toolResults === 1 && parsed.model === 'risk') call = { name: 'azpr_search_code', arguments: { query: 'second line of', path: '/src' } };
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
   } else if (payload?.assignment?.findingIds) {
     const findings = payload.assignment.findings;
@@ -215,9 +216,12 @@ try {
     assert.ok(!request.tools.includes('shell'), 'Shell is hidden from private reviewers by default.');
     assert.ok(!request.tools.includes('execute'), 'CodeMode execute is hidden.');
   }
-  assert.ok(reviewRequests.every(request => ['azpr_read_diff', 'azpr_read_file', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
+  assert.ok(reviewRequests.every(request => ['azpr_read_diff', 'azpr_read_file', 'azpr_search_code', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
   assert.ok(reviewRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools are hidden from private reviewers.');
   assert.ok(azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === 'b'.repeat(40)), 'A reviewer read HEAD through azpr_read_file.');
+  assert.ok(reviewRequests.some(request => request.model === 'risk' && /^2 match\(es\) for "second line of" in 2 file\(s\)[\s\S]*\/src\/fixture\.js:2: second line of \/src\/fixture\.js/.test(request.lastTool)),
+    'A reviewer searched file contents at HEAD through azpr_search_code.');
+  assert.equal(azure.callsTo('items').filter(call => call.query.$format === 'zip').length, 1, 'Content search reads one repository archive per run and commit.');
   assert.ok(reviewRequests.some(request => request.model === 'functional' && /outside the local OpenCode project/.test(request.lastTool)),
     'A native grep on a repository path is refused with guidance instead of waiting for approval.');
   assert.equal((await api('/api/permission/request')).data?.length ?? 0, 0, 'No private session waits for an approval.');

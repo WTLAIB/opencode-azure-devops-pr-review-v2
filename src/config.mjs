@@ -144,6 +144,8 @@ input snapshot; \`version\` is "head" (default), "base" or a full commit SHA:
   surrounding lines and both line numbers.
 - azpr_read_file: one file as numbered lines, at most 1000 per call; use
   startLine/endLine for other ranges of long files.
+- azpr_search_code: literal text in every text file of the repository at one
+  commit (default HEAD), as path:line matches; finds unchanged code too.
 - azpr_find_files: repository paths by name or glob; names only, not contents.
 - azpr_list_files: the entries of one folder (recursive: true for all descendants).
 - azpr_pr_threads: the PR's discussion threads; filter by path, or pass
@@ -153,8 +155,8 @@ time-limited and retried by the runtime.
 
 Native read, glob and grep see only the local OpenCode project and AZPR's
 private data files, never the PR repository: a repository path such as
-/src/app.ts exists only through the azpr tools. There is no search inside file
-contents; find candidate files by name and read them.
+/src/app.ts exists only through the azpr tools. Search contents with
+azpr_search_code and names with azpr_find_files instead of guessing paths.
 
 A failed read is not evidence. Do not repeat a request that failed as not found,
 refused or invalid; a timeout or throttling error was already retried, so report

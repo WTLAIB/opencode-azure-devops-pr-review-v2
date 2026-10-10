@@ -1,8 +1,33 @@
 // Offline stand-in for the Azure DevOps Services REST API (api-version 7.1):
-// pull request, iterations, iteration changes, threads and items. The same
+// pull request, iterations, iteration changes, commits, threads and items
+// (including a repository zip). The same
 // handler serves in-process tests (as a fetch function) and exact-host
 // fixtures (as a loopback HTTP server).
 import { Buffer } from 'node:buffer';
+import { deflateRawSync } from 'node:zlib';
+
+/** A minimal zip writer (deflated entries, CRC left at zero) for repository archives. */
+export function zipFiles(entries) {
+  const locals = [], directory = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nameBytes = Buffer.from(name, 'utf8'), data = Buffer.from(content), packed = deflateRawSync(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6); local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(packed.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(nameBytes.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(0x0800, 8); central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(packed.length, 20); central.writeUInt32LE(data.length, 24); central.writeUInt16LE(nameBytes.length, 28); central.writeUInt32LE(offset, 42);
+    locals.push(local, nameBytes, packed);
+    directory.push(central, nameBytes);
+    offset += 30 + nameBytes.length + packed.length;
+  }
+  const directorySize = directory.reduce((sum, part) => sum + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(directorySize, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, ...directory, end]);
+}
 
 export const FAKE_PAT = 'fixture-pat-0123456789abcdefghijklmnopqrstuvwxyz';
 const json = (status, value, headers = {}) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers }, body: JSON.stringify(value) });
@@ -15,6 +40,7 @@ export function fakeAzure(options = {}) {
     head: options.head ?? 'b'.repeat(40), base: options.base ?? 'a'.repeat(40), target: options.target ?? 'c'.repeat(40), status: options.status ?? 'active',
     iteration: 1, files: options.files ?? ['/src/Main.java'], binary: new Set(options.binary ?? []),
     sources: options.sources ?? {}, threads: [], nextThread: 1000, calls: [], fail: {}, afterVersions: null, snapshotTaken: false,
+    commits: options.commits ?? [{ commitId: options.head ?? 'b'.repeat(40), comment: 'Fixture change' }],
   };
   const pr = () => ({
     pullRequestId: state.prId, status: state.status, title: 'Fixture PR', description: 'Fixture description', isDraft: false,
@@ -37,6 +63,8 @@ export function fakeAzure(options = {}) {
       if (!more) state.snapshotTaken = true;
       return json(200, { changeEntries: entries, ...(more ? { nextSkip: skip + top, nextTop: top } : {}) });
     }],
+    ['commits', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/commits$/i, () =>
+      json(200, { value: state.commits, count: state.commits.length })],
     ['threads', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/threads$/i, () =>
       json(200, { value: state.threads.filter(thread => !thread.deleted), count: state.threads.length })],
     ['createThread', 'POST', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/threads$/i, request => {
@@ -50,6 +78,12 @@ export function fakeAzure(options = {}) {
     }],
     ['items', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/items$/i, request => {
       const path = request.query.get('path'), scope = request.query.get('scopePath'), version = request.query.get('versionDescriptor.version');
+      if (request.query.get('$format') === 'zip') {
+        const paths = new Set([...state.files, ...Object.keys(state.sources).flatMap(key => key.includes(':') ? (key.startsWith(`${version}:`) ? [key.slice(version.length + 1)] : []) : [key])]);
+        const entries = [...paths].sort().map(file => [file.replace(/^\//, ''), state.binary.has(file) ? Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]) : source(file, version)]);
+        const bytes = zipFiles(entries);
+        return { status: 200, headers: { 'content-type': 'application/zip', 'content-length': String(bytes.length) }, body: bytes };
+      }
       if (path) {
         if (!state.files.includes(path) && !Object.hasOwn(state.sources, path) && !Object.hasOwn(state.sources, `${version}:${path}`)) {
           return azureError(404, 'GitItemNotFoundException', `TF401174: The item '${path}' could not be found in the repository 'repo' at the version specified by '${version}'.`);

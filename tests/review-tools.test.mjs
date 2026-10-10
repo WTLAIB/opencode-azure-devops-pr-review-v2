@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, resolveVersion, renderFile, renderListing, renderThreads, runReviewTool, READ_LINES } from '../src/review-tools.mjs';
+import { zipFiles } from './fake-azure.mjs';
 
 const snapshot = { head: 'b'.repeat(40), base: 'a'.repeat(40), baseKind: 'merge-base' };
 const file = (text, extra = {}) => ({ path: '/src/a.ts', version: snapshot.head, text, size: text.length, ...extra });
@@ -66,6 +67,7 @@ test('tool arguments are validated before any Azure call', async () => {
   const context = { azure, run: {}, snapshot };
   for (const [name, input, message] of [
     ['azpr_read_file', {}, /path must be a repository path/],
+    ['azpr_read_file', { path: ' ' }, /path must be a repository path/],
     ['azpr_read_file', { path: '/a', startLine: 0 }, /startLine must be a positive integer/],
     ['azpr_read_file', { path: '/a', startLine: 5, endLine: 2 }, /endLine must not be smaller/],
     ['azpr_list_files', { recursive: 'yes' }, /recursive must be true or false/],
@@ -74,6 +76,15 @@ test('tool arguments are validated before any Azure call', async () => {
   ]) await assert.rejects(runReviewTool(name, input, context), message);
   const read = await runReviewTool('azpr_read_file', { path: 'src/a.ts', version: 'base' }, { ...context, azure: { readFile: async (_run, _snapshot, path, version) => ({ path, version, text: 'x\n', size: 2 }) } });
   assert.deepEqual(read.observation, { path: '/src/a.ts', version: snapshot.base, text: 'x\n' });
+  // Optional arguments sent as null or blank text count as not given.
+  const listed = [];
+  const lenient = { ...context, azure: { readFile: async (_run, _snapshot, path, version) => ({ path, version, text: 'x\n', size: 2 }), threads: async () => [],
+    listItems: async (_run, _snapshot, path, version, recursive) => { listed.push([path, version, recursive]); return []; } } };
+  assert.match((await runReviewTool('azpr_read_file', { path: '/a', version: '', startLine: null, endLine: null }, lenient)).text, /^\/a at HEAD/);
+  await runReviewTool('azpr_list_files', { path: '', version: null, recursive: null }, lenient);
+  await runReviewTool('azpr_find_files', { pattern: '*.py', path: ' ' }, lenient);
+  assert.deepEqual(listed, [['/', snapshot.head, false], ['/', snapshot.head, true]]);
+  assert.match((await runReviewTool('azpr_pr_threads', { path: '', threadId: null }, lenient)).text, /^0 live thread\(s\)\./);
 });
 
 test('diffs show both sides of every change and whole content for added or deleted files', async () => {
@@ -128,6 +139,34 @@ test('diffs show both sides of every change and whole content for added or delet
   assert.match(repeated, /199 hunk\(s\) repeat an earlier change and are folded to one line/);
   assert.match(repeated, /\n@@ #2 BASE 21-21 → HEAD 21-21 @@ folded: 2 changed line\(s\) repeating #1 with 0→20, 0→20\n/);
   assert.ok(repeated.length < 30000);
+});
+
+test('content search covers unchanged files at one commit, filtered by folder or glob', async () => {
+  const archives = [];
+  const trees = {
+    [snapshot.head]: [['src/parse.py', 'def parse(value):\n    return MutableSequence(value)\n'], ['src/util.py', 'from collections.abc import MutableSequence\n'], ['tests/test_parse.py', 'def test_parse():\n    assert parse([1]) == [1]\n']],
+    [snapshot.base]: [['src/parse.py', 'def parse(value):\n    return list(value)\n']],
+  };
+  const azure = { archive: async (_run, _snapshot, version) => { archives.push(version); return { bytes: zipFiles(trees[version]) }; } };
+  const context = { azure, run: {}, snapshot };
+  const search = async args => (await runReviewTool('azpr_search_code', args, context)).text;
+  assert.equal(await search({ query: 'MutableSequence' }),
+    `2 match(es) for "MutableSequence" in 2 file(s) (searched 3 text file(s) at HEAD (PR source) ${'b'.repeat(12)}).\n/src/parse.py:2: return MutableSequence(value)\n/src/util.py:1: from collections.abc import MutableSequence`);
+  assert.match(await search({ query: 'parse(', path: '/tests' }), /^2 match\(es\)[\s\S]*\/tests\/test_parse\.py:1: def test_parse\(\):/);
+  assert.match(await search({ query: 'parse(', path: '/tests', wholeWord: true }), /^1 match\(es\) for "parse\(" in 1 file\(s\) \(searched 1 text file\(s\)[\s\S]*\n\/tests\/test_parse\.py:2: assert parse\(\[1\]\) == \[1\]$/);
+  assert.match(await search({ query: 'def ', path: 'test_*.py' }), /^1 match\(es\)[\s\S]*\/tests\/test_parse\.py:1: def test_parse\(\):$/);
+  assert.match(await search({ query: 'MutableSequence', path: '', caseSensitive: null }), /^2 match\(es\) for "MutableSequence" in 2 file\(s\) \(searched 3 text/, 'A blank path searches everything.');
+  assert.match(await search({ query: 'mutablesequence', caseSensitive: true }), /^No match for "mutablesequence" in 3 text file\(s\) at HEAD[^.]*\. Try a shorter or different name/);
+  assert.match(await search({ query: 'MutableSequence', version: 'BASE' }), /^No match for "MutableSequence" in 1 text file\(s\) at BASE \(merge base\) a{12}\./, 'BASE is searched in its own archive.');
+  await search({ query: 'parse' });
+  assert.deepEqual(archives, [snapshot.head, snapshot.base], 'One archive per commit and run.');
+  const unavailable = { azure: { archive: async () => ({ tooLarge: true, size: 123456789 }) }, run: {}, snapshot };
+  assert.match((await runReviewTool('azpr_search_code', { query: 'parse' }, unavailable)).text,
+    /^Content search is unavailable for this repository: the repository archive is larger than AZPR reads \(123456789 bytes\)\. Find files with azpr_find_files/);
+  const refused = { azure: { archive: async () => assert.fail('Invalid input reaches Azure DevOps.') }, run: {}, snapshot };
+  for (const [args, message] of [[{}, /query must be literal text/], [{ query: ' x ' }, /query must be literal text/], [{ query: 'a\nb' }, /query must be literal text/], [{ query: 'x'.repeat(201) }, /query must be literal text/],
+    [{ query: 'parse', wholeWord: 'yes' }, /wholeWord must be true or false/], [{ query: 'parse', path: '/src\n/tests' }, /path must be a folder/], [{ query: 'parse', version: 'main' }, /version/]])
+    await assert.rejects(runReviewTool('azpr_search_code', args, refused), message);
 });
 
 test('files are found by glob or plain text in one cached recursive listing', async () => {

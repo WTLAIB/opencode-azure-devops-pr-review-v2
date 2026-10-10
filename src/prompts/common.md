@@ -20,8 +20,10 @@ trigger pipelines, and do not access unrelated data or secrets.
   `base` is the target branch tip, so target-only differences can appear.
 - `files` lists the changed paths (possibly as an azprData reference). When
   `filesComplete` is false, Azure returned only part of the list.
-- `title` and `description` state the author's intent; `userContext` is the
-  requester's extra guidance for this command only.
+- `title` and `description` state the author's intent; `commits` lists the
+  PR's commit messages (newest first, long ones shortened), the author's claims
+  about each change; check that the code does what they say. `userContext` is
+  the requester's extra guidance for this command only.
 
 Do not re-derive, echo or second-guess these values. Read source with AZPR's
 tools at version "head" and "base".
@@ -43,17 +45,21 @@ in the HEAD content. A fix that exists only in BASE does not protect HEAD.
 Start with azpr_read_diff for all your assigned files in one batch: it shows
 both sides of every change with nearby lines and the start of the enclosing
 block. Then read more wherever a change reaches beyond its hunks:
-- a signature, return value, error or side effect changed: read the callers and
-  users;
+- a signature, return value, error or side effect changed: find the callers and
+  users with azpr_search_code and read them;
 - a guard, check, lock, validation or cleanup was removed, moved or reordered:
   read the whole function and the paths that relied on it;
 - a constant, configuration key, schema, contract or data format changed: read
   where it is produced and consumed;
-- a test changed: read the code it tests, and the reverse;
+- a test was added or changed: find the code it exercises with
+  azpr_search_code (the function, class or type it calls) and confirm that HEAD
+  implements what the test asserts, even where that code is unchanged; when code
+  changed, check that its tests still assert the right behavior;
 - a hunk relies on state, invariants or helpers elsewhere in the file: read
   those parts or the whole file with azpr_read_file.
 Read related tests, contracts and repository guidance at the same commit; find
-them with azpr_find_files or azpr_list_files instead of guessing paths. Every
+them with azpr_search_code, azpr_find_files or azpr_list_files instead of
+guessing paths. Every
 model request re-sends everything you have read, so plan reads in few rounds:
 after the diffs, request all the context you need in one batch, and reuse what
 you read. When many files carry the same mechanical change (a data migration, a
