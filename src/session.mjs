@@ -53,8 +53,10 @@ function modelRef(value) {
     return { providerID: value.providerID, id: value.id, ...(value.variant === undefined ? {} : { variant: value.variant }) };
   }
   if (typeof value === 'string') {
-    const slash = value.indexOf('/');
-    if (slash > 0 && slash < value.length - 1) return { providerID: value.slice(0, slash), id: value.slice(slash + 1) };
+    const hash = value.indexOf('#'), base = hash < 0 ? value : value.slice(0, hash), slash = base.indexOf('/');
+    if (slash > 0 && slash < base.length - 1 && hash !== value.length - 1) {
+      return { providerID: base.slice(0, slash), id: base.slice(slash + 1), ...(hash < 0 ? {} : { variant: value.slice(hash + 1) }) };
+    }
   }
   throw new Error('[AZPR] A V2 provider/model reference is required.');
 }

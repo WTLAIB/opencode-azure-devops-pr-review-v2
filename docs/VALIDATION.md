@@ -14,7 +14,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 252 tests across settings (including the
+`npm run check` and `npm test` pass: 253 tests across settings (including the
 `mcp` → `azure` migration), host helpers, session transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
@@ -319,6 +319,41 @@ found in at most three files) points at the seeded line
 (`_generate_schema.py:375`, `MutableSequence` mapped to the sequence schema) and
 adds about 15,600 characters for the whole PR, along with noise from comments.
 
+## Live run: models and reasoning effort (PR #4, review only)
+
+All three review roles on one model, same revision and settings, nothing
+posted. "default" is the model's default variant, which AZPR always used before
+`provider/model#variant` was supported; `#high` asks for high reasoning effort.
+
+| Model | Seeded regression outside the diff | In the diff | Other confirmed | Review | Input tokens | Reasoning tokens | Searches |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| gpt-5.6-luna (default) | 0 of 2 | 2 of 2 | 0 | 130 s | 0.55–0.64 M | 3.9–5.4 K | 28–31 |
+| gpt-6-luna (default) | 0 of 2 | 2 of 2 | 0 | 65–75 s | 0.24–0.27 M | 0.2–0.4 K | 5 |
+| gpt-6-luna#high | 0 of 2 | 2 of 2 | 0 | 125–150 s | 0.58–0.79 M | 4.7–4.9 K | 25–27 |
+| gpt-6.1-sol (default) | 2 of 2 | 2 of 2 | 3, the same in both runs | 261–306 s | 1.47–1.53 M | 2.1–2.3 K | 49–60 |
+
+- gpt-6.1-sol searched for `MutableSequence` in both runs and explained the
+  defect: the bare type is mapped to the sequence schema while the
+  parameterized one uses the list schema the new test expects. Its suggested
+  fix is the upstream fix.
+- Its three other confirmed findings: validation JSON Schemas take the
+  serialization temporal format (fixed upstream later in pydantic #13711);
+  chained length constraints in the experimental pipeline now overwrite each
+  other (the PR dropped the extra length check); and JSON Schema generation
+  ignores the core schemas that the PR allows as serialization schemas (still
+  so upstream). None is a false positive; the last two are debatable in
+  severity.
+- gpt-6-luna#high also searched for `MutableSequence` in one run and received
+  the defective line next to the parameterized one, then reported no defect.
+  A runtime hint would have added exactly that evidence, so the hint was not
+  built: the miss is a limit of the model, and a stronger model finds the
+  defect with the general tools.
+- The default variant reasons little for some models (gpt-6-luna: 193 and 445
+  reasoning tokens per review); `#high` raised that tenfold without finding
+  the defect.
+- Verification does not find what the initial reviews miss: over 21 live runs,
+  59 verifier sessions decided 616 candidates and added 1 new finding.
+
 ### Diff defect
 
 Run 1 showed `test_list.py` with HEAD lines 297–298 missing. Hunks were built
@@ -336,9 +371,9 @@ tokens because reviewers made fewer whole-file reads. Tool arguments sent as
 
 ## Not yet validated
 
-- Finding a defect whose evidence spans a test and unchanged code in different
-  shards (missed on PR #4 by both reading strategies and in two runs with
-  content search).
+- A defect whose evidence spans a test and unchanged code in different shards
+  is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
+  gpt-6-luna; other PRs are not yet measured.
 - A live publication with this revision: the rule against skips that rely on
   another finding.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live

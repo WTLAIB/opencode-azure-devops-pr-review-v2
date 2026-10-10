@@ -60,8 +60,8 @@ function integer(value, at, min, max) {
 function model(value, at, optional = false) {
   if (optional && value === '') return '';
   if (typeof value !== 'string' || value.length > 512 ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*$/.test(value) ||
-      /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(value)) throw new Error(`${at}: select an actual provider/model ID from opencode models; do not use a display name or placeholder.`);
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(value) ||
+      /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(value)) throw new Error(`${at}: select an actual provider/model ID from opencode models, optionally with a variant as provider/model#variant; do not use a display name or placeholder.`);
   return value;
 }
 function languageTag(value) {
@@ -204,7 +204,8 @@ export function permissionRules(role, shell) {
   return Object.entries(nativeToolPermissions(role, shell)).map(([action, effect]) => ({ action, resource: '*', effect }));
 }
 
-function modelRef(value) {
-  const separator = value.indexOf('/');
-  return { providerID: value.slice(0, separator), id: value.slice(separator + 1) };
+/** "provider/model" or "provider/model#variant" (OpenCode's own notation) as a model reference. */
+export function modelRef(value) {
+  const hash = value.indexOf('#'), base = hash < 0 ? value : value.slice(0, hash), separator = base.indexOf('/');
+  return { providerID: base.slice(0, separator), id: base.slice(separator + 1), ...(hash < 0 ? {} : { variant: value.slice(hash + 1) }) };
 }

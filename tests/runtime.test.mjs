@@ -72,7 +72,7 @@ async function fixture(t, opts = {}) {
     app: { version: '2.0.22' },
     location: { directory },
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
-      .map(value => ({ providerID: 'fixture', id: value.slice(8), enabled: true, capabilities: { tools: true } })) }; } },
+      .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     permission: { hook: hook('permission') },
     agent: {
       async get({ agentID }) { return { data: clone(agents.get(agentID)) }; },
@@ -95,7 +95,7 @@ async function fixture(t, opts = {}) {
         calls.push({ kind: 'create', agent: input.agent, title: input.title });
         const id = `ses_${++seq}`;
         const session = { ...clone(input), id, history: [], turns: 0, outcome: 'succeeded' };
-        if (session.model) session.model.variant = 'default';
+        if (session.model) session.model.variant ??= 'default';
         sessions.set(id, session);
         return { ...clone(input), id, ...(session.model ? { model: clone(session.model) } : {}) };
       },
@@ -441,6 +441,17 @@ test('private sessions accept only the exact runtime prompt and primary requests
     await assert.rejects(emit('session', 'prompt', { sessionID: 'ordinary', prompt: { text: 'hi', agents: [{ id: 'azpr-review-risk' }] } }), /cannot be mentioned/);
   } });
   assert.match(await f.command(), /\] COMPLETE/);
+});
+
+test('a configured model variant is bound to its reviewer sessions; an unknown variant is refused', async t => {
+  const f = await fixture(t, { settings(s) { s.models.review.verifier = 'fixture/review-verifier#high'; } });
+  assert.match(await f.command(), /\] COMPLETE/);
+  assert.equal(f.sessionsFor('azpr-review-verifier')[0].model.variant, 'high');
+  assert.equal(f.sessionsFor('azpr-review-functional')[0].model.variant, 'default');
+  const g = await fixture(t, { settings(s) { s.models.review.risk = 'fixture/review-risk#turbo'; } });
+  assert.match(await g.command('pr-check'), /review\.risk model has no variant turbo; it offers high/);
+  assert.match(await g.command(), /no variant turbo[\s\S]*No fallback was selected/);
+  assert.equal(g.sessionsFor('azpr-review-risk').length, 0);
 });
 
 test('deep mode requires all three deep models', async t => {

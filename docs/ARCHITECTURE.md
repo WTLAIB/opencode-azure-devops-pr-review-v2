@@ -43,7 +43,8 @@ planning pages, posting). Notices never start a model response.
 
 Each workflow first runs one **preflight**: `settings.json` must be unchanged
 since load, reserved commands must still be ours, private agents are pinned and
-the selected models must exist and support tools. Review commands refuse a PR
+the selected models must exist and support tools (and offer the variant when a
+model is set as `provider/model#variant`). Review commands refuse a PR
 URL whose organization differs from `azure.organization` before any request.
 After preflight, hooks never re-read settings or catalogs.
 
@@ -141,8 +142,9 @@ publication is safe.
 ## Authorization and isolation
 
 Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`) are hidden
-primary agents with explicit models. Every private session gets a grant with
-the run, role, model and a pending prompt (text + nonce). Hooks enforce it:
+primary agents with explicit models (and variants, when configured). Every
+private session gets a grant with the run, role, model and a pending prompt
+(text + nonce); a request on another model or variant is refused. Hooks enforce it:
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
   cannot be mentioned or delegated.

@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings } from './config.mjs';
+import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -36,7 +36,6 @@ const ownRole = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
 const text = v => typeof v === 'string' && v.trim().length > 0;
 const clone = v => JSON.parse(JSON.stringify(v));
 const errorText = e => e instanceof Error ? e.message : typeof e?.message === 'string' ? e.message : 'OpenCode SDK operation failed.';
-const modelRef = id => { const n = id.indexOf('/'); return { providerID: id.slice(0, n), id: id.slice(n + 1) }; };
 const abortError = signal => signal.reason instanceof Error ? signal.reason : new Error('Review cancelled or timed out.');
 const remainingRunMs = run => run.deadlineAt === null ? null : Math.max(0, run.deadlineAt - Date.now());
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -153,7 +152,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   function authorize(sessionID, agent, actualModel) {
     const g = grants.get(sessionID);
     if (!g || !g.run.active || g.role !== agent) throw new Error('[AZPR] No active command-scoped reviewer authorization.');
-    if (`${actualModel?.providerID}/${actualModel?.id}` !== g.model || (actualModel?.variant ?? 'default') !== 'default') {
+    const expected = modelRef(g.model);
+    if (actualModel?.providerID !== expected.providerID || actualModel?.id !== expected.id || (actualModel?.variant ?? 'default') !== (expected.variant ?? 'default')) {
       throw new Error('[AZPR] Model mismatch; no fallback or manual reviewer model switching.');
     }
     if (ROLES[agent].mode !== g.run.profile) throw new Error('[AZPR] Reviewer profile mismatch.');
@@ -168,9 +168,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const slots = run.mode === 'comment' ? ['risk'] : ['functional', 'risk', 'verifier'];
     const problems = [];
     for (const slot of slots) {
-      const selected = settings.models[run.profile][slot];
-      const matches = modelRows.filter(model => `${model.providerID}/${model.id}` === selected && model.enabled !== false);
+      const selected = settings.models[run.profile][slot], { providerID, id, variant } = modelRef(selected);
+      const matches = modelRows.filter(model => model.providerID === providerID && model.id === id && model.enabled !== false);
+      const variants = (Array.isArray(matches[0]?.variants) ? matches[0].variants : []).map(item => item?.id).filter(text);
       if (matches.length !== 1) problems.push(`The selected ${run.profile}.${slot} model (${selected}) is unavailable in the host catalog.`);
+      else if (variant !== undefined && variant !== 'default' && !variants.includes(variant)) problems.push(`The selected ${run.profile}.${slot} model has no variant ${variant}${variants.length ? `; it offers ${variants.join(', ')}` : ''}.`);
       else if (matches[0].capabilities?.tools !== true) problems.push(`The selected ${run.profile}.${slot} model does not advertise tool support.`);
     }
     run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems,

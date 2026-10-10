@@ -107,15 +107,15 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    model requests per session and each re-sends what was read. Next candidate:
    provider prompt caching (cache reads are 10–16 % of input).
 5. Cross-shard evidence: a new test in one shard that contradicts unchanged
-   code in another shard is still missed. Content search (`azpr_search_code`,
-   over the repository zip of the exact commit; Azure DevOps Code Search
-   indexes only the default branch) and the PR's commit messages are in place,
-   and reviewers search often, but not for every new test. Next candidate: the
-   runtime cross-references identifiers on added test lines with the non-test
-   files that use them and gives each test file's reviewers those locations
-   (offline it points at the seeded line in PR #4 for about 4,000 tokens per
-   PR; comments must be filtered out), or a check stage dedicated to what new
-   tests assert.
+   code in another shard is found with content search (`azpr_search_code`, over
+   the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and
+   missed by gpt-5.6-luna and gpt-6-luna, even with high reasoning effort and
+   the defective line in a search result. It is a model limit, so no runtime
+   hints were added. A stronger verifier cannot make up for it: verifiers
+   judge the candidates and added 1 new finding in 616 decisions over 21 live
+   runs, so the initial reviewers' model decides what is found. A stronger
+   model can be kept for selected PRs in the deep profile. Confirm on other
+   real PRs.
 6. Check rendered comments, inline anchors and summaries in the Azure UI.
 7. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.

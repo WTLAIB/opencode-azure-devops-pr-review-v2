@@ -88,6 +88,15 @@ test('agents: one per configured role; deep needs all three models', () => {
     for (const key of ['prompt', 'permission', 'disable', 'steps']) assert.equal(Object.hasOwn(agent, key), false, key);
   }
   assert.deepEqual(agents['azpr-review-functional'].model, { providerID: 'provider', id: 'family/functional' });
+  // A variant (reasoning effort) uses OpenCode's own provider/model#variant notation.
+  const withVariant = input();
+  withVariant.models.review.risk = 'openai/gpt-6.1-sol#high';
+  assert.deepEqual(buildAgents(validateSettings(withVariant), prompts)['azpr-review-risk'].model, { providerID: 'openai', id: 'gpt-6.1-sol', variant: 'high' });
+  for (const bad of ['openai/gpt-6.1-sol#', 'openai/gpt-6.1-sol#high#max', 'openai#high', '#high']) {
+    const settings = input();
+    settings.models.review.risk = bad;
+    assert.throws(() => validateSettings(settings), /models\.review\.risk: select an actual provider\/model ID/, bad);
+  }
   const partial = input();
   partial.models.deep = { functional: 'other/deep-f', risk: '', verifier: '' };
   const partialSettings = validateSettings(partial);

@@ -123,7 +123,10 @@ settings they started with.
 }
 ```
 
-Model IDs use `provider/model` form and must exist in OpenCode. `/pr-deep`
+Model IDs use `provider/model` form and must exist in OpenCode. To choose a
+model variant such as a reasoning effort, use OpenCode's `provider/model#variant`
+form (for example `provider/model#high`); `/pr-check` reports a variant the
+model does not offer. Without a variant the model's default is used. `/pr-deep`
 needs all three deep models and never falls back to the review models. Comment
 planning uses the review's risk model.
 
