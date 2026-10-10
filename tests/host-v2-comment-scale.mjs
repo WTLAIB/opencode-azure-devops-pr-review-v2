@@ -4,8 +4,10 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * node tests/host-v2-comment-scale.mjs /absolute/path/opencode
  * 120 changed files are reviewed in shards; one shard reports a nearly full
  * context so the host attempts compaction, which AZPR refuses and splits the
- * shard instead. 30 findings are verified in two sessions, planned in pages
- * of four and published as 31 threads; a second publish creates nothing.
+ * shard instead. 30 findings are verified in two sessions; the second verifier
+ * moves one finding into a file of the first, so a duplicate-check session
+ * merges it. The other 29 are planned in pages of four and published; a
+ * second publish creates nothing.
  * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
@@ -49,8 +51,13 @@ const provider = createServer(async (request, response) => {
         const findings = input.model === 'risk' ? assigned.slice(0, 6).map((path, i) => ({ id: `${prefix}-${first + i}`, summary: `State lost in ${path}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.', location: `head:${path}:1`, severity: i % 3 === 2 ? 'low' : 'high', suggestion: 'Restore the guard.' })) : [];
         final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings, report: `Shard ${payload.assignment.shard} reviewed.` };
       }
+    } else if (payload?.assignment?.kind === 'duplicates') {
+      const moved = payload.assignment.findings.find(f => f.movedFrom), kept = payload.assignment.findings.find(f => !f.movedFrom);
+      final = { status: 'COMPLETE', merged: [{ id: moved.id, mergedInto: kept.id, reason: 'Same guard lost in the same file.' }], report: '' };
     } else if (payload?.assignment?.findingIds) {
-      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
+      // The second verifier moves its first high finding into a file the first verifier owns.
+      const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => f.severity === 'high') : undefined;
+      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
     } else if (payload?.commentWork?.kind === 'plan') {
       final = { status: 'READY', ...(payload.commentWork.allowSummary ? { summary: 'Fixture change.' } : {}),
         comments: payload.findings.filter(f => f.severity !== 'low').map(f => ({ findingId: f.id, severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.summary}\n\nTrigger, evidence and correction.` })),
@@ -107,20 +114,23 @@ try {
   assert.ok(compactionObserved, 'The host attempted compaction and AZPR refused it.');
   assert.deepEqual(functional.filter(stage => stage.status !== 'FAILED').map(stage => stage.label).sort().slice(0, 2), ['shard 1/5a', 'shard 1/5b']);
   assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
+  assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
+  const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];
+  assert.equal(merged.length, 1, 'The moved duplicate is merged into the finding that stays.');
   const coverage = functional.filter(stage => stage.status !== 'FAILED').reduce((n, stage) => n + stage.result.coverage.files.length, 0);
   assert.equal(coverage, 120, 'Every file is reviewed once by the functional role, including split shards.');
   await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
   const posted = await latest();
   assert.match(posted, /\] POSTED/, posted);
   const state = azure.state;
-  assert.equal(state.threads.length, 21, '20 high findings inline plus one summary; 10 low findings stay in the summary.');
+  assert.equal(state.threads.length, 20, '19 high findings inline plus one summary; 10 low findings stay in the summary.');
   const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
-  assert.equal(planner.length, 8, '30 findings in planning pages of four.');
+  assert.equal(planner.length, 8, '29 findings in planning pages of four.');
   await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
   assert.match(await latest(), /ALREADY_PRESENT/);
-  assert.equal(azure.callsTo('createThread').length, 21, 'A second publish writes nothing.');
+  assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
   console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, plannerSessions: planner.length, threads: state.threads.length, providerRequests: requests.length,
+    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, plannerSessions: planner.length, threads: state.threads.length, providerRequests: requests.length,
     maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }

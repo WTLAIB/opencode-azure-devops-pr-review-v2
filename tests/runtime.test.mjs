@@ -26,6 +26,7 @@ function defaultAnswer({ role, packet }) {
     return { status: 'COMPLETE', confirmed: packet.assignment.findings.map(f => ({ ...f, reason: 'Verified from source.' })),
       merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'FINAL_REPORT' };
   }
+  if (spec.format === 'dedupe') return { status: 'COMPLETE', merged: [], report: '' };
   const eligible = packet.findings.filter(f => f.severity !== 'low');
   return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}),
     comments: eligible.map(f => ({ findingId: f.id, severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.id} loses state\n\nTrigger, impact and correction.` })),
@@ -202,6 +203,26 @@ test('commands from the same conversation are refused while a run is active', as
   await assert.rejects(f.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }), /already running/);
   release.resolve();
   assert.match(await running, /\] COMPLETE/);
+});
+
+test('a file split across verification shards gets a private duplicate-check stage', async t => {
+  // Both initial roles report /src/Main.java; one finding per verification shard splits that file.
+  const f = await fixture(t, { files: ['/src/Main.java', '/test/MainTest.java'], settings(s) { s.workflow.shardFindings = 1; },
+    answer({ role, packet }) {
+      if (ROLES[role].format !== 'dedupe') return undefined;
+      assert.equal(packet.assignment.kind, 'duplicates');
+      return { status: 'COMPLETE', merged: [{ id: packet.assignment.findingIds[1], mergedInto: packet.assignment.findingIds[0], reason: 'Same cause and fix.' }], report: '' };
+    } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.match(receipt, /azpr-review-dedupe: COMPLETE/);
+  const [checker] = f.sessionsFor('azpr-review-dedupe');
+  assert.ok(checker.visibleTools.includes('azpr_read_file'));
+  assert.equal(checker.visibleTools.includes('shell'), false);
+  assert.match(receipt, new RegExp(`Report delivery: report queued to session=${checker.id}`), 'The report goes to the last review session.');
+  const report = f.notices.find(n => n.sessionID === checker.id && /^# AZPR/.test(n.text)).text;
+  assert.match(report, /R-1 — MERGED → F-1:\*\* Same cause and fix\. \[Runtime: merged by the same-file duplicate check/);
+  assert.ok(f.notices.some(n => /PROGRESS — Duplicate check: 1 file/.test(n.text)));
 });
 
 test('a verifier that misses a decision is asked to correct it in the same session', async t => {

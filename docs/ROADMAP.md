@@ -26,10 +26,12 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Correction turns.** Answers that break the output contract are corrected in
   the same session (`workflow.repairAttempts`); remaining problems degrade per
   item (UNREVIEWED, NEEDS_INFO, skipped comments) instead of failing the review.
-- **One place for duplicates.** Only verification merges duplicates. Verifier
-  rows are judged by their own fields, a move to another file must be declared
-  and the report shows the initial location, and the comment planner may not
-  skip a finding because another finding of the review is commented.
+- **One place for duplicates.** Only verification merges duplicates: each
+  verifier within its shard, and a duplicate check for files whose findings
+  different verifiers confirmed. Verifier rows are judged by their own fields,
+  a move to another file must be declared and the report shows the initial
+  location, and the comment planner may not skip a finding because another
+  finding of the review is commented.
 - **Stage retries.** Transient failures retry once in a new session
   (`workflow.stageRetries`); stream continuations work for every provider.
 - **Bounded Azure calls.** One queue with configurable concurrency and a
@@ -83,20 +85,19 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
 
 ## Remaining validation work
 
-1. Repeat a large-PR review and publication with this revision to confirm the
-   verifier and planner corrections live (moved findings, decision rows in the
-   wrong list, skips that rely on another finding). The previous commit passed
-   review and publication of 25 items on a 316-file PR (see
-   [validation](VALIDATION.md)).
+1. Publish a large PR with this revision to confirm the planner rule on skips
+   that rely on another finding, and observe a duplicate check on a real model.
+   Moved findings and decision rows in the wrong list were handled correctly in
+   live reviews; an earlier commit passed review and publication of 25 items on
+   a 316-file PR (see [validation](VALIDATION.md)).
 2. Confirm that a PAT limited to Code (Read) and Pull Request Threads
    (Read & write) is sufficient.
 3. Measure how often correction turns and retries happen per model, and tune
-   `workflow` defaults from those numbers. Initial-review wall time is bounded
-   by `workflow.parallelSessions`: on the 316-file PR the 26 initial sessions
-   kept 3.71 of 4 slots busy on average (about seven waves) with no provider
-   retry. A higher value shortens wall time without changing token use, as far
-   as the provider's rate limits allow; measure provider retries at 6–8 before
-   raising the default of 4.
+   `workflow` defaults from those numbers. On the 316-file PR,
+   `parallelSessions` 8 with `azure.concurrency` 6 cut the review from 719 s
+   (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
+   made the REST queue the bottleneck. The defaults stay 4 / 3 until other
+   providers and organizations have been measured; raise both together.
 4. Reduce the input-token cost of initial reviews: the 316-file review used
    about 7.4 million input tokens, mostly tool output re-sent with every model
    request of long initial sessions. Candidates are a tool that returns HEAD

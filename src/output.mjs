@@ -492,6 +492,54 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
   };
 }
 
+/**
+ * Accept one same-file duplicate check. The answer only merges: every finding
+ * it does not merge stays confirmed, so an invalid row is reported for a
+ * correction turn and otherwise ignored, never turning into a lost finding.
+ * Chains (A into B, B into C) end at the finding that stays; cycles name no
+ * survivor and are left unmerged.
+ * @param {string} answerText
+ * @param {{ids: string[]}} options the findings of the checked file
+ */
+export function evaluateDuplicates(answerText, { ids }) {
+  const warnings = new Set();
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'merged', 'report'] });
+  if (!parsed.value) {
+    return { issues: [`Your answer could not be used: ${parsed.problem}.`],
+      result: { status: 'COMPLETE', structured: false, merges: [], report: '', warnings: ['The duplicate check gave no usable answer; no finding was merged.'] } };
+  }
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
+  const source = aliasFields(parsed.value, ['status', 'merged', 'report'], warnings);
+  const assigned = new Set(ids), issues = [], rowsById = new Map();
+  if (!Array.isArray(source.merged)) issues.push('"merged" must be an array (use [] when none of the findings are duplicates).');
+  for (const [index, item] of rows(source.merged, warnings, 'merged').entries()) {
+    const row = aliasFields(isObject(item) ? item : {}, ['id', 'mergedInto', 'reason'], warnings);
+    const id = asText(row.id).trim(), into = asText(row.mergedInto).trim(), problems = [];
+    if (!assigned.has(id)) problems.push(`id ${JSON.stringify(id)} is not an assigned finding`);
+    if (!assigned.has(into) || into === id) problems.push('mergedInto must name another assigned finding');
+    if (!text(asText(row.reason))) problems.push('give a concrete reason');
+    if (rowsById.has(id)) problems.push(`${id} is merged more than once`);
+    if (problems.length) { issues.push(`merged[${index}]: ${problems.join('; ')}.`); continue; }
+    rowsById.set(id, { id, mergedInto: into, reason: asText(row.reason).trim() });
+  }
+  const merges = [];
+  for (const row of rowsById.values()) {
+    const seen = new Set([row.id]);
+    let target = row.mergedInto;
+    while (rowsById.has(target) && !seen.has(target)) { seen.add(target); target = rowsById.get(target).mergedInto; }
+    if (rowsById.has(target)) { issues.push(`${row.id}: the merges form a cycle; keep one of these findings and merge the others into it.`); continue; }
+    merges.push({ ...row, mergedInto: target });
+  }
+  const unmerged = issues.length ? ['Some duplicate-check merges were invalid and were not applied; those findings stay confirmed.'] : [];
+  return { issues, result: { status: 'COMPLETE', structured: true, merges, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
+    ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
+}
+
+export function duplicateRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  return `AZPR runtime: your duplicate check needs correction.\n${listIssues(issues)}\n\nReturn the complete JSON object again (status, merged, report). Merge an assigned finding only into another assigned finding that stays, and only when both state the same root cause and need the same correction.`;
+}
+
 // When only the JSON syntax was wrong, the content must come back unchanged:
 // a free-form resend tends to shorten evidence.
 const VERBATIM = 'Send the same answer again with identical content: do not shorten, summarize, reorder or reword any field. Only fix the JSON so it parses: escape every double quote inside a string as \\" (also inside `code`), write line breaks as \\n, and return exactly one JSON object.';

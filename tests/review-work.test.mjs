@@ -172,6 +172,57 @@ test('a verifier that moves a finding to another file confirms the move in a cor
   assert.equal(f.calls.filter(call => call.role === 'azpr-review-verifier').length, 1, 'The correction stays in the same verifier stage.');
 });
 
+// F-1 is found in /src/a.ts and R-1 in /tests/a.test.ts, so with one finding per
+// verification shard they are verified apart; R-1's verifier then moves it (and
+// adds V-1001) into /src/a.ts, which F-1's verifier never saw.
+const crossShard = (dedupe, { moveInto = '/src/a.ts' } = {}) => async ({ role, payload }) => {
+  const format = ROLES[role].format;
+  if (format === 'initial') return initial(payload, role.endsWith('-risk') ? [finding('R-1', '/tests/a.test.ts')] : [finding('F-1', '/src/a.ts')]);
+  if (format === 'final') {
+    const [own] = payload.assignment.findings;
+    if (own.id !== 'R-1') return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...own, reason: 'Verified.' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r1' });
+    return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...own, location: `head:${moveInto}:3`, movedFrom: own.location, reason: 'The defect is in a.ts.' }],
+      merged: [], rejected: [], needsInfo: [], newFindings: [{ ...finding('V-1001', moveInto), location: `head:${moveInto}:9` }], report: 'r2' });
+  }
+  return dedupe(payload);
+};
+
+test('findings that different verifiers confirmed in one file get a duplicate check', async t => {
+  const f = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], workflow: { shardFindings: 1 }, behave: crossShard(payload => {
+    assert.equal(payload.assignment.file, '/src/a.ts');
+    assert.deepEqual(payload.assignment.findingIds, ['F-1', 'R-1', 'V-1001']);
+    assert.deepEqual(payload.assignment.findings.map(x => x.verificationShard), ['1/2', '2/2', '2/2']);
+    assert.equal(payload.assignment.findings[1].movedFrom, 'head:/tests/a.test.ts:3');
+    return JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause and fix.' }, { id: 'V-1001', mergedInto: 'F-1', reason: 'Same guard.' }], report: 'Two duplicates of F-1.' });
+  }) });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}${d.mergedInto ? '>' + d.mergedInto : ''}`), ['F-1:CONFIRMED', 'R-1:MERGED>F-1', 'V-1001:MERGED>F-1']);
+  assert.match(final.dispositions[1].reason, /^Same cause and fix\. \[Runtime: merged by the same-file duplicate check/);
+  assert.deepEqual(final.newFindings, []);
+  assert.equal(f.calls.filter(call => call.role === 'azpr-review-dedupe').length, 1);
+  assert.match(final.report, /### Duplicate check: \/src\/a\.ts\n\nTwo duplicates of F-1\./);
+  assert.equal(final.shards.duplicateChecks, 1);
+  assert.ok(f.notices.some(message => /Duplicate check: 1 file\(s\) hold findings that different verification shards confirmed/.test(message)));
+});
+
+test('a failed duplicate check keeps every finding; findings one verifier saw together are not rechecked', async t => {
+  const failed = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], workflow: { shardFindings: 1 }, behave: crossShard(() => { throw new Error('dedupe crashed'); }) });
+  const kept = await runReview(failed.ctx, failed.run, failed.request);
+  assert.deepEqual(kept.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'R-1:CONFIRMED']);
+  assert.equal(kept.newFindings.length, 1);
+  assert.ok(kept.reviewWarnings.some(message => /duplicate check of \/src\/a\.ts failed \(dedupe crashed\); its 3 findings stay confirmed/.test(message)));
+  // With room for both findings in one verification shard, the same verifier already compared them.
+  const together = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], workflow: { shardFindings: 15 }, behave: async ({ role, payload }) => {
+    if (ROLES[role].format === 'final') return JSON.stringify({ status: 'COMPLETE', confirmed: payload.assignment.findings.map(x => ({ ...x, location: 'head:/src/a.ts:3', movedFrom: x.location, reason: 'ok' })),
+      merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' });
+    return crossShard(() => { throw new Error('must not run'); })({ role, payload });
+  } });
+  const same = await runReview(together.ctx, together.run, together.request);
+  assert.equal(together.calls.filter(call => call.role === 'azpr-review-dedupe').length, 0);
+  assert.equal(same.shards.duplicateChecks, 0);
+  assert.deepEqual(same.dispositions.map(d => d.status), ['CONFIRMED', 'CONFIRMED']);
+});
+
 test('an incomplete Azure file list asks reviewers to discover paths and records them', async t => {
   const f = await context(t, { files: ['/a.ts'], behave: async ({ role, payload }) => {
     if (ROLES[role].format === 'initial') {

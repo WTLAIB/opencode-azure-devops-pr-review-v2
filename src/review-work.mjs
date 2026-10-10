@@ -1,9 +1,10 @@
 /**
  * Review orchestration: runtime-owned snapshot, sharded initial reviews,
- * sharded verification and a deterministic final version recheck.
+ * sharded verification, a duplicate check for files whose findings different
+ * verifiers confirmed, and a deterministic final version recheck.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
+import { evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
 
 export { locationPath };
 const ID_SPAN = 1000;
@@ -44,6 +45,24 @@ export function shardFindings(findings, size) {
   }
   if (current.length) shards.push(current);
   return shards;
+}
+
+/**
+ * Confirmed claims that ended in one file although different verification
+ * shards decided them: a verifier moved a finding into another shard's file, or
+ * a file had more findings than one shard holds. Only these files lost the
+ * "one verifier per file" guarantee, so only they get a duplicate check.
+ * @param {{id: string, shard: object, finding: object}[]} claims
+ */
+export function sameFileGroups(claims) {
+  const byFile = new Map();
+  for (const claim of claims) {
+    const path = locationPath(claim.finding.location);
+    if (!path) continue;
+    if (!byFile.has(path)) byFile.set(path, []);
+    byFile.get(path).push(claim);
+  }
+  return [...byFile].filter(([, items]) => new Set(items.map(item => item.shard)).size > 1).map(([path, items]) => ({ path, items }));
 }
 
 /** Run tasks with bounded parallelism; results keep the task order. */
@@ -186,7 +205,7 @@ export async function runReview(ctx, run, request) {
   });
   if (!run.active) throw new Error(run.reason || 'Review stopped.');
 
-  const dispositions = [], newFindings = [], reports = [], usedNew = new Set();
+  const dispositions = [], newFindings = [], reports = [], usedNew = new Set(), decidedIn = new Map();
   let verified = 0;
   for (const { task, result, error } of verifications) {
     const label = task.count > 1 ? `Verification shard ${task.index + 1}/${task.count}` : '';
@@ -198,11 +217,65 @@ export async function runReview(ctx, run, request) {
     if (result.structured) verified++;
     dispositions.push(...result.dispositions);
     uniqueIds(result.newFindings, 'V', usedNew);
+    for (const decided of [...result.dispositions, ...result.newFindings]) decidedIn.set(decided.id, task);
     newFindings.push(...result.newFindings);
     for (const row of result.incompleteNewFindings ?? []) reports.push(`Incomplete new finding (not eligible for comments): ${row.summary || row.id || 'unnamed'}`);
     if (text(result.report)) reports.push(label ? `### ${label}\n\n${result.report}` : result.report);
     if (result.modelStatus === 'INCOMPLETE') warnings.push(`${label || 'The verifier'} reported unfinished checks; see its report.`);
     warnings.push(...result.warnings.map(message => label ? `${label}: ${message}` : message));
+  }
+
+  // Same-file duplicate check. Shards keep a file's findings together, but a
+  // moved finding or a split crowded file can bring findings that different
+  // verifiers confirmed into one file; a model compares only those, and a
+  // failed check keeps every finding.
+  const claims = [
+    ...dispositions.filter(d => d.status === 'CONFIRMED' && d.verifiedFinding).map(d => ({ id: d.id, shard: decidedIn.get(d.id), finding: d.verifiedFinding, reason: d.reason })),
+    ...newFindings.map(finding => ({ id: finding.id, shard: decidedIn.get(finding.id), finding })),
+  ];
+  const sameFile = sameFileGroups(claims);
+  if (sameFile.length) {
+    progress(run, `Duplicate check: ${sameFile.length} file(s) hold findings that different verification shards confirmed.`);
+    const checker = roleFor(run.profile, 'dedupe');
+    const checks = await runPool(sameFile.map((group, index) => ({ group, index, count: sameFile.length })), settings.workflow.parallelSessions, async task => {
+      const ids = task.group.items.map(item => item.id);
+      const findings = task.group.items.map(({ id, shard, finding, reason }) => ({ ...finding, id,
+        verificationShard: `${shard.index + 1}/${shard.count}`, ...(text(reason) ? { verifierReason: reason } : {}) }));
+      const payload = {
+        prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
+        assignment: { kind: 'duplicates', file: task.group.path, findingIds: ids, findings: await store.pack(findings, 40000) },
+      };
+      try {
+        const result = await runStage(run, checker, payload, {
+          evaluate(answer) {
+            const { result, issues } = evaluateDuplicates(answer, { ids });
+            return { result, issues, repairPrompt: issues.length ? duplicateRepairPrompt(issues, { parseOnly: !result.structured && syntaxProblem(issues) }) : undefined };
+          },
+        }, { label: task.count > 1 ? `${task.index + 1}/${task.count}` : '' });
+        return { ...task, result };
+      } catch (error) {
+        if (!run.active) throw error;
+        return { ...task, error };
+      }
+    });
+    if (!run.active) throw new Error(run.reason || 'Review stopped.');
+    for (const { group, result, error } of checks) {
+      if (!result) {
+        warnings.push(`The duplicate check of ${group.path} failed (${error?.message ?? 'unknown error'}); its ${group.items.length} findings stay confirmed and may include duplicates.`);
+        continue;
+      }
+      for (const merge of result.merges) {
+        const reason = `${merge.reason} [Runtime: merged by the same-file duplicate check after verification had confirmed it.]`;
+        const entry = dispositions.find(d => d.id === merge.id && d.status === 'CONFIRMED');
+        if (entry) Object.assign(entry, { status: 'MERGED', mergedInto: merge.mergedInto, reason });
+        else {
+          const index = newFindings.findIndex(finding => finding.id === merge.id);
+          if (index >= 0) dispositions.push({ id: merge.id, status: 'MERGED', mergedInto: merge.mergedInto, reason, verifiedFinding: newFindings.splice(index, 1)[0] });
+        }
+      }
+      if (text(result.report)) reports.push(`### Duplicate check: ${group.path}\n\n${result.report}`);
+      warnings.push(...result.warnings.map(message => `Duplicate check of ${group.path}: ${message}`));
+    }
   }
 
   // Deterministic final version recheck. Only a changed source commit is stale.
@@ -227,6 +300,6 @@ export async function runReview(ctx, run, request) {
     coverage, discoveredFiles: [...discovered], initialReports,
     initialObservations: status === 'COMPLETE' ? [] : findings,
     unstructuredInitials: status === 'COMPLETE' ? [] : initialReports.filter(item => !item.structured).map(item => item.report),
-    shards: { initial: shards.length, verification: groups.length },
+    shards: { initial: shards.length, verification: groups.length, duplicateChecks: sameFile.length },
   };
 }

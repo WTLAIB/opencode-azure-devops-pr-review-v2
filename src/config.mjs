@@ -20,6 +20,7 @@ const stages = {
   functional: { slot: 'functional', prompt: 'functional', format: 'initial', prefix: 'F', order: 1, label: 'Initial F' },
   risk: { slot: 'risk', prompt: 'risk', format: 'initial', prefix: 'R', order: 2, label: 'Initial R' },
   verifier: { slot: 'verifier', prompt: 'final', format: 'final', order: 3, label: 'Verification' },
+  dedupe: { slot: 'verifier', prompt: 'dedupe', format: 'dedupe', order: 4, label: 'Duplicate check' },
   'comment-plan': { slot: 'risk', prompt: 'comment-plan', format: 'comment-plan', comment: true, label: 'Comment plan' },
 };
 export const roleFor = (mode, stage) => `azpr-${mode}-${stage}`;

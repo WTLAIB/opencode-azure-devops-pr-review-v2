@@ -14,13 +14,13 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 234 tests across settings (including the
+`npm run check` and `npm test` pass: 238 tests across settings (including the
 `mcp` → `azure` migration), host helpers, session transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
 logged), the reviewers' tools, output acceptance and correction prompts
-(including verifier rows judged by their own fields and confirmations that move
-a finding to another file), comment validation and markers (including skips
+(including verifier rows judged by their own fields, confirmations that move
+a finding to another file and the same-file duplicate check), comment validation and markers (including skips
 that rely on another finding), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
@@ -68,11 +68,12 @@ rule so the offline runtime tests catch a regression.
 | --- | --- |
 | Changed files | 120, reviewed in 5 shards of 24 per role |
 | Context overflow | One functional shard reported a nearly full context; the host attempted compaction, AZPR refused it, and the shard was split into `1/5a` and `1/5b`, both COMPLETE |
-| Verification | 30 findings in 2 verification sessions |
-| Planning | 8 pages of at most four findings |
-| Publication | 21 threads (20 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
+| Verification | 30 findings in 2 verification sessions; the second verifier moves one high finding into a file of the first |
+| Duplicate check | One `dedupe` session for that file, which merges the moved duplicate |
+| Planning | 8 pages of at most four findings (29 findings) |
+| Publication | 20 threads (19 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
 | Largest provider request | 27,911 characters (27,185 before the prompt rules on moved findings and skips) |
-| REST calls | 71 |
+| REST calls | 69 |
 
 ## Live run (Azure DevOps Services, real model)
 
@@ -172,10 +173,48 @@ Two observations led to corrections in the current revision:
    file, and the other one (R-4001, from a region JSON file to the code that
    drops its fields) was correct.
 
+## Live runs: parallelism and the corrections (review only)
+
+Two more `/pr-review` runs of PR #3 at the same head, same models, language and
+service, nothing posted (the 25 comments above were unchanged afterwards). The
+first used commit `628a78d` with `workflow.parallelSessions` 8 and
+`azure.concurrency` 3; the second used this revision with 8 and 6.
+
+| Property | 68c1f7e, 4 / 3 (above) | 628a78d, 8 / 3 | This revision, 8 / 6 |
+| --- | --- | --- | --- |
+| Review duration | 719 s | 460 s | 393 s |
+| Initial review | 589 s; 3.71 sessions on average, peak 4 | 380 s; 6.07, peak 8 | 319 s; 6.71, peak 8 |
+| Sum of initial session time | 2,187 s | 2,308 s | 2,143 s |
+| Verification | 129 s, 5 sessions in two waves | 79 s, 4 sessions | 72 s, 5 sessions in one wave |
+| Candidates → confirmed | 66 → 26 | 53 → 26 | 60 → 26 |
+| Correction turns | 1 | 0 | 0 |
+| Provider retries, stage retries | 0, 0 | 0, 0 | 0, 0 |
+| REST calls (median, p95) | 616 (168 ms, 433 ms) | 646 (432 ms, 2.7 s) | 587 (90 ms, 244 ms) |
+| Most REST calls issued in one second | 36 | 86 | 38 |
+| Input tokens | 7.60 M | 9.17 M | 7.87 M |
+
+- A call's duration includes waiting for a queue slot. Calls that started with
+  fewer than three other calls in flight, so without waiting, took a median of
+  73–75 ms in every run, so Azure DevOps did not slow down: with 8 sessions and
+  a queue of 3, the queue was the bottleneck, and a queue of 6 removed it. No
+  request was throttled.
+- Token use varies between runs of the same commit (7.4 M to 9.2 M input so
+  far) with the number of model requests and tool calls; it did not follow the
+  parallelism.
+- In the 628a78d run, a verifier declared two moves to another file with
+  `movedFrom` in its first answer (from region JSON files to the normalization
+  code that drops their fields); the report showed both initial locations.
+- In the second run, a verifier again wrote merges into `confirmed` (nine
+  `{"id", "mergedInto", "reason"}` rows and no `merged` list). They were
+  classified as merges without a correction turn.
+- No file held findings that different verifiers confirmed, so the duplicate
+  check did not run; it is validated offline and with the exact-host scale
+  fixture.
+
 ## Not yet validated
 
-- A live run of the corrections above; they are validated offline and with the
-  exact-host fixtures only.
+- A live publication with this revision: the rule against skips that rely on
+  another finding, and a duplicate check on a real model.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.

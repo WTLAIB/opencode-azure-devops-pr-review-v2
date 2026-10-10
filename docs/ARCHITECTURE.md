@@ -18,7 +18,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
 | `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_file`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
-| `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, merge and the final version recheck. |
+| `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
 | `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
@@ -73,7 +73,15 @@ After preflight, hooks never re-read settings or catalogs.
    moved finding's initial location. Missing or invalid decisions trigger a
    repair turn asking only for those IDs; leftovers become UNREVIEWED (or
    NEEDS_INFO for incomplete confirmations).
-5. **Recheck** — a fresh PR and iteration read compares versions. A changed
+5. **Duplicate check** — the runtime groups confirmed findings by their final
+   file. A file whose findings different verifiers confirmed (a verifier moved
+   one there, or a crowded file was split) lost the one-verifier-per-file
+   guarantee, so one `dedupe` session per such file, using the verifier model,
+   compares them and may only merge a finding into another of that file (same
+   root cause and same correction). Invalid merges get a correction turn and are
+   otherwise ignored; chains end at the finding that stays; a failed check keeps
+   every finding and adds a warning. Usually no file qualifies and nothing runs.
+6. **Recheck** — a fresh PR and iteration read compares versions. A changed
    head is STALE; a changed base only adds a warning. A failed recheck is a
    warning because publication rechecks the head anyway.
 
@@ -127,7 +135,7 @@ publication is safe.
 
 ## Authorization and isolation
 
-Private roles (`azpr-<mode>-functional|risk|verifier|comment-plan`) are hidden
+Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`) are hidden
 primary agents with explicit models. Every private session gets a grant with
 the run, role, model and a pending prompt (text + nonce). Hooks enforce it:
 

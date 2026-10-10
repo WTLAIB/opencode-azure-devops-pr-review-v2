@@ -79,7 +79,7 @@ test('legacy model help stays readable without affecting agent instructions', ()
 test('agents: one per configured role; deep needs all three models', () => {
   const settings = validateSettings(input());
   const agents = buildAgents(settings, prompts);
-  assert.deepEqual(Object.keys(agents).sort(), ['azpr-review-comment-plan', 'azpr-review-functional', 'azpr-review-risk', 'azpr-review-verifier']);
+  assert.deepEqual(Object.keys(agents).sort(), ['azpr-review-comment-plan', 'azpr-review-dedupe', 'azpr-review-functional', 'azpr-review-risk', 'azpr-review-verifier']);
   for (const [id, agent] of Object.entries(agents)) {
     assert.equal(agent.id, id);
     assert.equal(agent.mode, 'primary');

@@ -10,7 +10,7 @@ acceptance, Azure source validity or report quality.
 | --- | --- |
 | Receipt in the invoking conversation | Status, per-stage rows (role, shard, session, model, attempts, repair turns, tool errors/timeouts, failure class) and notices. |
 | `PROGRESS` notices | Phases of the run: snapshot, shard counts, verification, retries, planning pages, posting. |
-| The verifier session | The rendered report (`# AZPR <id> — <status>`). |
+| The last review session (a verifier, or the duplicate check when one ran; the receipt names it) | The rendered report (`# AZPR <id> — <status>`). |
 | `${XDG_STATE_HOME:-~/.local/state}/opencode/azpr-v2/reviews/` | Persisted completed reviews (plans and publication ledgers included). |
 | `…/azpr-v2/receipts/` | Receipts that could not be queued to the conversation after three attempts. |
 | `…/azpr-v2/data/` | Private source excerpts and large comment inputs for persisted reviews. |

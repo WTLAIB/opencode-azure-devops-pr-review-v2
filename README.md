@@ -18,6 +18,10 @@ How a review works:
    source, sharded by finding. Answers that break the output contract get a
    short **correction turn** in the same session; whatever is still unusable is
    downgraded per finding (UNREVIEWED, NEEDS_INFO) instead of discarding the review.
+   When findings that different verifiers confirmed end up in the same file (a
+   verifier moved one there, or the file had more findings than one verifier
+   holds), a short **duplicate check** with the verifier model merges only true
+   duplicates; it never drops a finding.
 4. The runtime rechecks the PR versions. Only a changed **source** commit makes
    the review STALE; a moved base is reported as a warning.
 5. `/pr-comment` plans comments with a model, then the runtime posts the saved
@@ -60,7 +64,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **26 files** are sufficient:
+These **27 files** are sufficient:
 
 ```text
 install.sh
@@ -87,6 +91,7 @@ src/prompts/functional.md
 src/prompts/risk.md
 src/prompts/deep.md
 src/prompts/final.md
+src/prompts/dedupe.md
 src/prompts/comment-policy.md
 src/prompts/comment-plan.md
 ```
@@ -124,7 +129,7 @@ planning uses the review's risk model.
 | --- | --- |
 | `functional` | Requirements, boundaries, state changes, API compatibility and regressions. Strong code comprehension in the project's language. |
 | `risk` | Failures, retries, concurrency, authorization and data consistency. Evidence-based reasoning across call paths and reliable tool use. Also plans comments. |
-| `verifier` | Independent source re-checks, counterevidence, duplicate merging and the final report. Strong evidence judgment and instruction following. |
+| `verifier` | Independent source re-checks, counterevidence, duplicate merging (including the same-file duplicate check) and the final report. Strong evidence judgment and instruction following. |
 
 | Setting | Default and meaning |
 | --- | --- |

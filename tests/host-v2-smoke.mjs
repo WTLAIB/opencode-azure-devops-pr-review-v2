@@ -184,7 +184,7 @@ try {
   const commands = await api('/api/command');
   for (const name of ['pr-check', 'pr-review', 'pr-stop', 'pr-deep', 'pr-comment']) assert.ok(commands.data.some(command => command.name === name), name);
   const agents = await api('/api/agent');
-  for (const role of ['functional', 'risk', 'verifier', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), role);
+  for (const role of ['functional', 'risk', 'verifier', 'dedupe', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), role);
   const newOrigin = async title => (await api('/api/session', { title, location: { directory: directories.work } })).data.id;
   const latest = async origin => (await api(`/api/session/${origin}/inbox`)).data.at(-1)?.payload?.text ?? '';
   const inbox = async origin => (await api(`/api/session/${origin}/inbox`)).data.map(item => item.payload?.text ?? '');

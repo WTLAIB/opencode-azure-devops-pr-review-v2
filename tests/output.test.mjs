@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
-  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem,
+  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt,
 } from '../src/output.mjs';
 
 const finding = (id, extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.',
@@ -180,6 +180,33 @@ test('evaluateFinal asks a verifier to confirm moving a finding to another file 
     verifiedFinding: finding('R-1', { location: 'head:/tests/test_a.ts:12-13' }) }] }), { originals, previous: moved.result, supplement: true });
   assert.deepEqual(restored.issues, []);
   assert.equal(Object.hasOwn(restored.result.dispositions.find(d => d.id === 'R-1').verifiedFinding, 'movedFrom'), false);
+});
+
+test('evaluateDuplicates only merges within the checked file and never loses a finding', () => {
+  const ids = ['F-1', 'R-2', 'R-3', 'V-1'];
+  const clean = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'R-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }], report: 'r' }), { ids });
+  assert.deepEqual(clean.issues, []);
+  assert.deepEqual(clean.result.merges, [{ id: 'R-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }]);
+  assert.deepEqual(evaluateDuplicates('{"status":"COMPLETE","merged":[],"report":""}', { ids }).result.merges, []);
+  // A chain ends at the finding that stays; invalid rows are reported and left out.
+  const chained = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [
+    { id: 'R-3', mergedInto: 'R-2', reason: 'a' }, { id: 'R-2', mergedInto: 'F-1', reason: 'b' },
+    { id: 'X-9', mergedInto: 'F-1', reason: 'c' }, { id: 'V-1', mergedInto: 'V-1', reason: 'd' }, { id: 'F-1', mergedInto: 'R-2' } ], report: '' }), { ids });
+  assert.deepEqual(chained.result.merges.map(m => `${m.id}>${m.mergedInto}`), ['R-3>F-1', 'R-2>F-1']);
+  assert.ok(chained.issues.some(issue => /merged\[2\]: id "X-9" is not an assigned finding/.test(issue)));
+  assert.ok(chained.issues.some(issue => /merged\[3\]: mergedInto must name another assigned finding/.test(issue)));
+  assert.ok(chained.issues.some(issue => /merged\[4\]: give a concrete reason/.test(issue)));
+  assert.ok(chained.result.warnings.some(w => /stay confirmed/.test(w)));
+  assert.match(duplicateRepairPrompt(chained.issues), /same root cause and need the same correction/);
+  // A cycle names no survivor: nothing in it is merged.
+  const cycle = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'R-2', reason: 'a' }, { id: 'R-2', mergedInto: 'F-1', reason: 'b' }], report: '' }), { ids });
+  assert.deepEqual(cycle.result.merges, []);
+  assert.ok(cycle.issues.some(issue => /form a cycle/.test(issue)));
+  // No usable JSON: a correction turn, and no merge on its own.
+  const prose = evaluateDuplicates('R-2 repeats F-1.', { ids });
+  assert.equal(prose.result.structured, false);
+  assert.deepEqual(prose.result.merges, []);
+  assert.match(prose.issues[0], /could not be used/);
 });
 
 test('evaluateFinal keeps an unstructured verifier answer visible and asks for the full object', () => {
