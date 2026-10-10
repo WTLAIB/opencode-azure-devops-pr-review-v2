@@ -144,7 +144,7 @@ test('AZPR tools are registered once and a foreign tool with the same name is re
   const f = await fixture(t);
   t.after(await f.setup());
   const registered = await f.context.tool.list();
-  assert.deepEqual(registered.map(tool => tool.name).sort(), ['azpr_list_files', 'azpr_pr_threads', 'azpr_read_file']);
+  assert.deepEqual(registered.map(tool => tool.name).sort(), ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file']);
   assert.ok(registered.every(tool => tool.options?.codemode === false), 'Direct tools, not CodeMode.');
   const g = await fixture(t);
   await g.context.tool.transform(editor => editor.add({ name: 'azpr_read_file', description: 'other plugin', input: {}, execute: async () => ({}) }));

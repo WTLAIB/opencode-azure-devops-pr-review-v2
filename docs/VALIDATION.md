@@ -14,13 +14,16 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 238 tests across settings (including the
+`npm run check` and `npm test` pass: 244 tests across settings (including the
 `mcp` → `azure` migration), host helpers, session transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
-logged), the reviewers' tools, output acceptance and correction prompts
-(including verifier rows judged by their own fields, confirmations that move
-a finding to another file and the same-file duplicate check), comment validation and markers (including skips
+logged), line diffs (minimal edits checked against brute force on random
+inputs, context, enclosing blocks, folded repeats), the reviewers' tools
+(diffs of edited, added, deleted and renamed files, paging, file search),
+output acceptance and correction prompts (including verifier rows judged by
+their own fields, confirmations that move a finding to another file and the
+same-file duplicate check), comment validation and markers (including skips
 that rely on another finding), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
@@ -66,14 +69,14 @@ rule so the offline runtime tests catch a regression.
 
 | Property | Observed |
 | --- | --- |
-| Changed files | 120, reviewed in 5 shards of 24 per role |
+| Changed files | 120, reviewed in 5 shards of 24 per role; functional reviewers read whole files, risk reviewers read diffs |
 | Context overflow | One functional shard reported a nearly full context; the host attempted compaction, AZPR refused it, and the shard was split into `1/5a` and `1/5b`, both COMPLETE |
 | Verification | 30 findings in 2 verification sessions; the second verifier moves one high finding into a file of the first |
 | Duplicate check | One `dedupe` session for that file, which merges the moved duplicate |
 | Planning | 8 pages of at most four findings (29 findings) |
 | Publication | 20 threads (19 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
-| Largest provider request | 27,911 characters (27,185 before the prompt rules on moved findings and skips) |
-| REST calls | 69 |
+| Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
+| REST calls | 74 |
 
 ## Live run (Azure DevOps Services, real model)
 
@@ -211,10 +214,56 @@ first used commit `628a78d` with `workflow.parallelSessions` 8 and
   check did not run; it is validated offline and with the exact-host scale
   fixture.
 
+## Live A/B: reading diffs instead of whole files (review only)
+
+Seven `/pr-review` runs of PR #3 at the same head, with the same models,
+language and service; nothing was posted. Baselines A–C read whole files
+(commits `68c1f7e`, `628a78d`, `fe0ee7b`; `parallelSessions`/`azure.concurrency`
+4/3, 8/3 and 8/6). The variants used `azpr_read_diff`, `azpr_find_files` and the
+reading rules, all with 8/6:
+
+- V2 sent the diffs of all assigned files with the assignment;
+- V1 let reviewers read diffs themselves, without folding;
+- V3 (this revision) folds repeated changes and asks for few reading rounds.
+
+| Run | Review | Input tokens | Requests per initial session | Candidates → confirmed | Policy defects found | Configuration defect |
+| --- | --- | --- | --- | --- | --- | --- |
+| Baseline A | 719 s | 7.52 M | 5.08 | 66 → 26 | 24/24 | found |
+| Baseline B | 460 s | 9.17 M | 5.42 | 53 → 26 | 24/24 | found |
+| Baseline C | 393 s | 7.87 M | 5.35 | 60 → 26 | 24/24 | found |
+| V2 | 419 s | 15.13 M | 5.31 | 107 → 25 | 24/24 | found |
+| V1 | 451 s | 11.73 M | 5.58 | 74 → 27 | 24/24 | found |
+| V3 | 381 s | 5.53 M | 5.54 | 84 → 25 | 24/24 | found |
+| V3 | 429 s | 5.46 M | 5.54 | 69 → 25 | 24/24 | found |
+
+- Reviewers made about 5.5 model requests per session in every variant; cost
+  follows how much each request carries.
+- 240 of the 316 files are 300-line JSON region profiles with the same
+  migration on every route, so their plain diffs are 80 % of HEAD plus BASE.
+  V2 put 25 such diffs into every request of a shard, and reviewers still read
+  whole files: tokens roughly doubled, so sending diffs upfront was removed.
+  V1's plain diffs and the new reading rules cost 49 % more than baseline C.
+- Folding repeated changes brings PR #3's diff volume to 27 % of whole-file
+  reads (measured offline over all 316 files). V3 used 27–41 % fewer input
+  tokens than the baselines in two runs, with all 24 policy defects and the
+  configuration defect found each time.
+- Offline over the latest 182 pydantic commits that modified source files (618
+  files), diffs are 4.2 % of whole-file HEAD and BASE reads (median per commit 4
+  %, 90th percentile 9 %), so code-centric PRs should save more; this is not yet
+  validated live.
+- The duplicate check ran on a real model: in V1 it merged five duplicates that
+  different verifiers had confirmed in one file and kept two different
+  configuration findings apart.
+- Severity varies between runs of every variant (high findings: 4 to 12).
+  `azpr_find_files` was used 19–28 times per run, but guessed-path 404s did not
+  drop (1–5 per run).
+
 ## Not yet validated
 
+- A live review of a code-centric PR with large files; diff-based reading is
+  measured there offline only.
 - A live publication with this revision: the rule against skips that rely on
-  another finding, and a duplicate check on a real model.
+  another finding.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.

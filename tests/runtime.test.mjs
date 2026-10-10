@@ -283,7 +283,7 @@ test('shell and foreign tools are hidden and refused; shell is forced to deny th
   assert.match(attempted, /not available to this private reviewer/);
   assert.match(mcpTool, /not available to this private reviewer/);
   const functional = f.sessionsFor('azpr-review-functional')[0];
-  assert.deepEqual(functional.visibleTools.sort(), ['azpr_list_files', 'azpr_pr_threads', 'azpr_read_file', 'glob', 'grep', 'read']);
+  assert.deepEqual(functional.visibleTools.sort(), ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file', 'glob', 'grep', 'read']);
   const event = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'shell', resources: ['*'], effect: 'allow' });
   assert.equal(event.effect, 'deny');
   const own = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: [join(f.stateDirectory, 'data', 'x', '*')], effect: 'ask' });
@@ -320,16 +320,16 @@ test('shell: "inherit" keeps the host decision and exposes the tool; only an all
 
 test('a hung Azure DevOps read is aborted, retried and reported without blocking the review', async t => {
   let hung = 0, visible;
-  // Only this BASE read hangs. The other reviewer reads HEAD in parallel; it must
-  // neither hang here nor serve this read from the run cache, whatever the order.
+  // Only this read hangs: a context file no other session or runtime prefetch
+  // reads, so neither the run cache nor another reviewer can interfere.
   const f = await fixture(t, { azureTimeoutMs: 400, async during({ session, role, invoke }) {
     if (role !== 'azpr-review-functional') return;
     f.azure.state.fail.items = call => {
-      if (call.query['versionDescriptor.version'] !== f.azure.state.base) return undefined;
+      if (call.query.path !== '/src/Context.java') return undefined;
       hung++;
       return new Promise(() => {});
     };
-    visible = await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'base' });
+    visible = await invoke(session, 'azpr_read_file', { path: '/src/Context.java' });
     delete f.azure.state.fail.items;
   } });
   const receipt = await f.command();

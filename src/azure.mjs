@@ -404,12 +404,23 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       if (file.tooLarge) throw new AzureError(`${file.path} is larger than ${MAX_FILE_BYTES / 1048576} MB at ${version.slice(0, 12)}.`, { kind: 'too-large' });
       return file.text;
     },
-    /** Folder entries at a commit. */
+    /** Folder entries at a commit; a recursive listing is read once per run. */
     async listItems(run, snapshot, path, version, recursive = false) {
-      const result = await request(run, { path: `${repo(snapshot)}/items`, label: `folder ${normalizePath(path)}`, record: { path: normalizePath(path), version: version.slice(0, 12) },
-        query: { scopePath: normalizePath(path), recursionLevel: recursive ? 'Full' : 'OneLevel', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' } });
-      if (!Array.isArray(result?.value)) throw new AzureError('Azure DevOps returned no item list.');
-      return result.value;
+      const scope = normalizePath(path);
+      const read = async () => {
+        const result = await request(run, { path: `${repo(snapshot)}/items`, label: `folder ${scope}`, record: { path: scope, version: version.slice(0, 12), ...(recursive ? { recursive: true } : {}) },
+          query: { scopePath: scope, recursionLevel: recursive ? 'Full' : 'OneLevel', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' } });
+        if (!Array.isArray(result?.value)) throw new AzureError('Azure DevOps returned no item list.');
+        return result.value;
+      };
+      if (!recursive) return read();
+      const cache = run.listCache ??= new Map(), key = `${version}\n${scope}`;
+      if (!cache.has(key)) {
+        const pending = read();
+        cache.set(key, pending);
+        pending.catch(() => cache.delete(key));
+      }
+      return cache.get(key);
     },
     /** Every thread on the PR (one call; the API returns all of them). */
     async threads(run, snapshot) {

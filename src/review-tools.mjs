@@ -8,12 +8,14 @@
  * posts comments. Output is bounded and says how to read further.
  */
 import { isCommitSha, normalizePath } from './azure.mjs';
+import { DIFF_DEFAULTS, diffHunks, renderHunk, splitLines } from './diff.mjs';
 
-export const REVIEW_TOOLS = Object.freeze({ readFile: 'azpr_read_file', listFiles: 'azpr_list_files', threads: 'azpr_pr_threads' });
+export const REVIEW_TOOLS = Object.freeze({ readDiff: 'azpr_read_diff', readFile: 'azpr_read_file', findFiles: 'azpr_find_files', listFiles: 'azpr_list_files', threads: 'azpr_pr_threads' });
 export const REVIEW_TOOL_NAMES = Object.freeze(Object.values(REVIEW_TOOLS));
 export const READ_LINES = 1000;
 const READ_CHARACTERS = 60000;
 const LIST_ENTRIES = 1000;
+const FIND_RESULTS = 200;
 const THREAD_CHARACTERS = 40000;
 const COMMENT_EXCERPT = 2000;
 const MARKERS = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
@@ -29,6 +31,15 @@ const versionProperty = { type: 'string', description: '"head" (the PR source, d
 export function reviewToolDefinitions() {
   return [
     {
+      name: REVIEW_TOOLS.readDiff,
+      description: `What the PR changed in one file: BASE → HEAD hunks with ${DIFF_DEFAULTS.before} unchanged lines before and ${DIFF_DEFAULTS.after} after each change, extended to the start of the enclosing block when it is near. Each line reads "<mark> <BASE line> <HEAD line> | text" (mark "-" = only in BASE, "+" = only in HEAD; the prefix is not file content). A new or deleted file shows its whole content. Use azpr_read_file for code outside the hunks.`,
+      input: { type: 'object', additionalProperties: false, required: ['path'], properties: {
+        path: { type: 'string', description: 'Repository path at HEAD (for a renamed file, its new path), such as /src/app.ts.' },
+        context: { type: 'integer', minimum: 0, maximum: 50, description: `Unchanged lines before and after each change (default ${DIFF_DEFAULTS.before} before, ${DIFF_DEFAULTS.after} after).` },
+        fromHunk: { type: 'integer', minimum: 1, description: 'First hunk to return, when an earlier answer said more hunks follow.' },
+      } },
+    },
+    {
       name: REVIEW_TOOLS.readFile,
       description: `Read one file of the PR repository at an exact commit. Returns numbered lines ("N | text"; the prefix is not file content), at most ${READ_LINES} lines per call; use startLine/endLine for other ranges.`,
       input: { type: 'object', additionalProperties: false, required: ['path'], properties: {
@@ -36,6 +47,15 @@ export function reviewToolDefinitions() {
         version: versionProperty,
         startLine: { type: 'integer', minimum: 1, description: 'First line to return (default 1).' },
         endLine: { type: 'integer', minimum: 1, description: `Last line to return (default: up to ${READ_LINES} lines from startLine).` },
+      } },
+    },
+    {
+      name: REVIEW_TOOLS.findFiles,
+      description: `Find repository paths by name at an exact commit, instead of guessing them: a glob such as "test_*.py", "tests/**/*.ts" or "/src/**/config*" (without "/" it matches file names), or plain text matched anywhere in the path (case-insensitive). Names only, not file contents; at most ${FIND_RESULTS} results.`,
+      input: { type: 'object', additionalProperties: false, required: ['pattern'], properties: {
+        pattern: { type: 'string', description: 'Glob or plain text.' },
+        path: { type: 'string', description: 'Folder to search (default /).' },
+        version: versionProperty,
       } },
     },
     {
@@ -108,6 +128,95 @@ export function renderFile(file, { label, startLine, endLine }) {
   return { text: `${head} — lines ${first}-${last} of ${total}.${more}\nThe "N | " prefixes are line numbers, not file content.\n\n${rows.join('\n')}` };
 }
 
+const DIFF_LEGEND = 'Each line is "<mark> <BASE line> <HEAD line> | text": "-" exists only in BASE, "+" only in HEAD, a blank mark in both; the prefix is not file content.';
+
+/** A new or deleted file: its whole content as one-sided diff lines, bounded like a file read. */
+function wholeFile(file, { title, mark, version }) {
+  const lines = splitLines(file.text);
+  if (!lines.length) return `${title}: the file is empty.`;
+  const width = String(lines.length).length, pad = number => String(number).padStart(width), blank = ' '.repeat(width);
+  const rows = [];
+  let characters = 0, last = 0;
+  for (let index = 0; index < Math.min(lines.length, READ_LINES); index++) {
+    const row = `${mark} ${mark === '+' ? `${blank} ${pad(index + 1)}` : `${pad(index + 1)} ${blank}`} | ${lines[index]}`;
+    if (rows.length && characters + row.length > READ_CHARACTERS) break;
+    rows.push(row);
+    characters += row.length + 1;
+    last = index + 1;
+  }
+  const more = last < lines.length ? `\nLines ${last + 1}-${lines.length} follow: read them with azpr_read_file (version "${version}", startLine ${last + 1}).` : '';
+  return `${title}: the whole file (${lines.length} lines) ${mark === '+' ? 'is new in HEAD' : 'exists only in BASE'}.\n${DIFF_LEGEND}${more}\n\n${rows.join('\n')}`;
+}
+
+/**
+ * BASE → HEAD hunks of one file, bounded by characters with hunk paging.
+ * `base`/`head` are file reads, or null where the file does not exist.
+ */
+export function renderDiff({ path, change, base, head, snapshot, context, fromHunk = 1 }) {
+  const kind = change ? `${change.changeType.join(', ') || 'changed'}${change.originalPath ? ` from ${change.originalPath}` : ''}` : 'not in the PR\'s changed files';
+  const title = `${path} — BASE ${snapshot.base.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)} (${kind})`;
+  const unreadable = [base, head].find(file => file?.binary || file?.tooLarge);
+  if (unreadable) return `${title}: ${unreadable.binary ? 'binary' : `larger than AZPR reads (${unreadable.size} bytes)`} at ${unreadable === base ? 'BASE' : 'HEAD'}; no diff is shown.`;
+  if (!base && !head) return `${title}: the file exists in neither version.`;
+  if (!base || !head) return wholeFile(head ?? base, { title, mark: head ? '+' : '-', version: head ? 'head' : 'base' });
+  const { hunks, baseLines, headLines } = diffHunks(base.text, head.text, context === undefined ? {} : { before: context, after: context });
+  if (!hunks.length) return `${title}: no differences between BASE and HEAD.`;
+  if (fromHunk > hunks.length) return `${title} has ${hunks.length} hunk(s); fromHunk ${fromHunk} is past the end.`;
+  const width = String(Math.max(baseLines, headLines)).length;
+  const parts = [];
+  let characters = 0, next = fromHunk - 1;
+  while (next < hunks.length) {
+    let rendered = renderHunk(hunks[next], width);
+    if (parts.length && characters + rendered.length > READ_CHARACTERS) break;
+    if (rendered.length > READ_CHARACTERS) {
+      rendered = rendered.slice(0, rendered.lastIndexOf('\n', READ_CHARACTERS)) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+    }
+    parts.push(rendered);
+    characters += rendered.length + 2;
+    next++;
+  }
+  const more = next < hunks.length ? `\nHunks ${next + 1}-${hunks.length} follow: call again with fromHunk ${next + 1}.` : '';
+  const folded = hunks.filter(hunk => hunk.repeats).length;
+  const foldNote = folded ? `\n${folded} hunk(s) repeat an earlier change and are folded to one line: the same lines as the named hunk except for the listed string and number values (earlier→this). Read a folded hunk's exact lines with azpr_read_file.` : '';
+  return `${title}: ${hunks.length} hunk(s)${folded ? `, ${folded} folded` : ''}; BASE ${baseLines} lines, HEAD ${headLines} lines.\n${DIFF_LEGEND}${foldNote}${more}\n\n${parts.join('\n\n')}`;
+}
+
+/**
+ * Name matcher: a glob ("*" within a name, "**" across folders, "?" one
+ * character; without "/" it matches the file name) or case-insensitive text.
+ */
+export function pathMatcher(pattern) {
+  if (!/[*?]/.test(pattern)) {
+    const needle = pattern.toLowerCase();
+    return path => path.toLowerCase().includes(needle);
+  }
+  let source = '';
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char === '*' && pattern[index + 1] === '*') {
+      index++;
+      if (pattern[index + 1] === '/') { index++; source += '(?:.*/)?'; } else source += '.*';
+    } else if (char === '*') source += '[^/]*';
+    else if (char === '?') source += '[^/]';
+    else source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  const regex = new RegExp(pattern.startsWith('/') ? `^${source}$` : `(?:^|/)${source}$`, 'i');
+  return path => regex.test(path);
+}
+
+/** Matching paths of a recursive listing, folders marked with a trailing slash. */
+export function renderMatches(items, { pattern, path, label, version }) {
+  const match = pathMatcher(pattern);
+  const found = (Array.isArray(items) ? items : [])
+    .filter(item => typeof item?.path === 'string' && normalizePath(item.path) !== path && match(normalizePath(item.path)))
+    .map(item => `${normalizePath(item.path)}${item.isFolder === true || item.gitObjectType === 'tree' ? '/' : ''}`)
+    .sort();
+  const head = `${found.length} path(s) under ${path} at ${label} ${version.slice(0, 12)} match ${JSON.stringify(pattern)}`;
+  if (!found.length) return `${head}. Check the folder with azpr_list_files or try a broader pattern.`;
+  const more = found.length > FIND_RESULTS ? `\n${found.length - FIND_RESULTS} more are not shown; narrow the pattern or the folder.` : '';
+  return `${head}.\n${found.slice(0, FIND_RESULTS).join('\n')}${more}`;
+}
+
 /** Folder entries, folders marked with a trailing slash. */
 export function renderListing(items, { path, label, version }) {
   const entries = (Array.isArray(items) ? items : [])
@@ -155,6 +264,29 @@ export function renderThreads(threads, { path, threadId }) {
  */
 export async function runReviewTool(name, input, { azure, run, snapshot }) {
   const args = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  if (name === REVIEW_TOOLS.readDiff) {
+    const path = pathArgument(args.path);
+    if (args.context !== undefined && (!Number.isInteger(args.context) || args.context < 0 || args.context > 50)) throw new ToolInputError('context must be an integer from 0 to 50.');
+    const fromHunk = lineArgument(args.fromHunk, 'fromHunk') ?? 1;
+    const change = (snapshot.changes ?? []).find(item => item.path === path);
+    const types = change?.changeType ?? [];
+    // A missing version is part of the answer (an added or deleted file), not an error.
+    const read = async (filePath, version, absent) => {
+      if (absent) return null;
+      try { return await azure.readFile(run, snapshot, filePath, version); }
+      catch (error) { if (error?.kind === 'not-found') return null; throw error; }
+    };
+    const [base, head] = await Promise.all([read(change?.originalPath ?? path, snapshot.base, types.includes('add')), read(path, snapshot.head, types.includes('delete'))]);
+    const text = renderDiff({ path, change, base, head, snapshot, context: args.context, fromHunk });
+    return { text, ...(typeof head?.text === 'string' ? { observation: { path, version: snapshot.head, text: head.text } } : {}) };
+  }
+  if (name === REVIEW_TOOLS.findFiles) {
+    const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : '';
+    if (!pattern || pattern.length > 300 || /[\0\r\n]/.test(pattern)) throw new ToolInputError('pattern must be a glob such as "test_*.py" or plain text.');
+    const path = pathArgument(args.path, '/');
+    const { sha, label } = resolveVersion(args.version, snapshot);
+    return { text: renderMatches(await azure.listItems(run, snapshot, path, sha, true), { pattern, path, label, version: sha }) };
+  }
   if (name === REVIEW_TOOLS.readFile) {
     const path = pathArgument(args.path);
     const { sha, label } = resolveVersion(args.version, snapshot);

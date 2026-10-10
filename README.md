@@ -64,7 +64,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **27 files** are sufficient:
+These **28 files** are sufficient:
 
 ```text
 install.sh
@@ -83,6 +83,7 @@ src/attribution.mjs
 src/host.mjs
 src/tool-queue.mjs
 src/azure.mjs
+src/diff.mjs
 src/review-tools.mjs
 src/review-work.mjs
 src/store.mjs
@@ -165,9 +166,11 @@ Read & write**, put it in `azure.pat` of the installed `settings.json` (the
 installer keeps that file at mode 600) and restart OpenCode. Keep the PAT out of
 this repository and out of shared settings profiles.
 
-Reviewers read source through three read-only AZPR tools (`azpr_read_file`,
-`azpr_list_files`, `azpr_pr_threads`) that are visible only in AZPR's private
-sessions; other tools, including other MCP servers, are hidden from them. See
+Reviewers read source through five read-only AZPR tools (`azpr_read_diff`,
+`azpr_read_file`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`) that
+are visible only in AZPR's private sessions; other tools, including other MCP
+servers, are hidden from them. They start from each file's diff and read whole
+files only for the context a change needs. See
 [Azure DevOps access](docs/AZURE_DEVOPS.md) for the API list, versions and
 troubleshooting.
 

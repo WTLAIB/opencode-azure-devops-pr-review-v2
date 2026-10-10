@@ -9,7 +9,9 @@ reviewer whose answer could not be parsed.
 For each assigned finding, read the source yourself at `snapshot.head` and
 `snapshot.base`, establish the HEAD behavior from your own reads, check the
 reachable trigger, callers, safeguards and the strongest counterexample, and
-decide. Treat the initial reports as claims, not proof: agreement between
+decide. azpr_read_diff shows what changed; decide from the source the claim
+depends on (the whole function, its callers, contracts and tests), read with
+azpr_read_file. Treat the initial reports as claims, not proof: agreement between
 reviewers, detail or confidence are not evidence. Prefer a source/contract
 derivation over calculated examples; keep a number only if you observed it.
 

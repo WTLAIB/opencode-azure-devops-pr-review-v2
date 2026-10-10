@@ -75,3 +75,79 @@ test('tool arguments are validated before any Azure call', async () => {
   const read = await runReviewTool('azpr_read_file', { path: 'src/a.ts', version: 'base' }, { ...context, azure: { readFile: async (_run, _snapshot, path, version) => ({ path, version, text: 'x\n', size: 2 }) } });
   assert.deepEqual(read.observation, { path: '/src/a.ts', version: snapshot.base, text: 'x\n' });
 });
+
+test('diffs show both sides of every change and whole content for added or deleted files', async () => {
+  const sources = {
+    [`${snapshot.base}:/src/a.ts`]: 'function total(items) {\n  let sum = 0;\n  for (const item of items) sum += item.price;\n  return sum;\n}\n',
+    [`${snapshot.head}:/src/a.ts`]: 'function total(items) {\n  let sum = 0;\n  for (const item of items) sum += item.price * item.qty;\n  return sum;\n}\n',
+    [`${snapshot.head}:/src/new.ts`]: 'export const flag = true;\n',
+    [`${snapshot.base}:/src/old.ts`]: 'export const legacy = 1;\nexport const more = 2;\n',
+    [`${snapshot.base}:/src/before.ts`]: 'a\nb\n', [`${snapshot.head}:/src/after.ts`]: 'a\nB\n',
+    [`${snapshot.base}:/src/same.ts`]: 'x\n', [`${snapshot.head}:/src/same.ts`]: 'x\n',
+  };
+  const reads = [];
+  const azure = { readFile: async (_run, _snapshot, path, version) => {
+    reads.push(`${version.slice(0, 1)}:${path}`);
+    if (path === '/src/image.png') return { path, version, binary: true, size: 40 };
+    const text = sources[`${version}:${path}`];
+    if (text === undefined) throw Object.assign(new Error('missing'), { kind: 'not-found' });
+    return { path, version, text, size: text.length };
+  } };
+  const changes = [{ path: '/src/a.ts', changeType: ['edit'] }, { path: '/src/new.ts', changeType: ['add'] }, { path: '/src/old.ts', changeType: ['delete'] },
+    { path: '/src/after.ts', changeType: ['rename', 'edit'], originalPath: '/src/before.ts' }, { path: '/src/image.png', changeType: ['edit'] }];
+  const context = { azure, run: {}, snapshot: { ...snapshot, changes } };
+  const edit = await runReviewTool('azpr_read_diff', { path: '/src/a.ts' }, context);
+  assert.match(edit.text, /^\/src\/a\.ts — BASE aaaaaaaaaaaa → HEAD bbbbbbbbbbbb \(edit\): 1 hunk\(s\); BASE 5 lines, HEAD 5 lines\./);
+  assert.match(edit.text, /\n- 3   \|   for \(const item of items\) sum \+= item\.price;\n\+   3 \|   for \(const item of items\) sum \+= item\.price \* item\.qty;\n/);
+  assert.deepEqual(edit.observation, { path: '/src/a.ts', version: snapshot.head, text: sources[`${snapshot.head}:/src/a.ts`] }, 'HEAD text stays available for comment anchors.');
+  reads.length = 0;
+  assert.match((await runReviewTool('azpr_read_diff', { path: '/src/new.ts' }, context)).text, /\(add\): the whole file \(1 lines\) is new in HEAD\.[\s\S]*\n\+   1 \| export const flag = true;$/);
+  assert.deepEqual(reads, ['b:/src/new.ts'], 'An added file has no BASE to read.');
+  const deleted = await runReviewTool('azpr_read_diff', { path: '/src/old.ts' }, context);
+  assert.match(deleted.text, /\(delete\): the whole file \(2 lines\) exists only in BASE\.[\s\S]*\n- 1   \| export const legacy = 1;\n- 2   \| export const more = 2;$/);
+  assert.equal(deleted.observation, undefined);
+  assert.match((await runReviewTool('azpr_read_diff', { path: '/src/after.ts' }, context)).text, /\(rename, edit from \/src\/before\.ts\): 1 hunk/);
+  assert.match((await runReviewTool('azpr_read_diff', { path: '/src/same.ts' }, context)).text, /\(not in the PR's changed files\): no differences between BASE and HEAD\./);
+  assert.match((await runReviewTool('azpr_read_diff', { path: '/src/image.png' }, context)).text, /binary at BASE; no diff is shown\./);
+  assert.match((await runReviewTool('azpr_read_diff', { path: '/src/gone.ts' }, context)).text, /the file exists in neither version\./);
+  await assert.rejects(runReviewTool('azpr_read_diff', { path: '/src/a.ts', context: 99 }, context), /context must be an integer from 0 to 50/);
+  await assert.rejects(runReviewTool('azpr_read_diff', { path: '/src/a.ts', fromHunk: 0 }, context), /fromHunk must be a positive integer/);
+  // Many hunks are paged by characters.
+  const many = Array.from({ length: 4000 }, (_, i) => `line ${i} ${'z'.repeat(40)}`);
+  sources[`${snapshot.base}:/src/big.ts`] = many.join('\n');
+  sources[`${snapshot.head}:/src/big.ts`] = many.map((line, i) => i % 20 === 0 ? `${line} changed${i}` : line).join('\n');
+  const first = await runReviewTool('azpr_read_diff', { path: '/src/big.ts' }, context);
+  const next = Number(/call again with fromHunk (\d+)\./.exec(first.text)[1]);
+  assert.ok(first.text.length < 65000 && next > 1);
+  assert.match((await runReviewTool('azpr_read_diff', { path: '/src/big.ts', fromHunk: next }, context)).text, new RegExp(`@@ #${next} BASE ${(next - 1) * 20 - 4}-`));
+  // The same edit repeated through a file is folded and explained.
+  sources[`${snapshot.head}:/src/big.ts`] = many.map((line, i) => i % 20 === 0 ? `${line} changed` : line).join('\n');
+  context.run = {};
+  const repeated = (await runReviewTool('azpr_read_diff', { path: '/src/big.ts' }, context)).text;
+  assert.match(repeated, /: 200 hunk\(s\), 199 folded;/);
+  assert.match(repeated, /199 hunk\(s\) repeat an earlier change and are folded to one line/);
+  assert.match(repeated, /\n@@ #2 BASE 21-21 → HEAD 21-21 @@ folded: 2 changed line\(s\) repeating #1 with 0→20, 0→20\n/);
+  assert.ok(repeated.length < 30000);
+});
+
+test('files are found by glob or plain text in one cached recursive listing', async () => {
+  let listings = 0;
+  const items = ['/', '/src', '/src/app.ts', '/src/config.ts', '/src/lib', '/src/lib/config.yml', '/src/lib/myconfig.ts', '/tests', '/tests/test_app.py', '/tests/unit/test_config.py', '/docs/Routing.md']
+    .map(path => ({ path, isFolder: !/\.\w+$/.test(path) }));
+  const azure = { listItems: async (run, _snapshot, path, version, recursive) => {
+    assert.equal(recursive, true);
+    const cache = run.listCache ??= new Map(), key = `${version}\n${path}`;
+    if (!cache.has(key)) { listings++; cache.set(key, Promise.resolve(items)); }
+    return cache.get(key);
+  } };
+  const context = { azure, run: {}, snapshot };
+  const find = async (pattern, extra = {}) => (await runReviewTool('azpr_find_files', { pattern, ...extra }, context)).text.split('\n').slice(1);
+  assert.deepEqual(await find('test_*.py'), ['/tests/test_app.py', '/tests/unit/test_config.py']);
+  assert.deepEqual(await find('/src/**/config*'), ['/src/config.ts', '/src/lib/config.yml'], '"**/" spans whole folders only.');
+  assert.deepEqual(await find('tests/*.py'), ['/tests/test_app.py']);
+  assert.deepEqual(await find('routing'), ['/docs/Routing.md'], 'Plain text is a case-insensitive substring.');
+  assert.deepEqual(await find('lib'), ['/src/lib/', '/src/lib/config.yml', '/src/lib/myconfig.ts']);
+  assert.match((await runReviewTool('azpr_find_files', { pattern: '*.rs' }, context)).text, /^0 path\(s\) under \/ at HEAD \(PR source\) bbbbbbbbbbbb match "\*\.rs"\. Check the folder/);
+  assert.equal(listings, 1, 'One recursive listing serves every search of the same folder and commit.');
+  await assert.rejects(runReviewTool('azpr_find_files', { pattern: ' ' }, context), /pattern must be a glob/);
+});

@@ -14,9 +14,11 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   base, the complete changed-file list (paged 2,000 per request) and the final
   version recheck come from REST calls, not model echoes. `/pr-check` is fully
   deterministic.
-- **Reviewer tools.** Models read the repository through three read-only AZPR
-  tools bound to the run's repository; private sessions see only an allowlist
-  of tools, and ordinary sessions never see AZPR's tools.
+- **Reviewer tools.** Models read the repository through five read-only AZPR
+  tools bound to the run's repository: diffs with structure-aware context and
+  folded repeats, whole files, file search by name, folder listings and PR
+  threads. Private sessions see only an allowlist of tools, and ordinary
+  sessions never see AZPR's tools.
 - **Only source changes are stale.** A moved base is a warning; a changed head
   is STALE. Publication rechecks the head before writing.
 - **Sharded reviews.** Initial reviews run per file shard with disjoint finding-ID
@@ -86,10 +88,10 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
 ## Remaining validation work
 
 1. Publish a large PR with this revision to confirm the planner rule on skips
-   that rely on another finding, and observe a duplicate check on a real model.
-   Moved findings and decision rows in the wrong list were handled correctly in
-   live reviews; an earlier commit passed review and publication of 25 items on
-   a 316-file PR (see [validation](VALIDATION.md)).
+   that rely on another finding. Moved findings, decision rows in the wrong list
+   and the duplicate check worked in live reviews; an earlier commit passed
+   review and publication of 25 items on a 316-file PR (see
+   [validation](VALIDATION.md)).
 2. Confirm that a PAT limited to Code (Read) and Pull Request Threads
    (Read & write) is sufficient.
 3. Measure how often correction turns and retries happen per model, and tune
@@ -98,11 +100,11 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
    made the REST queue the bottleneck. The defaults stay 4 / 3 until other
    providers and organizations have been measured; raise both together.
-4. Reduce the input-token cost of initial reviews: the 316-file review used
-   about 7.4 million input tokens, mostly tool output re-sent with every model
-   request of long initial sessions. Candidates are a tool that returns HEAD
-   and BASE hunks instead of two full files, smaller shards and provider prompt
-   caching; measure before changing defaults.
+4. Reduce input tokens further. Reading diffs with folded repeats cut the
+   316-file review from 7.5–9.2 to about 5.5 million input tokens; reviewers
+   still make about 5.5 model requests per session and each re-sends what was
+   read. Next candidates: provider prompt caching (cache reads are 10–16 % of
+   input) and a live measurement on a code-centric PR.
 5. Check rendered comments, inline anchors and summaries in the Azure UI.
 6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.

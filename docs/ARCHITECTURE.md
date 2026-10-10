@@ -17,7 +17,8 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations, failure classification, interrupt and synthetic notices. |
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
-| `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_file`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
+| `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
+| `src/diff.mjs` | Line diffs (Myers) with both line numbers, more context before a change than after, the enclosing block's start, and folding of repeated changes. |
 | `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
 | `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
@@ -141,7 +142,7 @@ the run, role, model and a pending prompt (text + nonce). Hooks enforce it:
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
   cannot be mentioned or delegated.
-- `context`: private requests keep only the role's allowlist — AZPR's three
+- `context`: private requests keep only the role's allowlist — AZPR's five
   tools, native read/glob/grep and shell when the `shell` setting allows it;
   every other tool (other MCP servers, edits, web, delegation, CodeMode) is
   removed. Ordinary sessions lose only AZPR's tools. Comment pages that read too

@@ -37,14 +37,15 @@ const provider = createServer(async (request, response) => {
     let payload; try { payload = JSON.parse(textOf(users[0]?.content)); } catch { /* summaries etc. */ }
     const results = input.messages.filter(m => m.role === 'tool').length;
     requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: payload?.assignment?.files?.length, work: payload?.commentWork?.kind, toolResults: results, requestCharacters: body.length });
-    const fileTool = input.tools?.find(t => t.function.name === 'azpr_read_file')?.function.name;
+    // Functional reviewers read whole files; risk reviewers read diffs.
+    const fileTool = input.tools?.find(t => t.function.name === (input.model === 'risk' ? 'azpr_read_diff' : 'azpr_read_file'))?.function.name;
     let call, final, usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
     if (payload?.assignment?.files && !payload.assignment.findingIds) {
       const assigned = payload.assignment.files;
       // The first functional shard is "too large": report a nearly full context after its read.
       const tooLarge = input.model === 'functional' && assigned.length > 15 && assigned[0] === files[0];
       if (!results && fileTool) {
-        call = { name: fileTool, arguments: { path: assigned[0], version: 'head' } };
+        call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[0] } : { path: assigned[0], version: 'head' } };
         if (tooLarge) { usage = { prompt_tokens: 59000, completion_tokens: 10, total_tokens: 59010 }; overflowShards++; }
       } else {
         const prefix = input.model === 'functional' ? 'F' : 'R', first = Number(payload.assignment.firstFindingId.split('-')[1]);
@@ -113,6 +114,7 @@ try {
   assert.equal(overflowed.length, 1, 'Exactly one functional shard overflowed.');
   assert.ok(compactionObserved, 'The host attempted compaction and AZPR refused it.');
   assert.deepEqual(functional.filter(stage => stage.status !== 'FAILED').map(stage => stage.label).sort().slice(0, 2), ['shard 1/5a', 'shard 1/5b']);
+  assert.ok(stages('risk').every(stage => stage.status === 'FAILED' || stage.completedTools === 1), 'Each risk reviewer read its first file as a diff.');
   assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
   assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
   const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];

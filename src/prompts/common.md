@@ -40,12 +40,28 @@ in the HEAD content. A fix that exists only in BASE does not protect HEAD.
 
 ## Reading source
 
-Start from the changed paths, then read only the context a concrete question
-needs: callers, contracts, guards, tests and relevant repository guidance at the
-same commit. Batch independent reads and reuse what you read. Large PRs are
-split across several sessions: review your assigned files thoroughly and read
-other changed files only for context. If you cannot read something you need,
-say what is missing instead of guessing.
+Start with azpr_read_diff for all your assigned files in one batch: it shows
+both sides of every change with nearby lines and the start of the enclosing
+block. Then read more wherever a change reaches beyond its hunks:
+- a signature, return value, error or side effect changed: read the callers and
+  users;
+- a guard, check, lock, validation or cleanup was removed, moved or reordered:
+  read the whole function and the paths that relied on it;
+- a constant, configuration key, schema, contract or data format changed: read
+  where it is produced and consumed;
+- a test changed: read the code it tests, and the reverse;
+- a hunk relies on state, invariants or helpers elsewhere in the file: read
+  those parts or the whole file with azpr_read_file.
+Read related tests, contracts and repository guidance at the same commit; find
+them with azpr_find_files or azpr_list_files instead of guessing paths. Every
+model request re-sends everything you have read, so plan reads in few rounds:
+after the diffs, request all the context you need in one batch, and reuse what
+you read. When many files carry the same mechanical change (a data migration, a
+rename, generated output), examine one or two closely and check the rest for
+deviations; folded hunks already show where repeats differ. Large PRs are split
+across several sessions: review your assigned files thoroughly and read other
+changed files only for context. If you cannot read something you need, say what
+is missing instead of guessing.
 
 ## Finding quality
 

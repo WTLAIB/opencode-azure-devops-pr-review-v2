@@ -215,7 +215,7 @@ try {
     assert.ok(!request.tools.includes('shell'), 'Shell is hidden from private reviewers by default.');
     assert.ok(!request.tools.includes('execute'), 'CodeMode execute is hidden.');
   }
-  assert.ok(reviewRequests.every(request => ['azpr_read_file', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
+  assert.ok(reviewRequests.every(request => ['azpr_read_diff', 'azpr_read_file', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
   assert.ok(reviewRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools are hidden from private reviewers.');
   assert.ok(azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === 'b'.repeat(40)), 'A reviewer read HEAD through azpr_read_file.');
   assert.ok(reviewRequests.some(request => request.model === 'functional' && /outside the local OpenCode project/.test(request.lastTool)),

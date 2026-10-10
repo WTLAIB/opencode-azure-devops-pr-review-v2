@@ -64,10 +64,18 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
   pages), the final version recheck and the pre-publication recheck (PR and
   iterations), `/pr-check` reads, the discussion digest for comment planning,
   HEAD source excerpts for planning, thread creation and marker read-back.
-- **Reviewers** (models) use three read-only AZPR tools, visible only in AZPR's
+- **Reviewers** (models) use five read-only AZPR tools, visible only in AZPR's
   private sessions and always bound to the run's repository:
+  - `azpr_read_diff` — what the PR changed in one file: BASE → HEAD hunks with
+    both line numbers, 5 unchanged lines before and 3 after each change
+    (extended to the start of the enclosing block when it is near). A change
+    repeated at least three times in a file with only different strings or
+    numbers is folded to one line per repeat listing the values that differ.
+    The diff is computed locally from the two file reads below;
   - `azpr_read_file` — one file at `head`, `base` or a full commit SHA as
     numbered lines, at most 1,000 lines (60,000 characters) per call;
+  - `azpr_find_files` — repository paths by name or glob, from one recursive
+    listing per commit and folder (read once per run); names only;
   - `azpr_list_files` — one folder's entries (optionally recursive), at most
     1,000 entries;
   - `azpr_pr_threads` — live discussion threads, filterable by path or thread ID.

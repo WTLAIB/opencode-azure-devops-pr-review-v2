@@ -140,8 +140,11 @@ export function languagePrompt(role, language) {
 const TOOL_POLICY = `# Tools
 Read the PR repository with AZPR's tools. They always use the repository of the
 input snapshot; \`version\` is "head" (default), "base" or a full commit SHA:
+- azpr_read_diff: what the PR changed in one file, as BASE → HEAD hunks with
+  surrounding lines and both line numbers.
 - azpr_read_file: one file as numbered lines, at most 1000 per call; use
   startLine/endLine for other ranges of long files.
+- azpr_find_files: repository paths by name or glob; names only, not contents.
 - azpr_list_files: the entries of one folder (recursive: true for all descendants).
 - azpr_pr_threads: the PR's discussion threads; filter by path, or pass
   threadId for one thread with complete comments.
@@ -150,12 +153,13 @@ time-limited and retried by the runtime.
 
 Native read, glob and grep see only the local OpenCode project and AZPR's
 private data files, never the PR repository: a repository path such as
-/src/app.ts exists only through the azpr tools. There is no repository-wide
-search; list folders and read the candidate files instead.
+/src/app.ts exists only through the azpr tools. There is no search inside file
+contents; find candidate files by name and read them.
 
 A failed read is not evidence. Do not repeat a request that failed as not found,
 refused or invalid; a timeout or throttling error was already retried, so report
-the gap. The "N | " prefixes of file reads are line numbers, not source text.
+the gap. The "N | " and "<mark> <BASE> <HEAD> | " prefixes are line numbers, not
+source text.
 
 Never use public web tools, delegation, file edits or session or model controls.
 AZPR's tools are read-only; the runtime alone posts comments.`;
