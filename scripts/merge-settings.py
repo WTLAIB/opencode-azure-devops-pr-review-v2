@@ -65,8 +65,23 @@ def current_settings(existing):
             for key, value in help_text.items()
         ):
             raise ValueError("Legacy model help must contain only role documentation strings.")
-    if any(key in existing for key in ("steps", "maxStageCharacters", "structuredOutput", "azure", "comments", "auxiliaryModels", "outputRetries", "verification", "shellToolPermission")):
+    if any(key in existing for key in ("steps", "maxStageCharacters", "structuredOutput", "comments", "auxiliaryModels", "outputRetries", "verification", "shellToolPermission")):
         raise ValueError("Removed settings are unsupported.")
+    for key in ("azure", "mcp"):
+        if key in existing and not isinstance(existing[key], dict):
+            raise ValueError("Azure settings must be JSON objects.")
+
+
+def migrate(existing):
+    """AZPR calls Azure DevOps REST itself: move the retired mcp limits into azure."""
+    if "mcp" not in existing:
+        return False
+    mcp = existing.pop("mcp")
+    azure = existing.setdefault("azure", {})
+    for key in ("concurrency", "callTimeoutSeconds"):
+        if key in mcp and key not in azure:
+            azure[key] = mcp[key]
+    return True
 
 
 def main():
@@ -84,8 +99,9 @@ def main():
         removed_help = "_help" in existing.get("models", {})
         existing.get("models", {}).pop("_help", None)
         defaults.get("models", {}).pop("_help", None)
+        migrated = migrate(existing)
         added = merge(existing, defaults)
-        content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added or removed_help else raw
+        content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added or removed_help or migrated else raw
         with open(destination, "x", encoding="utf-8") as stream:
             stream.write(content)
     except (ValueError, OSError, UnicodeError, RecursionError):
@@ -95,6 +111,8 @@ def main():
     print("Settings defaults added: " + (", ".join(added) if added else "none."))
     if removed_help:
         print("Removed documentation-only models._help; see README.md for model-selection guidance.")
+    if migrated:
+        print("Moved mcp.concurrency/callTimeoutSeconds to azure; mcp.server is no longer used. Set azure.organization and azure.pat.")
     return 0
 
 

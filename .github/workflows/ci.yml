@@ -18,11 +18,11 @@ jobs:
           node-version: '22'
       - run: npm run check
       - run: npm test
-      - name: Install the exact host into a disposable prefix
+      - name: Install the tested host into a disposable prefix
         run: npm install --prefix "$RUNNER_TEMP/azpr-host" --no-audit --no-fund @opencode/cli@2.0.22
       - name: Exercise fresh installed package and host lifecycle
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise replacement package and host lifecycle
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --replace
-      - name: Exercise large normal/deep comment workflows with fake services
+      - name: Exercise sharded review, overflow split and idempotent publication at scale
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"

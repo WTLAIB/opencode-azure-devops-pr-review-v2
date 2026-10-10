@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readdir, readFile, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { createDiagnostics, createStageTiming, collectToolObservations, diagnosticResponse, diagnosticToolError } from '../src/diagnostics.mjs';
+import { createDiagnostics, pruneDebugRuns, createStageTiming, collectToolObservations, diagnosticResponse, diagnosticToolError } from '../src/diagnostics.mjs';
 
 test('original tool error summaries exclude inputs, result bodies and nested provider data', () => {
   const error = Object.assign(new Error('Original execution failure'), { type: 'tool-error', status: 503,
@@ -179,4 +179,30 @@ test('an unwritable debug target produces a warning, not an exception or overwri
   const log = await createDiagnostics(settings, context, run);
   assert.ok(log.warnings.length); assert.equal(log.directory, '');
   assert.equal(await readFile(join(context.directory, '.azpr-v2-debug'), 'utf8'), 'Existing user file');
+});
+
+test('only the newest debug.keepRuns AZPR run directories are kept; active and foreign ones are left alone', async t => {
+  const context = await fixture(t);
+  const root = join(context.directory, '.azpr-v2-debug');
+  const make = async (id, suffix, minutesAgo, marker = true) => {
+    const directory = join(root, `${id}-${suffix}`);
+    await mkdir(directory, { recursive: true });
+    if (marker) await writeFile(join(directory, '.gitignore'), '*\n');
+    await writeFile(join(directory, 'run.json'), '{}');
+    const at = (Date.now() - minutesAgo * 60000) / 1000;
+    await utimes(join(directory, 'run.json'), at, at);
+    return directory;
+  };
+  const oldest = await make('aaaaaaaa', 'Abc123', 50), active = await make('bbbbbbbb', 'Abc123', 40), older = await make('cccccccc', 'Abc123', 30);
+  const foreign = await make('dddddddd', 'Abc123', 60, false), other = join(root, 'notes');
+  await mkdir(other);
+  await make('eeeeeeee', 'Abc123', 20);
+  const log = await createDiagnostics({ ...settings, debug: { enabled: true, directory: '.azpr-v2-debug', keepRuns: 2 } }, context, run, new Set(['bbbbbbbb']));
+  const left = await readdir(root);
+  assert.ok(left.includes(log.directory.split('/').at(-1)), 'The new run is kept.');
+  assert.ok(left.includes('eeeeeeee-Abc123'), 'The newest earlier run is kept.');
+  for (const removed of [oldest, older]) await assert.rejects(stat(removed));
+  for (const kept of [active, foreign, other]) await stat(kept);
+  assert.match(await readFile(join(log.directory, 'run.json'), 'utf8'), /Only the newest 2 run directories are kept/);
+  assert.deepEqual(await pruneDebugRuns(root, 0), [], '0 keeps everything.');
 });

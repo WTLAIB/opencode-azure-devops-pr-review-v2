@@ -17,8 +17,26 @@
   "returnReport": "receipt",
   "debug": {
     "enabled": false,
-    "directory": ""
+    "directory": "",
+    "keepRuns": 20
   },
   "outputLanguage": "en",
-  "runTimeoutSeconds": null
+  "runTimeoutSeconds": null,
+  "shell": "deny",
+  "progressNotices": true,
+  "deletePrivateSessions": true,
+  "azure": {
+    "organization": "",
+    "pat": "",
+    "concurrency": 3,
+    "callTimeoutSeconds": 120,
+    "archiveMegabytes": 100
+  },
+  "workflow": {
+    "shardFiles": 25,
+    "shardFindings": 15,
+    "parallelSessions": 4,
+    "repairAttempts": 2,
+    "stageRetries": 1
+  }
 }

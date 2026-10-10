@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createReviewSession, requestReview as sendReview, interruptSession, appendReport } from '../src/session.mjs';
+import { createReviewSession, requestReview as sendReview, interruptSession, appendReport, classifyFailure, restartIndex } from '../src/session.mjs';
 
 const sessionID = 'ses_review';
 const input = 'https://example.test/pr/2 literal $ARGUMENTS `pwd` @private.txt';
@@ -101,10 +101,10 @@ test('V2 output fails closed when active context lacks the exact admitted prompt
 test('V2 output rejects interleaved input, changed projected text, and selected agent changes', async () => {
   for (const changed of [{ type: 'user', text: 'foreign input' }, { type: 'synthetic', text: 'foreign input' }, { type: 'agent-switched', agent: 'build' }, { type: 'model-switched', model }]) {
     const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, changed, assistant(), idle()] });
-    await assert.rejects(requestReview(context, { sessionID, text: input }), /context changed/);
+    await assert.rejects(requestReview(context, { sessionID, text: input }), /another message during this turn/);
   }
   const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: 'different' }, assistant(), idle()] });
-  await assert.rejects(requestReview(context, { sessionID, text: input }), /projected review prompt/);
+  await assert.rejects(requestReview(context, { sessionID, text: input }), /projected prompt differs/);
 });
 
 test('V2 output rejects incomplete, truncated, filtered, failed and interrupted executions', async () => {
@@ -166,7 +166,7 @@ test('provider failures expose status and observed tool turns while retaining pr
         { id: 'msg_input', type: 'user', text: input }, toolTurn, final, { ...idle(), outcome: 'failed' }] });
     await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
       assert.match(error.message, new RegExp(`HTTP ${status}; ${toolCount} tool calls observed`));
-      assert.equal(error.message.includes('compatibility with the role'), [401, 403].includes(status));
+      assert.equal(error.message.includes('tool permissions'), [401, 403].includes(status));
       assert.deepEqual(error.execution.provider, { status, toolCallsObserved: toolCount });
       assert.doesNotMatch(error.message + JSON.stringify(error.execution), /PRIVATE_/);
       assert.deepEqual(error.response.info.error, detail);
@@ -271,14 +271,13 @@ test('review text can complete through the pinned host continuation protocol wit
   assert.equal(answer.continuation.fragments[0].parts[0].text, '{"status":"COM');
   assert.doesNotMatch(JSON.stringify(answer), /PRIVATE_REASONING/);
   assert.equal(calls.filter(call => call.name === 'prompt').length, 1);
-  await assert.rejects(requestReview(context, { sessionID, text: input }), /context changed/);
+  await assert.rejects(requestReview(context, { sessionID, text: input }), /another message during this turn/);
 });
 test('host continuation cannot excuse foreign input, tool execution, binding changes or unfinished execution', async () => {
   const mutations = [
     turn => delete turn[0].retry,
-    turn => turn[0].retry.error = { type: 'other' },
-    turn => turn[0].retry.at = 1,
-    turn => turn[0].error = { type: 'aborted', status: 200 },
+    turn => turn[0].retry.attempt = 0,
+    turn => delete turn[0].error,
     turn => turn[0].finish = 'length',
     turn => turn[0].content.push({ type: 'tool', id: 'unexpected' }),
     turn => turn[1].text = 'foreign input',
@@ -295,4 +294,48 @@ test('host continuation cannot excuse foreign input, tool execution, binding cha
     const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
     await assert.rejects(requestReview(context, { sessionID, text: input, allowHostContinuations: true }));
   }
+});
+
+test('host continuation is accepted for any provider error wording and a reworded host continuation', async () => {
+  const turn = continuationTurn();
+  turn[0].error = { type: 'provider.api', status: 502, message: 'Anthropic stream closed unexpectedly' };
+  turn[1].text = 'The previous response was interrupted; please continue where you stopped.';
+  const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
+});
+
+test('a follow-up prompt in the same session only examines its own turn', async () => {
+  const repair = 'AZPR runtime: correct your answer';
+  const history = [{ id: 'msg_input', type: 'user', text: input }, assistant({ id: 'msg_first' }), idle(),
+    { id: 'msg_repair', type: 'user', text: repair }, assistant({ id: 'msg_second', content: [{ type: 'text', text: '{"fixed":true}' }] }), { ...idle(), id: 'msg_idle2' }];
+  const { context } = host({ prompt: async () => ({ id: 'msg_repair', sessionID, type: 'user', payload: { text: repair }, delivery: 'steer' }), context: async () => history });
+  const answer = await requestReview(context, { sessionID, text: repair });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"fixed":true}' }]);
+});
+
+test('failure classification drives stage retries and shard splitting', () => {
+  const failure = (execution, extra = {}) => Object.assign(new Error('x'), { execution }, extra);
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 429 } })), 'transient');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 503 } })), 'transient');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 401 } })), 'permanent');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 413 } })), 'overflow');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed' }), { compactionRequested: true }), 'overflow');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'missing-idle' })), 'transient');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'interrupted', interrupted: true })), 'permanent');
+  assert.equal(classifyFailure(Object.assign(new Error('x'), { contextChanged: true })), 'transient');
+  assert.equal(classifyFailure(new Error('bad request')), 'permanent');
+});
+
+test('a model that restarts its answer after a stream interruption keeps only the restarted text', async () => {
+  const turn = continuationTurn();
+  turn[0].error = { type: 'provider.transport', message: 'socket closed' };
+  turn[0].content = [{ type: 'text', text: '{"status":"COMPLETE","report":"first attempt cut off mid-sen' }];
+  turn[2].content = [{ type: 'text', text: '{"status":"COMPLETE","report":"complete second attempt"}' }];
+  const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE","report":"complete second attempt"}' }]);
+  assert.equal(answer.continuation.restartedAt, 1);
+  assert.equal(restartIndex(['{"status":"COM', 'PLETE"}']), 0, 'A real continuation is joined.');
+  assert.equal(restartIndex(['{"a"', '{"a" again']), 0, 'Very short openings are not compared.');
 });

@@ -1,15 +1,13 @@
-/** Exact OpenCode 2.0.22 session transport. No provider, Azure, or HTTP client. */
+/** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
+import { FOREIGN_MESSAGE_TYPES, isHostContinuation, requireMethods } from './host.mjs';
+
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function sessionApi(context, methods) {
-  for (const method of methods) {
-    if (typeof context?.session?.[method] !== 'function') {
-      throw new Error(`[AZPR] OpenCode V2 session.${method} is unavailable.`);
-    }
-  }
+  requireMethods(context, methods.map(method => `session.${method}`), 'the review session transport');
   return context.session;
 }
 
@@ -17,9 +15,8 @@ function aborted(signal) {
   if (signal?.aborted) throw signal.reason ?? new Error('[AZPR] Session operation cancelled.');
 }
 
-// The pinned Promise plugin adapter ignores request options, including signals.
-// Race locally, but retain pending admissions so cleanup cannot certify an idle
-// session before a delayed prompt is admitted. The workflow owns cleanup limits.
+// The host Promise adapter ignores request options, including signals. Race
+// locally, but keep pending admissions so cleanup waits for a delayed prompt.
 function cancellable(operation, signal) {
   aborted(signal);
   const promise = Promise.resolve().then(() => { aborted(signal); return operation(); });
@@ -56,8 +53,10 @@ function modelRef(value) {
     return { providerID: value.providerID, id: value.id, ...(value.variant === undefined ? {} : { variant: value.variant }) };
   }
   if (typeof value === 'string') {
-    const slash = value.indexOf('/');
-    if (slash > 0 && slash < value.length - 1) return { providerID: value.slice(0, slash), id: value.slice(slash + 1) };
+    const hash = value.indexOf('#'), base = hash < 0 ? value : value.slice(0, hash), slash = base.indexOf('/');
+    if (slash > 0 && slash < base.length - 1 && hash !== value.length - 1) {
+      return { providerID: base.slice(0, slash), id: base.slice(slash + 1), ...(hash < 0 ? {} : { variant: value.slice(hash + 1) }) };
+    }
   }
   throw new Error('[AZPR] A V2 provider/model reference is required.');
 }
@@ -104,8 +103,7 @@ function responseError(message, response, execution) {
   return error;
 }
 
-// Only expose bounded host metadata. Provider messages/bodies may contain
-// private request data; retain the original response for private inspection only.
+// Bounded host metadata only; provider bodies can contain private request data.
 function providerFailure(final, assistants) {
   const error = final?.error;
   if (typeof error?.type !== 'string' || !error.type.startsWith('provider.') ||
@@ -115,32 +113,28 @@ function providerFailure(final, assistants) {
       (Array.isArray(message.content) ? message.content.filter(part => part?.type === 'tool').length : 0), 0) };
 }
 
-// OpenCode 2.0.22 emits this synthetic message after scheduling continuation of
-// an incomplete stream with visible output. It is not another admitted prompt.
-const hostContinuation = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
+/**
+ * Text fragments of a stream the host interrupted and resumed. Accept only
+ * errored text-only assistant messages that the host marked for retry, each
+ * followed by the host continuation, and finally a successful text answer.
+ */
 function continuedText(turn, enabled) {
-  const recovered = new Set(), synthetic = new Set();
-  if (!enabled) return { recovered, synthetic };
+  const none = { recovered: new Set(), synthetic: new Set() };
+  if (!enabled) return none;
   const start = turn.findIndex(message => message?.type === 'assistant' && message.error);
-  if (start < 0) return { recovered, synthetic };
+  if (start < 0) return none;
   const tail = turn.slice(start, -1);
-  // Recover only text fragments followed directly by a successful final text.
-  // Never accept tools, foreign input, compaction or another unfinished output.
+  const recovered = new Set(), synthetic = new Set();
   for (let index = 0; index < tail.length; index += 2) {
     const message = tail[index];
     if (message?.type !== 'assistant' || !Array.isArray(message.content) ||
         !message.content.every(part => ['text', 'reasoning'].includes(part?.type)) ||
         !message.content.some(part => part?.type === 'text' && textValue(part.text)) ||
-        !Number.isFinite(message.time?.completed)) return { recovered: new Set(), synthetic: new Set() };
+        !Number.isFinite(message.time?.completed)) return none;
     if (index === tail.length - 1 && message.finish === 'stop' && !message.error) break;
-    const next = tail[index + 1], error = message.error;
-    if (message.finish !== 'error' || error?.type !== 'provider.invalid-output' || error.status !== 200 ||
-        error.message !== 'OpenAI Chat stream ended without finish_reason' ||
-        !Number.isInteger(message.retry?.attempt) || message.retry.attempt < 1 ||
-        !Number.isFinite(message.retry?.at) || message.retry.at < message.time.completed ||
-        !isDeepStrictEqual(message.retry.error, error) ||
-        next?.type !== 'synthetic' || next.text !== hostContinuation ||
-        index + 2 >= tail.length) return { recovered: new Set(), synthetic: new Set() };
+    const next = tail[index + 1];
+    if (message.finish !== 'error' || !message.error || !Number.isInteger(message.retry?.attempt) ||
+        message.retry.attempt < 1 || !isHostContinuation(next, message) || index + 2 >= tail.length) return none;
     recovered.add(message);
     synthetic.add(next);
   }
@@ -148,9 +142,43 @@ function continuedText(turn, enabled) {
 }
 
 /**
+ * Asked to continue an interrupted answer, a model sometimes starts over
+ * instead. A later fragment that opens exactly like the first one is such a
+ * restart: only the text from that fragment on is the answer.
+ */
+export function restartIndex(texts) {
+  const opening = (texts[0] ?? '').trimStart().slice(0, 16);
+  if (opening.length < 8) return 0;
+  for (let index = texts.length - 1; index > 0; index--) {
+    if (texts[index].trimStart().startsWith(opening)) return index;
+  }
+  return 0;
+}
+
+/**
+ * Classify a failed stage for the runtime's retry policy.
+ * - overflow: the host tried to compact (context full) or the provider rejected size.
+ * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
+ *   unexpected host messages.
+ * - permanent: everything else (authentication, bad request, cancellation).
+ */
+export function classifyFailure(error, { compactionRequested = false } = {}) {
+  if (compactionRequested) return 'overflow';
+  const execution = error?.execution;
+  if (execution?.interrupted) return 'permanent';
+  const status = execution?.provider?.status;
+  if (status === 413) return 'overflow';
+  if ([408, 409, 425, 429].includes(status) || (status >= 500 && status <= 599)) return 'transient';
+  if (status >= 400 && status < 500) return 'permanent';
+  if (execution && ['failed', 'unknown', 'missing-idle'].includes(execution.terminalOutcome)) return 'transient';
+  if (error?.contextChanged || error?.transient) return 'transient';
+  return 'permanent';
+}
+
+/**
  * Admit exactly one literal prompt, await idle, then read authoritative context.
- * Context is not a full history API: if compaction removes the admitted input,
- * correlation fails closed. Events cannot substitute for that missing evidence.
+ * Works for the first prompt and for follow-up repair prompts in the same
+ * session: only the turn after this admitted prompt is examined.
  */
 export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false }) {
   const api = sessionApi(context, ['prompt', 'wait', 'context', 'get']);
@@ -170,24 +198,24 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (!Array.isArray(messages) || session?.id !== sessionID) throw new Error('[AZPR] Invalid OpenCode V2 session context.');
   const indexes = messages.flatMap((message, index) => message?.id === admitted.id ? [index] : []);
   if (indexes.length !== 1) {
-    throw new Error('[AZPR] The exact admitted review prompt is absent or ambiguous in active context; compaction may have removed it. No output was accepted.');
+    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context; compaction may have removed it. No output was accepted.');
   }
   const prompt = messages[indexes[0]];
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {
-    throw new Error('[AZPR] The projected review prompt differs from the admitted literal input.');
+    throw new Error('[AZPR] The projected prompt differs from the admitted literal input.');
   }
   const turn = messages.slice(indexes[0] + 1);
   const continuation = continuedText(turn, allowHostContinuations);
-  if (turn.some(message => ['user', 'synthetic', 'agent-switched', 'model-switched', 'location-switched', 'shell', 'skill'].includes(message?.type) && !continuation.synthetic.has(message))) {
-    throw new Error('[AZPR] Reviewer context changed after admission; output cannot be assigned to the authorized request.');
+  if (turn.some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
+    const error = new Error('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
+    error.contextChanged = true;
+    throw error;
   }
   const terminal = turn.at(-1);
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
   if (session.outcome !== 'succeeded' || terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
-    // Report only bounded host states here, never arbitrary provider error text,
-    // prompts or credentials. Keep the original response in private diagnostics.
     const outcome = value => ['succeeded', 'failed', 'interrupted'].includes(value) ? value : 'unknown';
     const finish = ['stop', 'tool-calls', 'length', 'content-filter', 'error', 'cancelled'].includes(final?.finish) ? final.finish : 'unknown';
     const execution = { sessionOutcome: outcome(session.outcome),
@@ -197,9 +225,9 @@ export async function requestReview(context, { sessionID, text, role, model, met
     const provider = !execution.interrupted && providerFailure(final, assistants);
     if (provider) execution.provider = provider;
     const detail = provider
-      ? `Model provider request failed (HTTP ${provider.status}; ${provider.toolCallsObserved} tool calls observed).${[401, 403].includes(provider.status) ? ' Check provider access and compatibility with the role\'s tool permissions; this is not a review-format failure.' : ''} `
+      ? `Model provider request failed (HTTP ${provider.status}; ${provider.toolCallsObserved} tool calls observed).${[401, 403].includes(provider.status) ? ' Check provider access and the role\'s tool permissions.' : ''} `
       : '';
-    throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}); no partial response was accepted.`, answer, execution);
+    throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }
   if (session.agent !== role || !sameModel(session.model, selectedModel) ||
       assistants.some(message => message.agent !== role || !sameModel(message.model, selectedModel))) {
@@ -208,19 +236,22 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (!final || turn.at(-2) !== final || !Array.isArray(final.content) || !Number.isFinite(final.time?.completed) ||
       assistants.some(message => !continuation.recovered.has(message) && (message.error || !Number.isFinite(message.time?.completed) ||
         !['stop', 'tool-calls'].includes(message.finish)))) {
-    throw responseError('[AZPR] Reviewer context has no complete, successful final assistant response.', answer);
+    const error = responseError('[AZPR] The session has no complete, successful final assistant response.', answer);
+    error.transient = true;
+    throw error;
   }
   if (final.finish !== 'stop' || final.content.some(part => part?.type === 'tool')) {
-    throw responseError('[AZPR] Reviewer output did not end with a final text response; no partial output was accepted.', answer);
+    throw responseError('[AZPR] Reviewer output did not end with a final text response.', answer);
   }
   if (answer.parts.some(part => typeof part.text !== 'string')) throw new Error('[AZPR] Invalid reviewer text content.');
   if (continuation.recovered.size) {
     const fragments = [...continuation.recovered, final].map(message => normalizeAnswer(message, sessionID));
     if (fragments.some(fragment => fragment.parts.some(part => typeof part.text !== 'string'))) throw new Error('[AZPR] Invalid continued reviewer text.');
-    // Preserve literal boundaries, including a stream ending inside a JSON string.
-    // The ordinary output parser decides whether this is an unambiguous review.
-    answer.parts = [{ type: 'text', text: fragments.flatMap(fragment => fragment.parts.map(part => part.text)).join('') }];
-    answer.continuation = { count: continuation.recovered.size, fragments };
+    const texts = fragments.map(fragment => fragment.parts.map(part => part.text).join(''));
+    const restartedAt = restartIndex(texts);
+    // Keep literal boundaries; the output parser decides whether this is usable.
+    answer.parts = [{ type: 'text', text: texts.slice(restartedAt).join('') }];
+    answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
   aborted(signal);
   return answer;

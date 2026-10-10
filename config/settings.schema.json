@@ -53,7 +53,7 @@
             },
             "risk": {
               "type": "string",
-              "description": "Exact provider/model ID for independent risk review, source checks, and comments. Select for cross-path failure analysis and reliable MCP tool use. Standalone /pr-check uses review.risk."
+              "description": "Exact provider/model ID for independent risk review and comment planning. Select for cross-path failure analysis and reliable MCP tool use."
             },
             "verifier": {
               "type": "string",
@@ -72,7 +72,7 @@
             },
             "risk": {
               "type": "string",
-              "description": "Exact provider/model ID for independent risk review, source checks, and comments. Select for cross-path failure analysis and reliable MCP tool use. Standalone /pr-check uses review.risk. May be empty; deep runs only when all three IDs are configured."
+              "description": "Exact provider/model ID for independent risk review and comment planning. Select for cross-path failure analysis and reliable MCP tool use. May be empty; deep runs only when all three IDs are configured."
             },
             "verifier": {
               "type": "string",
@@ -117,12 +117,19 @@
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Save private stage inputs, visible answers, errors, and results locally. May contain confidential source or model-echoed secrets. No automatic cleanup."
+          "description": "Save private stage inputs, visible answers, errors, and results locally. May contain confidential source or model-echoed secrets. Only the newest debug.keepRuns run directories are kept."
         },
         "directory": {
           "type": "string",
           "default": "",
           "description": "Empty uses XDG_STATE_HOME/opencode/azpr-v2-debug (default ~/.local/state/opencode/azpr-v2-debug). Otherwise an absolute path or path relative to the active OpenCode project directory. No tilde expansion."
+        },
+        "keepRuns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 20,
+          "description": "Run directories kept in the debug directory. When a run starts, older AZPR run directories beyond this count are deleted (never a run still active in this OpenCode process, and nothing AZPR did not create). 0 keeps every run directory."
         }
       }
     },
@@ -134,7 +141,110 @@
       "minimum": 10,
       "maximum": 7200,
       "default": null,
-      "description": "Optional whole-command timeout covering all stages and report display. Null or omitted disables the timeout; an explicit integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual cancellation and bounded SDK cleanup remain available. This is not a spending cap."
+      "description": "Optional whole-command timeout covering all stages. Null or omitted disables it; an integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual /pr-stop and per-call MCP timeouts remain available. This is not a spending cap."
+    },
+    "shell": {
+      "enum": [
+        "deny",
+        "ask",
+        "inherit"
+      ],
+      "default": "deny",
+      "description": "Shell access for private reviewers and the comment planner. deny (default): shell is hidden and refused, so reviewers never run commands while reading untrusted PR content. ask: every command needs user approval in OpenCode (a background review waits for it). inherit: host permission rules decide."
+    },
+    "progressNotices": {
+      "type": "boolean",
+      "default": true,
+      "description": "Queue short PROGRESS notices to the invoking conversation during long reviews and publication. They never start a model response."
+    },
+    "deletePrivateSessions": {
+      "type": "boolean",
+      "default": true,
+      "description": "Delete AZPR's private reviewer sessions when they are no longer needed: a completed review's sessions when the review is evicted (the newest 20 are kept, as /pr-comment needs them), and the sessions of an unfinished review at once except the one holding its report or draft (all of them while debug is enabled); those kept sessions follow the same 20-run limit. false keeps every session."
+    },
+    "azure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "organization",
+        "pat"
+      ],
+      "description": "Azure DevOps REST access (api-version 7.1) shared by all AZPR workflows in one OpenCode process. No MCP server is used.",
+      "properties": {
+        "organization": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,49}$",
+          "description": "Azure DevOps organization name: the <org> in https://dev.azure.com/<org>. PR URLs of other organizations are refused."
+        },
+        "pat": {
+          "type": "string",
+          "minLength": 20,
+          "description": "Personal access token for that organization (scopes: Code Read; Pull Request Threads Read & write). Sent only to https://dev.azure.com/<org> and never logged. Keep this file private (mode 600)."
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 3,
+          "description": "Simultaneous Azure DevOps calls across all AZPR workflows. This limits parallelism, never total work."
+        },
+        "callTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 1800,
+          "default": 120,
+          "description": "Per-call timeout. A hung call is aborted and its slot released so other reviews keep running; reads are retried."
+        },
+        "archiveMegabytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024,
+          "default": 100,
+          "description": "Largest repository zip that content search (azpr_search_code) downloads per run and commit. A larger repository is not searched; the rest of the review is unaffected. The archive is held in memory while a review runs."
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Review sharding, repair and retry behavior.",
+      "properties": {
+        "shardFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 25,
+          "description": "Changed files per initial-review session. A shard that hits its context limit is split automatically."
+        },
+        "shardFindings": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 15,
+          "description": "Candidate findings per verification session."
+        },
+        "parallelSessions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4,
+          "description": "Reviewer sessions running at the same time within one command."
+        },
+        "repairAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 2,
+          "description": "Correction turns in the same session when an answer does not meet the output contract. Remaining problems degrade per item."
+        },
+        "stageRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 1,
+          "description": "New-session retries after a transient execution failure (provider 429/5xx, interrupted stream)."
+        }
+      }
     }
   }
 }

@@ -34,8 +34,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
-runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs plugin.js'
-prompt_names='common check functional risk deep final comment-policy comment-plan comment-publish'
+runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs diff.mjs search.mjs review-tools.mjs review-work.mjs store.mjs plugin.js'
+prompt_names='common functional risk deep final dedupe comment-policy comment-plan'
 command_names='pr-check pr-review pr-deep pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
 for file in scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
@@ -89,6 +89,9 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
+# A closed output pipe (for example `| head`) must not kill the installer before
+# cleanup: writes then fail instead, and a failure before success rolls back.
+trap '' PIPE
 
 # Refuse conflicts rather than trying to rewrite JSONC.
 for config in "$root/opencode.json" "$root/opencode.jsonc" "$root/config.json"; do
@@ -153,11 +156,14 @@ mkdir -p "$root/plugins"
 printf '%s\n' "$target" >> "$stage/installed"
 mv -- "$stage/new/$target" "$root/$target"
 success=1
+# Informational output only; an unwritable output must not fail a completed install.
+{
 printf '\nAzure PR Review installed (target host: @opencode/cli 2.0.22; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
 1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep.
-2. Configure your official @azure-devops/mcp 2.9.0 host connection with codemode: false for direct MCP tools. Existing host permissions still apply; no tool mapping is required.
+2. Set azure.organization and azure.pat: an Azure DevOps PAT for that organization with Code (Read) and Pull Request Threads (Read & write). AZPR calls the Azure DevOps REST API (api-version 7.1) itself; no MCP server is needed.
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
 Settings have not been API-validated. The plugin refuses incomplete configuration.
 TXT
+} 2>/dev/null || true

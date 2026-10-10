@@ -1,107 +1,128 @@
 # Roadmap
 
-Target: OpenCode CLI 2.0.22, official Azure DevOps MCP 2.9.0 and Ubuntu 22.04.
-This repository implements V2 only. [Current validation](VALIDATION.md) records
-the latest tested runtime; [validation history](VALIDATION_HISTORY.md) preserves
-earlier results without treating retired behavior as current requirements.
+Tested with OpenCode CLI 2.0.22, the Azure DevOps Services REST API
+(api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
+with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
-## Implemented
+## Implemented (stability revision)
 
-- Native V2 commands, hidden role/model-bound sessions, literal inbox correlation,
-  active grants, cancellation and non-resuming report notices. Host-owned ordinary
-  agents, permissions and auxiliary model choices remain intact.
-- Immediate STARTED admission with tracked background workflow ownership, final
-  receipt delivery to the invoking conversation, and actual new/existing TUI
-  cancellation probes. Long reviews no longer hold the command HTTP request.
-- Shared serial MCP execution across private workflows, without total call/file
-  caps or automatic retries. Execution and interruption cleanup prevent declined
-  or unavailable tools from blocking later work; native scheduling stays host-owned.
-- Two independent full-scope initial reviewers followed by one source-verifying
-  verifier in both normal and deep modes. Architecture, performance, behavioral tests,
-  documentation promises, type invariants and failure visibility are part of
-  their existing scope; no specialist model rounds are added.
-- Local review-envelope and syntax/key/shape recovery, literal retention of
-  ambiguous or partial output, explicit unavailable-stage notices and original-ID
-  accounting. Missing decisions remain UNREVIEWED. Every validated COMPLETE review
-  can enter same-origin comment planning despite disclosed initial limitations.
-  Final COMPLETE describes finished evidence verification and candidate decisions;
-  retained discovery/coverage limitations remain visible and are not a full-PR
-  inspection certificate.
-  A shortened verifier inventory echo may retain the admitted path list only
-  when its identity and versions match and every returned path was admitted;
-  the original echo and an explicit warning remain available.
-- Optional native project verification under inherited host permissions. MCP
-  supplies remote PR source; no checkout, clone, repository mapping, custom
-  execution platform or mandatory test quota is required.
-- One deterministic issue index in the report and saved PR summary, with a leading
-  robot/AI/model disclosure and optional brief purpose or change overview before
-  the index. Review IDs and commit SHAs stay in local records. Test/process narration
-  is not required in the summary. Existing stages author directly in outputLanguage,
-  without an additional translation or polishing stage.
-- Leading severity icons and compact Summary/Evidence/Suggested fix inline comments
-  for verified high/medium findings. Low findings remain in the summary. No numerical comment quota or
-  automatic promotion of severity is used.
-- Conditional summary details for confirmed findings without inline coverage
-  and every distinct non-defect recommendation retained by the verifier. Advice
-  travels through existing report fields, with no mandatory topic checklist,
-  suggestion quota, new defect IDs or extra model round. Empty sections are omitted.
-- Optional preview followed by explicit publication, or direct
-  `/pr-comment --publish` that prepares and saves a plan first. Omitted IDs select
-  the latest COMPLETE review in the origin, or the review associated with a result
-  session. Saved content, explicit authority and uncertain-attempt lockout remain.
-- Complete-empty-discussion guidance, visible optional planning-failure reasons,
-  captured review text for planning, numbered source displays and narrow literal
-  anchor restoration. These features do not certify source provenance or classify
-  MCP operations.
-- File-backed source/report/tool data and short comment work sessions for large PRs.
-  Successful read-only checkpoints retain exact records; every assigned finding
-  is accounted for before one complete plan is saved. All publication checks
-  precede sequential saved-item pages with one uncertain-attempt ledger.
-- Latest-20 completed-review cache in process memory, no time TTL, no authority
-  restored from history/debug files after restart. Optional diagnostics preserve
-  visible failures without recording reasoning or full host configuration.
-- Source-only standalone readiness, cancellable model/MCP preflight, a bounded
-  direct-tool registration observation period, exact-role/native-tool guards and
-  private auxiliary-request rejection, including after restart.
-- V2 installation, current-layout operational settings preservation, conflict refusal,
-  rollback and archival removal; offline tests and exact-host fresh/replacement
-  fixtures in CI. Controlled live review/publication acceptance is recorded
-  separately from fake-service and CI results.
-- Model-selection guidance in README and schema descriptions. New settings omit
-  documentation-only `models._help`; installation removes the legacy field with
-  a notice, while runtime readers remain compatible with existing files.
+- **Own Azure DevOps access.** AZPR calls the REST API (api-version 7.1, the
+  latest released version) with the organization and PAT from its settings;
+  no MCP server is needed. Reads retry transient failures, writes never retry,
+  every call is bounded and the PAT is never logged.
+- **Runtime-owned facts.** PR identity, the latest iteration's head and merge
+  base, the complete changed-file list (paged 2,000 per request) and the final
+  version recheck come from REST calls, not model echoes. `/pr-check` is fully
+  deterministic.
+- **Reviewer tools.** Models read the repository through six read-only AZPR
+  tools bound to the run's repository: diffs with structure-aware context and
+  folded repeats, whole files, content search over the exact commit, file
+  search by name, folder listings and PR threads. They also see the PR's commit
+  messages. Private sessions see only an allowlist of tools, and ordinary
+  sessions never see AZPR's tools.
+- **Only source changes are stale.** A moved base is a warning; a changed head
+  is STALE. Publication rechecks the head before writing.
+- **Sharded reviews.** Initial reviews run per file shard with disjoint finding-ID
+  ranges; verification runs per finding shard; parallelism is bounded.
+- **Context overflow is recovered.** A refused compaction marks the stage as
+  overflow and the shard is split and rerun (validated on the real host).
+- **Correction turns.** Answers that break the output contract are corrected in
+  the same session (`workflow.repairAttempts`); remaining problems degrade per
+  item (UNREVIEWED, NEEDS_INFO, skipped comments) instead of failing the review.
+- **One place for duplicates.** Only verification merges duplicates: each
+  verifier within its shard, and a duplicate check for files whose findings
+  different verifiers confirmed. Verifier rows are judged by their own fields,
+  a move to another file must be declared and the report shows the initial
+  location, and the comment planner may not skip a finding because another
+  finding of the review is commented.
+- **Stage retries.** Transient failures retry once in a new session
+  (`workflow.stageRetries`); stream continuations work for every provider.
+- **Bounded Azure calls.** One queue with configurable concurrency and a
+  per-call timeout that aborts the request, for both tool and runtime calls;
+  slots are released in `finally`.
+- **Deterministic, idempotent publication.** Existing markers are skipped,
+  writes are read back, partial results are safe to re-run, and inline markers
+  are stable across reviews of unchanged code.
+- **Persistence.** Completed reviews, previews and ledgers survive restarts;
+  stale scratch data and legacy temporary directories are cleaned up.
+- **Reliable notices.** PROGRESS notices during long runs; final receipts are
+  retried and fall back to a file.
+- **Safer defaults.** Shell is denied for private roles by default and enforced
+  through the permission hook; `/pr-stop` only affects the caller's conversation.
+- **Maintainability.** Prompts are about a third of their former size, runtime is
+  split into focused modules, host specifics live in `host.mjs`.
 
-## Remaining validation and quality work
+## Deferred
 
-1. Test additional authorized PRs, languages and model profiles. Priorities include
-   BASE/HEAD interpretation, decisive arithmetic, original-ID completeness,
-   severity consistency and accurate attribution of reproduced behavior.
-2. Assess review-note usefulness and natural language across more examples.
-   Notes should add PR-wide context beyond the findings, without generic process
-   inventories; relevant execution evidence remains with findings and local reports.
-   Check that supported improvement advice survives the initial/verifier/planner
-   handoffs and appears in Azure, including reviews with no confirmed defects.
-   Local fixtures verify data flow, not real-model recommendation completeness.
-3. Verify actual TUI notice rendering, result navigation and rendered Azure
-   comments. Queue acknowledgement and API content/coordinate checks have narrower
-   scope than a user-interface test.
-4. Repeat environment acceptance for other installations/providers and any future
-   host/MCP upgrade. Provider admission, quotas, source pagination and context
-   limits need their own evidence; the current small-PR samples are not broad
-   compatibility or reliability certification.
+### Default whole-run timeout and per-stage step cap
+
+A default `runTimeoutSeconds` and a per-stage step limit that removes tools and
+forces the model to finish were considered and **deliberately not adopted**.
+Earlier versions removed the step cap after real large PRs repeatedly hit
+whatever limit was chosen, and no step count worked across PR sizes and models.
+`runTimeoutSeconds` therefore stays `null` by default and private agents carry no
+`steps` value.
+
+Mitigations now in place: per-call Azure DevOps timeouts, sharding that keeps each
+session's work bounded, overflow splitting, `/pr-stop`, PROGRESS notices that
+show whether a run is moving, and the optional `runTimeoutSeconds`.
+
+Revisit when there is evidence from real runs, for example:
+
+- a step budget that scales with the shard's file count or changed lines instead
+  of a fixed number;
+- a soft limit that first asks the model to finish (as comment pages already do
+  after twelve requests) before any hard stop;
+- per-stage wall-clock budgets derived from observed timings in `result.json`.
+
+### Other credential sources
+
+Only a PAT in AZPR's settings is supported. Microsoft recommends short-lived
+Microsoft Entra tokens over PATs; an Entra or Azure CLI token source could be
+added if organizations restrict PAT creation.
+
+### Azure DevOps Server
+
+The REST calls work with Azure DevOps Server 2022.1 or later (api-version 7.1),
+but PR URLs and the base URL are limited to Azure DevOps Services.
+
+## Remaining validation work
+
+1. Publish a large PR with this revision to confirm the planner rule on skips
+   that rely on another finding. Moved findings, decision rows in the wrong list
+   and the duplicate check worked in live reviews; an earlier commit passed
+   review and publication of 25 items on a 316-file PR (see
+   [validation](VALIDATION.md)).
+2. Confirm that a PAT limited to Code (Read) and Pull Request Threads
+   (Read & write) is sufficient.
+3. Measure how often correction turns and retries happen per model, and tune
+   `workflow` defaults from those numbers. On the 316-file PR,
+   `parallelSessions` 8 with `azure.concurrency` 6 cut the review from 719 s
+   (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
+   made the REST queue the bottleneck. The defaults stay 4 / 3 until other
+   providers and organizations have been measured; raise both together.
+4. Reduce input tokens further. Reading diffs with folded repeats cut the
+   316-file review from 7.5–9.2 to about 5.5 million input tokens and a real
+   35-file code PR from 6.15 to 0.55–0.79 million; reviewers still make 4–5.5
+   model requests per session and each re-sends what was read. Next candidate:
+   provider prompt caching (cache reads are 10–16 % of input).
+5. Cross-shard evidence: a new test in one shard that contradicts unchanged
+   code in another shard is found with content search (`azpr_search_code`, over
+   the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and
+   missed by gpt-5.6-luna and gpt-6-luna, even with high reasoning effort and
+   the defective line in a search result. It is a model limit, so no runtime
+   hints were added. A stronger verifier cannot make up for it: verifiers
+   judge the candidates and added 1 new finding in 616 decisions over 21 live
+   runs, so the initial reviewers' model decides what is found. A stronger
+   model can be kept for selected PRs in the deep profile. Confirm on other
+   real PRs.
+6. Check rendered comments, inline anchors and summaries in the Azure UI.
+7. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
+   for shape changes, `azure.mjs` for REST changes.
 
 ## Quality principles
 
-Diagnose original evidence before adding instructions for a rule the model already
-ignored. Preserve failed samples, initial errors and partial publications. Separate
-execution success, source fidelity, factual quality and presentation; a COMPLETE
-status or successful write proves none of the others by itself.
-
-Prefer prompt clarity and useful results with honest limitations. Keep exact code
-and version provenance, coherent corrections and attributed test outcomes. Do not
-add model/PR/MCP-version exceptions, extra review rounds, mandatory fields, hidden review budgets,
-comparison machinery or a second completion gate to conceal model limitations.
-
-Native commands have real host authority; the plugin is not a sandbox. No live
-review, publication, deletion, installed-host upgrade or repository publication is
-implied by a local test. Follow the user's current authorization for each action.
+Keep deterministic facts in code and judgment in models. Prefer a correction
+turn or a per-item downgrade over discarding useful work, and keep every
+downgrade visible in the report. Preserve failed samples; a COMPLETE status or a
+successful write does not prove factual quality.

@@ -1,7 +1,14 @@
 import { withCommandCompletion } from './host-command.mjs';
-/** Opt-in exact-host scale fixture. Fake loopback models/MCP only; no Azure account.
+import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
+/** Opt-in exact-host scale fixture. Fake loopback models and Azure DevOps REST only.
  * node tests/host-v2-comment-scale.mjs /absolute/path/opencode
- * Synthetic completions test transport/accounting, not model review quality.
+ * 120 changed files are reviewed in shards; one shard reports a nearly full
+ * context so the host attempts compaction, which AZPR refuses and splits the
+ * shard instead. 30 findings are verified in two sessions; the second verifier
+ * moves one finding into a file of the first, so a duplicate-check session
+ * merges it. The other 29 are planned in pages of four and published; a
+ * second publish creates nothing.
+ * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
@@ -14,122 +21,123 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2];
 assert.ok(binary?.startsWith('/'));
-const fixture = await mkdtemp(join(root, '.local/host-v2-comment-scale-'));
+await mkdir(join(root, '.local'), { recursive: true });
+const fixture = await mkdtemp(join(root, '.local/host-v2-scale-'));
 const dirs = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work'].map(name => [name, join(fixture, name)]));
 await Promise.all(Object.values(dirs).map(path => mkdir(path, { recursive: true })));
-const snapshot = { repository: 'fixture/project/repository', prId: 123, base: 'a'.repeat(40), head: 'b'.repeat(40), scope: 'pr', files: ['/src/fixture.js', ...Array.from({ length: 6000 }, (_, i) => `/file-${i}.ts`)] };
-const finding = id => ({ id, summary: `Distinct fixture defect ${id}`, location: 'head:/src/fixture.js:1', severity: 'high', evidence: `Required guard missing at ${id}.`, counterevidence: 'Fixture caller checked.', suggestion: 'Restore this guard and regression case.' });
-const sourcePrefix = '  fixture-source\n\nfixture-third-line\n';
-const source = size => sourcePrefix + 'x\n'.repeat(Math.ceil(size / 2)).slice(0, size - sourcePrefix.length);
-const sizes = { functional: 3307749, risk: 120, verifier: 2200000 };
-const requests = [], receipts = [], posted = new Map();
-let child, logs = '', nextThread = 1000;
-const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+const files = Array.from({ length: 120 }, (_, i) => `/src/module-${String(Math.floor(i / 10)).padStart(2, '0')}/file-${String(i).padStart(3, '0')}.ts`);
+const requests = [];
+let child, logs = '', overflowShards = 0;
+const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
 const provider = createServer(async (request, response) => {
   try {
-    assert.equal(request.url, '/v1/chat/completions');
     let body = ''; for await (const chunk of request) body += chunk;
-    const input = JSON.parse(body), payload = JSON.parse(input.messages.findLast(m => m.role === 'user').content);
-    const sessionID = request.headers['x-opencode-session-id'];
-    const results = input.messages.filter(m => m.role === 'tool');
-    requests.push({ sessionID, model: input.model, work: payload.commentWork, inputCharacters: JSON.stringify(payload).length, requestCharacters: body.length, toolResults: results.length, toolArguments: input.messages.filter(m => m.role === 'assistant').flatMap(m => m.tool_calls ?? []).map(call => call.function.arguments) });
-    const fixtureTool = input.tools?.find(t => t.function.description === 'Deterministic scale fixture.')?.function.name;
-    let call, final;
-    if (payload.prUrl) {
-      if (!results.length) call = { name: fixtureTool, arguments: { operation: 'source', size: sizes[input.model], path: snapshot.files[0], revision: snapshot.head } };
-      else if (payload.reviews) final = { status: 'COMPLETE', snapshot, currentHead: snapshot.head, currentBase: snapshot.base, confirmed: payload.reviews.flatMap(r => r.findings).map(f => ({ ...f, reason: 'Fixture verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: Array.from({ length: 400 }, (_, i) => `Advice ${i}: Preserve a distinct supported component tradeoff and its correction.\n`).join('') };
-      else final = { status: 'COMPLETE', snapshot, coverage: { files: snapshot.files, gaps: [] }, findings: Array.from({ length: 35 }, (_, i) => finding(`${input.model === 'functional' ? 'F' : 'R'}-${i + 1}`)), report: 'Fixture initial review complete.' };
-    } else if (payload.commentWork.kind === 'plan') {
-      if (payload.commentWork.page === 1 && !payload.continuation) {
-        if ((input.tools?.length ?? 0) > 0 && results.length < 8) {
-          const shell = input.tools.find(t => t.function.name === 'shell'); assert.ok(shell);
-          const code = `const fs=require('node:fs');const rows=fs.readFileSync(${JSON.stringify(payload.reportReference.pages)},'utf8').trim().split('\\n');console.log(rows[${results.length}]);`;
-          call = { name: 'shell', arguments: { command: `${shellQuote(process.execPath)} -e ${shellQuote(code)}`, description: 'Read a bounded original report page' } };
-        } else {
-          assert.equal(input.tools?.length ?? 0, 0, 'The runtime must finish a long read-only session with a checkpoint.');
-          final = { status: 'CONTINUE', comments: [], skipped: [], reason: `Read ${results.length} bounded report rows. Complete assigned findings and assigned report segment in the next session.` };
-        }
-      } else if (!results.length) call = { name: fixtureTool, arguments: { operation: 'discussions', size: 2200000 } };
-      else {
-        assert.ok(JSON.stringify(results).includes('AZPR saved this complete observed tool result privately.'));
-        const report = typeof payload.report === 'string' ? payload.report : JSON.parse(await readFile(payload.report.azprData.file, 'utf8'));
-        final = { status: 'READY', comments: payload.findings.map(f => ({ findingId: f.id, severity: f.severity, path: snapshot.files[0], startLine: 1, endLine: 1, anchor: 'fixture-source', body: `issue (high): ${f.id} loses state\n\n` + 'Supported trigger, evidence and correction. '.repeat(15) })), skipped: [], summaryDetails: report };
+    const input = JSON.parse(body);
+    const users = input.messages.filter(m => m.role === 'user');
+    let payload; try { payload = JSON.parse(textOf(users[0]?.content)); } catch { /* summaries etc. */ }
+    const results = input.messages.filter(m => m.role === 'tool').length;
+    requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: payload?.assignment?.files?.length, work: payload?.commentWork?.kind, toolResults: results, requestCharacters: body.length });
+    // Functional reviewers read whole files; risk reviewers read diffs.
+    const fileTool = input.tools?.find(t => t.function.name === (input.model === 'risk' ? 'azpr_read_diff' : 'azpr_read_file'))?.function.name;
+    let call, final, usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+    if (payload?.assignment?.files && !payload.assignment.findingIds) {
+      const assigned = payload.assignment.files;
+      // The first functional shard is "too large": report a nearly full context after its read.
+      const tooLarge = input.model === 'functional' && assigned.length > 15 && assigned[0] === files[0];
+      if (!results && fileTool) {
+        call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[0] } : { path: assigned[0], version: 'head' } };
+        if (tooLarge) { usage = { prompt_tokens: 59000, completion_tokens: 10, total_tokens: 59010 }; overflowShards++; }
+      } else {
+        const prefix = input.model === 'functional' ? 'F' : 'R', first = Number(payload.assignment.firstFindingId.split('-')[1]);
+        const findings = input.model === 'risk' ? assigned.slice(0, 6).map((path, i) => ({ id: `${prefix}-${first + i}`, summary: `State lost in ${path}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.', location: `head:${path}:1`, severity: i % 3 === 2 ? 'low' : 'high', suggestion: 'Restore the guard.' })) : [];
+        final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings, report: `Shard ${payload.assignment.shard} reviewed.` };
       }
-    } else if (payload.commentWork.kind === 'publication-check') {
-      if (!results.length) call = { name: fixtureTool, arguments: { operation: 'discussions', size: 2200000 } };
-      else final = { status: 'READY', comments: [], skipped: [] };
+    } else if (payload?.assignment?.kind === 'duplicates') {
+      const moved = payload.assignment.findings.find(f => f.movedFrom), kept = payload.assignment.findings.find(f => !f.movedFrom);
+      final = { status: 'COMPLETE', merged: [{ id: moved.id, mergedInto: kept.id, reason: 'Same guard lost in the same file.' }], report: '' };
+    } else if (payload?.assignment?.findingIds) {
+      // The second verifier moves its first high finding into a file the first verifier owns.
+      const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => f.severity === 'high') : undefined;
+      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
+    } else if (payload?.commentWork?.kind === 'plan') {
+      final = { status: 'READY', ...(payload.commentWork.allowSummary ? { summary: 'Fixture change.' } : {}),
+        comments: payload.findings.filter(f => f.severity !== 'low').map(f => ({ findingId: f.id, severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.summary}\n\nTrigger, evidence and correction.` })),
+        skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, reason: 'Low severity stays in the summary.' })) };
     } else {
-      const items = [...(payload.summary ? [payload.summary] : []), ...payload.comments];
-      if (!results.length) call = { name: fixtureTool, arguments: { operation: 'metadata' } };
-      else if (results.length <= items.length) {
-        const item = items[results.length - 1];
-        call = { name: fixtureTool, arguments: { operation: 'publish', marker: item.marker, content: item.content } };
-      } else final = { status: 'DONE', ...(payload.summary ? { summaryThreadId: posted.get(payload.summary.marker) } : {}), posted: payload.comments.map(c => ({ findingId: c.findingId, threadId: posted.get(c.marker) })) };
+      final = 'Fixture summary.';
     }
-    if (call?.arguments.operation === 'publish') {
-      assert.ok(!posted.has(call.arguments.marker), 'Never repeat a saved write.'); posted.set(call.arguments.marker, nextThread++);
-    }
-    const delta = call ? { tool_calls: [{ index: 0, id: 'fixture_' + requests.length, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { content: JSON.stringify(final) };
+    const delta = call ? { tool_calls: [{ index: 0, id: 'fixture_' + requests.length, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { content: typeof final === 'string' ? final : JSON.stringify(final) };
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const emit = value => response.write('data: ' + JSON.stringify(value) + '\n\n');
     emit({ id: 'scale', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', ...delta }, finish_reason: null }] });
-    emit({ id: 'scale', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    emit({ id: 'scale', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }], usage });
     response.end('data: [DONE]\n\n');
   } catch (error) { logs += '\nPROVIDER: ' + error.stack; response.writeHead(400).end(JSON.stringify({ error: { message: String(error) } })); }
 });
 provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
 const providerURL = `http://127.0.0.1:${provider.address().port}/v1`;
-const mcpPath = join(fixture, 'mcp.mjs');
-await writeFile(mcpPath, `import {createInterface} from 'node:readline';import {appendFileSync} from 'node:fs';
-for await(const line of createInterface({input:process.stdin})) {if(!line.trim())continue;const req=JSON.parse(line);if(req.id===undefined)continue;let result={};
-if(req.method==='initialize')result={protocolVersion:req.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'scale',version:'1'}};
-if(req.method==='tools/list')result={tools:[{name:'arbitrary_fixture',description:'Deterministic scale fixture.',inputSchema:{type:'object',properties:{operation:{type:'string'},size:{type:'number'},path:{type:'string'},revision:{type:'string'},marker:{type:'string'},content:{type:'string'}},required:['operation']}}]};
-if(req.method==='tools/call'){const args=req.params.arguments;appendFileSync(${JSON.stringify(join(fixture, 'mcp-calls.jsonl'))},JSON.stringify(args)+'\\n');const prefix=${JSON.stringify(sourcePrefix)};let text=args.size?prefix+'x\\n'.repeat(Math.ceil(args.size/2)).slice(0,args.size-prefix.length):'Current fixture metadata.';if(args.operation==='publish')text=JSON.stringify({threadId:'fixture',content:args.content});result={content:[{type:'text',text}]};}
-process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,result})+'\\n');}
-`);
+const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 321, files, sources: Object.fromEntries(files.map(path => [path, 'fixture code\nsecond line\n'])) });
+const adoServer = createServer((request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
+adoServer.listen(0, '127.0.0.1'); await once(adoServer, 'listening');
+const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
 const settings = JSON.parse(await readFile(join(root, 'config/settings.example.json'), 'utf8'));
-for (const profile of ['review', 'deep']) for (const role of ['functional', 'risk', 'verifier']) settings.models[profile][role] = `fixture/${role}`;
+for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
+settings.workflow = { ...settings.workflow, shardFiles: 24, shardFindings: 15, parallelSessions: 4 };
+settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });
 assert.equal(install.status, 0, install.stderr);
-await writeFile(join(dirs.config, 'plugins/network-guard.js'), `export default {id:'scale.network.guard',async setup(ctx){await ctx.session.hook('http.request',event=>{if(!event.request.url.startsWith(${JSON.stringify(providerURL + '/')}))throw new Error('Only loopback fixture model requests are authorized.');});}};`);
-await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/risk', providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'fixture-only' }, models: Object.fromEntries(['functional', 'risk', 'verifier'].map(id => [id, { limit: { context: id === 'risk' ? 400000 : 4000000, output: 16000 } }])) } }, mcp: { servers: { fixture: { type: 'local', command: [process.execPath, mcpPath], codemode: false } } } }));
+await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/risk',
+  providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'fixture-only' },
+    models: Object.fromEntries(['functional', 'risk', 'verifier'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } }));
 const password = randomUUID();
-const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_CONFIG_HOME: join(fixture, 'xdg-config'), XDG_DATA_HOME: dirs.data, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state, TMPDIR: dirs.tmp, OPENCODE_TEST_HOME: dirs.home, OPENCODE_CONFIG_DIR: dirs.config, OPENCODE_PASSWORD: password, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1' };
+const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_CONFIG_HOME: join(fixture, 'xdg-config'), XDG_DATA_HOME: dirs.data, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state, TMPDIR: dirs.tmp, OPENCODE_TEST_HOME: dirs.home, OPENCODE_CONFIG_DIR: dirs.config, OPENCODE_PASSWORD: password, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1', AZPR_TEST_AZURE_BASE_URL: azureURL };
 try {
   child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  const url = await Promise.race([new Promise((resolveReady, reject) => { child.once('error', reject); child.once('exit', code => reject(new Error('Host exited ' + code))); child.stdout.on('data', data => { logs += data; const match = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) resolveReady(match[1]); }); child.stderr.on('data', data => { logs += data; }); }), new Promise((_, reject) => setTimeout(() => reject(new Error('Host startup timed out.')), 30000).unref())]);
-  const rawApi = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300000) }); const text = await response.text(); assert.ok(response.ok, text); return text ? JSON.parse(text) : undefined; };
+  const url = await Promise.race([new Promise((resolveReady, reject) => { child.once('error', reject); child.once('exit', code => reject(new Error('Host exited ' + code))); child.stdout.on('data', data => { logs += data; const match = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) resolveReady(match[1]); }); child.stderr.on('data', data => { logs += data; }); }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('startup timeout')), 30000).unref())]);
+  const rawApi = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300000) }); const raw = await response.text(); if (!response.ok) throw new Error(`${path}: ${response.status} ${raw}`); return raw ? JSON.parse(raw) : undefined; };
   const api = withCommandCompletion(rawApi, 300000);
-  assert.equal((await api('/api/info')).version, '2.0.22');
-  for (const command of ['pr-review', 'pr-deep']) {
-    snapshot.prId = command === 'pr-review' ? 123 : 124;
-    const origin = (await api('/api/session', { title: 'Scale fixture ' + command, location: { directory: dirs.work }, permissions: [{ action: 'shell', resource: '*', effect: 'allow' }] })).data;
-    for (let i = 0; i < 50; i++) { if ((await api('/api/mcp')).data.some(s => s.status?.status === 'connected')) break; await new Promise(r => setTimeout(r, 100)); }
-    await api(`/api/session/${origin.id}/command`, { name: command, text: `https://dev.azure.com/fixture/project/_git/repository/pullrequest/${snapshot.prId}`, delivery: 'steer' });
-    const reviewReceipt = (await api(`/api/session/${origin.id}/inbox`)).data.at(-1).payload.text; receipts.push(reviewReceipt); assert.match(reviewReceipt, /\] COMPLETE/);
-    await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
-    const receipt = (await api(`/api/session/${origin.id}/inbox`)).data.at(-1).payload.text; receipts.push(receipt); assert.match(receipt, /\] MODEL_REPORTED_POSTED/);
-    const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1], result = JSON.parse(await readFile(join(debug, 'result.json'), 'utf8')), plan = JSON.parse(await readFile(join(debug, 'comment-plan.json'), 'utf8'));
-    assert.equal(plan.comments.length, 70);
-    for (let i = 0; i < 400; i++) assert.ok(plan.summary.content.includes(`Advice ${i}:`));
-    assert.ok(result.stages.every(s => s.inputCharacters < 48000 && !s.requestObservations.rejected));
-    assert.ok(result.stages.filter(s => s.stage === 'comment-publish').length > 3);
-    assert.ok(result.stages.some(s => s.stage === 'comment-plan' && s.modelRequests >= 3 && s.modelRequests <= 9));
-    assert.ok(result.stages.some(s => s.status === 'CONTINUE' && s.checkpointCorrection === 'copy-reason-to-continuation'));
-    const first = JSON.parse(await readFile(join(debug, `01-azpr-${command === 'pr-deep' ? 'deep' : 'review'}-comment-plan.request.json`), 'utf8'));
-    const index = (await readFile(first.payload.evidenceIndex.file, 'utf8')).trim().split('\n').map(JSON.parse);
-    assert.deepEqual(index.map(item => item.output.characters).sort((a, b) => a - b), [120, 2200000, 3307749]);
-    for (const entry of index) assert.equal(await readFile(entry.output.file, 'utf8'), source(entry.output.characters));
-    const writes = (await readFile(join(fixture, 'mcp-calls.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse).filter(c => c.operation === 'publish');
-    for (const item of [plan.summary, ...plan.comments]) assert.equal(writes.filter(w => w.marker === item.marker && w.content === item.content).length, 1);
-    assert.ok(requests.filter(r => r.work).every(r => r.requestCharacters < 250000), 'Accumulated comment context stays bounded, including expanded saved-text tool arguments.');
-    console.log(JSON.stringify({ command, status: 'PASS', sourceCharacters: index.reduce((n, e) => n + e.output.characters, 0), files: snapshot.files.length, comments: plan.comments.length, commentSessions: result.stages.length, maxInputCharacters: Math.max(...result.stages.map(s => s.inputCharacters)), maxCommentRequestCharacters: Math.max(...requests.filter(r => r.work).map(r => r.requestCharacters)) }));
-  }
+  const origin = (await api('/api/session', { title: 'Scale fixture', location: { directory: dirs.work } })).data;
+  const latest = async () => (await api(`/api/session/${origin.id}/inbox`)).data.at(-1).payload.text;
+  await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
+  const receipt = await latest();
+  assert.match(receipt, /\] COMPLETE\n/, receipt);
+  const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
+  const result = JSON.parse(await readFile(join(debug, 'result.json'), 'utf8'));
+  const stages = role => result.stages.filter(stage => stage.role === `azpr-review-${role}`);
+  const functional = stages('functional');
+  const overflowed = functional.filter(stage => stage.failureClass === 'overflow');
+  const compactionObserved = functional.some(stage => stage.requestObservations?.kinds?.compaction > 0);
+  assert.equal(stages('risk').filter(stage => stage.status !== 'FAILED').length, 5, 'Five risk shards of 24 files.');
+  assert.equal(overflowed.length, 1, 'Exactly one functional shard overflowed.');
+  assert.ok(compactionObserved, 'The host attempted compaction and AZPR refused it.');
+  assert.deepEqual(functional.filter(stage => stage.status !== 'FAILED').map(stage => stage.label).sort().slice(0, 2), ['shard 1/5a', 'shard 1/5b']);
+  assert.ok(stages('risk').every(stage => stage.status === 'FAILED' || stage.completedTools === 1), 'Each risk reviewer read its first file as a diff.');
+  assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
+  assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
+  const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];
+  assert.equal(merged.length, 1, 'The moved duplicate is merged into the finding that stays.');
+  const coverage = functional.filter(stage => stage.status !== 'FAILED').reduce((n, stage) => n + stage.result.coverage.files.length, 0);
+  assert.equal(coverage, 120, 'Every file is reviewed once by the functional role, including split shards.');
+  await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+  const posted = await latest();
+  assert.match(posted, /\] POSTED/, posted);
+  const state = azure.state;
+  assert.equal(state.threads.length, 20, '19 high findings inline plus one summary; 10 low findings stay in the summary.');
+  const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
+  assert.equal(planner.length, 8, '29 findings in planning pages of four.');
+  await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+  assert.match(await latest(), /ALREADY_PRESENT/);
+  assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
+  console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
+    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, plannerSessions: planner.length, threads: state.threads.length, providerRequests: requests.length,
+    maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
   provider.closeAllConnections(); await new Promise(resolveDone => provider.close(resolveDone));
-  await writeFile(join(fixture, 'host.log'), logs); await writeFile(join(fixture, 'requests.json'), JSON.stringify(requests, null, 2)); await writeFile(join(fixture, 'receipts.json'), JSON.stringify(receipts, null, 2));
+  adoServer.closeAllConnections(); await new Promise(resolveDone => adoServer.close(resolveDone));
+  await writeFile(join(fixture, 'host.log'), logs); await writeFile(join(fixture, 'requests.json'), JSON.stringify(requests, null, 2));
   console.error('Private scale evidence: ' + fixture);
 }

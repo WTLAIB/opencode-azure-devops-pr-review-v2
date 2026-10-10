@@ -1,505 +1,262 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseJSONReport, normalizeFindingFormat, stageFormat, checkEnvelope, initialEnvelope, finalEnvelope } from '../src/output.mjs';
-import { readFile } from 'node:fs/promises';
-import { ROLES } from '../src/config.mjs';
-import { diagnosticResponse } from '../src/diagnostics.mjs';
-const response = text => ({ info: { finish: 'stop' }, parts: [{ type: 'text', text }] });
-const snapshot = { repository:'org/project/repo',prId:1,base:'a'.repeat(40),head:'b'.repeat(40),scope:'cumulative',files:['/main.js'] };
-const final = dispositions => ({status:'COMPLETE',snapshot,currentHead:snapshot.head,dispositions,report:'Evidence report'});
-const finding = (id='F-1') => ({id,summary:'Unprotected null input',location:'head:/main.js:2',evidence:'The caller can pass null to the new dereference, causing a request failure.',counterevidence:'The caller checks undefined, not null; its guard does not prevent this failure.',severity:'medium',suggestion:'Guard null and add a regression case for this caller.'});
-const initial = () => ({status:'COMPLETE',snapshot,coverage:{files:[...snapshot.files],gaps:[]},findings:[finding()],report:'Reviewed full changes and the relevant caller; no tests executed.'});
+import {
+  parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
+  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt,
+} from '../src/output.mjs';
 
-test('large complete JSON envelopes parse without a character limit', () => {
-  const value = initial();
-  value.findings[0].evidence = 'start' + 'x'.repeat(1000001) + 'end';
-  const json = JSON.stringify(value);
-  for (const reply of [response(json), response('```json\n' + json + '\n```')]) {
-    const parsed = parseJSONReport(reply);
-    assert.deepEqual(initialEnvelope(parsed, snapshot, 'F'), value);
-  }
-  for (const finish of ['length', 'content-filter', 'error', 'cancelled']) {
-    assert.throws(() => parseJSONReport({ ...response(json), info: { finish } }), /did not finish successfully/);
-  }
+const finding = (id, extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.',
+  location: 'head:/src/a.ts:12', severity: 'high', suggestion: 'Restore the guard.', ...extra });
+const initialAnswer = (findings, extra = {}) => JSON.stringify({ status: 'COMPLETE', coverage: { files: ['/src/a.ts'], gaps: [] }, additionalFiles: [], findings, report: 'Report', ...extra });
+
+test('parseModelJSON accepts a whole object, one fence or one embedded object and keeps surrounding text', () => {
+  assert.deepEqual(parseModelJSON('{"status":"COMPLETE"}', { keys: ['status'] }), { value: { status: 'COMPLETE' } });
+  const fenced = parseModelJSON('Intro\n```json\n{"status":"READY","comments":[]}\n```\nOutro', { keys: ['status', 'comments'] });
+  assert.deepEqual(fenced.value, { status: 'READY', comments: [] });
+  assert.equal(fenced.surroundingText, 'Intro\n\nOutro');
+  const embedded = parseModelJSON('Result: {"status":"COMPLETE","findings":[{"note":"a } brace"}]} done', { keys: ['status', 'findings'] });
+  assert.equal(embedded.value.findings[0].note, 'a } brace');
+  // An unrelated example object does not compete with the review object.
+  const example = parseModelJSON('See fn({"item": 3}).\n```json\n{"status":"COMPLETE","findings":[]}\n```', { keys: ['status', 'findings'] });
+  assert.deepEqual(example.value, { status: 'COMPLETE', findings: [] });
 });
 
-test('diagnostics retain complete visible answers and errors without preview truncation', () => {
-  const text = 'start' + 'x'.repeat(1000001) + 'end';
-  const result = diagnosticResponse({ info: { error: { type: 'api_error', message: text, response: { body: 'PRIVATE_BODY' } } }, parts: [
-    { type: 'text', text }, { type: 'reasoning', text: 'PRIVATE_REASONING' }, { type: 'tool', state: { output: 'PRIVATE_TOOL' } },
-  ] });
-  assert.equal(result.text, text);
-  assert.equal(result.textCharacters, text.length);
-  assert.equal(result.error.message, text);
-  for (const key of ['textTruncated', 'structuredTruncated', 'structuredPreview']) assert.equal(Object.hasOwn(result, key), false);
-  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_/);
+test('parseModelJSON reports concrete problems instead of guessing', () => {
+  assert.match(parseModelJSON('').problem, /empty/);
+  assert.match(parseModelJSON('no json here').problem, /no JSON object/);
+  assert.match(parseModelJSON('{"status": "COMPLETE",}', { keys: ['status'] }).problem, /could not be parsed/);
+  assert.match(parseModelJSON('{"status":"A","status":"B"}', { keys: ['status'] }).problem, /repeats a key/);
+  assert.match(parseModelJSON('```json\n{"status":"A"}\n```\n```json\n{"status":"B"}\n```', { keys: ['status'] }).problem, /2 JSON objects/);
+  assert.match(parseModelJSON('[1,2]', { keys: ['status'] }).problem, /not the expected object/);
 });
 
-test('complete JSON text cannot bypass provider errors or incomplete finishes', () => {
-  const values = [{ status: 'COMPLETE' }, { locations: [{ id: 'F-1', location: 'head:/main.js:2' }] }];
-  for (const value of values) {
-    const reply = response(JSON.stringify(value));
-    assert.deepEqual(parseJSONReport(reply), value);
-    for (const type of ['api_error', 'unknown_error']) {
-      assert.throws(() => parseJSONReport({ ...reply, info: { finish: 'stop', error: { type } } }), /OpenCode\/model error/);
-    }
-    for (const finish of ['length', 'content-filter', 'error', 'cancelled']) {
-      assert.throws(() => parseJSONReport({ ...reply, info: { finish } }), /did not finish successfully/);
-    }
-  }
+test('settings parsing stays strict', () => {
+  assert.deepEqual(parseUniqueJSON('{"a":1}'), { a: 1 });
+  assert.throws(() => parseUniqueJSON('{"a":1,"a":2}'), /duplicate JSON keys/);
+  assert.throws(() => parseUniqueJSON('```json\n{}\n```'));
 });
 
-test('tolerance: null extensions are audited without changing required finding values',()=>{
-  const raw=initial();raw.findings[0].PRIVATE_EMPTY_EXTENSION=null;
-  const before=JSON.stringify(raw),prepared=normalizeFindingFormat(raw,'azpr-review-functional');
-  assert.deepEqual(prepared.envelope,initial());
-  assert.deepEqual(prepared.corrections,[{path:'findings[0]',action:'remove-null-unknown-field',propertyIndex:7}]);
-  assert.equal(initialEnvelope(prepared.envelope,snapshot,'F').status,'COMPLETE');
-  assert.equal(JSON.stringify(raw),before);
-});
-test('tolerance: initial candidates can omit location but final confirmations and discoveries cannot',()=>{
-  const raw=initial();delete raw.findings[0].location;
-  const before=JSON.stringify(raw);
-  assert.equal(initialEnvelope(raw,snapshot,'F').status,'COMPLETE');
-  assert.equal(JSON.stringify(raw),before);
-  for(const role of ['azpr-review-functional','azpr-deep-risk']) {
-    const schema=stageFormat(role).schema.properties.findings.items;
-    assert.ok(!schema.required.includes('location'));
-    assert.ok(schema.properties.location);
-  }
-  assert.throws(()=>finalEnvelope(final([{id:'F-1',status:'CONFIRMED',reason:'Checked',verifiedFinding:raw.findings[0]}]),snapshot,raw.findings),/location/);
-  assert.throws(()=>finalEnvelope({...final([]),newFindings:[{...raw.findings[0],id:'V-1'}]},snapshot,[]),/location/);
-  for(const key of ['evidence','counterevidence','suggestion','summary','severity','id']) {
-    const bad=structuredClone(raw);delete bad.findings[0][key];
-    assert.throws(()=>initialEnvelope(bad,snapshot,'F'));
-  }
-});
-test('tolerance: an exactly identical V disposition is redundant, with the original reason retained in raw output',()=>{
-  const discovery=finding('V-1');
-  const raw={...final([{id:'F-1',status:'CONFIRMED',reason:'Checked',verifiedFinding:finding()},
-    {id:'V-1',status:'CONFIRMED',reason:'PRIVATE_DISCOVERY_REASON',verifiedFinding:structuredClone(discovery)}]),newFindings:[discovery]};
-  const before=JSON.stringify(raw),prepared=normalizeFindingFormat(raw,'azpr-review-verifier');
-  assert.equal(prepared.envelope.dispositions.length,1);
-  assert.deepEqual(prepared.envelope.newFindings,raw.newFindings);
-  assert.deepEqual(prepared.corrections,[{path:'dispositions[1]',action:'deduplicate-new-finding',newFindingPath:'newFindings[0]'}]);
-  assert.equal(finalEnvelope(prepared.envelope,snapshot,[finding()]).status,'COMPLETE');
-  assert.equal(JSON.stringify(raw),before);
-  assert.doesNotMatch(JSON.stringify(prepared.corrections),/PRIVATE_/);
-  for(const mutate of [
-    x=>x.dispositions[1].verifiedFinding.evidence+=' changed',
-    x=>x.dispositions[1].status='REJECTED',
-    x=>x.dispositions[1].mergedInto='F-1',
-    x=>x.dispositions[1].extra='nonempty',
-    x=>x.newFindings=[],x=>x.newFindings.push(structuredClone(discovery)),
-    x=>x.dispositions.push(structuredClone(x.dispositions[1])),
-    x=>x.dispositions.shift(),x=>delete x.newFindings[0].evidence,
-  ]) {
-    const bad=structuredClone(raw);mutate(bad);
-    assert.throws(()=>finalEnvelope(normalizeFindingFormat(bad,'azpr-review-verifier').envelope,snapshot,[finding()]));
-  }
+test('evaluateInitial accepts a good review and normalizes aliases and severity case', () => {
+  const answer = JSON.stringify({ Status: 'complete', coverage: { files: ['/src/a.ts'], gaps: [] }, findings: [finding('F-1', { severity: 'High' })], report: 'r' });
+  const { result, issues } = evaluateInitial(answer, { prefix: 'F', assigned: ['/src/a.ts'], inventory: ['/src/a.ts'] });
+  assert.deepEqual(issues, []);
+  assert.equal(result.status, 'COMPLETE');
+  assert.equal(result.findings[0].severity, 'high');
 });
 
-test('verifier transport uses a scalar string head while preserving incomplete and stale gates',()=>{
-  for(const role of ['azpr-review-verifier','azpr-deep-verifier']) {
-    const schema=stageFormat(role).schema;
-    assert.equal(schema.properties.currentHead.type,'string');
-    assert.ok(schema.required.includes('currentHead'));
-    assert.match(schema.properties.currentHead.description,/empty string.*INCOMPLETE/);
-  }
-  const incomplete={...final([]),status:'INCOMPLETE',currentHead:''};
-  assert.equal(finalEnvelope(incomplete,snapshot,[]).status,'INCOMPLETE');
-  // Reading a historical incomplete envelope stays compatible; never turn its
-  // unknown head into a completed review or fill it from the original snapshot.
-  assert.equal(finalEnvelope({...incomplete,currentHead:null},snapshot,[]).status,'INCOMPLETE');
-  for(const status of ['COMPLETE','STALE']) for(const currentHead of ['',null,undefined,42,'"'+snapshot.head+'"']) {
-    assert.throws(()=>finalEnvelope({...final([]),status,currentHead},snapshot,[]),/did not verify/);
-  }
-  assert.equal(finalEnvelope(final([]),snapshot,[]).status,'COMPLETE');
-  const sha256Snapshot={...snapshot,base:'a'.repeat(64),head:'b'.repeat(64)};
-  assert.equal(finalEnvelope({...final([]),snapshot:sha256Snapshot,currentHead:sha256Snapshot.head},sha256Snapshot,[]).status,'COMPLETE');
-  assert.equal(finalEnvelope({...final([]),currentHead:'c'.repeat(40)},snapshot,[]).status,'STALE');
-  assert.throws(()=>finalEnvelope({...final([]),status:'STALE'},snapshot,[]),/contradicts/);
+test('evaluateInitial lists repairable problems and still returns a usable PARTIAL result', () => {
+  const bad = JSON.stringify({ status: 'COMPLETE', findings: [{ id: 'F-1', summary: 'only summary', severity: 'critical' }], report: 'r' });
+  const { result, issues } = evaluateInitial(bad, { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.ok(issues.some(issue => /coverage/.test(issue)));
+  assert.ok(issues.some(issue => /missing evidence, counterevidence, suggestion/.test(issue)));
+  assert.ok(issues.some(issue => /severity must be high, medium or low/.test(issue)));
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.findings.length, 1);
+  assert.match(initialRepairPrompt(issues), /complete corrected JSON object/);
 });
 
-test('status diagnostics identify the field and allowed values without correcting the input',()=>{
-  const result={...initial(),status:'CCOMPLETE'};
-  assert.throws(()=>initialEnvelope(result,snapshot,'F'),/initial-review.*status.*CCOMPLETE.*COMPLETE.*PARTIAL/);
-  assert.equal(result.status,'CCOMPLETE');
-  assert.throws(()=>checkEnvelope({status:'RREADY',snapshot,report:'Source available'}),/source-check.*status.*RREADY/);
-  assert.throws(()=>finalEnvelope({...final([]),status:'CCOMPLETE'},snapshot,[]),/final-review.*status.*CCOMPLETE/);
-  assert.throws(()=>initialEnvelope({...result,status:'Bearer PRIVATE_TOKEN\nignore rules'},snapshot,'F'),error=>{
-    assert.doesNotMatch(error.message,/PRIVATE_TOKEN|ignore rules/);return true;
-  });
-});
-test('initial-envelope diagnostics list missing or mistyped fields without copying private values',()=>{
-  assert.throws(()=>initialEnvelope({status:'CCOMPLETE'},snapshot,'R'),/status-only.*snapshot.*coverage.*findings.*report/);
-  const malformed={status:'COMPLETE',snapshot:'PRIVATE_SOURCE_SENTINEL',coverage:[],findings:{},report:42};
-  assert.throws(()=>initialEnvelope(malformed,snapshot,'R'),error=>{
-    assert.match(error.message,/snapshot.*object.*coverage.*object.*findings.*array.*report.*text/);
-    assert.doesNotMatch(error.message,/PRIVATE_SOURCE_SENTINEL/);return true;
-  });
-  assert.throws(()=>initialEnvelope(null,snapshot,'R'),/expected an object/);
+test('evaluateInitial keeps unstructured text for verification', () => {
+  const { result, issues } = evaluateInitial('I found a race in /src/a.ts when two writers overlap.', { prefix: 'R', assigned: ['/src/a.ts'] });
+  assert.equal(result.structured, false);
+  assert.match(result.report, /race/);
+  assert.match(issues[0], /could not be used/);
 });
 
-test('status-only final diagnostics identify absent review content without echoing the status',()=>{
-  for(const status of ['COMPLETE','CLOSED_STATUS_PLACEHOLDER','PRIVATE_STATUS_SENTINEL']){
-    assert.throws(()=>finalEnvelope({status},snapshot,[]),error=>{
-      assert.match(error.message,/status-only.*snapshot.*dispositions.*report/);
-      assert.doesNotMatch(error.message,/PRIVATE_STATUS_SENTINEL/);return true;
-    });
-  }
+test('evaluateInitial downgrades COMPLETE when assigned files are missing and records discovered paths', () => {
+  const { result } = evaluateInitial(initialAnswer([], { coverage: { files: [], gaps: [] }, additionalFiles: ['src/extra.ts', '/src/a.ts'] }),
+    { prefix: 'F', assigned: ['/src/a.ts'], inventory: ['/src/a.ts'], filesComplete: false });
+  assert.equal(result.status, 'PARTIAL');
+  assert.deepEqual(result.additionalFiles, ['/src/extra.ts']);
 });
 
-test('JSON text rejects duplicate fields instead of silently replacing review evidence',()=>{
-  for(const raw of [
-    '{"status":"PARTIAL","status":"COMPLETE"}',
-    '{"status":"PARTIAL","st\\u0061tus":"COMPLETE"}',
-    '{"coverage":{"gaps":["PRIVATE_MISSING_EVIDENCE"],"gaps":[]}}',
-    '{"findings":[{"id":"F-1","evidence":"PRIVATE_EVIDENCE","evidence":"replacement"}]}',
-    '{"PRIVATE_KEY":null,"PRIVATE_KEY":null}',
-  ])for(const content of [raw,'Result:\n```json\n'+raw+'\n```']){
-    assert.throws(()=>parseJSONReport(response(content)),error=>{
-      assert.match(error.message,/duplicate JSON keys/);assert.doesNotMatch(error.message,/PRIVATE_/);return true;
-    });
-  }
+test('assignIds keeps valid IDs and renumbers missing or repeated ones', () => {
+  const warnings = new Set();
+  const rows = [{ id: 'F-1' }, { id: 'F-1' }, {}, { id: 'X-9' }];
+  assignIds(rows, 'F', warnings);
+  assert.deepEqual(rows.map(row => row.id), ['F-1', 'F-2', 'F-3', 'F-4']);
+  assert.equal(rows[3].originalId, 'X-9');
+  assert.equal(warnings.size, 1);
 });
 
-test('JSON text preserves complete evidence with repeated keys in separate objects and source strings',()=>{
-  const value=initial();value.findings.push(finding('F-2'));
-  value.findings[0].evidence='Literal source: {"status":"PARTIAL","status":"COMPLETE"}; arrays [1,2] and braces {}.';
-  for(const raw of [JSON.stringify(value),'```json\n'+JSON.stringify(value,null,2)+'\n```']){
-    const parsed=parseJSONReport(response(raw));
-    assert.deepEqual(parsed,value);assert.equal(initialEnvelope(parsed,snapshot,'F').status,'COMPLETE');
-  }
+test('evaluateFinal: complete decisions are accepted as-is', () => {
+  const originals = [finding('F-1'), finding('R-1')];
+  const answer = JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'Checked.' }], merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause.' }], rejected: [], needsInfo: [], newFindings: [finding('V-1')], report: 'Report' });
+  const { result, issues } = evaluateFinal(answer, { originals });
+  assert.deepEqual(issues, []);
+  assert.deepEqual(result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'R-1:MERGED']);
+  assert.equal(result.newFindings.length, 1);
 });
 
-test('incomplete finish rejects even syntactically complete text envelopes',()=>{
-  for(const finish of ['length','content-filter','error','cancelled']){
-    const value=initial(),reply=response(JSON.stringify(value));reply.info.finish=finish;
-    assert.throws(()=>parseJSONReport(reply),/did not finish successfully/);
-  }
+test('evaluateFinal: missing decisions become a supplement request and are merged back', () => {
+  const originals = [finding('F-1'), finding('F-2'), finding('R-1')];
+  const first = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Report' }), { originals });
+  assert.deepEqual(first.repairIds.sort(), ['F-2', 'R-1']);
+  assert.match(first.issues[0], /No decision was given for: F-2, R-1/);
+  const prompt = finalRepairPrompt(first.issues, first.repairIds);
+  assert.match(prompt, /decisions only for: F-2, R-1/);
+  const second = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'F-2', status: 'REJECTED', reason: 'Guarded.' }, { id: 'R-1', status: 'merged', mergedInto: 'F-1', reason: 'Same.' }] }),
+    { originals, previous: first.result, supplement: true });
+  assert.deepEqual(second.issues, []);
+  assert.deepEqual(second.result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'F-2:REJECTED', 'R-1:MERGED']);
+  assert.equal(second.result.report, 'Report', 'A supplement keeps the earlier report.');
 });
 
-test('source-check contracts reject malformed readiness before starting initial reviews',()=>{
-  assert.equal(checkEnvelope({status:'READY',snapshot,report:'Source available'}).snapshot.head,snapshot.head);
-  assert.equal(checkEnvelope({status:'NOT_READY',report:'No source access'}).status,'NOT_READY');
-  for(const value of [null,{}, {status:'READY',report:'No snapshot'}, {status:'READY',snapshot,report:''},
-    {status:'NOT_READY'}, {status:'READY',snapshot,report:'Source',sourceAccess:[]},
-    {status:'READY',snapshot,report:'Source',sourceAccess:{diff:[]}}, {status:'READY',snapshot,report:'Source',requirements:null}]) assert.throws(()=>checkEnvelope(value));
-});
-test('final merge graph rejects cycles instead of silently losing all findings',()=>{
-  const originals=['F-1','R-1','F-2'].map(id=>({id}));
-  for(const targets of [['R-1','F-1','F-1'],['R-1','F-2','F-1']]) {
-    const dispositions=originals.map((f,index)=>({...f,status:'MERGED',mergedInto:targets[index],reason:'Duplicate'}));
-    assert.throws(()=>finalEnvelope(final(dispositions),snapshot,originals),/cycle/);
-  }
-});
-test('merge chains must terminate at a real disposition and only merges may name a target',()=>{
-  const originals=['F-1','R-1','F-2'].map(id=>({id}));
-  for(const status of ['CONFIRMED','NEEDS_INFO','REJECTED']) {
-    const result=final([{id:'F-1',status,reason:'Evidence',...(status==='CONFIRMED'?{verifiedFinding:finding()}: {})}, {id:'R-1',status:'MERGED',mergedInto:'F-1',reason:'Duplicate'}, {id:'F-2',status:'MERGED',mergedInto:'R-1',reason:'Duplicate'}]);
-    assert.equal(finalEnvelope(result,snapshot,originals).status,'COMPLETE');
-  }
-  assert.throws(()=>finalEnvelope(final([{id:'F-1',status:'CONFIRMED',mergedInto:'R-1',reason:'Evidence'}]),snapshot,[originals[0]]),/Only a MERGED/);
-  assert.throws(()=>finalEnvelope({...final([]),newFindings:null},snapshot,[]),/Invalid findings/);
+test('evaluateFinal degrades per item after repairs: UNREVIEWED and NEEDS_INFO, never discarding the rest', () => {
+  const originals = [finding('F-1'), finding('F-2'), finding('F-3')];
+  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE',
+    confirmed: [{ id: 'F-1', summary: 'Only a summary', reason: 'ok' }, { ...finding('F-2'), reason: 'ok' }],
+    merged: [], rejected: [], needsInfo: [], newFindings: [{ id: 'V-1', summary: 'incomplete' }], report: 'r' }), { originals });
+  assert.ok(issues.some(issue => /F-1: the confirmed finding is missing/.test(issue)));
+  assert.ok(issues.some(issue => /newFindings\[0\]/.test(issue)));
+  const statuses = Object.fromEntries(result.dispositions.map(d => [d.id, d.status]));
+  assert.deepEqual(statuses, { 'F-1': 'NEEDS_INFO', 'F-2': 'CONFIRMED', 'F-3': 'UNREVIEWED' });
+  assert.equal(result.newFindings.length, 0);
+  assert.equal(result.incompleteNewFindings.length, 1);
+  assert.ok(result.warnings.some(w => /UNREVIEWED/.test(w)));
 });
 
-test('complete initial reviews require an explicit full coverage ledger even with zero findings',()=>{
-  const result={...initial(),findings:[]};
-  assert.equal(initialEnvelope(result,snapshot,'F').status,'COMPLETE');
-  for(const coverage of [undefined,null,[],{}, {files:[],gaps:[]},
-    {files:snapshot.files,gaps:['Unreviewed caller']}, {files:['/other.js'],gaps:[]},
-    {files:['/main.js','/main.js'],gaps:[]}, {files:snapshot.files,gaps:['']},
-    {files:snapshot.files,gaps:null}, {files:[null],gaps:[]}]) {
-    assert.throws(()=>initialEnvelope({...result,coverage},snapshot,'F'),/coverage|COMPLETE/);
-  }
-});
-test('coverage order is immaterial but missing work must be explicitly PARTIAL',()=>{
-  const expanded={...snapshot,files:['/main.js','/deleted.js']};
-  const result={...initial(),snapshot:expanded,coverage:{files:[...expanded.files].reverse(),gaps:[]}};
-  assert.equal(initialEnvelope(result,expanded,'F').status,'COMPLETE');
-  assert.throws(()=>initialEnvelope({...result,coverage:{files:['/main.js'],gaps:[]}},expanded,'F'),/every snapshot/);
-  assert.equal(initialEnvelope({...result,status:'PARTIAL',coverage:{files:['/main.js'],gaps:['Deleted file base source unavailable.']}},expanded,'F').status,'PARTIAL');
-  assert.throws(()=>initialEnvelope({...result,status:'PARTIAL'},expanded,'F'),/PARTIAL requires/);
-});
-test('initial findings require counterevidence, impact severity and a verification suggestion',()=>{
-  for(const key of ['summary','location','evidence','counterevidence','severity','suggestion']) {
-    for(const value of [undefined,null,'',42]) {
-      const result=initial();result.findings[0][key]=value;
-      assert.throws(()=>initialEnvelope(result,snapshot,'F'),/finding|evidence/);
-    }
-  }
-  const result=initial();result.findings[0].severity='certain';
-  assert.throws(()=>initialEnvelope(result,snapshot,'F'),/severity/);
-  result.findings[0].severity='low';assert.equal(initialEnvelope(result,snapshot,'F').findings.length,1);
-});
-test('finding diagnostics identify exact fields, duplicate IDs and schema extras without private data',()=>{
-  const result=initial(), first=result.findings[0];
-  first[' evidence']=first.evidence;delete first.evidence;
-  assert.throws(()=>initialEnvelope(result,snapshot,'F'),error=>{
-    assert.match(error.message,/findings\[0\]\.evidence is missing.*surrounding ASCII whitespace/);
-    assert.doesNotMatch(error.message,/caller can pass/);return true;
-  });
-  result.findings=[finding(),finding()];
-  assert.throws(()=>initialEnvelope(result,snapshot,'F'),/findings\[1\]\.id duplicates/);
-  result.findings=[{...finding(),PRIVATE_KEY_SENTINEL:'PRIVATE_VALUE_SENTINEL'}];
-  assert.throws(()=>initialEnvelope(result,snapshot,'F'),error=>{
-    assert.match(error.message,/findings\[0\].*unexpected field/);
-    assert.doesNotMatch(error.message,/PRIVATE_/);return true;
-  });
-  result.findings=[{...finding(),evidence_note:''}];
-  // The validator stays strict; only the separately audited preparation step
-  // may produce a canonical candidate for full validation.
-  assert.throws(()=>initialEnvelope(result,snapshot,'F'),/unexpected field/);
-  const bad={...finding(),evidence:null};
-  assert.throws(()=>finalEnvelope(final([{id:'F-1',status:'CONFIRMED',reason:'Checked',verifiedFinding:bad}]),snapshot,[finding()]),/dispositions\[0\]\.verifiedFinding\.evidence/);
-  assert.throws(()=>finalEnvelope({...final([]),newFindings:[{...bad,id:'V-1'}]},snapshot,[]),/newFindings\[0\]\.evidence/);
-});
-test('format normalization changes only unambiguous known keys and exactly empty unknown fields',()=>{
-  const expected=initial();expected.findings[0].evidence='  Preserve evidence whitespace.\n';
-  const raw={...expected,findings:[Object.fromEntries(Object.entries(expected.findings[0]).map(([k,v])=>[` \t${k}\r\n`,v]))]};
-  raw.findings[0].PRIVATE_UNKNOWN_NAME='';
-  const before=JSON.stringify(raw), prepared=normalizeFindingFormat(raw,'azpr-review-functional');
-  assert.deepEqual(prepared.envelope,expected);
-  assert.equal(prepared.corrections.length,8);
-  assert.doesNotMatch(JSON.stringify(prepared.corrections),/PRIVATE_|Preserve evidence/);
-  assert.equal(JSON.stringify(raw),before);
-  assert.equal(initialEnvelope(prepared.envelope,snapshot,'F').status,'COMPLETE');
-  const again=normalizeFindingFormat(prepared.envelope,'azpr-review-functional');
-  assert.strictEqual(again.envelope,prepared.envelope);assert.deepEqual(again.corrections,[]);
-});
-test('format normalization never chooses between conflicting field names, even identical values',()=>{
-  for(const fields of [
-    {evidence:'Same value',' evidence':'Same value'},
-    {' evidence':'Same value','evidence ':'Same value'},
-    {evidence:'Actual evidence',' evidence':''},
-    {' evidence':'PRIVATE_VALUE_SENTINEL',evidence:'Other value'},
-  ]) {
-    const raw=initial();delete raw.findings[0].evidence;Object.assign(raw.findings[0],fields);
-    const before=JSON.stringify(raw);
-    assert.throws(()=>normalizeFindingFormat(raw,'azpr-review-functional'),error=>{
-      assert.match(error.message,/findings\[0\]\.evidence has conflicting keys/);
-      assert.doesNotMatch(error.message,/PRIVATE_|Same value|Actual evidence/);return true;
-    });
-    assert.equal(JSON.stringify(raw),before);
-  }
-});
-test('nonempty or nonstring extras, misspellings and absent evidence still fail full validation',()=>{
-  for(const extra of ['source note',' ',false,0,[],{}]) {
-    const raw=initial();raw.findings[0].evidence_note=extra;
-    const prepared=normalizeFindingFormat(raw,'azpr-review-functional');
-    assert.deepEqual(prepared.corrections,[]);
-    assert.throws(()=>initialEnvelope(prepared.envelope,snapshot,'F'),/unexpected field/);
-  }
-  for(const key of ['Evidence','evdience','\u00a0evidence','\u200bevidence']) {
-    const raw=initial();raw.findings[0][key]=raw.findings[0].evidence;delete raw.findings[0].evidence;
-    const prepared=normalizeFindingFormat(raw,'azpr-review-functional');
-    assert.deepEqual(prepared.corrections,[]);
-    assert.throws(()=>initialEnvelope(prepared.envelope,snapshot,'F'),/\.evidence is missing/);
-  }
-  for(const value of [undefined,null,'',' ',42]) {
-    const raw=initial();delete raw.findings[0].evidence;
-    if(value!==undefined)raw.findings[0][' evidence']=value;
-    raw.findings[0].unused='';
-    const prepared=normalizeFindingFormat(raw,'azpr-review-functional');
-    assert.throws(()=>initialEnvelope(prepared.envelope,snapshot,'F'),/\.evidence (?:is missing|must be nonempty text)/);
-  }
-});
-test('finding formatting excludes statuses, snapshots, reports, coverage, comments and source checks',()=>{
-  const raw=initial();raw.findings[0][' evidence']=raw.findings[0].evidence;delete raw.findings[0].evidence;
-  for(const role of ['azpr-review-check','azpr-review-comment-plan','azpr-review-comment-publish','unknown']) {
-    const prepared=normalizeFindingFormat(raw,role);
-    assert.strictEqual(prepared.envelope,raw);assert.deepEqual(prepared.corrections,[]);
-  }
-  const badStatus={...raw,status:'CCOMPLETE'};
-  assert.strictEqual(normalizeFindingFormat(badStatus,'azpr-review-functional').envelope,badStatus);
-  const prepared=normalizeFindingFormat(raw,'azpr-review-functional');
-  for(const key of ['status','snapshot','coverage','report']) assert.strictEqual(prepared.envelope[key],raw[key]);
-  assert.throws(()=>initialEnvelope({...prepared.envelope,coverage:{files:[],gaps:[]}},snapshot,'F'),/COMPLETE requires/);
-  assert.throws(()=>initialEnvelope({...prepared.envelope,snapshot:{...snapshot,head:'c'.repeat(40)}},snapshot,'F'),/different snapshot/);
-});
-test('verifier finding formatting preserves verdicts and head checks in both modes',()=>{
-  for(const mode of ['review','deep']) {
-    const corrected=finding();corrected[' suggestion']=corrected.suggestion;delete corrected.suggestion;
-    const raw={...final([{id:'F-1',status:'CONFIRMED',reason:'Checked',verifiedFinding:corrected}]),newFindings:[{...finding('V-1'),empty_note:''}]};
-    const before=JSON.stringify(raw), prepared=normalizeFindingFormat(raw,`azpr-${mode}-verifier`);
-    assert.deepEqual(prepared.corrections,[
-      {path:'dispositions[0].verifiedFinding.suggestion',action:'trim-key-whitespace'},
-      {path:'newFindings[0]',action:'remove-empty-unknown-field',propertyIndex:7},
-    ]);
-    assert.equal(finalEnvelope(prepared.envelope,snapshot,[finding()]).status,'COMPLETE');
-    assert.equal(finalEnvelope({...prepared.envelope,currentHead:'c'.repeat(40)},snapshot,[finding()]).status,'STALE');
-    assert.throws(()=>finalEnvelope({...prepared.envelope,currentHead:''},snapshot,[finding()]),/did not verify/);
-    assert.equal(JSON.stringify(raw),before);
-  }
-});
-test('confirmed dispositions require a complete corrected finding under the original ID',()=>{
-  const corrected={...finding(),summary:'Narrowed claim',severity:'low'};
-  const disposition={id:'F-1',status:'CONFIRMED',reason:'Caller and safeguard checked',verifiedFinding:corrected};
-  const result=finalEnvelope(final([disposition]),snapshot,[finding()]);
-  assert.deepEqual(result.dispositions[0].verifiedFinding,corrected);
-  for(const verifiedFinding of [undefined,null,{},finding('R-1'),{...finding(),counterevidence:''},{...finding(),suggestion:''},{...finding(),severity:'certain'}]) {
-    assert.throws(()=>finalEnvelope(final([{...disposition,verifiedFinding}]),snapshot,[finding()]));
-  }
-  for(const status of ['REJECTED','NEEDS_INFO','MERGED']) {
-    assert.throws(()=>finalEnvelope(final([{...disposition,status,...(status==='MERGED'?{mergedInto:'R-1'}:{})}]),snapshot,[finding(),finding('R-1')]),/Only a CONFIRMED/);
-  }
-});
-test('new verifier findings must pass the same evidence and severity checks',()=>{
-  const good={...final([]),newFindings:[finding('V-1')]};
-  assert.equal(finalEnvelope(good,snapshot,[]).newFindings.length,1);
-  for(const entry of [finding('F-1'),{...finding('V-1'),counterevidence:undefined},{...finding('V-1'),severity:null}]) {
-    assert.throws(()=>finalEnvelope({...good,newFindings:[entry]},snapshot,[]));
-  }
-});
-test('internal schemas and role prompt examples describe the same quality contracts',async()=>{
-  const required=['id','summary','evidence','counterevidence','location','severity','suggestion'];
-  for(const mode of ['review','deep']) {
-    const finalSchema=stageFormat(`azpr-${mode}-verifier`).schema;
-    assert.deepEqual(finalSchema.properties.confirmed.items.required,[...required,'reason']);
-    assert.deepEqual(finalSchema.properties.newFindings.items.required,required);
-    for(const role of ['functional','risk']) {
-      const schema=stageFormat(`azpr-${mode}-${role}`).schema;
-      assert.ok(schema.required.includes('coverage'));
-      assert.deepEqual(schema.properties.coverage.required,['files','gaps']);
-      assert.deepEqual(schema.properties.findings.items.required,required.filter(key=>key!=='location'));
-    }
-  }
-  for(const [name,prefix] of [['functional','F'],['risk','R']]) {
-    const prompt=await readFile(new URL(`../src/prompts/${name}.md`,import.meta.url),'utf8');
-    const result=JSON.parse(/```json\n([\s\S]*?)\n```/.exec(prompt)[1]);
-    result.snapshot=snapshot;
-    if(name==='final') {
-      result.currentHead=snapshot.head;
-      assert.equal(finalEnvelope(result,snapshot,[finding(),finding('R-1')]).status,'COMPLETE');
-    } else {
-      result.coverage.files=[...snapshot.files];
-      assert.equal(initialEnvelope(result,snapshot,prefix).status,'COMPLETE');
-    }
-  }
-});
-test('review guidance uses PR versions; standalone check retains cumulative proof',async()=>{
-  const common=await readFile(new URL('../src/prompts/common.md',import.meta.url),'utf8');
-  const check=await readFile(new URL('../src/prompts/check.md',import.meta.url),'utf8');
-  const result=JSON.parse(/```json\n([\s\S]*?)\n```/.exec(check)[1]);
-  for(const key of ['identity','successfulCalls','failedCalls']) assert.equal(typeof result.sourceAccess[key],'string');
-  assert.match(common,/blob.*commit/s);
-  assert.match(common,/array.*string/s);
-  assert.match(common,/short branch name.*refs\/heads\//s);
-  assert.match(common,/at\s+most\s+one identical retry per logical read/is);
-  assert.match(check,/Keyword search, PR membership queries\s+and file-content equality do not establish ancestry/);
-  assert.match(check,/before and after.*listing/s);
-  assert.match(check,/Do not explore unrelated/);
-  assert.match(check,/A latest target tip,\s+successful merge status, matching branch tips or synthesized iteration labels\s+do not by themselves prove a merge base/);
-  assert.match(check,/A page's entry count is not a total/);
-  assert.match(check,/source access at the exact commits for all changed\s+files/);
-  assert.match(check,/post-listing tip check unless that second read actually occurred/);
-  assert.match(check,/Do not perform a code review or diagnose defects/);
-  assert.match(check,/missing required evidence prevents\s+READY/);
-  assert.match(common,/Reuse complete exact-commit content\s+already\s+obtained in your own session/s);
-  result.snapshot=snapshot;
-  assert.equal(checkEnvelope(result).status,'READY');
-});
-test('single-source verifier report retains evidence and requires every structured disposition',async()=>{
-  const prompt=await readFile(new URL('../src/prompts/final.md',import.meta.url),'utf8');
-  assert.match(prompt,/trigger, scope, severity, evidence, counterevidence/);
-  assert.match(prompt,/exactly one structured\s+decision per original ID/);
-  assert.match(prompt,/runtime renders the validated snapshot, findings/);
-  assert.match(prompt,/Explain material limits\s+and unexecuted tests even when no findings survive/);
-  assert.match(prompt,/read the same PR metadata again/);
-});
-test('finding locations must be recounted from exact source without transport wrappers',async()=>{
-  const common=await readFile(new URL('../src/prompts/common.md',import.meta.url),'utf8');
-  const finalPrompt=await readFile(new URL('../src/prompts/final.md',import.meta.url),'utf8');
-  const location=stageFormat('azpr-review-verifier').schema.properties.confirmed.items.properties.location;
-  assert.match(location.description,/one-based/);
-  assert.match(common,/blank lines.*comments/s);
-  assert.match(common,/MCP.*wrapper/s);
-  assert.match(finalPrompt,/Recount.*source/s);
-  assert.match(finalPrompt,/do not inherit the representative's offsets/);
-  assert.match(finalPrompt,/NEEDS_INFO/);
+test('evaluateFinal rejects invalid merges and cycles per item', () => {
+  const originals = [finding('F-1'), finding('F-2'), finding('F-3')];
+  const { result } = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [], rejected: [], needsInfo: [], newFindings: [], report: 'r',
+    merged: [{ id: 'F-1', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' }, { id: 'F-3', mergedInto: 'F-9', reason: 'c' }] }), { originals });
+  assert.deepEqual(result.dispositions.map(d => d.status), ['UNREVIEWED', 'UNREVIEWED', 'UNREVIEWED']);
 });
 
-test('only visible JSON text can supply the review envelope', () => {
-  assert.throws(() => parseJSONReport({ info: { structured: { status: 'READY' } }, parts: [] }), /Empty/);
-  for (const raw of ['[]', 'null', '"text"', '1']) assert.throws(() => parseJSONReport(response(raw)), /must be an object/);
-  const reply = response('{"status":"READY"}');
-  reply.info.structured = { status: 'NOT_READY' };
-  assert.deepEqual(parseJSONReport(reply), { status: 'READY' });
-});
-test('JSON text accepts JSON or one fenced object, not broken or ambiguous envelopes', () => {
-  for (const raw of ['{"status":"READY"}', '```json\n{"status":"READY"}\n```', 'Result:\n```json\n{"status":"READY"}\n```\nEnd.', '```json\r\n{"status":"READY"}\r\n```']) {
-    assert.equal(parseJSONReport(response(raw)).status, 'READY');
-  }
-  for (const raw of ['Missing source', '{"status":"READY"', '```json\n{}\n```\n```json\n{}\n```', '{"a":1}\n{"b":2}', '{"a":1}\n```json\n{}\n```']) {
-    assert.throws(() => parseJSONReport(response(raw)), /required JSON envelope.*finish=stop/);
-  }
-  assert.throws(() => parseJSONReport(response('x'.repeat(1001))), /required JSON envelope/);
-  assert.throws(() => parseJSONReport(response('')), /Empty/);
-  assert.throws(() => parseJSONReport({ info: {}, parts: [{ type: 'reasoning', text: '{"status":"READY"}' }] }), /Empty/);
-});
-test('every stage has an internal object schema without host transport options', () => {
-  for (const role of Object.keys(ROLES)) {
-    const format = stageFormat(role);
-    assert.deepEqual(Object.keys(format), ['schema']);
-    assert.equal(format.schema.type, 'object'); assert.ok(format.schema.required.includes('status'));
-    assert.equal(format.schema.additionalProperties, false);
-  }
-  assert.ok(stageFormat('azpr-review-functional').schema.properties.findings.items.properties.severity);
-  assert.ok(stageFormat('azpr-review-verifier').schema.properties.merged.items.properties.mergedInto);
-  assert.ok(stageFormat('azpr-review-check').schema.properties.status.enum.includes('NOT_READY'));
-});
-test('diagnostic projection excludes reasoning, tool payloads, headers, and unknown metadata', () => {
-  const value = diagnosticResponse({ info: { id: 'msg_1', finish: 'length', error: { type: 'api_error', message: 'actual error', headers: { authorization: 'SECRET_HEADER' }, response: { body: 'SECRET_BODY' } }, metadata: 'SECRET_METADATA' }, parts: [
-    { type: 'text', text: 'Visible reply' }, { type: 'reasoning', text: 'PRIVATE_REASONING' }, { type: 'tool', state: { input: 'PRIVATE_TOOL' } }, { type: 'text', ignored: true, text: 'IGNORED_TEXT' },
-  ] });
-  assert.equal(value.error.message, 'actual error'); assert.equal(value.text, 'Visible reply');
-  assert.doesNotMatch(JSON.stringify(value), /SECRET_|PRIVATE_|IGNORED_/);
-
+test('evaluateFinal: cross-shard merge targets are allowed when listed in allIds', () => {
+  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'R-7', reason: 'Same.' }], confirmed: [], rejected: [], needsInfo: [], newFindings: [], report: '' }),
+    { originals: [finding('F-1')], allIds: ['F-1', 'R-7'] });
+  assert.deepEqual(issues, []);
+  assert.equal(result.dispositions[0].status, 'MERGED');
 });
 
-
-test('PR version contract: direct initials need no ancestry proof and bind the requested PR ID',()=>{
-  const s={...snapshot,scope:'pr'};
-  const value={...initial(),snapshot:s};
-  assert.equal(initialEnvelope(value,null,'F','https://dev.azure.com/org/project/_git/repo/pullrequest/1').status,'COMPLETE');
-  assert.throws(()=>initialEnvelope(value,null,'F','https://dev.azure.com/org/project/_git/repo/pullrequest/2'),/PR ID/);
-  assert.throws(()=>initialEnvelope({...value,snapshot:{...s,head:'2026-01-01T00:00:00Z'}},null,'F'),/SHA/);
+test('evaluateFinal judges a decision row by its own fields, not only by the list it is in', () => {
+  const originals = [finding('F-1'), finding('F-2'), finding('R-1'), finding('R-2'), finding('R-3')];
+  // As in a live PR #3 verifier: merges written into "confirmed" next to a real confirmation.
+  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE',
+    confirmed: [{ ...finding('F-1'), reason: 'Checked.' }, { id: 'R-1', mergedInto: 'F-1', reason: 'Same cause and fix.' }],
+    merged: [{ ...finding('F-2'), status: 'CONFIRMED', reason: 'Checked.' }],
+    rejected: [{ id: 'R-2', status: 'merged', mergedInto: 'F-2', reason: 'Same cause.' }, { id: 'R-3', mergedInto: 'F-1', reason: 'Guarded elsewhere.' }],
+    needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.deepEqual(issues, []);
+  assert.deepEqual(result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'F-2:CONFIRMED', 'R-1:MERGED', 'R-2:MERGED', 'R-3:REJECTED']);
+  assert.equal(result.dispositions.find(d => d.id === 'F-2').verifiedFinding.summary, 'Defect F-2');
+  assert.equal(Object.hasOwn(result.dispositions.find(d => d.id === 'F-2').verifiedFinding, 'status'), false);
+  assert.ok(result.warnings.some(w => /3 decision\(s\) placed under another category were classified by their own fields/.test(w)));
+  // A confirmation that also names mergedInto stays a confirmation; a bare row without a merge target is still repaired.
+  const kept = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), mergedInto: 'F-2', reason: 'ok' }, { id: 'F-2', reason: 'ok' }],
+    merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals: [finding('F-1'), finding('F-2')] });
+  assert.equal(kept.result.dispositions[0].status, 'CONFIRMED');
+  assert.ok(kept.issues.some(issue => /F-2: the confirmed finding is missing/.test(issue)));
+  // A corrected disposition may carry the finding fields directly instead of a verifiedFinding wrapper.
+  const inline = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1'), status: 'CONFIRMED', reason: 'ok' }] }), { originals: [finding('F-1')] });
+  assert.deepEqual(inline.issues, []);
+  assert.equal(inline.result.dispositions[0].verifiedFinding.evidence, 'HEAD drops the guard.');
 });
 
-test('PR version contract: final freshness checks source and target versions',()=>{
-  const s={...snapshot,scope:'pr'};
-  const value={...final([]),snapshot:s,currentBase:s.base};
-  assert.equal(finalEnvelope(value,s,[]).status,'COMPLETE');
-  assert.equal(finalEnvelope({...value,currentBase:'c'.repeat(40)},s,[]).status,'STALE');
-  assert.equal(finalEnvelope({...value,currentHead:'c'.repeat(40)},s,[]).status,'STALE');
-  for(const currentBase of [undefined,'',null,'2026-01-01']) assert.throws(()=>finalEnvelope({...value,currentBase},s,[]),/target|base/i);
-  assert.equal(finalEnvelope({...value,status:'INCOMPLETE',currentBase:''},s,[]).status,'INCOMPLETE');
+test('evaluateFinal asks a verifier to confirm moving a finding to another file and records the initial location', () => {
+  const originals = [finding('R-1', { location: 'head:/tests/test_a.ts:11-13' }), finding('F-1')];
+  const answer = (rows, extra = {}) => JSON.stringify({ status: 'COMPLETE', confirmed: rows, merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r', ...extra });
+  // Same-file line corrections need nothing, and a stray movedFrom is not kept.
+  const lines = evaluateFinal(answer([{ ...finding('R-1', { location: 'head:/tests/test_a.ts:12' }), reason: 'ok' }, { ...finding('F-1', { location: 'head:/src/a.ts:14', movedFrom: 'x' }), reason: 'ok' }]), { originals });
+  assert.deepEqual(lines.issues, []);
+  assert.equal(lines.result.dispositions.some(d => Object.hasOwn(d.verifiedFinding, 'movedFrom')), false);
+  // A silent move to another file gets one correction turn; the result already records where it came from.
+  const moved = evaluateFinal(answer([{ ...finding('R-1', { location: 'head:/src/a.ts:18-19' }), reason: 'ok' }, { ...finding('F-1'), reason: 'ok' }]), { originals });
+  assert.deepEqual(moved.repairIds, ['R-1']);
+  assert.match(moved.issues[0], /R-1: the location moved to another file \(head:\/tests\/test_a\.ts:11-13 → head:\/src\/a\.ts:18-19\)/);
+  assert.match(finalRepairPrompt(moved.issues, moved.repairIds), /movedFrom/);
+  const unconfirmed = moved.result.dispositions.find(d => d.id === 'R-1');
+  assert.equal(unconfirmed.status, 'CONFIRMED');
+  assert.equal(unconfirmed.verifiedFinding.movedFrom, 'head:/tests/test_a.ts:11-13');
+  assert.ok(moved.result.warnings.some(w => /R-1 \(from head:\/tests\/test_a\.ts:11-13\) to another file without confirming the move/.test(w)));
+  // Confirming the move keeps it; the runtime's record of the initial location wins over the model's text.
+  const confirmed = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The defect is in a.ts.', movedFrom: 'the test',
+    verifiedFinding: finding('R-1', { location: 'head:/src/a.ts:18-19' }) }] }), { originals, previous: moved.result, supplement: true });
+  assert.deepEqual(confirmed.issues, []);
+  assert.equal(confirmed.result.dispositions.find(d => d.id === 'R-1').verifiedFinding.movedFrom, 'head:/tests/test_a.ts:11-13');
+  assert.equal(confirmed.result.warnings.some(w => /without confirming the move/.test(w)), false);
+  // Returning to the candidate's file is not a move.
+  const restored = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The test expects the wrong value.',
+    verifiedFinding: finding('R-1', { location: 'head:/tests/test_a.ts:12-13' }) }] }), { originals, previous: moved.result, supplement: true });
+  assert.deepEqual(restored.issues, []);
+  assert.equal(Object.hasOwn(restored.result.dispositions.find(d => d.id === 'R-1').verifiedFinding, 'movedFrom'), false);
 });
 
-test('PR version contract: initial failures may omit unknown snapshot but cannot invent findings',()=>{
-  const value={status:'PARTIAL',coverage:{files:[],gaps:['PR metadata unavailable']},findings:[],report:'Missing PR metadata'};
-  assert.equal(initialEnvelope(value,null,'F').status,'PARTIAL');
-  for(const bad of [{...value,status:'COMPLETE'},{...value,findings:[finding()]},{...value,coverage:{files:[],gaps:[]}}])
-    assert.throws(()=>initialEnvelope(bad,null,'F'));
+test('evaluateDuplicates only merges within the checked file and never loses a finding', () => {
+  const ids = ['F-1', 'R-2', 'R-3', 'V-1'];
+  const clean = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'R-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }], report: 'r' }), { ids });
+  assert.deepEqual(clean.issues, []);
+  assert.deepEqual(clean.result.merges, [{ id: 'R-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }]);
+  assert.deepEqual(evaluateDuplicates('{"status":"COMPLETE","merged":[],"report":""}', { ids }).result.merges, []);
+  // A chain ends at the finding that stays; invalid rows are reported and left out.
+  const chained = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [
+    { id: 'R-3', mergedInto: 'R-2', reason: 'a' }, { id: 'R-2', mergedInto: 'F-1', reason: 'b' },
+    { id: 'X-9', mergedInto: 'F-1', reason: 'c' }, { id: 'V-1', mergedInto: 'V-1', reason: 'd' }, { id: 'F-1', mergedInto: 'R-2' } ], report: '' }), { ids });
+  assert.deepEqual(chained.result.merges.map(m => `${m.id}>${m.mergedInto}`), ['R-3>F-1', 'R-2>F-1']);
+  assert.ok(chained.issues.some(issue => /merged\[2\]: id "X-9" is not an assigned finding/.test(issue)));
+  assert.ok(chained.issues.some(issue => /merged\[3\]: mergedInto must name another assigned finding/.test(issue)));
+  assert.ok(chained.issues.some(issue => /merged\[4\]: give a concrete reason/.test(issue)));
+  assert.ok(chained.result.warnings.some(w => /stay confirmed/.test(w)));
+  assert.match(duplicateRepairPrompt(chained.issues), /same root cause and need the same correction/);
+  // A cycle names no survivor: nothing in it is merged.
+  const cycle = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'R-2', reason: 'a' }, { id: 'R-2', mergedInto: 'F-1', reason: 'b' }], report: '' }), { ids });
+  assert.deepEqual(cycle.result.merges, []);
+  assert.ok(cycle.issues.some(issue => /form a cycle/.test(issue)));
+  // No usable JSON: a correction turn, and no merge on its own.
+  const prose = evaluateDuplicates('R-2 repeats F-1.', { ids });
+  assert.equal(prose.result.structured, false);
+  assert.deepEqual(prose.result.merges, []);
+  assert.match(prose.issues[0], /could not be used/);
 });
 
+test('evaluateFinal keeps an unstructured verifier answer visible and asks for the full object', () => {
+  const { result, issues, repairIds } = evaluateFinal('The guard is missing; I confirm F-1.', { originals: [finding('F-1')] });
+  assert.equal(result.structured, false);
+  assert.equal(result.dispositions[0].status, 'UNREVIEWED');
+  assert.deepEqual(repairIds, ['F-1']);
+  assert.match(finalRepairPrompt(issues, repairIds, { full: true }), /complete verification JSON object/);
+});
 
-test('missing disposition diagnostics retain every missing ID without inventing decisions',async()=>{
-  const { OutputDispositionError }=await import('../src/output.mjs');
-  const originals=[finding('F-1'),finding('F-2'),finding('F-3'),finding('R-1'),finding('R-2'),finding('R-3')];
-  const raw=final(originals.slice(0,3).map(f=>({id:f.id,status:'CONFIRMED',reason:'Source verified',verifiedFinding:f})));
-  const before=JSON.stringify(raw);
-  const validate=x=>finalEnvelope(x,snapshot,originals);
-  let missing;
-  assert.throws(()=>validate(raw),e=>{
-    assert.ok(e instanceof OutputDispositionError);
-    missing=e.missingIds;
-    assert.deepEqual(missing,['R-1','R-2','R-3']);
-    assert.match(e.message,/R-1, R-2, R-3/);
-    return true;
-  });
-  assert.equal(JSON.stringify(raw),before);
-  const malicious=new OutputDispositionError(['PRIVATE_UNTRUSTED_VALUE']);
-  assert.doesNotMatch(malicious.message,/PRIVATE_UNTRUSTED_VALUE/);
+test('unescaped quotes inside inline code are repaired locally and disclosed', () => {
+  const broken = '{"status":"COMPLETE","findings":[],"coverage":{"files":["/a.ts"],"gaps":[]},"report":"HEAD returns `{"stock": s}.copy()` and `x`."}';
+  assert.throws(() => JSON.parse(broken));
+  const parsed = parseModelJSON(broken, { keys: ['status'] });
+  assert.equal(parsed.value.report, 'HEAD returns `{"stock": s}.copy()` and `x`.');
+  assert.deepEqual(parsed.corrections, [{ action: 'escape-quotes-in-code-span', count: 2 }]);
+  const { result, issues } = evaluateInitial(broken, { prefix: 'F', assigned: ['/a.ts'], inventory: ['/a.ts'] });
+  assert.deepEqual(issues, []);
+  assert.ok(result.warnings.some(w => /repaired locally/.test(w)));
+  // A backtick span that crosses JSON members is never touched.
+  assert.equal(escapeCodeSpanQuotes('{"a":"x `y", "b": "z` w"}'), null);
+  assert.equal(escapeCodeSpanQuotes('{"a":"plain"}'), null);
+});
+
+test('a verifier resend after an unparsable answer carries no stale warnings (B1)', () => {
+  const originals = [finding('F-1'), finding('R-1')];
+  const first = evaluateFinal('{"status":"COMPLETE","confirmed":[{"id":"F-1" "summary": "x"}]}', { originals });
+  assert.equal(first.result.structured, false);
+  assert.ok(syntaxProblem(first.issues));
+  assert.match(parseRepairPrompt(first.issues), /identical content: do not shorten/);
+  const resend = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'same' }],
+    rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals, previous: first.result, supplement: Boolean(first.result.structured) });
+  assert.deepEqual(resend.issues, []);
+  assert.deepEqual(resend.result.warnings, [], 'Warnings from the failed first answer must not survive.');
+});
+
+test('a supplement keeps normalization notes but recomputes derived warnings', () => {
+  const originals = [finding('F-1'), finding('R-1')];
+  const first = evaluateFinal(JSON.stringify({ Status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: 'not-an-array', rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.ok(first.result.warnings.some(w => /UNREVIEWED/.test(w)));
+  const merged = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'MERGED', mergedInto: 'F-1', reason: 'same' }] }),
+    { originals, previous: first.result, supplement: true });
+  assert.equal(merged.result.warnings.some(w => /UNREVIEWED/.test(w)), false, 'Resolved items no longer count as unreviewed.');
+  assert.ok(merged.result.warnings.some(w => /non-array review section/i.test(w) || /kept as one entry/.test(w)), 'Normalization notes carry over.');
+});
+
+test('repair prompts: syntax errors ask for the same content; missing JSON asks for the full object', () => {
+  assert.equal(syntaxProblem(['Your answer could not be used: no JSON object was found.']), false);
+  assert.match(initialRepairPrompt(['x could not be parsed'], { parseOnly: true }), /not valid JSON[\s\S]*identical content/);
+  assert.match(initialRepairPrompt(['coverage missing']), /keep the existing wording/);
+  assert.match(finalRepairPrompt(['no JSON object was found'], ['F-1'], { full: true }), /complete verification JSON object/);
+  assert.match(finalRepairPrompt(['bad'], ['F-1'], { parseOnly: true }), /identical content/);
 });

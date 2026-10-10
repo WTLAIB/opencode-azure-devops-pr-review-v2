@@ -1,267 +1,45 @@
-import { ROLES } from './config.mjs';
-// Internal JSON envelope contracts. MCP tools remain discovered by the V2 host.
-const string = { type: 'string' };
-const array = items => ({ type: 'array', items });
-const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
-const status = (...values) => ({ type: 'string', enum: values });
-const snapshotSchema = object({ repository: string, prId: { type: 'integer' }, base: string, head: string, scope: { const: 'cumulative', type: 'string' }, files: array(string) });
-const prSnapshot = { ...snapshotSchema, properties: { ...snapshotSchema.properties,
-  scope: { const: 'pr', type: 'string', description: 'Current PR changes at the PR-reported source and target commits; no independent merge-base proof.' },
-  base: { ...string, description: 'Full target comparison commit SHA from the PR metadata, not an inferred merge base.' },
-  head: { ...string, description: 'Full source commit SHA from the same PR metadata.' },
-} };
-const finding = object({ id: string, summary: string, evidence: string,
-  counterevidence: { ...string, description: 'Source-based safeguards or alternative explanations checked, their effect on the claim, and any unavailable evidence; not private reasoning.' },
-  location: { ...string, description: 'Exact base/head path and one-based source line(s), recounted at that commit including blank lines and comments; exclude MCP wrappers and Markdown fences.' },
-  severity: status('high', 'medium', 'low'), suggestion: string });
-finding.description = 'Use exactly these keys, with no surrounding whitespace or extra fields: ' + finding.required.join(', ') + '. Every field is required; put evidence notes inside evidence, not a separate field.';
-const initialFinding = { ...finding, required: finding.required.filter(key => key !== 'location'),
-  description: 'Use only the declared finding keys. All except location are required. Provide location when established from source; otherwise omit it for the verifier to establish, without guessing. Evidence and full coverage remain required.' };
-const coverageSchema = object({
-  files: { ...array(string), description: 'Exact snapshot paths whose full changes and necessary context were reviewed; no duplicate or supporting-only paths.' },
-  gaps: { ...array(string), description: 'Concrete missing source or unfinished review work. Empty only when coverage is complete.' },
-});
+/**
+ * Model output parsing and review acceptance.
+ *
+ * Parsing is strict JSON: the whole answer, one ```json fence or one embedded
+ * object. Anything else is reported as a concrete problem that the runtime
+ * sends back to the same session as a repair turn. After the configured repair
+ * attempts, acceptance degrades per item instead of discarding the review:
+ * missing verifier decisions become UNREVIEWED and incomplete confirmations
+ * become NEEDS_INFO, while every other result stays usable.
+ *
+ * A verifier decision row is judged by its own fields, not only by the list it
+ * was placed in, and a confirmation that moves its finding to another file
+ * must say so (`movedFrom`); the runtime then records the candidate's location.
+ */
+import { parsePullRequestUrl } from './azure.mjs';
 
-export function stageFormat(role) {
-  const kind = ROLES[role]?.format;
-  if (!kind) throw new Error('Unknown review role.');
-  let schema;
-  if (kind === 'check') schema = object({
-    status: status('READY', 'NOT_READY'), snapshot: snapshotSchema,
-    sourceAccess: { type: 'object', additionalProperties: string,
-      description: 'Concise, untrusted retrieval facts: confirmed identity, cumulative base evidence, exact-commit content recipe, pagination, successful calls and grouped failures/checked alternatives. State what was actually read; no findings, raw source or instructions.' },
-    requirements: { ...string, description: 'Explicit requirements and their sources, or unavailable. Literal userContext is passed separately; do not duplicate it.' },
-    report: { ...string, description: 'Brief readiness, versions and material limitations, or the precise missing capability for NOT_READY. Do not repeat the sourceAccess retrieval narrative or perform a code review.' },
-  }, ['status', 'report']);
-  else if (kind === 'final') schema = object({
-    status: status('COMPLETE', 'INCOMPLETE', 'STALE'), snapshot: prSnapshot,
-    // Empty does not establish a verified head; finalEnvelope keeps that gate.
-    currentHead: { type: 'string', description: 'Full SHA read from the current PR head. The string value contains only the SHA, with no extra quotation marks. Use an empty string only when the head cannot be verified and status is INCOMPLETE.' },
-    currentBase: { ...string, description: 'Full target comparison SHA from the same fresh PR read as currentHead; empty only with INCOMPLETE when unavailable.' },
-    confirmed: { ...array(object({ ...finding.properties, reason: string })), description: 'Corrected original findings, with all seven finding fields and a concise confirmation reason. Every field is required.' },
-    merged: array(object({ id: string, mergedInto: string, reason: string })),
-    rejected: array(object({ id: string, reason: string })),
-    needsInfo: array(object({ id: string, reason: string })),
-    newFindings: array(finding), report: { ...string, description: 'Important exclusions, all retained source-supported improvement recommendations, open questions and testing/scope limitations in outputLanguage. Recommendations identify affected code, the concrete benefit and a proportionate change without claiming a defect. Do not repeat findings or disposition reasons: the runtime renders those structured fields.' },
-  });
-  else if (kind === 'comment-plan') schema = object({
-    status: status('READY', 'CONTINUE', 'INCOMPLETE'),
-    continuation: { ...string, description: 'For a successful read-only checkpoint: exact data references/cursors, completed checks and remaining work. A fresh authorized session continues; no write or retry is authorized.' },
-    comments: array(object({ findingId: string, severity: status('high', 'medium'), path: string, startLine: { type: 'integer' }, endLine: { type: 'integer' }, anchor: string, body: string })),
-    skipped: array(object({ findingId: string, reason: string })),
-    summary: { ...string, description: 'Optional one or two sentences before the issue index. Begin with the purpose supported by the PR description or requirements; otherwise describe what changed without guessing intent. Add shared impact or a supported fix priority only when useful. Use the completed review and available PR context; omit when there is nothing to add. Exclude finding recaps/counts, review-process narration, run IDs, commit SHAs and private diagnostics; preserve limitations that materially qualify conclusions.' },
-    summaryDetails: { ...string, description: 'Optional Markdown after the issue index, in outputLanguage. Carry every distinct non-defect improvement recommendation retained in the final report, with affected code, benefit, suggested direction and qualifications. Separately explain confirmed findings not covered inline, including low severity, or point to their existing substantive discussion. Use only sections with actual content; no topic checklist, invented findings, defect severity for advice, item quota or private report dump. Preserve material evidence limits.' },
-  }, ['status', 'comments', 'skipped']);
-  else if (kind === 'comment-publish') schema = object({
-    status: status('DONE', 'INCOMPLETE'), posted: array(object({ findingId: string, threadId: { type: ['string', 'integer'] } })),
-    summaryThreadId: { type: ['string', 'integer'], description: 'Actual returned general-summary thread ID, only after checking its create result.' },
-  }, ['status', 'posted']);
-  else schema = object({ status: status('COMPLETE', 'PARTIAL'),
-    snapshot: { ...prSnapshot, description: 'Required for COMPLETE. Establish it from the requested PR, without a preflight or ancestry search. Omit only for PARTIAL when PR metadata is unavailable.' },
-    coverage: coverageSchema, findings: array(initialFinding),
-    report: { ...string, description: 'Review summary and limitations. Submit the full review, never a status-only acknowledgement or placeholder.' },
-  }, ['status', 'coverage', 'findings', 'report']);
-  return { schema };
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const text = value => typeof value === 'string' && value.trim().length > 0;
+const asText = value => value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+export const canonicalKey = key => String(key).trim().replace(/[_\s-]/g, '').toLowerCase();
+const canonicalEnum = value => typeof value === 'string' ? value.trim().toUpperCase().replace(/[\s-]+/g, '_') : '';
+const SEVERITIES = ['high', 'medium', 'low'];
+export const FINDING_FIELDS = Object.freeze(['id', 'summary', 'evidence', 'counterevidence', 'location', 'severity', 'suggestion']);
+const DECISIONS = ['CONFIRMED', 'MERGED', 'REJECTED', 'NEEDS_INFO'];
+const DECISION_FIELDS = [...FINDING_FIELDS, 'status', 'reason', 'mergedInto', 'verifiedFinding', 'movedFrom'];
+const MAX_LISTED_ISSUES = 25;
+
+/** Path part of a location such as "head:/src/a.ts:12-14"; '' when there is none. */
+export function locationPath(location) {
+  const match = /^(?:head|base)?:?(\/[^:]+)(?::\d+(?:-\d+)?)?$/.exec(String(location ?? '').trim());
+  return match ? match[1] : '';
 }
 
 export function visibleText(response) {
   return (response?.parts ?? []).filter(p => p.type === 'text' && !p.ignored).map(p => p.text ?? '').join('\n');
 }
 
-/** A display aid, not a source/commit certificate. Keep the raw output intact. */
-export function numberToolText(result, input, snapshot) {
-  if (typeof result?.output !== 'string' || !result.output.includes('\n') ||
-      result.isError === true || result.metadata?.isError === true || result.metadata?.truncated === true) return result;
-  // Never discard wrappers, alternate content, attachments or structured output.
-  if (result.content !== undefined && (!Array.isArray(result.content) || result.content.length !== 1 ||
-      result.content[0]?.type !== 'text' || result.content[0].text !== result.output)) return result;
-  const lines = result.output.split('\n');
-  if (lines.at(-1) === '') lines.pop(); // A terminal newline does not add a source line.
-  const numbered = lines.map((line, index) => `${index + 1} | ${line.replace(/\r$/, '')}`).join('\n');
-  let request = '';
-  const values = new Set();
-  try { if (input !== undefined) request = `\nRequest arguments: ${JSON.stringify(input, (_key, value) => {
-    if (typeof value === 'string') values.add(value);
-    return value;
-  })}`; }
-  catch { return result; } // An optional display aid must never fail a tool call.
-  const matches = [['head', 'HEAD (PR source)'], ['base', 'BASE (PR target reference)']]
-    .filter(([key]) => typeof snapshot?.[key] === 'string' && snapshot[key] && values.has(snapshot[key]))
-    .map(([, label]) => label);
-  if (matches.length) request += `\nReview snapshot argument match: ${matches.join('; ')}. This labels argument values only, not returned-content provenance or a certified merge base.`;
-  return { ...result, content: [{ ...(result.content?.[0] ?? {}), type: 'text',
-    text: `AZPR numbered tool text (display only).${request}\nRows count this returned text, not wrappers or missing source. The N | prefixes are not part of the original text.\n\n${numbered}` }] };
-}
-const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-const findingKey = key => key.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
-const finalCategories = ['confirmed', 'merged', 'rejected', 'needsInfo'];
-const disposition = object({
-  id: string, status: status('CONFIRMED', 'MERGED', 'REJECTED', 'NEEDS_INFO'),
-  reason: string, mergedInto: string, verifiedFinding: finding,
-}, ['id', 'status', 'reason']);
-
-// JSON validation and value-free diagnostics share the internal key catalogs.
-// Domain validators still own conditional requirements, versions and evidence.
-function hasUnexpectedFields(value, schema) {
-  return isObject(value) && schema.additionalProperties === false &&
-    Object.keys(value).some(key => !Object.hasOwn(schema.properties, key));
-}
-function requireKnownFields(value, schema, label) {
-  if (hasUnexpectedFields(value, schema)) {
-    throw new Error(`Invalid ${label}: unexpected fields; names and values omitted.`);
-  }
-}
-function finalContract(result) {
-  const schema = stageFormat('azpr-review-verifier').schema;
-  if (!isObject(result) || !Object.hasOwn(result, 'dispositions')) return schema;
-  const { confirmed, merged, rejected, needsInfo, ...properties } = schema.properties;
-  return object({ ...properties, dispositions: array(disposition) },
-    ['status', 'snapshot', 'currentHead', 'currentBase', 'dispositions', 'report']);
-}
-
-/** Convert explicit categories, never infer a verdict or copy initial evidence.
- * Disposition rows remain an alternate bounded model-output representation. */
-export function finalSubmission(result) {
-  if (!isObject(result)) return result;
-  if (Object.keys(result).length === 1 && Object.hasOwn(result, 'status')) throw new Error('Invalid final-review envelope: status-only submission; snapshot, current versions, dispositions and report are required.');
-  const categories = finalCategories.some(key => Object.hasOwn(result, key));
-  if (Object.hasOwn(result, 'dispositions')) {
-    if (categories) throw new Error('Final submission mixes categories and legacy dispositions.');
-    requireKnownFields(result, finalContract(result), 'final submission');
-    return result;
-  }
-  const schema = finalContract(result);
-  requireKnownFields(result, schema, 'final submission');
-  for (const key of [...finalCategories, 'newFindings']) {
-    if (!Array.isArray(result[key])) throw new Error(`Invalid final submission: ${key} must be an array.`);
-  }
-  const dispositions = [];
-  for (const key of finalCategories) for (const [i, item] of result[key].entries()) {
-    if (!isObject(item)) throw new Error(`Invalid final submission: ${key}[${i}] must be an object.`);
-    if (key === 'confirmed') {
-      // Retain all finding fields for strict validation and audited normalization.
-      const { reason, ...verifiedFinding } = item;
-      dispositions.push({ id: item.id, status: 'CONFIRMED', reason, verifiedFinding });
-    } else {
-      requireKnownFields(item, schema.properties[key].items, `final submission ${key}[${i}]`);
-      dispositions.push({ ...item, status: { merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' }[key] });
-    }
-  }
-  const { confirmed, merged, rejected, needsInfo, ...rest } = result;
-  return { ...rest, dispositions };
-}
-
-/** Bounded, value-free diagnostics; never an evidence validator or repair. */
-export function finalSubmissionIssues(result) {
-  const issues = [];
-  const add = (path, code) => { if (issues.length < 32) issues.push({ path, code }); };
-  const scan = (value, schema, path) => {
-    if (issues.length >= 32) return;
-    const actual = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
-    if (schema.type === 'integer' ? !Number.isInteger(value) : schema.type !== actual) { add(path, `expected-${schema.type}`); return; }
-    if (schema.enum && !schema.enum.includes(value)) add(path, 'invalid-enum');
-    if (schema.const !== undefined && value !== schema.const) add(path, 'invalid-constant');
-    if (actual === 'string' && !text(value)) add(path, 'empty-text');
-    if (actual === 'array') value.forEach((item, i) => scan(item, schema.items, `${path}[${i}]`));
-    if (actual === 'object') {
-      for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) add(path ? `${path}.${key}` : key, 'missing-field');
-      for (const [key, child] of Object.entries(schema.properties ?? {})) if (Object.hasOwn(value, key)) scan(value[key], child, path ? `${path}.${key}` : key);
-      if (hasUnexpectedFields(value, schema)) add(path || '$', 'unexpected-fields');
-    }
-  };
-  const schema = finalContract(result);
-  if (isObject(result) && Object.hasOwn(result, 'dispositions')) {
-    if (Array.isArray(result.dispositions)) result.dispositions.forEach((item, i) => {
-      if (item?.status === 'CONFIRMED' && !isObject(item.verifiedFinding)) add(`dispositions[${i}].verifiedFinding`, 'missing-corrected-finding');
-    });
-  }
-  scan(result, schema, '');
-  return issues;
-}
-
-/** Narrow, auditable formatting only. The caller must validate the entire result
- * before accepting these changes. Never mutate the raw response or add evidence. */
-export function normalizeFindingFormat(result, role) {
-  const corrections = [];
-  const kind = ROLES[role]?.format;
-  if (!['initial', 'final'].includes(kind) || !isObject(result) ||
-      !stageFormat(role).schema.properties.status.enum.includes(result.status)) return { envelope: result, corrections };
-  const categoryInput = kind === 'final' && !Object.hasOwn(result, 'dispositions');
-  if (kind === 'final') result = finalSubmission(result);
-  function normalize(value, path) {
-    if (!isObject(value)) return value;
-    const entries = [], seen = new Set();
-    for (const [propertyIndex, [key, content]] of Object.entries(value).entries()) {
-      const canonical = findingKey(key);
-      if (Object.hasOwn(finding.properties, canonical)) {
-        // Reject even equal values: choosing between competing keys hides an
-        // ambiguous submission. Values (including whitespace) stay untouched.
-        if (seen.has(canonical)) throw new Error(`Invalid finding: ${path}.${canonical} has conflicting keys after whitespace normalization.`);
-        seen.add(canonical);
-        entries.push([canonical, content]);
-        if (canonical !== key) corrections.push({ path: `${path}.${canonical}`, action: 'trim-key-whitespace' });
-      } else if (content === '' || content === null) {
-        // No names/values from unknown fields enter public receipts or notices.
-        corrections.push({ path, action: content === null ? 'remove-null-unknown-field' : 'remove-empty-unknown-field', propertyIndex });
-      } else entries.push([key, content]);
-    }
-    return Object.fromEntries(entries);
-  }
-  const envelope = { ...result };
-  if (kind === 'initial' && Array.isArray(result.findings)) envelope.findings = result.findings.map((value, i) => normalize(value, `findings[${i}]`));
-  if (kind === 'final') {
-    if (Array.isArray(result.dispositions)) envelope.dispositions = result.dispositions.map((value, i) => {
-      if (!isObject(value) || value.status !== 'CONFIRMED') return value;
-      const verifiedFinding = normalize(value.verifiedFinding, `dispositions[${i}].verifiedFinding`);
-      return { ...value, ...(categoryInput ? { id: verifiedFinding?.id } : {}), verifiedFinding };
-    });
-    if (Array.isArray(result.newFindings)) envelope.newFindings = result.newFindings.map((value, i) => normalize(value, `newFindings[${i}]`));
-    if (Array.isArray(envelope.dispositions) && Array.isArray(envelope.newFindings)) {
-      const completeFinding = value => isObject(value) && Object.keys(value).length === finding.required.length &&
-        finding.required.every(key => Object.hasOwn(value, key) && text(value[key]));
-      envelope.dispositions = envelope.dispositions.filter((item, i, items) => {
-        if (!isObject(item) || !/^V-[1-9][0-9]*$/.test(item.id) || item.status !== 'CONFIRMED' || !text(item.reason) ||
-            Object.keys(item).some(key => !['id', 'status', 'reason', 'verifiedFinding'].includes(key)) ||
-            items.filter(other => other?.id === item.id).length !== 1) return true;
-        const matches = envelope.newFindings.map((value, index) => ({ value, index })).filter(({ value }) => value?.id === item.id);
-        if (matches.length !== 1 || !completeFinding(item.verifiedFinding) || !completeFinding(matches[0].value) ||
-            !finding.required.every(key => item.verifiedFinding[key] === matches[0].value[key])) return true;
-        // This is only a redundant V entry, never an original F/R disposition.
-        // Its reason and full original object remain in the raw response.
-        corrections.push({ path: `dispositions[${i}]`, action: 'deduplicate-new-finding', newFindingPath: `newFindings[${matches[0].index}]` });
-        return false;
-      });
-    }
-  }
-  return { envelope: corrections.length ? envelope : result, corrections };
-}
-
-export class OutputStatusError extends Error {
-  constructor(label, value, allowed) {
-    // Receipts must not echo arbitrary model text, source, or credentials.
-    const shown = typeof value === 'string' && /^[A-Z_]{1,24}$/.test(value) ? JSON.stringify(value) : `<${value === null ? 'null' : typeof value}>`;
-    super(`Invalid ${label} envelope: status received ${shown}; expected ${allowed.join(' or ')}.`);
-    this.name = 'OutputStatusError';
-  }
-}
-export class OutputLocationError extends Error {}
-export class OutputDispositionError extends Error {
-  constructor(missingIds) {
-    const shown = missingIds.filter(id => typeof id === 'string' && /^[FR]-[1-9][0-9]{0,20}$/.test(id)).slice(0, 20);
-    super(`Final reviewer omitted one or more original findings. Missing disposition IDs: ${shown.join(', ')}${missingIds.length > shown.length ? ' (additional IDs in diagnostics)' : ''}.`);
-    this.name = 'OutputDispositionError';
-    this.missingIds = [...missingIds];
-  }
-}
-
-function requireStatus(result, allowed, label) {
-  if (!allowed.includes(result.status)) throw new OutputStatusError(label, result.status, allowed);
-}
 // Call only after JSON.parse establishes grammar. Repeated keys must never
-// replace earlier evidence, even when the escaped spelling or value differs.
+// silently replace an earlier value.
 function rejectDuplicateJSONKeys(content, message) {
   const stack = [];
-  for (const [token] of content.matchAll(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g)) {
+  for (const [token] of content.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\]:,]/g)) {
     if (token === '{') stack.push({ keys: new Set(), key: true });
     else if (token === '[') stack.push(null);
     else if (token === '}' || token === ']') stack.pop();
@@ -274,163 +52,20 @@ function rejectDuplicateJSONKeys(content, message) {
   }
 }
 
-/** Strict local JSON, including settings; no fencing, normalization or repair.
- * Callers must replace syntax errors before exposing potentially private input. */
+/** Strict local JSON for settings and stored data; no fences or repair. */
 export function parseUniqueJSON(content) {
   const value = JSON.parse(content);
   rejectDuplicateJSONKeys(content, 'Input contains duplicate JSON keys; no field value was accepted.');
   return value;
 }
-// Review-only syntax recovery. An iterative grammar preserves complete values;
-// it never removes an unfinished member or invents a missing value. Offsets refer
-// to the original body, including when punctuation is inserted. Settings,
-// publication and source-readiness parsing do not use this extension.
-function reviewJSONCandidate(content) {
-  const stack = [{ kind: 'root', next: 'value' }], edits = [], pieces = [];
-  const token = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null/y;
-  let i = 0, lastValueEnd = 0;
-  const change = (action, offset, replacement = '') => edits.push({ action, offset, replacement });
-  const quoted = (codeValues = false) => {
-    const start = i, quote = content[i++], close = quote === '“' ? '”' : quote;
-    let value = '', codeEnd = -1, escapedCodeQuote = false;
-    while (i < content.length) {
-      const char = content[i++];
-      if (codeValues && quote === '"' && char === '`' && i - 1 > codeEnd) {
-        const delimiter = /^`+/.exec(content.slice(i - 1))[0];
-        const end = content.indexOf(delimiter, i - 1 + delimiter.length);
-        const span = end < 0 ? '' : content.slice(i - 1 + delimiter.length, end);
-        const unescapedQuotes = [...span.matchAll(/\\.|"/g)].filter(([token]) => token === '"').length;
-        // A closed, single-line Markdown code span gives a literal boundary.
-        // Do not cross JSON members or invent a missing code/string terminator.
-        if (end >= 0 && !/[\r\n]/.test(span) && !/"\s*:/.test(span) && unescapedQuotes % 2 === 0) {
-          codeEnd = end + delimiter.length - 1;
-        }
-      }
-      if (char === close) {
-        if (i - 1 < codeEnd) {
-          value += char; escapedCodeQuote = true;
-          change('escape-inline-code-quote', i - 1, '\\"');
-          continue;
-        }
-        const raw = content.slice(start, i);
-        if (quote === '"' && !escapedCodeQuote) {
-          try { JSON.parse(raw); return raw; } catch { /* Literal controls only. */ }
-        }
-        if (!escapedCodeQuote || /[\u0000-\u001f]/.test(raw)) change('normalize-string-delimiters-or-controls', start);
-        return JSON.stringify(value);
-      }
-      if (char !== '\\') { value += char; continue; }
-      const escaped = content[i++];
-      if (escaped === "'" && quote === "'") { value += "'"; continue; }
-      const length = escaped === 'u' ? 4 : 0;
-      const escape = '\\' + escaped + content.slice(i, i + length);
-      try { value += JSON.parse('"' + escape + '"'); } catch { return; }
-      i += length;
-    }
-    // Closing an unfinished string would invent its content boundary.
-  };
-  while (i < content.length) {
-    const char = content[i], frame = stack.at(-1);
-    if (/\s/u.test(char)) { pieces.push(' \t\r\n'.includes(char) ? char : ' '); i++; continue; }
-    if (content.startsWith('//', i) || content.startsWith('/*', i)) {
-      const start = i, line = content[i + 1] === '/';
-      const end = content.indexOf(line ? '\n' : '*/', i + 2);
-      if (!line && end < 0) return;
-      i = end < 0 ? content.length : end + (line ? 0 : 2);
-      pieces.push(' '); change('remove-json-comment', start); continue;
-    }
-    if (char === '}' || char === ']') {
-      if (frame.kind === 'root' && frame.next === 'end') {
-        change('remove-redundant-closing-delimiter', i++); continue;
-      }
-      if (frame.kind !== (char === '}' ? 'object' : 'array')) return;
-      if (frame.comma !== undefined) {
-        pieces[frame.commaPiece] = ''; change('remove-trailing-comma', frame.comma);
-      }
-      else if (!['end', 'first-key', 'first-value'].includes(frame.next)) return;
-      stack.pop(); pieces.push(char); lastValueEnd = ++i; continue;
-    }
-    if (frame.next === 'colon') {
-      if (char === ':') { pieces.push(char); i++; }
-      else { pieces.push(':'); change('insert-missing-colon', i, ':'); }
-      frame.next = 'value'; continue;
-    }
-    if (frame.next === 'end') {
-      if (frame.kind === 'root') return; // Never select one of multiple roots.
-      if (char === ',') {
-        frame.comma = i++; frame.commaPiece = pieces.length; pieces.push(',');
-      } else {
-        // Adjacent numeric/literal fragments are not missing separators.
-        if (i === lastValueEnd && !['{', '[', '"', "'", '“'].includes(char)) return;
-        pieces.push(','); change('insert-missing-comma', i, ',');
-      }
-      frame.next = frame.kind === 'object' ? 'key' : 'value';
-      continue;
-    }
-    if (['key', 'first-key'].includes(frame.next)) {
-      let key;
-      if (['"', "'", '“'].includes(char)) key = quoted();
-      else {
-        const match = /^[A-Za-z_$][\w$-]*(?=\s*:)/.exec(content.slice(i));
-        if (!match) return;
-        key = JSON.stringify(match[0]); change('quote-object-key', i); i += match[0].length;
-      }
-      if (key === undefined) return;
-      pieces.push(key); frame.next = 'colon'; delete frame.comma;
-      continue;
-    }
-    if (!['value', 'first-value'].includes(frame.next)) return;
-    frame.next = 'end'; delete frame.comma;
-    if (char === '{' || char === '[') {
-      stack.push({ kind: char === '{' ? 'object' : 'array', next: char === '{' ? 'first-key' : 'first-value' });
-      pieces.push(char); i++; continue;
-    }
-    if (['"', "'", '“'].includes(char)) {
-      const value = quoted(true); if (value === undefined) return; pieces.push(value);
-    } else {
-      token.lastIndex = i;
-      const match = token.exec(content); if (!match) return;
-      pieces.push(match[0]); i = token.lastIndex;
-    }
-    lastValueEnd = i;
-  }
-  while (stack.length > 1) {
-    const frame = stack.pop();
-    if (!['end', 'first-key', 'first-value'].includes(frame.next)) return;
-    const close = frame.kind === 'object' ? '}' : ']';
-    pieces.push(close); change('insert-missing-closing-delimiter', i, close);
-  }
-  if (stack[0].next !== 'end' || !edits.length) return;
-  return { text: pieces.join(''), corrections: edits.map(({ action, offset, replacement }) =>
-    replacement ? { action, offset, replacement } : { action, offset }) };
-}
 
-/** Strict parsing remains the contract for checks and comments. */
-export function parseJSONReport(response) {
-  return parseReport(response).envelope;
-}
-
-/** Normal review text only; callers must validate the complete envelope before
- * accepting/disclosing corrections. Offsets are zero-based UTF-16 positions in
- * the selected JSON body. The response and all member/value text stay untouched. */
-export function parseReviewJSONReport(response, role) {
-  return parseReport(response, role);
-}
-
-const reviewSections = ['findings', 'report', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions'];
-const looksLikeReview = value => isObject(value) && Object.keys(value).some(key =>
-  reviewSections.some(known => canonicalKey(key) === canonicalKey(known)));
-
-// Consume all Markdown fences in order. A Python block's closing delimiter is
-// not the opening delimiter of the following JSON block.
 function fencedBlocks(content) {
   const blocks = [];
   let open;
   for (const match of content.matchAll(/^[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/gm)) {
     const [, delimiter, info] = match;
     if (!open) {
-      open = { start: match.index, body: match.index + match[0].length,
-        delimiter, json: /^(?:jsonc?)?\s*$/i.test(info.trim()) };
+      open = { start: match.index, body: match.index + match[0].length, delimiter, json: /^(?:jsonc?)?\s*$/i.test(info.trim()) };
     } else if (!info.trim() && delimiter[0] === open.delimiter[0] && delimiter.length >= open.delimiter.length) {
       blocks.push({ start: open.start, end: match.index + match[0].length,
         text: content.slice(open.body, match.index).replace(/^\r?\n/, ''), json: open.json });
@@ -440,512 +75,504 @@ function fencedBlocks(content) {
   return blocks;
 }
 
-/** Locate whole objects in commentary without treating braces inside strings or
- * comments as delimiters. Keep unfinished objects as ambiguity candidates too.
- * This scanner is iterative and has no output/depth budget. */
+/** Balanced top-level objects, ignoring braces inside double-quoted strings. */
 function embeddedObjects(content) {
   const objects = [];
-  let start = -1, depth = 0, quote = '', escaped = false, comment = '';
+  let start = -1, depth = 0, inString = false, escaped = false;
   for (let i = 0; i < content.length; i++) {
-    const char = content[i], next = content[i + 1];
+    const char = content[i];
     if (start < 0) {
       if (char === '{') { start = i; depth = 1; }
       continue;
     }
-    if (comment) {
-      if (comment === 'line' && /[\r\n]/.test(char)) comment = '';
-      else if (comment === 'block' && char === '*' && next === '/') { comment = ''; i++; }
-      continue;
-    }
-    if (quote) {
+    if (inString) {
       if (escaped) escaped = false;
       else if (char === '\\') escaped = true;
-      else if (char === quote) quote = '';
+      else if (char === '"') inString = false;
       continue;
     }
-    if (['"', "'", '“'].includes(char)) { quote = char === '“' ? '”' : char; continue; }
-    if (char === '/' && ['/', '*'].includes(next)) { comment = next === '/' ? 'line' : 'block'; i++; continue; }
-    if (char === '{') depth++;
-    if (char === '}' && --depth === 0) {
-      objects.push({ start, end: i + 1, text: content.slice(start, i + 1) }); start = -1;
+    if (char === '"') inString = true;
+    else if (char === '{') depth++;
+    else if (char === '}' && --depth === 0) {
+      objects.push({ start, end: i + 1, text: content.slice(start, i + 1) });
+      start = -1;
     }
   }
-  if (start >= 0) objects.push({ start, end: content.length, text: content.slice(start) });
   return objects;
 }
 
-/** Choose one identifiable review, never one of competing review submissions.
- * Incidental JSON/code examples and every surrounding character remain data. */
-function embeddedReview(content, blocks, parse, commentPlan = false) {
+/**
+ * Narrow local repair for one frequent model slip: unescaped double quotes
+ * inside a closed, single-line `inline code` span within a JSON string, as in
+ * "evidence": "HEAD reads `cfg["x"]`". Spans that look like a JSON member
+ * boundary are left alone. Returns null when nothing applies; the caller still parses and
+ * validates the complete result.
+ */
+export function escapeCodeSpanQuotes(text) {
+  let out = '', inString = false, count = 0;
+  for (let i = 0; i < text.length;) {
+    const char = text[i];
+    if (!inString) { if (char === '"') inString = true; out += char; i++; continue; }
+    if (char === '\\') { out += char + (text[i + 1] ?? ''); i += 2; continue; }
+    if (char === '"') { inString = false; out += char; i++; continue; }
+    if (char === '`') {
+      const delimiter = /^`+/.exec(text.slice(i))[0];
+      const close = text.indexOf(delimiter, i + delimiter.length);
+      const span = close < 0 ? '' : text.slice(i + delimiter.length, close);
+      const bare = [...span.matchAll(/\\.|"/g)].filter(([token]) => token === '"').length;
+      // `", "` or `": "` inside a span is a JSON member boundary, not code.
+      if (close >= 0 && bare && bare % 2 === 0 && !/[\r\n]/.test(span) && !/"\s*[,:]\s*"/.test(span)) {
+        out += delimiter + span.replace(/\\.|"/g, token => token === '"' ? '\\"' : token) + delimiter;
+        count += bare;
+        i = close + delimiter.length;
+        continue;
+      }
+      out += delimiter;
+      i += delimiter.length;
+      continue;
+    }
+    out += char; i++;
+  }
+  return count ? { text: out, count } : null;
+}
+
+function tryParse(candidate) {
+  const parse = text => {
+    const value = JSON.parse(text);
+    rejectDuplicateJSONKeys(text, 'the JSON object repeats a key');
+    return value;
+  };
+  try { return { value: parse(candidate) }; }
+  catch (error) {
+    const repaired = escapeCodeSpanQuotes(candidate);
+    if (repaired) {
+      try { return { value: parse(repaired.text), corrections: [{ action: 'escape-quotes-in-code-span', count: repaired.count }] }; }
+      catch { /* Report the original problem. */ }
+    }
+    return { error };
+  }
+}
+
+/**
+ * Extract exactly one JSON object from a model answer.
+ * @param {string} raw
+ * @param {{keys?: string[]}} options canonical keys that identify the expected object
+ * @returns {{value?: object, surroundingText?: string, corrections?: object[], problem?: string}}
+ */
+export function parseModelJSON(raw, { keys = [] } = {}) {
+  const content = String(raw ?? '').trim();
+  if (!content) return { problem: 'the answer was empty' };
+  const relevant = value => isObject(value) && (!keys.length || Object.keys(value).some(key => keys.includes(canonicalKey(key))));
+  const whole = tryParse(content);
+  const accept = (selected, extra = {}) => ({ value: selected.value, ...(selected.corrections ? { corrections: selected.corrections } : {}), ...extra });
+  if (whole.value !== undefined) return relevant(whole.value) ? accept(whole) : { problem: 'the answer is JSON but not the expected object' };
+  const blocks = fencedBlocks(content);
+  const fenced = blocks.filter(block => block.json).map(block => ({ ...block, ...tryParse(block.text) }));
+  const usable = fenced.filter(block => relevant(block.value));
+  const surrounding = (selected) => (content.slice(0, selected.start) + content.slice(selected.end)).trim();
+  if (usable.length === 1) return accept(usable[0], { surroundingText: surrounding(usable[0]) });
+  if (usable.length > 1) return { problem: `the answer contains ${usable.length} JSON objects; return exactly one` };
   let outside = '', end = 0;
-  for (const block of blocks) {
-    outside += content.slice(end, block.start) + ' '.repeat(block.end - block.start); end = block.end;
-  }
+  for (const block of blocks) { outside += content.slice(end, block.start) + ' '.repeat(block.end - block.start); end = block.end; }
   outside += content.slice(end);
-  const candidates = [];
-  const identifiable = commentPlan
-    ? value => isObject(value) && ['comments', 'skipped'].some(key => Object.hasOwn(value, key))
-    : looksLikeReview;
-  const sections = commentPlan ? ['status', 'comments', 'skipped']
-    : [...reviewSections, 'status', 'snapshot', 'currentHead', 'currentBase'];
-  const statuses = commentPlan ? ['READY', 'INCOMPLETE'] : ['COMPLETE', 'PARTIAL', 'INCOMPLETE', 'STALE'];
-  for (const block of [...blocks.filter(block => block.json), ...embeddedObjects(outside)]) {
-    let parsed;
-    try { parsed = parse(block.text); } catch { /* Do not overlook an unfinished competing review. */ }
-    const firstKey = /^\{\s*["'“]?([A-Za-z_$][\w$ -]*?)["'”]?\s*:/.exec(block.text)?.[1];
-    const unfinishedReview = !parsed && firstKey && sections
-      .some(key => canonicalKey(key) === canonicalKey(firstKey));
-    const verdict = isObject(parsed?.envelope) && Object.entries(parsed.envelope).some(([key, value]) =>
-      canonicalKey(key) === 'status' && statuses.includes(canonicalEnum(value)));
-    if (identifiable(parsed?.envelope) || verdict || unfinishedReview) candidates.push({ ...block, parsed });
-  }
-  if (candidates.length !== 1 || !identifiable(candidates[0].parsed?.envelope)) return;
-  const selected = candidates[0];
-  return { ...selected.parsed,
-    corrections: [...selected.parsed.corrections, { action: commentPlan ? 'extract-comment-plan-envelope' : 'extract-review-envelope' }],
-    surroundingText: (content.slice(0, selected.start) + content.slice(selected.end)).trim() };
+  const embedded = embeddedObjects(outside).map(object => ({ ...object, ...tryParse(object.text) })).filter(object => relevant(object.value));
+  if (embedded.length === 1) return accept(embedded[0], { surroundingText: surrounding(embedded[0]) });
+  if (embedded.length > 1) return { problem: `the answer contains ${embedded.length} JSON objects; return exactly one` };
+  const failure = fenced.length === 1 ? fenced[0].error : content.includes('{') ? whole.error : null;
+  return { problem: failure ? `the JSON could not be parsed (${String(failure.message).slice(0, 200)})` : 'no JSON object was found' };
 }
 
-function parseReport(response, role) {
-  const finish = String(response.info?.finish ?? 'unknown').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
-  if (response.info?.error) {
-    const name = String(response.info.error.type ?? 'UnknownError').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
-    throw new Error(`Reviewer returned an OpenCode/model error (${name}; finish=${finish}). Inspect the private session or debug response. No automatic retry.`);
-  }
-  if (['length', 'content-filter', 'error', 'cancelled'].includes(response.info?.finish)) throw new Error(`Reviewer output did not finish successfully (finish=${finish}); no partial response or output recovery was accepted.`);
-  const allowRecovery = response.info?.finish === 'stop' &&
-    ['initial', 'final'].includes(ROLES[role]?.format);
-  const commentPlan = response.info?.finish === 'stop' && ROLES[role]?.format === 'comment-plan';
-  let result, corrections = [];
-  let content = visibleText(response).trim();
-  if (!content) throw new Error(`Empty reviewer output (finish=${finish}); inspect the session export or debug response.`);
-  // Never guess between multiple envelopes. Review recovery handles syntax;
-  // it does not fill missing values or discard an unfinished finding.
-  const blocks = fencedBlocks(content), fences = blocks.filter(block => block.json);
-  let jsonContent = content;
-  function parse(candidate) {
-    try { return { envelope: JSON.parse(candidate), text: candidate, corrections: [] }; }
-    catch (error) {
-      const normalized = allowRecovery && reviewJSONCandidate(candidate);
-      if (!normalized) throw error;
-      return { envelope: JSON.parse(normalized.text), ...normalized };
-    }
-  }
-  let parsed, surroundingText;
-  try { parsed = parse(content); }
-  catch {
-    const outsideFence = fences.length === 1 ? content.slice(0, fences[0].start) + content.slice(fences[0].end) : '';
-    if (fences.length === 1 && !/[{}]|```|~~~/.test(outsideFence)) {
-      try {
-        parsed = parse(fences[0].text);
-        surroundingText = outsideFence.trim();
-      } catch { /* Retain the entire text in the review fallback. */ }
-    }
-    if (parsed === undefined && (allowRecovery || commentPlan)) {
-      parsed = embeddedReview(content, blocks, parse, commentPlan);
-      surroundingText = parsed?.surroundingText;
-    }
-    if (parsed === undefined) throw new Error(`Reviewer did not return the required JSON envelope (characters=${content.length}; finish=${finish}). Partial output remains in its session. Inspect the private session or debug response. No automatic retry.`);
-  }
-  ({ envelope: result, text: jsonContent, corrections } = parsed);
-  rejectDuplicateJSONKeys(jsonContent, 'Reviewer text contains duplicate JSON keys; no field value was selected or repaired.');
-  if (!isObject(result)) throw new Error('Review envelope must be an object.');
-  return { envelope: result, corrections, ...(surroundingText ? { surroundingText } : {}) };
-}
-
-/** A successfully completed review may still be useful without structured JSON.
- * Keep that text literal for the verifier/report. Never salvage failed execution
- * as a completed answer, and never pick a winner among duplicate JSON keys. */
-export function readReviewOutput(response, role) {
-  if (!['initial', 'final'].includes(ROLES[role]?.format)) return parseReviewJSONReport(response, role);
-  if (response.info?.error) return parseReviewJSONReport(response, role);
-  if (response.info?.finish !== 'stop') throw new Error('Reviewer output did not finish successfully; retained text cannot substitute for completed execution.');
-  try {
-    const parsed = parseReviewJSONReport(response, role);
-    if (!looksLikeReview(parsed.envelope)) {
-      throw new Error('A JSON example is not a structured review.');
-    }
-    if (parsed.surroundingText) parsed.envelope = { ...parsed.envelope,
-      surroundingText: Object.hasOwn(parsed.envelope, 'surroundingText')
-        ? [parsed.envelope.surroundingText, parsed.surroundingText] : parsed.surroundingText };
-    return parsed;
-  }
-  catch {
-    const report = visibleText(response).trim();
-    if (!report) throw new Error('Reviewer returned no visible review content.');
-    return { envelope: { report, unstructured: true }, corrections: [{ action: 'retain-unstructured-review' }] };
-  }
-}
-
-/** Keep supplementary text literal; do not shell-tokenize, unquote, or expand it. */
-export function parseReviewRequest(raw) {
-  if (typeof raw !== 'string' || raw.length > 16000 || raw.includes('\0')) throw new Error('[AZPR] Supply a PR URL and optional context (maximum 16000 characters).');
-  const match = /^\s*(\S+)(?:\s+([\s\S]*))?$/.exec(raw);
-  if (!match) throw new Error('[AZPR] Supply a PR URL and optional context.');
-  let url;
-  try { url = new URL(match[1]); } catch { throw new Error('[AZPR] The first argument must be an absolute HTTPS PR URL.'); }
-  if (url.protocol !== 'https:' || url.username || url.password || !/\/pullrequest\/[1-9][0-9]*\/?$/i.test(url.pathname)) {
-    throw new Error('[AZPR] Use an HTTPS Azure PR URL ending in /pullrequest/<id>, without embedded credentials.');
-  }
-  const urlIdentity = identityFromURL(url);
-  return { request: raw, prUrl: match[1], userContext: match[2] ?? '', ...(urlIdentity ? { urlIdentity } : {}) };
-}
-
-/** URL-derived hints, not server-verified identity or MCP argument bindings. */
-function identityFromURL(url) {
-  let match, organization, project, repository;
-  if (url.hostname === 'dev.azure.com') {
-    match = /^\/([^/]+)\/([^/]+)\/_git\/([^/]+)\/pullrequest\/[1-9][0-9]*\/?$/i.exec(url.pathname);
-    if (match) [, organization, project, repository] = match;
-  } else if (/^[^.]+\.visualstudio\.com$/.test(url.hostname)) {
-    match = /^\/([^/]+)\/_git\/([^/]+)\/pullrequest\/[1-9][0-9]*\/?$/i.exec(url.pathname);
-    if (match) { organization = url.hostname.split('.')[0]; [, project, repository] = match; }
-  }
-  if (!match) return; // Preserve custom server/collection URLs without guessing.
-  try {
-    const values = [organization, project, repository].map(decodeURIComponent);
-    if (values.some(value => !value.trim() || /[\x00-\x1f\x7f]/.test(value))) return;
-    return Object.fromEntries(['organization', 'project', 'repository'].map((key, i) => [key, values[i]]));
-  } catch { /* Malformed encoding remains in the original URL for source checking. */ }
-}
-
-const sha = value => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
-const text = value => typeof value === 'string' && value.trim().length > 0;
-export function validateSnapshot(s) {
-  requireKnownFields(s, snapshotSchema, 'snapshot');
-  if (!isObject(s) || !text(s.repository) || !Number.isInteger(s.prId) || s.prId < 1 ||
-      !sha(s.base) || !sha(s.head) || !['pr', 'cumulative'].includes(s.scope) || !Array.isArray(s.files) ||
-      s.files.length === 0 || !s.files.every(text) || new Set(s.files).size !== s.files.length) {
-    throw new Error('Missing full base/head SHA, PR scope or complete unique file list.');
-  }
-  return { repository: s.repository, prId: s.prId, base: s.base.toLowerCase(), head: s.head.toLowerCase(), scope: s.scope, files: [...s.files] };
-}
-function snapshotKey(s) { const value = validateSnapshot(s); value.files.sort(); return JSON.stringify(value); }
-export function checkEnvelope(result, prUrl) {
-  if (!isObject(result) || !text(result.report)) throw new Error('Invalid source-check envelope: a status and report are required.');
-  requireKnownFields(result, stageFormat('azpr-review-check').schema, 'source-check envelope');
-  requireKnownFields(result.snapshot, snapshotSchema, 'snapshot');
-  requireStatus(result, ['READY', 'NOT_READY'], 'source-check');
-  if (result.requirements !== undefined && typeof result.requirements !== 'string') throw new Error('Source-check requirements must be text.');
-  if (result.sourceAccess !== undefined && (!isObject(result.sourceAccess) || Object.values(result.sourceAccess).some(value => typeof value !== 'string'))) throw new Error('Source-check sourceAccess must describe capabilities as text fields.');
-  if (result.status !== 'READY') return result;
-  const snapshot = validateSnapshot(result.snapshot);
-  if (snapshot.scope !== 'cumulative') throw new Error('Standalone source-check requires cumulative scope.');
-  if (prUrl && String(snapshot.prId) !== new URL(prUrl).pathname.split('/').filter(Boolean).at(-1)) throw new Error('Source-check snapshot PR ID does not match the requested URL.');
-  return { ...result, snapshot };
-}
-function validateFinding(value, prefix, ids, path, allowMissingLocation = false) {
-  if (!isObject(value)) throw new Error(`Invalid finding: ${path} must be an object.`);
-  const issues = [];
-  for (const key of finding.required) {
-    if (key === 'location' && allowMissingLocation && !Object.hasOwn(value, key)) continue;
-    if (!Object.hasOwn(value, key)) {
-      const whitespace = Object.keys(value).some(raw => raw !== key && findingKey(raw) === key);
-      issues.push(`${path}.${key} is missing${whitespace ? ' (a matching key has surrounding ASCII whitespace)' : ''}`);
-    } else if (!text(value[key])) issues.push(`${path}.${key} must be nonempty text`);
-  }
-  if (text(value.id)) {
-    if (!new RegExp(`^${prefix}-[1-9][0-9]*$`).test(value.id)) issues.push(`${path}.id has an invalid prefix or number`);
-    else if (ids.has(value.id)) issues.push(`${path}.id duplicates an earlier finding`);
-  }
-  if (text(value.severity) && !finding.properties.severity.enum.includes(value.severity)) issues.push(`${path}.severity must be high, medium, or low`);
-  const extra = Object.keys(value).filter(key => !Object.hasOwn(finding.properties, key)).length;
-  if (extra) issues.push(`${path} contains ${extra} unexpected field(s); names and values omitted`);
-  if (issues.length) {
-    const ErrorType = !allowMissingLocation && issues.length === 1 && !Object.hasOwn(value, 'location') ? OutputLocationError : Error;
-    throw new ErrorType(`Invalid finding: ${issues.join('; ')}.`);
-  }
-  ids.add(value.id);
-}
-function validateFindings(findings, prefix, path = 'findings', allowMissingLocation = false) {
-  if (!Array.isArray(findings)) throw new Error('Invalid findings array.');
-  const ids = new Set();
-  findings.forEach((value, i) => validateFinding(value, prefix, ids, `${path}[${i}]`, allowMissingLocation));
-}
-export function initialEnvelope(result, expected, prefix, prUrl) {
-  if (!isObject(result)) throw new Error('Invalid initial-review envelope: expected an object.');
-  requireKnownFields(result, stageFormat('azpr-review-functional').schema, 'initial-review envelope');
-  requireKnownFields(result.coverage, coverageSchema, 'coverage ledger');
-  const missingSnapshot = result.status === 'PARTIAL' && result.snapshot === undefined && !expected;
-  const invalid = [
-    !missingSnapshot && !isObject(result.snapshot) && 'snapshot must be an object',
-    !isObject(result.coverage) && 'coverage must be an object',
-    !Array.isArray(result.findings) && 'findings must be an array',
-    !text(result.report) && 'report must be nonempty text',
-  ].filter(Boolean);
-  const statusOnly = Object.keys(result).length === 1 && Object.hasOwn(result, 'status');
-  if (invalid.length) throw new Error(`Invalid initial-review envelope: ${statusOnly ? 'status-only submission; ' : ''}${invalid.join('; ')}.`);
-  requireStatus(result, ['COMPLETE', 'PARTIAL'], 'initial-review');
-  const selected = missingSnapshot ? null : validateSnapshot(result.snapshot);
-  if (expected && snapshotKey(result.snapshot) !== snapshotKey(expected)) throw new Error('Initial reviewer used a different snapshot or file list.');
-  if (!expected && selected?.scope !== 'pr' && !missingSnapshot) throw new Error('Direct initial review requires PR scope, not ancestry certification.');
-  if (selected && prUrl && String(selected.prId) !== new URL(prUrl).pathname.split('/').filter(Boolean).at(-1)) throw new Error('Initial reviewer snapshot PR ID does not match the requested URL.');
-  const files = selected?.files ?? [];
-  const coverage = result.coverage;
-  if (!isObject(coverage) || !Array.isArray(coverage.files) || !Array.isArray(coverage.gaps) ||
-      !coverage.files.every(file => text(file) && files.includes(file)) ||
-      new Set(coverage.files).size !== coverage.files.length || !coverage.gaps.every(text)) throw new Error('Invalid coverage ledger: list unique reviewed snapshot files and concrete gaps.');
-  if (result.status === 'COMPLETE' && (coverage.files.length !== files.length || coverage.gaps.length)) throw new Error('COMPLETE requires coverage of every snapshot file with no review gaps.');
-  if (result.status === 'PARTIAL' && !coverage.gaps.length) throw new Error('PARTIAL requires an explanation of the review gaps.');
-  if (missingSnapshot && result.findings.length) throw new Error('An initial review without a snapshot cannot report findings.');
-  validateFindings(result.findings, prefix, 'findings', true);
-  return result;
-}
-/** Compare metadata already read by the two initials; no tool/model request. */
-export function mergeInitialSnapshots(reviews) {
-  const snapshots = reviews.map(review => validateSnapshot(review.snapshot));
-  const first = snapshots[0];
-  if (!first || first.scope !== 'pr' || snapshots.some(s =>
-      ['repository', 'prId', 'base', 'head', 'scope'].some(key => s[key] !== first[key]))) {
-    throw new Error('Initial reviewers used different PR identities or source/target commits. Start a new review for a stable PR version.');
-  }
-  // Preserve both discovery results in reviews. The verifier examines every
-  // reported path; ordering or a different file set is not a version mismatch.
-  return { ...first, files: [...new Set(snapshots.flatMap(s => s.files))].sort() };
-}
-export function finalEnvelope(result, expected, originals) {
-  result = finalSubmission(result);
-  if (!isObject(result) || !text(result.report) || !Array.isArray(result.dispositions)) throw new Error('Invalid final-review envelope.');
-  requireStatus(result, ['COMPLETE', 'INCOMPLETE', 'STALE'], 'final-review');
-  if (snapshotKey(result.snapshot) !== snapshotKey(expected)) throw new Error('Final reviewer used a different snapshot.');
-  result = { ...result, snapshot: validateSnapshot(result.snapshot) };
-  result.snapshot.files.sort(); // Stable rendering; the unmodified raw response remains diagnostic data.
-  const ids = new Set(originals.map(f => f.id));
-  const accounted = new Set();
-  for (const [i, item] of result.dispositions.entries()) {
-    requireKnownFields(item, disposition, `dispositions[${i}]`);
-    if (!isObject(item) || !ids.has(item.id) || accounted.has(item.id) || !['CONFIRMED','NEEDS_INFO','REJECTED','MERGED'].includes(item.status) || !text(item.reason)) {
-      throw new Error('Final review has an invalid/missing disposition or silently changed a finding ID.');
-    }
-    if (item.status === 'MERGED' && (!ids.has(item.mergedInto) || item.mergedInto === item.id)) throw new Error('Merged finding must reference another original finding.');
-    if (item.status !== 'MERGED' && item.mergedInto !== undefined) throw new Error('Only a MERGED finding may contain mergedInto.');
-    if (item.status === 'CONFIRMED') {
-      if (!isObject(item.verifiedFinding) || item.verifiedFinding.id !== item.id) throw new Error('CONFIRMED requires the verifier\'s corrected finding with the same original ID.');
-      validateFinding(item.verifiedFinding, '[FR]', new Set(), `dispositions[${i}].verifiedFinding`);
-    } else if (item.verifiedFinding !== undefined) throw new Error('Only a CONFIRMED disposition may contain verifiedFinding.');
-    accounted.add(item.id);
-  }
-  if (accounted.size !== ids.size) throw new OutputDispositionError([...ids].filter(id => !accounted.has(id)));
-  const dispositions = new Map(result.dispositions.map(item => [item.id, item]));
-  const resolved = new Set();
-  for (let item of result.dispositions) {
-    const path = new Set();
-    while (item.status === 'MERGED' && !resolved.has(item.id)) {
-      if (path.has(item.id)) throw new Error('Merged findings form a cycle with no final disposition.');
-      path.add(item.id); item = dispositions.get(item.mergedInto);
-    }
-    for (const id of path) resolved.add(id);
-  }
-  if (result.newFindings !== undefined) validateFindings(result.newFindings, 'V', 'newFindings');
-  if (!sha(result.currentHead) && result.status !== 'INCOMPLETE') throw new Error('Final reviewer did not verify the current PR head.');
-  if (expected.scope === 'pr' && !sha(result.currentBase) && result.status !== 'INCOMPLETE') throw new Error('Final reviewer did not verify the current PR target base.');
-  const changedHead = sha(result.currentHead) && result.currentHead.toLowerCase() !== expected.head.toLowerCase();
-  const changedBase = expected.scope === 'pr' && sha(result.currentBase) && result.currentBase.toLowerCase() !== expected.base.toLowerCase();
-  if (changedHead || changedBase) result = { ...result, status: 'STALE' }; // No automatic rerun.
-  else if (result.status === 'STALE') throw new Error('STALE verdict contradicts reported versions; require manual verification.');
-  return result;
-}
-
-// Review delivery is deliberately more permissive than publication. The strict
-// validators above assess structured evidence independently of presentation
-// warnings. Initial limitations inform the verifier, not a second publication veto.
-const initialKeys = ['status', 'snapshot', 'coverage', 'findings', 'report'];
-const finalKeys = ['status', 'snapshot', 'currentHead', 'currentBase', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'dispositions', 'report'];
-const canonicalKey = key => key.trim().replace(/[_\s-]/g, '').toLowerCase();
-const asText = value => value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-const canonicalEnum = value => typeof value === 'string' ? value.trim().toUpperCase() : '';
-const reviewSHA = value => asText(value).trim().replace(/^["'`]*([0-9a-f]{40}|[0-9a-f]{64})["'`]*$/i, '$1').toLowerCase();
-const select = (value, keys) => isObject(value) ? Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) : value;
-const note = (notes, message) => { if (!notes.includes(message)) notes.push(message); };
-
-function reviewFields(value, keys, notes) {
+/** Map aliased keys (case, underscores, spaces) onto the expected names. */
+function aliasFields(value, names, warnings) {
   if (!isObject(value)) return {};
-  const aliases = new Map(keys.map(key => [canonicalKey(key), key]));
-  const entries = Object.entries(value), counts = new Map();
-  for (const [key] of entries) {
+  const aliases = new Map(names.map(name => [canonicalKey(name), name]));
+  const counts = new Map();
+  for (const key of Object.keys(value)) {
     const name = aliases.get(canonicalKey(key));
     if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  return Object.fromEntries(entries.map(([key, content]) => {
+  const result = {};
+  for (const [key, content] of Object.entries(value)) {
     const name = aliases.get(canonicalKey(key));
     if (name && counts.get(name) > 1) {
-      note(notes, 'Conflicting field aliases were retained for inspection; no alias was silently overwritten.');
-      return [key, content];
-    }
-    return [name ?? key, content];
-  }));
+      warnings.add('Conflicting field spellings were kept as written.');
+      result[key] = content;
+    } else result[name ?? key] = content;
+  }
+  return result;
 }
-function reviewRows(value, notes) {
+
+function rows(value, warnings, label) {
   if (value == null) return [];
   if (Array.isArray(value)) return value;
   if (typeof value === 'string') {
-    try { const parsed = parseUniqueJSON(value); if (Array.isArray(parsed)) return parsed; } catch { /* Keep literal content. */ }
+    try { const parsed = JSON.parse(value); if (Array.isArray(parsed)) return parsed; } catch { /* Literal text. */ }
   }
-  note(notes, 'A non-array review section was retained as one entry.');
+  warnings.add(`${label} was not an array and was kept as one entry.`);
   return [value];
 }
-function reviewSnapshot(value, notes) {
-  if (!isObject(value)) return null;
-  const result = reviewFields(value, Object.keys(snapshotSchema.properties), notes);
-  if (typeof result.prId === 'string' && /^[1-9][0-9]*$/.test(result.prId.trim())) result.prId = Number(result.prId);
-  for (const key of ['repository', 'base', 'head', 'scope']) if (typeof result[key] === 'string') result[key] = result[key].trim();
-  for (const key of ['base', 'head']) if (Object.hasOwn(result, key)) result[key] = reviewSHA(result[key]);
-  if (typeof result.scope === 'string') result.scope = result.scope.toLowerCase();
-  if (Array.isArray(result.files)) result.files = [...new Set(result.files)];
-  return result;
-}
-function snapshotView(value) { return select(value, Object.keys(snapshotSchema.properties)); }
-function findingView(value) { return select(value, finding.required); }
-function reviewFinding(value, notes) {
-  const row = isObject(value) ? reviewFields(value, finding.required, notes) : { summary: asText(value) };
-  for (const key of finding.required) if (Object.hasOwn(row, key)) row[key] = asText(row[key]);
-  if (typeof row.id === 'string') row.id = row.id.trim();
-  if (typeof row.severity === 'string') row.severity = row.severity.trim().toLowerCase();
-  if (finding.required.some(key => key !== 'id' && !text(row[key]))) note(notes, 'Some findings omit evidence, counterevidence, severity, a correction, a summary or a source location. Missing details were not invented.');
+
+function normalizeFinding(value, warnings) {
+  const row = isObject(value) ? aliasFields(value, FINDING_FIELDS, warnings) : { summary: asText(value) };
+  for (const key of FINDING_FIELDS) if (Object.hasOwn(row, key)) row[key] = asText(row[key]).trim();
+  if (typeof row.severity === 'string') row.severity = row.severity.toLowerCase();
   return row;
 }
 
-function assignTrackingIds(findings, prefix, notes) {
-  const used = new Set(), reserved = new Set(findings.map(row => row.id).filter(text));
-  let nextId = 1;
+/** Problems that make a finding unusable, phrased for a repair request. */
+function findingProblems(row, { requireLocation }) {
+  const missing = FINDING_FIELDS.filter(key => key !== 'id' && (key !== 'location' || requireLocation) && !text(row[key]));
+  const problems = [];
+  if (missing.length) problems.push(`missing ${missing.join(', ')}`);
+  if (text(row.severity) && !SEVERITIES.includes(row.severity)) problems.push('severity must be high, medium or low');
+  return problems;
+}
+
+/** Give missing, malformed or repeated IDs stable runtime IDs. */
+export function assignIds(findings, prefix, warnings) {
+  const pattern = new RegExp(`^${prefix}-[1-9][0-9]*$`);
+  const reserved = new Set(findings.map(row => row.id).filter(id => typeof id === 'string' && pattern.test(id)));
+  const used = new Set();
+  let next = 1;
   for (const row of findings) {
-    if (!text(row.id) || !new RegExp(`^${prefix}-[1-9][0-9]*$`).test(row.id) || used.has(row.id)) {
-      if (Object.hasOwn(row, 'id')) row.originalId = row.id;
-      while (reserved.has(`${prefix}-${nextId}`)) nextId++;
-      row.id = `${prefix}-${nextId++}`; reserved.add(row.id);
-      note(notes, 'Runtime tracking IDs were assigned to missing, malformed or repeated IDs; original IDs and finding content remain available.');
+    if (typeof row.id !== 'string' || !pattern.test(row.id) || used.has(row.id)) {
+      if (text(row.id)) row.originalId = row.id;
+      while (reserved.has(`${prefix}-${next}`)) next++;
+      row.id = `${prefix}-${next++}`;
+      reserved.add(row.id);
+      warnings.add('Runtime IDs replaced missing, malformed or repeated finding IDs.');
     }
     used.add(row.id);
   }
 }
 
-/** Stable tracking IDs are bookkeeping, never generated source evidence. All
- * supplied rows, including prose, duplicates and extra fields, remain available. */
-export function acceptInitialReview(value, prefix, prUrl) {
-  const notes = [], source = isObject(value) ? value : { report: asText(value), unstructured: true };
-  const result = reviewFields(source, initialKeys, notes);
-  result.snapshot = reviewSnapshot(result.snapshot, notes);
-  result.coverage = reviewFields(result.coverage, ['files', 'gaps'], notes);
-  if (!Array.isArray(result.coverage.files) || !Array.isArray(result.coverage.gaps)) note(notes, 'The initial coverage ledger is missing or incomplete; the verifier must establish coverage independently.');
-  result.coverage.files = reviewRows(result.coverage.files, notes).map(asText);
-  result.coverage.gaps = reviewRows(result.coverage.gaps, notes).map(asText);
-  result.findings = reviewRows(result.findings, notes).map(row => reviewFinding(row, notes));
-  assignTrackingIds(result.findings, prefix, notes);
-  result.report = asText(result.report);
-  result.status = canonicalEnum(result.status);
-  if (result.unstructured) note(notes, 'Unstructured initial output was retained literally for independent verification.');
-  let complete = false;
-  try {
-    const assessed = initialEnvelope({ ...select(result, initialKeys), snapshot: snapshotView(result.snapshot),
-      coverage: select(result.coverage, ['files', 'gaps']), findings: result.findings.map(findingView),
-      // Overview wording is presentation, not an evidence gate.
-      report: result.report || 'No separate overview supplied.' }, null, prefix, prUrl);
-    complete = assessed.status === 'COMPLETE';
-  } catch (error) { note(notes, `Initial review limitation: ${error.message}`); }
-  if (!complete) note(notes, 'This initial review has unresolved coverage or structured-evidence gaps.');
-  result.status = complete ? 'COMPLETE' : 'PARTIAL';
-  result.reviewWarnings = notes;
-  result.contractComplete = complete && !source.unstructured && !notes.some(message => /Conflicting|tracking IDs/.test(message));
-  return result;
+const listIssues = issues => issues.slice(0, MAX_LISTED_ISSUES).map(issue => `- ${issue}`).join('\n') +
+  (issues.length > MAX_LISTED_ISSUES ? `\n- ... and ${issues.length - MAX_LISTED_ISSUES} more` : '');
+
+/**
+ * Accept one initial-review answer for an assigned set of files.
+ * Always returns a usable result; `issues` lists what a repair turn should fix.
+ */
+export function evaluateInitial(answerText, { prefix, assigned = [], inventory = [], filesComplete = true }) {
+  const warnings = new Set();
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'findings', 'coverage', 'report'] });
+  if (!parsed.value) {
+    const report = String(answerText ?? '').trim();
+    return {
+      issues: [`Your answer could not be used: ${parsed.problem}.`],
+      result: { status: 'PARTIAL', structured: false, coverage: { files: [], gaps: ['The reviewer answer was not structured JSON.'] },
+        additionalFiles: [], findings: [], report, warnings: ['The initial answer was not structured; its text is passed to verification as-is.'] },
+    };
+  }
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
+  const source = aliasFields(parsed.value, ['status', 'coverage', 'additionalFiles', 'findings', 'report'], warnings);
+  const issues = [];
+  const coverage = aliasFields(source.coverage, ['files', 'gaps'], warnings);
+  const covered = rows(coverage.files, warnings, 'coverage.files').map(asText).filter(text);
+  const gaps = rows(coverage.gaps, warnings, 'coverage.gaps').map(asText).filter(text);
+  if (!Array.isArray(source.findings)) issues.push('"findings" must be an array (use [] when there are none).');
+  if (!isObject(source.coverage)) issues.push('"coverage" must be an object with "files" (reviewed paths) and "gaps".');
+  const findings = rows(source.findings, warnings, 'findings').map(row => normalizeFinding(row, warnings));
+  findings.forEach((row, index) => {
+    const problems = findingProblems(row, { requireLocation: false });
+    if (problems.length) issues.push(`findings[${index}]${text(row.id) ? ` (${row.id})` : ''}: ${problems.join('; ')}.`);
+  });
+  assignIds(findings, prefix, warnings);
+  const known = new Set([...inventory, ...assigned]);
+  const additionalFiles = [...new Set(rows(source.additionalFiles, warnings, 'additionalFiles').map(asText)
+    .filter(path => text(path) && !/[\0\r\n]/.test(path)).map(path => path.startsWith('/') ? path : '/' + path))]
+    .filter(path => !known.has(path));
+  if (additionalFiles.length && filesComplete) {
+    warnings.add('The reviewer listed changed paths outside the complete inventory; they are kept for verification only.');
+  }
+  const missingCoverage = assigned.filter(path => !covered.includes(path));
+  let status = canonicalEnum(source.status) === 'COMPLETE' ? 'COMPLETE' : 'PARTIAL';
+  if (status === 'COMPLETE' && (missingCoverage.length || gaps.length)) {
+    status = 'PARTIAL';
+    if (missingCoverage.length) warnings.add(`${missingCoverage.length} assigned file(s) are not listed in coverage.files.`);
+  }
+  const report = asText(source.report).trim();
+  if (!report) warnings.add('The reviewer gave no report text.');
+  return {
+    issues,
+    result: { status, structured: true, coverage: { files: covered, gaps }, additionalFiles, findings, report,
+      warnings: [...warnings], ...(parsed.corrections ? { corrections: parsed.corrections } : {}),
+      ...(parsed.surroundingText ? { surroundingText: parsed.surroundingText } : {}) },
+  };
 }
 
-/** Use established frames when available, and give the verifier every original
- * report, including conflicting frames. Missing metadata never becomes a fake SHA. */
-export function selectReviewSnapshot(reviews, prUrl) {
-  const frames = [], warnings = [];
-  for (const review of reviews) {
-    try {
-      const frame = validateSnapshot(snapshotView(review.snapshot));
-      if (frame.scope !== 'pr' || (prUrl && String(frame.prId) !== new URL(prUrl).pathname.split('/').filter(Boolean).at(-1))) throw new Error();
-      frames.push(frame);
-    } catch { note(warnings, 'An initial reviewer did not establish a usable PR snapshot.'); }
-  }
-  if (!frames.length) return { snapshot: null, warnings: [...warnings, 'The verifier must establish the requested PR identity and versions independently.'] };
-  const first = frames[0];
-  const same = frame => ['repository', 'prId', 'base', 'head', 'scope'].every(key => frame[key] === first[key]);
-  if (frames.some(frame => !same(frame))) note(warnings, 'Initial reviewers reported conflicting PR identities or versions. Their observations must not be combined as one verified snapshot.');
-  return { snapshot: { ...first, files: [...new Set(frames.filter(same).flatMap(frame => frame.files))].sort() }, warnings };
+const hasFindingContent = row => FINDING_FIELDS.some(key => key !== 'id' && text(asText(row[key])));
+
+/**
+ * The decision a row states itself. An explicit valid `status` wins over the
+ * list the row was placed in, and a row under `confirmed` that names
+ * `mergedInto` but carries no finding is a merge: it cannot be a confirmation.
+ */
+function rowDecision(row, listed) {
+  const explicit = canonicalEnum(row.status);
+  if (DECISIONS.includes(explicit)) return explicit;
+  if (listed === 'CONFIRMED' && text(asText(row.mergedInto)) && !isObject(row.verifiedFinding) && !hasFindingContent(row)) return 'MERGED';
+  return listed;
 }
 
-/** Missing decisions are visible runtime UNREVIEWED rows, never fabricated
- * model verdicts. Quality gaps retain a usable PARTIAL report without a retry. */
-export function acceptFinalReview(value, expected, originals, prUrl) {
-  const notes = [], source = isObject(value) ? value : { report: asText(value), unstructured: true };
-  const result = reviewFields(source, finalKeys, notes);
-  result.report = asText(result.report);
-  result.snapshot = reviewSnapshot(result.snapshot, notes);
-  const verifierSnapshot = result.snapshot !== null;
-  if (!result.snapshot && expected) {
-    result.snapshot = structuredClone(expected);
-    note(notes, 'The displayed snapshot comes from the initial reviews; the verifier omitted its snapshot.');
+/** A confirmation's finding is its `verifiedFinding`, otherwise the row's own finding fields. */
+function decisionRow(row, status) {
+  const id = asText(row.id ?? row.verifiedFinding?.id).trim();
+  if (status !== 'CONFIRMED') return { ...row, id, status };
+  const { reason, verifiedFinding, mergedInto, status: _stated, movedFrom, ...finding } = row;
+  return { id, status, reason, verifiedFinding: isObject(verifiedFinding) ? verifiedFinding : finding, ...(movedFrom !== undefined ? { movedFrom } : {}) };
+}
+
+function normalizeDecisionRows(value, warnings) {
+  const source = aliasFields(value, ['status', 'dispositions', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'report'], warnings);
+  const fields = item => aliasFields(isObject(item) ? item : { reason: asText(item) }, DECISION_FIELDS, warnings);
+  const decisions = [];
+  for (const item of rows(source.dispositions, warnings, 'dispositions')) {
+    const row = fields(item);
+    decisions.push(decisionRow(row, canonicalEnum(row.status)));
   }
-  if (verifierSnapshot && expected) {
-    try {
-      const reported = validateSnapshot(snapshotView(result.snapshot));
-      const admitted = validateSnapshot(snapshotView(expected));
-      const sameIdentity = ['repository', 'prId', 'base', 'head', 'scope'].every(key => reported[key] === admitted[key]);
-      const paths = new Set(admitted.files);
-      if (sameIdentity && reported.files.length < paths.size && reported.files.every(path => paths.has(path))) {
-        // The input inventory is retained data, not a verifier coverage claim.
-        // Preserve the model's echo; never repair identity, versions, evidence,
-        // new/different paths or missing finding decisions through this rule.
-        result.reportedSnapshotFiles = [...result.snapshot.files];
-        result.snapshot = { ...result.snapshot, files: [...admitted.files] };
-        note(notes, `The verifier omitted ${paths.size - reported.files.length} admitted snapshot path(s); the original inventory was retained. This does not mark those paths as reviewed.`);
-      }
-    } catch { /* Incomplete or conflicting snapshots retain the strict guard. */ }
-  }
-  result.currentHead = reviewSHA(result.currentHead);
-  result.currentBase = reviewSHA(result.currentBase);
-  const modelStatus = canonicalEnum(result.status);
-  let rows = reviewRows(result.dispositions, notes).map(item => reviewFields(isObject(item) ? item : { reason: asText(item) }, Object.keys(disposition.properties), notes));
-  for (const [category, status] of Object.entries({ confirmed: 'CONFIRMED', merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' })) {
-    for (const value of reviewRows(result[category], notes)) {
-      const item = reviewFields(isObject(value) ? value : { reason: asText(value) }, [...finding.required, 'reason', 'mergedInto', 'verifiedFinding', 'status'], notes);
-      if (status === 'CONFIRMED') {
-        const { reason, verifiedFinding, ...finding } = item;
-        rows.push({ id: item.id ?? verifiedFinding?.id, status, reason, verifiedFinding: verifiedFinding ?? finding });
-      } else rows.push({ ...item, status });
+  let reclassified = 0;
+  for (const [category, listed] of Object.entries({ confirmed: 'CONFIRMED', merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' })) {
+    for (const item of rows(source[category], warnings, category)) {
+      const row = fields(item);
+      const status = rowDecision(row, listed);
+      if (status !== listed) reclassified++;
+      decisions.push(decisionRow(row, status));
     }
   }
-  result.dispositions = rows.map(item => {
-    const row = { ...item, id: asText(item.id), status: canonicalEnum(item.status) || 'UNREVIEWED', reason: asText(item.reason) };
-    if (row.verifiedFinding != null) row.verifiedFinding = reviewFinding(row.verifiedFinding, notes);
-    return row;
+  if (reclassified) warnings.add(`${reclassified} decision(s) placed under another category were classified by their own fields.`);
+  return { source, decisions };
+}
+
+/** A valid confirmation located in another file than its candidate; null when the file is unchanged. */
+function fileMove(original, row) {
+  const from = locationPath(original?.location), to = locationPath(row.verifiedFinding.location);
+  if (!from || !to || from === to) return null;
+  return { from: original.location.trim(), to: row.verifiedFinding.location, acknowledged: text(asText(row.movedFrom)) || text(asText(row.verifiedFinding.movedFrom)) };
+}
+
+/**
+ * Accept one verifier answer for its assigned original findings.
+ * @param {string} answerText
+ * @param {{originals: object[], allIds?: string[], previous?: object, supplement?: boolean}} options
+ */
+export function evaluateFinal(answerText, { originals, allIds = originals.map(f => f.id), previous, supplement = false }) {
+  // A supplement merges into the previous result and keeps its normalization
+  // notes; a full resend starts clean so a failed first answer leaves no trace.
+  const warnings = new Set(supplement && previous?.structured ? previous.baseWarnings ?? [] : []);
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'confirmed', 'merged', 'rejected', 'needsinfo', 'newfindings', 'dispositions', 'report'] });
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
+  const assignedIds = originals.map(f => f.id);
+  if (!parsed.value) {
+    if (previous?.structured) {
+      return { issues: [`Your correction could not be used: ${parsed.problem}.`], result: previous, repairIds: previous.pendingIds ?? [] };
+    }
+    return {
+      issues: [`Your answer could not be used: ${parsed.problem}.`],
+      repairIds: assignedIds,
+      result: finishFinal({ structured: false, modelStatus: 'UNSPECIFIED', decisions: new Map(), newFindings: [],
+        report: String(answerText ?? '').trim(), warnings: new Set(['The verifier answer was not structured; its text is shown as-is.']) }, originals),
+    };
+  }
+  const { source, decisions } = normalizeDecisionRows(parsed.value, warnings);
+  const byId = new Map(supplement && previous?.structured ? previous.decisionRows.map(row => [row.id, row]) : []);
+  const issues = [];
+  const assigned = new Set(assignedIds), all = new Set(allIds);
+  for (const row of decisions) {
+    if (!assigned.has(row.id)) { warnings.add(`Ignored a decision for unassigned ID ${row.id || '(blank)'}.`); continue; }
+    if (!supplement && byId.has(row.id)) { warnings.add(`Kept the first of several decisions for ${row.id}.`); continue; }
+    byId.set(row.id, row);
+  }
+  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set() }, moves = new Map();
+  const candidates = new Map(originals.map(original => [original.id, original]));
+  for (const id of assignedIds) {
+    const row = byId.get(id);
+    if (!row) { repairIds.add(id); continue; }
+    if (!DECISIONS.includes(row.status)) { issues.push(`${id}: status must be one of ${DECISIONS.join(', ')}.`); repairIds.add(id); continue; }
+    if (!text(row.reason)) { issues.push(`${id}: give a concrete reason.`); repairIds.add(id); }
+    if (row.status === 'MERGED' && (!all.has(row.mergedInto) || row.mergedInto === id)) {
+      issues.push(`${id}: mergedInto must name another original finding ID.`); repairIds.add(id); invalid.merge.add(id);
+    }
+    if (row.status === 'CONFIRMED') {
+      row.verifiedFinding = normalizeFinding(row.verifiedFinding, warnings);
+      row.verifiedFinding.id = id;
+      const problems = findingProblems(row.verifiedFinding, { requireLocation: true });
+      if (problems.length) { issues.push(`${id}: the confirmed finding is ${problems.join('; ')}.`); repairIds.add(id); invalid.confirm.add(id); continue; }
+      const move = fileMove(candidates.get(id), row);
+      if (move) moves.set(id, move);
+      if (move && !move.acknowledged) {
+        issues.push(`${id}: the location moved to another file (${move.from} → ${move.to}). Keep the candidate's file unless the defect stated in summary is in the other file; to keep the move, add "movedFrom": "${move.from}" and explain the move in reason.`);
+        repairIds.add(id);
+      }
+    }
+  }
+  const missing = assignedIds.filter(id => !byId.has(id));
+  if (missing.length) issues.unshift(`No decision was given for: ${missing.join(', ')}.`);
+  const sourceNew = supplement && !Object.hasOwn(source, 'newFindings') ? null : source.newFindings;
+  const newFindings = sourceNew === null ? [...(previous?.newFindings ?? []), ...(previous?.incompleteNewFindings ?? [])]
+    : rows(sourceNew, warnings, 'newFindings').map(row => normalizeFinding(row, warnings));
+  if (sourceNew !== null) newFindings.forEach((row, index) => {
+    const problems = findingProblems(row, { requireLocation: true });
+    if (problems.length) issues.push(`newFindings[${index}]: ${problems.join('; ')}.`);
   });
-  result.newFindings = reviewRows(result.newFindings, notes).map(item => reviewFinding(item, notes));
-  // New verifier findings have no original reviewer decision to correlate.
-  // Assign bookkeeping IDs without rewriting dispositions or inventing evidence.
-  assignTrackingIds(result.newFindings, 'V', notes);
-  const accounted = new Set(result.dispositions.map(row => row.id));
-  result.unreviewedFindings = originals.filter(row => !accounted.has(row.id));
-  for (const row of result.unreviewedFindings) result.dispositions.push({ id: row.id, status: 'UNREVIEWED',
-    reason: 'Runtime notice: the verifier supplied no decision for this original finding. The initial observation remains unconfirmed.' });
-  if (result.unreviewedFindings.length) note(notes, 'The verifier omitted decisions. Original observations are shown separately as unreviewed, not silently rejected or confirmed.');
-  if (source.unstructured) note(notes, 'Unstructured final output is shown literally; its claims and freshness were not machine-validated.');
-  result.modelStatus = modelStatus || 'UNSPECIFIED';
-  result.status = modelStatus;
-  let complete = false;
-  try {
-    const frame = expected ?? validateSnapshot(snapshotView(result.snapshot));
-    if (prUrl && String(result.snapshot?.prId) !== new URL(prUrl).pathname.split('/').filter(Boolean).at(-1)) throw new Error('Final snapshot PR ID does not match the requested URL.');
-    const assessed = finalEnvelope({ status: modelStatus, snapshot: snapshotView(result.snapshot), currentHead: result.currentHead, currentBase: result.currentBase,
-      report: result.report || 'No separate overview supplied.', newFindings: result.newFindings.map(findingView),
-      dispositions: result.dispositions.map(row => ({ ...select(row, Object.keys(disposition.properties)),
-        ...(row.verifiedFinding ? { verifiedFinding: findingView(row.verifiedFinding) } : {}) })) }, frame, originals);
-    complete = assessed.status === 'COMPLETE';
-    result.status = assessed.status;
-  } catch (error) { note(notes, `Final review limitation: ${error.message}`); }
-  const frame = expected ?? result.snapshot;
-  const changed = ['Head', 'Base'].some(side => sha(result[`current${side}`]) && sha(frame?.[side.toLowerCase()]) && result[`current${side}`].toLowerCase() !== frame[side.toLowerCase()].toLowerCase());
-  if (changed) note(notes, 'Reported current PR versions differ from the reviewed snapshot. This report is stale.');
-  // A repaired section shape or supplementary note cannot invalidate a final
-  // result that passed the full evidence contract. Borrowed identity and
-  // conflicting aliases still cannot stand in for the verifier's own evidence.
-  const ambiguous = notes.some(message => message.startsWith('Conflicting field aliases'));
-  result.status = changed || modelStatus === 'STALE' ? 'STALE' : complete && !source.unstructured &&
-    verifierSnapshot && !ambiguous ? 'COMPLETE' : 'PARTIAL';
-  result.reviewWarnings = notes;
-  result.contractComplete = result.status === 'COMPLETE';
-  return result;
+  const report = supplement && !text(asText(source.report)) ? previous?.report ?? '' : asText(source.report).trim();
+  const modelStatus = supplement ? previous?.modelStatus ?? 'UNSPECIFIED' : canonicalEnum(source.status) || 'UNSPECIFIED';
+  const state = { structured: true, modelStatus, decisions: byId, newFindings, report, warnings, corrections: parsed.corrections, moves };
+  return { issues, repairIds: [...repairIds], result: finishFinal(state, originals, invalid, [...repairIds]) };
+}
+
+// The runtime records where a moved finding came from; a model's own value is not kept.
+function confirmedFinding(finding, move) {
+  const { movedFrom: _stated, ...rest } = finding;
+  return move ? { ...rest, movedFrom: move.from } : rest;
+}
+
+/** Degrade unresolved items per finding; nothing else is discarded. */
+/**
+ * A merge chain must end at a non-merged decision; findings whose chain is a
+ * cycle become UNREVIEWED. Runs per verifier answer and again over all shards,
+ * since a merge may name a finding another shard decided. Returns their IDs.
+ */
+export function breakMergeCycles(dispositions) {
+  const byId = new Map(dispositions.map(entry => [entry.id, entry]));
+  const cyclic = new Set();
+  for (const entry of dispositions) {
+    if (entry.status !== 'MERGED') continue;
+    const seen = new Set([entry.id]);
+    let target = byId.get(entry.mergedInto);
+    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
+    if (target?.status === 'MERGED') cyclic.add(entry.id);
+  }
+  for (const entry of dispositions) {
+    if (!cyclic.has(entry.id)) continue;
+    entry.status = 'UNREVIEWED';
+    entry.reason = `${entry.reason} [Runtime: the merge chain forms a cycle.]`;
+    delete entry.mergedInto;
+  }
+  return [...cyclic];
+}
+
+function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
+  const { decisions } = state;
+  // Normalization notes carry over into a merged supplement; warnings derived
+  // from the current decisions are recomputed every time.
+  const base = [...state.warnings], derived = [];
+  const dispositions = [];
+  for (const original of originals) {
+    const row = decisions.get(original.id);
+    if (!row) {
+      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: 'The verifier gave no decision for this finding; it is not confirmed.' });
+      continue;
+    }
+    if (!DECISIONS.includes(row.status)) {
+      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: asText(row.reason) || 'The verifier decision was malformed.' });
+      continue;
+    }
+    if (row.status === 'CONFIRMED' && invalid.confirm.has(original.id)) {
+      const absent = FINDING_FIELDS.filter(key => !text(row.verifiedFinding?.[key]));
+      dispositions.push({ id: original.id, status: 'NEEDS_INFO', reason: `${asText(row.reason)} [Runtime: the confirmation lacks ${absent.join(', ') || 'valid fields'}, so it is not eligible for comments.]`.trim(),
+        partialFinding: row.verifiedFinding });
+      continue;
+    }
+    if (row.status === 'MERGED' && invalid.merge.has(original.id)) {
+      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: `${asText(row.reason)} [Runtime: the merge target is invalid.]`.trim() });
+      continue;
+    }
+    const entry = { id: original.id, status: row.status, reason: asText(row.reason).trim() || 'No reason given.',
+      ...(row.status === 'MERGED' ? { mergedInto: row.mergedInto } : {}),
+      ...(row.status === 'CONFIRMED' ? { verifiedFinding: confirmedFinding(row.verifiedFinding, state.moves?.get(original.id)) } : {}) };
+    dispositions.push(entry);
+  }
+  breakMergeCycles(dispositions);
+  const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
+  if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
+  const unconfirmed = dispositions.filter(row => row.status === 'CONFIRMED' && state.moves?.get(row.id)?.acknowledged === false);
+  if (unconfirmed.length) derived.push(`Verification moved ${unconfirmed.map(row => `${row.id} (from ${row.verifiedFinding.movedFrom})`).join(', ')} to another file without confirming the move; check the location.`);
+  const newFindings = state.newFindings.filter(row => !findingProblems(row, { requireLocation: true }).length);
+  if (newFindings.length < state.newFindings.length) derived.push(`${state.newFindings.length - newFindings.length} new verifier finding(s) were incomplete and are listed in the report only.`);
+  return {
+    status: !state.structured ? 'PARTIAL' : state.modelStatus === 'INCOMPLETE' ? 'INCOMPLETE' : 'COMPLETE',
+    structured: state.structured, modelStatus: state.modelStatus, dispositions, newFindings,
+    incompleteNewFindings: state.newFindings.filter(row => !newFindings.includes(row)),
+    report: state.report, warnings: [...base, ...derived], baseWarnings: base,
+    ...(state.corrections ? { corrections: state.corrections } : {}),
+    decisionRows: [...decisions.values()], pendingIds,
+  };
+}
+
+/**
+ * Accept one same-file duplicate check. The answer only merges: every finding
+ * it does not merge stays confirmed, so an invalid row is reported for a
+ * correction turn and otherwise ignored, never turning into a lost finding.
+ * Chains (A into B, B into C) end at the finding that stays; cycles name no
+ * survivor and are left unmerged.
+ * @param {string} answerText
+ * @param {{ids: string[]}} options the findings of the checked file
+ */
+export function evaluateDuplicates(answerText, { ids }) {
+  const warnings = new Set();
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'merged', 'report'] });
+  if (!parsed.value) {
+    return { issues: [`Your answer could not be used: ${parsed.problem}.`],
+      result: { status: 'COMPLETE', structured: false, merges: [], report: '', warnings: ['The duplicate check gave no usable answer; no finding was merged.'] } };
+  }
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
+  const source = aliasFields(parsed.value, ['status', 'merged', 'report'], warnings);
+  const assigned = new Set(ids), issues = [], rowsById = new Map();
+  if (!Array.isArray(source.merged)) issues.push('"merged" must be an array (use [] when none of the findings are duplicates).');
+  for (const [index, item] of rows(source.merged, warnings, 'merged').entries()) {
+    const row = aliasFields(isObject(item) ? item : {}, ['id', 'mergedInto', 'reason'], warnings);
+    const id = asText(row.id).trim(), into = asText(row.mergedInto).trim(), problems = [];
+    if (!assigned.has(id)) problems.push(`id ${JSON.stringify(id)} is not an assigned finding`);
+    if (!assigned.has(into) || into === id) problems.push('mergedInto must name another assigned finding');
+    if (!text(asText(row.reason))) problems.push('give a concrete reason');
+    if (rowsById.has(id)) problems.push(`${id} is merged more than once`);
+    if (problems.length) { issues.push(`merged[${index}]: ${problems.join('; ')}.`); continue; }
+    rowsById.set(id, { id, mergedInto: into, reason: asText(row.reason).trim() });
+  }
+  const merges = [];
+  for (const row of rowsById.values()) {
+    const seen = new Set([row.id]);
+    let target = row.mergedInto;
+    while (rowsById.has(target) && !seen.has(target)) { seen.add(target); target = rowsById.get(target).mergedInto; }
+    if (rowsById.has(target)) { issues.push(`${row.id}: the merges form a cycle; keep one of these findings and merge the others into it.`); continue; }
+    merges.push({ ...row, mergedInto: target });
+  }
+  const unmerged = issues.length ? ['Some duplicate-check merges were invalid and were not applied; those findings stay confirmed.'] : [];
+  return { issues, result: { status: 'COMPLETE', structured: true, merges, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
+    ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
+}
+
+export function duplicateRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  return `AZPR runtime: your duplicate check needs correction.\n${listIssues(issues)}\n\nReturn the complete JSON object again (status, merged, report). Merge an assigned finding only into another assigned finding that stays, and only when both state the same root cause and need the same correction.`;
+}
+
+// When only the JSON syntax was wrong, the content must come back unchanged:
+// a free-form resend tends to shorten evidence.
+const VERBATIM = 'Send the same answer again with identical content: do not shorten, summarize, reorder or reword any field. Only fix the JSON so it parses: escape every double quote inside a string as \\" (also inside `code`), write line breaks as \\n, and return exactly one JSON object.';
+/** The answer had JSON with a syntax error (as opposed to no JSON at all). */
+export const syntaxProblem = issues => issues.some(issue => /could not be parsed|repeats a key/.test(issue));
+export const parseRepairPrompt = issues => `AZPR runtime: your previous answer was not valid JSON.\n${listIssues(issues)}\n\n${VERBATIM}`;
+
+/** Repair request for an initial review: resend the whole corrected object. */
+export function initialRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). Keep every finding you still stand behind and keep the existing wording of fields that need no correction; read more source only if a correction needs it.`;
+}
+
+/** Repair request for a verifier: only the decisions that are missing or invalid. */
+export function finalRepairPrompt(issues, ids, { includeNewFindings = false, full = false, parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  if (full) return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete verification JSON object (status, confirmed, merged, rejected, needsInfo, newFindings, report) with exactly one decision for each assigned finding ID.`;
+  return `AZPR runtime: some decisions need correction.\n${listIssues(issues)}\n\nReturn one JSON object {"dispositions": [...]${includeNewFindings ? ', "newFindings": [...]' : ''}} containing decisions only for: ${ids.join(', ')}. Each row has id, status (CONFIRMED, MERGED, REJECTED or NEEDS_INFO) and reason; CONFIRMED rows include "verifiedFinding" with summary, evidence, counterevidence, location, severity and suggestion (plus "movedFrom" when the location is in another file than the candidate's); MERGED rows include "mergedInto". Earlier decisions are kept.`;
+}
+
+/** Keep supplementary text literal; do not shell-tokenize, unquote or expand it. */
+export function parseReviewRequest(raw) {
+  if (typeof raw !== 'string' || raw.length > 16000 || raw.includes('\0')) throw new Error('[AZPR] Supply a PR URL and optional context (maximum 16000 characters).');
+  const match = /^\s*(\S+)(?:\s+([\s\S]*))?$/.exec(raw);
+  if (!match) throw new Error('[AZPR] Supply a PR URL and optional context.');
+  const target = parsePullRequestUrl(match[1]);
+  return { request: raw, prUrl: match[1], userContext: match[2] ?? '', target };
 }
