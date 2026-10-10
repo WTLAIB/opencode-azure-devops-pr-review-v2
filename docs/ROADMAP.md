@@ -101,12 +101,16 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    made the REST queue the bottleneck. The defaults stay 4 / 3 until other
    providers and organizations have been measured; raise both together.
 4. Reduce input tokens further. Reading diffs with folded repeats cut the
-   316-file review from 7.5–9.2 to about 5.5 million input tokens; reviewers
-   still make about 5.5 model requests per session and each re-sends what was
-   read. Next candidates: provider prompt caching (cache reads are 10–16 % of
-   input) and a live measurement on a code-centric PR.
-5. Check rendered comments, inline anchors and summaries in the Azure UI.
-6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
+   316-file review from 7.5–9.2 to about 5.5 million input tokens and a real
+   35-file code PR from 6.15 to 0.79 million; reviewers still make about 5.5
+   model requests per session and each re-sends what was read. Next candidate:
+   provider prompt caching (cache reads are 10–16 % of input).
+5. Cross-shard evidence: a new test in one shard that contradicts unchanged
+   code in another shard was missed by both reading strategies. Candidates are
+   keeping tests with the code they exercise when sharding, or a content search
+   tool (Azure DevOps Code Search, where the organization has it).
+6. Check rendered comments, inline anchors and summaries in the Azure UI.
+7. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
 
 ## Quality principles

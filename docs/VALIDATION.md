@@ -258,10 +258,36 @@ reading rules, all with 8/6:
   `azpr_find_files` was used 19–28 times per run, but guessed-path 404s did not
   drop (1–5 per run).
 
+## Live run: real code (review only)
+
+PR kevin888y/OpenCode #4 was created for this test from pydantic (MIT): a
+snapshot at `125921fdc9` as the base and the changes of the next 20 upstream
+commits as the source (35 files, +1,074/−293 lines, Python and Rust; 13 changed
+source files have more than 1,000 lines). Two regressions were seeded: one in a
+changed hunk (`json_schema.py` declares millisecond temporal values as strings
+although they serialize as numbers) and one outside the diff (a bare
+`MutableSequence` still uses the sequence schema while the PR's new test expects
+a list; the test and the implementation fell into different shards). Offline,
+its diffs are 6.2 % of whole-file HEAD and BASE reads. Both revisions ran with
+`parallelSessions` 8 and `azure.concurrency` 6; nothing was posted.
+
+| Property | Whole-file reading (`fe0ee7b`) | This revision (`c1de65c`) |
+| --- | --- | --- |
+| Review | 331 s | 115 s |
+| Initial sessions | 10: three sessions filled their model context and their shards were split | 4 |
+| Input tokens | 6.15 M | 0.79 M (−87 %) |
+| Seeded regression in a changed hunk | found and confirmed | found and confirmed |
+| Seeded regression outside the diff, test and code in different shards | missed | missed |
+| Other confirmed findings | none | none |
+
+Diff-based reading kept the result of whole-file reading on real code at an
+eighth of the input tokens and without context overflow. Neither revision
+connects a new test with unchanged code in another shard.
+
 ## Not yet validated
 
-- A live review of a code-centric PR with large files; diff-based reading is
-  measured there offline only.
+- Finding a defect whose evidence spans a test and unchanged code in different
+  shards (missed by both reading strategies on PR #4).
 - A live publication with this revision: the rule against skips that rely on
   another finding.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
