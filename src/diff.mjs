@@ -150,12 +150,12 @@ export function diffHunks(baseText, headText, options = {}) {
   const rows = diffLines(a, b).map(op => ({ kind: op.kind, base: op.a + 1, head: op.b + 1, text: op.kind === '+' ? b[op.b] : a[op.a] }));
   const blocks = changeBlocks(rows, foldRepeats);
   if (!blocks.length) return { hunks: [], baseLines: a.length, headLines: b.length };
-  const changed = blocks.filter(block => !block.repeats).flatMap(block => [block.start, block.end]);
+  // Every changed row of a block is shown; nearby blocks share one hunk.
   const windows = [];
-  for (const index of changed) {
+  for (const block of blocks.filter(block => !block.repeats)) {
     const last = windows.at(-1);
-    if (last && index <= last.end + 1 + after + before) { last.end = index; continue; }
-    windows.push({ first: index, end: index });
+    if (last && block.start <= last.end + 1 + after + before) { last.end = block.end; continue; }
+    windows.push({ first: block.start, end: block.end });
   }
   const hunks = windows.map(({ first, end }) => {
     const header = enclosingLine(rows, first, Math.max(headerReach, titleReach));
@@ -164,6 +164,11 @@ export function diffHunks(baseText, headText, options = {}) {
     const stop = Math.min(rows.length - 1, end + after);
     return { start, stop, title: header >= 0 && header < start ? rows[header].text.trim().slice(0, 160) : '' };
   });
+  // A repeat that a hunk reaches into is shown whole in that hunk, not cut.
+  for (const block of blocks.filter(block => block.repeats)) {
+    const hunk = hunks.find(item => block.start <= item.stop && block.end >= item.start);
+    if (hunk) { hunk.start = Math.min(hunk.start, block.start); hunk.stop = Math.max(hunk.stop, block.end); }
+  }
   // Extended starts can overlap the previous hunk; merge those.
   const merged = [];
   for (const hunk of hunks) {

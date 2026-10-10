@@ -28,6 +28,27 @@ test('beyond the edit bound a change is one replacement, still exact', () => {
   assert.deepEqual(splitLines(''), []);
 });
 
+test('every changed line is in a hunk or a folded repeat, however long the change', () => {
+  const base = Array.from({ length: 40 }, (_, i) => `line ${i}`);
+  const added = Array.from({ length: 14 }, (_, i) => `    assert added(${i}) == ${i} and True`);
+  const { hunks } = diffHunks(base.join('\n'), [...base.slice(0, 20), ...added, ...base.slice(20)].join('\n'));
+  assert.equal(hunks.length, 1, 'One insertion longer than the context is one hunk, not its two ends.');
+  assert.deepEqual(hunks[0].lines.filter(row => row.kind === '+').map(row => row.head), Array.from({ length: 14 }, (_, i) => 21 + i));
+  let seed = 11;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const lines = count => Array.from({ length: count }, () => ['a', 'b', 'c', 'x = 1', 'x = 2', '    if y:', '}'][Math.floor(random() * 7)]);
+  const within = (span, line) => span !== 'none' && line >= Number(span.split('-')[0]) && line <= Number(span.split('-')[1]);
+  for (let round = 0; round < 2000; round++) {
+    const a = lines(Math.floor(random() * 60));
+    const b = random() < 0.5 ? lines(Math.floor(random() * 60)) : [...a.slice(0, 10), ...lines(Math.floor(random() * 30)), ...a.slice(10)];
+    const { hunks } = diffHunks(a.join('\n'), b.join('\n'), { before: Math.floor(random() * 4), after: Math.floor(random() * 4), foldRepeats: 2 + Math.floor(random() * 2) });
+    const missing = diffLines(a, b).filter(op => op.kind !== '=').filter(op => !hunks.some(hunk => hunk.repeats
+      ? (op.kind === '+' ? within(hunk.head, op.b + 1) : within(hunk.base, op.a + 1))
+      : hunk.lines.some(row => row.kind === op.kind && row.base === op.a + 1 && row.head === op.b + 1)));
+    assert.deepEqual(missing, [], `${a.join('|')} -> ${b.join('|')}`);
+  }
+});
+
 test('hunks keep more context before than after, merge when close and open at the enclosing block', () => {
   const base = ['import os', '', 'class Shop:', '    def cancel(self, order, units):', '        """Return released units."""', '        if order.status == "cancelled":',
     '            return units', '        order.status = "cancelled"', '        return units + order.units', '', ...Array.from({ length: 20 }, (_, i) => `x${i} = ${i}`), 'VERSION = 1'];
