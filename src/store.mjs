@@ -1,6 +1,7 @@
 /**
  * Durable private state: completed reviews (with plans and publication
- * ledgers), their comment data and undelivered receipts.
+ * ledgers), their comment data, undelivered receipts and the reviewer
+ * sessions kept from unfinished runs.
  *
  * Reviews survive an OpenCode restart so /pr-comment works afterwards in the
  * original conversation. The newest `limit` reviews are kept; older ones and
@@ -42,8 +43,12 @@ async function writeAtomic(path, content) {
   await rename(temporary, path);
 }
 
-export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIMIT, now = () => Date.now() } = {}) {
-  const dirs = { reviews: join(root, 'reviews'), data: join(root, 'data'), receipts: join(root, 'receipts') };
+/**
+ * `onRemove(review)` runs after an evicted or removed review's files are
+ * deleted (for example to delete its reviewer sessions); its errors are ignored.
+ */
+export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIMIT, now = () => Date.now(), onRemove } = {}) {
+  const dirs = { reviews: join(root, 'reviews'), data: join(root, 'data'), receipts: join(root, 'receipts'), sessions: join(root, 'sessions') };
   for (const directory of [root, ...Object.values(dirs)]) await mkdir(directory, { recursive: true, mode: 0o700 });
 
   async function readReview(file) {
@@ -64,6 +69,7 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
   async function removeReview(review) {
     await rm(join(dirs.reviews, `${review.id}.json`), { force: true });
     if (review.dataDirectory && inside(dirs.data, review.dataDirectory)) await rm(review.dataDirectory, { recursive: true, force: true });
+    try { await onRemove?.(review); } catch { /* Cleanup never fails an eviction. */ }
   }
 
   return {
@@ -111,6 +117,24 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
         } catch { /* Not ours or already gone. */ }
       }
       return removed;
+    },
+    /**
+     * Remember reviewer sessions kept from a run that left no saved review.
+     * The newest `limit` runs keep theirs; returns the session IDs of older
+     * runs, whose records are removed, for the caller to delete.
+     */
+    async keepSessions(runId, sessionIDs) {
+      await writeAtomic(join(dirs.sessions, `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${runId}.json`), JSON.stringify(sessionIDs));
+      const files = (await readdir(dirs.sessions)).filter(name => name.endsWith('.json')).sort();
+      const released = [];
+      for (const old of files.slice(0, Math.max(0, files.length - limit))) {
+        try {
+          const ids = JSON.parse(await readFile(join(dirs.sessions, old), 'utf8'));
+          if (Array.isArray(ids)) released.push(...ids.filter(id => typeof id === 'string'));
+        } catch { /* An unreadable record releases nothing. */ }
+        await rm(join(dirs.sessions, old), { force: true });
+      }
+      return released;
     },
     /** Last-resort receipt file when the conversation notice cannot be queued. */
     async writeReceipt(runId, text) {

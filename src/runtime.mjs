@@ -97,9 +97,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   // An unwritable state directory must not disable the plugin: fall back to a
   // per-user directory under the system temporary directory.
   let storeFallback;
-  const store = await createReviewStore({ root: options.stateDirectory ?? stateRoot() }).catch(error => {
+  const onRemove = review => removeSessions(review.reportSessions);
+  const store = await createReviewStore({ root: options.stateDirectory ?? stateRoot(), onRemove }).catch(error => {
     storeFallback = errorText(error);
-    return createReviewStore({ root: join(tmpdir(), `azpr-v2-state-${process.getuid?.() ?? 'user'}`) });
+    return createReviewStore({ root: join(tmpdir(), `azpr-v2-state-${process.getuid?.() ?? 'user'}`), onRemove });
   });
   const capabilities = hostCapabilities(context);
   for (const review of await store.load().catch(() => [])) completed.set(review.id, review);
@@ -211,6 +212,28 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (!owner?.data) return;
     try { const data = await owner.data; openStores.delete(data.directory); await data.dispose(); } catch { /* Cleanup never replaces an outcome. */ }
     owner.data = undefined;
+  }
+  /** Delete AZPR's own reviewer sessions (never one an active run uses); failures are ignored. */
+  async function removeSessions(sessionIDs) {
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
+    const active = new Set([...runs.values()].flatMap(run => run.stages.map(stage => stage.sessionID)));
+    for (const sessionID of new Set(sessionIDs ?? [])) {
+      if (active.has(sessionID)) continue;
+      await deadline(() => context.session.remove({ sessionID }), 5000).catch(() => {});
+    }
+  }
+  /**
+   * A review run that saved no review: delete its sessions except the one
+   * holding its report or draft (all are kept while debugging, or when an
+   * abort was not confirmed); kept sessions follow the review limit.
+   */
+  async function releaseUnfinished(run) {
+    const sessions = run.stages.map(stage => stage.sessionID).filter(Boolean);
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove || !sessions.length) return;
+    const keepAll = settings.debug.enabled || run.abortUnconfirmed;
+    const kept = keepAll ? sessions : sessions.filter(id => id === run.reportStage?.sessionID);
+    await removeSessions(sessions.filter(id => !kept.includes(id)));
+    if (kept.length) await removeSessions(await store.keepSessions(run.id, kept).catch(() => []));
   }
   async function persistReview(review) {
     try { await store.save(review); } catch { review.persistFailed = true; }
@@ -428,7 +451,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     timer?.unref?.();
     const outcome = { status: 'INCOMPLETE', report: '', failure: '' };
     try {
-      run.debug = await createDiagnostics(settings, { directory: context.location?.directory }, run);
+      run.debug = await createDiagnostics(settings, { directory: context.location?.directory }, run, new Set(runs.keys()));
       if (dispatch) await bounded(() => dispatch.ready, run.controller.signal);
       await preflight(run);
       Object.assign(outcome, await action(run));
@@ -520,6 +543,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       return { status: final.status, report: rendered, review: completedReview };
     }, dispatch);
     if (status === 'COMPLETE' && review) await rememberReview(review);
+    else await releaseUnfinished(run);
     output.text = renderReceipt(run, report, status, failure, settings);
   }
 

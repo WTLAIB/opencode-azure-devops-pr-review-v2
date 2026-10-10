@@ -25,9 +25,9 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
-| `src/store.mjs` | Persistent reviews, data cleanup and fallback receipt files. |
+| `src/store.mjs` | Persistent reviews, data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit). |
 | `src/attribution.mjs` | Deterministic reports, provenance, receipts and ledgers. |
-| `src/diagnostics.mjs` | Optional private diagnostic files and stage timing. |
+| `src/diagnostics.mjs` | Optional private diagnostic files (bounded by `debug.keepRuns`) and stage timing. |
 | `src/prompts/` | Shared review rules, role prompts and comment policy. |
 
 ## Commands and workflows

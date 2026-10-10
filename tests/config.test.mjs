@@ -30,12 +30,15 @@ test('settings reject removed transports and unknown keys', () => {
 
 test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls and sharded workflow', () => {
   const raw = input();
-  for (const key of ['runTimeoutSeconds', 'shell', 'progressNotices', 'workflow']) delete raw[key];
+  for (const key of ['runTimeoutSeconds', 'shell', 'progressNotices', 'deletePrivateSessions', 'workflow']) delete raw[key];
+  delete raw.debug;
   raw.azure = { organization: 'org', pat: PAT };
   const settings = validateSettings(raw);
   assert.equal(settings.runTimeoutSeconds, null);
   assert.equal(settings.shell, 'deny');
   assert.equal(settings.progressNotices, true);
+  assert.equal(settings.deletePrivateSessions, true);
+  assert.deepEqual(settings.debug, { enabled: false, directory: '', keepRuns: 20 });
   assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100 });
   assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 });
   assert.deepEqual(validateSettings(input()).azure, settings.azure, 'The example matches the defaults.');
@@ -51,10 +54,13 @@ test('numeric and enum settings are range checked; partial objects take defaults
   for (const [key, value] of [['azure', { organization: 'org', pat: PAT, concurrency: 0 }], ['azure', { organization: 'org', pat: PAT, concurrency: 9 }], ['azure', { organization: 'org', pat: PAT, callTimeoutSeconds: 5 }],
     ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 0 }], ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 1025 }], ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 1.5 }],
     ['workflow', { shardFiles: 0 }], ['workflow', { parallelSessions: 17 }], ['workflow', { repairAttempts: 4 }], ['workflow', { stageRetries: -1 }],
-    ['shell', 'allow'], ['progressNotices', 'yes']]) {
+    ['shell', 'allow'], ['progressNotices', 'yes'], ['deletePrivateSessions', 'no'],
+    ['debug', { enabled: true, keepRuns: -1 }], ['debug', { enabled: true, keepRuns: 1001 }], ['debug', { enabled: true, keepRuns: '5' }]]) {
     assert.throws(() => validateSettings({ ...input(), [key]: value }), undefined, `${key}=${JSON.stringify(value)}`);
   }
   for (const shell of ['deny', 'ask', 'inherit']) assert.equal(validateSettings({ ...input(), shell }).shell, shell);
+  assert.equal(validateSettings({ ...input(), debug: { enabled: true, keepRuns: 0 } }).debug.keepRuns, 0, '0 keeps every run directory.');
+  assert.equal(validateSettings({ ...input(), deletePrivateSessions: false }).deletePrivateSessions, false);
 });
 
 test('azure needs an organization name and a token-shaped PAT; errors never echo the PAT', () => {

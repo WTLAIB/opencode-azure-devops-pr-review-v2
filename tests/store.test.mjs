@@ -55,6 +55,28 @@ test('the newest reviews are kept; evicted reviews lose their data directory', a
   await assert.rejects(stat(data.directory));
 });
 
+test('evicted reviews are reported once for session cleanup', async t => {
+  const directory = await root(t);
+  const removed = [];
+  const store = await createReviewStore({ root: directory, limit: 1, onRemove: async old => { removed.push([old.id, [...old.reportSessions]]); throw new Error('ignored'); } });
+  await store.save(review('aaaaaaaa', '2026-01-01T00:00:00Z'));
+  await store.save(review('bbbbbbbb', '2026-01-02T00:00:00Z'));
+  assert.deepEqual(await store.enforceLimit(), ['aaaaaaaa']);
+  assert.deepEqual(removed, [['aaaaaaaa', ['ses_a']]]);
+  await store.enforceLimit();
+  assert.equal(removed.length, 1);
+});
+
+test('sessions kept from unfinished runs are bounded; older runs release theirs', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
+  assert.deepEqual(await store.keepSessions('run00001', ['ses_1']), []);
+  assert.deepEqual(await store.keepSessions('run00002', ['ses_2', 'ses_3']), []);
+  assert.deepEqual(await store.keepSessions('run00003', ['ses_4']), ['ses_1']);
+  assert.equal((await readdir(store.dirs.sessions)).length, 2);
+});
+
 test('sweep removes only stale unreferenced data', async t => {
   const directory = await root(t);
   const now = Date.now();

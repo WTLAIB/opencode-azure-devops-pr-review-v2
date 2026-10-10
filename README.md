@@ -144,6 +144,7 @@ planning uses the review's risk model.
 | `runTimeoutSeconds` | `null` (no whole-command timer); an integer 10–7200 enables one. |
 | `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode. `inherit`: host permissions decide. |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
+| `deletePrivateSessions` | `true`: AZPR deletes its private reviewer sessions once they are no longer needed (see [retention](#retention-and-privacy)); `false` keeps every session. |
 | `azure.organization` | Required. The `<org>` of `https://dev.azure.com/<org>`; PR URLs of other organizations are refused. |
 | `azure.pat` | Required. A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**. Sent only to `https://dev.azure.com/<org>` and never logged. |
 | `azure.concurrency` | `3` simultaneous Azure DevOps calls across all AZPR commands. |
@@ -154,7 +155,7 @@ planning uses the review's risk model.
 | `workflow.parallelSessions` | `4` reviewer sessions at once within a command. |
 | `workflow.repairAttempts` | `2` correction turns when an answer breaks the output contract. |
 | `workflow.stageRetries` | `1` new-session retry after a transient failure (provider 429/5xx, interrupted stream). |
-| `debug.enabled` / `debug.directory` | `false` / `""`; see [debugging](docs/DEBUGGING.md). |
+| `debug.enabled` / `debug.directory` / `debug.keepRuns` | `false` / `""` / `20` run directories kept (`0` keeps all); see [debugging](docs/DEBUGGING.md). |
 
 `steps`, `maxStageCharacters`, `structuredOutput`, `comments`,
 `auxiliaryModels`, `outputRetries`, `verification` and `shellToolPermission`
@@ -233,6 +234,13 @@ permissions. The newest 20 reviews are kept; older ones and stale scratch data
 are removed automatically. A receipt that cannot reach the conversation is saved
 under `receipts/` there. `/pr-comment` only accepts reviews started in the same
 conversation (or from one of that review's sessions).
+
+OpenCode does not delete sessions by itself, so AZPR removes its private
+reviewer sessions (`deletePrivateSessions`, on by default): a completed review's
+sessions go when the review is evicted, since `/pr-comment` needs them until
+then. A review that did not complete keeps only the session holding its report
+or draft (every session while debug is enabled), and these kept sessions follow
+the same limit of 20 runs. Your own conversations are never deleted.
 
 ## Development and removal
 

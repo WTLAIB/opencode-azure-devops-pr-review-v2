@@ -76,7 +76,7 @@ export function validateSettings(raw) {
     throw new Error('settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.pat, and remove mcp.');
   }
   keys(raw, ['$schema', 'version', 'enabled', 'models', 'debug', 'outputLanguage', 'returnReport', 'runTimeoutSeconds',
-    'shell', 'progressNotices', 'azure', 'workflow'], 'settings');
+    'shell', 'progressNotices', 'deletePrivateSessions', 'azure', 'workflow'], 'settings');
   if (raw.version !== 2) throw new Error('settings.version must be 2. Use the V2 settings example; older host layouts are not supported.');
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('enabled must be boolean.');
   if (raw.$schema !== undefined && typeof raw.$schema !== 'string') throw new Error('$schema must be a string.');
@@ -98,15 +98,19 @@ export function validateSettings(raw) {
   if (!['receipt', 'full'].includes(returnReport)) throw new Error('returnReport must be receipt or full.');
   const outputLanguage = languageTag(raw.outputLanguage === undefined ? 'en' : raw.outputLanguage);
   const debug = raw.debug === undefined ? { enabled: false, directory: '' } : raw.debug;
-  keys(debug, ['enabled', 'directory'], 'debug');
+  keys(debug, ['enabled', 'directory', 'keepRuns'], 'debug');
   if (typeof debug.enabled !== 'boolean' || (debug.directory !== undefined &&
       (typeof debug.directory !== 'string' || /[\0\r\n]/.test(debug.directory) || debug.directory.startsWith('~')))) throw new Error('debug requires enabled (boolean) and an optional directory path; use an absolute path or a project-relative path, not ~.');
+  const keepRuns = withDefault(debug.keepRuns, 20);
+  integer(keepRuns, 'debug.keepRuns', 0, 1000);
   const runTimeoutSeconds = withDefault(raw.runTimeoutSeconds, null);
   if (runTimeoutSeconds !== null) integer(runTimeoutSeconds, 'runTimeoutSeconds', 10, 7200);
   const shell = withDefault(raw.shell, 'deny');
   if (!SHELL_MODES.includes(shell)) throw new Error('shell must be deny, ask or inherit.');
   const progressNotices = withDefault(raw.progressNotices, true);
   if (typeof progressNotices !== 'boolean') throw new Error('progressNotices must be boolean.');
+  const deletePrivateSessions = withDefault(raw.deletePrivateSessions, true);
+  if (typeof deletePrivateSessions !== 'boolean') throw new Error('deletePrivateSessions must be boolean.');
   const azure = { ...DEFAULTS.azure, ...(raw.azure === undefined ? {} : (keys(raw.azure, Object.keys(DEFAULTS.azure), 'azure'), raw.azure)) };
   // Never echo the PAT in an error.
   if (typeof azure.organization !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,49}$/.test(azure.organization)) {
@@ -124,8 +128,8 @@ export function validateSettings(raw) {
   integer(workflow.parallelSessions, 'workflow.parallelSessions', 1, 16);
   integer(workflow.repairAttempts, 'workflow.repairAttempts', 0, 3);
   integer(workflow.stageRetries, 'workflow.stageRetries', 0, 2);
-  return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '' },
-    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, azure, workflow,
+  return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '', keepRuns },
+    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, azure, workflow,
     deepReady: deepConfigured === MODEL_SLOTS.length,
     deepPartial: deepConfigured > 0 && deepConfigured < MODEL_SLOTS.length };
 }

@@ -253,7 +253,7 @@ test('installation omits only legacy help from supplied and replacement settings
   const defaultsPath=join(s.source,'config/settings.example.json');
   const defaults=JSON.parse(readFileSync(defaultsPath,'utf8'));defaults.models._help=settings.models._help;
   const defaultsRaw=JSON.stringify(defaults);writeFileSync(defaultsPath,defaultsRaw);
-  const expected=structuredClone(settings);delete expected.models._help;
+  const expected=structuredClone(settings);delete expected.models._help;expected.debug.keepRuns=20;
   for(const replacing of [false,true]) {
     if(replacing) writeFileSync(installed(s,'settings.json'),raw);
     const result=install(s,replacing?['--replace']:['--settings',file]);ok(result);
@@ -295,7 +295,7 @@ test('current partial settings merge only missing defaults and preserve existing
   assert.doesNotMatch(result.stdout + result.stderr, /team\/new/);
   const merged = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
   assert.equal(merged.models.review.functional, 'team/new');
-  assert.deepEqual(merged.debug, { enabled: true, directory: '' });
+  assert.deepEqual(merged.debug, { enabled: true, directory: '', keepRuns: 20 });
   for(const key of ['comments','auxiliaryModels','outputRetries']) assert.equal(Object.hasOwn(merged,key),false);
   for (const key of ['enabled', 'outputLanguage', 'custom']) assert.deepEqual(merged[key], partial[key]);
   assert.equal(merged.runTimeoutSeconds, null);

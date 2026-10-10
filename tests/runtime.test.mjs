@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES } from '../src/config.mjs';
+import { createReviewStore } from '../src/store.mjs';
 import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -141,6 +142,7 @@ async function fixture(t, opts = {}) {
       },
       async wait({ sessionID }) { await sessions.get(sessionID).running; },
       async context({ sessionID }) { return clone(sessions.get(sessionID).history); },
+      async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); sessions.delete(sessionID); },
       async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) s.outcome = 'interrupted'; return { interrupted: true }; },
       async synthetic(input) {
         if (opts.syntheticFailure?.(input)) throw new Error('Fixture notice unavailable');
@@ -534,6 +536,37 @@ test('AZPR tools read ranges, list folders and threads for private reviewers onl
   const frame = await f.emit('session', 'context', { sessionID: 'ordinary', agent: 'build', tools: { read: {}, azpr_read_file: {}, azpr_pr_threads: {} } });
   assert.deepEqual(Object.keys(frame.tools), ['read']);
   await assert.rejects(f.registry.tool('azpr_read_file').execute({ path: '/src/Main.java' }, { sessionID: 'ordinary', agent: 'build' }), /only to an active AZPR reviewer session/);
+});
+
+test('private sessions of an unfinished review are deleted except the one holding the draft; completed ones stay', async t => {
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
+  const created = () => f.calls.filter(call => call.kind === 'create').length;
+  assert.match(await f.command(), /\] PARTIAL/);
+  const removed = f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
+  const draft = f.sessionsFor('azpr-review-verifier').at(-1);
+  assert.ok(f.notices.some(n => n.sessionID === draft.id && /# AZPR [a-f0-9]{8} — PARTIAL/.test(n.text)), 'The draft stays readable.');
+  assert.equal(removed.length, created() - 1);
+  assert.equal([...f.sessions.values()].filter(session => session.parentID === 'ordinary').length, 1);
+  assert.equal((await readdir(join(f.stateDirectory, 'sessions'))).length, 1, 'The kept session is remembered for later cleanup.');
+  const before = f.calls.length;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'second'), /\] PARTIAL/);
+  f.calls.splice(0, before);
+  assert.ok(f.calls.some(call => call.kind === 'remove'));
+});
+
+test('evicted reviews take their private sessions with them; deletePrivateSessions false keeps them', async t => {
+  for (const keep of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const store = await createReviewStore({ root: join(directory, 'state') });
+    for (let i = 0; i < 21; i++) {
+      await store.save({ id: i.toString(16).padStart(8, '0'), origin: 'ordinary', completedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+        reportSessions: new Set([`ses_old_${i}`]), publication: new Map(), final: { dispositions: [] } });
+    }
+    const f = await fixture(t, { directory, settings: s => { s.deletePrivateSessions = !keep; } });
+    const removed = f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
+    assert.deepEqual(removed, keep ? [] : ['ses_old_0']);
+  }
 });
 
 test('a PR from another organization is refused before any Azure call; a rejected PAT is explained', async t => {

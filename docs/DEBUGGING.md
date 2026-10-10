@@ -21,16 +21,20 @@ acceptance, Azure source validity or report quality.
 In the installed `plugins/azpr-v2/settings.json`:
 
 ```json
-{ "debug": { "enabled": true, "directory": "" }, "returnReport": "full" }
+{ "debug": { "enabled": true, "directory": "", "keepRuns": 20 }, "returnReport": "full" }
 ```
 
 Restart OpenCode after editing. An empty directory selects
 `${XDG_STATE_HOME:-~/.local/state}/opencode/azpr-v2-debug/`; a relative path is
 resolved against the active project. Each run creates a unique owner-only
 directory named in the receipt. Debug data can contain source, PR details and
-secrets echoed by a service; do not commit or upload it. Nothing is deleted
-automatically. With debug enabled, private data of failed runs is kept for
-inspection (stale scratch data is still removed after 24 hours).
+secrets echoed by a service; do not commit or upload it. When a run starts,
+AZPR deletes its older run directories beyond `debug.keepRuns` (default 20;
+`0` keeps all); a run still active in the same OpenCode process and anything
+AZPR did not create are left alone. With debug enabled, private data of failed
+runs is kept for inspection (stale scratch data is still removed after 24
+hours), and every private session of a review that did not complete is kept
+within the same limit of 20 runs.
 
 | File | What it records |
 | --- | --- |

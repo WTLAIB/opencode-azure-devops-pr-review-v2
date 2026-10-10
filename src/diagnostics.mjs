@@ -1,5 +1,5 @@
 // Opt-in local evidence, NOT a transcript of private reasoning or tool traffic.
-import { appendFile, mkdir, mkdtemp, lstat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, lstat, readdir, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, parse, relative, isAbsolute } from 'node:path';
 import { visibleText } from './output.mjs';
@@ -122,7 +122,37 @@ async function ensureDirectory(path) {
   }
 }
 
-export async function createDiagnostics(settings, context, run) {
+/**
+ * Delete run directories beyond the newest `keep` (0 keeps all). Only
+ * directories AZPR created (`<run id>-XXXXXX`, owned by this user, with the
+ * `.gitignore` written at creation) are considered, never an active run's.
+ * Runs are ordered by their run.json, written once when the run starts.
+ */
+export async function pruneDebugRuns(root, keep, active = new Set()) {
+  if (!keep) return [];
+  const runs = [];
+  for (const name of await readdir(root).catch(() => [])) {
+    const match = /^([a-f0-9]{8})-[A-Za-z0-9]{6}$/.exec(name);
+    if (!match) continue;
+    const path = join(root, name);
+    try {
+      const info = await lstat(path);
+      if (!info.isDirectory() || info.uid !== process.getuid?.()) continue;
+      await lstat(join(path, '.gitignore'));
+      const started = await lstat(join(path, 'run.json')).then(file => file.mtimeMs, () => info.mtimeMs);
+      runs.push({ id: match[1], path, started });
+    } catch { /* Not an AZPR run directory. */ }
+  }
+  runs.sort((a, b) => b.started - a.started);
+  const removed = [];
+  for (const old of runs.slice(keep)) {
+    if (active.has(old.id)) continue;
+    try { await rm(old.path, { recursive: true, force: true }); removed.push(old.path); } catch { /* Another process may own it. */ }
+  }
+  return removed;
+}
+
+export async function createDiagnostics(settings, context, run, active = new Set()) {
   const log = { directory: '', warnings: [], write: async () => {}, append: async () => {} };
   if (!settings.debug.enabled) return log;
   try {
@@ -155,7 +185,8 @@ export async function createDiagnostics(settings, context, run) {
       // Never the PAT.
       azure: settings.azure && { organization: settings.azure.organization, concurrency: settings.azure.concurrency, callTimeoutSeconds: settings.azure.callTimeoutSeconds, archiveMegabytes: settings.azure.archiveMegabytes },
       workflow: settings.workflow,
-      privacy: 'Private review data. May contain source, PR details, model IDs, or secrets echoed by the model. Do not upload or commit. No automatic retention cleanup.' });
+      privacy: `Private review data. May contain source, PR details, model IDs, or secrets echoed by the model. Do not upload or commit. ${settings.debug.keepRuns ? `Only the newest ${settings.debug.keepRuns} run directories are kept (debug.keepRuns).` : 'No automatic cleanup (debug.keepRuns is 0).'}` });
+    await pruneDebugRuns(root, settings.debug.keepRuns, active);
   } catch { log.warnings.push('Debug logging could not start; no diagnostic data was intentionally written. Inspect the OpenCode session instead.'); }
   return log;
 }

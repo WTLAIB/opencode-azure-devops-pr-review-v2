@@ -117,12 +117,19 @@
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Save private stage inputs, visible answers, errors, and results locally. May contain confidential source or model-echoed secrets. No automatic cleanup."
+          "description": "Save private stage inputs, visible answers, errors, and results locally. May contain confidential source or model-echoed secrets. Only the newest debug.keepRuns run directories are kept."
         },
         "directory": {
           "type": "string",
           "default": "",
           "description": "Empty uses XDG_STATE_HOME/opencode/azpr-v2-debug (default ~/.local/state/opencode/azpr-v2-debug). Otherwise an absolute path or path relative to the active OpenCode project directory. No tilde expansion."
+        },
+        "keepRuns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 20,
+          "description": "Run directories kept in the debug directory. When a run starts, older AZPR run directories beyond this count are deleted (never a run still active in this OpenCode process, and nothing AZPR did not create). 0 keeps every run directory."
         }
       }
     },
@@ -149,6 +156,11 @@
       "type": "boolean",
       "default": true,
       "description": "Queue short PROGRESS notices to the invoking conversation during long reviews and publication. They never start a model response."
+    },
+    "deletePrivateSessions": {
+      "type": "boolean",
+      "default": true,
+      "description": "Delete AZPR's private reviewer sessions when they are no longer needed: a completed review's sessions when the review is evicted (the newest 20 are kept, as /pr-comment needs them), and the sessions of an unfinished review at once except the one holding its report or draft (all of them while debug is enabled); those kept sessions follow the same 20-run limit. false keeps every session."
     },
     "azure": {
       "type": "object",

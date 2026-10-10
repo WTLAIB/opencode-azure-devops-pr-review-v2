@@ -17,12 +17,14 @@
   "returnReport": "receipt",
   "debug": {
     "enabled": false,
-    "directory": ""
+    "directory": "",
+    "keepRuns": 20
   },
   "outputLanguage": "en",
   "runTimeoutSeconds": null,
   "shell": "deny",
   "progressNotices": true,
+  "deletePrivateSessions": true,
   "azure": {
     "organization": "",
     "pat": "",
