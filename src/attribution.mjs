@@ -51,9 +51,9 @@ export function commentAttribution(provenance, language, commentModel) {
 
 // Presentation uses validated fields; it neither translates nor invents claims.
 const reportVocabulary = {
-  en: { scope: 'Scope and versions', overview: 'Checks and limitations', findings: 'Confirmed findings', decisions: 'Finding decisions', evidence: 'Evidence and impact', counter: 'Counterevidence', suggestion: 'Correction and verification', location: 'Location', none: 'None reported.', draft: 'Incomplete review draft', warning: 'AI-generated, unconfirmed initial observations. Verification did not complete. This is not an approved review or input for PR comments.', failure: 'Failure', candidates: 'Unconfirmed initial observations', gaps: 'Coverage gaps', coverage: 'Coverage', partial: 'Verification did not produce a structured result. These claims are provisional and cannot be used for PR comments.', stale: 'The PR source changed during the review. Run a new review before commenting.' },
-  tw: { scope: '範圍與版本', overview: '查證與限制', findings: '已確認問題', decisions: '問題裁決理由', evidence: '證據與影響', counter: '反證檢查', suggestion: '修正與驗證建議', location: '位置', none: '未列出。', draft: '未完成審查草稿', warning: 'AI 產生的初審觀察，尚未完成驗證，不能視為已確認結論或用於 PR 留言。', failure: '失敗原因', candidates: '尚未確認的初審觀察', gaps: '覆蓋缺口', coverage: '覆蓋範圍', partial: '驗證沒有產生結構化結果，下列結論僅供檢視，不能用於 PR 留言。', stale: 'PR 原始碼在審查期間已變更，請重新審查後再留言。' },
-  cn: { scope: '范围与版本', overview: '查证与限制', findings: '已确认问题', decisions: '问题裁决理由', evidence: '证据与影响', counter: '反证检查', suggestion: '修正与验证建议', location: '位置', none: '未列出。', draft: '未完成审查草稿', warning: 'AI 产生的初审观察，尚未完成验证，不能视为已确认结论或用于 PR 留言。', failure: '失败原因', candidates: '尚未确认的初审观察', gaps: '覆盖缺口', coverage: '覆盖范围', partial: '验证没有产生结构化结果，下列结论仅供查看，不能用于 PR 留言。', stale: 'PR 源码在审查期间已变更，请重新审查后再留言。' },
+  en: { scope: 'Scope and versions', overview: 'Checks and limitations', findings: 'Confirmed findings', decisions: 'Finding decisions', evidence: 'Evidence and impact', counter: 'Counterevidence', suggestion: 'Correction and verification', location: 'Location', moved: 'initial location', none: 'None reported.', draft: 'Incomplete review draft', warning: 'AI-generated, unconfirmed initial observations. Verification did not complete. This is not an approved review or input for PR comments.', failure: 'Failure', candidates: 'Unconfirmed initial observations', gaps: 'Coverage gaps', coverage: 'Coverage', partial: 'Verification did not produce a structured result. These claims are provisional and cannot be used for PR comments.', stale: 'The PR source changed during the review. Run a new review before commenting.' },
+  tw: { scope: '範圍與版本', overview: '查證與限制', findings: '已確認問題', decisions: '問題裁決理由', evidence: '證據與影響', counter: '反證檢查', suggestion: '修正與驗證建議', location: '位置', moved: '初審位置', none: '未列出。', draft: '未完成審查草稿', warning: 'AI 產生的初審觀察，尚未完成驗證，不能視為已確認結論或用於 PR 留言。', failure: '失敗原因', candidates: '尚未確認的初審觀察', gaps: '覆蓋缺口', coverage: '覆蓋範圍', partial: '驗證沒有產生結構化結果，下列結論僅供檢視，不能用於 PR 留言。', stale: 'PR 原始碼在審查期間已變更，請重新審查後再留言。' },
+  cn: { scope: '范围与版本', overview: '查证与限制', findings: '已确认问题', decisions: '问题裁决理由', evidence: '证据与影响', counter: '反证检查', suggestion: '修正与验证建议', location: '位置', moved: '初审位置', none: '未列出。', draft: '未完成审查草稿', warning: 'AI 产生的初审观察，尚未完成验证，不能视为已确认结论或用于 PR 留言。', failure: '失败原因', candidates: '尚未确认的初审观察', gaps: '覆盖缺口', coverage: '覆盖范围', partial: '验证没有产生结构化结果，下列结论仅供查看，不能用于 PR 留言。', stale: 'PR 源码在审查期间已变更，请重新审查后再留言。' },
 };
 const reportWords = language => reportVocabulary[pick(language, 'en', 'tw', 'cn')];
 
@@ -79,7 +79,7 @@ export function renderReviewSummary(findings, language, introduction = '') {
   return `## PR Review Summary\n\n${introduction ? `${introduction}\n\n` : ''}${counts}\n\n${rows ? `| Severity | Summary | ${w.location} |\n| --- | --- | --- |\n${rows}` : empty}`;
 }
 
-const findingFields = ['id', 'summary', 'severity', 'location', 'evidence', 'counterevidence', 'suggestion', 'origin', 'shardId', 'originalId'];
+const findingFields = ['id', 'summary', 'severity', 'location', 'movedFrom', 'evidence', 'counterevidence', 'suggestion', 'origin', 'shardId', 'originalId'];
 function extraOutput(value, known) {
   const entries = Object.entries(value ?? {}).filter(([key, content]) => !known.includes(key) && content !== '' && content !== null && content !== undefined);
   if (!entries.length) return '';
@@ -91,7 +91,7 @@ function extraOutput(value, known) {
 }
 function renderFinding(finding = {}, w) {
   finding ??= {};
-  return `### ${finding.id || '—'} — ${finding.summary || w.none} (${finding.severity || '—'})\n\n**${w.location}:** ${displayLocation(finding.location) || '—'}\n\n**${w.evidence}**\n\n${finding.evidence || w.none}\n\n**${w.counter}**\n\n${finding.counterevidence || w.none}\n\n**${w.suggestion}**\n\n${finding.suggestion || w.none}${extraOutput(finding, findingFields)}`;
+  return `### ${finding.id || '—'} — ${finding.summary || w.none} (${finding.severity || '—'})\n\n**${w.location}:** ${displayLocation(finding.location) || '—'}${finding.movedFrom ? ` (${w.moved}: ${displayLocation(finding.movedFrom)})` : ''}\n\n**${w.evidence}**\n\n${finding.evidence || w.none}\n\n**${w.counter}**\n\n${finding.counterevidence || w.none}\n\n**${w.suggestion}**\n\n${finding.suggestion || w.none}${extraOutput(finding, findingFields)}`;
 }
 
 function renderSnapshot(final) {

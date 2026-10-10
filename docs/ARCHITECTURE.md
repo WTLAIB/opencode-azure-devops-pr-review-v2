@@ -64,9 +64,15 @@ After preflight, hooks never re-read settings or catalogs.
    `workflow.shardFindings`; shards end only between files, so every finding on
    a file reaches the same verifier (a file is split only when it alone has
    more findings than a shard holds). Each verifier decides its assigned IDs and may
-   merge into any original ID. Missing or invalid decisions trigger a repair
-   turn asking only for those IDs; leftovers become UNREVIEWED (or NEEDS_INFO
-   for incomplete confirmations).
+   merge into any original ID; merging is the only place duplicates are
+   resolved. A decision row is judged by its own fields (an explicit status,
+   or a merge target on a row without a finding) even when it sits in another
+   list. A confirmation that moves its finding to another file must say so
+   with `movedFrom`; otherwise the verifier is asked to confirm or undo the
+   move, and an unconfirmed move is kept with a warning. The report shows a
+   moved finding's initial location. Missing or invalid decisions trigger a
+   repair turn asking only for those IDs; leftovers become UNREVIEWED (or
+   NEEDS_INFO for incomplete confirmations).
 5. **Recheck** — a fresh PR and iteration read compares versions. A changed
    head is STALE; a changed base only adds a warning. A failed recheck is a
    warning because publication rechecks the head anyway.

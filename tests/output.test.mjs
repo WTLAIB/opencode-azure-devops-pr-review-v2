@@ -129,6 +129,59 @@ test('evaluateFinal: cross-shard merge targets are allowed when listed in allIds
   assert.equal(result.dispositions[0].status, 'MERGED');
 });
 
+test('evaluateFinal judges a decision row by its own fields, not only by the list it is in', () => {
+  const originals = [finding('F-1'), finding('F-2'), finding('R-1'), finding('R-2'), finding('R-3')];
+  // As in a live PR #3 verifier: merges written into "confirmed" next to a real confirmation.
+  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE',
+    confirmed: [{ ...finding('F-1'), reason: 'Checked.' }, { id: 'R-1', mergedInto: 'F-1', reason: 'Same cause and fix.' }],
+    merged: [{ ...finding('F-2'), status: 'CONFIRMED', reason: 'Checked.' }],
+    rejected: [{ id: 'R-2', status: 'merged', mergedInto: 'F-2', reason: 'Same cause.' }, { id: 'R-3', mergedInto: 'F-1', reason: 'Guarded elsewhere.' }],
+    needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.deepEqual(issues, []);
+  assert.deepEqual(result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'F-2:CONFIRMED', 'R-1:MERGED', 'R-2:MERGED', 'R-3:REJECTED']);
+  assert.equal(result.dispositions.find(d => d.id === 'F-2').verifiedFinding.summary, 'Defect F-2');
+  assert.equal(Object.hasOwn(result.dispositions.find(d => d.id === 'F-2').verifiedFinding, 'status'), false);
+  assert.ok(result.warnings.some(w => /3 decision\(s\) placed under another category were classified by their own fields/.test(w)));
+  // A confirmation that also names mergedInto stays a confirmation; a bare row without a merge target is still repaired.
+  const kept = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), mergedInto: 'F-2', reason: 'ok' }, { id: 'F-2', reason: 'ok' }],
+    merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals: [finding('F-1'), finding('F-2')] });
+  assert.equal(kept.result.dispositions[0].status, 'CONFIRMED');
+  assert.ok(kept.issues.some(issue => /F-2: the confirmed finding is missing/.test(issue)));
+  // A corrected disposition may carry the finding fields directly instead of a verifiedFinding wrapper.
+  const inline = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1'), status: 'CONFIRMED', reason: 'ok' }] }), { originals: [finding('F-1')] });
+  assert.deepEqual(inline.issues, []);
+  assert.equal(inline.result.dispositions[0].verifiedFinding.evidence, 'HEAD drops the guard.');
+});
+
+test('evaluateFinal asks a verifier to confirm moving a finding to another file and records the initial location', () => {
+  const originals = [finding('R-1', { location: 'head:/tests/test_a.ts:11-13' }), finding('F-1')];
+  const answer = (rows, extra = {}) => JSON.stringify({ status: 'COMPLETE', confirmed: rows, merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r', ...extra });
+  // Same-file line corrections need nothing, and a stray movedFrom is not kept.
+  const lines = evaluateFinal(answer([{ ...finding('R-1', { location: 'head:/tests/test_a.ts:12' }), reason: 'ok' }, { ...finding('F-1', { location: 'head:/src/a.ts:14', movedFrom: 'x' }), reason: 'ok' }]), { originals });
+  assert.deepEqual(lines.issues, []);
+  assert.equal(lines.result.dispositions.some(d => Object.hasOwn(d.verifiedFinding, 'movedFrom')), false);
+  // A silent move to another file gets one correction turn; the result already records where it came from.
+  const moved = evaluateFinal(answer([{ ...finding('R-1', { location: 'head:/src/a.ts:18-19' }), reason: 'ok' }, { ...finding('F-1'), reason: 'ok' }]), { originals });
+  assert.deepEqual(moved.repairIds, ['R-1']);
+  assert.match(moved.issues[0], /R-1: the location moved to another file \(head:\/tests\/test_a\.ts:11-13 → head:\/src\/a\.ts:18-19\)/);
+  assert.match(finalRepairPrompt(moved.issues, moved.repairIds), /movedFrom/);
+  const unconfirmed = moved.result.dispositions.find(d => d.id === 'R-1');
+  assert.equal(unconfirmed.status, 'CONFIRMED');
+  assert.equal(unconfirmed.verifiedFinding.movedFrom, 'head:/tests/test_a.ts:11-13');
+  assert.ok(moved.result.warnings.some(w => /R-1 \(from head:\/tests\/test_a\.ts:11-13\) to another file without confirming the move/.test(w)));
+  // Confirming the move keeps it; the runtime's record of the initial location wins over the model's text.
+  const confirmed = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The defect is in a.ts.', movedFrom: 'the test',
+    verifiedFinding: finding('R-1', { location: 'head:/src/a.ts:18-19' }) }] }), { originals, previous: moved.result, supplement: true });
+  assert.deepEqual(confirmed.issues, []);
+  assert.equal(confirmed.result.dispositions.find(d => d.id === 'R-1').verifiedFinding.movedFrom, 'head:/tests/test_a.ts:11-13');
+  assert.equal(confirmed.result.warnings.some(w => /without confirming the move/.test(w)), false);
+  // Returning to the candidate's file is not a move.
+  const restored = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The test expects the wrong value.',
+    verifiedFinding: finding('R-1', { location: 'head:/tests/test_a.ts:12-13' }) }] }), { originals, previous: moved.result, supplement: true });
+  assert.deepEqual(restored.issues, []);
+  assert.equal(Object.hasOwn(restored.result.dispositions.find(d => d.id === 'R-1').verifiedFinding, 'movedFrom'), false);
+});
+
 test('evaluateFinal keeps an unstructured verifier answer visible and asks for the full object', () => {
   const { result, issues, repairIds } = evaluateFinal('The guard is missing; I confirm F-1.', { originals: [finding('F-1')] });
   assert.equal(result.structured, false);

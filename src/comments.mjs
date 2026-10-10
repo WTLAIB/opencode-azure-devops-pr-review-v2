@@ -16,10 +16,20 @@ const markerTag = fingerprint => `<!-- azpr-comment:${fingerprint} -->`;
 const escapeComments = value => value.replaceAll('<!--', '&lt;!--').replaceAll('-->', '--&gt;');
 
 export function confirmedFindings(review) {
-  // Initial candidates remain audit data. Only verifier-corrected claims count.
+  // Initial candidates remain audit data. Only verifier-corrected claims count;
+  // a moved finding's initial location stays in the report, not in the claim.
   const confirmed = review.final.dispositions.filter(d => d.status === 'CONFIRMED' && isObject(d.verifiedFinding))
-    .map(d => ({ ...d.verifiedFinding, id: d.id }));
+    .map(({ id, verifiedFinding: { movedFrom: _initial, ...finding } }) => ({ ...finding, id }));
   return [...confirmed, ...(review.final.newFindings ?? [])];
+}
+
+/**
+ * Other findings of this review that a skip reason names. The verifier already
+ * merged duplicates, so another finding's comment never covers a finding.
+ */
+function citedFindings(reason, own, findingIds) {
+  const named = String(reason).match(/(?<![A-Za-z0-9_-])[A-Za-z]+-\d+(?!\d)/g) ?? [];
+  return [...new Set(named)].filter(id => id !== own && findingIds.has(id));
 }
 
 export function publicationItems(plan) {
@@ -179,11 +189,20 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false }
     handled.add(finding.id);
     comments.push({ findingId: finding.id, severity, path, startLine: restored.startLine, endLine: restored.endLine, anchor: restored.anchor, body });
   }
+  const findingIds = new Set(confirmedFindings(review).map(finding => finding.id));
   for (const [index, raw] of (Array.isArray(value.skipped) ? value.skipped : []).entries()) {
     const s = isObject(raw) ? aliases(raw, ['findingId', 'reason']) : {};
     if (!eligible.has(s.findingId)) { corrections.push({ action: 'drop-unassigned-skip', index }); continue; }
     if (handled.has(s.findingId)) continue;
-    skip(s.findingId, nonempty(s.reason) ? s.reason.trim() : 'Skipped by the comment planner without a stated reason.');
+    const reason = nonempty(s.reason) ? s.reason.trim() : 'Skipped by the comment planner without a stated reason.';
+    const cited = citedFindings(reason, s.findingId, findingIds);
+    if (cited.length && !final) {
+      issues.push(`skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
+      reported.add(s.findingId);
+      continue;
+    }
+    if (cited.length) corrections.push({ action: 'keep-skip-citing-other-finding', findingId: s.findingId, cited });
+    skip(s.findingId, cited.length ? `${reason} [Runtime: other findings of this review do not cover this one; it remains in the summary index.]` : reason);
   }
   const missing = [...eligible.keys()].filter(id => !handled.has(id));
   if (missing.length && status !== 'CONTINUE') {

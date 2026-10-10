@@ -70,6 +70,27 @@ test('low-severity and unknown findings never become inline comments', () => {
   assert.ok(corrections.some(c => c.action === 'drop-unassigned-comment'));
 });
 
+test('a skip that relies on another finding of this review gets a correction turn', () => {
+  // As in a live PR #3 plan: R-12001 skipped because F-1009's comment on an earlier page "covered" it.
+  const r = review([finding('F-1009'), finding('R-12001', 'medium'), finding('F-1'), finding('F-10')]);
+  const assigned = [finding('R-12001', 'medium'), finding('F-10')];
+  const text = answer([], [{ findingId: 'R-12001', reason: '已由先前頁面的F-1009 inline 留言覆蓋相同根因。' }, { findingId: 'F-10', reason: 'Already discussed in thread 42; F-10 is UTF-8 safe there (TF401174).' }]);
+  const first = evaluatePlanPage(text, { review: r, assigned });
+  assert.equal(first.issues.length, 1, 'Only the skip that names another finding is sent back; F-10 may name itself and is not read as F-1.');
+  assert.match(first.issues[0], /skip for R-12001 relies on F-1009: findings of this review are separate issues/);
+  assert.deepEqual(first.result.skipped.map(s => s.findingId), ['F-10']);
+  const final = evaluatePlanPage(text, { review: r, assigned, final: true });
+  assert.deepEqual(final.issues, []);
+  assert.deepEqual(final.result.skipped.map(s => s.findingId), ['R-12001', 'F-10']);
+  assert.match(final.result.skipped[0].reason, /\[Runtime: other findings of this review do not cover this one; it remains in the summary index\.\]$/);
+  assert.ok(final.corrections.some(c => c.action === 'keep-skip-citing-other-finding' && c.cited.join() === 'F-1009'));
+});
+
+test('confirmed findings for planning and the summary carry the final location only', () => {
+  const r = review([finding('F-1', 'high', { location: 'head:/src/a.ts:18', movedFrom: 'head:/tests/a.test.ts:3' })]);
+  assert.deepEqual(confirmedFindings(r).map(f => [f.location, Object.hasOwn(f, 'movedFrom')]), [['head:/src/a.ts:18', false]]);
+});
+
 test('CONTINUE checkpoints, INCOMPLETE pages and unparseable answers degrade safely', () => {
   const r = review([finding('F-1'), finding('F-2')]);
   const assigned = r.final.dispositions.map(d => d.verifiedFinding);

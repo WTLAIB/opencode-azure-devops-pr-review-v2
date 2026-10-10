@@ -107,6 +107,14 @@ test('final reports show runtime-owned versions, coverage, warnings and unreview
   assert.match(renderFinalReport(final('PARTIAL'), 'en'), /PARTIAL: Verification did not produce a structured result/);
 });
 
+test('a finding that verification moved to another file shows its initial location', () => {
+  const moved = { ...final(), dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The defect is in a.ts.',
+    verifiedFinding: { ...finding('R-1'), location: 'head:/src/a.ts:18', movedFrom: 'head:/tests/a.test.ts:3' } }] };
+  assert.match(renderFinalReport(moved, 'en'), /\*\*Location:\*\* head:\/src\/a\.ts:18 \(initial location: head:\/tests\/a\.test\.ts:3\)/);
+  assert.match(renderFinalReport(moved, 'zh-TW'), /\*\*位置:\*\* head:\/src\/a\.ts:18 \(初審位置: head:\/tests\/a\.test\.ts:3\)/);
+  assert.doesNotMatch(renderFinalReport(moved, 'en'), /"movedFrom"/, 'The field is rendered, not dumped as extra JSON.');
+});
+
 test('provenance aggregates shard sessions per role and model', () => {
   const stages = [
     { role: 'azpr-review-functional', model: 'p/f', status: 'COMPLETE', result: { findings: [1, 2] } },

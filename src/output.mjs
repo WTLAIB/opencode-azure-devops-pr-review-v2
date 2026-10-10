@@ -7,6 +7,10 @@
  * attempts, acceptance degrades per item instead of discarding the review:
  * missing verifier decisions become UNREVIEWED and incomplete confirmations
  * become NEEDS_INFO, while every other result stays usable.
+ *
+ * A verifier decision row is judged by its own fields, not only by the list it
+ * was placed in, and a confirmation that moves its finding to another file
+ * must say so (`movedFrom`); the runtime then records the candidate's location.
  */
 import { parsePullRequestUrl } from './azure.mjs';
 
@@ -18,7 +22,14 @@ const canonicalEnum = value => typeof value === 'string' ? value.trim().toUpperC
 const SEVERITIES = ['high', 'medium', 'low'];
 export const FINDING_FIELDS = Object.freeze(['id', 'summary', 'evidence', 'counterevidence', 'location', 'severity', 'suggestion']);
 const DECISIONS = ['CONFIRMED', 'MERGED', 'REJECTED', 'NEEDS_INFO'];
+const DECISION_FIELDS = [...FINDING_FIELDS, 'status', 'reason', 'mergedInto', 'verifiedFinding', 'movedFrom'];
 const MAX_LISTED_ISSUES = 25;
+
+/** Path part of a location such as "head:/src/a.ts:12-14"; '' when there is none. */
+export function locationPath(location) {
+  const match = /^(?:head|base)?:?(\/[^:]+)(?::\d+(?:-\d+)?)?$/.exec(String(location ?? '').trim());
+  return match ? match[1] : '';
+}
 
 export function visibleText(response) {
   return (response?.parts ?? []).filter(p => p.type === 'text' && !p.ignored).map(p => p.text ?? '').join('\n');
@@ -290,23 +301,54 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
   };
 }
 
+const hasFindingContent = row => FINDING_FIELDS.some(key => key !== 'id' && text(asText(row[key])));
+
+/**
+ * The decision a row states itself. An explicit valid `status` wins over the
+ * list the row was placed in, and a row under `confirmed` that names
+ * `mergedInto` but carries no finding is a merge: it cannot be a confirmation.
+ */
+function rowDecision(row, listed) {
+  const explicit = canonicalEnum(row.status);
+  if (DECISIONS.includes(explicit)) return explicit;
+  if (listed === 'CONFIRMED' && text(asText(row.mergedInto)) && !isObject(row.verifiedFinding) && !hasFindingContent(row)) return 'MERGED';
+  return listed;
+}
+
+/** A confirmation's finding is its `verifiedFinding`, otherwise the row's own finding fields. */
+function decisionRow(row, status) {
+  const id = asText(row.id ?? row.verifiedFinding?.id).trim();
+  if (status !== 'CONFIRMED') return { ...row, id, status };
+  const { reason, verifiedFinding, mergedInto, status: _stated, movedFrom, ...finding } = row;
+  return { id, status, reason, verifiedFinding: isObject(verifiedFinding) ? verifiedFinding : finding, ...(movedFrom !== undefined ? { movedFrom } : {}) };
+}
+
 function normalizeDecisionRows(value, warnings) {
   const source = aliasFields(value, ['status', 'dispositions', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'report'], warnings);
+  const fields = item => aliasFields(isObject(item) ? item : { reason: asText(item) }, DECISION_FIELDS, warnings);
   const decisions = [];
   for (const item of rows(source.dispositions, warnings, 'dispositions')) {
-    const row = aliasFields(isObject(item) ? item : { reason: asText(item) }, ['id', 'status', 'reason', 'mergedInto', 'verifiedFinding'], warnings);
-    decisions.push({ ...row, id: asText(row.id).trim(), status: canonicalEnum(row.status) });
+    const row = fields(item);
+    decisions.push(decisionRow(row, canonicalEnum(row.status)));
   }
-  for (const [category, status] of Object.entries({ confirmed: 'CONFIRMED', merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' })) {
+  let reclassified = 0;
+  for (const [category, listed] of Object.entries({ confirmed: 'CONFIRMED', merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' })) {
     for (const item of rows(source[category], warnings, category)) {
-      const row = aliasFields(isObject(item) ? item : { reason: asText(item) }, [...FINDING_FIELDS, 'reason', 'mergedInto', 'verifiedFinding'], warnings);
-      if (status === 'CONFIRMED') {
-        const { reason, verifiedFinding, mergedInto, ...finding } = row;
-        decisions.push({ id: asText(row.id ?? verifiedFinding?.id).trim(), status, reason, verifiedFinding: verifiedFinding ?? finding });
-      } else decisions.push({ ...row, id: asText(row.id).trim(), status });
+      const row = fields(item);
+      const status = rowDecision(row, listed);
+      if (status !== listed) reclassified++;
+      decisions.push(decisionRow(row, status));
     }
   }
+  if (reclassified) warnings.add(`${reclassified} decision(s) placed under another category were classified by their own fields.`);
   return { source, decisions };
+}
+
+/** A valid confirmation located in another file than its candidate; null when the file is unchanged. */
+function fileMove(original, row) {
+  const from = locationPath(original?.location), to = locationPath(row.verifiedFinding.location);
+  if (!from || !to || from === to) return null;
+  return { from: original.location.trim(), to: row.verifiedFinding.location, acknowledged: text(asText(row.movedFrom)) || text(asText(row.verifiedFinding.movedFrom)) };
 }
 
 /**
@@ -341,7 +383,8 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
     if (!supplement && byId.has(row.id)) { warnings.add(`Kept the first of several decisions for ${row.id}.`); continue; }
     byId.set(row.id, row);
   }
-  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set() };
+  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set() }, moves = new Map();
+  const candidates = new Map(originals.map(original => [original.id, original]));
   for (const id of assignedIds) {
     const row = byId.get(id);
     if (!row) { repairIds.add(id); continue; }
@@ -354,7 +397,13 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
       row.verifiedFinding = normalizeFinding(row.verifiedFinding, warnings);
       row.verifiedFinding.id = id;
       const problems = findingProblems(row.verifiedFinding, { requireLocation: true });
-      if (problems.length) { issues.push(`${id}: the confirmed finding is ${problems.join('; ')}.`); repairIds.add(id); invalid.confirm.add(id); }
+      if (problems.length) { issues.push(`${id}: the confirmed finding is ${problems.join('; ')}.`); repairIds.add(id); invalid.confirm.add(id); continue; }
+      const move = fileMove(candidates.get(id), row);
+      if (move) moves.set(id, move);
+      if (move && !move.acknowledged) {
+        issues.push(`${id}: the location moved to another file (${move.from} → ${move.to}). Keep the candidate's file unless the defect stated in summary is in the other file; to keep the move, add "movedFrom": "${move.from}" and explain the move in reason.`);
+        repairIds.add(id);
+      }
     }
   }
   const missing = assignedIds.filter(id => !byId.has(id));
@@ -368,8 +417,14 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
   });
   const report = supplement && !text(asText(source.report)) ? previous?.report ?? '' : asText(source.report).trim();
   const modelStatus = supplement ? previous?.modelStatus ?? 'UNSPECIFIED' : canonicalEnum(source.status) || 'UNSPECIFIED';
-  const state = { structured: true, modelStatus, decisions: byId, newFindings, report, warnings, corrections: parsed.corrections };
+  const state = { structured: true, modelStatus, decisions: byId, newFindings, report, warnings, corrections: parsed.corrections, moves };
   return { issues, repairIds: [...repairIds], result: finishFinal(state, originals, invalid, [...repairIds]) };
+}
+
+// The runtime records where a moved finding came from; a model's own value is not kept.
+function confirmedFinding(finding, move) {
+  const { movedFrom: _stated, ...rest } = finding;
+  return move ? { ...rest, movedFrom: move.from } : rest;
 }
 
 /** Degrade unresolved items per finding; nothing else is discarded. */
@@ -402,7 +457,7 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
     }
     const entry = { id: original.id, status: row.status, reason: asText(row.reason).trim() || 'No reason given.',
       ...(row.status === 'MERGED' ? { mergedInto: row.mergedInto } : {}),
-      ...(row.status === 'CONFIRMED' ? { verifiedFinding: row.verifiedFinding } : {}) };
+      ...(row.status === 'CONFIRMED' ? { verifiedFinding: confirmedFinding(row.verifiedFinding, state.moves?.get(original.id)) } : {}) };
     dispositions.push(entry);
     resolved.set(entry.id, entry);
   }
@@ -423,6 +478,8 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
   }
   const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
   if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
+  const unconfirmed = dispositions.filter(row => row.status === 'CONFIRMED' && state.moves?.get(row.id)?.acknowledged === false);
+  if (unconfirmed.length) derived.push(`Verification moved ${unconfirmed.map(row => `${row.id} (from ${row.verifiedFinding.movedFrom})`).join(', ')} to another file without confirming the move; check the location.`);
   const newFindings = state.newFindings.filter(row => !findingProblems(row, { requireLocation: true }).length);
   if (newFindings.length < state.newFindings.length) derived.push(`${state.newFindings.length - newFindings.length} new verifier finding(s) were incomplete and are listed in the report only.`);
   return {
@@ -452,7 +509,7 @@ export function initialRepairPrompt(issues, { parseOnly = false } = {}) {
 export function finalRepairPrompt(issues, ids, { includeNewFindings = false, full = false, parseOnly = false } = {}) {
   if (parseOnly) return parseRepairPrompt(issues);
   if (full) return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete verification JSON object (status, confirmed, merged, rejected, needsInfo, newFindings, report) with exactly one decision for each assigned finding ID.`;
-  return `AZPR runtime: some decisions need correction.\n${listIssues(issues)}\n\nReturn one JSON object {"dispositions": [...]${includeNewFindings ? ', "newFindings": [...]' : ''}} containing decisions only for: ${ids.join(', ')}. Each row has id, status (CONFIRMED, MERGED, REJECTED or NEEDS_INFO) and reason; CONFIRMED rows include "verifiedFinding" with summary, evidence, counterevidence, location, severity and suggestion; MERGED rows include "mergedInto". Earlier decisions are kept.`;
+  return `AZPR runtime: some decisions need correction.\n${listIssues(issues)}\n\nReturn one JSON object {"dispositions": [...]${includeNewFindings ? ', "newFindings": [...]' : ''}} containing decisions only for: ${ids.join(', ')}. Each row has id, status (CONFIRMED, MERGED, REJECTED or NEEDS_INFO) and reason; CONFIRMED rows include "verifiedFinding" with summary, evidence, counterevidence, location, severity and suggestion (plus "movedFrom" when the location is in another file than the candidate's); MERGED rows include "mergedInto". Earlier decisions are kept.`;
 }
 
 /** Keep supplementary text literal; do not shell-tokenize, unquote or expand it. */

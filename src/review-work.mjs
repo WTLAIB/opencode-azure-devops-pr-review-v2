@@ -3,8 +3,9 @@
  * sharded verification and a deterministic final version recheck.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, syntaxProblem } from './output.mjs';
+import { evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
 
+export { locationPath };
 const ID_SPAN = 1000;
 const text = value => typeof value === 'string' && value.trim().length > 0;
 
@@ -15,12 +16,6 @@ export function shardFiles(files, size) {
   const shards = [];
   for (let index = 0; index < sorted.length; index += size) shards.push(sorted.slice(index, index + size));
   return shards;
-}
-
-/** Path part of a location such as "head:/src/a.ts:12-14". */
-export function locationPath(location) {
-  const match = /^(?:head|base)?:?(\/[^:]+)(?::\d+(?:-\d+)?)?$/.exec(String(location ?? '').trim());
-  return match ? match[1] : '';
 }
 
 /**

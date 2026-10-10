@@ -14,15 +14,18 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 228 tests across settings (including the
+`npm run check` and `npm test` pass: 234 tests across settings (including the
 `mcp` → `azure` migration), host helpers, session transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
-logged), the reviewers' tools, output acceptance and correction prompts, comment
-validation and markers, planning and publication, review sharding, persistence,
-rendering, installation (including an output pipe closed mid-install, which
-used to leave the lock and a staged copy of the previous settings) and the
-runtime integration (fake host plus a fake Azure DevOps REST service).
+logged), the reviewers' tools, output acceptance and correction prompts
+(including verifier rows judged by their own fields and confirmations that move
+a finding to another file), comment validation and markers (including skips
+that rely on another finding), planning and publication, review sharding,
+persistence, rendering, installation (including an output pipe closed
+mid-install, which used to leave the lock and a staged copy of the previous
+settings) and the runtime integration (fake host plus a fake Azure DevOps REST
+service).
 
 ## REST API version check
 
@@ -68,7 +71,7 @@ rule so the offline runtime tests catch a regression.
 | Verification | 30 findings in 2 verification sessions |
 | Planning | 8 pages of at most four findings |
 | Publication | 21 threads (20 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
-| Largest provider request | 27,185 characters |
+| Largest provider request | 27,911 characters (27,185 before the prompt rules on moved findings and skips) |
 | REST calls | 71 |
 
 ## Live run (Azure DevOps Services, real model)
@@ -124,9 +127,55 @@ One duplicate remained in the report (`F-2001` and `R-2001`, the same cause in
 findings into different verifiers. Verification shards now end only between
 files; a unit test reproduces the 48-finding distribution.
 
+## Live run: large PR with publication (commit 68c1f7e)
+
+PR kevin888y/OpenCode #3 again, at the same head, with the same models, language
+and service, running the installed package of commit `68c1f7e` (the revision
+before the verifier and planner corrections below). The 24 AZPR comments of an
+earlier run were deleted first; the comments of this run were kept on the PR.
+
+| Step | Result |
+| --- | --- |
+| `/pr-check` | READY, 9 s |
+| `/pr-review` | COMPLETE, 719 s: initial review 589 s (26 sessions), verification 129 s (5 sessions); 66 candidates → 26 confirmed (6 high, 19 medium, 1 low), 40 merged duplicates, none rejected; one correction turn |
+| `/pr-comment --publish` | POSTED, 157 s: 7 planning pages of one model request each and no tools (147 s), then 25 items (summary and 24 inline) created in about 5 s and all read back as VERIFIED |
+| Second publish | POSTED, all 25 ALREADY_PRESENT, no write |
+
+- 681 REST calls over the four commands, none retried; four 404s for paths that
+  models guessed.
+- About 7.60 million input and 88,000 output tokens; initial review sessions
+  used 95 % of the input.
+- Independent read-back: 23 of the 24 inline threads sit on changed right-side
+  lines; the 24th reports a removed check and sits on the line after the
+  removal, where HEAD has no line for it.
+- The two `worker_capacity.py` findings that stayed separate in the previous run
+  were merged, as file-grouped verification shards intend.
+- Initial sessions used on average 3.71 of the 4 `workflow.parallelSessions`
+  slots; the 26 sessions ran in about seven waves.
+
+Two observations led to corrections in the current revision:
+
+1. One verifier wrote four merges into `confirmed` (`{"id", "mergedInto",
+   "reason"}`). They were treated as incomplete confirmations and cost one
+   correction turn. A decision row is now judged by its own fields: an explicit
+   status, or a merge target on a row without a finding.
+2. A verifier moved R-12001, a test that asserts the wrong result, from the test
+   file onto the implementation lines of F-1009 without saying so. The planner
+   then skipped R-12001 as covered by F-1009's comment, so the test got no
+   comment and the summary index showed the implementation file. A move to
+   another file must now be declared with `movedFrom` (otherwise the verifier is
+   asked to confirm or undo it, and an unconfirmed move is kept with a warning),
+   the report shows the initial location, and the planner may not skip a
+   finding because another finding of the review is commented (a prompt rule,
+   plus a correction turn when a skip names another finding). Moves stay
+   allowed: of the 60 confirmations in the live runs so far, 2 moved to another
+   file, and the other one (R-4001, from a region JSON file to the code that
+   drops its fields) was correct.
+
 ## Not yet validated
 
-- Comment planning and publication on a large PR (25 confirmed findings).
+- A live run of the corrections above; they are validated offline and with the
+  exact-host fixtures only.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.

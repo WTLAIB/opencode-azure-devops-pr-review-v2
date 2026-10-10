@@ -29,8 +29,10 @@ without `--publish`; `--publish` reuses an existing preview exactly.
   **💡 Suggested fix**, followed by the model attribution and a hidden marker.
 
 Low findings, findings that cannot be anchored, and issues that an existing
-discussion already covers are skipped with a local reason; skips are listed in
-the preview and receipt.
+discussion on the PR already covers are skipped with a local reason; skips are
+listed in the preview and receipt. Findings of the same review never cover each
+other: the verifier already merged duplicates, so each confirmed high or medium
+finding gets its own comment unless one of those reasons applies.
 
 ## Planning
 
@@ -57,6 +59,7 @@ Every page is validated item by item:
 | End line that does not match the quoted anchor | Derived from the anchor. |
 | Anchor that exists at other lines in observed HEAD text | Moved to the unique matching lines. |
 | Body over 1,200 characters, unknown path, missing anchor, ambiguous anchor, missing findings | Sent back as a correction turn; after `workflow.repairAttempts` the item is skipped (bodies up to 4,000 characters are accepted on the last pass). |
+| A skip whose reason names another finding of this review | Sent back as a correction turn; on the last pass the skip stays, marked as not covered by the other finding. |
 | Planner returns INCOMPLETE | Finished comments are kept; the rest are skipped with the planner's reason. |
 
 A low finding never becomes an inline comment, and the verified severity always

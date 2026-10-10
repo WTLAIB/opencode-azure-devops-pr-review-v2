@@ -299,10 +299,16 @@ test('shell: "inherit" keeps the host decision and exposes the tool; only an all
 
 test('a hung Azure DevOps read is aborted, retried and reported without blocking the review', async t => {
   let hung = 0, visible;
+  // Only this BASE read hangs. The other reviewer reads HEAD in parallel; it must
+  // neither hang here nor serve this read from the run cache, whatever the order.
   const f = await fixture(t, { azureTimeoutMs: 400, async during({ session, role, invoke }) {
     if (role !== 'azpr-review-functional') return;
-    f.azure.state.fail.items = () => { hung++; return new Promise(() => {}); };
-    visible = await invoke(session, 'azpr_read_file', { path: '/src/Main.java' });
+    f.azure.state.fail.items = call => {
+      if (call.query['versionDescriptor.version'] !== f.azure.state.base) return undefined;
+      hung++;
+      return new Promise(() => {});
+    };
+    visible = await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'base' });
     delete f.azure.state.fail.items;
   } });
   const receipt = await f.command();

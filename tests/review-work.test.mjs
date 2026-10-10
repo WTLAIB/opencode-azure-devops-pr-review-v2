@@ -156,6 +156,22 @@ test('repair turns fix a verifier that missed decisions', async t => {
   assert.equal(f.calls.filter(call => call.role === 'azpr-review-verifier').length, 1);
 });
 
+test('a verifier that moves a finding to another file confirms the move in a correction turn', async t => {
+  const f = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], behave: async ({ role, payload, turn }) => {
+    if (ROLES[role].format === 'initial') return initial(payload, role.endsWith('-risk') ? [finding('R-1', '/tests/a.test.ts')] : []);
+    const moved = { ...finding('R-1'), location: 'head:/src/a.ts:18' };
+    if (turn === 0) return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...moved, reason: 'Verified.' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' });
+    return JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The defect stated in summary is in a.ts.', verifiedFinding: { ...moved, movedFrom: 'head:/tests/a.test.ts:3' } }] });
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  const [decision] = final.dispositions;
+  assert.equal(decision.status, 'CONFIRMED');
+  assert.equal(decision.verifiedFinding.location, 'head:/src/a.ts:18');
+  assert.equal(decision.verifiedFinding.movedFrom, 'head:/tests/a.test.ts:3');
+  assert.equal(final.reviewWarnings.some(message => /without confirming the move/.test(message)), false);
+  assert.equal(f.calls.filter(call => call.role === 'azpr-review-verifier').length, 1, 'The correction stays in the same verifier stage.');
+});
+
 test('an incomplete Azure file list asks reviewers to discover paths and records them', async t => {
   const f = await context(t, { files: ['/a.ts'], behave: async ({ role, payload }) => {
     if (ROLES[role].format === 'initial') {

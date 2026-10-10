@@ -3,8 +3,10 @@
 `commentWork` identifies this work page. Account for every finding in `findings`
 (at most four per page): each one appears exactly once, either in `comments` or
 in `skipped` with a reason. Other pages handle other findings; `priorPages`
-lists what earlier pages already produced so you can avoid duplicates and keep
-the summary consistent.
+lists what earlier pages already produced so the summary stays consistent.
+The verifier already merged duplicate findings: each finding is a separate
+issue, so never skip one because another finding of this review has or will get
+a comment.
 
 The runtime already read what this page normally needs, so most pages need no
 tool call at all:
@@ -24,10 +26,10 @@ when some finding has no excerpt).
 ## Anchors
 
 For each comment choose a changed file at `snapshot.head` and the smallest
-useful line range, then quote those exact lines in `anchor` (joined with
-newlines, no trailing newline) **without** the `N | ` prefixes. Never use base-file
-coordinates or guess line numbers; skip a finding you cannot anchor.
-Deleted-only and binary files cannot be anchored.
+useful line range for the finding's own claim, then quote those exact lines in
+`anchor` (joined with newlines, no trailing newline) **without** the `N | `
+prefixes. Never use base-file coordinates or guess line numbers; skip a finding
+you cannot anchor. Deleted-only and binary files cannot be anchored.
 
 ## Summary text
 

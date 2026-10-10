@@ -17,9 +17,10 @@ findings:
 - Low-severity findings are not inline; they appear in the summary index.
 - Skip a finding (with a local reason) when it cannot be anchored reliably, its
   claim cannot be stated faithfully within the length limit, or an existing
-  discussion (human or bot, not deleted) already covers the same issue. Read the
-  existing threads with azpr_pr_threads to check this; resolved threads
-  still count as discussions.
+  discussion on the PR (human or bot, not deleted; name its thread) already
+  covers the same issue. Read the existing threads with azpr_pr_threads to check
+  this; resolved threads still count as discussions. Comments planned for other
+  findings of this review are not existing discussions.
 
 Inline body format, in outputLanguage, at most 1,200 characters:
 - First line: `🔴 high: ` or `🟡 medium: ` followed by a concrete defect title.

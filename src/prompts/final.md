@@ -19,11 +19,17 @@ Return exactly one decision per assigned ID:
 - confirmed: the complete corrected finding under the same ID (summary,
   evidence, counterevidence, location, severity, suggestion) plus reason.
   Re-establish the location from source (`head:/path:line`), reassess severity
-  from the decisive impact and explain a severity change in reason.
+  from the decisive impact and explain a severity change in reason. The
+  location is where the defect stated in summary is: correct the lines freely,
+  but keep the candidate's file unless that defect is in another file. When you
+  move a finding to another file, add `movedFrom` with the candidate's location
+  and explain the move in reason.
 - rejected: a concrete source-based refutation.
 - needsInfo: the missing evidence and what would settle it.
 - merged: `mergedInto` names another original ID (any ID in allFindingIds) with
   the same root cause and correction. Do not merge into itself or form cycles.
+  Findings that need different corrections stay separate, each at its own
+  location, even when they share a cause.
 
 A merge or a decision explained only in prose does not count; every assigned ID
 needs its own row. New, independently verified issues that no candidate covers
