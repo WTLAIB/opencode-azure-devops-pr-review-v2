@@ -77,18 +77,30 @@ Publication is deterministic runtime code using the Azure DevOps REST API
 3. For each saved item: skip it when its marker exists (`ALREADY_PRESENT`),
    otherwise create it with the exact saved content and right-side coordinates
    (`POSTED`); Azure DevOps attaches the iteration context itself. Each result
-   is saved immediately, and each attempt is saved as `SENDING` before its
-   request. A failed item does not stop the others (`FAILED`); a create whose
-   outcome is unknown (timeout, a lost connection, or a stop or restart during
-   the request) is `UNCERTAIN`. Writes are never retried automatically.
+   is saved immediately. A failed item does not stop the others (`FAILED`); a
+   create whose outcome is unknown (timeout, a lost connection, or a stop or
+   restart during the request) is `UNCERTAIN`. Writes are never retried
+   automatically.
 4. List the threads again: created and uncertain items whose marker is present
    become `VERIFIED`; an uncertain item without a marker stays `UNCERTAIN`,
    because Azure DevOps may still finish the request.
 
-A later run does not write an `UNCERTAIN` (or leftover `SENDING`) item again
-until its marker appears or 15 minutes have passed since that attempt; until
-then it stays `UNCERTAIN`. This prevents a delayed create and its retry from
-both landing as duplicate threads.
+Before each create, the attempt is recorded under `attempts/` in the state
+directory, per PR and marker and shared by every review of that PR and every
+OpenCode process. If that record cannot be written, nothing more is sent and
+the item is `FAILED`. A later publication, from this review or another review
+of the same PR:
+
+- never sends an item again whose create returned a thread ID, even while the
+  thread list does not show it yet (it is reported as `POSTED` or
+  `UNVERIFIED` with that thread);
+- does not send an item with an unknown outcome until its marker appears or 15
+  minutes have passed since that attempt (`UNCERTAIN` until then);
+- may send an item again whose create failed with a definite error.
+
+Azure DevOps offers no way to confirm that an unknown create will never land.
+After 15 minutes AZPR assumes it did not; a create the service completed even
+later would appear twice.
 
 The receipt status is `POSTED` when every item is verified or already present,
 `PARTIALLY_POSTED` when some failed, and `FAILED` when none succeeded. Run the

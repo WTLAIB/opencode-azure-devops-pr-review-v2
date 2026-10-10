@@ -77,6 +77,23 @@ test('sessions kept from unfinished runs are bounded; older runs release theirs'
   assert.equal((await readdir(store.dirs.sessions)).length, 2);
 });
 
+test('publication attempts are shared per PR, re-read before writes and expire after 90 days', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, now: () => clock });
+  const one = await store.attempts('["org","p","r",1]'), other = await store.attempts('["org","p","r",1]');
+  await one.set('m1', { state: 'SENDING', at: new Date(clock).toISOString() });
+  await other.set('m2', { state: 'CREATED', threadId: 5, at: new Date(clock).toISOString() });
+  assert.equal(other.get('m1').state, 'SENDING', 'A write re-reads what another instance saved.');
+  assert.equal((await store.attempts('["org","p","r",2]')).get('m1'), undefined, 'Another PR has its own record.');
+  await one.remove(['m1']);
+  assert.equal((await store.attempts('["org","p","r",1]')).get('m1'), undefined);
+  clock += 91 * 24 * 3600 * 1000;
+  assert.equal((await store.attempts('["org","p","r",1]')).get('m2'), undefined);
+  await writeFile(join(store.dirs.attempts, (await readdir(store.dirs.attempts))[0]), 'not json');
+  await assert.rejects(store.attempts('["org","p","r",1]'));
+});
+
 test('sweep removes only stale unreferenced data', async t => {
   const directory = await root(t);
   const now = Date.now();

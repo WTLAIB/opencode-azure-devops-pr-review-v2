@@ -14,19 +14,42 @@ import { repositoryArchive, searchArchive } from './search.mjs';
 export const REVIEW_TOOLS = Object.freeze({ readDiff: 'azpr_read_diff', readFile: 'azpr_read_file', searchCode: 'azpr_search_code', findFiles: 'azpr_find_files', listFiles: 'azpr_list_files', threads: 'azpr_pr_threads' });
 export const REVIEW_TOOL_NAMES = Object.freeze(Object.values(REVIEW_TOOLS));
 export const READ_LINES = 1000;
-const READ_CHARACTERS = 60000;
-/** One source line cut to READ_CHARACTERS, saying how to find the rest. */
-const clipLine = (row, number) => row.length <= READ_CHARACTERS ? row
-  : `${row.slice(0, READ_CHARACTERS)} [line ${number} has ${row.length} characters; the rest is not shown. azpr_search_code shows any part of it around a search term.]`;
+/**
+ * OpenCode keeps only a preview of a tool output over 51,200 bytes (its
+ * default tool_output.max_bytes) and saves the rest where private reviewers
+ * cannot read it, so every AZPR tool answer stays below that in UTF-8 bytes.
+ */
+const OUTPUT_BYTES = 48000;
+const READ_BYTES = 45000;
 const LIST_ENTRIES = 1000;
 const FIND_RESULTS = 200;
-const THREAD_CHARACTERS = 40000;
+const THREAD_BYTES = 40000;
 const COMMENT_EXCERPT = 2000;
 const MARKERS = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
 const HAS_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/;
 
 export class ToolInputError extends Error {
   constructor(message) { super(message); this.name = 'ToolInputError'; }
+}
+
+const bytes = text => Buffer.byteLength(text);
+/** End index of the longest part of `text` from `start` within `budget` UTF-8 bytes; never splits a surrogate pair. */
+function fitEnd(text, start, budget) {
+  let used = 0, index = start;
+  while (index < text.length) {
+    const code = text.codePointAt(index);
+    const width = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (used + width > budget) break;
+    used += width;
+    index += code > 0xffff ? 2 : 1;
+  }
+  return index;
+}
+/** How many of `rows` (joined by newlines) fit in `budget` bytes. */
+function fitting(rows, budget) {
+  let used = 0, count = 0;
+  for (const row of rows) { used += bytes(row) + 1; if (used > budget) break; count++; }
+  return count;
 }
 
 const versionProperty = { type: 'string', description: '"head" (the PR source, default), "base" (the merge base the PR is compared with) or a full 40-character commit SHA.' };
@@ -45,12 +68,13 @@ export function reviewToolDefinitions() {
     },
     {
       name: REVIEW_TOOLS.readFile,
-      description: `Read one file of the PR repository at an exact commit. Returns numbered lines ("N | text"; the prefix is not file content), at most ${READ_LINES} lines per call; use startLine/endLine for other ranges.`,
+      description: `Read one file of the PR repository at an exact commit. Returns numbered lines ("N | text"; the prefix is not file content), at most ${READ_LINES} lines per call; use startLine/endLine for other ranges, and startColumn to continue a line too long for one read.`,
       input: { type: 'object', additionalProperties: false, required: ['path'], properties: {
         path: { type: 'string', description: 'Repository path such as /src/app.ts.' },
         version: versionProperty,
         startLine: { type: 'integer', minimum: 1, description: 'First line to return (default 1).' },
         endLine: { type: 'integer', minimum: 1, description: `Last line to return (default: up to ${READ_LINES} lines from startLine).` },
+        startColumn: { type: 'integer', minimum: 1, description: 'Character position in startLine to start from (default 1); the answer names it when a long line continues.' },
       } },
     },
     {
@@ -118,8 +142,12 @@ const lineArgument = (value, name) => {
   return value;
 };
 
-/** Numbered lines of one file, bounded by line count and characters. */
-export function renderFile(file, { label, startLine, endLine }) {
+/**
+ * Numbered lines of one file, bounded by line count and bytes. A line longer
+ * than one read is shown in parts: startColumn continues it, so no source is
+ * out of reach.
+ */
+export function renderFile(file, { label, startLine, endLine, startColumn }) {
   const head = `${file.path} at ${label} ${file.version.slice(0, 12)}`;
   if (file.binary) return { text: `${head} is a binary file (${file.size} bytes); its content is not shown.` };
   if (file.tooLarge) return { text: `${head} is larger than AZPR reads (${file.size} bytes); its content is not shown.` };
@@ -128,19 +156,27 @@ export function renderFile(file, { label, startLine, endLine }) {
   const total = lines.length;
   if (!total) return { text: `${head} is empty.` };
   if (startLine && startLine > total) return { text: `${head} has ${total} lines; startLine ${startLine} is past the end.` };
-  const first = startLine ?? 1;
+  const first = startLine ?? 1, column = startColumn ?? 1;
+  if (column > 1 && column > lines[first - 1].length) return { text: `${head}: line ${first} has ${lines[first - 1].length} characters; startColumn ${column} is past its end.` };
   let last = Math.min(endLine ?? first + READ_LINES - 1, total, first + READ_LINES - 1);
   if (last < first) throw new ToolInputError('endLine must not be smaller than startLine.');
   const rows = [];
-  let characters = 0;
+  let used = 0, cut;
   for (let number = first; number <= last; number++) {
-    const row = clipLine(`${number} | ${lines[number - 1]}`, number);
-    if (rows.length && characters + row.length > READ_CHARACTERS) { last = number - 1; break; }
-    rows.push(row);
-    characters += row.length + 1;
+    const from = number === first ? column - 1 : 0, prefix = `${number} | `, line = lines[number - 1];
+    const row = prefix + (from ? line.slice(from) : line);
+    if (used + bytes(row) + 1 <= READ_BYTES) { rows.push(row); used += bytes(row) + 1; continue; }
+    if (rows.length) { last = number - 1; break; }
+    const end = fitEnd(line, from, READ_BYTES - bytes(prefix) - 1);
+    rows.push(prefix + line.slice(from, end));
+    cut = { number, next: end + 1, length: line.length };
+    last = number;
+    break;
   }
-  const more = last < total ? ` Continue with startLine ${last + 1}.` : '';
-  return { text: `${head} — lines ${first}-${last} of ${total}.${more}\nThe "N | " prefixes are line numbers, not file content.\n\n${rows.join('\n')}` };
+  const part = column > 1 || cut ? ` (line ${first} from character ${column}${cut ? ` to ${cut.next - 1} of ${cut.length}` : ''})` : '';
+  const more = cut ? ` Line ${cut.number} continues: call again with startLine ${cut.number} and startColumn ${cut.next}.`
+    : last < total ? ` Continue with startLine ${last + 1}.` : '';
+  return { text: `${head} — lines ${first}-${last} of ${total}${part}.${more}\nThe "N | " prefixes are line numbers, not file content.\n\n${rows.join('\n')}` };
 }
 
 const DIFF_LEGEND = 'Each line is "<mark> <BASE line> <HEAD line> | text": "-" exists only in BASE, "+" only in HEAD, a blank mark in both; the prefix is not file content.';
@@ -151,15 +187,19 @@ function wholeFile(file, { title, mark, version }) {
   if (!lines.length) return `${title}: the file is empty.`;
   const width = String(lines.length).length, pad = number => String(number).padStart(width), blank = ' '.repeat(width);
   const rows = [];
-  let characters = 0, last = 0;
+  let used = 0, last = 0, more = '';
   for (let index = 0; index < Math.min(lines.length, READ_LINES); index++) {
-    const row = clipLine(`${mark} ${mark === '+' ? `${blank} ${pad(index + 1)}` : `${pad(index + 1)} ${blank}`} | ${lines[index]}`, index + 1);
-    if (rows.length && characters + row.length > READ_CHARACTERS) break;
-    rows.push(row);
-    characters += row.length + 1;
-    last = index + 1;
+    const prefix = `${mark} ${mark === '+' ? `${blank} ${pad(index + 1)}` : `${pad(index + 1)} ${blank}`} | `, row = prefix + lines[index];
+    if (used + bytes(row) + 1 <= READ_BYTES) { rows.push(row); used += bytes(row) + 1; last = index + 1; continue; }
+    if (!rows.length) {
+      const end = fitEnd(lines[index], 0, READ_BYTES - bytes(prefix) - 1);
+      rows.push(prefix + lines[index].slice(0, end));
+      more = `\nLine 1 has ${lines[index].length} characters; continue it with azpr_read_file (version "${version}", startLine 1, startColumn ${end + 1}).`;
+      last = 1;
+    }
+    break;
   }
-  const more = last < lines.length ? `\nLines ${last + 1}-${lines.length} follow: read them with azpr_read_file (version "${version}", startLine ${last + 1}).` : '';
+  if (!more && last < lines.length) more = `\nLines ${last + 1}-${lines.length} follow: read them with azpr_read_file (version "${version}", startLine ${last + 1}).`;
   return `${title}: the whole file (${lines.length} lines) ${mark === '+' ? 'is new in HEAD' : 'exists only in BASE'}.\n${DIFF_LEGEND}${more}\n\n${rows.join('\n')}`;
 }
 
@@ -182,13 +222,13 @@ export function renderDiff({ path, change, base, head, snapshot, context, fromHu
   let characters = 0, next = fromHunk - 1;
   while (next < hunks.length) {
     let rendered = renderHunk(hunks[next], width);
-    if (parts.length && characters + rendered.length > READ_CHARACTERS) break;
-    if (rendered.length > READ_CHARACTERS) {
-      const cut = rendered.lastIndexOf('\n', READ_CHARACTERS);
-      rendered = rendered.slice(0, cut > 0 ? cut : READ_CHARACTERS) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+    if (parts.length && characters + bytes(rendered) > READ_BYTES) break;
+    if (bytes(rendered) > READ_BYTES) {
+      const end = fitEnd(rendered, 0, READ_BYTES - 300), cut = rendered.lastIndexOf('\n', end);
+      rendered = rendered.slice(0, cut > 0 ? cut : end) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
     }
     parts.push(rendered);
-    characters += rendered.length + 2;
+    characters += bytes(rendered) + 2;
     next++;
   }
   const more = next < hunks.length ? `\nHunks ${next + 1}-${hunks.length} follow: call again with fromHunk ${next + 1}.` : '';
@@ -229,8 +269,9 @@ export function renderMatches(items, { pattern, path, label, version }) {
     .sort();
   const head = `${found.length} path(s) under ${path} at ${label} ${version.slice(0, 12)} match ${JSON.stringify(pattern)}`;
   if (!found.length) return `${head}. Check the folder with azpr_list_files or try a broader pattern.`;
-  const more = found.length > FIND_RESULTS ? `\n${found.length - FIND_RESULTS} more are not shown; narrow the pattern or the folder.` : '';
-  return `${head}.\n${found.slice(0, FIND_RESULTS).join('\n')}${more}`;
+  const shown = found.slice(0, fitting(found.slice(0, FIND_RESULTS), READ_BYTES));
+  const more = found.length > shown.length ? `\n${found.length - shown.length} more are not shown; narrow the pattern or the folder.` : '';
+  return `${head}.\n${shown.join('\n')}${more}`;
 }
 
 /** A path filter: a folder (its files and subfolders) or a glob. */
@@ -248,8 +289,10 @@ export function renderSearch(result, { query, label, version, archive }) {
     .filter(Boolean);
   const scope = `${result.searched} text file(s) at ${label} ${version.slice(0, 12)}${notes.length ? `; not searched: ${notes.join(', ')}` : ''}`;
   if (!result.total) return `No match for ${JSON.stringify(query)} in ${scope}. Try a shorter or different name, or find files with azpr_find_files.`;
-  const more = result.total > result.matches.length ? `\nShowing ${result.matches.length} of ${result.total}; narrow with path or wholeWord.` : '';
-  return `${result.total} match(es) for ${JSON.stringify(query)} in ${result.files} file(s) (searched ${scope}).${more}\n${result.matches.map(match => `${match.path}:${match.line}: ${match.text}`).join('\n')}`;
+  const rows = result.matches.map(match => `${match.path}:${match.line}: ${match.text}`);
+  const shown = rows.slice(0, fitting(rows, READ_BYTES));
+  const more = result.total > shown.length ? `\nShowing ${shown.length} of ${result.total}; narrow with path or wholeWord.` : '';
+  return `${result.total} match(es) for ${JSON.stringify(query)} in ${result.files} file(s) (searched ${scope}).${more}\n${shown.join('\n')}`;
 }
 
 /** Folder entries, folders marked with a trailing slash. */
@@ -258,27 +301,30 @@ export function renderListing(items, { path, label, version }) {
     .filter(item => typeof item?.path === 'string' && normalizePath(item.path) !== path)
     .map(item => `${normalizePath(item.path)}${item.isFolder === true || item.gitObjectType === 'tree' ? '/' : ''}`)
     .sort();
-  const shown = entries.slice(0, LIST_ENTRIES);
+  const shown = entries.slice(0, fitting(entries.slice(0, LIST_ENTRIES), READ_BYTES));
   const more = entries.length > shown.length ? `\n${entries.length - shown.length} more entries are not shown; list a subfolder instead.` : '';
   return { text: `${path} at ${label} ${version.slice(0, 12)} — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}.\n${shown.join('\n')}${more}` };
 }
 
-/** One thread cut to THREAD_CHARACTERS: whole comments first, then the start of the next one. */
+const threadText = shown => JSON.stringify(shown, null, 1);
+
+/** One thread cut to THREAD_BYTES: whole comments first, then the start of the next one. */
 function boundThread(row) {
-  const budget = THREAD_CHARACTERS - JSON.stringify({ ...row, comments: [], omittedComments: row.comments.length }).length;
+  // Compact JSON bytes leave room for the indentation of the shown form.
+  const budget = THREAD_BYTES * 0.85 - bytes(JSON.stringify({ ...row, comments: [], omittedComments: row.comments.length }));
   const comments = [];
   let used = 0;
   for (const comment of row.comments) {
-    const size = JSON.stringify(comment).length + 1;
+    const size = bytes(JSON.stringify(comment)) + 1;
     if (used + size <= budget) { comments.push(comment); used += size; continue; }
     const marker = ' [shortened: this thread is longer than AZPR shows]';
-    let content = comment.content.slice(0, Math.max(0, budget - used - 200));
-    while (content && JSON.stringify({ ...comment, content: content + marker }).length + 1 > budget - used) content = content.slice(0, Math.floor(content.length * 0.8));
-    if (content) comments.push({ ...comment, content: content + marker });
+    const room = budget - used - bytes(JSON.stringify({ ...comment, content: marker })) - 1;
+    if (room > 0) comments.push({ ...comment, content: comment.content.slice(0, fitEnd(comment.content, 0, room / 1.2)) + marker });
     break;
   }
-  const omitted = row.comments.length - comments.length;
-  return { ...row, comments, ...(omitted ? { omittedComments: omitted } : {}) };
+  const bounded = () => ({ ...row, comments, ...(row.comments.length > comments.length ? { omittedComments: row.comments.length - comments.length } : {}) });
+  while (comments.length > 1 && bytes(threadText([bounded()])) > THREAD_BYTES) comments.pop();
+  return bounded();
 }
 
 /** Live discussion threads in a compact JSON form. */
@@ -305,19 +351,26 @@ export function renderThreads(threads, { path, threadId }) {
       comments });
   }
   let shown = rows, note = '';
-  while (shown.length > 1 && JSON.stringify(shown).length > THREAD_CHARACTERS) shown = shown.slice(0, Math.max(1, Math.floor(shown.length * 0.8)));
+  while (shown.length > 1 && bytes(threadText(shown)) > THREAD_BYTES) shown = shown.slice(0, Math.max(1, Math.floor(shown.length * 0.8)));
   // A single thread that is still too long is cut inside, so the loop always ends.
-  if (shown.length === 1 && JSON.stringify(shown).length > THREAD_CHARACTERS) shown = [boundThread(shown[0])];
+  if (shown.length === 1 && bytes(threadText(shown)) > THREAD_BYTES) shown = [boundThread(shown[0])];
   if (shown.length < rows.length) note = `\n${rows.length - shown.length} more thread(s) are not shown; filter by path or threadId.`;
   if (threadId !== undefined && !rows.length) return { text: `Thread ${threadId} does not exist on this PR or has no live comments.` };
-  return { text: `${rows.length} live thread(s)${path ? ` on ${path}` : ''}.${note}\n${JSON.stringify(shown, null, 1)}` };
+  return { text: `${rows.length} live thread(s)${path ? ` on ${path}` : ''}.${note}\n${threadText(shown)}` };
 }
 
 /**
  * Run one tool for an authorized private session. Returns the visible text and,
  * for file reads, the observed source for later anchor checks.
  */
-export async function runReviewTool(name, input, { azure, run, snapshot }) {
+export async function runReviewTool(name, input, context) {
+  const result = await reviewTool(name, input, context);
+  if (bytes(result.text) <= OUTPUT_BYTES) return result;
+  // Every renderer is bounded below this; the cut is only a safety net.
+  return { ...result, text: `${result.text.slice(0, fitEnd(result.text, 0, OUTPUT_BYTES - 200))}\n[Output cut to the tool-output limit; request a narrower range.]` };
+}
+
+async function reviewTool(name, input, { azure, run, snapshot }) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   // Models often send an optional argument as null or "": that means not given.
   const args = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null && !(typeof value === 'string' && !value.trim())));
@@ -358,9 +411,11 @@ export async function runReviewTool(name, input, { azure, run, snapshot }) {
     const path = pathArgument(args.path);
     const { sha, label } = resolveVersion(args.version, snapshot);
     const startLine = lineArgument(args.startLine, 'startLine'), endLine = lineArgument(args.endLine, 'endLine');
+    const startColumn = lineArgument(args.startColumn, 'startColumn');
     if (startLine && endLine && endLine < startLine) throw new ToolInputError('endLine must not be smaller than startLine.');
+    if (startColumn && !startLine) throw new ToolInputError('startColumn continues startLine; give both.');
     const file = await azure.readFile(run, snapshot, path, sha);
-    return { ...renderFile(file, { label, startLine, endLine }), ...(typeof file.text === 'string' ? { observation: { path, version: sha, text: file.text } } : {}) };
+    return { ...renderFile(file, { label, startLine, endLine, startColumn }), ...(typeof file.text === 'string' ? { observation: { path, version: sha, text: file.text } } : {}) };
   }
   if (name === REVIEW_TOOLS.listFiles) {
     const path = pathArgument(args.path, '/');

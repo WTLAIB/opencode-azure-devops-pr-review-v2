@@ -595,7 +595,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (!publicationItems(review.plan).length) return { status: 'NOTHING_TO_POST', report: preview };
       run.phase = 'publication';
       progress(run, `Posting ${publicationItems(review.plan).length} comment item(s).`);
-      const result = await publishPlan({ run, review, azure, progress: message => progress(run, message), persist: () => persistReview(review) });
+      // Attempts are shared by every review of this PR, so another review cannot resend an unresolved create.
+      const attempts = await store.attempts(targetKey(review.target)).catch(error => {
+        throw new Error(`The publication attempt record could not be read (${errorText(error)}); nothing was posted.`);
+      });
+      const result = await publishPlan({ run, review, azure, attempts, progress: message => progress(run, message), persist: () => persistReview(review) });
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
     for (const stage of run.stages) review.reportSessions.add(stage.sessionID);

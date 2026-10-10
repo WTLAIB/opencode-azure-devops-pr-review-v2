@@ -26,7 +26,7 @@ test('versions resolve to the snapshot; anything else is refused', () => {
   for (const bad of ['main', 'abc123', 42]) assert.throws(() => resolveVersion(bad, snapshot), /version/);
 });
 
-test('file reads are numbered with real line numbers and bounded by lines and characters', () => {
+test('file reads are numbered with real line numbers and bounded by lines and bytes', () => {
   const long = Array.from({ length: READ_LINES + 5 }, (_, i) => `l${i + 1}`).join('\n') + '\n';
   const first = renderFile(file(long), { label: 'HEAD (PR source)' }).text;
   assert.match(first, new RegExp(`lines 1-${READ_LINES} of ${READ_LINES + 5}\\. Continue with startLine ${READ_LINES + 1}\\.`));
@@ -37,8 +37,12 @@ test('file reads are numbered with real line numbers and bounded by lines and ch
   assert.match(renderFile(file('a\n'), { label: 'x', startLine: 5 }).text, /has 1 lines; startLine 5 is past the end/);
   const wide = Array.from({ length: 50 }, () => 'y'.repeat(2000)).join('\n');
   const bounded = renderFile(file(wide), { label: 'x' }).text;
-  assert.ok(bounded.length < 65000);
-  assert.match(bounded, /lines 1-29 of 50\. Continue with startLine 30\./);
+  assert.ok(Buffer.byteLength(bounded) < 48000);
+  assert.match(bounded, /lines 1-22 of 50\. Continue with startLine 23\./);
+  const chinese = Array.from({ length: 50 }, () => '中'.repeat(1000)).join('\n');
+  const wideBytes = renderFile(file(chinese), { label: 'x' }).text;
+  assert.ok(Buffer.byteLength(wideBytes) < 48000, 'Multi-byte text is bounded in bytes, as OpenCode measures tool output.');
+  assert.match(wideBytes, /lines 1-14 of 50\. Continue with startLine 15\./);
   assert.match(renderFile(file('', { text: undefined, binary: true, size: 9 }), { label: 'x' }).text, /binary file \(9 bytes\)/);
 });
 
@@ -81,6 +85,8 @@ test('tool arguments are validated before any Azure call', async () => {
   const lenient = { ...context, azure: { readFile: async (_run, _snapshot, path, version) => ({ path, version, text: 'x\n', size: 2 }), threads: async () => [],
     listItems: async (_run, _snapshot, path, version, recursive) => { listed.push([path, version, recursive]); return []; } } };
   assert.match((await runReviewTool('azpr_read_file', { path: '/a', version: '', startLine: null, endLine: null }, lenient)).text, /^\/a at HEAD/);
+  await assert.rejects(runReviewTool('azpr_read_file', { path: '/a', startColumn: 5 }, lenient), /startColumn continues startLine; give both/);
+  await assert.rejects(runReviewTool('azpr_read_file', { path: '/a', startLine: 1, startColumn: 0 }, lenient), /startColumn must be a positive integer/);
   await runReviewTool('azpr_list_files', { path: '', version: null, recursive: null }, lenient);
   await runReviewTool('azpr_find_files', { pattern: '*.py', path: ' ' }, lenient);
   assert.deepEqual(listed, [['/', snapshot.head, false], ['/', snapshot.head, true]]);
@@ -202,13 +208,26 @@ test('one oversized thread is cut inside instead of looping forever', () => {
   assert.ok(shown[0].omittedComments > 0 && shown[0].comments.length > 0);
 });
 
-test('a single very long source line is bounded in reads and diffs', () => {
-  const line = 'z'.repeat(2_200_000);
-  const read = renderFile(file(`${line}\nnext\n`), { label: 'HEAD (PR source)' }).text;
-  assert.ok(read.length < 61000);
-  assert.match(read, /\[line 1 has 2200004 characters; the rest is not shown\. azpr_search_code shows any part of it/);
-  assert.match(read, /lines 1-1 of 2\. Continue with startLine 2\./, 'Reading continues with the next line.');
+test('a single very long source line is read losslessly in parts and bounded in diffs', () => {
+  const line = Array.from({ length: 220000 }, (_, i) => `v${i % 10}x中`).join('').slice(0, 2_200_000) + 'TAIL_MARKER';
+  const source = file(`${line}\nnext\n`);
+  let text = renderFile(source, { label: 'HEAD (PR source)' }).text, rebuilt = '', reads = 0;
+  for (;;) {
+    reads++;
+    assert.ok(Buffer.byteLength(text) < 48000);
+    rebuilt += text.split('\n\n').slice(1).join('\n\n').replace(/^1 \| /, '');
+    const next = /Line 1 continues: call again with startLine 1 and startColumn (\d+)\./.exec(text);
+    if (!next) break;
+    text = renderFile(source, { label: 'HEAD (PR source)', startLine: 1, startColumn: Number(next[1]) }).text;
+  }
+  assert.ok(reads > 10);
+  assert.equal(rebuilt.split('\n')[0], line, 'Every character of the line is returned exactly once.');
+  assert.match(text, /lines 1-2 of 2 \(line 1 from character \d+\)\./, 'The last part of the line is followed by the next line.');
+  assert.match(renderFile(source, { label: 'x', startLine: 2, startColumn: 9 }).text, /line 2 has 4 characters; startColumn 9 is past its end/);
   const diff = renderDiff({ path: '/min.js', change: { changeType: ['edit'] }, snapshot,
     base: { path: '/min.js', version: snapshot.base, text: 'short\n' }, head: { path: '/min.js', version: snapshot.head, text: `${line}\n` } });
-  assert.ok(diff.length < 62000, `diff is ${diff.length} characters`);
+  assert.ok(Buffer.byteLength(diff) < 48000, `diff is ${Buffer.byteLength(diff)} bytes`);
+  const added = renderDiff({ path: '/min.js', change: { changeType: ['add'] }, snapshot, base: null, head: { path: '/min.js', version: snapshot.head, text: `${line}\n` } });
+  assert.ok(Buffer.byteLength(added) < 48000);
+  assert.match(added, /continue it with azpr_read_file \(version "head", startLine 1, startColumn \d+\)/);
 });

@@ -67,7 +67,10 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
   iterations), `/pr-check` reads, the discussion digest for comment planning,
   HEAD source excerpts for planning, thread creation and marker read-back.
 - **Reviewers** (models) use six read-only AZPR tools, visible only in AZPR's
-  private sessions and always bound to the run's repository:
+  private sessions and always bound to the run's repository. Every answer
+  stays below 48,000 UTF-8 bytes: OpenCode keeps only a preview of a tool
+  output over its default limit of 51,200 bytes, and private reviewers cannot
+  read the rest it saves:
   - `azpr_read_diff` — what the PR changed in one file: BASE → HEAD hunks with
     both line numbers, 5 unchanged lines before and 3 after each change
     (extended to the start of the enclosing block when it is near). A change
@@ -75,7 +78,9 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
     numbers is folded to one line per repeat listing the values that differ.
     The diff is computed locally from the two file reads below;
   - `azpr_read_file` — one file at `head`, `base` or a full commit SHA as
-    numbered lines, at most 1,000 lines (60,000 characters) per call;
+    numbered lines, at most 1,000 lines (45,000 bytes) per call; a line longer
+    than one read is returned in parts with `startColumn`, keeping its line
+    number, so no source is out of reach;
   - `azpr_search_code` — literal text in the contents of every text file at
     `head`, `base` or a commit, changed or not, as `path:line: text` matches
     (at most 100, 20 per file), optionally limited to a folder or a name glob.

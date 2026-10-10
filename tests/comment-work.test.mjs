@@ -94,9 +94,16 @@ test('CONTINUE checkpoints keep finished work and stop when no progress is made'
   await assert.rejects(prepareComments(stuck.review, stuck.store, loop.invoke), /without progress/);
 });
 
-function publisher(azure) {
+/** Publication attempts as the store keeps them per PR; `fail` makes every write throw. */
+function memoryAttempts() {
+  const entries = {};
+  return { entries, fail: false, get: marker => entries[marker],
+    async set(marker, entry) { if (this.fail) throw new Error('disk full'); entries[marker] = entry; },
+    async remove(markers) { if (this.fail) throw new Error('disk full'); for (const marker of markers) delete entries[marker]; } };
+}
+function publisher(azure, attempts = memoryAttempts()) {
   const api = createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: 1000 }), fetch: azure.fetch, retryDelayMs: 1 });
-  return { api, run: { id: 'run1', active: true, controller: new AbortController() } };
+  return { api, attempts, run: { id: 'run1', active: true, controller: new AbortController() } };
 }
 async function plannedReview(t, azure) {
   const ctx = await setup(t, [finding('F-1'), finding('F-2')], azure);
@@ -108,9 +115,9 @@ async function plannedReview(t, azure) {
 test('publication posts exact saved text, reads every marker back, and is idempotent on re-run', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
-  const { api, run } = publisher(azure);
+  const { api, run, attempts } = publisher(azure);
   let persisted = 0;
-  const first = await publishPlan({ run, review, azure: api, persist: async () => { persisted++; } });
+  const first = await publishPlan({ run, review, azure: api, attempts, persist: async () => { persisted++; } });
   assert.equal(first.status, 'POSTED');
   assert.equal(azure.state.threads.length, 3);
   assert.deepEqual(azure.state.threads.map(thread => thread.comments[0].content), publicationItems(review.plan).map(item => item.content));
@@ -118,7 +125,7 @@ test('publication posts exact saved text, reads every marker back, and is idempo
   assert.ok(persisted >= 3);
   const writes = () => azure.callsTo('createThread').length;
   const before = writes();
-  const second = await publishPlan({ run, review, azure: api });
+  const second = await publishPlan({ run, review, azure: api, attempts });
   assert.equal(second.status, 'POSTED');
   assert.equal(writes(), before, 'Existing markers are skipped, not posted again.');
   assert.ok([...review.publication.values()].every(entry => entry.state === 'ALREADY_PRESENT'));
@@ -127,14 +134,14 @@ test('publication posts exact saved text, reads every marker back, and is idempo
 test('a failed write leaves a partial result that a later run completes without duplicates', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
-  const { api, run } = publisher(azure);
+  const { api, run, attempts } = publisher(azure);
   let failures = 1;
   azure.state.fail.createThread = () => { if (failures-- > 0) return azureError(503, 'ServiceUnavailableException', 'Busy.'); };
-  const first = await publishPlan({ run, review, azure: api });
+  const first = await publishPlan({ run, review, azure: api, attempts });
   assert.equal(first.status, 'PARTIALLY_POSTED');
   assert.equal(azure.state.threads.length, 2);
   assert.equal([...review.publication.values()].filter(entry => entry.state === 'FAILED').length, 1);
-  const second = await publishPlan({ run, review, azure: api });
+  const second = await publishPlan({ run, review, azure: api, attempts });
   assert.equal(second.status, 'POSTED');
   assert.equal(azure.state.threads.length, 3);
 });
@@ -142,12 +149,12 @@ test('a failed write leaves a partial result that a later run completes without 
 test('an uncertain write that did land is confirmed by read-back', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
-  const { api, run } = publisher(azure);
+  const { api, run, attempts } = publisher(azure);
   azure.state.fail.createThread = call => {
     azure.state.threads.push({ id: 77, comments: [{ content: call.body.comments[0].content }] });
     return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comments: [] }) };
   };
-  const result = await publishPlan({ run, review, azure: api });
+  const result = await publishPlan({ run, review, azure: api, attempts });
   assert.equal(result.status, 'POSTED');
   assert.ok([...review.publication.values()].every(entry => entry.state === 'VERIFIED' && entry.threadId === 77));
 });
@@ -155,7 +162,7 @@ test('an uncertain write that did land is confirmed by read-back', async t => {
 test('an uncertain write is never repeated until its marker appears or the settle time passes', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
-  const { api, run } = publisher(azure);
+  const { api, run, attempts } = publisher(azure);
   let clock = Date.parse('2026-01-01T00:00:00Z');
   const now = () => clock;
   const late = [];
@@ -164,37 +171,80 @@ test('an uncertain write is never repeated until its marker appears or the settl
     late.push(call.body.comments[0].content);
     return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comments: [] }) };
   };
-  const first = await publishPlan({ run, review, azure: api, now });
+  const first = await publishPlan({ run, review, azure: api, attempts, now });
   assert.equal(first.status, 'FAILED');
   assert.match(first.reason, /not posted again until their marker appears or 15 minutes/);
   assert.ok([...review.publication.values()].every(entry => entry.state === 'UNCERTAIN'), 'No read-back marker does not prove the write failed.');
   const writes = () => azure.callsTo('createThread').length;
   const sent = writes();
   clock += 5 * 60 * 1000;
-  assert.equal((await publishPlan({ run, review, azure: api, now })).status, 'FAILED');
+  assert.equal((await publishPlan({ run, review, azure: api, attempts, now })).status, 'FAILED');
   assert.equal(writes(), sent, 'A retry within the settle time sends nothing.');
   azure.state.threads.push({ id: 90, comments: [{ content: late[0] }] });
-  const landed = await publishPlan({ run, review, azure: api, now });
+  const landed = await publishPlan({ run, review, azure: api, attempts, now });
   assert.equal(landed.counts.ALREADY_PRESENT, 1, 'The delayed create is found by its marker.');
   assert.equal(writes(), sent);
   delete azure.state.fail.createThread;
   clock += 15 * 60 * 1000;
-  assert.equal((await publishPlan({ run, review, azure: api, now })).status, 'POSTED');
+  assert.equal((await publishPlan({ run, review, azure: api, attempts, now })).status, 'POSTED');
   assert.equal(azure.state.threads.length, 3, 'After the settle time the missing items are written once.');
   review.publication.get(publicationItems(review.plan)[0].marker).state = 'SENDING';
-  assert.equal((await publishPlan({ run, review, azure: api, now })).status, 'POSTED', 'Existing markers win over a leftover SENDING record.');
+  assert.equal((await publishPlan({ run, review, azure: api, attempts, now })).status, 'POSTED', 'Existing markers win over a leftover SENDING record.');
+});
+
+test('another review of the same PR does not resend an unresolved create', async t => {
+  const azure = fakeAzure();
+  const first = (await plannedReview(t, azure)).review, second = (await plannedReview(t, azure)).review;
+  assert.deepEqual(publicationItems(second.plan).map(item => item.marker), publicationItems(first.plan).map(item => item.marker));
+  const { api, run, attempts } = publisher(azure);
+  azure.state.fail.createThread = () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comments: [] }) });
+  await publishPlan({ run, review: first, azure: api, attempts });
+  const sent = azure.callsTo('createThread').length;
+  const other = await publishPlan({ run, review: second, azure: api, attempts });
+  assert.equal(azure.callsTo('createThread').length, sent, 'The second review sends nothing while the first one\'s creates are unresolved.');
+  assert.ok([...second.publication.values()].every(entry => entry.state === 'UNCERTAIN'));
+  assert.match(other.reason, /earlier attempt whose outcome is unknown/);
+});
+
+test('a create that returned a thread is not sent again while the thread list lags', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  let id = 50;
+  azure.state.fail.createThread = () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ++id, comments: [] }) });
+  const first = await publishPlan({ run, review, azure: api, attempts });
+  assert.ok([...review.publication.values()].every(entry => entry.state === 'UNVERIFIED'));
+  assert.equal(first.status, 'FAILED');
+  const sent = azure.callsTo('createThread').length;
+  await publishPlan({ run, review, azure: api, attempts });
+  assert.equal(azure.callsTo('createThread').length, sent, 'Returned threads are not sent again.');
+  assert.ok([...review.publication.values()].every(entry => entry.state === 'UNVERIFIED' && entry.threadId > 50 && entry.earlierAttempt), 'Still reported as not read back.');
+});
+
+test('nothing is sent when the attempt cannot be saved first', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  attempts.fail = true;
+  const result = await publishPlan({ run, review, azure: api, attempts });
+  assert.equal(azure.callsTo('createThread').length, 0);
+  assert.equal(result.status, 'FAILED');
+  assert.match(result.reason, /attempt could not be saved \(disk full\); nothing was sent/);
+  attempts.fail = false;
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'POSTED');
+  assert.equal(azure.state.threads.length, 3);
 });
 
 test('publication refuses a changed source commit or an inactive PR before writing', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
-  const { api, run } = publisher(azure);
+  const { api, run, attempts } = publisher(azure);
   azure.state.head = 'c'.repeat(40);
-  const stale = await publishPlan({ run, review, azure: api });
+  const stale = await publishPlan({ run, review, azure: api, attempts });
   assert.equal(stale.status, 'STALE');
   azure.state.head = head;
   azure.state.status = 'completed';
-  assert.equal((await publishPlan({ run, review, azure: api })).status, 'INCOMPLETE');
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'INCOMPLETE');
   assert.equal(azure.callsTo('createThread').length, 0);
 });
 

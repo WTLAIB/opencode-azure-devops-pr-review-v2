@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, cp, rm, readdir } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, writeFile, cp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
@@ -395,6 +395,21 @@ test('stale reviews are reported and cannot be commented on; a moved base stays 
   const drift = await fixture(t);
   drift.azure.state.afterVersions = { base: 'd'.repeat(40) };
   assert.match(await drift.command(), /\] COMPLETE/);
+});
+
+test('publication sends nothing when the attempt record cannot be written', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  const attempts = join(f.stateDirectory, 'attempts');
+  await chmod(attempts, 0o500);
+  const failed = await f.command('pr-comment', `${review} --publish`);
+  assert.match(failed, /\] FAILED/);
+  assert.match(failed, /publication attempt could not be saved/);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+  await chmod(attempts, 0o700);
+  assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED/);
+  assert.equal(f.azure.state.threads.length, 3);
 });
 
 test('comment preview, publication, idempotent re-publication and a restart in between', async t => {

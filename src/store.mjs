@@ -1,7 +1,7 @@
 /**
  * Durable private state: completed reviews (with plans and publication
- * ledgers), their comment data, undelivered receipts and the reviewer
- * sessions kept from unfinished runs.
+ * ledgers), their comment data, undelivered receipts, the reviewer sessions
+ * kept from unfinished runs and publication attempts per PR.
  *
  * Reviews survive an OpenCode restart so /pr-comment works afterwards in the
  * original conversation. The newest `limit` reviews are kept; older ones and
@@ -17,6 +17,7 @@ export const REVIEW_LIMIT = 20;
 const RECEIPT_LIMIT = 50;
 const STALE_DATA_MS = 24 * 60 * 60 * 1000;
 const FORMAT = 1;
+const ATTEMPT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export function stateRoot(env = process.env) {
   const base = isAbsolute(env.XDG_STATE_HOME ?? '') ? env.XDG_STATE_HOME : join(homedir(), '.local', 'state');
@@ -48,7 +49,7 @@ async function writeAtomic(path, content) {
  * deleted (for example to delete its reviewer sessions); its errors are ignored.
  */
 export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIMIT, now = () => Date.now(), onRemove } = {}) {
-  const dirs = { reviews: join(root, 'reviews'), data: join(root, 'data'), receipts: join(root, 'receipts'), sessions: join(root, 'sessions') };
+  const dirs = { reviews: join(root, 'reviews'), data: join(root, 'data'), receipts: join(root, 'receipts'), sessions: join(root, 'sessions'), attempts: join(root, 'attempts') };
   for (const directory of [root, ...Object.values(dirs)]) await mkdir(directory, { recursive: true, mode: 0o700 });
 
   async function readReview(file) {
@@ -135,6 +136,35 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
         await rm(join(dirs.sessions, old), { force: true });
       }
       return released;
+    },
+    /**
+     * Thread-creation attempts of one PR, keyed by comment marker and shared by
+     * every review and process: an attempt is recorded before its request is
+     * sent and its outcome after. Writes re-read the file and throw on
+     * failure, so a caller can refuse to send what it could not record.
+     * Entries older than 90 days are dropped.
+     */
+    async attempts(prKey) {
+      const file = join(dirs.attempts, `${checksum(prKey).slice(0, 32)}.json`);
+      const read = async () => {
+        let raw;
+        try { raw = await readFile(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+        const value = JSON.parse(raw);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The publication attempt record is not valid JSON.');
+        return Object.fromEntries(Object.entries(value).filter(([, entry]) => now() - Date.parse(entry?.at) < ATTEMPT_RETENTION_MS));
+      };
+      let entries = await read();
+      const update = async change => {
+        const current = await read();
+        change(current);
+        await writeAtomic(file, JSON.stringify(current));
+        entries = current;
+      };
+      return {
+        get: marker => entries[marker],
+        set: (marker, entry) => update(current => { current[marker] = entry; }),
+        remove: markers => update(current => { for (const marker of markers) delete current[marker]; }),
+      };
     },
     /** Last-resort receipt file when the conversation notice cannot be queued. */
     async writeReceipt(runId, text) {
