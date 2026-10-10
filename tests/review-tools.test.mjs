@@ -162,7 +162,7 @@ test('content search covers unchanged files at one commit, filtered by folder or
   assert.deepEqual(archives, [snapshot.head, snapshot.base], 'One archive per commit and run.');
   const unavailable = { azure: { archive: async () => ({ tooLarge: true, size: 123456789 }) }, run: {}, snapshot };
   assert.match((await runReviewTool('azpr_search_code', { query: 'parse' }, unavailable)).text,
-    /^Content search is unavailable for this repository: the repository archive is larger than AZPR reads \(123456789 bytes\)\. Find files with azpr_find_files/);
+    /^Content search is unavailable for this repository: the repository archive is larger than the azure\.archiveMegabytes setting allows \(123456789 bytes\)\. Find files with azpr_find_files/);
   const refused = { azure: { archive: async () => assert.fail('Invalid input reaches Azure DevOps.') }, run: {}, snapshot };
   for (const [args, message] of [[{}, /query must be literal text/], [{ query: ' x ' }, /query must be literal text/], [{ query: 'a\nb' }, /query must be literal text/], [{ query: 'x'.repeat(201) }, /query must be literal text/],
     [{ query: 'parse', wholeWord: 'yes' }, /wholeWord must be true or false/], [{ query: 'parse', path: '/src\n/tests' }, /path must be a folder/], [{ query: 'parse', version: 'main' }, /version/]])

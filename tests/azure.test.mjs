@@ -16,7 +16,7 @@ const iterations = [{ id: 1, sourceRefCommit: { commitId: 'd'.repeat(40) }, comm
   { id: 2, sourceRefCommit: { commitId: H }, commonRefCommit: { commitId: M }, targetRefCommit: { commitId: T } }];
 const run = () => ({ id: 'run1', controller: new AbortController() });
 const client = (azure, options = {}) => createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 2000 }),
-  retryDelayMs: 1, fetch: options.fetch ?? azure.fetch, onCall: options.onCall });
+  retryDelayMs: 1, fetch: options.fetch ?? azure.fetch, onCall: options.onCall, maxArchiveBytes: options.maxArchiveBytes });
 
 test('snapshot: latest iteration head against its merge base, lowercased SHAs, normalized unique paths and change types', () => {
   const snapshot = buildSnapshot({ pr: pr(), iterations, complete: true, changes: [
@@ -204,4 +204,6 @@ test('repository archives download as zip at a commit and stop at the size limit
     .archive(run(), { projectId: 'pid', repositoryId: 'rid', ...snapshot }, snapshot.head);
   assert.equal(huge.tooLarge, true);
   assert.ok(pulled < 20, 'Reading stops right after the limit.');
+  const capped = await client(azure, { maxArchiveBytes: 22 }).archive(run(), { projectId: 'pid', repositoryId: 'rid', ...snapshot }, snapshot.head);
+  assert.equal(capped.tooLarge, true, 'The limit comes from azure.archiveMegabytes.');
 });

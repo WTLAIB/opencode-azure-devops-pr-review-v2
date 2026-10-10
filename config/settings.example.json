@@ -27,7 +27,8 @@
     "organization": "",
     "pat": "",
     "concurrency": 3,
-    "callTimeoutSeconds": 120
+    "callTimeoutSeconds": 120,
+    "archiveMegabytes": 100
   },
   "workflow": {
     "shardFiles": 25,

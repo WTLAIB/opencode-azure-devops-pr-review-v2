@@ -483,7 +483,7 @@ test('replacement moves the retired mcp limits into azure and never prints the P
   assert.match(result.stdout, /Moved mcp\.concurrency\/callTimeoutSeconds to azure/);
   const migrated = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
   assert.equal(Object.hasOwn(migrated, 'mcp'), false);
-  assert.deepEqual(migrated.azure, { concurrency: 5, callTimeoutSeconds: 300, organization: '', pat: '' });
+  assert.deepEqual(migrated.azure, { concurrency: 5, callTimeoutSeconds: 300, organization: '', pat: '', archiveMegabytes: 100 });
   assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
   // A configured PAT survives replacement byte for byte and is never echoed.
   migrated.azure.organization = 'team'; migrated.azure.pat = TEAM_PAT;

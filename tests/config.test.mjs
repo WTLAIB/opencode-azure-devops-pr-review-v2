@@ -36,7 +36,7 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
   assert.equal(settings.runTimeoutSeconds, null);
   assert.equal(settings.shell, 'deny');
   assert.equal(settings.progressNotices, true);
-  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120 });
+  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100 });
   assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 });
   assert.deepEqual(validateSettings(input()).azure, settings.azure, 'The example matches the defaults.');
   assert.deepEqual(validateSettings(input()).workflow, settings.workflow);
@@ -45,9 +45,11 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
 });
 
 test('numeric and enum settings are range checked; partial objects take defaults', () => {
-  assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, concurrency: 1, callTimeoutSeconds: 120 });
+  assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, concurrency: 1, callTimeoutSeconds: 120, archiveMegabytes: 100 });
+  assert.equal(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, archiveMegabytes: 1024 } }).azure.archiveMegabytes, 1024);
   assert.equal(validateSettings({ ...input(), workflow: { repairAttempts: 0 } }).workflow.repairAttempts, 0);
   for (const [key, value] of [['azure', { organization: 'org', pat: PAT, concurrency: 0 }], ['azure', { organization: 'org', pat: PAT, concurrency: 9 }], ['azure', { organization: 'org', pat: PAT, callTimeoutSeconds: 5 }],
+    ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 0 }], ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 1025 }], ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 1.5 }],
     ['workflow', { shardFiles: 0 }], ['workflow', { parallelSessions: 17 }], ['workflow', { repairAttempts: 4 }], ['workflow', { stageRetries: -1 }],
     ['shell', 'allow'], ['progressNotices', 'yes']]) {
     assert.throws(() => validateSettings({ ...input(), [key]: value }), undefined, `${key}=${JSON.stringify(value)}`);

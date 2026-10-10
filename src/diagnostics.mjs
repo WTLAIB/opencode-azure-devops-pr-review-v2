@@ -153,7 +153,7 @@ export async function createDiagnostics(settings, context, run) {
       returnReport: settings.returnReport, outputTransport: 'json-text',
       runTimeoutSeconds: settings.runTimeoutSeconds, shell: settings.shell,
       // Never the PAT.
-      azure: settings.azure && { organization: settings.azure.organization, concurrency: settings.azure.concurrency, callTimeoutSeconds: settings.azure.callTimeoutSeconds },
+      azure: settings.azure && { organization: settings.azure.organization, concurrency: settings.azure.concurrency, callTimeoutSeconds: settings.azure.callTimeoutSeconds, archiveMegabytes: settings.azure.archiveMegabytes },
       workflow: settings.workflow,
       privacy: 'Private review data. May contain source, PR details, model IDs, or secrets echoed by the model. Do not upload or commit. No automatic retention cleanup.' });
   } catch { log.warnings.push('Debug logging could not start; no diagnostic data was intentionally written. Inspect the OpenCode session instead.'); }

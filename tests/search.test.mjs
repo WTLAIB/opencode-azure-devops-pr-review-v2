@@ -58,5 +58,5 @@ test('one archive per run and commit; an archive over the limit is remembered as
   assert.equal((await repositoryArchive(run, azure, {}, 'a'.repeat(40))), first);
   assert.equal(downloads, 1);
   const other = await repositoryArchive(run, azure, {}, 'b'.repeat(40));
-  assert.match(other.unavailable, /larger than AZPR reads \(9000000000 bytes\)/);
+  assert.match(other.unavailable, /larger than the azure\.archiveMegabytes setting allows \(9000000000 bytes\)/);
 });

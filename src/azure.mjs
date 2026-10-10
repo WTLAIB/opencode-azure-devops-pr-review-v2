@@ -19,7 +19,7 @@ const MAX_RETRY_AFTER_MS = 60000;
 const CHANGE_PAGE = 2000;           // The maximum $top of iteration changes.
 const MAX_CHANGE_PAGES = 100;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
-export const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
+export const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024; // default of azure.archiveMegabytes
 const FILE_CACHE_CHARACTERS = 64 * 1024 * 1024;
 const DESCRIPTION_LIMIT = 8000;
 const COMMIT_LIMIT = 100;           // Commits of a PR shown to reviewers.
@@ -241,7 +241,7 @@ const NETWORK_CODES = /^(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|
  * @param {string} options.pat
  * @param {ReturnType<import('./tool-queue.mjs').createToolQueue>} options.queue
  */
-export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_URL, queue, retryDelayMs = 1000, onCall, fetch: fetchImpl = globalThis.fetch }) {
+export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_URL, maxArchiveBytes = MAX_ARCHIVE_BYTES, queue, retryDelayMs = 1000, onCall, fetch: fetchImpl = globalThis.fetch }) {
   const authorization = 'Basic ' + Buffer.from(':' + pat, 'utf8').toString('base64');
   const root = `${restBaseUrl(baseUrl === DEFAULT_BASE_URL ? undefined : baseUrl)}/${encodeURIComponent(organization)}`;
   const pause = (ms, signal) => new Promise((resolve, reject) => {
@@ -459,9 +459,9 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       }
       return cache.get(key);
     },
-    /** The whole repository at a commit as one zip; `tooLarge` above MAX_ARCHIVE_BYTES. */
+    /** The whole repository at a commit as one zip; `tooLarge` above maxArchiveBytes. */
     async archive(run, snapshot, version) {
-      const result = await request(run, { path: `${repo(snapshot)}/items`, accept: 'bytes', maxBytes: MAX_ARCHIVE_BYTES, label: 'repository archive', record: { version: version.slice(0, 12) },
+      const result = await request(run, { path: `${repo(snapshot)}/items`, accept: 'bytes', maxBytes: maxArchiveBytes, label: 'repository archive', record: { version: version.slice(0, 12) },
         query: { scopePath: '/', recursionLevel: 'Full', $format: 'zip', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' } });
       return result.tooLarge ? { tooLarge: true, size: result.size } : { bytes: result.bytes };
     },

@@ -148,6 +148,7 @@ planning uses the review's risk model.
 | `azure.pat` | Required. A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**. Sent only to `https://dev.azure.com/<org>` and never logged. |
 | `azure.concurrency` | `3` simultaneous Azure DevOps calls across all AZPR commands. |
 | `azure.callTimeoutSeconds` | `120`; a hung call is aborted and its slot released (reads are retried). |
+| `azure.archiveMegabytes` | `100` (1–1024): the largest repository zip that content search downloads per run and commit; a larger repository is not searched. It is held in memory during a review. |
 | `workflow.shardFiles` | `25` changed files per initial-review session. |
 | `workflow.shardFindings` | At most `15` findings per verification session; one file's findings stay in the same session (a file is split only when it alone has more). |
 | `workflow.parallelSessions` | `4` reviewer sessions at once within a command. |

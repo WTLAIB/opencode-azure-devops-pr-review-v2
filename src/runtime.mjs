@@ -91,7 +91,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const queue = createToolQueue({ concurrency: settings.azure.concurrency, timeoutMs: options.azureTimeoutMs ?? settings.azure.callTimeoutSeconds * 1000 });
   const retryDelayMs = options.retryDelayMs ?? 1000;
   const baseUrl = restBaseUrl(options.azureBaseUrl ?? process.env.AZPR_TEST_AZURE_BASE_URL);
-  const azure = createAzureClient({ organization: settings.azure.organization, pat: settings.azure.pat, baseUrl, queue, retryDelayMs, fetch: options.fetch,
+  const azure = createAzureClient({ organization: settings.azure.organization, pat: settings.azure.pat, baseUrl,
+    maxArchiveBytes: settings.azure.archiveMegabytes * 1024 * 1024, queue, retryDelayMs, fetch: options.fetch,
     onCall: (run, record) => { void run.debug?.append?.('azure-calls.jsonl', JSON.stringify({ at: new Date().toISOString(), ...record })); } });
   // An unwritable state directory must not disable the plugin: fall back to a
   // per-user directory under the system temporary directory.

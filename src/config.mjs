@@ -44,7 +44,7 @@ export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
   ? [...REVIEW_TOOL_NAMES, ...READ_TOOLS, ...(shell === 'deny' ? [] : ['shell'])] : [];
 
 const DEFAULTS = Object.freeze({
-  azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120 }),
+  azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100 }),
   workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 }),
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
@@ -117,6 +117,7 @@ export function validateSettings(raw) {
   }
   integer(azure.concurrency, 'azure.concurrency', 1, 8);
   integer(azure.callTimeoutSeconds, 'azure.callTimeoutSeconds', 10, 1800);
+  integer(azure.archiveMegabytes, 'azure.archiveMegabytes', 1, 1024);
   const workflow = { ...DEFAULTS.workflow, ...(raw.workflow === undefined ? {} : (keys(raw.workflow, Object.keys(DEFAULTS.workflow), 'workflow'), raw.workflow)) };
   integer(workflow.shardFiles, 'workflow.shardFiles', 1, 1000);
   integer(workflow.shardFindings, 'workflow.shardFindings', 1, 500);

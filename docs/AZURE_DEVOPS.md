@@ -80,7 +80,7 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
     `head`, `base` or a commit, changed or not, as `path:line: text` matches
     (at most 100, 20 per file), optionally limited to a folder or a name glob.
     The runtime downloads the repository once per run and commit as a zip
-    (at most 100 MB) and searches it in memory; files over 2 MB, binary files
+    (at most `azure.archiveMegabytes`, 100 MB by default) and searches it in memory; files over 2 MB, binary files
     and anything beyond 256 MB of text are not searched, and ZIP64 or
     encrypted archives make the tool answer that search is unavailable. Azure
     DevOps Code Search is not used: it indexes only the default branch, not a

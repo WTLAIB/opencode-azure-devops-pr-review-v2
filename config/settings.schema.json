@@ -182,6 +182,13 @@
           "maximum": 1800,
           "default": 120,
           "description": "Per-call timeout. A hung call is aborted and its slot released so other reviews keep running; reads are retried."
+        },
+        "archiveMegabytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024,
+          "default": 100,
+          "description": "Largest repository zip that content search (azpr_search_code) downloads per run and commit. A larger repository is not searched; the rest of the review is unaffected. The archive is held in memory while a review runs."
         }
       }
     },
