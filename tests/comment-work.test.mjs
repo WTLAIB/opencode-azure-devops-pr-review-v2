@@ -152,6 +152,39 @@ test('an uncertain write that did land is confirmed by read-back', async t => {
   assert.ok([...review.publication.values()].every(entry => entry.state === 'VERIFIED' && entry.threadId === 77));
 });
 
+test('an uncertain write is never repeated until its marker appears or the settle time passes', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run } = publisher(azure);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const now = () => clock;
+  const late = [];
+  // The create's outcome is unknown and it lands only later (a delayed server commit).
+  azure.state.fail.createThread = call => {
+    late.push(call.body.comments[0].content);
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ comments: [] }) };
+  };
+  const first = await publishPlan({ run, review, azure: api, now });
+  assert.equal(first.status, 'FAILED');
+  assert.match(first.reason, /not posted again until their marker appears or 15 minutes/);
+  assert.ok([...review.publication.values()].every(entry => entry.state === 'UNCERTAIN'), 'No read-back marker does not prove the write failed.');
+  const writes = () => azure.callsTo('createThread').length;
+  const sent = writes();
+  clock += 5 * 60 * 1000;
+  assert.equal((await publishPlan({ run, review, azure: api, now })).status, 'FAILED');
+  assert.equal(writes(), sent, 'A retry within the settle time sends nothing.');
+  azure.state.threads.push({ id: 90, comments: [{ content: late[0] }] });
+  const landed = await publishPlan({ run, review, azure: api, now });
+  assert.equal(landed.counts.ALREADY_PRESENT, 1, 'The delayed create is found by its marker.');
+  assert.equal(writes(), sent);
+  delete azure.state.fail.createThread;
+  clock += 15 * 60 * 1000;
+  assert.equal((await publishPlan({ run, review, azure: api, now })).status, 'POSTED');
+  assert.equal(azure.state.threads.length, 3, 'After the settle time the missing items are written once.');
+  review.publication.get(publicationItems(review.plan)[0].marker).state = 'SENDING';
+  assert.equal((await publishPlan({ run, review, azure: api, now })).status, 'POSTED', 'Existing markers win over a leftover SENDING record.');
+});
+
 test('publication refuses a changed source commit or an inactive PR before writing', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);

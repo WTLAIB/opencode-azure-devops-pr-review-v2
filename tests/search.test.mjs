@@ -60,3 +60,10 @@ test('one archive per run and commit; an archive over the limit is remembered as
   const other = await repositoryArchive(run, azure, {}, 'b'.repeat(40));
   assert.match(other.unavailable, /larger than the azure\.archiveMegabytes setting allows \(9000000000 bytes\)/);
 });
+
+test('a long line is shown around its match', () => {
+  const line = 'a'.repeat(5000) + 'NEEDLE' + 'b'.repeat(5000);
+  const { matches } = searchArchive({ files: new Map([['/min.js', line]]) }, { query: 'needle' });
+  assert.match(matches[0].text, /^…a+NEEDLEb+…$/);
+  assert.ok(matches[0].text.length <= 242);
+});

@@ -92,6 +92,13 @@ const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * @param {{files: Map<string, string>}} archive
  * @param {{query: string, caseSensitive?: boolean, wholeWord?: boolean, include?: (path: string) => boolean}} options
  */
+/** A long line is shown around its first match, so any part of it can be found. */
+function excerpt(line, pattern) {
+  if (line.length <= LINE_CHARACTERS) return line;
+  const start = Math.max(0, Math.min(line.search(pattern) - 80, line.length - LINE_CHARACTERS));
+  return `${start ? '…' : ''}${line.slice(start, start + LINE_CHARACTERS)}${start + LINE_CHARACTERS < line.length ? '…' : ''}`;
+}
+
 export function searchArchive(archive, { query, caseSensitive = false, wholeWord = false, include = () => true }) {
   const source = wholeWord ? `(?<![A-Za-z0-9_])${escapeRegExp(query)}(?![A-Za-z0-9_])` : escapeRegExp(query);
   const pattern = new RegExp(source, caseSensitive ? '' : 'i');
@@ -109,7 +116,7 @@ export function searchArchive(archive, { query, caseSensitive = false, wholeWord
       total++;
       if (inFile++ >= PER_FILE || matches.length >= MATCHES) return;
       const trimmed = line.replace(/\r$/, '').trim();
-      matches.push({ path, line: index + 1, text: trimmed.length > LINE_CHARACTERS ? `${trimmed.slice(0, LINE_CHARACTERS)}…` : trimmed });
+      matches.push({ path, line: index + 1, text: excerpt(trimmed, pattern) });
     });
   }
   return { matches, total, files, searched };

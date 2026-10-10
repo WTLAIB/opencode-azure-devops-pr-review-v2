@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { REVIEW_TOOL_NAMES, reviewToolDefinitions, resolveVersion, renderFile, renderListing, renderThreads, runReviewTool, READ_LINES } from '../src/review-tools.mjs';
+import { REVIEW_TOOL_NAMES, reviewToolDefinitions, resolveVersion, renderDiff, renderFile, renderListing, renderThreads, runReviewTool, READ_LINES } from '../src/review-tools.mjs';
 import { zipFiles } from './fake-azure.mjs';
 
 const snapshot = { head: 'b'.repeat(40), base: 'a'.repeat(40), baseKind: 'merge-base' };
@@ -189,4 +189,26 @@ test('files are found by glob or plain text in one cached recursive listing', as
   assert.match((await runReviewTool('azpr_find_files', { pattern: '*.rs' }, context)).text, /^0 path\(s\) under \/ at HEAD \(PR source\) bbbbbbbbbbbb match "\*\.rs"\. Check the folder/);
   assert.equal(listings, 1, 'One recursive listing serves every search of the same folder and commit.');
   await assert.rejects(runReviewTool('azpr_find_files', { pattern: ' ' }, context), /pattern must be a glob/);
+});
+
+test('one oversized thread is cut inside instead of looping forever', () => {
+  const long = [{ id: 7, comments: [{ content: 'x'.repeat(41000), author: { displayName: 'A' } }] }];
+  const text = renderThreads(long, { threadId: 7 }).text;
+  assert.ok(text.length < 41000);
+  assert.match(text, /shortened: this thread is longer than AZPR shows/);
+  const chatty = [{ id: 8, comments: Array.from({ length: 400 }, (_, i) => ({ content: `reply ${i} ${'y'.repeat(200)}`, author: { displayName: 'B' } })) }];
+  const shown = JSON.parse(renderThreads(chatty, {}).text.split('\n').slice(1).join('\n'));
+  assert.equal(shown.length, 1);
+  assert.ok(shown[0].omittedComments > 0 && shown[0].comments.length > 0);
+});
+
+test('a single very long source line is bounded in reads and diffs', () => {
+  const line = 'z'.repeat(2_200_000);
+  const read = renderFile(file(`${line}\nnext\n`), { label: 'HEAD (PR source)' }).text;
+  assert.ok(read.length < 61000);
+  assert.match(read, /\[line 1 has 2200004 characters; the rest is not shown\. azpr_search_code shows any part of it/);
+  assert.match(read, /lines 1-1 of 2\. Continue with startLine 2\./, 'Reading continues with the next line.');
+  const diff = renderDiff({ path: '/min.js', change: { changeType: ['edit'] }, snapshot,
+    base: { path: '/min.js', version: snapshot.base, text: 'short\n' }, head: { path: '/min.js', version: snapshot.head, text: `${line}\n` } });
+  assert.ok(diff.length < 62000, `diff is ${diff.length} characters`);
 });

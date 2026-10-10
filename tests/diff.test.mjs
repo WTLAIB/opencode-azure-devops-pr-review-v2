@@ -99,3 +99,9 @@ test('a change repeated across a file folds to one line per repeat with the valu
   const edited = renamed.map((line, i) => line.startsWith('call') ? (i % 2 ? `invoke(${i})` : `invoke${i}(x)`) : line);
   assert.ok(diffHunks(renamed.join('\n'), edited.join('\n')).hunks.filter(hunk => hunk.repeats).length < 4);
 });
+
+test('a large replacement builds its edit script without exceeding the argument limit', () => {
+  const ops = diffLines(Array(80000).fill('old'), Array(80000).fill('new'));
+  assert.equal(ops.length, 160000);
+  assert.deepEqual([ops[0].kind, ops.at(-1).kind], ['-', '+']);
+});

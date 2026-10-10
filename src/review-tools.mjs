@@ -15,6 +15,9 @@ export const REVIEW_TOOLS = Object.freeze({ readDiff: 'azpr_read_diff', readFile
 export const REVIEW_TOOL_NAMES = Object.freeze(Object.values(REVIEW_TOOLS));
 export const READ_LINES = 1000;
 const READ_CHARACTERS = 60000;
+/** One source line cut to READ_CHARACTERS, saying how to find the rest. */
+const clipLine = (row, number) => row.length <= READ_CHARACTERS ? row
+  : `${row.slice(0, READ_CHARACTERS)} [line ${number} has ${row.length} characters; the rest is not shown. azpr_search_code shows any part of it around a search term.]`;
 const LIST_ENTRIES = 1000;
 const FIND_RESULTS = 200;
 const THREAD_CHARACTERS = 40000;
@@ -131,7 +134,7 @@ export function renderFile(file, { label, startLine, endLine }) {
   const rows = [];
   let characters = 0;
   for (let number = first; number <= last; number++) {
-    const row = `${number} | ${lines[number - 1]}`;
+    const row = clipLine(`${number} | ${lines[number - 1]}`, number);
     if (rows.length && characters + row.length > READ_CHARACTERS) { last = number - 1; break; }
     rows.push(row);
     characters += row.length + 1;
@@ -150,7 +153,7 @@ function wholeFile(file, { title, mark, version }) {
   const rows = [];
   let characters = 0, last = 0;
   for (let index = 0; index < Math.min(lines.length, READ_LINES); index++) {
-    const row = `${mark} ${mark === '+' ? `${blank} ${pad(index + 1)}` : `${pad(index + 1)} ${blank}`} | ${lines[index]}`;
+    const row = clipLine(`${mark} ${mark === '+' ? `${blank} ${pad(index + 1)}` : `${pad(index + 1)} ${blank}`} | ${lines[index]}`, index + 1);
     if (rows.length && characters + row.length > READ_CHARACTERS) break;
     rows.push(row);
     characters += row.length + 1;
@@ -181,7 +184,8 @@ export function renderDiff({ path, change, base, head, snapshot, context, fromHu
     let rendered = renderHunk(hunks[next], width);
     if (parts.length && characters + rendered.length > READ_CHARACTERS) break;
     if (rendered.length > READ_CHARACTERS) {
-      rendered = rendered.slice(0, rendered.lastIndexOf('\n', READ_CHARACTERS)) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+      const cut = rendered.lastIndexOf('\n', READ_CHARACTERS);
+      rendered = rendered.slice(0, cut > 0 ? cut : READ_CHARACTERS) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
     }
     parts.push(rendered);
     characters += rendered.length + 2;
@@ -259,6 +263,24 @@ export function renderListing(items, { path, label, version }) {
   return { text: `${path} at ${label} ${version.slice(0, 12)} — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}.\n${shown.join('\n')}${more}` };
 }
 
+/** One thread cut to THREAD_CHARACTERS: whole comments first, then the start of the next one. */
+function boundThread(row) {
+  const budget = THREAD_CHARACTERS - JSON.stringify({ ...row, comments: [], omittedComments: row.comments.length }).length;
+  const comments = [];
+  let used = 0;
+  for (const comment of row.comments) {
+    const size = JSON.stringify(comment).length + 1;
+    if (used + size <= budget) { comments.push(comment); used += size; continue; }
+    const marker = ' [shortened: this thread is longer than AZPR shows]';
+    let content = comment.content.slice(0, Math.max(0, budget - used - 200));
+    while (content && JSON.stringify({ ...comment, content: content + marker }).length + 1 > budget - used) content = content.slice(0, Math.floor(content.length * 0.8));
+    if (content) comments.push({ ...comment, content: content + marker });
+    break;
+  }
+  const omitted = row.comments.length - comments.length;
+  return { ...row, comments, ...(omitted ? { omittedComments: omitted } : {}) };
+}
+
 /** Live discussion threads in a compact JSON form. */
 export function renderThreads(threads, { path, threadId }) {
   const rows = [];
@@ -283,7 +305,9 @@ export function renderThreads(threads, { path, threadId }) {
       comments });
   }
   let shown = rows, note = '';
-  while (shown.length && JSON.stringify(shown).length > THREAD_CHARACTERS) shown = shown.slice(0, Math.max(1, Math.floor(shown.length * 0.8)));
+  while (shown.length > 1 && JSON.stringify(shown).length > THREAD_CHARACTERS) shown = shown.slice(0, Math.max(1, Math.floor(shown.length * 0.8)));
+  // A single thread that is still too long is cut inside, so the loop always ends.
+  if (shown.length === 1 && JSON.stringify(shown).length > THREAD_CHARACTERS) shown = [boundThread(shown[0])];
   if (shown.length < rows.length) note = `\n${rows.length - shown.length} more thread(s) are not shown; filter by path or threadId.`;
   if (threadId !== undefined && !rows.length) return { text: `Thread ${threadId} does not exist on this PR or has no live comments.` };
   return { text: `${rows.length} live thread(s)${path ? ` on ${path}` : ''}.${note}\n${JSON.stringify(shown, null, 1)}` };

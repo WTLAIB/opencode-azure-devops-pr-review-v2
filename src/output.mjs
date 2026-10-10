@@ -428,13 +428,36 @@ function confirmedFinding(finding, move) {
 }
 
 /** Degrade unresolved items per finding; nothing else is discarded. */
+/**
+ * A merge chain must end at a non-merged decision; findings whose chain is a
+ * cycle become UNREVIEWED. Runs per verifier answer and again over all shards,
+ * since a merge may name a finding another shard decided. Returns their IDs.
+ */
+export function breakMergeCycles(dispositions) {
+  const byId = new Map(dispositions.map(entry => [entry.id, entry]));
+  const cyclic = new Set();
+  for (const entry of dispositions) {
+    if (entry.status !== 'MERGED') continue;
+    const seen = new Set([entry.id]);
+    let target = byId.get(entry.mergedInto);
+    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
+    if (target?.status === 'MERGED') cyclic.add(entry.id);
+  }
+  for (const entry of dispositions) {
+    if (!cyclic.has(entry.id)) continue;
+    entry.status = 'UNREVIEWED';
+    entry.reason = `${entry.reason} [Runtime: the merge chain forms a cycle.]`;
+    delete entry.mergedInto;
+  }
+  return [...cyclic];
+}
+
 function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
   const { decisions } = state;
   // Normalization notes carry over into a merged supplement; warnings derived
   // from the current decisions are recomputed every time.
   const base = [...state.warnings], derived = [];
   const dispositions = [];
-  const resolved = new Map();
   for (const original of originals) {
     const row = decisions.get(original.id);
     if (!row) {
@@ -459,23 +482,8 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
       ...(row.status === 'MERGED' ? { mergedInto: row.mergedInto } : {}),
       ...(row.status === 'CONFIRMED' ? { verifiedFinding: confirmedFinding(row.verifiedFinding, state.moves?.get(original.id)) } : {}) };
     dispositions.push(entry);
-    resolved.set(entry.id, entry);
   }
-  // A merge chain must end at a non-merged decision; cycles become UNREVIEWED.
-  const cyclic = new Set();
-  for (const entry of dispositions) {
-    if (entry.status !== 'MERGED') continue;
-    const seen = new Set([entry.id]);
-    let target = resolved.get(entry.mergedInto);
-    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = resolved.get(target.mergedInto); }
-    if (target?.status === 'MERGED') cyclic.add(entry.id);
-  }
-  for (const entry of dispositions) {
-    if (!cyclic.has(entry.id)) continue;
-    entry.status = 'UNREVIEWED';
-    entry.reason = `${entry.reason} [Runtime: the merge chain forms a cycle.]`;
-    delete entry.mergedInto;
-  }
+  breakMergeCycles(dispositions);
   const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
   if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
   const unconfirmed = dispositions.filter(row => row.status === 'CONFIRMED' && state.moves?.get(row.id)?.acknowledged === false);

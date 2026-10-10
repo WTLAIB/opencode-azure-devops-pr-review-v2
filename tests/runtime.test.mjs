@@ -276,6 +276,48 @@ test('a compaction request marks context overflow and the shard is split', async
   assert.match(receipt, /failure=overflow/);
 });
 
+test('a verifier assignment that overflows the context is split instead of becoming UNREVIEWED', async t => {
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ session, role, packet, emit }) {
+    if (role === 'azpr-review-verifier' && packet.assignment.findings.length > 1) {
+      await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'compaction' });
+    }
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.deepEqual(f.sessionsFor('azpr-review-verifier').map(s => s.packet.assignment.findings.length), [2, 1, 1]);
+  assert.ok(f.notices.some(n => /PROGRESS — The verifier reached its context limit on 2 findings/.test(n.text)));
+  const [file] = await readdir(join(f.stateDirectory, 'reviews'));
+  const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', file), 'utf8')).body);
+  assert.deepEqual(saved.final.dispositions.map(d => d.status), ['CONFIRMED', 'CONFIRMED']);
+});
+
+test('new verifier findings get unique V- IDs even when the model reuses or omits one', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], answer({ role, packet }) {
+    if (role !== 'azpr-review-verifier') return undefined;
+    const extra = (id, summary) => ({ ...finding(id, '/src/Main.java'), summary });
+    return { ...defaultAnswer({ role, packet }), newFindings: [extra('F-1', 'Second defect'), { ...extra('x', 'Third defect'), id: undefined }, extra('V-1', 'Fourth defect')] };
+  } });
+  assert.match(await f.command(), /\] COMPLETE/);
+  const [file] = await readdir(join(f.stateDirectory, 'reviews'));
+  const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', file), 'utf8')).body);
+  const ids = [...saved.final.dispositions.map(d => d.id), ...saved.final.newFindings.map(n => n.id)];
+  assert.equal(new Set(ids).size, ids.length, `IDs are unique: ${ids.join(', ')}`);
+  assert.ok(saved.final.newFindings.every(n => /^V-\d+$/.test(n.id)));
+});
+
+test('merges that form a cycle across verification shards become UNREVIEWED with a warning', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], settings(s) { s.workflow.shardFindings = 1; s.returnReport = 'full'; }, answer({ role, packet }) {
+    if (role !== 'azpr-review-verifier') return undefined;
+    const [own] = packet.assignment.findings;
+    return { status: 'COMPLETE', confirmed: [], merged: [{ id: own.id, mergedInto: own.id.startsWith('F-') ? 'R-1' : 'F-1', reason: 'Same defect.' }],
+      rejected: [], needsInfo: [], newFindings: [], report: 'Merged.' };
+  } });
+  const receipt = await f.command();
+  assert.equal(f.sessionsFor('azpr-review-verifier').length, 2);
+  assert.match(receipt, /Merges across verification shards formed a cycle; F-1, R-1 are shown as UNREVIEWED/);
+  assert.match(receipt, /F-1 — UNREVIEWED/);
+});
+
 test('shell and foreign tools are hidden and refused; shell is forced to deny through the permission hook', async t => {
   let attempted, mcpTool;
   const f = await fixture(t, { async during({ session, role, invoke }) {

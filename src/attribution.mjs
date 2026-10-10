@@ -148,7 +148,7 @@ export function renderPublication(review, result) {
   const rows = [...(review.publication ?? new Map()).values()].map(entry =>
     `- ${entry.kind === 'summary' ? 'PR summary' : `${entry.findingId} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}`).join('\n');
   const counts = result?.counts ? Object.entries(result.counts).map(([state, count]) => `${state}=${count}`).join(', ') : '';
-  return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. FAILED or UNVERIFIED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers.`;
+  return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. FAILED or UNVERIFIED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers. UNCERTAIN entries may still appear from an earlier attempt and are retried only after their marker check settles.`;
 }
 
 function renderStageReceipt(stage) {

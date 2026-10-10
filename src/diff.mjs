@@ -28,7 +28,8 @@ export function diffLines(a, b, { maxEdits = MAX_EDITS } = {}) {
   while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
   const ops = [];
   for (let i = 0; i < start; i++) ops.push({ kind: '=', a: i, b: i });
-  ops.push(...middleScript(a, b, start, endA, start, endB, maxEdits));
+  // Not push(...script): a long script exceeds the engine's argument limit.
+  for (const op of middleScript(a, b, start, endA, start, endB, maxEdits)) ops.push(op);
   for (let i = 0; i < a.length - endA; i++) ops.push({ kind: '=', a: endA + i, b: endB + i });
   return ops;
 }

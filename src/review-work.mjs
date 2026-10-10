@@ -4,7 +4,7 @@
  * verifiers confirmed, and a deterministic final version recheck.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
+import { breakMergeCycles, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
 
 export { locationPath };
 const ID_SPAN = 1000;
@@ -87,10 +87,10 @@ export async function snapshotForModel(snapshot, store) {
 }
 
 /** Make finding IDs unique across shards; keep the model's ID when it is free. */
-function uniqueIds(findings, prefix, used) {
+function uniqueIds(findings, prefix, used, valid = () => true) {
   let next = 1;
   for (const finding of findings) {
-    if (!used.has(finding.id)) { used.add(finding.id); continue; }
+    if (valid(finding.id) && !used.has(finding.id)) { used.add(finding.id); continue; }
     while (used.has(`${prefix}-${next}`)) next++;
     finding.shardId = finding.id;
     finding.id = `${prefix}-${next}`;
@@ -183,11 +183,14 @@ export async function runReview(ctx, run, request) {
   const groups = shardFindings(findings, settings.workflow.shardFindings);
   const allIds = findings.map(finding => finding.id);
   const packedReports = await store.pack(initialReports);
-  const verifications = await runPool(groups.map((assigned, index) => ({ assigned, index, count: groups.length })), settings.workflow.parallelSessions, async task => {
+  let nextNewBase = groups.length * ID_SPAN;
+  // Like initial shards, a verifier assignment that overflows the context is
+  // split (between files where possible) and only an indivisible one fails.
+  async function verifyTask(task) {
     const payload = {
       prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
-      assignment: { shard: `${task.index + 1}/${task.count}`, findingIds: task.assigned.map(f => f.id), findings: task.assigned,
-        allFindingIds: await store.pack(allIds, 4000), firstNewFindingId: `V-${task.index * ID_SPAN + 1}` },
+      assignment: { shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, findingIds: task.assigned.map(f => f.id), findings: task.assigned,
+        allFindingIds: await store.pack(allIds, 4000), firstNewFindingId: `V-${task.idBase + 1}` },
       initialReports: packedReports, discoveredFiles: [...discovered],
     };
     try {
@@ -197,19 +200,29 @@ export async function runReview(ctx, run, request) {
           if (!issues.length) return { result, issues };
           return { result, issues, repairPrompt: finalRepairPrompt(issues, repairIds, { parseOnly: !result.structured && syntaxProblem(issues), full: !result.structured, includeNewFindings: issues.some(issue => issue.startsWith('newFindings')) }) };
         },
-      }, { label: task.count > 1 ? `shard ${task.index + 1}/${task.count}` : '' });
-      return { task, result };
+      }, { label: task.count > 1 || task.part ? `shard ${task.index + 1}/${task.count}${task.part ?? ''}` : '' });
+      return [{ task, result }];
     } catch (error) {
       if (!run.active) throw error;
-      return { task, error };
+      if (error?.failureClass === 'overflow' && task.assigned.length > 1) {
+        progress(run, `The verifier reached its context limit on ${task.assigned.length} findings; splitting the shard.`);
+        const parts = shardFindings(task.assigned, Math.ceil(task.assigned.length / 2));
+        const smaller = parts.map((assigned, index) => ({ ...task, assigned, idBase: (nextNewBase += ID_SPAN), part: `${task.part ?? ''}${String.fromCharCode(97 + index)}` }));
+        const outcomes = [];
+        for (const part of smaller) outcomes.push(...await verifyTask(part));
+        return outcomes;
+      }
+      return [{ task, error }];
     }
-  });
+  }
+  const verifications = (await runPool(groups.map((assigned, index) => ({ assigned, index, count: groups.length, idBase: index * ID_SPAN })),
+    settings.workflow.parallelSessions, verifyTask)).flat();
   if (!run.active) throw new Error(run.reason || 'Review stopped.');
 
-  const dispositions = [], newFindings = [], reports = [], usedNew = new Set(), decidedIn = new Map();
+  const dispositions = [], newFindings = [], reports = [], usedNew = new Set(allIds), decidedIn = new Map();
   let verified = 0;
   for (const { task, result, error } of verifications) {
-    const label = task.count > 1 ? `Verification shard ${task.index + 1}/${task.count}` : '';
+    const label = task.count > 1 || task.part ? `Verification shard ${task.index + 1}/${task.count}${task.part ?? ''}` : '';
     if (!result) {
       warnings.push(`${label || 'Verification'} failed (${error?.message ?? 'unknown error'}); its findings are UNREVIEWED.`);
       for (const finding of task.assigned) dispositions.push({ id: finding.id, status: 'UNREVIEWED', reason: 'The verification session failed; this finding is not confirmed.' });
@@ -217,7 +230,8 @@ export async function runReview(ctx, run, request) {
     }
     if (result.structured) verified++;
     dispositions.push(...result.dispositions);
-    uniqueIds(result.newFindings, 'V', usedNew);
+    // New findings need IDs unique across the review: never a missing ID or one of an original finding.
+    uniqueIds(result.newFindings, 'V', usedNew, id => typeof id === 'string' && /^V-\d+$/.test(id));
     for (const decided of [...result.dispositions, ...result.newFindings]) decidedIn.set(decided.id, task);
     newFindings.push(...result.newFindings);
     for (const row of result.incompleteNewFindings ?? []) reports.push(`Incomplete new finding (not eligible for comments): ${row.summary || row.id || 'unnamed'}`);
@@ -278,6 +292,11 @@ export async function runReview(ctx, run, request) {
       warnings.push(...result.warnings.map(message => `Duplicate check of ${group.path}: ${message}`));
     }
   }
+
+  // A merge may name a finding another shard decided; a cycle across shards
+  // would otherwise hide every finding in it without a warning.
+  const cyclic = breakMergeCycles(dispositions);
+  if (cyclic.length) warnings.push(`Merges across verification shards formed a cycle; ${cyclic.join(', ')} ${cyclic.length === 1 ? 'is' : 'are'} shown as UNREVIEWED.`);
 
   // Deterministic final version recheck. Only a changed source commit is stale.
   let freshness;

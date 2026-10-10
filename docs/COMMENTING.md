@@ -77,11 +77,18 @@ Publication is deterministic runtime code using the Azure DevOps REST API
 3. For each saved item: skip it when its marker exists (`ALREADY_PRESENT`),
    otherwise create it with the exact saved content and right-side coordinates
    (`POSTED`); Azure DevOps attaches the iteration context itself. Each result
-   is saved immediately. A failed item does not stop the others (`FAILED`); a
-   create whose outcome is unknown (timeout or a lost connection) is
-   `UNCERTAIN`. Writes are never retried automatically.
+   is saved immediately, and each attempt is saved as `SENDING` before its
+   request. A failed item does not stop the others (`FAILED`); a create whose
+   outcome is unknown (timeout, a lost connection, or a stop or restart during
+   the request) is `UNCERTAIN`. Writes are never retried automatically.
 4. List the threads again: created and uncertain items whose marker is present
-   become `VERIFIED`; an uncertain item without a marker becomes `FAILED`.
+   become `VERIFIED`; an uncertain item without a marker stays `UNCERTAIN`,
+   because Azure DevOps may still finish the request.
+
+A later run does not write an `UNCERTAIN` (or leftover `SENDING`) item again
+until its marker appears or 15 minutes have passed since that attempt; until
+then it stays `UNCERTAIN`. This prevents a delayed create and its retry from
+both landing as duplicate threads.
 
 The receipt status is `POSTED` when every item is verified or already present,
 `PARTIALLY_POSTED` when some failed, and `FAILED` when none succeeded. Run the

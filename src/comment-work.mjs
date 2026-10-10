@@ -176,12 +176,21 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
 }
 
 /**
+ * A create whose outcome is unknown (timeout, lost connection, or a process
+ * that stopped mid-request) can still land on the server later. Its item is
+ * not written again until its marker appears or this long has passed.
+ */
+export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
+
+/**
  * Publish a saved plan with deterministic Azure DevOps calls.
  * - Refuses if the PR is no longer active or its source commit changed.
  * - Skips items whose marker already exists on the PR (idempotent re-runs).
+ * - Saves each attempt before sending it and never repeats an uncertain one
+ *   within UNCERTAIN_SETTLE_MS, even across restarts.
  * - Reads every created marker back from Azure DevOps.
  */
-export async function publishPlan({ run, review, azure, progress, persist }) {
+export async function publishPlan({ run, review, azure, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS }) {
   const items = publicationItems(review.plan);
   const ledger = review.publication ??= new Map();
   const current = await azure.versions(run, review.snapshot);
@@ -192,11 +201,20 @@ export async function publishPlan({ run, review, azure, progress, persist }) {
   const present = markersInThreads(await azure.threads(run, review.snapshot));
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, path: item.path, startLine: item.startLine }),
-    ...entry, at: new Date().toISOString() });
+    ...entry, at: new Date(now()).toISOString() });
   let written = 0;
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
     if (present.has(item.marker)) { record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker) }); continue; }
+    const earlier = ledger.get(item.marker);
+    if (['SENDING', 'UNCERTAIN'].includes(earlier?.state) && !(now() - Date.parse(earlier.at) >= settleMs)) {
+      earlier.state = 'UNCERTAIN';
+      continue;
+    }
+    // Saved before sending: a stop or crash mid-request leaves SENDING, which
+    // the next run treats as uncertain.
+    record(item, { state: 'SENDING' });
+    await persist?.();
     try {
       const created = await azure.createThread(run, review.snapshot, item);
       record(item, { state: 'POSTED', threadId: created.threadId, ...(created.contentMatches === false ? { contentMismatch: true } : {}) });
@@ -216,7 +234,6 @@ export async function publishPlan({ run, review, azure, progress, persist }) {
       if (!['POSTED', 'UNCERTAIN', 'FAILED'].includes(entry.state)) continue;
       if (after.has(item.marker)) Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker) });
       else if (entry.state === 'POSTED') entry.state = 'UNVERIFIED';
-      else if (entry.state === 'UNCERTAIN') entry.state = 'FAILED';
     }
   } catch (error) {
     if (!run.active) throw error;
@@ -226,5 +243,7 @@ export async function publishPlan({ run, review, azure, progress, persist }) {
   const states = items.map(item => ledger.get(item.marker).state);
   const succeeded = states.filter(state => ['VERIFIED', 'ALREADY_PRESENT', 'POSTED'].includes(state)).length;
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
-  return { status, readBack, counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])) };
+  const uncertain = states.filter(state => state === 'UNCERTAIN').length;
+  const reason = uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined;
+  return { status, readBack, ...(reason ? { reason } : {}), counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])) };
 }
