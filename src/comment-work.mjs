@@ -187,10 +187,10 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  * Publish a saved plan with deterministic Azure DevOps calls.
  * - Refuses if the PR is no longer active or its source commit changed.
  * - Skips items whose marker already exists on the PR (idempotent re-runs).
- * - Coordinates through `attempts` (per PR, shared by every review): an
- *   attempt is saved before its request and nothing is sent if that fails; a
- *   create that returned a thread ID is never sent again, and one with an
- *   unknown outcome not within UNCERTAIN_SETTLE_MS.
+ * - Coordinates through `attempts` (per PR, shared by every review; not a
+ *   lock between processes): an attempt is saved before its request and
+ *   nothing is sent if that fails; a create that returned a thread ID is never
+ *   sent again, and one with an unknown outcome not within UNCERTAIN_SETTLE_MS.
  * - Reads every created marker back from Azure DevOps.
  */
 export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS }) {

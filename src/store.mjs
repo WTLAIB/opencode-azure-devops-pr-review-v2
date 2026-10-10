@@ -139,9 +139,10 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
     },
     /**
      * Thread-creation attempts of one PR, keyed by comment marker and shared by
-     * every review and process: an attempt is recorded before its request is
-     * sent and its outcome after. Writes re-read the file and throw on
-     * failure, so a caller can refuse to send what it could not record.
+     * every review: an attempt is recorded before its request is sent and its
+     * outcome after. Writes re-read the file and throw on failure, so a caller
+     * can refuse to send what it could not record. This is not a lock between
+     * processes: two processes publishing the same PR at once can both send.
      * Entries older than 90 days are dropped.
      */
     async attempts(prKey) {

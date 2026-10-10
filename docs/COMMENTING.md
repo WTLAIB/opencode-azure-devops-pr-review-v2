@@ -86,10 +86,9 @@ Publication is deterministic runtime code using the Azure DevOps REST API
    because Azure DevOps may still finish the request.
 
 Before each create, the attempt is recorded under `attempts/` in the state
-directory, per PR and marker and shared by every review of that PR and every
-OpenCode process. If that record cannot be written, nothing more is sent and
-the item is `FAILED`. A later publication, from this review or another review
-of the same PR:
+directory, per PR and marker and shared by every review of that PR. If that
+record cannot be written, nothing more is sent and the item is `FAILED`. A
+later publication, from this review or another review of the same PR:
 
 - never sends an item again whose create returned a thread ID, even while the
   thread list does not show it yet (it is reported as `POSTED` or
@@ -101,6 +100,12 @@ of the same PR:
 Azure DevOps offers no way to confirm that an unknown create will never land.
 After 15 minutes AZPR assumes it did not; a create the service completed even
 later would appear twice.
+
+One OpenCode process publishes one PR at a time. The record is not a lock
+between processes: two separate OpenCode processes (for example a
+`--standalone` instance next to the background service) that publish the same
+PR at the same moment can both create an item. The TUI and desktop app use
+the background service, so this needs a deliberately separate process.
 
 The receipt status is `POSTED` when every item is verified or already present,
 `PARTIALLY_POSTED` when some failed, and `FAILED` when none succeeded. Run the
