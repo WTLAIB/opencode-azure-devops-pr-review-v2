@@ -474,6 +474,18 @@ PR #4 (35 files, two seeded regressions):
 - Cross-shard discovery did not move with any variant: the regression outside
   PR #4's diff was found by gpt-6.1-sol with the old prompts and with v2/v3
   (4 of 4, filed from the test shard) and by no other model in any run.
+
+### Live publication with this revision (gpt-5.6-terra)
+
+After the earlier 25 comments on PR #3 were deleted, `/pr-review` and
+`/pr-comment --publish` ran once per PR with gpt-5.6-terra on all three roles.
+PR #3: 24 of 24 policy defects confirmed (57 candidates, 461 s, 4.3 M input);
+24 items published, all VERIFIED on read-back (one summary, 23 inline; the
+low-severity finding appears in the summary index only); a second
+`--publish` reported ALREADY_PRESENT for all 24. PR #4: the regression inside
+the diff confirmed (195 s, 0.6 M); 2 items VERIFIED (summary and
+`json_schema.py:874`), the second `--publish` ALREADY_PRESENT for both. No
+skip relied on another finding.
 - Risk: those same-line duplicates must be merged by the verifier.
   gpt-5.6-luna and gpt-5.6-terra merged them in every run; gpt-6-luna did in
   three of four runs and in the fourth confirmed 17 duplicates on the same
