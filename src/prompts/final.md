@@ -36,10 +36,6 @@ A merge or a decision explained only in prose does not count; every assigned ID
 needs its own row. New, independently verified issues that no candidate covers
 go in newFindings with all finding fields, numbered from
 `assignment.firstNewFindingId` (V-1, V-2, ...). Use [] for empty categories.
-An initial report sometimes describes a defect in prose without filing it;
-nobody else verifies those. When `assignment.shard` starts with "1/", check
-each such description in `initialReports` against source and add the ones that
-hold to newFindings; other shards leave them to shard 1.
 
 ## Report
 

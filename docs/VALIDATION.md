@@ -397,10 +397,13 @@ Prompt variants:
   that the runtime enforces anyway removed from the prompt.
 - v4: v3 without "followed the leads it raised" in the COMPLETE definition of
   the initial roles.
-- v5 (this revision): v4 with the scope rule "every changed file has its own
-  reviewer: follow your assigned files' leads wherever they go; a defect you
-  reach in unchanged code is yours to file; other changed files are context
-  only", and "in any area" replaced by "of any kind".
+- v5: v4 with the scope rule "every changed file has its own reviewer: follow
+  your assigned files' leads wherever they go; a defect you reach in unchanged
+  code is yours to file; other changed files are context only", and "in any
+  area" replaced by "of any kind".
+- This revision: v5 without the verifier's prose check (removed after review,
+  see below). gpt-6-luna and gpt-5.6-terra ran v5; gpt-5.6-luna and
+  gpt-6.1-sol last ran v3/v4.
 
 PR #3 (316 files, 24 policy defects and one configuration defect):
 
@@ -452,7 +455,12 @@ PR #4 (35 files, two seeded regressions):
 - The prose check by the first verification shard added one finding in
   fourteen runs (v5, gpt-6-luna: a pagination defect another candidate
   already covered; the same-file duplicate check merged it). Once reviewers
-  file their defects, nothing is left in prose. It stays as a safety net.
+  file their defects, nothing is left in prose. It was removed after review:
+  its work grows with the number of initial reports, not with the shard's
+  candidates, and every overflow split of the first shard (labels `1/N`,
+  `1/Na`, ...) repeats the same sweep, so an overflow during it would leave
+  that shard's candidates UNREVIEWED, and a shard without candidates cannot
+  split at all.
 - gpt-5.6-terra had no filing problem with the old prompts (both roles filed
   all 22 defects of shard 2) and gains nothing measurable: 24 of 24 and the
   regression inside the diff with every prompt set, the configuration defect

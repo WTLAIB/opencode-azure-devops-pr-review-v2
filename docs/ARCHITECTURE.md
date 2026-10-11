@@ -81,9 +81,7 @@ After preflight, hooks never re-read settings or catalogs.
    move, and an unconfirmed move is kept with a warning. The report shows a
    moved finding's initial location. Missing or invalid decisions trigger a
    repair turn asking only for those IDs; leftovers become UNREVIEWED (or
-   NEEDS_INFO for incomplete confirmations). The first verification shard also
-   checks defects that an initial report described in prose without filing
-   them and adds the ones that hold as new findings (`V-…`).
+   NEEDS_INFO for incomplete confirmations).
 5. **Duplicate check** — the runtime groups confirmed findings by their final
    file. A file whose findings different verifiers confirmed (a verifier moved
    one there, or a crowded file was split) lost the one-verifier-per-file
