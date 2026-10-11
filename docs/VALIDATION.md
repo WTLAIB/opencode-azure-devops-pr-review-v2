@@ -494,7 +494,9 @@ PR #4 (35 files, two seeded regressions):
   turn for the pair, UNREVIEWED if unresolved); a follow-up review showed the
   same gap across shards (a crowded or overflow-split file can put the pair
   in two verifiers), so the combined decisions are settled the same way with
-  a warning. Two repeat runs with the checks in place confirmed 24 of 24 and
+  a warning; a verifier-added finding that survives counts as a confirmed
+  target there, since the duplicate check may merge into it. Two repeat runs
+  with the checks in place confirmed 24 of 24 and
   the configuration defect with no merge correction needed (58 → 26 and
   65 → 26; 366–406 s; 5.8–6.1 M). The third run also saw the first provider
   stream interruption in these runs: the host's continuation message after a

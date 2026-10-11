@@ -221,6 +221,16 @@ test('findings that different verifiers confirmed in one file get a duplicate ch
   assert.ok(f.notices.some(message => /Duplicate check: 1 file\(s\) hold findings that different verification shards confirmed/.test(message)));
 });
 
+test('a duplicate check may merge confirmed findings into a surviving verifier-added finding', async t => {
+  const f = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], workflow: { shardFindings: 1 }, behave: crossShard(() =>
+    JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'V-1001', reason: 'V-1001 states it completely.' }, { id: 'R-1', mergedInto: 'V-1001', reason: 'Same guard.' }], report: 'Kept V-1001.' })) });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}${d.mergedInto ? '>' + d.mergedInto : ''}`), ['F-1:MERGED>V-1001', 'R-1:MERGED>V-1001']);
+  assert.deepEqual(final.newFindings.map(x => x.id), ['V-1001']);
+  assert.ok(!final.reviewWarnings.some(w => /not confirmed|UNREVIEWED/.test(w)), JSON.stringify(final.reviewWarnings));
+  assert.equal(final.status, 'COMPLETE');
+});
+
 test('a failed duplicate check keeps every finding; findings one verifier saw together are not rechecked', async t => {
   const failed = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], workflow: { shardFindings: 1 }, behave: crossShard(() => { throw new Error('dedupe crashed'); }) });
   const kept = await runReview(failed.ctx, failed.run, failed.request);

@@ -299,8 +299,9 @@ export async function runReview(ctx, run, request) {
   if (cyclic.length) warnings.push(`Merges across verification shards formed a cycle; ${cyclic.join(', ')} ${cyclic.length === 1 ? 'is' : 'are'} shown as UNREVIEWED.`);
   // A verifier may merge into a finding that another shard rejected or left
   // undecided; only the combined decisions can tell, and such a merged finding
-  // must not vanish behind the rejection.
-  const dangling = settleMergeTargets(dispositions, { unknownIsDangling: true });
+  // must not vanish behind the rejection. Surviving verifier-added findings are
+  // confirmed targets (the duplicate check may merge into them).
+  const dangling = settleMergeTargets(dispositions, { unknownIsDangling: true, confirmedIds: new Set(newFindings.map(finding => finding.id)) });
   if (dangling.length) warnings.push(`Merged into findings that were not confirmed and shown as UNREVIEWED: ${dangling.map(row => `${row.id} → ${row.target} (${row.status})`).join(', ')}.`);
 
   // Deterministic final version recheck. Only a changed source commit is stale.

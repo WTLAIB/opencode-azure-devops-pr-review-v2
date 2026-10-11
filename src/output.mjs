@@ -472,17 +472,20 @@ export function breakMergeCycles(dispositions) {
  * verifier answer after normalization (a confirmation that became NEEDS_INFO
  * counts) and again over all shards, since a verifier may merge into a
  * finding another shard decided. Call after breakMergeCycles. Targets absent
- * from `dispositions` belong to other shards unless `unknownIsDangling`.
- * Dangling sources become UNREVIEWED; returns them with the target they named.
+ * from `dispositions` belong to other shards unless `unknownIsDangling`;
+ * `confirmedIds` names targets kept elsewhere (surviving verifier-added
+ * findings, which the duplicate check may merge into). Dangling sources
+ * become UNREVIEWED; returns them with the target they named.
  */
-export function settleMergeTargets(dispositions, { unknownIsDangling = false } = {}) {
+export function settleMergeTargets(dispositions, { unknownIsDangling = false, confirmedIds = new Set() } = {}) {
   const byId = new Map(dispositions.map(entry => [entry.id, entry]));
+  const lookup = id => byId.get(id) ?? (confirmedIds.has(id) ? { id, status: 'CONFIRMED' } : undefined);
   const dangling = [];
   for (const entry of dispositions) {
     if (entry.status !== 'MERGED') continue;
     const seen = new Set([entry.id]);
-    let target = byId.get(entry.mergedInto);
-    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
+    let target = lookup(entry.mergedInto);
+    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = lookup(target.mergedInto); }
     if (target?.status === 'CONFIRMED' || target?.status === 'MERGED' || (!target && !unknownIsDangling)) continue;
     dangling.push({ id: entry.id, target: target?.id ?? entry.mergedInto, status: target?.status ?? 'undecided' });
   }
