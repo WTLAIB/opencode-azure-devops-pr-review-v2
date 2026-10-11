@@ -403,7 +403,7 @@ Prompt variants:
   area" replaced by "of any kind".
 - final (this revision): v5 without the verifier's prose check (removed after
   review, see below). gpt-6-luna and gpt-5.6-terra ran v5, gpt-5.6-luna ran
-  the final revision three times (the second and third with the merge-target
+  the final revision four times (the last three with the merge-target
   checks), gpt-6.1-sol last ran v3.
 
 PR #3 (316 files, 24 policy defects and one configuration defect):
@@ -420,7 +420,7 @@ PR #3 (316 files, 24 policy defects and one configuration defect):
 | gpt-5.6-luna | v1 | 24 of 24 | yes | 200 → 48 | 23 (the config defect once per region file) | 606 s | 7.73 M |
 | gpt-5.6-luna | v2 | 24 of 24 | yes | 62 → 26 | 0 | 366 s | 6.30 M |
 | gpt-5.6-luna | v3 | 24 of 24 | yes | 104 → 25 | 0 | 446 s | 7.43 M |
-| gpt-5.6-luna | final (3 runs) | 22 of 24 (see below); 24 of 24; 24 of 24 | yes | 53 → 23; 58 → 26; 65 → 26 | 0 | 366–406 s | 5.82–6.35 M |
+| gpt-5.6-luna | final (4 runs) | 22 of 24 (see below); then 24 of 24 three times | yes | 53 → 23; 58 → 26; 65 → 26; 59 → 25 | 0 | 351–406 s | 5.35–6.35 M |
 | gpt-5.6-terra | old | 24 of 24 | no | 101 → 24 | 0 | 566 s | 4.59 M |
 | gpt-5.6-terra | v2 | 24 of 24 | no | 126 → 24 | 0 | 581 s | 6.18 M |
 | gpt-5.6-terra | v3 | 24 of 24 | no | 117 → 24 | 0 | 621 s | 4.92 M |
@@ -495,10 +495,11 @@ PR #4 (35 files, two seeded regressions):
   same gap across shards (a crowded or overflow-split file can put the pair
   in two verifiers), so the combined decisions are settled the same way with
   a warning; a verifier-added finding that survives counts as a confirmed
-  target there, since the duplicate check may merge into it. Two repeat runs
-  with the checks in place confirmed 24 of 24 and
-  the configuration defect with no merge correction needed (58 → 26 and
-  65 → 26; 366–406 s; 5.8–6.1 M). The third run also saw the first provider
+  target there, since the duplicate check may merge into it. Three repeat
+  runs with the checks in place confirmed 24 of 24 and the configuration
+  defect with no merge correction needed (58 → 26, 65 → 26 and 59 → 25;
+  351–406 s; 5.4–6.1 M; the last one with a duplicate check and no false
+  warning). The third run also saw the first provider
   stream interruption in these runs: the host's continuation message after a
   turn that had made tool calls is not accepted as the authorized answer, the
   shard was retried in a new session (`workflow.stageRetries`) and completed.
