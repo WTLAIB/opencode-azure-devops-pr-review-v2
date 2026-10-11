@@ -156,6 +156,22 @@ test('repair turns fix a verifier that missed decisions', async t => {
   assert.equal(f.calls.filter(call => call.role === 'azpr-review-verifier').length, 1);
 });
 
+test('a merge into a finding that another verification shard rejected is shown as UNREVIEWED with a warning', async t => {
+  // One file with more findings than a shard holds is the only way a file's findings reach two verifiers.
+  const f = await context(t, { files: ['/a.ts'], workflow: { shardFindings: 1 }, behave: async ({ role, payload }) => {
+    if (ROLES[role].format === 'initial') return initial(payload, [finding(`${ROLES[role].prefix}-1`)]);
+    const [id] = payload.assignment.findingIds;
+    const row = id === 'R-1' ? { id, status: 'MERGED', mergedInto: 'F-1', reason: 'Same cause as F-1.' } : { id, status: 'REJECTED', reason: 'Guarded.' };
+    return JSON.stringify({ status: 'COMPLETE', dispositions: [row], newFindings: [], report: 'r' });
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.equal(f.calls.filter(call => call.role === 'azpr-review-verifier').length, 2);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:REJECTED', 'R-1:UNREVIEWED']);
+  assert.match(final.dispositions[1].reason, /merged into F-1, which is REJECTED/);
+  assert.ok(final.reviewWarnings.some(w => /R-1 → F-1 \(REJECTED\)/.test(w)));
+  assert.equal(final.status, 'COMPLETE');
+});
+
 test('a verifier that moves a finding to another file confirms the move in a correction turn', async t => {
   const f = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], behave: async ({ role, payload, turn }) => {
     if (ROLES[role].format === 'initial') return initial(payload, role.endsWith('-risk') ? [finding('R-1', '/tests/a.test.ts')] : []);

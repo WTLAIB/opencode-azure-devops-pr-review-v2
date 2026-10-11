@@ -83,7 +83,9 @@ After preflight, hooks never re-read settings or catalogs.
    repair turn asking only for those IDs; leftovers become UNREVIEWED (or
    NEEDS_INFO for incomplete confirmations). A merge whose chain ends at a
    finding the same answer rejected or marked NEEDS_INFO gets a repair turn
-   for the pair; left unresolved, the merged finding is UNREVIEWED.
+   for the pair; left unresolved, the merged finding is UNREVIEWED. After the
+   shards are combined the same rule settles merges into findings another
+   verifier did not confirm, with a warning.
 5. **Duplicate check** — the runtime groups confirmed findings by their final
    file. A file whose findings different verifiers confirmed (a verifier moved
    one there, or a crowded file was split) lost the one-verifier-per-file

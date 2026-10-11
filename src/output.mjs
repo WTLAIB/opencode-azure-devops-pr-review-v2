@@ -383,7 +383,7 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
     if (!supplement && byId.has(row.id)) { warnings.add(`Kept the first of several decisions for ${row.id}.`); continue; }
     byId.set(row.id, row);
   }
-  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set(), mergeTarget: new Set() }, moves = new Map();
+  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set() }, moves = new Map();
   const candidates = new Map(originals.map(original => [original.id, original]));
   for (const id of assignedIds) {
     const row = byId.get(id);
@@ -408,7 +408,8 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
   }
   // A merge whose chain ends at a finding this same answer rejected or left
   // NEEDS_INFO takes both out without a refutation; ask for one consistent
-  // decision on the pair. Targets another shard decides are not checked.
+  // decision on the pair. Targets another shard decides are settled after the
+  // shards are combined (settleMergeTargets).
   for (const id of assignedIds) {
     const row = byId.get(id);
     if (row?.status !== 'MERGED' || invalid.merge.has(id)) continue;
@@ -417,7 +418,7 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
     while (target?.status === 'MERGED' && assigned.has(target.id) && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
     if (!target || !assigned.has(target.id) || !['REJECTED', 'NEEDS_INFO'].includes(target.status)) continue;
     issues.push(`${id}: merged into ${target.id}, which this answer marks ${target.status}. Confirm ${target.id} with the complete finding, or decide ${id} on its own evidence (confirmed, rejected or needsInfo).`);
-    repairIds.add(id); repairIds.add(target.id); invalid.mergeTarget.add(id);
+    repairIds.add(id); repairIds.add(target.id);
   }
   const missing = assignedIds.filter(id => !byId.has(id));
   if (missing.length) issues.unshift(`No decision was given for: ${missing.join(', ')}.`);
@@ -465,7 +466,36 @@ export function breakMergeCycles(dispositions) {
   return [...cyclic];
 }
 
-function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set(), mergeTarget: new Set() }, pendingIds = []) {
+/**
+ * A merge chain must end at a CONFIRMED finding; otherwise the merged finding
+ * has no decision of its own and would vanish behind a rejection. Runs per
+ * verifier answer after normalization (a confirmation that became NEEDS_INFO
+ * counts) and again over all shards, since a verifier may merge into a
+ * finding another shard decided. Call after breakMergeCycles. Targets absent
+ * from `dispositions` belong to other shards unless `unknownIsDangling`.
+ * Dangling sources become UNREVIEWED; returns them with the target they named.
+ */
+export function settleMergeTargets(dispositions, { unknownIsDangling = false } = {}) {
+  const byId = new Map(dispositions.map(entry => [entry.id, entry]));
+  const dangling = [];
+  for (const entry of dispositions) {
+    if (entry.status !== 'MERGED') continue;
+    const seen = new Set([entry.id]);
+    let target = byId.get(entry.mergedInto);
+    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
+    if (target?.status === 'CONFIRMED' || target?.status === 'MERGED' || (!target && !unknownIsDangling)) continue;
+    dangling.push({ id: entry.id, target: target?.id ?? entry.mergedInto, status: target?.status ?? 'undecided' });
+  }
+  for (const row of dangling) {
+    const entry = byId.get(row.id);
+    entry.status = 'UNREVIEWED';
+    entry.reason = `${entry.reason} [Runtime: merged into ${row.target}, which is ${row.status}; no decision stands.]`;
+    delete entry.mergedInto;
+  }
+  return dangling;
+}
+
+function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
   const { decisions } = state;
   // Normalization notes carry over into a merged supplement; warnings derived
   // from the current decisions are recomputed every time.
@@ -491,16 +521,14 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
       dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: `${asText(row.reason)} [Runtime: the merge target is invalid.]`.trim() });
       continue;
     }
-    if (row.status === 'MERGED' && invalid.mergeTarget.has(original.id)) {
-      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: `${asText(row.reason)} [Runtime: merged into a finding this verifier rejected; no decision stands.]`.trim() });
-      continue;
-    }
     const entry = { id: original.id, status: row.status, reason: asText(row.reason).trim() || 'No reason given.',
       ...(row.status === 'MERGED' ? { mergedInto: row.mergedInto } : {}),
       ...(row.status === 'CONFIRMED' ? { verifiedFinding: confirmedFinding(row.verifiedFinding, state.moves?.get(original.id)) } : {}) };
     dispositions.push(entry);
   }
   breakMergeCycles(dispositions);
+  const dangling = settleMergeTargets(dispositions);
+  if (dangling.length) derived.push(`${dangling.length} merged finding(s) name a target that was not confirmed and are shown as UNREVIEWED.`);
   const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
   if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
   const unconfirmed = dispositions.filter(row => row.status === 'CONFIRMED' && state.moves?.get(row.id)?.acknowledged === false);

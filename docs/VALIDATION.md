@@ -491,9 +491,12 @@ PR #4 (35 files, two seeded regressions):
   with a valid status and a reason, so no correction turn ran. It occurred in
   1 of 181 verification shards across all live runs; the runtime now treats a
   merge into a finding the same answer rejected as a contract problem (repair
-  turn for the pair, UNREVIEWED if unresolved). The repeat run with that
-  check in place confirmed 24 of 24 and the configuration defect with no
-  correction turn needed (58 → 26, 366 s, 5.8 M).
+  turn for the pair, UNREVIEWED if unresolved); a follow-up review showed the
+  same gap across shards (a crowded or overflow-split file can put the pair
+  in two verifiers), so the combined decisions are settled the same way with
+  a warning. The repeat run with the check in place confirmed 24 of 24 and
+  the configuration defect with no correction turn needed (58 → 26, 366 s,
+  5.8 M).
 - Cross-shard discovery did not move with any variant: the regression outside
   PR #4's diff was found by gpt-6.1-sol with the old prompts and with v2/v3
   (4 of 4, filed from the test shard) and by no other model in any run.

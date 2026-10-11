@@ -132,7 +132,12 @@ test('evaluateFinal asks for a consistent decision when a merge chain ends at a 
   assert.deepEqual([...first.repairIds].sort(), ['F-1', 'R-1', 'R-2']);
   // Left unresolved, the merged rows are shown as UNREVIEWED instead of vanishing behind the rejected target.
   assert.deepEqual(first.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'REJECTED'], ['R-1', 'UNREVIEWED'], ['R-2', 'UNREVIEWED']]);
-  assert.match(first.result.dispositions[1].reason, /merged into a finding this verifier rejected/);
+  assert.match(first.result.dispositions[1].reason, /merged into F-1, which is REJECTED/);
+  assert.ok(first.result.warnings.some(w => /name a target that was not confirmed/.test(w)));
+  // A confirmation that lacks fields becomes NEEDS_INFO after normalization; a merge into it is settled on that final status.
+  const degraded = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ id: 'F-1', summary: 'Only a summary', reason: 'ok' }],
+    merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause.' }], rejected: [{ id: 'R-2', reason: 'Guarded.' }], needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.deepEqual(degraded.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'NEEDS_INFO'], ['R-1', 'UNREVIEWED'], ['R-2', 'REJECTED']]);
   // A supplement that confirms the target clears the issue and keeps the merges.
   const second = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1'), status: 'CONFIRMED', reason: 'Checked in source.' }] }),
     { originals, previous: first.result, supplement: true });
