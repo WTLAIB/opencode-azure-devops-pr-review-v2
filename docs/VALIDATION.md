@@ -403,7 +403,8 @@ Prompt variants:
   area" replaced by "of any kind".
 - final (this revision): v5 without the verifier's prose check (removed after
   review, see below). gpt-6-luna and gpt-5.6-terra ran v5, gpt-5.6-luna ran
-  the final revision once, gpt-6.1-sol last ran v3.
+  the final revision twice (the second run with the merge-target check),
+  gpt-6.1-sol last ran v3.
 
 PR #3 (316 files, 24 policy defects and one configuration defect):
 
@@ -419,7 +420,7 @@ PR #3 (316 files, 24 policy defects and one configuration defect):
 | gpt-5.6-luna | v1 | 24 of 24 | yes | 200 → 48 | 23 (the config defect once per region file) | 606 s | 7.73 M |
 | gpt-5.6-luna | v2 | 24 of 24 | yes | 62 → 26 | 0 | 366 s | 6.30 M |
 | gpt-5.6-luna | v3 | 24 of 24 | yes | 104 → 25 | 0 | 446 s | 7.43 M |
-| gpt-5.6-luna | final | 22 of 24 (see below) | yes | 53 → 23 | 0 | 376 s | 6.35 M |
+| gpt-5.6-luna | final (2 runs) | 22 of 24 (see below); 24 of 24 | yes; yes | 53 → 23; 58 → 26 | 0; 0 | 366–376 s | 5.82–6.35 M |
 | gpt-5.6-terra | old | 24 of 24 | no | 101 → 24 | 0 | 566 s | 4.59 M |
 | gpt-5.6-terra | v2 | 24 of 24 | no | 126 → 24 | 0 | 581 s | 6.18 M |
 | gpt-5.6-terra | v3 | 24 of 24 | no | 117 → 24 | 0 | 621 s | 4.92 M |
@@ -490,7 +491,9 @@ PR #4 (35 files, two seeded regressions):
   with a valid status and a reason, so no correction turn ran. It occurred in
   1 of 181 verification shards across all live runs; the runtime now treats a
   merge into a finding the same answer rejected as a contract problem (repair
-  turn for the pair, UNREVIEWED if unresolved).
+  turn for the pair, UNREVIEWED if unresolved). The repeat run with that
+  check in place confirmed 24 of 24 and the configuration defect with no
+  correction turn needed (58 → 26, 366 s, 5.8 M).
 - Cross-shard discovery did not move with any variant: the regression outside
   PR #4's diff was found by gpt-6.1-sol with the old prompts and with v2/v3
   (4 of 4, filed from the test shard) and by no other model in any run.
