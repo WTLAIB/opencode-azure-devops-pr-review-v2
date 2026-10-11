@@ -401,9 +401,9 @@ Prompt variants:
   your assigned files' leads wherever they go; a defect you reach in unchanged
   code is yours to file; other changed files are context only", and "in any
   area" replaced by "of any kind".
-- This revision: v5 without the verifier's prose check (removed after review,
-  see below). gpt-6-luna and gpt-5.6-terra ran v5; gpt-5.6-luna and
-  gpt-6.1-sol last ran v3/v4.
+- final (this revision): v5 without the verifier's prose check (removed after
+  review, see below). gpt-6-luna and gpt-5.6-terra ran v5, gpt-5.6-luna ran
+  the final revision once, gpt-6.1-sol last ran v3.
 
 PR #3 (316 files, 24 policy defects and one configuration defect):
 
@@ -419,6 +419,7 @@ PR #3 (316 files, 24 policy defects and one configuration defect):
 | gpt-5.6-luna | v1 | 24 of 24 | yes | 200 → 48 | 23 (the config defect once per region file) | 606 s | 7.73 M |
 | gpt-5.6-luna | v2 | 24 of 24 | yes | 62 → 26 | 0 | 366 s | 6.30 M |
 | gpt-5.6-luna | v3 | 24 of 24 | yes | 104 → 25 | 0 | 446 s | 7.43 M |
+| gpt-5.6-luna | final | 22 of 24 (see below) | yes | 53 → 23 | 0 | 376 s | 6.35 M |
 | gpt-5.6-terra | old | 24 of 24 | no | 101 → 24 | 0 | 566 s | 4.59 M |
 | gpt-5.6-terra | v2 | 24 of 24 | no | 126 → 24 | 0 | 581 s | 6.18 M |
 | gpt-5.6-terra | v3 | 24 of 24 | no | 117 → 24 | 0 | 621 s | 4.92 M |
@@ -477,8 +478,18 @@ PR #4 (35 files, two seeded regressions):
   old prompts (3.9 M) because they now file 24 defects instead of 9 and
   verification runs in 4–5 shards instead of 1.
 - Under the scope rule a defect reaches verification two or three times
-  (gpt-6-luna v5: 16 policy files with 2 candidates, 8 with 3) instead of
-  four, so the verifier has fewer same-line duplicates to merge.
+  (gpt-6-luna v5: 16 policy files with 2 candidates, 8 with 3; gpt-5.6-luna
+  final: exactly 2 for all 24) instead of four, so the verifier has fewer
+  same-line duplicates to merge.
+- gpt-5.6-luna's final-revision run lost two defects in verification, not in
+  review: both roles filed `worker_capacity` and `write_permissions`, and the
+  verifier of that shard answered in 2,132 characters, merging R-2001 and
+  R-2002 into F-2001 and F-2002 while listing those two under `rejected` with
+  the reason "the candidate itself is a valid issue; see the F-2001
+  confirmation", which it never wrote. Every assigned ID had one decision
+  with a valid status and a reason, so no correction turn ran. A merge into a
+  rejected target is detectable; it occurred in 1 of 181 verification shards
+  across all live runs.
 - Cross-shard discovery did not move with any variant: the regression outside
   PR #4's diff was found by gpt-6.1-sol with the old prompts and with v2/v3
   (4 of 4, filed from the test shard) and by no other model in any run.
