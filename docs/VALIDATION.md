@@ -487,9 +487,10 @@ PR #4 (35 files, two seeded regressions):
   R-2002 into F-2001 and F-2002 while listing those two under `rejected` with
   the reason "the candidate itself is a valid issue; see the F-2001
   confirmation", which it never wrote. Every assigned ID had one decision
-  with a valid status and a reason, so no correction turn ran. A merge into a
-  rejected target is detectable; it occurred in 1 of 181 verification shards
-  across all live runs.
+  with a valid status and a reason, so no correction turn ran. It occurred in
+  1 of 181 verification shards across all live runs; the runtime now treats a
+  merge into a finding the same answer rejected as a contract problem (repair
+  turn for the pair, UNREVIEWED if unresolved).
 - Cross-shard discovery did not move with any variant: the regression outside
   PR #4's diff was found by gpt-6.1-sol with the old prompts and with v2/v3
   (4 of 4, filed from the test shard) and by no other model in any run.

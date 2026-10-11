@@ -122,6 +122,29 @@ test('evaluateFinal rejects invalid merges and cycles per item', () => {
   assert.deepEqual(result.dispositions.map(d => d.status), ['UNREVIEWED', 'UNREVIEWED', 'UNREVIEWED']);
 });
 
+test('evaluateFinal asks for a consistent decision when a merge chain ends at a rejected target, then degrades to UNREVIEWED', () => {
+  const originals = [finding('F-1'), finding('R-1'), finding('R-2')];
+  const first = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [],
+    merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause.' }, { id: 'R-2', mergedInto: 'R-1', reason: 'Same cause.' }],
+    rejected: [{ id: 'F-1', reason: 'The candidate itself is valid; see the F-1 confirmation.' }], needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.ok(first.issues.some(issue => issue.startsWith('R-1: merged into F-1, which this answer marks REJECTED')));
+  assert.ok(first.issues.some(issue => issue.startsWith('R-2: merged into F-1, which this answer marks REJECTED')));
+  assert.deepEqual([...first.repairIds].sort(), ['F-1', 'R-1', 'R-2']);
+  // Left unresolved, the merged rows are shown as UNREVIEWED instead of vanishing behind the rejected target.
+  assert.deepEqual(first.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'REJECTED'], ['R-1', 'UNREVIEWED'], ['R-2', 'UNREVIEWED']]);
+  assert.match(first.result.dispositions[1].reason, /merged into a finding this verifier rejected/);
+  // A supplement that confirms the target clears the issue and keeps the merges.
+  const second = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1'), status: 'CONFIRMED', reason: 'Checked in source.' }] }),
+    { originals, previous: first.result, supplement: true });
+  assert.deepEqual(second.issues, []);
+  assert.deepEqual(second.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'CONFIRMED'], ['R-1', 'MERGED'], ['R-2', 'MERGED']]);
+  // Merges into a confirmed finding or into another shard's finding raise nothing.
+  const fine = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }],
+    merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'same' }, { id: 'R-2', mergedInto: 'X-9', reason: 'same' }], rejected: [], needsInfo: [], newFindings: [], report: 'r' }),
+    { originals, allIds: ['F-1', 'R-1', 'R-2', 'X-9'] });
+  assert.deepEqual(fine.issues, []);
+});
+
 test('evaluateFinal: cross-shard merge targets are allowed when listed in allIds', () => {
   const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'R-7', reason: 'Same.' }], confirmed: [], rejected: [], needsInfo: [], newFindings: [], report: '' }),
     { originals: [finding('F-1')], allIds: ['F-1', 'R-7'] });

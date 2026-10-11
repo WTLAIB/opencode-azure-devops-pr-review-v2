@@ -28,7 +28,8 @@ Return exactly one decision per assigned ID:
 - rejected: a concrete source-based refutation.
 - needsInfo: the missing evidence and what would settle it.
 - merged: `mergedInto` names another original ID (any ID in allFindingIds) with
-  the same root cause and correction. Do not merge into itself or form cycles.
+  the same root cause and correction. Do not merge into itself, form cycles or
+  merge into a finding you reject: decide such a pair on its own evidence.
   Findings that need different corrections stay separate, each at its own
   location, even when they share a cause.
 

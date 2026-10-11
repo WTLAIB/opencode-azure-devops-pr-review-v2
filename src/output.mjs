@@ -383,7 +383,7 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
     if (!supplement && byId.has(row.id)) { warnings.add(`Kept the first of several decisions for ${row.id}.`); continue; }
     byId.set(row.id, row);
   }
-  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set() }, moves = new Map();
+  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set(), mergeTarget: new Set() }, moves = new Map();
   const candidates = new Map(originals.map(original => [original.id, original]));
   for (const id of assignedIds) {
     const row = byId.get(id);
@@ -405,6 +405,19 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
         repairIds.add(id);
       }
     }
+  }
+  // A merge whose chain ends at a finding this same answer rejected or left
+  // NEEDS_INFO takes both out without a refutation; ask for one consistent
+  // decision on the pair. Targets another shard decides are not checked.
+  for (const id of assignedIds) {
+    const row = byId.get(id);
+    if (row?.status !== 'MERGED' || invalid.merge.has(id)) continue;
+    const seen = new Set([id]);
+    let target = byId.get(row.mergedInto);
+    while (target?.status === 'MERGED' && assigned.has(target.id) && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
+    if (!target || !assigned.has(target.id) || !['REJECTED', 'NEEDS_INFO'].includes(target.status)) continue;
+    issues.push(`${id}: merged into ${target.id}, which this answer marks ${target.status}. Confirm ${target.id} with the complete finding, or decide ${id} on its own evidence (confirmed, rejected or needsInfo).`);
+    repairIds.add(id); repairIds.add(target.id); invalid.mergeTarget.add(id);
   }
   const missing = assignedIds.filter(id => !byId.has(id));
   if (missing.length) issues.unshift(`No decision was given for: ${missing.join(', ')}.`);
@@ -452,7 +465,7 @@ export function breakMergeCycles(dispositions) {
   return [...cyclic];
 }
 
-function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
+function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set(), mergeTarget: new Set() }, pendingIds = []) {
   const { decisions } = state;
   // Normalization notes carry over into a merged supplement; warnings derived
   // from the current decisions are recomputed every time.
@@ -476,6 +489,10 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
     }
     if (row.status === 'MERGED' && invalid.merge.has(original.id)) {
       dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: `${asText(row.reason)} [Runtime: the merge target is invalid.]`.trim() });
+      continue;
+    }
+    if (row.status === 'MERGED' && invalid.mergeTarget.has(original.id)) {
+      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: `${asText(row.reason)} [Runtime: merged into a finding this verifier rejected; no decision stands.]`.trim() });
       continue;
     }
     const entry = { id: original.id, status: row.status, reason: asText(row.reason).trim() || 'No reason given.',
