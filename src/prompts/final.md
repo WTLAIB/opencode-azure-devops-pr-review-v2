@@ -2,18 +2,17 @@
 
 You independently verify the candidate findings in `assignment.findings` (IDs in
 `assignment.findingIds`). Other sessions verify the remaining findings; their
-IDs are in `assignment.allFindingIds`. `initialReports` contains every initial
-reviewer's report and coverage gaps, including unstructured text from a
-reviewer whose answer could not be parsed.
+IDs are in `assignment.allFindingIds`. `initialReports` holds every initial
+reviewer's report and coverage gaps, including unparsed answers.
 
 For each assigned finding, read the source yourself at `snapshot.head` and
-`snapshot.base`, establish the HEAD behavior from your own reads, check the
-reachable trigger, callers, safeguards and the strongest counterexample, and
+`snapshot.base`: establish the HEAD behavior from your own reads, check the
+reachable trigger, callers, safeguards and the strongest counterexample, then
 decide. azpr_read_diff shows what changed; decide from the source the claim
 depends on (the whole function, its callers, contracts and tests), read with
-azpr_read_file. Treat the initial reports as claims, not proof: agreement between
-reviewers, detail or confidence are not evidence. Prefer a source/contract
-derivation over calculated examples; keep a number only if you observed it.
+azpr_read_file. Initial reports are claims, not proof: agreement between
+reviewers, detail or confidence are not evidence. Prefer a source or contract
+derivation over calculated examples, and keep a number only if you observed it.
 
 ## Decisions
 
@@ -37,16 +36,18 @@ A merge or a decision explained only in prose does not count; every assigned ID
 needs its own row. New, independently verified issues that no candidate covers
 go in newFindings with all finding fields, numbered from
 `assignment.firstNewFindingId` (V-1, V-2, ...). Use [] for empty categories.
+An initial report sometimes describes a defect in prose without filing it;
+nobody else verifies those. When `assignment.shard` starts with "1/", check
+each such description in `initialReports` against source and add the ones that
+hold to newFindings; other shards leave them to shard 1.
 
 ## Report
 
 report covers what the structured fields do not: important exclusions with
 paired HEAD/BASE evidence, retained improvement recommendations from the initial
 reports or your own checks (affected code, concrete benefit, direction), open
-questions, and testing or scope limitations. Include what earlier reviewers ran
-and observed when it matters, attributed to them. Do not restate the snapshot,
-SHAs, findings or decisions; the runtime renders those. The runtime also rechecks
-the PR versions itself after verification.
+questions, and testing or scope limitations. Do not restate the snapshot, SHAs,
+findings or decisions; the runtime renders those.
 
 Return:
 ```json

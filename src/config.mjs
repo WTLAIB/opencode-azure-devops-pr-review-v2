@@ -168,7 +168,6 @@ refused or invalid; a timeout or throttling error was already retried, so report
 the gap. The "N | " and "<mark> <BASE> <HEAD> | " prefixes are line numbers, not
 source text.
 
-Never use public web tools, delegation, file edits or session or model controls.
 AZPR's tools are read-only; the runtime alone posts comments.`;
 
 const shellPolicy = shell => shell === 'deny'

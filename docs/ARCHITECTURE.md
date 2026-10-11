@@ -62,7 +62,10 @@ After preflight, hooks never re-read settings or catalogs.
 2. **Initial reviews** — changed files are sorted and cut into shards of
    `workflow.shardFiles`. For each role and shard a private session reviews the
    assigned files with a finding-ID range (`F-1…`, `F-1001…`) so IDs never
-   collide. Up to `workflow.parallelSessions` sessions run at once.
+   collide. Up to `workflow.parallelSessions` sessions run at once. Each
+   reviewer files every concrete defect it finds as a finding: a role's focus
+   orders its attention and is not a filter, and `report` carries exclusions,
+   advice and limitations only.
 3. **Overflow** — private sessions may not compact. A compaction request (or a
    413) marks the stage as `overflow`; the runtime splits that shard in half
    and runs both halves (labels `shard 1/5a`, `1/5b`).
@@ -78,7 +81,9 @@ After preflight, hooks never re-read settings or catalogs.
    move, and an unconfirmed move is kept with a warning. The report shows a
    moved finding's initial location. Missing or invalid decisions trigger a
    repair turn asking only for those IDs; leftovers become UNREVIEWED (or
-   NEEDS_INFO for incomplete confirmations).
+   NEEDS_INFO for incomplete confirmations). The first verification shard also
+   checks defects that an initial report described in prose without filing
+   them and adds the ones that hold as new findings (`V-…`).
 5. **Duplicate check** — the runtime groups confirmed findings by their final
    file. A file whose findings different verifiers confirmed (a verifier moved
    one there, or a crowded file was split) lost the one-verifier-per-file
