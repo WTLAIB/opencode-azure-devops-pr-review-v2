@@ -4,7 +4,7 @@
  * verifiers confirmed, and a deterministic final version recheck.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { breakMergeCycles, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
+import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
 
 export { locationPath };
 const ID_SPAN = 1000;
@@ -297,6 +297,12 @@ export async function runReview(ctx, run, request) {
   // would otherwise hide every finding in it without a warning.
   const cyclic = breakMergeCycles(dispositions);
   if (cyclic.length) warnings.push(`Merges across verification shards formed a cycle; ${cyclic.join(', ')} ${cyclic.length === 1 ? 'is' : 'are'} shown as UNREVIEWED.`);
+  // A verifier may merge into a finding that another shard rejected or left
+  // undecided; only the combined decisions can tell, and such a merged finding
+  // must not vanish behind the rejection. Surviving verifier-added findings are
+  // confirmed targets (the duplicate check may merge into them).
+  const dangling = settleMergeTargets(dispositions, { unknownIsDangling: true, confirmedIds: new Set(newFindings.map(finding => finding.id)) });
+  if (dangling.length) warnings.push(`Merged into findings that were not confirmed and shown as UNREVIEWED: ${dangling.map(row => `${row.id} → ${row.target} (${row.status})`).join(', ')}.`);
 
   // Deterministic final version recheck. Only a changed source commit is stale.
   let freshness;

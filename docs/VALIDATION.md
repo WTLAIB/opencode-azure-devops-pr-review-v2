@@ -369,6 +369,170 @@ repeat. The corrected diffs of PR #4 are 23 % larger; run 2 still used fewer
 tokens because reviewers made fewer whole-file reads. Tool arguments sent as
 `null` or blank text now count as not given.
 
+## Live A/B: filing rules in the reviewer prompts (PR #3 and PR #4, review only)
+
+2026-10-11, OpenCode 2.0.22, api-version 7.1, `parallelSessions` 8,
+`azure.concurrency` 6, `outputLanguage` zh-TW, all three review roles on one
+model, nothing posted. Baselines are the runs of the sections above (prompts
+of commit 56bc5d7).
+
+Cause found before the change: with gpt-6-luna, both roles read all 25 diffs of
+PR #3's shard 2 (22 policy modules), but the risk reviewer filed 4 findings and
+described five more defects in `report` "because they are outside this
+review's focus", and the functional reviewer filed 6 and listed 16 in `report`.
+Only `findings` reach verification, so 9 of 24 defects survived; the 15 → 9
+step in verification was six functional/risk duplicates merged correctly.
+
+Prompt variants:
+
+- v1: every concrete defect is its own finding (no maximum, one per defect and
+  location); a role's focus orders attention and is not a filter; `report`
+  never describes a defect; COMPLETE requires following the reading leads;
+  "plan reads in few rounds" replaced by "never skip a read to save a round";
+  the first verification shard checks defects described only in prose.
+- v2: v1 plus "one entry per root cause" (code that is wrong once and affects
+  many files or records is one finding at that code; separately wrong modules
+  are separate findings).
+- v3: v2 with "plan reads in few rounds" restored and the tool prohibition
+  that the runtime enforces anyway removed from the prompt.
+- v4: v3 without "followed the leads it raised" in the COMPLETE definition of
+  the initial roles.
+- v5: v4 with the scope rule "every changed file has its own reviewer: follow
+  your assigned files' leads wherever they go; a defect you reach in unchanged
+  code is yours to file; other changed files are context only", and "in any
+  area" replaced by "of any kind".
+- final (this revision): v5 without the verifier's prose check (removed after
+  review, see below). gpt-6-luna and gpt-5.6-terra ran v5, gpt-5.6-luna ran
+  the final revision four times (the last three with the merge-target
+  checks), gpt-6.1-sol last ran v3.
+
+PR #3 (316 files, 24 policy defects and one configuration defect):
+
+| Model | Prompts | Policy defects | Config defect | Candidates → confirmed | Duplicate confirmations | Review | Input tokens |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| gpt-6-luna | old | 9 of 24 | no | 15 → 9 | 0 | 250 s | 2.85 M |
+| gpt-6-luna | v1 | 24 of 24 | no | 76 → 24 | 0 | 316 s | 3.90 M |
+| gpt-6-luna | v2 | 24 of 24 | no | 60 → 25 | 0 | 286 s | 3.85 M |
+| gpt-6-luna | v3 (2 runs) | 24 of 24 both | 1 of 2 | 65 → 25; 64 → 42 | 0; 17 | 271–296 s | 3.49–3.68 M |
+| gpt-6-luna | v4 | 24 of 24 | no | 54 → 24 | 0 | 366 s | 3.94 M |
+| gpt-6-luna | v5 | 24 of 24 | no | 56 → 24 | 0 | 321 s | 3.87 M |
+| gpt-5.6-luna | old (2 runs) | 24 of 24 both | yes | 69–84 → 25 | 0 | 386–431 s | 5.46–5.53 M |
+| gpt-5.6-luna | v1 | 24 of 24 | yes | 200 → 48 | 23 (the config defect once per region file) | 606 s | 7.73 M |
+| gpt-5.6-luna | v2 | 24 of 24 | yes | 62 → 26 | 0 | 366 s | 6.30 M |
+| gpt-5.6-luna | v3 | 24 of 24 | yes | 104 → 25 | 0 | 446 s | 7.43 M |
+| gpt-5.6-luna | final (4 runs) | 22 of 24 (see below); then 24 of 24 three times | yes | 53 → 23; 58 → 26; 65 → 26; 59 → 25 | 0 | 351–406 s | 5.35–6.35 M |
+| gpt-5.6-terra | old | 24 of 24 | no | 101 → 24 | 0 | 566 s | 4.59 M |
+| gpt-5.6-terra | v2 | 24 of 24 | no | 126 → 24 | 0 | 581 s | 6.18 M |
+| gpt-5.6-terra | v3 | 24 of 24 | no | 117 → 24 | 0 | 621 s | 4.92 M |
+| gpt-5.6-terra | v5 | 24 of 24 | no | 76 → 24 | 0 | 496 s | 5.33 M |
+
+PR #4 (35 files, two seeded regressions):
+
+| Model | Prompts | In the diff | Outside the diff | Other confirmed | Review | Input tokens |
+| --- | --- | --- | --- | --- | --- | --- |
+| gpt-6-luna | old (4 runs) | 3 of 4 | 0 | 0 | 65–75 s | 0.22–0.29 M |
+| gpt-6-luna | v1, v2 | 0 of 2 | 0 | 0 | 65–70 s | 0.42–0.57 M |
+| gpt-6-luna | v3 (2 runs) | 2 of 2 | 0 | 0 | 80 s | 0.39–0.62 M |
+| gpt-6-luna | v4 | 1 of 1 | 0 | 0 | 80 s | 0.33 M |
+| gpt-5.6-luna | old (2 runs) | 2 of 2 | 0 | 0 | 130 s | 0.55–0.64 M |
+| gpt-5.6-luna | v1 / v2 / v3 | 1 / 0 / 1 of 1 | 0 | 0 / 1 / 0 | 120–145 s | 0.76 / 0.92 / 0.86 M |
+| gpt-5.6-terra | old (2 runs) | 2 of 2 | 0 | 0 | 180–196 s | 0.69–0.82 M |
+| gpt-5.6-terra | v2, v3 (3 runs) | 3 of 3 | 0 | 0 | 170–185 s | 1.01–1.05 M |
+| gpt-5.6-terra | v4 (2 runs) | 2 of 2 | 0 | 0 | 186–211 s | 0.96–1.04 M |
+| gpt-5.6-terra | v5 (2 runs) | 2 of 2 | 0 | 0 | 180–181 s | 0.69–0.85 M |
+| gpt-6.1-sol | old (2 runs) | 2 of 2 | 2 of 2 | 2 | 261–306 s | 1.47–1.53 M |
+| gpt-6.1-sol | v2 / v3 | 1 / 1 of 1 | 1 / 1 of 1 | 3 / 5 | 406 / 351 s | 3.50 / 2.14 M |
+
+- The filing rules are what helped. gpt-6-luna's functional reviewer on PR #3's
+  shard 2 filed 22 findings in two model requests after the same 25 diff reads
+  that had produced 6 findings and 16 sentences of prose; all five new-prompt
+  runs of gpt-6-luna on PR #3 found 24 of 24.
+- "One per defect and location" made gpt-5.6-luna file the configuration
+  defect once per affected region file; "one per root cause" removed those 23
+  duplicates and kept the defect at `configuration.py`.
+- "Never skip a read to save a round" cost tokens without a measurable gain:
+  gpt-6.1-sol 1.5 → 3.5 M on PR #4 (2.1 M after the revert), gpt-5.6-terra
+  6.2 → 4.9 M on PR #3 after the revert. No variant made gpt-5.6-luna or
+  gpt-6-luna find the regression outside the diff.
+- The prose check by the first verification shard added one finding in
+  fourteen runs (v5, gpt-6-luna: a pagination defect another candidate
+  already covered; the same-file duplicate check merged it). Once reviewers
+  file their defects, nothing is left in prose. It was removed after review:
+  its work grows with the number of initial reports, not with the shard's
+  candidates, and every overflow split of the first shard (labels `1/N`,
+  `1/Na`, ...) repeats the same sweep, so an overflow during it would leave
+  that shard's candidates UNREVIEWED, and a shard without candidates cannot
+  split at all.
+- gpt-5.6-terra had no filing problem with the old prompts (both roles filed
+  all 22 defects of shard 2) and gains nothing measurable: 24 of 24 and the
+  regression inside the diff with every prompt set, the configuration defect
+  and the regression outside the diff with none. v3 cost it 7 % more input on
+  PR #3 and about 35 % more on PR #4: the sessions assigned the test files
+  read and reviewed the implementation of other shards ("in any area"). v4
+  changed nothing for it; the scope rule of v5 brought PR #4 back to the old
+  0.69–0.85 M and PR #3 candidates from 117 to 76 (verification shards 9 → 6,
+  496 s), with input inside the run-to-run spread of the old prompts
+  (4.6–5.3 M).
+- For gpt-6-luna, "followed the leads it raised" was what made its PR #4
+  sessions read more (0.39–0.62 M → 0.33 M without it); PR #3 stayed at
+  24 of 24 in v4 and v5. Its PR #3 reviews cost about 35 % more than with the
+  old prompts (3.9 M) because they now file 24 defects instead of 9 and
+  verification runs in 4–5 shards instead of 1.
+- Under the scope rule a defect reaches verification two or three times
+  (gpt-6-luna v5: 16 policy files with 2 candidates, 8 with 3; gpt-5.6-luna
+  final: exactly 2 for all 24) instead of four, so the verifier has fewer
+  same-line duplicates to merge.
+- gpt-5.6-luna's final-revision run lost two defects in verification, not in
+  review: both roles filed `worker_capacity` and `write_permissions`, and the
+  verifier of that shard answered in 2,132 characters, merging R-2001 and
+  R-2002 into F-2001 and F-2002 while listing those two under `rejected` with
+  the reason "the candidate itself is a valid issue; see the F-2001
+  confirmation", which it never wrote. Every assigned ID had one decision
+  with a valid status and a reason, so no correction turn ran. It occurred in
+  1 of 181 verification shards across all live runs; the runtime now treats a
+  merge into a finding the same answer rejected as a contract problem (repair
+  turn for the pair, UNREVIEWED if unresolved); a follow-up review showed the
+  same gap across shards (a crowded or overflow-split file can put the pair
+  in two verifiers), so the combined decisions are settled the same way with
+  a warning; a verifier-added finding that survives counts as a confirmed
+  target there, since the duplicate check may merge into it. Three repeat
+  runs with the checks in place confirmed 24 of 24 and the configuration
+  defect with no merge correction needed (58 → 26, 65 → 26 and 59 → 25;
+  351–406 s; 5.4–6.1 M; the last one with a duplicate check and no false
+  warning). The third run also saw the first provider
+  stream interruption in these runs: the host's continuation message after a
+  turn that had made tool calls is not accepted as the authorized answer, the
+  shard was retried in a new session (`workflow.stageRetries`) and completed.
+- Cross-shard discovery did not move with any variant: the regression outside
+  PR #4's diff was found by gpt-6.1-sol with the old prompts and with v2/v3
+  (4 of 4, filed from the test shard) and by no other model in any run.
+
+### Live publication with this revision (gpt-5.6-terra)
+
+After the earlier 25 comments on PR #3 were deleted, `/pr-review` and
+`/pr-comment --publish` ran once per PR with gpt-5.6-terra on all three roles.
+PR #3: 24 of 24 policy defects confirmed (57 candidates, 461 s, 4.3 M input);
+24 items published, all VERIFIED on read-back (one summary, 23 inline; the
+low-severity finding appears in the summary index only); a second
+`--publish` reported ALREADY_PRESENT for all 24. PR #4: the regression inside
+the diff confirmed (195 s, 0.6 M); 2 items VERIFIED (summary and
+`json_schema.py:874`), the second `--publish` ALREADY_PRESENT for both. No
+skip relied on another finding.
+- Risk: those same-line duplicates must be merged by the verifier.
+  gpt-5.6-luna and gpt-5.6-terra merged them in every run; gpt-6-luna did in
+  three of four runs and in the fourth confirmed 17 duplicates on the same
+  lines (two of five verification shards merged nothing). Publishing that
+  review would post two to four identical comments per line. A deterministic
+  runtime merge of candidates with the same path and lines is the proposed
+  fix; it is not part of this revision.
+- The regression inside PR #4's diff was missed by gpt-6-luna in three
+  consecutive runs around the prompt change (one of them with the old
+  prompts) and found in both v3 runs, although every session had read the
+  defective lines and the test asserting the opposite: model variance, not a
+  prompt effect.
+- The configuration defect of PR #3: gpt-5.6-luna 4 of 4 new-prompt runs,
+  gpt-6-luna 1 of 4, gpt-5.6-terra 0 of 2.
+
 ## Not yet validated
 
 - A defect whose evidence spans a test and unchanged code in different shards

@@ -136,6 +136,9 @@ planning uses the review's risk model.
 | `risk` | Failures, retries, concurrency, authorization and data consistency. Evidence-based reasoning across call paths and reliable tool use. Also plans comments. |
 | `verifier` | Independent source re-checks, counterevidence, duplicate merging (including the same-file duplicate check) and the final report. Strong evidence judgment and instruction following. |
 
+A role's focus orders its attention and is not a filter: every reviewer files
+every concrete defect it finds, in any area, as a finding.
+
 | Setting | Default and meaning |
 | --- | --- |
 | `enabled` | `true`; `false` registers nothing. |

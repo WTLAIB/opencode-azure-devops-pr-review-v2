@@ -406,6 +406,20 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
       }
     }
   }
+  // A merge whose chain ends at a finding this same answer rejected or left
+  // NEEDS_INFO takes both out without a refutation; ask for one consistent
+  // decision on the pair. Targets another shard decides are settled after the
+  // shards are combined (settleMergeTargets).
+  for (const id of assignedIds) {
+    const row = byId.get(id);
+    if (row?.status !== 'MERGED' || invalid.merge.has(id)) continue;
+    const seen = new Set([id]);
+    let target = byId.get(row.mergedInto);
+    while (target?.status === 'MERGED' && assigned.has(target.id) && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
+    if (!target || !assigned.has(target.id) || !['REJECTED', 'NEEDS_INFO'].includes(target.status)) continue;
+    issues.push(`${id}: merged into ${target.id}, which this answer marks ${target.status}. Confirm ${target.id} with the complete finding, or decide ${id} on its own evidence (confirmed, rejected or needsInfo).`);
+    repairIds.add(id); repairIds.add(target.id);
+  }
   const missing = assignedIds.filter(id => !byId.has(id));
   if (missing.length) issues.unshift(`No decision was given for: ${missing.join(', ')}.`);
   const sourceNew = supplement && !Object.hasOwn(source, 'newFindings') ? null : source.newFindings;
@@ -452,6 +466,38 @@ export function breakMergeCycles(dispositions) {
   return [...cyclic];
 }
 
+/**
+ * A merge chain must end at a CONFIRMED finding; otherwise the merged finding
+ * has no decision of its own and would vanish behind a rejection. Runs per
+ * verifier answer after normalization (a confirmation that became NEEDS_INFO
+ * counts) and again over all shards, since a verifier may merge into a
+ * finding another shard decided. Call after breakMergeCycles. Targets absent
+ * from `dispositions` belong to other shards unless `unknownIsDangling`;
+ * `confirmedIds` names targets kept elsewhere (surviving verifier-added
+ * findings, which the duplicate check may merge into). Dangling sources
+ * become UNREVIEWED; returns them with the target they named.
+ */
+export function settleMergeTargets(dispositions, { unknownIsDangling = false, confirmedIds = new Set() } = {}) {
+  const byId = new Map(dispositions.map(entry => [entry.id, entry]));
+  const lookup = id => byId.get(id) ?? (confirmedIds.has(id) ? { id, status: 'CONFIRMED' } : undefined);
+  const dangling = [];
+  for (const entry of dispositions) {
+    if (entry.status !== 'MERGED') continue;
+    const seen = new Set([entry.id]);
+    let target = lookup(entry.mergedInto);
+    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = lookup(target.mergedInto); }
+    if (target?.status === 'CONFIRMED' || target?.status === 'MERGED' || (!target && !unknownIsDangling)) continue;
+    dangling.push({ id: entry.id, target: target?.id ?? entry.mergedInto, status: target?.status ?? 'undecided' });
+  }
+  for (const row of dangling) {
+    const entry = byId.get(row.id);
+    entry.status = 'UNREVIEWED';
+    entry.reason = `${entry.reason} [Runtime: merged into ${row.target}, which is ${row.status}; no decision stands.]`;
+    delete entry.mergedInto;
+  }
+  return dangling;
+}
+
 function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
   const { decisions } = state;
   // Normalization notes carry over into a merged supplement; warnings derived
@@ -484,6 +530,8 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
     dispositions.push(entry);
   }
   breakMergeCycles(dispositions);
+  const dangling = settleMergeTargets(dispositions);
+  if (dangling.length) derived.push(`${dangling.length} merged finding(s) name a target that was not confirmed and are shown as UNREVIEWED.`);
   const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
   if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
   const unconfirmed = dispositions.filter(row => row.status === 'CONFIRMED' && state.moves?.get(row.id)?.acknowledged === false);
