@@ -187,7 +187,12 @@ permission, validation and not-found errors and every write fail at once. Files
 are cached per run. With debug enabled each call is logged to
 `azure-calls.jsonl` (method, call, path or range, attempt, status, duration,
 outcome; never comment bodies or credentials). Slots are released in
-`finally`, never by a hook.
+`finally`, never by a hook. Every request carries the `azure.proxy`,
+`azure.caFile` and `azure.verifyTls` transport (Bun's per-request `proxy` and
+`tls` options; extra CA certificates are added to the built-in roots). A
+rejected certificate fails at once, and an error answer without Azure DevOps'
+`X-TFS-ProcessId` header is reported as a proxy's or gateway's answer rather
+than as a PAT or permission problem.
 
 Shell is denied by default. With `shell: "ask"` or `"inherit"` reviewers may run
 commands under host permissions; that is real host authority, not a sandbox.

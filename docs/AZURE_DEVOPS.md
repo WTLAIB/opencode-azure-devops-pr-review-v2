@@ -26,11 +26,57 @@ reads no other component's configuration.
    file and the discussions without any model request.
 
 The PAT is sent only to `https://dev.azure.com/<organization>` as
-`Authorization: Basic base64(":" + PAT)`. It never appears in receipts, reports,
+`Authorization: Basic base64(":" + PAT)`, inside a `CONNECT` tunnel when
+`azure.proxy` is set. It never appears in receipts, reports,
 diagnostics or error messages. The installer keeps `settings.json` at mode 600
 and preserves it on `--replace`; keep it out of repositories and shared profiles.
 PR URLs whose organization differs from `azure.organization` are refused before
 any request.
+
+## Proxies and TLS inspection
+
+When dev.azure.com is reachable only through a proxy, a direct connection fails
+and `/pr-check` reports `network error (ConnectionRefused)` (or a timeout, or
+`ENOTFOUND`) under PR metadata. Point AZPR at the proxy in `settings.json` and
+restart OpenCode:
+
+```json
+{ "azure": { "proxy": "http://proxy.example.com:8080" } }
+```
+
+- `azure.proxy` applies only to AZPR's Azure DevOps calls, not to model
+  providers or other plugins. Credentials go in the URL as
+  `http://user:password@host:port`, percent-encoded (`@` is `%40`); they are
+  never shown in reports or diagnostics. Only Basic proxy authentication is
+  supported; for an NTLM or Kerberos proxy run a local forwarder (such as Px or
+  Cntlm) and point `azure.proxy` at it. HTTPS requests are tunnelled with
+  `CONNECT`, so the proxy sees `dev.azure.com:443` but not the PAT, unless it
+  inspects TLS.
+- Many corporate proxies inspect TLS: they present certificates signed by a
+  company root CA, and requests fail with `the server's TLS certificate was not
+  accepted (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)` or a similar code. Save that root
+  CA certificate as a PEM file and set `azure.caFile` to its absolute path; AZPR
+  trusts it in addition to the built-in roots. On Windows (also for WSL) the
+  certificate is in the certificate store (certmgr.msc → Trusted Root
+  Certification Authorities); export it as "Base-64 encoded X.509 (.CER)".
+  `openssl s_client -proxy host:port -connect dev.azure.com:443 -showcerts`
+  shows the chain the proxy presents.
+- `azure.verifyTls: false` turns certificate checks off for these calls, the
+  equivalent of `curl -k` or `NODE_TLS_REJECT_UNAUTHORIZED=0`. Anyone who can
+  intercept the connection can then read the PAT, so use it only when the CA
+  certificate cannot be obtained. `/pr-check` shows a WARNING row while it is
+  off.
+- Settings and the CA file are read when OpenCode loads AZPR; restart OpenCode
+  after changing either. `/pr-check` lists the proxy (without credentials) and
+  the number of extra CA certificates.
+- Without `azure.proxy`, OpenCode's runtime (Bun) still honours `HTTPS_PROXY`
+  and `NO_PROXY` in the OpenCode process environment, and `NODE_EXTRA_CA_CERTS`
+  for extra CA certificates. Those apply to every connection OpenCode makes,
+  including model providers; `azure.proxy` and `azure.caFile` limit the change
+  to AZPR.
+- The three settings rely on the per-request proxy and TLS options of Bun's
+  `fetch`. A runtime whose `fetch` would ignore them makes AZPR refuse to load
+  instead of connecting directly.
 
 ## REST API and versions
 
@@ -116,9 +162,14 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
   (`azure.callTimeoutSeconds`) that aborts the HTTP request and frees the slot.
 - Reads retry network errors, timeouts, throttling (429, honouring
   `Retry-After` up to 60 seconds) and 5xx responses twice with backoff.
-- Writes are never retried. A write whose outcome is unknown (timeout or a lost
-  connection after sending) is recorded as uncertain and resolved by reading the
-  markers back; publishing again is always safe.
+- Writes are never retried. A write whose outcome is unknown (timeout, a lost
+  connection after sending, or a 5xx from a proxy or gateway that may have
+  forwarded it) is recorded as uncertain and resolved by reading the markers
+  back; publishing again is always safe.
+- A certificate that is not trusted fails at once: the handshake failed, so
+  nothing was sent. An error answer without Azure DevOps' `X-TFS-ProcessId`
+  response header (which Azure DevOps puts on every answer) is reported as the
+  answer of a proxy or gateway, not as a PAT or permission problem.
 - Files are read once per run and cached; binary files (a NUL byte in the first
   8,000 bytes) and files over 10 MB are reported, not shown.
 
@@ -131,6 +182,10 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 | `Azure DevOps could not find … (HTTP 404 TF…)` | Wrong project, repository, PR ID or path; Azure's error code is shown. |
 | `The PR belongs to organization "x", but azure.organization is "y"` | Configure the PAT and organization of that PR. |
 | `… did not finish within the per-call timeout` | Azure DevOps or the network did not answer; reads were retried. |
+| `network error (ConnectionRefused)` (or `ETIMEDOUT`, `ENOTFOUND`) | OpenCode cannot reach dev.azure.com; behind a corporate proxy set `azure.proxy`. With a proxy set, the proxy itself is unreachable. |
+| `the server's TLS certificate was not accepted (…)` | A proxy inspects HTTPS with its own CA (or the clock is wrong); set `azure.caFile`. Not retried. |
+| `A proxy refused … it requires authentication (HTTP 407)` | Put the proxy credentials in `azure.proxy`. |
+| `A proxy or gateway answered … instead of Azure DevOps` | A proxy or firewall answered (no Azure DevOps response headers), for example for a blocked destination; check its policy for dev.azure.com. |
 | `The PR has no source/base commit yet` | Azure DevOps has not finished evaluating the PR; retry shortly. |
 
 Exact-host fixtures set `AZPR_TEST_AZURE_BASE_URL` to a loopback fake service;

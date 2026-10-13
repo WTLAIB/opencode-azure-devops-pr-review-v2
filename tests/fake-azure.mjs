@@ -30,7 +30,9 @@ export function zipFiles(entries) {
 }
 
 export const FAKE_PAT = 'fixture-pat-0123456789abcdefghijklmnopqrstuvwxyz';
-const json = (status, value, headers = {}) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers }, body: JSON.stringify(value) });
+// Azure DevOps marks every response it serves with X-TFS-ProcessId; AZPR tells a proxy's own answer apart by its absence.
+export const AZURE_HEADERS = Object.freeze({ 'x-tfs-processid': '00000000-0000-0000-0000-00000000f1c7' });
+const json = (status, value, headers = {}) => ({ status, headers: { 'content-type': 'application/json; charset=utf-8', ...AZURE_HEADERS, ...headers }, body: JSON.stringify(value) });
 export const azureError = (status, typeKey, message) => json(status, { $id: '1', innerException: null, message, typeName: `Microsoft.TeamFoundation.${typeKey}, Microsoft.TeamFoundation`, typeKey, errorCode: 0, eventId: 3000 });
 
 export function fakeAzure(options = {}) {
@@ -82,14 +84,14 @@ export function fakeAzure(options = {}) {
         const paths = new Set([...state.files, ...Object.keys(state.sources).flatMap(key => key.includes(':') ? (key.startsWith(`${version}:`) ? [key.slice(version.length + 1)] : []) : [key])]);
         const entries = [...paths].sort().map(file => [file.replace(/^\//, ''), state.binary.has(file) ? Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]) : source(file, version)]);
         const bytes = zipFiles(entries);
-        return { status: 200, headers: { 'content-type': 'application/zip', 'content-length': String(bytes.length) }, body: bytes };
+        return { status: 200, headers: { 'content-type': 'application/zip', 'content-length': String(bytes.length), ...AZURE_HEADERS }, body: bytes };
       }
       if (path) {
         if (!state.files.includes(path) && !Object.hasOwn(state.sources, path) && !Object.hasOwn(state.sources, `${version}:${path}`)) {
           return azureError(404, 'GitItemNotFoundException', `TF401174: The item '${path}' could not be found in the repository 'repo' at the version specified by '${version}'.`);
         }
         const bytes = state.binary.has(path) ? Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]) : Buffer.from(source(path, version), 'utf8');
-        return { status: 200, headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) }, body: bytes };
+        return { status: 200, headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length), ...AZURE_HEADERS }, body: bytes };
       }
       const prefix = scope === '/' ? '/' : `${scope}/`;
       const children = new Map();
@@ -111,7 +113,7 @@ export function fakeAzure(options = {}) {
     const call = { method, route: route?.[0] ?? 'unknown', path: decodeURIComponent(parsed.pathname), query: Object.fromEntries(parsed.searchParams), ...(body ? { body: JSON.parse(body) } : {}) };
     state.calls.push(call);
     if (auth !== `Basic ${Buffer.from(':' + state.pat).toString('base64')}`) {
-      return { status: 203, headers: { 'content-type': 'text/html; charset=utf-8' }, body: '<!DOCTYPE html><html><body>Sign in</body></html>' };
+      return { status: 203, headers: { 'content-type': 'text/html; charset=utf-8', ...AZURE_HEADERS }, body: '<!DOCTYPE html><html><body>Sign in</body></html>' };
     }
     if (parsed.searchParams.get('api-version') !== '7.1') return azureError(400, 'VssVersionOutOfRangeException', 'Unexpected api-version in the fixture.');
     if (!route) return azureError(404, 'NotFoundException', 'Unknown fixture route.');

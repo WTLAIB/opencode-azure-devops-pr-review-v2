@@ -153,6 +153,9 @@ every concrete defect it finds, in any area, as a finding.
 | `azure.concurrency` | `3` simultaneous Azure DevOps calls across all AZPR commands. |
 | `azure.callTimeoutSeconds` | `120`; a hung call is aborted and its slot released (reads are retried). |
 | `azure.archiveMegabytes` | `100` (1–1024): the largest repository zip that content search downloads per run and commit; a larger repository is not searched. It is held in memory during a review. |
+| `azure.proxy` | `""`: no AZPR proxy (`HTTPS_PROXY` and `NO_PROXY` in OpenCode's environment still apply). A forward proxy for AZPR's Azure DevOps calls only, such as `http://proxy.example.com:8080`; credentials go in the URL as `http://user:password@host:port` (percent-encoded) and are never shown. See [proxies](docs/AZURE_DEVOPS.md#proxies-and-tls-inspection). |
+| `azure.caFile` | `""`. The absolute path of a PEM file with CA certificates AZPR trusts in addition to the built-in roots, for a proxy that inspects HTTPS. |
+| `azure.verifyTls` | `true`. `false` skips certificate checks for AZPR's Azure DevOps calls (like `curl -k`), so anyone who can intercept the connection can read the PAT; prefer `azure.caFile`. `/pr-check` warns while it is off. |
 | `workflow.shardFiles` | `25` changed files per initial-review session. |
 | `workflow.shardFindings` | At most `15` findings per verification session; one file's findings stay in the same session (a file is split only when it alone has more). |
 | `workflow.parallelSessions` | `4` reviewer sessions at once within a command. |
@@ -173,7 +176,9 @@ a PAT scoped to **one organization** (global "all accessible organizations"
 PATs stop working on 2026-12-01) with **Code: Read** and **Pull Request Threads:
 Read & write**, put it in `azure.pat` of the installed `settings.json` (the
 installer keeps that file at mode 600) and restart OpenCode. Keep the PAT out of
-this repository and out of shared settings profiles.
+this repository and out of shared settings profiles. Behind a corporate proxy,
+also set `azure.proxy`, and `azure.caFile` when the proxy inspects HTTPS (see
+[proxies and TLS inspection](docs/AZURE_DEVOPS.md#proxies-and-tls-inspection)).
 
 Reviewers read source through six read-only AZPR tools (`azpr_read_diff`,
 `azpr_read_file`, `azpr_search_code`, `azpr_find_files`, `azpr_list_files`,

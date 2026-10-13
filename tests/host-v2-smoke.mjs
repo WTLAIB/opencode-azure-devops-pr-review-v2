@@ -1,5 +1,6 @@
 import { withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
+import { fakeProxy } from './fake-proxy.mjs';
 /**
  * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
  * Isolated directories, a loopback deterministic provider, a loopback fake
@@ -8,11 +9,15 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * review in which reviewers read through AZPR's tools while foreign tools stay
  * hidden, a verifier repair turn, comment preview and idempotent publication
  * across a host restart, cancellation, and private auxiliary-request denial.
- * It does not validate a real provider, real Azure DevOps or visual rendering.
+ * The fresh run also reaches Azure DevOps over HTTPS only through an
+ * authenticating CONNECT proxy with a fixture CA (openssl generates it).
+ * It does not validate a real provider, real Azure DevOps, a real corporate
+ * proxy or visual rendering.
  */
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createServer as createTlsServer } from 'node:https';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -302,6 +307,73 @@ try {
   tui.stderr.on('data', data => { tuiOutput += data; });
   assert.equal((await once(tui, 'exit'))[0], 0, tuiOutput);
   results.tui = 'new and existing sessions cancelled from the same TUI';
+
+  // 7. A corporate network: Azure DevOps over HTTPS only through an authenticating
+  // CONNECT proxy that re-signs TLS with its own CA (azure.proxy, azure.caFile, azure.verifyTls).
+  if (replacement) results.proxy = 'covered by the fresh run';
+  else if (spawnSync('openssl', ['version']).status !== 0) results.proxy = 'SKIPPED: openssl is unavailable';
+  else {
+    const pki = join(fixture, 'pki');
+    await mkdir(pki);
+    const openssl = args => { const result = spawnSync('openssl', args, { cwd: pki, encoding: 'utf8', timeout: 30000 }); assert.equal(result.status, 0, result.stderr); };
+    openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj', '/CN=AZPR fixture proxy CA',
+      '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
+    openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=127.0.0.1']);
+    await writeFile(join(pki, 'server.ext'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
+    openssl(['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem', '-days', '2', '-extfile', 'server.ext']);
+    const tlsServer = createTlsServer({ key: await readFile(join(pki, 'server.key')), cert: await readFile(join(pki, 'server.pem')) },
+      (request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
+    tlsServer.listen(0, '127.0.0.1');
+    await once(tlsServer, 'listening');
+    const tunnelTarget = `127.0.0.1:${tlsServer.address().port}`;
+    const proxy = await fakeProxy({ credentials: 'azpr:p@ss w0rd' });
+    const withCredentials = new URL(proxy.url);
+    withCredentials.username = 'azpr';
+    withCredentials.password = 'p@ss w0rd';
+    const proxyShown = `proxy http://127.0.0.1:${withCredentials.port}`;
+    try {
+      const installedSettings = join(runtimeDirectory, 'settings.json');
+      const base = JSON.parse(await readFile(installedSettings, 'utf8'));
+      // Settings are read once, so every variant needs a host restart.
+      const checkWith = async network => {
+        await stopHost();
+        await writeFile(installedSettings, JSON.stringify({ ...base, azure: { ...base.azure, proxy: '', caFile: '', verifyTls: true, ...network } }, null, 2));
+        env.AZPR_TEST_AZURE_BASE_URL = `https://${tunnelTarget}`;
+        url = await startHost();
+        const origin = await newOrigin('Proxy check');
+        await api(`/api/session/${origin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
+        return latest(origin);
+      };
+      const reached = azure.state.calls.length;
+      const ready = await checkWith({ proxy: withCredentials.href, caFile: join(pki, 'ca.pem') });
+      assert.match(ready, /\] READY/, ready);
+      assert.ok(ready.includes(`${proxyShown} with credentials; 1 extra CA certificate(s) from azure.caFile`), ready);
+      assert.ok(!ready.includes('w0rd'), 'Proxy credentials are never shown.');
+      const tunnels = proxy.events.filter(event => event.type === 'connect');
+      assert.ok(tunnels.length >= 1 && proxy.events.length === tunnels.length, JSON.stringify(proxy.events));
+      assert.ok(tunnels.every(event => event.target === tunnelTarget && event.authorization === null &&
+        event.proxyAuthorization === `Basic ${Buffer.from('azpr:p@ss w0rd').toString('base64')}`), 'Bun tunnels with percent-decoded proxy credentials; the PAT stays inside TLS.');
+      assert.ok(azure.state.calls.length > reached, 'Azure DevOps calls arrived through the tunnel.');
+
+      const beforeUntrusted = azure.state.calls.length;
+      const untrusted = await checkWith({ proxy: withCredentials.href });
+      assert.match(untrusted, /\] NOT_READY[\s\S]*PR metadata \| FAILED \| Azure DevOps PR failed: the server's TLS certificate was not accepted \([A-Z_]+\)\. If a proxy inspects HTTPS, set azure\.caFile/, untrusted);
+      assert.doesNotMatch(untrusted, /after \d attempts/, 'A rejected certificate is not retried.');
+      assert.equal(azure.state.calls.length, beforeUntrusted, 'Nothing reaches Azure DevOps over an untrusted connection.');
+
+      const refused = await checkWith({ proxy: proxy.url, caFile: join(pki, 'ca.pem') });
+      assert.match(refused, /\] NOT_READY[\s\S]*PR metadata \| FAILED \| A proxy refused PR: it requires authentication \(HTTP 407\)\. Put the proxy user name and password in azure\.proxy/, refused);
+
+      const insecure = await checkWith({ proxy: withCredentials.href, verifyTls: false });
+      assert.match(insecure, /\] READY/, insecure);
+      assert.match(insecure, /\| TLS verification \| WARNING \| Disabled by azure\.verifyTls: false/);
+      results.proxy = `READY through an authenticating CONNECT proxy with azure.caFile (${tunnels.length} tunnel(s)); untrusted certificate NOT_READY without retry; 407 explained; verifyTls false READY with a warning`;
+    } finally {
+      await proxy.close();
+      tlsServer.closeAllConnections();
+      await new Promise(resolveClosed => tlsServer.close(resolveClosed));
+    }
+  }
 
   console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace' : 'fresh', host: '2.0.22', providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
 } finally {

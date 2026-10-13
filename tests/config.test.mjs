@@ -39,7 +39,7 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
   assert.equal(settings.progressNotices, true);
   assert.equal(settings.deletePrivateSessions, true);
   assert.deepEqual(settings.debug, { enabled: false, directory: '', keepRuns: 20 });
-  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100 });
+  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
   assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 });
   assert.deepEqual(validateSettings(input()).azure, settings.azure, 'The example matches the defaults.');
   assert.deepEqual(validateSettings(input()).workflow, settings.workflow);
@@ -47,8 +47,25 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
   for (const value of [false, 0, 9, 7201]) assert.throws(() => validateSettings({ ...input(), runTimeoutSeconds: value }), /runTimeoutSeconds/);
 });
 
+test('proxy and TLS settings: accepted forms; rejections never echo the proxy URL', () => {
+  const azure = extra => ({ ...input(), azure: { organization: 'org', pat: PAT, ...extra } });
+  for (const proxy of ['', 'http://10.1.2.3:80', 'http://proxy.example.com:8080/', 'https://proxy.example.com', 'http://user:p%40ss@10.1.2.3:3128', 'http://[::1]:3128']) {
+    assert.equal(validateSettings(azure({ proxy })).azure.proxy, proxy);
+  }
+  for (const proxy of ['10.1.2.3:80', 'proxy.example.com:8080', 'socks5://10.1.2.3:1080', 'http://user:secret-word@10.1.2.3:80/path', 'http://10.1.2.3:80?x=1',
+    'http://10.1.2.3:80#f', 'http://', 42, null, 'http://' + 'a'.repeat(2050)]) {
+    assert.throws(() => validateSettings(azure({ proxy })), error => /azure\.proxy must be empty or a proxy URL/.test(error.message) && !error.message.includes('secret-word'), String(proxy));
+  }
+  assert.equal(validateSettings(azure({ caFile: '/etc/ssl/corp-root.pem' })).azure.caFile, '/etc/ssl/corp-root.pem');
+  for (const caFile of ['corp.pem', '~/corp.pem', '/tmp/a\nb.pem', 7, null]) {
+    assert.throws(() => validateSettings(azure({ caFile })), /azure\.caFile must be empty or the absolute path/, String(caFile));
+  }
+  assert.equal(validateSettings(azure({ verifyTls: false })).azure.verifyTls, false);
+  for (const verifyTls of ['false', 0, null]) assert.throws(() => validateSettings(azure({ verifyTls })), /azure\.verifyTls must be boolean/);
+});
+
 test('numeric and enum settings are range checked; partial objects take defaults', () => {
-  assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, concurrency: 1, callTimeoutSeconds: 120, archiveMegabytes: 100 });
+  assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, concurrency: 1, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
   assert.equal(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, archiveMegabytes: 1024 } }).azure.archiveMegabytes, 1024);
   assert.equal(validateSettings({ ...input(), workflow: { repairAttempts: 0 } }).workflow.repairAttempts, 0);
   for (const [key, value] of [['azure', { organization: 'org', pat: PAT, concurrency: 0 }], ['azure', { organization: 'org', pat: PAT, concurrency: 9 }], ['azure', { organization: 'org', pat: PAT, callTimeoutSeconds: 5 }],

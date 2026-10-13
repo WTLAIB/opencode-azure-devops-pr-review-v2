@@ -138,7 +138,7 @@ export function renderIncompleteDraft(stages, failure, language) {
 
 /** Deterministic /pr-check report; no model was involved. */
 export function renderCheckReport(snapshot, checks, readiness) {
-  const rows = checks.map(c => `| ${c.name} | ${c.ok ? 'ok' : 'FAILED'} | ${String(c.detail ?? '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').slice(0, 300)} |`).join('\n');
+  const rows = checks.map(c => `| ${c.name} | ${!c.ok ? 'FAILED' : c.warning ? 'WARNING' : 'ok'} | ${String(c.detail ?? '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').slice(0, 300)} |`).join('\n');
   const models = readiness?.checkedModelSlots?.length ? `\n\nModels checked: ${readiness.checkedModelSlots.join(', ')} (profile ${readiness.profile}).` : '';
   return `## Source readiness\n\n${snapshot ? `${snapshot.organization}/${snapshot.project}/${snapshot.repository} · PR #${snapshot.prId} · ${snapshot.status}${snapshot.title ? ` · "${snapshot.title}"` : ''}\n\n- head: \`${snapshot.head}\`\n- base: \`${snapshot.base}\`${snapshot.baseKind === 'target' ? ' (target branch tip; no merge base reported)' : ' (merge base)'}\n- changed files: ${snapshot.files.length} (${snapshot.filesComplete ? 'complete list' : 'partial list; reviewers will look for the rest'})\n\n` : ''}| Check | Result | Detail |\n| --- | --- | --- |\n${rows}${models}\n\nREADY means AZPR can read this PR through the Azure DevOps REST API with the configured PAT; it is not a review or an approval.`;
 }

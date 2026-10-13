@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile, cp, rm, readdir } from 'node:fs/promises';
+import { rootCertificates } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
@@ -528,6 +529,58 @@ test('/pr-check is deterministic and needs no model session', async t => {
   assert.equal(f.prompts().length, 0);
   f.azure.state.fail.threads = () => azureError(403, 'UnauthorizedRequestException', 'TF401027: You need the Git GenericRead permission.');
   assert.match(await f.command('pr-check'), /\] NOT_READY[\s\S]*PR discussions \| FAILED \| Azure DevOps refused PR threads \(HTTP 403/);
+});
+
+test('azure.proxy, azure.caFile and azure.verifyTls reach every Azure DevOps request; /pr-check shows them without credentials', async t => {
+  const recording = () => {
+    const azure = fakeAzure(), inits = [], inner = azure.fetch;
+    azure.fetch = (url, init) => { inits.push(init); return inner(url, init); };
+    return { azure, inits };
+  };
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-ca-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const caFile = join(directory, 'corp-root.pem');
+  await writeFile(caFile, `Corporate root\n${rootCertificates[0]}\n`);
+  const a = recording();
+  const f = await fixture(t, { azure: a.azure, settings(s) { s.azure.proxy = 'http://corp:secret-word@127.0.0.1:3128'; s.azure.caFile = caFile; } });
+  const receipt = await f.command('pr-check');
+  assert.match(receipt, /\] READY/);
+  assert.match(receipt, /\| Azure DevOps REST \| ok \| organization org, api-version 7\.1; proxy http:\/\/127\.0\.0\.1:3128 with credentials; 1 extra CA certificate\(s\) from azure\.caFile \|/);
+  assert.ok(!receipt.includes('secret-word') && !receipt.includes(caFile));
+  assert.ok(a.inits.length >= 5 && a.inits.every(init => init.proxy === 'http://corp:secret-word@127.0.0.1:3128' && init.tls.ca.length === rootCertificates.length + 1));
+
+  const b = recording();
+  const g = await fixture(t, { azure: b.azure, settings(s) { s.azure.verifyTls = false; } });
+  const insecure = await g.command('pr-check');
+  assert.match(insecure, /\] READY/, 'Disabled verification is a warning, not a failure.');
+  assert.match(insecure, /\| TLS verification \| WARNING \| Disabled by azure\.verifyTls: false\. Certificates are not checked/);
+  assert.ok(b.inits.every(init => init.tls?.rejectUnauthorized === false && init.proxy === undefined));
+  const plain = await fixture(t);
+  assert.doesNotMatch(await plain.command('pr-check'), /proxy|TLS verification/, 'Defaults add nothing.');
+});
+
+test('an unusable azure.caFile, or proxy and TLS settings on a runtime whose fetch ignores them, stop loading', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-transport-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await cp(new URL('src/prompts', ROOT), join(directory, 'prompts'), { recursive: true });
+  const settings = JSON.parse(await readFile(new URL('config/settings.example.json', ROOT), 'utf8'));
+  for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/review-${role}`;
+  settings.azure = { ...settings.azure, organization: 'org', pat: FAKE_PAT };
+  const load = async (azure, options = { fetch: fakeAzure().fetch }) => {
+    await writeFile(join(directory, 'settings.json'), JSON.stringify({ ...settings, azure: { ...settings.azure, ...azure } }));
+    return setupAzurePrReview({}, directory, { stateDirectory: join(directory, 'state'), ...options });
+  };
+  const ca = name => join(directory, name);
+  await writeFile(ca('empty.pem'), 'no certificate in this file\n');
+  await writeFile(ca('broken.pem'), '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n');
+  await assert.rejects(load({ caFile: ca('missing.pem') }), /azure\.caFile could not be read \(ENOENT\)/);
+  await assert.rejects(load({ caFile: ca('empty.pem') }), /azure\.caFile contains no PEM certificate/);
+  await assert.rejects(load({ caFile: ca('broken.pem') }), /Certificate 1 in azure\.caFile is not a valid PEM certificate/);
+  // Node's own fetch would silently bypass the proxy; only Bun (OpenCode) or an injected fetch may use these settings.
+  assert.equal(typeof process.versions.bun, 'undefined');
+  for (const azure of [{ proxy: 'http://127.0.0.1:3128' }, { verifyTls: false }]) {
+    await assert.rejects(load(azure, {}), /need OpenCode's Bun runtime, whose fetch applies per-request proxy and TLS options/);
+  }
 });
 
 test('an incomplete review keeps an unconfirmed draft and leaves no completed review', async t => {
