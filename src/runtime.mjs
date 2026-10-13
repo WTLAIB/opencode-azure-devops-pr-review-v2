@@ -7,12 +7,12 @@
  * REST API with AZPR's own organization and PAT. Reviewers read the repository
  * through AZPR's read-only tools, which use the same client.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
 import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
@@ -21,11 +21,11 @@ import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CH
 import { prepareComments, publishPlan, discussionDigest } from './comment-work.mjs';
 import { publicationItems } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
-import { API_VERSION, createAzureClient, restBaseUrl, targetKey } from './azure.mjs';
+import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { hostCapabilities, listOf, recordOf, requireMethods } from './host.mjs';
+import { fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -43,6 +43,23 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
   const onAbort = () => { clearTimeout(timer); reject(abortError(signal)); };
   signal?.addEventListener('abort', onAbort, { once: true });
 });
+
+const CA_FILE_BYTES = 1024 * 1024;
+/** azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings. */
+async function readCaCertificates(path) {
+  if (!path) return [];
+  let raw;
+  try {
+    if ((await stat(path)).size > CA_FILE_BYTES) throw new Error('larger than 1 MB');
+    raw = await readFile(path, 'utf8');
+  } catch (error) { throw new Error(`[AZPR] azure.caFile could not be read (${error.code ?? error.message}).`); }
+  const certificates = pemCertificates(raw);
+  if (!certificates.length) throw new Error('[AZPR] azure.caFile contains no PEM certificate (-----BEGIN CERTIFICATE-----).');
+  certificates.forEach((pem, index) => {
+    try { new X509Certificate(pem); } catch { throw new Error(`[AZPR] Certificate ${index + 1} in azure.caFile is not a valid PEM certificate.`); }
+  });
+  return certificates;
+}
 
 async function bounded(operation, signal) {
   if (signal.aborted) throw abortError(signal);
@@ -91,7 +108,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const queue = createToolQueue({ concurrency: settings.azure.concurrency, timeoutMs: options.azureTimeoutMs ?? settings.azure.callTimeoutSeconds * 1000 });
   const retryDelayMs = options.retryDelayMs ?? 1000;
   const baseUrl = restBaseUrl(options.azureBaseUrl ?? process.env.AZPR_TEST_AZURE_BASE_URL);
-  const azure = createAzureClient({ organization: settings.azure.organization, pat: settings.azure.pat, baseUrl,
+  const caCertificates = await readCaCertificates(settings.azure.caFile);
+  const transport = fetchTransport({ proxy: settings.azure.proxy, caCertificates, verifyTls: settings.azure.verifyTls });
+  if (Object.keys(transport).length && !options.fetch && !fetchTransportSupported()) {
+    throw new Error('[AZPR] azure.proxy, azure.caFile and azure.verifyTls need OpenCode\'s Bun runtime, whose fetch applies per-request proxy and TLS options; this runtime would ignore them and connect directly.');
+  }
+  // How AZPR reaches Azure DevOps, for /pr-check and diagnostics; never the proxy credentials.
+  const proxied = settings.azure.proxy ? new URL(settings.azure.proxy) : null;
+  const network = {
+    ...(proxied ? { proxy: proxyLabel(settings.azure.proxy), ...(proxied.username || proxied.password ? { proxyCredentials: true } : {}) } : {}),
+    ...(caCertificates.length ? { extraCaCertificates: caCertificates.length } : {}),
+    ...(settings.azure.verifyTls ? {} : { verifyTls: false }),
+  };
+  const azure = createAzureClient({ organization: settings.azure.organization, pat: settings.azure.pat, baseUrl, transport,
     maxArchiveBytes: settings.azure.archiveMegabytes * 1024 * 1024, queue, retryDelayMs, fetch: options.fetch,
     onCall: (run, record) => { void run.debug?.append?.('azure-calls.jsonl', JSON.stringify({ at: new Date().toISOString(), ...record })); } });
   // An unwritable state directory must not disable the plugin: fall back to a
@@ -178,7 +207,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       else if (matches[0].capabilities?.tools !== true) problems.push(`The selected ${run.profile}.${slot} model does not advertise tool support.`);
     }
     run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems,
-      azure: { organization: settings.azure.organization, apiVersion: API_VERSION } };
+      azure: { organization: settings.azure.organization, apiVersion: API_VERSION, ...network } };
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
   }
 
@@ -486,7 +515,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function runCheck(run, request) {
     const checks = [];
     for (const problem of run.readiness?.modelProblems ?? []) checks.push({ name: 'Model', ok: false, detail: problem });
-    checks.push({ name: 'Azure DevOps REST', ok: true, detail: `organization ${settings.azure.organization}, api-version ${API_VERSION}` });
+    const route = [network.proxy ? `proxy ${network.proxy}${network.proxyCredentials ? ' with credentials' : ''}` : '',
+      network.extraCaCertificates ? `${network.extraCaCertificates} extra CA certificate(s) from azure.caFile` : ''].filter(Boolean);
+    checks.push({ name: 'Azure DevOps REST', ok: true, detail: `organization ${settings.azure.organization}, api-version ${API_VERSION}${route.map(part => `; ${part}`).join('')}` });
+    if (network.verifyTls === false) {
+      checks.push({ name: 'TLS verification', ok: true, warning: true,
+        detail: 'Disabled by azure.verifyTls: false. Certificates are not checked, so anyone who can intercept the connection can read the PAT; prefer azure.caFile.' });
+    }
     let snapshot;
     try {
       snapshot = await azure.snapshot(run, request.target);

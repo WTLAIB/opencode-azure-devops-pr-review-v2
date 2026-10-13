@@ -75,6 +75,9 @@ Common receipts:
 | --- | --- |
 | `Azure DevOps rejected the PAT for organization …` | Renew or correct `azure.pat` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart OpenCode. |
 | `Azure DevOps refused … (HTTP 403 …)` | Add the missing PAT scope or project/repository access. |
+| `network error (ConnectionRefused)` with a hint to set `azure.proxy` | dev.azure.com is reachable only through a proxy; set `azure.proxy` (see [proxies](AZURE_DEVOPS.md#proxies-and-tls-inspection)). |
+| `the server's TLS certificate was not accepted (…)` | The proxy inspects HTTPS; set `azure.caFile` to its root CA certificate. |
+| `A proxy refused … (HTTP 407)` / `A proxy or gateway answered …` | The proxy wants credentials in `azure.proxy`, or it blocks dev.azure.com. |
 | `azpr_read_file failed: …` in a stage's tool errors | The model asked for a missing path or invalid range; the review continues and reports the gap. |
 | `permission.rejected` … `cannot use paths outside the local OpenCode project` | A reviewer used a native tool on a repository path; it was refused instead of waiting for an approval and the model was pointed to the azpr tools. |
 | `settings.json changed since OpenCode loaded it` | Restart OpenCode. Running commands were unaffected. |

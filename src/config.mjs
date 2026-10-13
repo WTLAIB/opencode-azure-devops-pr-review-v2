@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { REVIEW_TOOL_NAMES } from './review-tools.mjs';
 
 // One catalog owns mode, role, model slot, prompt, output kind and stage order.
@@ -44,7 +45,7 @@ export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
   ? [...REVIEW_TOOL_NAMES, ...READ_TOOLS, ...(shell === 'deny' ? [] : ['shell'])] : [];
 
 const DEFAULTS = Object.freeze({
-  azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100 }),
+  azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
   workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 }),
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
@@ -62,6 +63,15 @@ function model(value, at, optional = false) {
   if (typeof value !== 'string' || value.length > 512 ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(value) ||
       /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(value)) throw new Error(`${at}: select an actual provider/model ID from opencode models, optionally with a variant as provider/model#variant; do not use a display name or placeholder.`);
+  return value;
+}
+/** A forward proxy for Azure DevOps calls. Never echo it: it may carry credentials. */
+function proxyUrl(value) {
+  const message = 'azure.proxy must be empty or a proxy URL such as http://proxy.example.com:8080, optionally with percent-encoded credentials (http://user:password@host:port), without a path, query or fragment.';
+  if (value === '') return '';
+  let url;
+  try { url = typeof value === 'string' && value.length <= 2048 ? new URL(value) : null; } catch { url = null; }
+  if (!url || !['http:', 'https:'].includes(url.protocol) || !url.hostname || !['', '/'].includes(url.pathname) || url.search || url.hash) throw new Error(message);
   return value;
 }
 function languageTag(value) {
@@ -122,6 +132,11 @@ export function validateSettings(raw) {
   integer(azure.concurrency, 'azure.concurrency', 1, 8);
   integer(azure.callTimeoutSeconds, 'azure.callTimeoutSeconds', 10, 1800);
   integer(azure.archiveMegabytes, 'azure.archiveMegabytes', 1, 1024);
+  proxyUrl(azure.proxy);
+  if (typeof azure.caFile !== 'string' || (azure.caFile !== '' && (!isAbsolute(azure.caFile) || /[\0\r\n]/.test(azure.caFile)))) {
+    throw new Error('azure.caFile must be empty or the absolute path of a PEM file with CA certificates.');
+  }
+  if (typeof azure.verifyTls !== 'boolean') throw new Error('azure.verifyTls must be boolean.');
   const workflow = { ...DEFAULTS.workflow, ...(raw.workflow === undefined ? {} : (keys(raw.workflow, Object.keys(DEFAULTS.workflow), 'workflow'), raw.workflow)) };
   integer(workflow.shardFiles, 'workflow.shardFiles', 1, 1000);
   integer(workflow.shardFindings, 'workflow.shardFindings', 1, 500);

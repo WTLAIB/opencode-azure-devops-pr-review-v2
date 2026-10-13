@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { rootCertificates } from 'node:tls';
 import {
-  API_VERSION, buildSnapshot, changeTypes, createAzureClient, isBinary, latestIteration, markersInThreads, prStatus, prVersions, restBaseUrl,
+  API_VERSION, buildSnapshot, changeTypes, createAzureClient, fetchTransport, isBinary, latestIteration, markersInThreads, pemCertificates, prStatus, prVersions,
+  proxyLabel, restBaseUrl,
 } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
-import { fakeAzure, azureError, FAKE_PAT } from './fake-azure.mjs';
+import { fakeAzure, azureError, AZURE_HEADERS, FAKE_PAT } from './fake-azure.mjs';
 
 const target = { organization: 'org', project: 'proj', repository: 'repo', pullRequestId: 123 };
 const H = 'A'.repeat(40), M = 'B'.repeat(40), T = 'C'.repeat(40);
@@ -16,7 +18,7 @@ const iterations = [{ id: 1, sourceRefCommit: { commitId: 'd'.repeat(40) }, comm
   { id: 2, sourceRefCommit: { commitId: H }, commonRefCommit: { commitId: M }, targetRefCommit: { commitId: T } }];
 const run = () => ({ id: 'run1', controller: new AbortController() });
 const client = (azure, options = {}) => createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 2000 }),
-  retryDelayMs: 1, fetch: options.fetch ?? azure.fetch, onCall: options.onCall, maxArchiveBytes: options.maxArchiveBytes });
+  retryDelayMs: 1, fetch: options.fetch ?? azure.fetch, onCall: options.onCall, maxArchiveBytes: options.maxArchiveBytes, transport: options.transport });
 
 test('snapshot: latest iteration head against its merge base, lowercased SHAs, normalized unique paths and change types', () => {
   const snapshot = buildSnapshot({ pr: pr(), iterations, complete: true, changes: [
@@ -108,7 +110,7 @@ test('client errors: a rejected PAT and not-found are permanent; 5xx, throttling
   await assert.rejects(c.threads(r, snapshot), error => error.kind === 'server' && /HTTP 503 ServiceUnavailableException: Busy\.\) after 3 attempts\.$/.test(error.message));
   assert.equal(azure.callsTo('threads').length, 3);
   let throttled = 0;
-  azure.state.fail.threads = () => (throttled++ ? undefined : { ...azureError(429, 'RequestBlockedException', 'Slow down.'), headers: { 'content-type': 'application/json', 'retry-after': '0' } });
+  azure.state.fail.threads = () => (throttled++ ? undefined : { ...azureError(429, 'RequestBlockedException', 'Slow down.'), headers: { ...AZURE_HEADERS, 'content-type': 'application/json', 'retry-after': '0' } });
   assert.equal((await c.threads(r, snapshot)).length, 0);
   delete azure.state.fail.threads;
 
@@ -206,4 +208,88 @@ test('repository archives download as zip at a commit and stop at the size limit
   assert.ok(pulled < 20, 'Reading stops right after the limit.');
   const capped = await client(azure, { maxArchiveBytes: 22 }).archive(run(), { projectId: 'pid', repositoryId: 'rid', ...snapshot }, snapshot.head);
   assert.equal(capped.tooLarge, true, 'The limit comes from azure.archiveMegabytes.');
+});
+
+test('proxy and TLS transport: CA certificates join the built-in roots; labels never carry credentials', () => {
+  assert.deepEqual(fetchTransport(), {});
+  assert.deepEqual(fetchTransport({ proxy: 'http://u:pw@10.1.2.3:80' }), { proxy: 'http://u:pw@10.1.2.3:80' });
+  const pem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+  const { tls } = fetchTransport({ caCertificates: [pem] });
+  assert.equal(tls.ca.length, rootCertificates.length + 1, 'tls.ca alone would replace the roots.');
+  assert.equal(tls.ca.at(-1), pem);
+  assert.deepEqual(fetchTransport({ caCertificates: [pem], verifyTls: false }), { tls: { rejectUnauthorized: false } });
+  assert.deepEqual(pemCertificates(`subject=CN Corp\n${pem}\n\nnoise\n${pem}\n`), [pem, pem]);
+  assert.deepEqual(pemCertificates('no certificate here'), []);
+  assert.equal(proxyLabel('http://user:secret@10.1.2.3:80'), 'http://10.1.2.3:80');
+  assert.equal(proxyLabel('http://proxy.example.com:8080/'), 'http://proxy.example.com:8080');
+  assert.equal(proxyLabel('https://proxy.example.com'), 'https://proxy.example.com:443');
+});
+
+test('client sends every request with the proxy and TLS options', async () => {
+  const azure = fakeAzure();
+  const transport = fetchTransport({ proxy: 'http://u:pw@127.0.0.1:3128', caCertificates: ['-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'] });
+  const inits = [];
+  const c = client(azure, { transport, fetch: (url, init) => { inits.push(init); return azure.fetch(url, init); } });
+  const r = run();
+  const snapshot = await c.snapshot(r, target);
+  await c.threads(r, snapshot);
+  await c.createThread(r, snapshot, { kind: 'summary', content: 'x' });
+  assert.ok(inits.length >= 6);
+  assert.ok(inits.every(init => init.proxy === transport.proxy && init.tls === transport.tls));
+});
+
+test('proxy, TLS and connection failures are classified with what to change', async () => {
+  const azure = fakeAzure();
+  const snapshot = await client(azure).snapshot(run(), target);
+  const bun = (code, message) => Object.assign(new TypeError(message), { code });
+  const failing = (make, transport) => {
+    let calls = 0;
+    const records = [];
+    const c = client(azure, { transport, onCall: (_run, record) => records.push(record), fetch: async (url, init) => { calls++; return make(url, init); } });
+    return { c, records, calls: () => calls };
+  };
+  const proxy = { proxy: 'http://corp:secret-word@10.1.2.3:80' };
+
+  // Bun reports a rejected certificate on error.code; nothing was sent and retrying cannot help.
+  const tls = failing(() => { throw bun('UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'unable to get local issuer certificate'); }, proxy);
+  await assert.rejects(tls.c.threads(run(), snapshot), error => error.kind === 'tls' && !error.transient &&
+    error.message === "Azure DevOps PR threads failed: the server's TLS certificate was not accepted (UNABLE_TO_GET_ISSUER_CERT_LOCALLY). If a proxy inspects HTTPS, set azure.caFile to its root CA certificate (PEM) and restart OpenCode.");
+  assert.equal(tls.calls(), 1);
+  await assert.rejects(tls.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.kind === 'tls' && error.uncertain === false);
+  const altName = failing(() => { throw bun('ERR_TLS_CERT_ALTNAME_INVALID', 'altname'); });
+  await assert.rejects(altName.c.threads(run(), snapshot), error => error.kind === 'tls');
+
+  // Bun's ConnectionRefused: reads retry, writes are known not to have been sent, and the hint names the proxy setting.
+  const refused = failing(() => { throw bun('ConnectionRefused', 'Unable to connect. Is the computer able to access the url?'); });
+  await assert.rejects(refused.c.threads(run(), snapshot), error => error.kind === 'network' &&
+    error.message === 'Azure DevOps PR threads failed: network error (ConnectionRefused) after 3 attempts. If this network reaches dev.azure.com only through a proxy, set azure.proxy.');
+  assert.equal(refused.calls(), 3);
+  await assert.rejects(refused.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.uncertain === false && /set azure\.proxy\.$/.test(error.message));
+  const viaProxy = failing(() => { throw bun('ConnectionRefused', 'Unable to connect.'); }, proxy);
+  await assert.rejects(viaProxy.c.threads(run(), snapshot), error => /after 3 attempts\. Check that the proxy http:\/\/10\.1\.2\.3:80 \(azure\.proxy\) is reachable\.$/.test(error.message));
+  const reset = failing(() => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); });
+  await assert.rejects(reset.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.uncertain === true && !/azure\.proxy/.test(error.message),
+    'A reset after sending stays uncertain and gets no proxy hint.');
+
+  // A proxy's own answers carry no Azure DevOps headers; they are not blamed on the PAT.
+  const auth = failing(() => new Response(null, { status: 407, headers: { 'proxy-authenticate': 'Basic realm="corp"' } }), proxy);
+  await assert.rejects(auth.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
+    error.message === 'A proxy refused PR threads: it requires authentication (HTTP 407). Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.');
+  assert.equal(auth.calls(), 1);
+  const blocked = failing(() => new Response('<html>Blocked by policy</html>', { status: 403, headers: { 'content-type': 'text/html' } }), proxy);
+  await assert.rejects(blocked.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
+    error.message === 'A proxy or gateway answered PR threads with HTTP 403 instead of Azure DevOps (no Azure DevOps response headers). Check that the proxy http://10.1.2.3:80 (azure.proxy) allows dev.azure.com.');
+  const direct = failing(() => new Response(null, { status: 403 }));
+  await assert.rejects(direct.c.threads(run(), snapshot), error => /set azure\.proxy if this network requires one\.$/.test(error.message));
+  const gateway = failing(() => new Response(null, { status: 502 }), proxy);
+  await assert.rejects(gateway.c.threads(run(), snapshot), error => error.kind === 'proxy' && error.transient && /HTTP 502[\s\S]* after 3 attempts\./.test(error.message));
+  assert.equal(gateway.calls(), 3);
+  await assert.rejects(gateway.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.uncertain === true, 'A gateway may have forwarded the write.');
+  const portal = failing(() => new Response('<html>Sign in to the proxy</html>', { status: 200, headers: { 'content-type': 'text/html' } }), proxy);
+  await assert.rejects(portal.c.threads(run(), snapshot), error => error.kind === 'proxy' && /HTTP 200 instead of Azure DevOps/.test(error.message));
+  // Azure DevOps' own answers keep their meaning.
+  const azure403 = failing(() => new Response(JSON.stringify({ typeKey: 'UnauthorizedRequestException', message: 'TF401027' }), { status: 403, headers: { ...AZURE_HEADERS, 'content-type': 'application/json' } }), proxy);
+  await assert.rejects(azure403.c.threads(run(), snapshot), error => error.kind === 'permission');
+
+  for (const probe of [tls, viaProxy, auth, blocked, gateway, portal]) assert.ok(!JSON.stringify(probe.records).includes('secret-word'), 'Proxy credentials never reach call records.');
 });

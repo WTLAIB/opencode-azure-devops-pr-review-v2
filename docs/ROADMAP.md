@@ -40,6 +40,10 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Bounded Azure calls.** One queue with configurable concurrency and a
   per-call timeout that aborts the request, for both tool and runtime calls;
   slots are released in `finally`.
+- **Corporate networks.** `azure.proxy`, `azure.caFile` and `azure.verifyTls`
+  send AZPR's Azure DevOps calls through a proxy and trust a TLS-inspecting
+  proxy's CA without changing OpenCode's other connections; certificate,
+  proxy-authentication and gateway errors say which setting to change.
 - **Deterministic, idempotent publication.** Existing markers are skipped,
   writes are read back, partial results are safe to re-run, and inline markers
   are stable across reviews of unchanged code.

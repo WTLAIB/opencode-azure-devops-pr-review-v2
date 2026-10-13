@@ -46,6 +46,13 @@ export function hostCapabilities(context) {
   };
 }
 
+/**
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.22), whose fetch accepts
+ * per-request `proxy` and `tls` options. Node's fetch silently ignores both, so
+ * a configured proxy would be bypassed; callers refuse instead.
+ */
+export const fetchTransportSupported = () => typeof process.versions?.bun === 'string';
+
 /** Throw one readable error naming every missing host method. */
 export function requireMethods(context, paths, purpose) {
   const missing = paths.filter(path => typeof path.split('.').reduce((value, key) => value?.[key], context) !== 'function');

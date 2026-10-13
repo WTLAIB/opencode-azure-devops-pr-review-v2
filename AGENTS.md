@@ -21,6 +21,8 @@ backups and failure records. Never upload `.local/`.
   REST API with `azure.organization` and `azure.pat` from AZPR's settings. Keep
   REST paths and the pinned api-version in `azure.mjs` only; never log, echo or
   persist the PAT, and send it only to the organization's REST endpoint.
+  `azure.proxy`, `azure.caFile` and `azure.verifyTls` shape only that
+  connection; never show proxy credentials.
 - Models read the repository only through the read-only tools in
   `review-tools.mjs`, registered with `codemode: false`; private roles see an
   explicit tool allowlist and ordinary sessions never see AZPR's tools.

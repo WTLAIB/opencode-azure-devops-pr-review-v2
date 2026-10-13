@@ -14,11 +14,14 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 253 tests across settings (including the
-`mcp` → `azure` migration), host helpers, session transport, the shared queue,
+`npm run check` and `npm test` pass: 280 tests across settings (including the
+`mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
+transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
-logged, commit messages, the repository zip with a streaming size limit),
+logged, commit messages, the repository zip with a streaming size limit, proxy
+and TLS options on every request, certificate, proxy-authentication, gateway and
+Bun connection errors, proxy credentials never logged),
 content search (zip reading, refused ZIP64, encrypted and damaged archives,
 literal, case and whole-word matching, path filters, result bounds, one archive
 per run and commit), line diffs (minimal edits checked against brute force on random
@@ -63,6 +66,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
 | Private sessions | Generate and compaction on a private session sent no provider request; ordinary generation still worked. |
 | TUI | New and existing TUI sessions kept their origin and cancelled from the same TUI. |
+| Proxy (fresh run, 2026-10-13) | The fake service served HTTPS with a certificate from a fixture CA, reachable through a CONNECT proxy that demands Basic credentials. With `azure.proxy` (credentials containing `@` and a space, percent-encoded) and `azure.caFile`, `/pr-check` was READY over one tunnel; the proxy saw the percent-decoded credentials and no `Authorization` header. Without the CA file: NOT_READY with the certificate message, no retry, no request reached the service. Without proxy credentials: NOT_READY explaining HTTP 407. `verifyTls: false`: READY with a WARNING row. The proxy password appeared nowhere in the fixture except the installed `settings.json`. |
 
 The first smoke attempt failed: AZPR's tools were registered without
 `codemode: false`, so OpenCode placed them behind CodeMode `execute`, which
@@ -82,6 +86,26 @@ rule so the offline runtime tests catch a regression.
 | Publication | 20 threads (19 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
 | Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
 | REST calls | 74 |
+
+## Proxy and TLS behaviour of OpenCode's runtime
+
+Measured on 2026-10-13 with the Bun runtime embedded in OpenCode 2.0.22 (Bun
+1.4.2, run as `BUN_BE_BUN=1 opencode`), a local CONNECT proxy and a fixture CA;
+`azure.proxy`, `azure.caFile` and `azure.verifyTls` are built on these results:
+
+| Behaviour | Observed |
+| --- | --- |
+| `fetch(url, { proxy })` | HTTPS through a `CONNECT` tunnel and HTTP in absolute form, for loopback targets too; an `https://` proxy works as well. Credentials in the proxy URL are percent-decoded into `Proxy-Authorization: Basic`. |
+| `tls: { ca }` | Replaces the built-in roots: with only the fixture CA, dev.azure.com failed with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. AZPR therefore appends to `tls.rootCertificates` (121 roots); a two-certificate bundle works. Host names are still verified (`ERR_TLS_CERT_ALTNAME_INVALID`). |
+| `tls: { rejectUnauthorized: false }` | Skips verification, also through a proxy. |
+| Proxy refusals | A 407 or a refused `CONNECT` (403) comes back as a `Response` with that status, not as an exception; it carries the proxy's headers only. |
+| Errors | Thrown with `error.code`: `ConnectionRefused` (also for an unreachable proxy), `ENOTFOUND`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE` and other certificate codes. |
+| Environment | `HTTPS_PROXY` and `NO_PROXY` are honoured without the `proxy` option; `NODE_EXTRA_CA_CERTS` and `NODE_TLS_REJECT_UNAUTHORIZED=0` work process-wide. |
+| Azure DevOps answers | A 302 sign-in redirect and a 404 for an unknown organization both carried `X-TFS-ProcessId` (and `ActivityId`, `X-VSS-E2EID`); the fixture proxy's answers did not. |
+
+The first symptom that led to this work came from a corporate network: `/pr-check`
+reported `Azure DevOps PR failed: network error (ConnectionRefused) after 3
+attempts.` because dev.azure.com is reachable there only through a proxy.
 
 ## Live run (Azure DevOps Services, real model)
 
@@ -544,3 +568,6 @@ skip relied on another finding.
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.
 - Rendered comments and anchors in the Azure DevOps UI were not inspected.
+- A real corporate proxy: `azure.proxy`, `azure.caFile` and `azure.verifyTls`
+  were validated with the fixture proxy and CA above only. Proxies that require
+  NTLM or Kerberos are not supported directly.

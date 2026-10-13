@@ -10,6 +10,7 @@
  * is sent only to that organization's REST endpoint and never logged.
  */
 import { Buffer } from 'node:buffer';
+import { rootCertificates } from 'node:tls';
 
 export const API_VERSION = '7.1';
 export const DEFAULT_BASE_URL = 'https://dev.azure.com';
@@ -28,9 +29,9 @@ const COMMIT_MESSAGE_LIMIT = 600;
 export class AzureError extends Error {
   /**
    * @param {string} message
-   * @param {{kind?: string, status?: number, code?: string, transient?: boolean, uncertain?: boolean, retryAfterMs?: number, cause?: unknown}} [details]
+   * @param {{kind?: string, status?: number, code?: string, transient?: boolean, uncertain?: boolean, retryAfterMs?: number, hint?: string, cause?: unknown}} [details]
    */
-  constructor(message, { kind = 'unexpected', status, code, transient = false, uncertain = false, retryAfterMs, cause } = {}) {
+  constructor(message, { kind = 'unexpected', status, code, transient = false, uncertain = false, retryAfterMs, hint, cause } = {}) {
     super(message);
     this.name = 'AzureError';
     this.kind = kind;
@@ -39,6 +40,8 @@ export class AzureError extends Error {
     this.transient = transient;
     this.uncertain = uncertain;
     if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
+    // What the user can change, appended once the final attempt has failed.
+    if (hint) this.hint = hint;
     if (cause) this.cause = cause;
   }
 }
@@ -231,7 +234,33 @@ function retryAfterMs(header) {
   return Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_RETRY_AFTER_MS) : undefined;
 }
 
-const NETWORK_CODES = /^(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|UND_ERR_[A-Z_]+)$/;
+// Fetch error codes: Bun (OpenCode's runtime) reports e.g. ConnectionRefused where Node reports ECONNREFUSED.
+const NOT_SENT_CODES = /^(?:ECONNREFUSED|ConnectionRefused|FailedToOpenSocket|ENOTFOUND|EAI_AGAIN)$/;
+const UNREACHABLE_CODES = /^(?:ECONNREFUSED|ConnectionRefused|FailedToOpenSocket|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)$/;
+const CERTIFICATE_CODES = /^(?:UNABLE_TO_GET_ISSUER_CERT(?:_LOCALLY)?|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|CERT_[A-Z_]+|ERR_TLS_CERT_ALTNAME_INVALID)$/;
+// Azure DevOps marks every response it serves; a proxy's own answer does not carry this header.
+const fromAzure = headers => typeof headers?.get === 'function' && headers.get('x-tfs-processid') !== null;
+
+/** PEM certificate blocks of a CA bundle; other text in the file is ignored. */
+export const pemCertificates = text => String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+
+/** A proxy as reports and messages show it: scheme, host and port, never credentials. */
+export function proxyLabel(proxy) {
+  const url = new URL(proxy);
+  return `${url.protocol}//${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
+}
+
+/**
+ * Per-request fetch options for azure.proxy, azure.caFile and azure.verifyTls
+ * (Bun's fetch; see host.mjs). Extra CA certificates join the built-in roots,
+ * because `tls.ca` alone replaces them.
+ */
+export function fetchTransport({ proxy = '', caCertificates = [], verifyTls = true } = {}, roots = rootCertificates) {
+  return {
+    ...(proxy ? { proxy } : {}),
+    ...(!verifyTls ? { tls: { rejectUnauthorized: false } } : caCertificates.length ? { tls: { ca: [...roots, ...caCertificates] } } : {}),
+  };
+}
 
 /**
  * Azure DevOps REST client. The PAT is turned into the Basic credential once
@@ -240,17 +269,33 @@ const NETWORK_CODES = /^(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|
  * @param {string} options.organization
  * @param {string} options.pat
  * @param {ReturnType<import('./tool-queue.mjs').createToolQueue>} options.queue
+ * @param {ReturnType<typeof fetchTransport>} [options.transport] proxy and TLS options for every request
  */
-export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_URL, maxArchiveBytes = MAX_ARCHIVE_BYTES, queue, retryDelayMs = 1000, onCall, fetch: fetchImpl = globalThis.fetch }) {
+export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_URL, maxArchiveBytes = MAX_ARCHIVE_BYTES, queue, retryDelayMs = 1000, onCall, fetch: fetchImpl = globalThis.fetch, transport = {} }) {
   const authorization = 'Basic ' + Buffer.from(':' + pat, 'utf8').toString('base64');
   const root = `${restBaseUrl(baseUrl === DEFAULT_BASE_URL ? undefined : baseUrl)}/${encodeURIComponent(organization)}`;
+  const proxyName = transport.proxy ? proxyLabel(transport.proxy) : '';
   const pause = (ms, signal) => new Promise((resolve, reject) => {
     const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve(); }, ms);
     const stop = () => { clearTimeout(timer); reject(signal.reason ?? new Error('Cancelled.')); };
     signal.addEventListener('abort', stop, { once: true });
   });
 
-  function httpFailure(status, body, label, headers) {
+  /** An answer from a proxy or gateway instead of Azure DevOps. */
+  function intermediaryFailure(status, label, method) {
+    if (status === 407) {
+      return new AzureError(`A proxy refused ${label}: it requires authentication (HTTP 407).`, { kind: 'proxy', status,
+        hint: 'Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.' });
+    }
+    // A gateway that already forwarded a write may have delivered it.
+    return new AzureError(`A proxy or gateway answered ${label} with HTTP ${status} instead of Azure DevOps (no Azure DevOps response headers).`, {
+      kind: 'proxy', status, transient: status === 429 || status >= 500, uncertain: method !== 'GET' && status >= 500,
+      hint: proxyName ? `Check that the proxy ${proxyName} (azure.proxy) allows dev.azure.com.`
+        : 'Check the proxy or firewall between OpenCode and dev.azure.com; set azure.proxy if this network requires one.' });
+  }
+
+  function httpFailure(status, body, label, headers, method = 'GET') {
+    if (status === 407 || (status >= 400 && !fromAzure(headers))) return intermediaryFailure(status, label, method);
     const code = clean(body?.typeKey || String(body?.typeName ?? '').split(',')[0].split('.').at(-1));
     const detail = clean(body?.message);
     const suffix = `${code ? ` ${code}` : ''}${detail ? `: ${detail}` : ''}`;
@@ -274,22 +319,34 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
         headers: { authorization, accept: accept === 'json' ? 'application/json' : 'application/octet-stream',
           ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...transport,
       });
     } catch (error) {
       if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
       const code = error?.cause?.code ?? error?.code;
+      const known = typeof code === 'string' ? code : '';
+      // A rejected certificate fails the handshake before anything is sent; retrying cannot help.
+      if (CERTIFICATE_CODES.test(known)) {
+        throw new AzureError(`Azure DevOps ${label} failed: the server's TLS certificate was not accepted (${clean(known)}).`, { kind: 'tls', code: known, cause: error,
+          hint: 'If a proxy inspects HTTPS, set azure.caFile to its root CA certificate (PEM) and restart OpenCode.' });
+      }
       throw new AzureError(`Azure DevOps ${label} failed: network error${code ? ` (${clean(code)})` : ''}.`, { kind: 'network', transient: true, cause: error,
-        uncertain: method !== 'GET' && !(typeof code === 'string' && /^(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN)$/.test(code)) });
+        uncertain: method !== 'GET' && !NOT_SENT_CODES.test(known),
+        ...(UNREACHABLE_CODES.test(known) ? { hint: proxyName ? `Check that the proxy ${proxyName} (azure.proxy) is reachable.`
+          : 'If this network reaches dev.azure.com only through a proxy, set azure.proxy.' } : {}) });
     }
     const type = response.headers.get('content-type') ?? '';
     if (response.status < 200 || response.status >= 300 || response.status === 203) {
       let detail;
       try { detail = /json/i.test(type) ? await response.json() : (await response.arrayBuffer(), undefined); } catch { detail = undefined; }
-      throw httpFailure(response.status, detail, label, response.headers);
+      throw httpFailure(response.status, detail, label, response.headers, method);
     }
     if (accept === 'json') {
-      // A sign-in page instead of JSON means the credential was not accepted.
-      if (!/json/i.test(type)) { await response.arrayBuffer().catch(() => {}); throw httpFailure(203, undefined, label); }
+      // A sign-in page instead of JSON means the credential was not accepted; a page from elsewhere came from a proxy.
+      if (!/json/i.test(type)) {
+        await response.arrayBuffer().catch(() => {});
+        throw fromAzure(response.headers) ? httpFailure(203, undefined, label) : intermediaryFailure(response.status, label, method);
+      }
       try { return await response.json(); }
       catch (error) { throw new AzureError(`Azure DevOps returned unreadable JSON for ${label}.`, { kind: 'network', transient: true, cause: error }); }
     }
@@ -349,6 +406,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
           continue;
         }
         if (attempt > 1) error.message = `${error.message.replace(/\.$/, '')} after ${attempt} attempts.`;
+        if (error.hint && !error.message.endsWith(error.hint)) error.message += ` ${error.hint}`;
         throw error;
       }
     }

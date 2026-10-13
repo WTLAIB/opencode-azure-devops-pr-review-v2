@@ -201,6 +201,22 @@
           "maximum": 1024,
           "default": 100,
           "description": "Largest repository zip that content search (azpr_search_code) downloads per run and commit. A larger repository is not searched; the rest of the review is unaffected. The archive is held in memory while a review runs."
+        },
+        "proxy": {
+          "type": "string",
+          "maxLength": 2048,
+          "default": "",
+          "description": "Forward proxy for AZPR's Azure DevOps calls only, e.g. http://proxy.example.com:8080; credentials go in the URL as http://user:password@host:port (percent-encoded) and are never shown. HTTPS requests are tunnelled with CONNECT, so the proxy sees the host name but not the PAT unless it inspects TLS. Empty: no AZPR proxy; HTTPS_PROXY and NO_PROXY in OpenCode's environment still apply."
+        },
+        "caFile": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path of a PEM file with CA certificates that AZPR trusts in addition to the built-in roots, for a proxy that inspects HTTPS. Read when OpenCode loads AZPR; restart OpenCode after changing it."
+        },
+        "verifyTls": {
+          "type": "boolean",
+          "default": true,
+          "description": "false turns off certificate checks for AZPR's Azure DevOps calls (like curl -k): anyone who can intercept the connection can then read the PAT. Last resort when the proxy's CA certificate cannot be obtained; prefer caFile. /pr-check shows a warning while it is off."
         }
       }
     },
