@@ -44,6 +44,7 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
   signal?.addEventListener('abort', onAbort, { once: true });
 });
 
+const SESSION_REMOVALS = 8;
 const CA_FILE_BYTES = 1024 * 1024;
 /** azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings. */
 async function readCaCertificates(path) {
@@ -78,8 +79,8 @@ async function deadline(operation, milliseconds) {
 /**
  * Session/command-scoped integration.
  * `options` (offline tests only): stateDirectory, azureTimeoutMs, retryDelayMs,
- * azureBaseUrl and fetch. A base URL override (also AZPR_TEST_AZURE_BASE_URL for
- * exact-host fixtures) must be a loopback test server.
+ * removeTimeoutMs, azureBaseUrl and fetch. A base URL override (also
+ * AZPR_TEST_AZURE_BASE_URL for exact-host fixtures) must be a loopback test server.
  */
 export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, options = {}) {
   const settingsPath = join(baseDirectory, 'settings.json');
@@ -242,14 +243,22 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try { const data = await owner.data; openStores.delete(data.directory); await data.dispose(); } catch { /* Cleanup never replaces an outcome. */ }
     owner.data = undefined;
   }
-  /** Delete AZPR's own reviewer sessions (never one an active run uses); failures are ignored. */
+  /**
+   * Delete AZPR's own reviewer sessions (never one an active run uses), a few
+   * at a time so a host that stalls on deletion delays the receipt by one
+   * timeout per batch, not per session; failures are ignored.
+   */
   async function removeSessions(sessionIDs) {
     if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
     const active = new Set([...runs.values()].flatMap(run => run.stages.map(stage => stage.sessionID)));
-    for (const sessionID of new Set(sessionIDs ?? [])) {
-      if (active.has(sessionID)) continue;
-      await deadline(() => context.session.remove({ sessionID }), 5000).catch(() => {});
-    }
+    const pending = [...new Set(sessionIDs ?? [])].filter(sessionID => !active.has(sessionID));
+    const worker = async () => {
+      while (pending.length) {
+        const sessionID = pending.shift();
+        await deadline(() => context.session.remove({ sessionID }), options.removeTimeoutMs ?? 5000).catch(() => {});
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SESSION_REMOVALS, pending.length) }, worker));
   }
   /**
    * A review run that saved no review: delete its sessions except the one

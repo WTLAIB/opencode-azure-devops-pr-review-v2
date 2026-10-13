@@ -143,7 +143,7 @@ async function fixture(t, opts = {}) {
       },
       async wait({ sessionID }) { await sessions.get(sessionID).running; },
       async context({ sessionID }) { return clone(sessions.get(sessionID).history); },
-      async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); sessions.delete(sessionID); },
+      async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); await opts.remove?.(sessionID); sessions.delete(sessionID); },
       async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) s.outcome = 'interrupted'; return { interrupted: true }; },
       async synthetic(input) {
         if (opts.syntheticFailure?.(input)) throw new Error('Fixture notice unavailable');
@@ -154,7 +154,7 @@ async function fixture(t, opts = {}) {
     },
   };
   const stateDirectory = join(directory, 'state');
-  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, retryDelayMs: 5, fetch: azure.fetch });
+  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
   return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
@@ -677,6 +677,22 @@ test('evicted reviews take their private sessions with them; deletePrivateSessio
     const removed = f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
     assert.deepEqual(removed, keep ? [] : ['ses_old_0']);
   }
+});
+
+test('private sessions are deleted a few at a time, so a host that stalls on deletion costs one timeout per batch', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await createReviewStore({ root: join(directory, 'state') });
+  const evicted = Array.from({ length: 20 }, (_, i) => `ses_old_${i}`);
+  for (let i = 0; i < 21; i++) {
+    await store.save({ id: i.toString(16).padStart(8, '0'), origin: 'ordinary', completedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+      reportSessions: new Set(i ? [`ses_kept_${i}`] : evicted), publication: new Map(), final: { dispositions: [] } });
+  }
+  const starts = [];
+  // The host never confirms a deletion; each one ends at the removal timeout.
+  const f = await fixture(t, { directory, removeTimeoutMs: 50, remove: () => { starts.push(performance.now()); return new Promise(() => {}); } });
+  assert.deepEqual(f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID).sort(), [...evicted].sort(), 'Every session is still attempted.');
+  assert.equal(starts.filter(at => at - starts[0] < 25).length, 8, 'Eight start together; the next ones wait for a timeout.');
 });
 
 test('a PR from another organization is refused before any Azure call; a rejected PAT is explained', async t => {
