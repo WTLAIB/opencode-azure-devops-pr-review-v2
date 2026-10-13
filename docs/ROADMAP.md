@@ -79,6 +79,28 @@ Revisit when there is evidence from real runs, for example:
   after twelve requests) before any hard stop;
 - per-stage wall-clock budgets derived from observed timings in `result.json`.
 
+### Repository archives over 1 GB
+
+Content search downloads the repository zip of the exact commit, up to
+`azure.archiveMegabytes` (at most 1024). A repository with committed binaries
+can be larger; it is reviewed without content search. Raising the maximum alone
+is not enough (measured on 2026-10-14):
+
+- Azure DevOps sends the zip without a length, and the entries' local headers
+  carry no sizes (data descriptors follow the data), so entries cannot be
+  skipped while downloading; the central directory at the end is needed. The
+  zip is held in memory and briefly doubled when the received chunks are
+  joined, and a Bun 1.4.2 buffer holds at most 4 GiB.
+- The download counts against `azure.callTimeoutSeconds` as total time, and a
+  failed download is not remembered, so each later search starts it again.
+- ZIP64 archives (over 4 GB or 65,535 entries) are refused.
+
+A larger maximum would need the zip written to a private temporary file with
+only its directory and text entries read back, ZIP64, an inactivity timeout for
+the download and a failed download remembered for the run. Every run would
+still download the whole archive. Revisit once the size of the repositories
+that need it is known.
+
 ### Other credential sources
 
 Only a PAT in AZPR's settings is supported. Microsoft recommends short-lived
@@ -108,8 +130,10 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
 4. Reduce input tokens further. Reading diffs with folded repeats cut the
    316-file review from 7.5–9.2 to about 5.5 million input tokens and a real
    35-file code PR from 6.15 to 0.55–0.79 million; reviewers still make 4–5.5
-   model requests per session and each re-sends what was read. Next candidate:
-   provider prompt caching (cache reads are 10–16 % of input).
+   model requests per session and each re-sends what was read. They already
+   make 9–12 tool calls per round, so batch parameters for the read tools
+   would save little and were not added (see [validation](VALIDATION.md)).
+   Next candidate: provider prompt caching (cache reads are 10–21 % of input).
 5. Cross-shard evidence: a new test in one shard that contradicts unchanged
    code in another shard is found with content search (`azpr_search_code`, over
    the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and

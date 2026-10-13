@@ -14,7 +14,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 280 tests across settings (including the
+`npm run check` and `npm test` pass: 281 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -36,7 +36,7 @@ that rely on another finding), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
 settings) and the runtime integration (fake host plus a fake Azure DevOps REST
-service).
+service, including session deletion when the host never confirms one).
 
 ## REST API version check
 
@@ -106,6 +106,9 @@ Measured on 2026-10-13 with the Bun runtime embedded in OpenCode 2.0.22 (Bun
 The first symptom that led to this work came from a corporate network: `/pr-check`
 reported `Azure DevOps PR failed: network error (ConnectionRefused) after 3
 attempts.` because dev.azure.com is reachable there only through a proxy.
+On 2026-10-14 `/pr-check` passed on that network with `azure.proxy` set to the
+company's HTTP proxy and `azure.verifyTls` false (shown as a WARNING row); no
+`azure.caFile` was set.
 
 ## Live run (Azure DevOps Services, real model)
 
@@ -557,6 +560,35 @@ skip relied on another finding.
 - The configuration defect of PR #3: gpt-5.6-luna 4 of 4 new-prompt runs,
   gpt-6-luna 1 of 4, gpt-5.6-terra 0 of 2.
 
+## Reviewer rounds and session cleanup (debug records, offline tests)
+
+A stability review proposed batch parameters for `azpr_read_diff` and
+`azpr_read_file`, because one gpt-6-luna session under the earlier prompts had
+made 28 model requests with about one tool call each. The debug records of all
+133 live runs above show that this was an outlier: reviewers already batch by
+making several tool calls in one response. With the final prompts:
+
+| Model | Sessions | Model requests per session (most) | Tool calls per round |
+| --- | ---: | ---: | ---: |
+| gpt-5.6-luna | 123 | 5.4 (10) | 10.5 |
+| gpt-5.6-terra | 78 | 4.4 (6) | 12.2 |
+| gpt-6-luna | 30 | 4.4 (9) | 9.3 |
+
+The first round reads every assigned diff at once (25 in a full shard); later
+rounds follow leads that depend on what was read. gpt-6-luna makes 29 of its 71
+later rounds with a single call, so a batch parameter could save it about one
+request per session at most. Batch parameters were not added. The comment
+planner's forced final answer (tools removed and an instruction added after 12
+requests) never triggered in 21 live planning sessions (18 needed one request,
+the most was 9), so its effect on prompt caching was left as is. Cache reads
+stay at 11–21 % of input in these runs; see the roadmap.
+
+Reviewer sessions of an evicted review or an unfinished run are now deleted
+eight at a time, each deletion still limited to five seconds. A host that
+stalls on deletion delays the receipt by one limit per eight sessions instead
+of one per session: about 20 s instead of 2.5 minutes for the 30 sessions of a
+PR #3 review. An offline test uses a host that never confirms a deletion.
+
 ## Not yet validated
 
 - A defect whose evidence spans a test and unchanged code in different shards
@@ -568,6 +600,8 @@ skip relied on another finding.
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.
 - Rendered comments and anchors in the Azure DevOps UI were not inspected.
-- A real corporate proxy: `azure.proxy`, `azure.caFile` and `azure.verifyTls`
-  were validated with the fixture proxy and CA above only. Proxies that require
-  NTLM or Kerberos are not supported directly.
+- `azure.caFile` with a real proxy: the corporate network above ran with
+  `verifyTls: false`; whether its proxy inspects TLS, and trusting its root CA
+  instead, were not checked. `azure.caFile` was validated with the fixture
+  proxy and CA above only. Proxies that require NTLM or Kerberos are not
+  supported directly.
