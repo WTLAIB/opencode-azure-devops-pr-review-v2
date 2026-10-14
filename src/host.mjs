@@ -43,7 +43,31 @@ export function hostCapabilities(context) {
     permissionHook: fn('permission.hook'),
     toolTransform: fn('tool.transform'),
     sessionRemove: fn('session.remove'),
+    eventSubscribe: fn('event.subscribe'),
   };
+}
+
+/**
+ * Session events that show a turn progressing while no hook runs. OpenCode
+ * 2.0.22 emits one delta event per streamed chunk of answer text, reasoning
+ * or tool-call input; the projected session context shows the text only once
+ * the step ends.
+ */
+const PROGRESS_EVENTS = new Map([
+  ...['started', 'delta', 'ended'].map(phase => [`session.text.${phase}`, 'model output was streamed']),
+  ...['started', 'delta', 'ended'].map(phase => [`session.reasoning.${phase}`, 'model reasoning was streamed']),
+  ...['started', 'delta', 'ended'].map(phase => [`session.tool.input.${phase}`, 'a tool call was streamed']),
+  ['session.tool.progress', 'a tool reported progress'],
+  ['session.step.started', 'a model step started'],
+  ['session.step.streamed', 'a model step finished streaming'],
+  ['session.step.ended', 'a model step ended'],
+]);
+
+/** The session and activity a progress event stands for, or null. */
+export function sessionProgress(event) {
+  const activity = PROGRESS_EVENTS.get(event?.type);
+  const sessionID = event?.data?.sessionID;
+  return activity && typeof sessionID === 'string' ? { sessionID, activity } : null;
 }
 
 /**

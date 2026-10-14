@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, listOf, recordOf, HOST_CONTINUATION_TEXT } from '../src/host.mjs';
+import { hostCapabilities, isHostContinuation, listOf, recordOf, sessionProgress, HOST_CONTINUATION_TEXT } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -67,10 +67,24 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(capabilities.tested, true);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
+  assert.equal(capabilities.eventSubscribe, false);
+  assert.equal(hostCapabilities({ event: { subscribe() {} } }).eventSubscribe, true);
   assert.equal(hostCapabilities({}).version, 'unknown');
   const errored = { type: 'assistant', error: { type: 'provider.api' }, retry: { attempt: 1 } };
   assert.equal(isHostContinuation({ type: 'synthetic', text: HOST_CONTINUATION_TEXT }), true);
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, errored), true);
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, { type: 'assistant' }), false);
   assert.equal(isHostContinuation({ type: 'user', text: HOST_CONTINUATION_TEXT }), false);
+});
+
+test('session progress events: streamed text, reasoning and tool-call input, tool progress and steps; nothing else', () => {
+  const data = { sessionID: 'ses_1', assistantMessageID: 'msg_1', delta: 'x' };
+  assert.deepEqual(sessionProgress({ type: 'session.text.delta', data }), { sessionID: 'ses_1', activity: 'model output was streamed' });
+  assert.equal(sessionProgress({ type: 'session.reasoning.delta', data }).activity, 'model reasoning was streamed');
+  assert.equal(sessionProgress({ type: 'session.tool.input.delta', data }).activity, 'a tool call was streamed');
+  assert.equal(sessionProgress({ type: 'session.tool.progress', data }).activity, 'a tool reported progress');
+  assert.equal(sessionProgress({ type: 'session.step.started', data }).activity, 'a model step started');
+  for (const type of ['session.status', 'session.usage.updated', 'session.inbox.enqueued', 'session.synthetic', 'message.part.delta']) assert.equal(sessionProgress({ type, data }), null, type);
+  assert.equal(sessionProgress({ type: 'session.text.delta', data: {} }), null);
+  assert.equal(sessionProgress(undefined), null);
 });

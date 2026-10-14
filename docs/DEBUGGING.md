@@ -59,7 +59,17 @@ in parallel.
      interrupted turn, unexpected message in the turn);
    - `overflow` means the session needed compaction; the runtime split the shard;
    - `permanent` (authentication, bad request) was not retried;
+   - `idle` means the stage inactivity watchdog stopped the stage after
+     `workflow.stageIdleSeconds` without activity; it was retried once in a new
+     session. Its error and `idleStop` name the last activity and when it
+     happened: after `model request N was sent` the model never answered,
+     after `model output was streamed` (or reasoning, or a tool call) the stream
+     stopped mid-answer, after `tool X started` a tool did not return, after
+     `tool X ended` no next model request came, after `shell asked for
+     approval` nobody approved;
    - `cancelled` came from `/pr-stop`, a timeout or unload.
+   `requestObservations.retries` lists OpenCode's own retries of a provider
+   request (attempt, whether AZPR allowed it, the announced delay).
    Receipt counters `stream-continuations` and `continuation-restarts` show
    interrupted provider streams and answers the model started over.
 2. The failed stage's request, response(s) and result together. `repairs` lists
@@ -86,3 +96,4 @@ Common receipts:
 | `PR source commit changed after the review` | The PR got new commits; run a new review before commenting. |
 | `This review's private data is no longer available` | The review was evicted or its data removed; run a new review. |
 | `Comment planning repeated a checkpoint without progress` | The planner kept asking for more reading; inspect the planning stages. |
+| `Stage inactivity watchdog stopped this stage: no activity for … s after …` (`failure=idle`, plus an inactivity notice) | The model stream, a tool or OpenCode stopped responding for `workflow.stageIdleSeconds`; the stage ran again in a new session. Repeated stops after `model request N was sent` point at the provider. Raise the setting only if a model really needs longer for one answer (live stages so far stayed under 151 s without any event). |

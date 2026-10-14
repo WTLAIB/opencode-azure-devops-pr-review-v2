@@ -12,6 +12,7 @@ import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs'
 const ROOT = new URL('../', import.meta.url);
 const clone = value => structuredClone(value);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
 const pathOf = location => /^head:(\/[^:]+)/.exec(location)?.[1] ?? '/src/Main.java';
 const finding = (id, path, severity = 'high') => ({ id, summary: `Fixture defect ${id}`, location: `head:${path}:1`, severity,
@@ -52,6 +53,9 @@ async function fixture(t, opts = {}) {
   const agents = new Map([['build', { id: 'build', permissions: [] }]]);
   const commands = new Map();
   const hooks = new Map(), sessions = new Map(), calls = [], notices = [], waiters = new Set();
+  // OpenCode's session event feed: tests publish events such as streamed text deltas.
+  const feeds = new Set();
+  const publish = event => { for (const feed of feeds) feed(event); };
   let seq = 0;
   const emit = async (domain, name, event) => { for (const fn of hooks.get(`${domain}:${name}`) ?? []) await fn(event); return event; };
   const hook = domain => async (name, fn) => {
@@ -76,6 +80,16 @@ async function fixture(t, opts = {}) {
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     permission: { hook: hook('permission') },
+    ...(opts.events === false ? {} : { event: { subscribe() {
+      const queue = [], waiting = [];
+      const feed = event => { const next = waiting.shift(); if (next) next({ value: event, done: false }); else queue.push(event); };
+      feeds.add(feed);
+      const done = { value: undefined, done: true };
+      return { [Symbol.asyncIterator]: () => ({
+        next: () => queue.length ? Promise.resolve({ value: queue.shift(), done: false }) : feeds.has(feed) ? new Promise(resolve => waiting.push(resolve)) : Promise.resolve(done),
+        return: () => { feeds.delete(feed); for (const resolve of waiting.splice(0)) resolve(done); return Promise.resolve(done); },
+      }) };
+    } } }),
     agent: {
       async get({ agentID }) { return { data: clone(agents.get(agentID)) }; },
       async transform(fn) {
@@ -118,7 +132,7 @@ async function fixture(t, opts = {}) {
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-            await opts.during?.({ session, role, packet, turn, invoke, emit });
+            await opts.during?.({ session, role, packet, turn, invoke, emit, publish });
             if (turn === 0 && ROLES[role].format === 'initial' && packet.assignment.files.length) {
               await invoke(session, 'azpr_read_file', { path: packet.assignment.files[0], version: 'head' });
             }
@@ -144,7 +158,7 @@ async function fixture(t, opts = {}) {
       async wait({ sessionID }) { await sessions.get(sessionID).running; },
       async context({ sessionID }) { return clone(sessions.get(sessionID).history); },
       async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); await opts.remove?.(sessionID); sessions.delete(sessionID); },
-      async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) s.outcome = 'interrupted'; return { interrupted: true }; },
+      async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) { s.outcome = 'interrupted'; s.onInterrupt?.(); } return { interrupted: true }; },
       async synthetic(input) {
         if (opts.syntheticFailure?.(input)) throw new Error('Fixture notice unavailable');
         notices.push(clone(input));
@@ -154,9 +168,9 @@ async function fixture(t, opts = {}) {
     },
   };
   const stateDirectory = join(directory, 'state');
-  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, retryDelayMs: 5, fetch: azure.fetch });
+  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, stageIdleMs: opts.stageIdleMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
-  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry,
+  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, publish,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
     sessionsFor: role => [...sessions.values()].filter(session => session.agent === role),
     async command(name = 'pr-review', text = azure.prUrl(), origin = 'ordinary') {
@@ -176,6 +190,7 @@ async function fixture(t, opts = {}) {
   };
 }
 const reviewId = receipt => /\[AZPR ([a-f0-9]{8})\]/.exec(receipt)[1];
+const stageRecords = async receipt => JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8')).stages;
 
 test('a review returns STARTED, progress notices and one COMPLETE receipt, and persists the review', async t => {
   const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'] });
@@ -263,6 +278,138 @@ test('a permanent provider failure is not retried and the sibling review continu
   assert.match(receipt, /\] COMPLETE/);
   assert.match(receipt, /azpr-review-risk: FAILED.*failure=permanent/);
   assert.ok(f.notices.some(n => /risk shard 1\/1 failed/.test(n.text)), 'The report names the missing role coverage.');
+});
+
+test('a host retry is allowed and recorded: OpenCode prepares context again before it resends; a resend without context is refused', async t => {
+  let retry;
+  const f = await fixture(t, { async during({ session, role, turn, emit }) {
+    if (role !== 'azpr-review-risk' || turn) return;
+    const base = { sessionID: session.id, agent: role, model: clone(session.model) };
+    await assert.rejects(emit('session', 'model.request', { ...base, kind: 'primary' }), /no authorized primary context/);
+    // OpenCode 2.0.22 (SessionRunner.runStep): the retry decision, then a newly prepared request.
+    retry = await emit('session', 'retry', { ...base, attempt: 2, error: { type: 'provider.api', status: 503 }, decision: { retry: true, delay: 10 } });
+    await emit('session', 'context', { ...base, system: [], messages: [], tools: {} });
+    await emit('session', 'model.request', { ...base, kind: 'primary' });
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.deepEqual(retry.decision, { retry: true, delay: 10 });
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 1, 'The host retried in place, not in a new session.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.deepEqual(risk.requestObservations.retries, [{ attempt: 2, proposed: true, allowed: true, delayMs: 10 }]);
+  assert.deepEqual([risk.requestObservations.kinds.primary, risk.requestObservations.authorizedPrimary, risk.requestObservations.rejected], [3, 2, 1]);
+  const late = await f.emit('session', 'retry', { sessionID: risk.sessionID, agent: 'azpr-review-risk', model: { providerID: 'fixture', id: 'review-risk', variant: 'default' }, attempt: 3, decision: { retry: true, delay: 10 } });
+  assert.deepEqual(late.decision, { retry: false }, 'A retry after the command ended is refused.');
+});
+
+test('a stalled stage is stopped by the inactivity watchdog, named as such and retried in a new session', async t => {
+  let stalled = false;
+  const f = await fixture(t, { stageIdleMs: 400, async during({ session, role }) {
+    if (role !== 'azpr-review-risk' || stalled) return;
+    stalled = true;
+    // The model stream stops: nothing happens until AZPR interrupts the session.
+    await new Promise(resolve => { session.onInterrupt = resolve; });
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  const [first, second] = f.sessionsFor('azpr-review-risk');
+  assert.ok(second, 'The stage ran again in a new session.');
+  assert.ok(f.calls.some(call => call.kind === 'interrupt' && call.sessionID === first.id), 'The stalled session was interrupted.');
+  assert.ok(receipt.includes(`azpr-review-risk: FAILED; session=${first.id}; model=fixture/review-risk; failure=idle; error=[AZPR] Stage inactivity watchdog stopped this stage: no activity for 0.4 s after model request 1 was sent (workflow.stageIdleSeconds).`), receipt);
+  assert.match(receipt, /azpr-review-risk: COMPLETE; [^\n]*attempt=2/);
+  assert.match(receipt, /Inactivity notice: the stage inactivity watchdog stopped 1 stage\(s\) \(failure=idle\) after 0\.4 s without activity: azpr-review-risk after model request 1 was sent\./);
+  assert.ok(f.notices.some(n => /Initial R failed \(\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after model request 1 was sent \(workflow\.stageIdleSeconds\)\.\); retrying in a new session/.test(n.text)));
+  assert.doesNotMatch(receipt, /Cancellation warning/, 'The interrupted session settled.');
+  const stopped = (await stageRecords(receipt)).find(stage => stage.failureClass === 'idle');
+  assert.equal(stopped.idleStop.lastActivity, 'model request 1 was sent');
+  assert.equal(stopped.timing.responseOutcome, 'idle-stopped');
+});
+
+test('a stage that stalls again fails with the watchdog named in the report; the review keeps the other role', async t => {
+  const f = await fixture(t, { stageIdleMs: 400, async during({ session, role, invoke }) {
+    if (role !== 'azpr-review-risk') return;
+    await invoke(session, 'read', { filePath: 'notes.md' });
+    await new Promise(resolve => { session.onInterrupt = resolve; });
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 2);
+  assert.equal(receipt.match(/azpr-review-risk: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after tool read ended/g)?.length, 2, receipt);
+  assert.match(receipt, /Inactivity notice: the stage inactivity watchdog stopped 2 stage\(s\)/);
+  const report = f.notices.find(n => /^# AZPR [a-f0-9]{8} — COMPLETE/.test(n.text)).text;
+  assert.match(report, /azpr-review-risk shard 1\/1 failed \(\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after tool read ended \(workflow\.stageIdleSeconds\)\.\); its 1 file\(s\) lack this role's review\./);
+});
+
+test('streamed output is activity: an answer that keeps streaming past the window runs on; a stream that goes quiet is stopped and named', async t => {
+  let quiet = false;
+  const f = await fixture(t, { stageIdleMs: 400, async during({ session, role, turn, publish }) {
+    const delta = () => publish({ type: 'session.text.delta', data: { sessionID: session.id, assistantMessageID: 'msg_stream', delta: 'x' } });
+    if (role === 'azpr-review-functional' && !turn) {
+      // 900 ms of streamed answer after the request, never 400 ms without a chunk, and no hook in between.
+      for (let chunk = 0; chunk < 9; chunk++) { await sleep(100); delta(); }
+    }
+    if (role === 'azpr-review-risk' && !quiet) {
+      quiet = true;
+      delta(); delta();
+      await new Promise(resolve => { session.onInterrupt = resolve; });
+    }
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.equal(f.sessionsFor('azpr-review-functional').length, 1, 'The streaming answer was not stopped.');
+  assert.doesNotMatch(receipt, /azpr-review-functional: FAILED/);
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 2);
+  assert.match(receipt, /azpr-review-risk: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after model output was streamed \(workflow\.stageIdleSeconds\)\./);
+  assert.equal(f.feeds.size, 0, 'The event feed closes when no stage is watched.');
+});
+
+test('working stages are never stopped: every event restarts the window, a running AZPR tool and an announced host retry wait count', async t => {
+  const f = await fixture(t, { stageIdleMs: 400, async during({ session, role, turn, invoke, emit }) {
+    if (turn) return;
+    if (role === 'azpr-review-functional') {
+      // 500 ms of work, never 400 ms without an event.
+      for (let step = 0; step < 5; step++) { await sleep(100); await invoke(session, 'read', { filePath: 'notes.md' }); }
+      // An Azure DevOps read that takes longer than the window.
+      f.azure.state.fail.items = async call => { if (call.query.path === '/src/Context.java') await sleep(900); };
+      await invoke(session, 'azpr_read_file', { path: '/src/Context.java' });
+      delete f.azure.state.fail.items;
+    }
+    if (role === 'azpr-review-risk') {
+      const base = { sessionID: session.id, agent: role, model: clone(session.model) };
+      await emit('session', 'retry', { ...base, attempt: 2, decision: { retry: true, delay: 600 } });
+      await sleep(700);
+      await emit('session', 'context', { ...base, system: [], messages: [], tools: {} });
+      await emit('session', 'model.request', { ...base, kind: 'primary' });
+    }
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.ok(!f.calls.some(call => call.kind === 'interrupt'), 'No session was stopped.');
+  assert.equal(f.sessionsFor('azpr-review-functional').length + f.sessionsFor('azpr-review-risk').length, 2);
+  assert.doesNotMatch(receipt, /failure=idle|Inactivity notice/);
+});
+
+test('a PR without changed files stops before any reviewer session', async t => {
+  const f = await fixture(t, { files: [] });
+  const receipt = await f.command();
+  assert.match(receipt, /\] INCOMPLETE\nReason \(review\): PR #123 has no changed files in its latest iteration; there is nothing to review\./);
+  assert.equal(f.calls.filter(call => call.kind === 'create').length, 0);
+});
+
+test('without candidate findings one verifier still runs and writes the checks and limitations; the review is COMPLETE', async t => {
+  const f = await fixture(t, { answer({ role, packet }) {
+    if (ROLES[role].format === 'initial') return { status: 'COMPLETE', coverage: { files: packet.assignment.files, gaps: [] }, additionalFiles: [], findings: [], report: 'No defects; a test assertion was narrowed.' };
+    if (ROLES[role].format === 'final') return { status: 'COMPLETE', confirmed: [], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'VERIFIER_SUMMARY: the narrowed assertion is a coverage loss, not a defect.' };
+    return undefined;
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  const [verifier] = f.sessionsFor('azpr-review-verifier');
+  assert.deepEqual(verifier.packet.assignment.findingIds, []);
+  assert.match(JSON.stringify(verifier.packet.initialReports), /a test assertion was narrowed/, 'The verifier reads the initial reports.');
+  assert.ok(f.notices.some(n => /Initial review finished: 0 candidate finding\(s\)\. Verifying\./.test(n.text)));
+  const report = f.notices.find(n => /^# AZPR [a-f0-9]{8} — COMPLETE/.test(n.text)).text;
+  assert.match(report, /VERIFIER_SUMMARY: the narrowed assertion is a coverage loss, not a defect\./);
 });
 
 test('a compaction request marks context overflow and the shard is split', async t => {

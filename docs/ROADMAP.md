@@ -36,7 +36,15 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   location, and the comment planner may not skip a finding because another
   finding of the review is commented.
 - **Stage retries.** Transient failures retry once in a new session
-  (`workflow.stageRetries`); stream continuations work for every provider.
+  (`workflow.stageRetries`); stream continuations work for every provider, and
+  OpenCode's own retries of a failed provider request pass AZPR's hooks.
+- **Stage inactivity watchdog.** A stage that shows no activity for
+  `workflow.stageIdleSeconds` (default 600 s) while it waits on OpenCode is
+  stopped with `failure=idle` and an error naming its last activity, then
+  retried in a new session; any activity, including each streamed chunk of
+  output, restarts the window.
+- **Nothing to review.** A PR whose complete change list is empty stops before
+  any session.
 - **Bounded Azure calls.** One queue with configurable concurrency and a
   per-call timeout that aborts the request, for both tool and runtime calls;
   slots are released in `finally`.
@@ -69,7 +77,13 @@ whatever limit was chosen, and no step count worked across PR sizes and models.
 
 Mitigations now in place: per-call Azure DevOps timeouts, sharding that keeps each
 session's work bounded, overflow splitting, `/pr-stop`, PROGRESS notices that
-show whether a run is moving, and the optional `runTimeoutSeconds`.
+show whether a run is moving, the optional `runTimeoutSeconds`, and the stage
+inactivity watchdog (`workflow.stageIdleSeconds`). The watchdog limits silence,
+not work: it stops a stage only when nothing happened for the whole window, so
+it never cuts a large PR that keeps working. It was added after four stages of
+one run waited about 30 minutes on an approval (the cause, a native tool
+outside the project, is refused at once since) and because OpenCode 2.0.22
+waits up to 30 minutes for data on the OpenAI WebSocket transport.
 
 Revisit when there is evidence from real runs, for example:
 

@@ -14,7 +14,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 281 tests across settings (including the
+`npm run check` and `npm test` pass: 289 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -36,7 +36,11 @@ that rely on another finding), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
 settings) and the runtime integration (fake host plus a fake Azure DevOps REST
-service, including session deletion when the host never confirms one).
+service, including session deletion when the host never confirms one, a host
+retry that OpenCode prepares again, the stage inactivity watchdog stopping,
+naming and retrying a stalled stage while steady activity, streamed output, a
+slow AZPR tool and an announced retry wait are never stopped, a PR without changed files, and a
+review without candidate findings that still gets its verifier).
 
 ## REST API version check
 
@@ -64,6 +68,8 @@ REST service and one foreign stdio MCP server. Both passed:
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
 | Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. |
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
+| Provider retry (2026-10-14) | The fake provider answered the risk reviewer's first request with HTTP 503. OpenCode retried it in the same session after its backoff (1.6–2.3 s in eleven runs, two of them in CI); AZPR's `retry` hook allowed it (attempt 2), the resend passed the primary-request check (4 authorized primary requests, none rejected) and the review was COMPLETE without a new session. Fresh and `--replace` runs. |
+| Stalled and long streams (fresh run, 2026-10-15) | With `workflow.stageIdleSeconds` 60, two reviews ran at once. In the first, the fake provider sent the functional reviewer's response headers and then nothing. After 60.0 s the watchdog stopped the stage: `failure=idle`, error `Stage inactivity watchdog stopped this stage: no activity for 60 s after model request 1 was sent (workflow.stageIdleSeconds).`, an inactivity notice and a PROGRESS retry notice naming it. AZPR interrupted the session, OpenCode closed the provider stream and confirmed settlement (no cancellation warning), and a new session completed the review. In the second, the functional answer streamed one chunk per second for 66.0 s, longer than the window, and ran on without a stop or a new session. Both were COMPLETE 66.3 s after the commands. |
 | Private sessions | Generate and compaction on a private session sent no provider request; ordinary generation still worked. |
 | TUI | New and existing TUI sessions kept their origin and cancelled from the same TUI. |
 | Proxy (fresh run, 2026-10-13) | The fake service served HTTPS with a certificate from a fixture CA, reachable through a CONNECT proxy that demands Basic credentials. With `azure.proxy` (credentials containing `@` and a space, percent-encoded) and `azure.caFile`, `/pr-check` was READY over one tunnel; the proxy saw the percent-decoded credentials and no `Authorization` header. Without the CA file: NOT_READY with the certificate message, no retry, no request reached the service. Without proxy credentials: NOT_READY explaining HTTP 407. `verifyTls: false`: READY with a WARNING row. The proxy password appeared nowhere in the fixture except the installed `settings.json`. |
@@ -589,6 +595,27 @@ stalls on deletion delays the receipt by one limit per eight sessions instead
 of one per session: about 20 s instead of 2.5 minutes for the 30 sessions of a
 PR #3 review. An offline test uses a host that never confirms a deletion.
 
+## Host retries and stage inactivity (OpenCode 2.0.22, debug records)
+
+A stability review asked whether OpenCode's own retry of a failed provider
+request is refused by AZPR's `model.request` hook, which accepts a primary
+request only after an authorized `context` hook, and noted that a stage could
+wait without limit. Checked on 2026-10-14 in the OpenCode 2.0.22 binary, the
+debug records of the live runs above and the exact-host fixture:
+
+| Question | Observed |
+| --- | --- |
+| How OpenCode retries | `SessionRunner.runStep` handles a retry before any output, a continuation after partial output and a WebSocket recovery the same way: it waits, then prepares the request again, and `SessionModelRequest.prepare` triggers `context` and then `model.request`. A resend therefore always follows an authorized context. Backoff starts at 2 s and is capped at 10 s, at most 10 retries; `Retry-After` of rate-limit and provider-internal errors is honoured up to 15 minutes; transport timeouts are retried at most 3 times. |
+| Host retries in live runs | 1,101 stage records of 71 live runs (2026-10-10 to 10-14): 10 stages saw a host retry (attempt 2, allowed by the `retry` hook). In each, the authorized primary requests equalled the observed ones and none was rejected; 9 completed and 1 failed for an unrelated reason (a continuation after a turn with tool calls, which is refused by design and retried in a new session). The only rejected requests, in 3 stages, were compaction requests. The stability review had counted no host retry. |
+| How long OpenCode waits for a provider | An HTTP (SSE) response is aborted after 5 minutes without headers or data (`headerTimeout` and `chunkTimeout` default to 300,000 ms). OpenCode's OpenAI integration uses the WebSocket session transport by default, whose wait for data defaults to 30 minutes, and a timed-out read can be retried. |
+| Normal quiet time | In the 1,097 live stages that ended normally, the longest stretch without a prompt admission, model request, tool start or end or host retry was 151 s, while a final answer was written; the 99th percentile was 120 s and the median 23 s. These stretches include answers being streamed, which count as activity too (next row), so the quiet time the watchdog sees is shorter. The 4 other stages are the 2026-10-10 run in which native `grep` calls waited for an approval for 1,688–1,813 s (such requests are refused at once since). |
+| What a plugin sees while a model streams | A probe plugin on OpenCode 2.0.22, while a fixture provider streamed one chunk per second: the projected session context kept the answer text empty until the step ended and `session.get` did not change, but `event.subscribe()` delivered one `session.text.delta` event per chunk, carrying the session ID. The feed also has reasoning and tool-input deltas, tool progress and step events, and `return()` on its iterator ends the subscription at once. An external review of this revision showed why it matters: before streamed output counted as activity, an answer streaming one chunk per second through a 60 s window was stopped at 60.9 s, 0.9 s after its last chunk. AZPR now follows these events while a stage is watched. |
+| Reviews without candidates | 3 of 71 runs (PR #4, gpt-6-luna) produced no candidate finding. Their verifier sessions took 6–14 s with 1–3 requests and added no finding, but they condensed the four initial reports into the report's checks and limitations; one checked and relayed a narrowed test assertion, the same advice that comment planning turned into the published PR #4 summary. Without the verifier that section would be empty or four unedited reports, so it still runs. No PR without changed files occurred; such a PR now stops before any session. |
+
+So host retries needed no change. The watchdog's default of 600 s is four
+times the longest quiet stretch observed; a stopped stage is retried like a
+transient failure, and its error names the last activity.
+
 ## Not yet validated
 
 - A defect whose evidence spans a test and unchanged code in different shards
@@ -605,3 +632,10 @@ PR #3 review. An offline test uses a host that never confirms a deletion.
   instead, were not checked. `azure.caFile` was validated with the fixture
   proxy and CA above only. Proxies that require NTLM or Kerberos are not
   supported directly.
+- The stage inactivity watchdog with a real provider: no live stall has
+  occurred since it was added. It was validated with the fixture provider's
+  stalled HTTP stream; a stalled OpenAI WebSocket stream was not produced on
+  purpose.
+- Streamed reasoning from a real reasoning model: the fixture streams answer
+  text only. A model that thinks without streaming anything looks silent to
+  the watchdog for that time.

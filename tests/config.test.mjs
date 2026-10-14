@@ -40,7 +40,7 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
   assert.equal(settings.deletePrivateSessions, true);
   assert.deepEqual(settings.debug, { enabled: false, directory: '', keepRuns: 20 });
   assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
-  assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 });
+  assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 });
   assert.deepEqual(validateSettings(input()).azure, settings.azure, 'The example matches the defaults.');
   assert.deepEqual(validateSettings(input()).workflow, settings.workflow);
   for (const value of [10, 7200, null]) assert.equal(validateSettings({ ...input(), runTimeoutSeconds: value }).runTimeoutSeconds, value);
@@ -68,6 +68,10 @@ test('numeric and enum settings are range checked; partial objects take defaults
   assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, concurrency: 1, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
   assert.equal(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, archiveMegabytes: 1024 } }).azure.archiveMegabytes, 1024);
   assert.equal(validateSettings({ ...input(), workflow: { repairAttempts: 0 } }).workflow.repairAttempts, 0);
+  for (const value of [0, 60, 7200]) assert.equal(validateSettings({ ...input(), workflow: { stageIdleSeconds: value } }).workflow.stageIdleSeconds, value);
+  for (const value of [59, 7201, 1.5, -1, null, '600']) {
+    assert.throws(() => validateSettings({ ...input(), workflow: { stageIdleSeconds: value } }), /workflow\.stageIdleSeconds must be 0 \(off\) or an integer from 60 to 7200/, String(value));
+  }
   for (const [key, value] of [['azure', { organization: 'org', pat: PAT, concurrency: 0 }], ['azure', { organization: 'org', pat: PAT, concurrency: 9 }], ['azure', { organization: 'org', pat: PAT, callTimeoutSeconds: 5 }],
     ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 0 }], ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 1025 }], ['azure', { organization: 'org', pat: PAT, archiveMegabytes: 1.5 }],
     ['workflow', { shardFiles: 0 }], ['workflow', { parallelSessions: 17 }], ['workflow', { repairAttempts: 4 }], ['workflow', { stageRetries: -1 }],
