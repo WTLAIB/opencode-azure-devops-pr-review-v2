@@ -45,6 +45,8 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
 });
 
 const SESSION_REMOVALS = 8;
+// A retry wait the host announces suspends the inactivity watchdog at most this long.
+const HOST_PAUSE_LIMIT_MS = 60 * 60 * 1000;
 const CA_FILE_BYTES = 1024 * 1024;
 /** azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings. */
 async function readCaCertificates(path) {
@@ -79,7 +81,7 @@ async function deadline(operation, milliseconds) {
 /**
  * Session/command-scoped integration.
  * `options` (offline tests only): stateDirectory, azureTimeoutMs, retryDelayMs,
- * removeTimeoutMs, azureBaseUrl and fetch. A base URL override (also
+ * removeTimeoutMs, stageIdleMs, azureBaseUrl and fetch. A base URL override (also
  * AZPR_TEST_AZURE_BASE_URL for exact-host fixtures) must be a loopback test server.
  */
 export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, options = {}) {
@@ -108,6 +110,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const state = { raw, settings, agents, fingerprints: {}, registrationPermissions: {}, agentsPinned: false };
   const queue = createToolQueue({ concurrency: settings.azure.concurrency, timeoutMs: options.azureTimeoutMs ?? settings.azure.callTimeoutSeconds * 1000 });
   const retryDelayMs = options.retryDelayMs ?? 1000;
+  const stageIdleMs = options.stageIdleMs ?? settings.workflow.stageIdleSeconds * 1000;
   const baseUrl = restBaseUrl(options.azureBaseUrl ?? process.env.AZPR_TEST_AZURE_BASE_URL);
   const caCertificates = await readCaCertificates(settings.azure.caFile);
   const transport = fetchTransport({ proxy: settings.azure.proxy, caCertificates, verifyTls: settings.azure.verifyTls });
@@ -329,26 +332,74 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
 
   // -------------------------------------------------------------- stages
-  async function ask(run, g, sessionID, text, spec) {
+  /** Reviewer activity restarts the inactivity window; `pauseMs` covers a wait the host announced. */
+  function touch(g, activity, pauseMs = 0) {
+    const watch = g?.watch;
+    if (!watch) return;
+    watch.at = Date.now();
+    watch.activity = activity;
+    if (pauseMs > 0) watch.quietUntil = Math.max(watch.quietUntil, watch.at + Math.min(pauseMs, HOST_PAUSE_LIMIT_MS));
+  }
+
+  /**
+   * Stage inactivity watchdog (workflow.stageIdleSeconds). While a stage waits
+   * on OpenCode, prompt admissions, model requests, tool starts and ends,
+   * approval requests and announced host retries are activity; a running AZPR
+   * tool is too, since its Azure calls have their own timeouts. A stage with no
+   * activity for the whole window is stopped with an error that says so.
+   */
+  function watchStage(watch, stop) {
+    if (!stageIdleMs) return () => {};
+    // Not unref'd: a stalled stage may have nothing else pending. The attempt always clears it.
+    let timer;
+    const arm = milliseconds => { timer = setTimeout(check, milliseconds); };
+    function check() {
+      if (!watch.waiting || watch.toolsRunning) return arm(stageIdleMs);
+      const remaining = Math.max(watch.at, watch.quietUntil) + stageIdleMs - Date.now();
+      if (remaining > 0) return arm(remaining);
+      const seconds = Number((stageIdleMs / 1000).toFixed(3));
+      watch.idleStop = { idleSeconds: seconds, lastActivity: watch.activity, lastActivityAt: new Date(watch.at).toISOString(), stoppedAt: new Date().toISOString() };
+      watch.error = Object.assign(new Error(`[AZPR] Stage inactivity watchdog stopped this stage: no activity for ${seconds} s after ${watch.activity} (workflow.stageIdleSeconds).`), { failureClass: 'idle' });
+      stop(watch.error);
+    }
+    arm(stageIdleMs);
+    return () => clearTimeout(timer);
+  }
+
+  async function ask(g, sessionID, text, signal) {
     const nonce = randomUUID();
     g.pending = { text, nonce };
     g.primaryPrepared = false;
     const before = { admitted: g.admitted, calls: g.calls };
-    const answer = await bounded(() => requestReview(context, {
-      sessionID, role: g.role, model: modelRef(g.model), text, metadata: { azprGrant: nonce },
-      signal: run.controller.signal, allowHostContinuations: true,
-    }), run.controller.signal);
+    touch(g, 'the prompt was sent');
+    g.watch.waiting = true;
+    let answer;
+    try {
+      answer = await bounded(() => requestReview(context, {
+        sessionID, role: g.role, model: modelRef(g.model), text, metadata: { azprGrant: nonce },
+        signal, allowHostContinuations: true,
+      }), signal);
+    } finally { g.watch.waiting = false; }
     if (g.admitted <= before.admitted || g.calls <= before.calls) throw new Error('Required V2 prompt/context hooks were not observed; the answer cannot be accepted.');
     return answer;
   }
 
   /**
    * One stage attempt: a fresh role-bound session, the payload prompt, then up
-   * to `repairAttempts` correction turns in the same session.
+   * to `repairAttempts` correction turns in the same session. The inactivity
+   * watchdog stops only this attempt; the run's signal still cancels everything.
    * @param {{evaluate: Function, finalize?: Function}} handler
    */
   async function stageAttempt(run, role, payload, handler, { label, attempt }) {
-    const signal = run.controller.signal;
+    const watch = { at: Date.now(), activity: 'the stage started', quietUntil: 0, toolsRunning: 0, waiting: true };
+    const stopper = new AbortController();
+    const unwatch = watchStage(watch, error => stopper.abort(error));
+    try { return await attemptStage(run, role, payload, handler, { label, attempt }, watch, AbortSignal.any([run.controller.signal, stopper.signal])); }
+    finally { unwatch(); }
+  }
+
+  async function attemptStage(run, role, payload, handler, { label, attempt }, watch, signal) {
+    const runSignal = run.controller.signal;
     if (!run.active) throw new Error('Review stopped.');
     await checkRole(role, signal);
     const spec = ROLES[role];
@@ -358,9 +409,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), signal }), signal);
     if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');
     seenSessions.add(made.id);
+    watch.waiting = false;
     const input = JSON.stringify(payload);
     const g = {
-      run, role, model: idModel, pending: null, admitted: 0, calls: 0, primaryPrepared: false,
+      run, role, model: idModel, watch, pending: null, admitted: 0, calls: 0, primaryPrepared: false,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
@@ -383,7 +435,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       let prompt = input, evaluation, answerText = '';
       const repairs = [];
       for (let turn = 0; ; turn++) {
-        const answer = await ask(run, g, made.id, prompt, spec);
+        const answer = await ask(g, made.id, prompt, signal);
         answerText = visibleText(answer);
         if (settings.debug.enabled) await run.debug.write(`${stem}.response${turn ? `-repair${turn}` : ''}.json`, diagnosticResponse(answer));
         if (answer.continuation) {
@@ -407,17 +459,21 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       record.result = result;
       return result;
     } catch (error) {
-      g.timing?.promptSettled(signal.aborted ? 'interrupted' : 'rejected');
+      // Cancelling the run wins; otherwise a watchdog stop is reported as one.
+      const idle = !runSignal.aborted && watch.error;
+      g.timing?.promptSettled(runSignal.aborted ? 'interrupted' : idle ? 'idle-stopped' : 'rejected');
       if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response.json`, diagnosticResponse(error.response));
-      if (signal.aborted) error = abortError(signal);
+      if (runSignal.aborted) error = abortError(runSignal);
+      else if (idle) error = watch.error;
       record.status = 'FAILED';
       record.error = errorText(error);
       if (error?.execution) record.execution = { ...error.execution, authorizedPrimaryRequests: g.calls };
-      const failureClass = signal.aborted ? 'cancelled' : classifyFailure(error, { compactionRequested: g.compactionRequested });
+      if (idle) record.idleStop = watch.idleStop;
+      const failureClass = runSignal.aborted ? 'cancelled' : idle ? 'idle' : classifyFailure(error, { compactionRequested: g.compactionRequested });
       record.failureClass = failureClass;
       if (error instanceof Error) error.failureClass = failureClass;
       grants.delete(made.id);
-      if (!signal.aborted) await abortSession(run, made.id);
+      if (!runSignal.aborted) await abortSession(run, made.id);
       throw error;
     } finally {
       grants.delete(made.id);
@@ -439,15 +495,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
   }
 
-  /** Retry a stage in a new session after a transient failure. */
+  /** Retry a stage in a new session after a transient failure or an inactivity stop. */
   async function runStage(run, role, payload, handler, { label = '' } = {}) {
     const attempts = 1 + settings.workflow.stageRetries;
     for (let attempt = 1; ; attempt++) {
       try { return await stageAttempt(run, role, payload, handler, { label, attempt }); }
       catch (error) {
         if (!run.active || run.controller.signal.aborted) throw error;
-        if (error?.failureClass !== 'transient' || attempt >= attempts) throw error;
-        progress(run, `${ROLES[role].label}${label ? ` ${label}` : ''} failed (${errorText(error).slice(0, 120)}); retrying in a new session.`);
+        if (!['transient', 'idle'].includes(error?.failureClass) || attempt >= attempts) throw error;
+        progress(run, `${ROLES[role].label}${label ? ` ${label}` : ''} failed (${errorText(error).slice(0, 200)}); retrying in a new session.`);
       }
     }
   }
@@ -685,6 +741,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const snapshot = g.referenceSnapshot;
     if (!snapshot) throw new Error('[AZPR] No PR snapshot is available for this reviewer.');
     let outcome;
+    // Bounded by the Azure DevOps call timeouts, so the inactivity watchdog waits for it.
+    g.watch.toolsRunning++;
     try {
       outcome = await runReviewTool(name, clone(input ?? {}), { azure, run: g.run, snapshot });
     } catch (error) {
@@ -692,6 +750,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (error?.kind === 'timeout') g.toolTimeouts++;
       const message = `${name} failed: ${errorText(error)}`;
       return { output: message, content: [{ type: 'text', text: message }], metadata: { isError: true } };
+    } finally {
+      g.watch.toolsRunning--;
+      touch(g, `tool ${name} ended`);
     }
     if (outcome.observation && ['initial', 'final'].includes(ROLES[g.role].format)) {
       // Keep observed source text with its request for anchor checks in comment planning.
@@ -740,6 +801,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const session = recordOf(await bounded(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal));
       authorize(event.sessionID, session?.agent, session?.model);
       g.admitted++;
+      touch(g, 'the prompt was admitted');
     }));
     registrations.push(await context.session.hook('context', async event => {
       const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
@@ -776,6 +838,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         g.primaryPrepared = false;
         g.calls++;
         g.timing?.modelRequest();
+        touch(g, `model request ${g.calls} was sent`);
       } catch (error) {
         if (observed) observed.rejectedRequests++;
         throw error;
@@ -788,7 +851,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       let authorized = false;
       try { if (g?.run.active) { authorize(event.sessionID, event.agent, event.model); authorized = true; } } catch { /* Revoked. */ }
       if (!authorized) event.decision = { retry: false };
-      g?.retryEvents.push({ attempt: Number.isInteger(event.attempt) ? event.attempt : null, proposed, allowed: authorized && proposed });
+      const attempt = Number.isInteger(event.attempt) ? event.attempt : null;
+      const delayMs = Number.isFinite(event.decision?.delay) && event.decision.delay > 0 ? event.decision.delay : 0;
+      g?.retryEvents.push({ attempt, proposed, allowed: authorized && proposed, ...(delayMs ? { delayMs } : {}) });
+      // OpenCode waits before it prepares the request again; that wait is not inactivity.
+      if (authorized && proposed) touch(g, `the host scheduled a retry${attempt === null ? '' : ` (attempt ${attempt})`}`, delayMs);
     }));
     if (capabilities.permissionHook) {
       // Enforce the shell setting and allow reads of AZPR's own private data,
@@ -812,6 +879,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
             ? 'AZPR reviewers cannot use paths outside the local OpenCode project. PR repository paths such as /src/app.ts are read with azpr_read_file and azpr_list_files, not with native read, glob or grep.'
             : 'AZPR reviewers run unattended and cannot wait for an approval, so this request is denied.';
         }
+        // A pending approval is the last activity the watchdog can name.
+        const g = grants.get(event.sessionID);
+        if (event.effect === 'ask' && g?.role === event.agent) touch(g, `${event.action} asked for approval`);
       }));
     }
     registrations.push(await context.tool.hook('execute.before', async event => {
@@ -819,6 +889,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (!seenSessions.has(event.sessionID) && !privateAgent(event.agent)) return;
       const g = grants.get(event.sessionID);
       if (!g?.run.active || g.role !== event.agent) throw new Error('[AZPR] Review tool authorization expired.');
+      touch(g, `tool ${event.tool} started`);
       const call = `${event.id}:${event.tool}`;
       g.toolCalls.set(call, event.tool);
       g.toolArgumentCharacters.set(call, JSON.stringify(event.input ?? {}).length);
@@ -831,6 +902,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     registrations.push(await context.tool.hook('execute.after', async event => {
       const g = grants.get(event.sessionID), call = `${event.id}:${event.tool}`;
       if (!g?.run.active || g.role !== event.agent || !g.toolCalls.has(call) || g.terminalTools.has(call)) return;
+      touch(g, `tool ${event.tool} ended`);
       const status = event.status === 'error' ? 'error' : 'completed';
       g.terminalTools.set(call, status);
       g.timing?.toolEnded(call, status);

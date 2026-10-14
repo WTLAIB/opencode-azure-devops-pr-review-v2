@@ -112,6 +112,8 @@ export async function runReview(ctx, run, request) {
   if (snapshot.status !== 'active') warnings.push(`The PR status is ${snapshot.status}.`);
   if (!snapshot.filesComplete) warnings.push('Azure DevOps returned an incomplete changed-file list; reviewers were asked to find the remaining paths, which are not verified as complete.');
   progress(run, `PR #${snapshot.prId} at ${snapshot.head.slice(0, 10)}: ${snapshot.files.length} changed file(s)${snapshot.filesComplete ? '' : ' (partial list)'}.`);
+  // A partial list asks reviewers to find the remaining paths; a complete empty one leaves nothing to review.
+  if (!snapshot.files.length && snapshot.filesComplete) throw new Error(`PR #${snapshot.prId} has no changed files in its latest iteration; there is nothing to review.`);
 
   const modelSnapshot = await snapshotForModel(snapshot, store);
   const shards = shardFiles(snapshot.files, settings.workflow.shardFiles);
@@ -178,7 +180,8 @@ export async function runReview(ctx, run, request) {
   if (discovered.size) warnings.push(`Reviewers reported ${discovered.size} changed path(s) missing from Azure's list: ${[...discovered].slice(0, 20).join(', ')}${discovered.size > 20 ? ', ...' : ''}`);
   progress(run, `Initial review finished: ${findings.length} candidate finding(s). Verifying.`);
 
-  // Verification, sharded by finding.
+  // Verification, sharded by finding. Without candidates one verifier still
+  // runs: it checks the initial reports and writes the checks and limitations.
   const verifier = roleFor(run.profile, 'verifier');
   const groups = shardFindings(findings, settings.workflow.shardFindings);
   const allIds = findings.map(finding => finding.id);

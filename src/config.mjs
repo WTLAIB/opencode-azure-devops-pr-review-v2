@@ -46,7 +46,7 @@ export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
 
 const DEFAULTS = Object.freeze({
   azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
-  workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 }),
+  workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 }),
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -143,6 +143,8 @@ export function validateSettings(raw) {
   integer(workflow.parallelSessions, 'workflow.parallelSessions', 1, 16);
   integer(workflow.repairAttempts, 'workflow.repairAttempts', 0, 3);
   integer(workflow.stageRetries, 'workflow.stageRetries', 0, 2);
+  const idle = workflow.stageIdleSeconds;
+  if (idle !== 0 && (!Number.isInteger(idle) || idle < 60 || idle > 7200)) throw new Error('workflow.stageIdleSeconds must be 0 (off) or an integer from 60 to 7200.');
   return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '', keepRuns },
     enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, azure, workflow,
     deepReady: deepConfigured === MODEL_SLOTS.length,

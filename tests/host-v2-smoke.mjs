@@ -8,7 +8,9 @@ import { fakeProxy } from './fake-proxy.mjs';
  * foreign stdio MCP server. Covers the deterministic source check, a full
  * review in which reviewers read through AZPR's tools while foreign tools stay
  * hidden, a verifier repair turn, comment preview and idempotent publication
- * across a host restart, cancellation, and private auxiliary-request denial.
+ * across a host restart, cancellation, a provider 503 that OpenCode retries in
+ * the same session, and private auxiliary-request denial. The fresh run also
+ * stalls a model stream until the stage inactivity watchdog stops it.
  * The fresh run also reaches Azure DevOps over HTTPS only through an
  * authenticating CONNECT proxy with a fixture CA (openssl generates it).
  * It does not validate a real provider, real Azure DevOps, a real corporate
@@ -38,6 +40,10 @@ const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
+// The smallest inactivity window, so the stalled-stream step takes about a
+// minute; the hanging reviews below are stopped well before it (keep
+// AZPR_TUI_HOLD_SECONDS under 60).
+settings.workflow = { ...settings.workflow, stageIdleSeconds: 60 };
 settings.outputLanguage = 'zh-TW';
 settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings, null, 2));
@@ -55,7 +61,8 @@ if (replacement) {
 
 // ------------------------------------------------------------ fake provider
 const requests = [];
-let child, logs = '';
+const overloaded = new Set();
+let child, logs = '', stall = null;
 const lastUser = messages => messages?.findLast(message => message.role === 'user')?.content;
 const firstUser = messages => messages?.find(message => message.role === 'user')?.content;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
@@ -73,6 +80,21 @@ const provider = createServer(async (request, response) => {
   if (payload?.userContext?.includes('hang-smoke')) {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.write(': fixture waits for cancellation\n\n');
+    return;
+  }
+  // The first request of each risk session fails once, like an overloaded provider.
+  if (payload?.userContext?.includes('retry-smoke') && parsed.model === 'risk' && !overloaded.has(sessionID)) {
+    overloaded.add(sessionID);
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: { message: 'Fixture provider overloaded', type: 'server_error' } }));
+    return;
+  }
+  // The first functional session's stream starts and then stops sending.
+  if (payload?.userContext?.includes('stall-smoke') && parsed.model === 'functional' && !stall) {
+    stall = { sessionID, at: Date.now(), closed: null };
+    response.on('close', () => { stall.closed = Date.now(); });
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write(': fixture stream stalls\n\n');
     return;
   }
   const fileTool = parsed.tools?.find(tool => tool.function?.name === 'azpr_read_file')?.function.name;
@@ -275,6 +297,45 @@ try {
   await cancelled;
   assert.ok((await inbox(cancelOrigin)).some(text => /\] CANCELLED/.test(text)), 'Manual cancellation leaves a CANCELLED receipt.');
   results.cancellation = 'CANCELLED';
+  const stageRecords = async receipt => JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8')).stages;
+
+  // 4b. A provider 503 is retried by OpenCode in the same session: the host
+  // prepares the request again (context, then model.request), so AZPR allows it.
+  const retryOrigin = await newOrigin('Provider retry');
+  const beforeRetry = requests.length;
+  await api(`/api/session/${retryOrigin}/command`, { name: 'pr-review', text: `${prUrl} retry-smoke`, delivery: 'steer' });
+  const retried = await latest(retryOrigin);
+  assert.match(retried, /\] COMPLETE\n/, retried);
+  assert.doesNotMatch(retried, /azpr-review-risk: [^\n]*attempt=2/, 'No new session was needed.');
+  const riskRequests = requests.slice(beforeRetry).filter(request => request.model === 'risk');
+  assert.ok(riskRequests.length >= 2 && riskRequests[0].sessionID === riskRequests[1].sessionID && riskRequests[0].last === riskRequests[1].last, 'OpenCode resent the request in the same session.');
+  const riskStage = (await stageRecords(retried)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(riskStage.requestObservations.retries.length, 1, JSON.stringify(riskStage.requestObservations));
+  assert.equal(riskStage.requestObservations.retries[0].allowed, true);
+  assert.equal(riskStage.requestObservations.rejected, 0);
+  assert.equal(riskStage.requestObservations.kinds.primary, riskStage.requestObservations.authorizedPrimary);
+  results.hostRetry = `provider 503 retried in place by OpenCode (retry delay ${riskStage.requestObservations.retries[0].delayMs ?? 'unknown'} ms); ${riskStage.requestObservations.authorizedPrimary} authorized primary requests, 0 rejected`;
+
+  // 4c. A model stream that stops sending is stopped by the stage inactivity
+  // watchdog (workflow.stageIdleSeconds: 60), interrupted on the host and retried.
+  if (replacement) results.watchdog = 'covered by the fresh run';
+  else {
+    const stallOrigin = await newOrigin('Stalled stream');
+    const started = Date.now();
+    await api(`/api/session/${stallOrigin}/command`, { name: 'pr-review', text: `${prUrl} stall-smoke`, delivery: 'steer' });
+    const recovered = await latest(stallOrigin);
+    assert.match(recovered, /\] COMPLETE\n/, recovered);
+    assert.ok(recovered.includes(`azpr-review-functional: FAILED; session=${stall.sessionID}`), recovered);
+    assert.match(recovered, /azpr-review-functional: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 60 s after model request 1 was sent \(workflow\.stageIdleSeconds\)\./);
+    assert.match(recovered, /azpr-review-functional: COMPLETE; [^\n]*attempt=2/);
+    assert.match(recovered, /Inactivity notice: the stage inactivity watchdog stopped 1 stage\(s\) \(failure=idle\) after 60 s without activity: azpr-review-functional after model request 1 was sent\./);
+    assert.doesNotMatch(recovered, /Cancellation warning/, 'OpenCode confirmed the interrupted session settled.');
+    assert.ok((await inbox(stallOrigin)).some(text => /PROGRESS — Initial F failed \(\[AZPR\] Stage inactivity watchdog stopped this stage/.test(text)), 'The retry notice names the watchdog.');
+    assert.ok(stall.closed !== null, 'OpenCode closed the stalled provider stream after the interrupt.');
+    const stoppedAfter = (stall.closed - stall.at) / 1000;
+    assert.ok(stoppedAfter >= 59 && stoppedAfter < 75, `The stream was closed ${stoppedAfter} s after it stalled.`);
+    results.watchdog = `stalled stream stopped after ${stoppedAfter.toFixed(1)} s (failure=idle), closed by OpenCode, retried in a new session; COMPLETE in ${((Date.now() - started) / 1000).toFixed(1)} s`;
+  }
 
   // 5. Private sessions cannot run auxiliary requests; ordinary sessions can.
   const privateSession = reviewRequests.find(request => request.model === 'risk').sessionID;

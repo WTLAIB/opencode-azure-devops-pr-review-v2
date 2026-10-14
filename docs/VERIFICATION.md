@@ -8,7 +8,7 @@ does not need a checkout or Git history, and reviews never clone or fetch.
 | Value | Behavior |
 | --- | --- |
 | `deny` (default) | Shell is removed from private reviewers' tool lists and refused if called, regardless of later host rules (enforced through the `permission` hook). Reviewers still read, glob and grep the current project. |
-| `ask` | Shell is offered; every command needs your approval in OpenCode. A background review waits while an approval is pending. |
+| `ask` | Shell is offered; every command needs your approval in OpenCode. A background review waits while an approval is pending, up to `workflow.stageIdleSeconds` (the stage is then stopped as inactive, `failure=idle`, and retried). |
 | `inherit` | Host permission rules decide, as for any agent. |
 
 The default protects you from prompt injection: reviewers read untrusted PR
@@ -26,7 +26,9 @@ small reproduction, static analysis — in a fresh temporary directory with file
 copied from AZPR tool reads at the exact commit. Commands run with real host
 authority; this is not a filesystem, process or network sandbox. Native edit,
 write and patch tools stay denied, but those denials do not stop an approved
-shell command from writing files.
+shell command from writing files. A command that runs longer than
+`workflow.stageIdleSeconds` counts as inactivity and stops its stage; raise the
+setting (or set `0`) if reviewers need longer checks.
 
 Execution is optional. Failed tests, missing dependencies or unavailable
 execution are observations in the report, not a gate on a source-supported
@@ -35,5 +37,6 @@ finding.
 ## Cancellation
 
 `/pr-stop`, a configured `runTimeoutSeconds` and plugin unload revoke grants and
-ask OpenCode to interrupt and settle the sessions. They do not roll back command
-side effects or terminate detached background processes.
+ask OpenCode to interrupt and settle the sessions; the stage inactivity watchdog
+does the same for one stalled stage. They do not roll back command side effects
+or terminate detached background processes.

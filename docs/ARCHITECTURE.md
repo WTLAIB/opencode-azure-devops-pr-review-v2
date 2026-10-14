@@ -58,7 +58,9 @@ After preflight, hooks never re-read settings or catalogs.
    lagging merge or multiple merge bases are reported as warnings. The PR's
    commit messages (newest 100, each shortened to 600 characters) go to the
    reviewers as the author's claims about each change; the comment planner
-   does not get them.
+   does not get them. A complete change list without files ends the command
+   before any session (INCOMPLETE, nothing to review); a partial one asks the
+   reviewers to find the remaining paths.
 2. **Initial reviews** — changed files are sorted and cut into shards of
    `workflow.shardFiles`. For each role and shard a private session reviews the
    assigned files with a finding-ID range (`F-1…`, `F-1001…`) so IDs never
@@ -86,6 +88,9 @@ After preflight, hooks never re-read settings or catalogs.
    for the pair; left unresolved, the merged finding is UNREVIEWED. After the
    shards are combined the same rule settles merges into findings another
    verifier did not confirm, with a warning.
+   Without candidate findings one verifier still runs: it checks the initial
+   reports and condenses them into the report's checks and limitations, which
+   comment planning also uses for the PR summary.
 5. **Duplicate check** — the runtime groups confirmed findings by their final
    file. A file whose findings different verifiers confirmed (a verifier moved
    one there, or a crowded file was split) lost the one-verifier-per-file
@@ -110,7 +115,25 @@ the answer; if it lists issues and a repair prompt, the runtime sends up to
 newly authorized prompt with its own nonce). A transient failure (provider
 408/409/425/429/5xx, missing idle, an unexpected message in the turn) retries
 the stage once in a new session (`workflow.stageRetries`). Permanent failures
-and cancellations are not retried.
+and cancellations are not retried. Before that, OpenCode itself retries a
+failed provider request in the same session (backoff from 2 s, `Retry-After`
+up to 15 minutes); it prepares every resend again, so the resend passes the
+`context` and `model.request` hooks like any request.
+
+A **stage inactivity watchdog** (`workflow.stageIdleSeconds`, default 600, 0
+turns it off) covers a model stream, a tool or the host that stops responding.
+While a stage waits on OpenCode, prompt admissions, model requests, tool starts
+and ends, approval requests and announced host retries are activity (an
+announced retry wait is added to the window), and a running AZPR tool counts
+until it returns because its Azure calls have their own timeouts. A stage with
+no activity for the whole window is stopped: its grant is revoked, its session
+interrupted, and it fails with `failure=idle` and an error that names the last
+activity, such as `Stage inactivity watchdog stopped this stage: no activity
+for 600 s after model request 3 was sent`; the receipt adds an inactivity
+notice. It is retried in a new session like a transient failure. Any activity
+restarts the window, so this is not the whole-run timeout or step cap the
+[roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is never
+stopped. The longest quiet stretch in 1,097 normal live stages was 151 s.
 
 Host stream continuations are accepted for any provider: an errored text-only
 assistant message that the host marked for retry, followed by the host's
@@ -162,7 +185,9 @@ private session gets a grant with the run, role, model and a pending prompt
   much get their tools removed to force a checkpoint.
 - `model.request`: only primary requests after an authorized context; compaction,
   generation and title requests are refused (compaction marks overflow).
-- `retry`: host retries continue only while the grant is active.
+- `retry`: host retries continue only while the grant is active; the announced
+  wait does not count as inactivity. OpenCode prepares the resend again
+  (`context`, then `model.request`), so it passes the primary-request check.
 - `permission` `evaluate`: enforces the `shell` setting for private roles,
   allows reads of AZPR's own private data directory and refuses at once any
   other request that would wait for an approval (private sessions run
@@ -172,6 +197,9 @@ private session gets a grant with the run, role, model and a pending prompt
 - `tool.execute.before`: refuses any tool outside the allowlist and delegation.
 - `tool.execute.after`: records tool outcomes and pages large comment-tool
   results into private files.
+- `prompt`, `model.request`, `retry`, the tool hooks and a pending approval in
+  `permission` also record the stage's last activity for the inactivity
+  watchdog.
 
 AZPR registers its tools with `codemode: false` (OpenCode offers only such
 tools directly). A tool runs only for an active grant and always on the run's

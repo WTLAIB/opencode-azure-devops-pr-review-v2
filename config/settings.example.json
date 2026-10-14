@@ -40,6 +40,7 @@
     "shardFindings": 15,
     "parallelSessions": 4,
     "repairAttempts": 2,
-    "stageRetries": 1
+    "stageRetries": 1,
+    "stageIdleSeconds": 600
   }
 }
