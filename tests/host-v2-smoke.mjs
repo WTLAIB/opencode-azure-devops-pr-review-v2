@@ -10,7 +10,8 @@ import { fakeProxy } from './fake-proxy.mjs';
  * hidden, a verifier repair turn, comment preview and idempotent publication
  * across a host restart, cancellation, a provider 503 that OpenCode retries in
  * the same session, and private auxiliary-request denial. The fresh run also
- * stalls a model stream until the stage inactivity watchdog stops it.
+ * stalls a model stream until the stage inactivity watchdog stops it, while an
+ * answer that keeps streaming longer than the watchdog's window runs on.
  * The fresh run also reaches Azure DevOps over HTTPS only through an
  * authenticating CONNECT proxy with a fixture CA (openssl generates it).
  * It does not validate a real provider, real Azure DevOps, a real corporate
@@ -62,7 +63,7 @@ if (replacement) {
 // ------------------------------------------------------------ fake provider
 const requests = [];
 const overloaded = new Set();
-let child, logs = '', stall = null;
+let child, logs = '', stall = null, longStream = null;
 const lastUser = messages => messages?.findLast(message => message.role === 'user')?.content;
 const firstUser = messages => messages?.find(message => message.role === 'user')?.content;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
@@ -100,6 +101,26 @@ const provider = createServer(async (request, response) => {
   const fileTool = parsed.tools?.find(tool => tool.function?.name === 'azpr_read_file')?.function.name;
   let call, final = 'Ordinary fixture answer.';
   const finding = (id, path) => ({ id, summary: '缺少防護會遺失狀態', evidence: 'HEAD: `fixture code` 略過防護。BASE: 有防護。', counterevidence: '呼叫端沒有再次檢查。', location: `head:${path}:1`, severity: 'high', suggestion: '恢復防護並加上回歸測試。' });
+  // The first functional session's answer streams for 66 s, one chunk per second.
+  if (payload?.userContext?.includes('stream-smoke') && parsed.model === 'functional' && !longStream) {
+    const files = payload.assignment.files;
+    const answer = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
+    longStream = { sessionID, at: Date.now(), chunks: 0, finishedAt: null };
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    const send = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: 'chatcmpl_long', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    send({ role: 'assistant' });
+    const timer = setInterval(() => {
+      const chunk = ++longStream.chunks;
+      send({ content: answer.slice(Math.ceil(answer.length * (chunk - 1) / 66), Math.ceil(answer.length * chunk / 66)) });
+      if (chunk < 66) return;
+      clearInterval(timer);
+      longStream.finishedAt = Date.now();
+      send({}, 'stop');
+      response.end('data: [DONE]\n\n');
+    }, 1000);
+    response.on('close', () => clearInterval(timer));
+    return;
+  }
   if (payload?.assignment?.files && !payload.assignment.findingIds) {
     const files = payload.assignment.files;
     if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
@@ -316,25 +337,36 @@ try {
   assert.equal(riskStage.requestObservations.kinds.primary, riskStage.requestObservations.authorizedPrimary);
   results.hostRetry = `provider 503 retried in place by OpenCode (retry delay ${riskStage.requestObservations.retries[0].delayMs ?? 'unknown'} ms); ${riskStage.requestObservations.authorizedPrimary} authorized primary requests, 0 rejected`;
 
-  // 4c. A model stream that stops sending is stopped by the stage inactivity
-  // watchdog (workflow.stageIdleSeconds: 60), interrupted on the host and retried.
+  // 4c. The stage inactivity watchdog (workflow.stageIdleSeconds: 60), two reviews
+  // at once: a model stream that stops sending is stopped, interrupted on the
+  // host and retried; an answer that keeps streaming longer than the window runs on.
   if (replacement) results.watchdog = 'covered by the fresh run';
   else {
-    const stallOrigin = await newOrigin('Stalled stream');
+    const stallOrigin = await newOrigin('Stalled stream'), streamOrigin = await newOrigin('Long stream');
     const started = Date.now();
-    await api(`/api/session/${stallOrigin}/command`, { name: 'pr-review', text: `${prUrl} stall-smoke`, delivery: 'steer' });
+    await Promise.all([
+      api(`/api/session/${stallOrigin}/command`, { name: 'pr-review', text: `${prUrl} stall-smoke`, delivery: 'steer' }),
+      api(`/api/session/${streamOrigin}/command`, { name: 'pr-review', text: `${prUrl} stream-smoke`, delivery: 'steer' }),
+    ]);
     const recovered = await latest(stallOrigin);
     assert.match(recovered, /\] COMPLETE\n/, recovered);
     assert.ok(recovered.includes(`azpr-review-functional: FAILED; session=${stall.sessionID}`), recovered);
-    assert.match(recovered, /azpr-review-functional: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 60 s after model request 1 was sent \(workflow\.stageIdleSeconds\)\./);
+    assert.match(recovered, /azpr-review-functional: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 60 s after (model request 1 was sent|a model step started) \(workflow\.stageIdleSeconds\)\./);
     assert.match(recovered, /azpr-review-functional: COMPLETE; [^\n]*attempt=2/);
-    assert.match(recovered, /Inactivity notice: the stage inactivity watchdog stopped 1 stage\(s\) \(failure=idle\) after 60 s without activity: azpr-review-functional after model request 1 was sent\./);
+    assert.match(recovered, /Inactivity notice: the stage inactivity watchdog stopped 1 stage\(s\) \(failure=idle\) after 60 s without activity: azpr-review-functional after /);
     assert.doesNotMatch(recovered, /Cancellation warning/, 'OpenCode confirmed the interrupted session settled.');
     assert.ok((await inbox(stallOrigin)).some(text => /PROGRESS — Initial F failed \(\[AZPR\] Stage inactivity watchdog stopped this stage/.test(text)), 'The retry notice names the watchdog.');
     assert.ok(stall.closed !== null, 'OpenCode closed the stalled provider stream after the interrupt.');
     const stoppedAfter = (stall.closed - stall.at) / 1000;
     assert.ok(stoppedAfter >= 59 && stoppedAfter < 75, `The stream was closed ${stoppedAfter} s after it stalled.`);
-    results.watchdog = `stalled stream stopped after ${stoppedAfter.toFixed(1)} s (failure=idle), closed by OpenCode, retried in a new session; COMPLETE in ${((Date.now() - started) / 1000).toFixed(1)} s`;
+    const streamed = await latest(streamOrigin);
+    assert.match(streamed, /\] COMPLETE\n/, streamed);
+    assert.ok(longStream?.finishedAt, 'The long answer was streamed to the end.');
+    const streamedFor = (longStream.finishedAt - longStream.at) / 1000;
+    assert.ok(streamedFor > 62, `The answer streamed for ${streamedFor} s, longer than the window.`);
+    assert.doesNotMatch(streamed, /failure=idle|Inactivity notice/, 'Streamed output is activity.');
+    assert.doesNotMatch(streamed, /azpr-review-functional: [^\n]*attempt=2/, 'No new session was needed.');
+    results.watchdog = `stalled stream stopped after ${stoppedAfter.toFixed(1)} s (failure=idle), closed by OpenCode, retried in a new session; an answer streamed for ${streamedFor.toFixed(1)} s (${longStream.chunks} chunks) ran on; both COMPLETE in ${((Date.now() - started) / 1000).toFixed(1)} s`;
   }
 
   // 5. Private sessions cannot run auxiliary requests; ordinary sessions can.

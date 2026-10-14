@@ -272,7 +272,7 @@
             }
           ],
           "default": 600,
-          "description": "Stage inactivity watchdog: a reviewer stage that shows no activity (prompt admission, model request, tool start or end, approval request, announced host retry) for this many seconds while it waits on OpenCode is stopped with an error that says so (failure=idle) and retried in a new session (stageRetries). Any activity restarts the window, so long stages that keep working are never cut. 0 turns it off. With shell allowed, an approval or a command that takes longer counts as inactivity."
+          "description": "Stage inactivity watchdog: a reviewer stage that shows no activity (prompt admission, model request, streamed output, tool start or end, approval request, announced host retry) for this many seconds while it waits on OpenCode is stopped with an error that says so (failure=idle) and retried in a new session (stageRetries). Any activity restarts the window, so long stages that keep working, including a long answer that keeps streaming, are never cut. 0 turns it off. With shell allowed, an approval or a command that takes longer counts as inactivity."
         }
       }
     }

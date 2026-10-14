@@ -41,7 +41,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Stage inactivity watchdog.** A stage that shows no activity for
   `workflow.stageIdleSeconds` (default 600 s) while it waits on OpenCode is
   stopped with `failure=idle` and an error naming its last activity, then
-  retried in a new session; any activity restarts the window.
+  retried in a new session; any activity, including each streamed chunk of
+  output, restarts the window.
 - **Nothing to review.** A PR whose complete change list is empty stops before
   any session.
 - **Bounded Azure calls.** One queue with configurable concurrency and a

@@ -25,7 +25,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods } from './host.mjs';
+import { fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods, sessionProgress } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -341,15 +341,46 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (pauseMs > 0) watch.quietUntil = Math.max(watch.quietUntil, watch.at + Math.min(pauseMs, HOST_PAUSE_LIMIT_MS));
   }
 
+  // Streamed output reaches no hook. While watched stages run, OpenCode's
+  // session events show it (one event per streamed chunk); without them only
+  // the hooks count.
+  let eventFeed = null, eventFollowers = 0;
+  function followEvents() {
+    eventFollowers++;
+    if (eventFeed || disposed || !capabilities.eventSubscribe) return;
+    let iterator;
+    try { iterator = context.event.subscribe()[Symbol.asyncIterator](); } catch { return; }
+    eventFeed = iterator;
+    void (async () => {
+      try {
+        for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+          const progress = sessionProgress(next.value);
+          if (progress) touch(grants.get(progress.sessionID), progress.activity);
+        }
+      } catch { /* The feed ended; the next watched stage subscribes again. */ }
+      if (eventFeed === iterator) eventFeed = null;
+    })();
+  }
+  function closeEvents() {
+    const iterator = eventFeed;
+    eventFeed = null;
+    if (iterator) void Promise.resolve().then(() => iterator.return?.()).catch(() => {});
+  }
+  function unfollowEvents() {
+    if (--eventFollowers <= 0) { eventFollowers = 0; closeEvents(); }
+  }
+
   /**
    * Stage inactivity watchdog (workflow.stageIdleSeconds). While a stage waits
-   * on OpenCode, prompt admissions, model requests, tool starts and ends,
-   * approval requests and announced host retries are activity; a running AZPR
-   * tool is too, since its Azure calls have their own timeouts. A stage with no
-   * activity for the whole window is stopped with an error that says so.
+   * on OpenCode, prompt admissions, model requests, streamed output, tool
+   * starts and ends, approval requests and announced host retries are
+   * activity; a running AZPR tool is too, since its Azure calls have their own
+   * timeouts. A stage with no activity for the whole window is stopped with an
+   * error that says so.
    */
   function watchStage(watch, stop) {
     if (!stageIdleMs) return () => {};
+    followEvents();
     // Not unref'd: a stalled stage may have nothing else pending. The attempt always clears it.
     let timer;
     const arm = milliseconds => { timer = setTimeout(check, milliseconds); };
@@ -363,7 +394,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       stop(watch.error);
     }
     arm(stageIdleMs);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); unfollowEvents(); };
   }
 
   async function ask(g, sessionID, text, signal) {
@@ -986,6 +1017,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     disposed = true;
     await Promise.allSettled([...runs.values()].map(run => abortRun(run, 'OpenCode V2 plugin unloaded.')));
     await Promise.allSettled([...jobs]);
+    closeEvents();
     completed.clear();
     openStores.clear();
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));

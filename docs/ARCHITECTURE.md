@@ -122,10 +122,14 @@ up to 15 minutes); it prepares every resend again, so the resend passes the
 
 A **stage inactivity watchdog** (`workflow.stageIdleSeconds`, default 600, 0
 turns it off) covers a model stream, a tool or the host that stops responding.
-While a stage waits on OpenCode, prompt admissions, model requests, tool starts
-and ends, approval requests and announced host retries are activity (an
-announced retry wait is added to the window), and a running AZPR tool counts
-until it returns because its Azure calls have their own timeouts. A stage with
+While a stage waits on OpenCode, prompt admissions, model requests, streamed
+output, tool starts and ends, approval requests and announced host retries are
+activity (an announced retry wait is added to the window), and a running AZPR
+tool counts until it returns because its Azure calls have their own timeouts.
+Streamed output reaches no hook, so while a stage is watched AZPR follows
+OpenCode's session events (`event.subscribe`), which carry one event per
+streamed chunk of answer text, reasoning or tool-call input; a host without
+them leaves only the hooks. A stage with
 no activity for the whole window is stopped: its grant is revoked, its session
 interrupted, and it fails with `failure=idle` and an error that names the last
 activity, such as `Stage inactivity watchdog stopped this stage: no activity
@@ -199,7 +203,8 @@ private session gets a grant with the run, role, model and a pending prompt
   results into private files.
 - `prompt`, `model.request`, `retry`, the tool hooks and a pending approval in
   `permission` also record the stage's last activity for the inactivity
-  watchdog.
+  watchdog, and so do OpenCode's session events for streamed output, followed
+  only while a stage is watched.
 
 AZPR registers its tools with `codemode: false` (OpenCode offers only such
 tools directly). A tool runs only for an active grant and always on the run's

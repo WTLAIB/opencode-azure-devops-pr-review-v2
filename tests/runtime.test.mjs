@@ -53,6 +53,9 @@ async function fixture(t, opts = {}) {
   const agents = new Map([['build', { id: 'build', permissions: [] }]]);
   const commands = new Map();
   const hooks = new Map(), sessions = new Map(), calls = [], notices = [], waiters = new Set();
+  // OpenCode's session event feed: tests publish events such as streamed text deltas.
+  const feeds = new Set();
+  const publish = event => { for (const feed of feeds) feed(event); };
   let seq = 0;
   const emit = async (domain, name, event) => { for (const fn of hooks.get(`${domain}:${name}`) ?? []) await fn(event); return event; };
   const hook = domain => async (name, fn) => {
@@ -77,6 +80,16 @@ async function fixture(t, opts = {}) {
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     permission: { hook: hook('permission') },
+    ...(opts.events === false ? {} : { event: { subscribe() {
+      const queue = [], waiting = [];
+      const feed = event => { const next = waiting.shift(); if (next) next({ value: event, done: false }); else queue.push(event); };
+      feeds.add(feed);
+      const done = { value: undefined, done: true };
+      return { [Symbol.asyncIterator]: () => ({
+        next: () => queue.length ? Promise.resolve({ value: queue.shift(), done: false }) : feeds.has(feed) ? new Promise(resolve => waiting.push(resolve)) : Promise.resolve(done),
+        return: () => { feeds.delete(feed); for (const resolve of waiting.splice(0)) resolve(done); return Promise.resolve(done); },
+      }) };
+    } } }),
     agent: {
       async get({ agentID }) { return { data: clone(agents.get(agentID)) }; },
       async transform(fn) {
@@ -119,7 +132,7 @@ async function fixture(t, opts = {}) {
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-            await opts.during?.({ session, role, packet, turn, invoke, emit });
+            await opts.during?.({ session, role, packet, turn, invoke, emit, publish });
             if (turn === 0 && ROLES[role].format === 'initial' && packet.assignment.files.length) {
               await invoke(session, 'azpr_read_file', { path: packet.assignment.files[0], version: 'head' });
             }
@@ -157,7 +170,7 @@ async function fixture(t, opts = {}) {
   const stateDirectory = join(directory, 'state');
   const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, stageIdleMs: opts.stageIdleMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
-  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry,
+  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, publish,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
     sessionsFor: role => [...sessions.values()].filter(session => session.agent === role),
     async command(name = 'pr-review', text = azure.prUrl(), origin = 'ordinary') {
@@ -325,6 +338,29 @@ test('a stage that stalls again fails with the watchdog named in the report; the
   assert.match(receipt, /Inactivity notice: the stage inactivity watchdog stopped 2 stage\(s\)/);
   const report = f.notices.find(n => /^# AZPR [a-f0-9]{8} — COMPLETE/.test(n.text)).text;
   assert.match(report, /azpr-review-risk shard 1\/1 failed \(\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after tool read ended \(workflow\.stageIdleSeconds\)\.\); its 1 file\(s\) lack this role's review\./);
+});
+
+test('streamed output is activity: an answer that keeps streaming past the window runs on; a stream that goes quiet is stopped and named', async t => {
+  let quiet = false;
+  const f = await fixture(t, { stageIdleMs: 400, async during({ session, role, turn, publish }) {
+    const delta = () => publish({ type: 'session.text.delta', data: { sessionID: session.id, assistantMessageID: 'msg_stream', delta: 'x' } });
+    if (role === 'azpr-review-functional' && !turn) {
+      // 900 ms of streamed answer after the request, never 400 ms without a chunk, and no hook in between.
+      for (let chunk = 0; chunk < 9; chunk++) { await sleep(100); delta(); }
+    }
+    if (role === 'azpr-review-risk' && !quiet) {
+      quiet = true;
+      delta(); delta();
+      await new Promise(resolve => { session.onInterrupt = resolve; });
+    }
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.equal(f.sessionsFor('azpr-review-functional').length, 1, 'The streaming answer was not stopped.');
+  assert.doesNotMatch(receipt, /azpr-review-functional: FAILED/);
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 2);
+  assert.match(receipt, /azpr-review-risk: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after model output was streamed \(workflow\.stageIdleSeconds\)\./);
+  assert.equal(f.feeds.size, 0, 'The event feed closes when no stage is watched.');
 });
 
 test('working stages are never stopped: every event restarts the window, a running AZPR tool and an announced host retry wait count', async t => {

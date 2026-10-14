@@ -62,9 +62,11 @@ in parallel.
    - `idle` means the stage inactivity watchdog stopped the stage after
      `workflow.stageIdleSeconds` without activity; it was retried once in a new
      session. Its error and `idleStop` name the last activity and when it
-     happened: after `model request N was sent` the model stream stopped,
-     after `tool X started` a tool did not return, after `tool X ended` no
-     next model request came, after `shell asked for approval` nobody approved;
+     happened: after `model request N was sent` the model never answered,
+     after `model output was streamed` (or reasoning, or a tool call) the stream
+     stopped mid-answer, after `tool X started` a tool did not return, after
+     `tool X ended` no next model request came, after `shell asked for
+     approval` nobody approved;
    - `cancelled` came from `/pr-stop`, a timeout or unload.
    `requestObservations.retries` lists OpenCode's own retries of a provider
    request (attempt, whether AZPR allowed it, the announced delay).
