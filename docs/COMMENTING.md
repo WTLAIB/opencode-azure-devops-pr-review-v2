@@ -47,8 +47,12 @@ earlier pages. Most pages finish in one model request without tools; the
 planner reads more only for lines outside an excerpt or a full comment body.
 A page that needs more reading returns `CONTINUE` with its finished items and a
 continuation note (tools are withdrawn after 12 requests or about 48,000
-characters of tool output); a new session continues the page. Repeating a
-checkpoint without progress stops planning.
+characters of tool output); a new session continues the page. A page gets at
+most three continuation sessions. When a checkpoint repeats an earlier one
+without progress (same open findings, reads and notes), or the fourth session
+still returns `CONTINUE`, the page ends there: its finished comments are kept,
+its open findings are skipped with that reason and stay in the summary index,
+and the other pages and publication go on. A PROGRESS notice names the page.
 
 Every page is validated item by item:
 

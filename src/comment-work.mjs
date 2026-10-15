@@ -8,6 +8,8 @@ const text = value => typeof value === 'string' && value.trim().length > 0;
 // A short finding can still need substantial source inspection. Bound each
 // page's working set; every remaining finding gets its own page.
 export const PLANNING_FINDINGS_PER_PAGE = 4;
+// Sessions that may continue a page after its first; what is still open then is skipped.
+export const PAGE_CONTINUATIONS = 3;
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const evidenceKeys = review => [...new Set((review.commentEvidence ?? []).map(item =>
@@ -122,7 +124,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   }
   let summaryWritten = false;
   for (let index = 0; index < count; index++) {
-    let pending = groups[index] ?? [], continuation;
+    let pending = groups[index] ?? [], continuation, sessions = 0;
     const report = reports[index]?.text ?? '';
     progress?.(`Planning comments, page ${index + 1}/${count}`);
     do {
@@ -153,22 +155,33 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
           return { ...result, corrections };
         },
       });
+      sessions++;
       if (text(page.summary)) summaryWritten = true;
       pages.push(page);
       prepared.push(await store.object({ input: payload, result: page }));
       const accounted = new Set([...page.comments, ...page.skipped].map(item => item.findingId));
       pending = pending.filter(item => !accounted.has(item.id));
       continuation = page.status === 'CONTINUE' ? page.continuation : undefined;
+      let stopped;
       if (continuation) {
-        // Rephrasing a checkpoint or repeating the same reads is not progress.
+        // Rephrasing a checkpoint or repeating the same reads is not progress, and
+        // a page gets PAGE_CONTINUATIONS more sessions at most. Either way the page
+        // ends here and keeps its finished work; only what is still open is skipped.
         const details = [...new Set(pages.map(part => part.summaryDetails).filter(text))].sort();
         const signature = JSON.stringify([index, pending.map(item => item.id), details, evidenceKeys(review)]);
-        if (signatures.has(signature)) throw new Error('Comment planning repeated a checkpoint without progress; nothing was published.');
+        if (signatures.has(signature)) stopped = 'repeated a checkpoint without progress';
+        else if (sessions > PAGE_CONTINUATIONS) stopped = `did not finish the page in ${sessions} sessions`;
         signatures.add(signature);
-      } else if (pending.length) {
+        if (stopped) {
+          continuation = undefined;
+          progress?.(`Planning comments, page ${index + 1}/${count}: the planner ${stopped}; ${pending.length} finding(s) skipped.`);
+        }
+      }
+      if (!continuation && pending.length) {
         // A READY page that left findings unaccounted was already finalized
         // with skips; anything still pending here is recorded explicitly.
-        pages.push({ status: 'READY', comments: [], skipped: pending.map(item => ({ findingId: item.id, reason: 'The comment planner did not address this finding; it remains in the summary index.' })), summaryDetails: '' });
+        const reason = stopped ? `The comment planner ${stopped}` : 'The comment planner did not address this finding';
+        pages.push({ status: 'READY', comments: [], skipped: pending.map(item => ({ findingId: item.id, reason: `${reason}; it remains in the summary index.` })), summaryDetails: '' });
       }
     } while (continuation);
   }

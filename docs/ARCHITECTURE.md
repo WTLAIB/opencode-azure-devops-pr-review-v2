@@ -153,7 +153,9 @@ object.
 ### Comments
 
 Planning (model) uses pages of at most four findings plus report segments, with
-CONTINUE checkpoints when a page needs more reading and a no-progress guard.
+CONTINUE checkpoints when a page needs more reading: at most three continuation
+sessions per page, and a checkpoint without progress or a fourth unfinished
+session ends the page, keeping its finished comments and skipping what is open.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
