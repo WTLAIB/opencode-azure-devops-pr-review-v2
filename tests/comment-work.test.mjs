@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, discussionDigest, parseLocation, sourceWindow } from '../src/comment-work.mjs';
+import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, sourceWindow } from '../src/comment-work.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
 import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -77,7 +77,7 @@ test('a page with problems is repaired in place; what stays broken is skipped, n
   assert.match(plan.skipped[0].reason, /did not address/);
 });
 
-test('CONTINUE checkpoints keep finished work and stop when no progress is made', async t => {
+test('CONTINUE checkpoints keep finished work; a checkpoint without progress skips what is open instead of failing', async t => {
   const { review, store } = await setup(t, [finding('F-1'), finding('F-2')]);
   let sessions = 0;
   const { invoke, payloads } = stages(async payload => {
@@ -89,9 +89,39 @@ test('CONTINUE checkpoints keep finished work and stop when no progress is made'
   assert.equal(sessions, 2);
   assert.equal(payloads[1].findings.length, 1);
   assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1', 'F-2']);
-  const stuck = await setup(t, [finding('F-1')]);
-  const loop = stages(async () => JSON.stringify({ status: 'CONTINUE', comments: [], skipped: [], continuation: 'Still reading.' }));
-  await assert.rejects(prepareComments(stuck.review, stuck.store, loop.invoke), /without progress/);
+  const stuck = await setup(t, [finding('F-1'), finding('F-2')]);
+  const notices = [];
+  const loop = stages(async payload => JSON.stringify(payload.continuation
+    ? { status: 'CONTINUE', comments: [], skipped: [], continuation: 'Still reading.' }
+    : { status: 'CONTINUE', comments: [comment('F-1')], skipped: [], continuation: 'Check F-2 next.' }));
+  const kept = await prepareComments(stuck.review, stuck.store, loop.invoke, { progress: message => notices.push(message) });
+  assert.equal(loop.payloads.length, 2, 'The first continuation repeats the checkpoint and ends the page.');
+  assert.deepEqual(kept.comments.map(c => c.findingId), ['F-1'], 'Finished work is kept.');
+  assert.deepEqual(kept.skipped.map(s => [s.findingId, s.reason]), [['F-2', 'The comment planner repeated a checkpoint without progress; it remains in the summary index.']]);
+  assert.match(kept.summary.content, /F-2/, 'The skipped finding stays in the summary index.');
+  assert.deepEqual(notices.filter(n => /without progress/.test(n)), ['Planning comments, page 1/1: the planner repeated a checkpoint without progress; 1 finding(s) skipped.']);
+});
+
+test('a page gets at most three continuation sessions even when each one reads something new; later pages still run', async t => {
+  const findings = Array.from({ length: PLANNING_FINDINGS_PER_PAGE + 1 }, (_, i) => finding(`F-${i + 1}`));
+  const { review, store } = await setup(t, findings);
+  let reads = 0;
+  const { invoke, payloads } = stages(async payload => {
+    if (payload.commentWork.page === 2) return JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] });
+    // Page 1 never finishes, but every session reads new source, so its checkpoint always differs.
+    if (++reads > 10) throw new Error('Page 1 kept continuing: the continuation cap is missing.');
+    review.commentEvidence = [...(review.commentEvidence ?? []), { tool: 'azpr_read_file', input: { path: '/src/Main.java', offset: reads }, result: { sha256: String(reads) } }];
+    return JSON.stringify({ status: 'CONTINUE', comments: payload.continuation ? [] : [comment('F-1')], skipped: [], continuation: `Read part ${reads}; more to read.` });
+  });
+  const notices = [];
+  const plan = await prepareComments(review, store, invoke, { progress: message => notices.push(message) });
+  assert.equal(PAGE_CONTINUATIONS, 3);
+  assert.equal(payloads.filter(p => p.commentWork.page === 1).length, 1 + PAGE_CONTINUATIONS, 'Page 1 stops after its first session and three continuations.');
+  assert.equal(payloads.filter(p => p.commentWork.page === 2).length, 1);
+  assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1', 'F-5']);
+  assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-2', 'F-3', 'F-4']);
+  assert.ok(plan.skipped.every(s => s.reason === 'The comment planner did not finish the page in 4 sessions; it remains in the summary index.'));
+  assert.ok(notices.includes('Planning comments, page 1/2: the planner did not finish the page in 4 sessions; 3 finding(s) skipped.'));
 });
 
 /** Publication attempts as the store keeps them per PR; `fail` makes every write throw. */

@@ -95,5 +95,5 @@ Common receipts:
 | `No completed review is available for this conversation` | Run the comment command in the review's conversation, or run a new review. |
 | `PR source commit changed after the review` | The PR got new commits; run a new review before commenting. |
 | `This review's private data is no longer available` | The review was evicted or its data removed; run a new review. |
-| `Comment planning repeated a checkpoint without progress` | The planner kept asking for more reading; inspect the planning stages. |
+| Skipped finding: `The comment planner repeated a checkpoint without progress` or `did not finish the page in 4 sessions` | The planner kept asking for more reading on that page; the finding has no inline comment but stays in the summary index, and the other comments were planned as usual. Inspect the page's planning stages; `/pr-comment <id>` (a preview) plans again. |
 | `Stage inactivity watchdog stopped this stage: no activity for … s after …` (`failure=idle`, plus an inactivity notice) | The model stream, a tool or OpenCode stopped responding for `workflow.stageIdleSeconds`; the stage ran again in a new session. Repeated stops after `model request N was sent` point at the provider. Raise the setting only if a model really needs longer for one answer (live stages so far stayed under 151 s without any event). |

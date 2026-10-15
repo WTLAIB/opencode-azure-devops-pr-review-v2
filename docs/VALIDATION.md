@@ -14,7 +14,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 289 tests across settings (including the
+`npm run check` and `npm test` pass: 290 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -586,7 +586,12 @@ later rounds with a single call, so a batch parameter could save it about one
 request per session at most. Batch parameters were not added. The comment
 planner's forced final answer (tools removed and an instruction added after 12
 requests) never triggered in 21 live planning sessions (18 needed one request,
-the most was 9), so its effect on prompt caching was left as is. Cache reads
+the most was 9), so its effect on prompt caching was left as is. Only 1 of
+those 21 sessions returned CONTINUE (an early revision that made the planner
+read the PR threads; a second session finished the page). A page now gets at
+most three continuation sessions, so a planner that keeps reading without
+finishing cannot open sessions without end; an offline test shows the fourth
+session ending the page while the next page is planned as usual. Cache reads
 stay at 11–21 % of input in these runs; see the roadmap.
 
 Reviewer sessions of an evicted review or an unfinished run are now deleted
