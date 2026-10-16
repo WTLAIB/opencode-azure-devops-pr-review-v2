@@ -1,9 +1,10 @@
 # OpenCode Azure DevOps PR Review — V2
 
 Explicit, independent Azure DevOps PR reviews for **`@opencode/cli`** (tested with
-**2.0.22**) and **Ubuntu 22.04**, using the **Azure DevOps Services REST API**
-(api-version **7.1**) with a personal access token from AZPR's own settings. No
-MCP server is needed. The plugin uses the OpenCode V2 plugin/session API.
+**2.0.22** and **2.0.31**) and **Ubuntu 22.04**, using the **Azure DevOps
+Services REST API** (api-version **7.1**) with a personal access token from
+AZPR's own settings. No MCP server is needed. The plugin uses the OpenCode V2
+plugin/session API.
 
 How a review works:
 

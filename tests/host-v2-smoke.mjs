@@ -1,6 +1,7 @@
 import { withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 import { fakeProxy } from './fake-proxy.mjs';
+import { TESTED_HOST_VERSIONS } from '../src/host.mjs';
 /**
  * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
  * Isolated directories, a loopback deterministic provider, a loopback fake
@@ -73,6 +74,7 @@ const provider = createServer(async (request, response) => {
   const parsed = JSON.parse(body);
   const sessionID = request.headers['x-opencode-session-id'];
   requests.push({ path: request.url, model: parsed.model, sessionID, tools: (parsed.tools ?? []).map(tool => tool.function?.name), last: textOf(lastUser(parsed.messages)).slice(0, 200),
+    toolResults: parsed.messages?.filter(message => message.role === 'tool').length ?? 0,
     lastTool: textOf(parsed.messages?.findLast(message => message.role === 'tool')?.content).slice(0, 600) });
   let payload;
   try { payload = JSON.parse(textOf(firstUser(parsed.messages))); } catch { /* ordinary chat */ }
@@ -126,6 +128,8 @@ const provider = createServer(async (request, response) => {
     if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
     // A reviewer mistaking a repository path for a local one must get an answer, not a pending approval.
     else if (toolResults === 1 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/scale_lab' } };
+    // An existing directory outside the project reaches the permission hook on every tested host.
+    else if (toolResults === 2 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/etc' } };
     else if (toolResults === 1 && parsed.model === 'risk') call = { name: 'azpr_search_code', arguments: { query: 'second line of', path: '/src' } };
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
   } else if (payload?.assignment?.findingIds) {
@@ -221,7 +225,8 @@ try {
     return raw ? JSON.parse(raw) : undefined;
   };
   const api = withCommandCompletion(rawApi, 120000);
-  assert.equal((await api('/api/info')).version, '2.0.22');
+  const hostVersion = (await api('/api/info')).version;
+  assert.ok(TESTED_HOST_VERSIONS.includes(hostVersion), `OpenCode ${hostVersion} is not a tested version.`);
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
       if ((await api('/api/mcp')).data?.some(server => server.name === 'foreign' && server.status?.status === 'connected')) return;
@@ -239,6 +244,7 @@ try {
   const inbox = async origin => (await api(`/api/session/${origin}/inbox`)).data.map(item => item.payload?.text ?? '');
   const prUrl = 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123';
   const results = {};
+  const stageRecords = async receipt => JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8')).stages;
 
   // 1. Deterministic source check: no model request.
   const checkOrigin = await newOrigin('Check');
@@ -270,8 +276,10 @@ try {
   assert.ok(reviewRequests.some(request => request.model === 'risk' && /^2 match\(es\) for "second line of" in 2 file\(s\)[\s\S]*\/src\/fixture\.js:2: second line of \/src\/fixture\.js/.test(request.lastTool)),
     'A reviewer searched file contents at HEAD through azpr_search_code.');
   assert.equal(azure.callsTo('items').filter(call => call.query.$format === 'zip').length, 1, 'Content search reads one repository archive per run and commit.');
-  assert.ok(reviewRequests.some(request => request.model === 'functional' && /outside the local OpenCode project/.test(request.lastTool)),
-    'A native grep on a repository path is refused with guidance instead of waiting for approval.');
+  const afterGrep = count => reviewRequests.find(request => request.model === 'functional' && request.toolResults === count)?.lastTool ?? '';
+  // 2.0.22 asks for the missing repository path and AZPR refuses with guidance; 2.0.31 reports that it does not exist.
+  assert.match(afterGrep(2), /outside the local OpenCode project|Search path does not exist: \/scale_lab/, 'A native grep on a repository path gets an answer instead of waiting for approval.');
+  assert.match(afterGrep(3), /outside the local OpenCode project/, 'A native grep outside the project is refused with guidance instead of waiting for approval.');
   assert.equal((await api('/api/permission/request')).data?.length ?? 0, 0, 'No private session waits for an approval.');
   const verifierRequests = reviewRequests.filter(request => request.model === 'verifier');
   assert.equal(new Set(verifierRequests.map(request => request.sessionID)).size, 1, 'The repair turn stays in the verifier session.');
@@ -281,6 +289,9 @@ try {
   assert.ok(azure.state.calls.every(call => call.query['api-version'] === '7.1'), 'Every REST call pins api-version 7.1.');
   const saved = await readdir(join(directories.state, 'opencode', 'azpr-v2', 'reviews'));
   assert.ok(saved.includes(`${reviewID}.json`), 'Completed reviews are persisted.');
+  const reviewStages = await stageRecords(receipt);
+  assert.ok(reviewStages.length >= 3 && reviewStages.every(stage => stage.tokens?.requests?.length === stage.modelRequests && stage.tokens.input >= stage.modelRequests),
+    'Debug stage records keep the token usage the host reported for every model request.');
   results.review = 'COMPLETE with verifier repair turn, hidden shell and persisted review';
 
   // 3. Preview, then publication, then a restart and an idempotent re-run.
@@ -318,7 +329,6 @@ try {
   await cancelled;
   assert.ok((await inbox(cancelOrigin)).some(text => /\] CANCELLED/.test(text)), 'Manual cancellation leaves a CANCELLED receipt.');
   results.cancellation = 'CANCELLED';
-  const stageRecords = async receipt => JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8')).stages;
 
   // 4b. A provider 503 is retried by OpenCode in the same session: the host
   // prepares the request again (context, then model.request), so AZPR allows it.
@@ -468,7 +478,7 @@ try {
     }
   }
 
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace' : 'fresh', host: '2.0.22', providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
+  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace' : 'fresh', host: hostVersion, providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
 } finally {
   await stopHost();
   provider.closeAllConnections();

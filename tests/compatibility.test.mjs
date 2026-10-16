@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, listOf, recordOf, sessionProgress, HOST_CONTINUATION_TEXT } from '../src/host.mjs';
+import { hostCapabilities, isHostContinuation, listOf, recordOf, sessionProgress, tokenUsage, usageTotals, HOST_CONTINUATION_TEXT, TESTED_HOST_VERSIONS } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -65,6 +65,9 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
   const capabilities = hostCapabilities({ app: { version: '2.0.22' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
+  assert.deepEqual(TESTED_HOST_VERSIONS, ['2.0.22', '2.0.31']);
+  assert.equal(hostCapabilities({ app: { version: '2.0.31' } }).tested, true);
+  assert.equal(hostCapabilities({ app: { version: '2.0.30' } }).tested, false);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);
@@ -75,6 +78,26 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, errored), true);
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, { type: 'assistant' }), false);
   assert.equal(isHostContinuation({ type: 'user', text: HOST_CONTINUATION_TEXT }), false);
+});
+
+test('token usage reads each assistant message of a session context and totals the cached share', () => {
+  const messages = [
+    { type: 'user', text: 'payload', tokens: { input: 99 } },
+    { type: 'assistant', tokens: { input: 4507, output: 23, reasoning: 0, cache: { read: 0, write: 0 } } },
+    { type: 'assistant', tokens: { input: 778, output: 82, reasoning: 5, cache: { read: 4352, write: 0 } } },
+    { type: 'assistant', content: [] },
+    { type: 'assistant', tokens: { input: -1, output: Number.NaN, cache: { write: 128 } } },
+    { type: 'idle', outcome: 'succeeded' },
+  ];
+  const requests = tokenUsage(messages);
+  assert.deepEqual(requests, [
+    { input: 4507, cacheRead: 0, cacheWrite: 0, output: 23, reasoning: 0 },
+    { input: 778, cacheRead: 4352, cacheWrite: 0, output: 82, reasoning: 5 },
+    { input: 0, cacheRead: 0, cacheWrite: 128, output: 0, reasoning: 0 },
+  ]);
+  assert.deepEqual(usageTotals(requests), { input: 5285, cacheRead: 4352, cacheWrite: 128, output: 105, reasoning: 5, cachedInputShare: 0.4457 });
+  assert.equal(usageTotals([]).cachedInputShare, null);
+  assert.deepEqual(tokenUsage(undefined), []);
 });
 
 test('session progress events: streamed text, reasoning and tool-call input, tool progress and steps; nothing else', () => {

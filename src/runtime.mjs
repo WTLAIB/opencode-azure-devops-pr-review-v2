@@ -25,7 +25,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods, sessionProgress } from './host.mjs';
+import { fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -522,6 +522,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
       if (g.timing) record.timing = g.timing.finish();
+      if (settings.debug.enabled && !runSignal.aborted) {
+        try {
+          const requests = tokenUsage(await deadline(() => context.session.context({ sessionID: made.id }), 5000));
+          if (requests.length) record.tokens = { ...usageTotals(requests), requests };
+        } catch { /* Token usage is diagnostic only. */ }
+      }
       await run.debug.write(`${stem}.result.json`, record);
     }
   }
@@ -553,9 +559,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
 
   async function finishDiagnostics(run, status, report, failure) {
     if (report) await run.debug.write(run.draft ? 'draft.md' : 'report.md', report);
+    const requests = run.stages.flatMap(stage => stage.tokens?.requests ?? []);
     await run.debug.write('result.json', { id: run.id, status, reportKind: run.draft ? 'incomplete-draft' : report ? 'report' : 'none',
       error: failure || undefined, abortUnconfirmed: Boolean(run.abortUnconfirmed), endedAt: new Date().toISOString(),
-      readiness: run.readiness, azureCalls: run.azureCalls ?? 0, azureRetries: run.azureRetries ?? 0, stages: run.stages, warnings: run.debug.warnings });
+      readiness: run.readiness, azureCalls: run.azureCalls ?? 0, azureRetries: run.azureRetries ?? 0,
+      ...(requests.length ? { tokens: usageTotals(requests) } : {}), stages: run.stages, warnings: run.debug.warnings });
   }
 
   /** One owner for locks, deadlines, cancellation, presentation and cleanup. */
@@ -889,8 +897,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (authorized && proposed) touch(g, `the host scheduled a retry${attempt === null ? '' : ` (attempt ${attempt})`}`, delayMs);
     }));
     if (capabilities.permissionHook) {
-      // Enforce the shell setting and allow reads of AZPR's own private data,
-      // regardless of permission rules the host appends after this plugin.
+      // Enforce the shell setting and the project boundary, regardless of
+      // permission rules the host appends after this plugin. Outside the
+      // project only AZPR's own private data is readable; the host's default
+      // for other paths is not trusted (OpenCode 2.0.22 asks, 2.0.31 allows).
       // Private reviewers run unattended: a request that would wait for
       // approval is refused at once. Only shell keeps host approvals, and only
       // when the user allowed it (shell: "ask" or "inherit").
@@ -900,15 +910,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           if (settings.shell === 'deny') { event.effect = 'deny'; event.message = 'AZPR settings deny shell for private reviewers (shell: "deny").'; }
           else if (settings.shell === 'ask' && event.effect === 'allow') event.effect = 'ask';
         }
-        if (event.action === 'external_directory' && Array.isArray(event.resources) && event.resources.length &&
-            event.resources.every(resource => typeof resource === 'string' && resource.replace(/[*?].*$/, '').startsWith(store.root + '/'))) {
-          event.effect = 'allow';
+        if (event.action === 'external_directory') {
+          const own = Array.isArray(event.resources) && event.resources.length > 0 &&
+            event.resources.every(resource => typeof resource === 'string' && resource.replace(/[*?].*$/, '').startsWith(store.root + '/'));
+          event.effect = own ? 'allow' : 'deny';
+          if (!own) event.message = 'AZPR reviewers cannot use paths outside the local OpenCode project. PR repository paths such as /src/app.ts are read with azpr_read_file and azpr_list_files, not with native read, glob or grep.';
         }
         if (event.effect === 'ask' && !(event.action === 'shell' && settings.shell !== 'deny')) {
           event.effect = 'deny';
-          event.message = event.action === 'external_directory'
-            ? 'AZPR reviewers cannot use paths outside the local OpenCode project. PR repository paths such as /src/app.ts are read with azpr_read_file and azpr_list_files, not with native read, glob or grep.'
-            : 'AZPR reviewers run unattended and cannot wait for an approval, so this request is denied.';
+          event.message = 'AZPR reviewers run unattended and cannot wait for an approval, so this request is denied.';
         }
         // A pending approval is the last activity the watchdog can name.
         const g = grants.get(event.sessionID);
