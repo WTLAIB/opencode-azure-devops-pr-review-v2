@@ -42,11 +42,11 @@ within the same limit of 20 runs.
 | `readiness.json` | Checked model slots, the Azure DevOps organization and api-version, and host capabilities. |
 | `NN-ROLE.request.json` | Stage identity, the literal payload and the role instructions. |
 | `NN-ROLE.response.json`, `NN-ROLE.response-repairN.json` | Visible answers of the first turn and each correction turn. |
-| `NN-ROLE.result.json` | Status, repairs, unresolved issues, corrections, tool observations, failure class and timing. |
+| `NN-ROLE.result.json` | Status, repairs, unresolved issues, corrections, tool observations, failure class, timing and `tokens`: the token usage OpenCode reported for each model request of the stage (`input` without cached input, `cacheRead`, `cacheWrite`, `output`, `reasoning`), their sums and `cachedInputShare`. |
 | `report.md` / `draft.md` | Rendered report or unconfirmed draft. |
 | `comment-plan.json` | The saved plan with exact content, anchors, offsets and markers. |
 | `azure-calls.jsonl` | Every Azure DevOps REST call, from the runtime and the reviewers' AZPR tools: method, call, file path or change page, attempt, HTTP status or error kind, duration, bytes, and whether it will be retried. Never credentials or comment bodies. |
-| `result.json` | Final status, every stage record, Azure call and retry counts, and warnings. |
+| `result.json` | Final status, every stage record, Azure call and retry counts, the run's token totals with `cachedInputShare`, and warnings. |
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
 
 The numeric prefix is stage creation order; shards and verification sessions run
@@ -75,7 +75,14 @@ in parallel.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item.
-3. For comments: `comment-plan.json` and the publication ledger in the receipt.
+3. Cost and prompt cache: `tokens` in each stage record. `cachedInputShare` is
+   `cacheRead / (input + cacheRead + cacheWrite)`. On a long session, a request
+   whose `cacheRead` is close to the previous request's prompt reused it; a run
+   that stays near 0% points at the host's cache affinity rather than at AZPR,
+   whose requests keep a stable prefix (OpenCode 2.0.22 with ChatGPT token
+   sharing sent no session headers; see [validation](VALIDATION.md)). Stages
+   that a cancellation interrupted have no `tokens`.
+4. For comments: `comment-plan.json` and the publication ledger in the receipt.
    `FAILED` and `UNVERIFIED` items are safe to publish again; existing items are
    skipped by their markers.
 

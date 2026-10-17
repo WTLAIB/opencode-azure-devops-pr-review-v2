@@ -1,14 +1,14 @@
 /**
  * OpenCode host compatibility helpers.
  *
- * The plugin was validated against one OpenCode release, but it should detect
+ * The plugin is validated against one OpenCode release, but it should detect
  * capabilities instead of assuming exact response shapes. Every host-specific
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
  */
-export const TESTED_HOST_VERSION = '2.0.22';
+export const TESTED_HOST_VERSION = '2.0.32';
 
-// Text OpenCode 2.0.22 queues after resuming an interrupted text stream.
+// Text OpenCode 2.0.32 queues after resuming an interrupted text stream.
 export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
 
 // Context message types that mean someone other than the admitted prompt
@@ -49,7 +49,7 @@ export function hostCapabilities(context) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.0.22 emits one delta event per streamed chunk of answer text, reasoning
+ * 2.0.32 emits one delta event per streamed chunk of answer text, reasoning
  * or tool-call input; the projected session context shows the text only once
  * the step ends.
  */
@@ -71,11 +71,33 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.22), whose fetch accepts
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32), whose fetch accepts
  * per-request `proxy` and `tls` options. Node's fetch silently ignores both, so
  * a configured proxy would be bypassed; callers refuse instead.
  */
 export const fetchTransportSupported = () => typeof process.versions?.bun === 'string';
+
+/**
+ * Model token usage per assistant message of a session context, oldest first.
+ * OpenCode reports `tokens: { input, output, reasoning, cache: { read, write } }`
+ * on each assistant message; `input` excludes cached input, so the prompt of a
+ * request is input + cache.read + cache.write. Missing or invalid counts are 0.
+ */
+export function tokenUsage(messages) {
+  const count = value => Number.isFinite(value) && value >= 0 ? value : 0;
+  return (Array.isArray(messages) ? messages : [])
+    .filter(message => message?.type === 'assistant' && isRecord(message.tokens))
+    .map(({ tokens }) => ({ input: count(tokens.input), cacheRead: count(tokens.cache?.read), cacheWrite: count(tokens.cache?.write),
+      output: count(tokens.output), reasoning: count(tokens.reasoning) }));
+}
+
+/** Sums of `tokenUsage` rows and the share of prompt tokens read from the provider's cache (null without prompt tokens). */
+export function usageTotals(requests) {
+  const total = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 };
+  for (const request of requests) for (const key of Object.keys(total)) total[key] += request[key];
+  const prompt = total.input + total.cacheRead + total.cacheWrite;
+  return { ...total, cachedInputShare: prompt ? Number((total.cacheRead / prompt).toFixed(4)) : null };
+}
 
 /** Throw one readable error naming every missing host method. */
 export function requireMethods(context, paths, purpose) {

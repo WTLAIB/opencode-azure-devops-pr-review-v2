@@ -75,7 +75,7 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: '2.0.22' },
+    app: { version: '2.0.32' },
     location: { directory },
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
@@ -145,6 +145,7 @@ async function fixture(t, opts = {}) {
               return;
             }
             session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'stop', time: { created: 1, completed: 2 },
+              ...(opts.tokens ? { tokens: opts.tokens({ role, turn }) } : {}),
               content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'succeeded' });
             session.outcome = 'succeeded';
           } catch (error) {
@@ -212,6 +213,42 @@ test('a review returns STARTED, progress notices and one COMPLETE receipt, and p
   assert.ok(f.notices.some(n => n.sessionID === verifier.id && /FINAL_REPORT/.test(n.text)), 'The report is queued to the verifier session.');
   const initial = [...f.sessions.values()].find(session => session.packet?.assignment?.files);
   assert.deepEqual(initial.packet.snapshot.commits, [{ id: 'b'.repeat(12), message: 'Fixture change' }], 'Reviewers see the PR commit messages.');
+});
+
+test('debug records keep each stage\'s per-request token usage and the run\'s cached share', async t => {
+  const f = await fixture(t, {
+    tokens: ({ turn }) => ({ input: 1000, output: 10, reasoning: 2, cache: { read: turn ? 900 : 0, write: 0 } }),
+    answer({ role, packet, turn }) {
+      if (ROLES[role].format !== 'final') return undefined;
+      if (turn === 0) return { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' };
+      return { dispositions: packet.assignment.findings.slice(1).map(item => ({ id: item.id, status: 'MERGED', mergedInto: packet.assignment.findings[0].id, reason: 'Same cause.' })) };
+    } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  const stages = await stageRecords(receipt);
+  const first = { input: 1000, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 2 };
+  for (const stage of stages.filter(stage => ROLES[stage.role].format === 'initial')) {
+    assert.deepEqual(stage.tokens.requests, [first], stage.role);
+    assert.equal(stage.tokens.cachedInputShare, 0);
+  }
+  const verifier = stages.find(stage => ROLES[stage.role].format === 'final');
+  assert.deepEqual(verifier.tokens.requests, [first, { ...first, cacheRead: 900 }], 'The repair turn is a second request of the same stage.');
+  assert.equal(verifier.tokens.cacheRead, 900);
+  assert.equal(verifier.tokens.cachedInputShare, Number((900 / 2900).toFixed(4)));
+  const run = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8'));
+  const requests = stages.flatMap(stage => stage.tokens.requests);
+  assert.equal(run.tokens.input, requests.reduce((sum, request) => sum + request.input, 0));
+  assert.equal(run.tokens.cacheRead, 900);
+  assert.equal(run.tokens.cachedInputShare, Number((900 / (900 + 1000 * requests.length)).toFixed(4)));
+});
+
+test('stage records omit token usage when the host reports none', async t => {
+  const f = await fixture(t);
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.ok((await stageRecords(receipt)).every(stage => stage.tokens === undefined));
+  const run = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8'));
+  assert.equal(run.tokens, undefined);
 });
 
 test('commands from the same conversation are refused while a run is active', async t => {
@@ -486,6 +523,16 @@ test('shell and foreign tools are hidden and refused; shell is forced to deny th
   const foreign = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: ['/scale_lab/*'], effect: 'ask' });
   assert.equal(foreign.effect, 'deny');
   assert.match(foreign.message, /PR repository paths such as \/src\/app\.ts are read with azpr_read_file/);
+  // OpenCode 2.0.31 and later allow external directories by default; AZPR still keeps reviewers inside the project.
+  const allowedOutside = await f.emit('permission', 'evaluate', { agent: 'azpr-review-functional', action: 'external_directory', resources: ['/etc/*'], effect: 'allow' });
+  assert.equal(allowedOutside.effect, 'deny');
+  assert.match(allowedOutside.message, /cannot use paths outside the local OpenCode project/);
+  const ownAllowed = await f.emit('permission', 'evaluate', { agent: 'azpr-review-comment-plan', action: 'external_directory', resources: [join(f.stateDirectory, 'data', 'x', '*')], effect: 'allow' });
+  assert.equal(ownAllowed.effect, 'allow');
+  const mixed = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: [join(f.stateDirectory, 'data', 'x', '*'), '/home/user/.ssh/*'], effect: 'allow' });
+  assert.equal(mixed.effect, 'deny', 'Every resource must be AZPR data.');
+  const empty = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: [], effect: 'allow' });
+  assert.equal(empty.effect, 'deny');
   const secret = await f.emit('permission', 'evaluate', { agent: 'azpr-review-verifier', action: 'read', resources: ['/project/.env'], effect: 'ask' });
   assert.equal(secret.effect, 'deny');
   assert.match(secret.message, /run unattended/);
@@ -493,6 +540,8 @@ test('shell and foreign tools are hidden and refused; shell is forced to deny th
   assert.equal(allowed.effect, 'allow');
   const ordinaryAsk = await f.emit('permission', 'evaluate', { agent: 'build', action: 'external_directory', resources: ['/etc/*'], effect: 'ask' });
   assert.equal(ordinaryAsk.effect, 'ask', 'Ordinary sessions keep the host decision.');
+  const ordinaryAllowed = await f.emit('permission', 'evaluate', { agent: 'build', action: 'external_directory', resources: ['/etc/*'], effect: 'allow' });
+  assert.equal(ordinaryAllowed.effect, 'allow');
   const ordinary = await f.emit('permission', 'evaluate', { agent: 'build', action: 'shell', resources: ['*'], effect: 'allow' });
   assert.equal(ordinary.effect, 'allow');
 });

@@ -10,11 +10,13 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Environment
 
 Ubuntu 22.04.5 LTS (WSL2, kernel 6.18), Node 22.23.3, OpenCode CLI 2.0.22,
-Azure DevOps Services REST api-version 7.1. Date: 2026-10-10.
+Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
+2026-10-17 the tested host is OpenCode CLI 2.0.32
+([below](#opencode-2032-the-tested-host-2026-10-17)).
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 290 tests across settings (including the
+`npm run check` and `npm test` pass: 293 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -39,8 +41,10 @@ settings) and the runtime integration (fake host plus a fake Azure DevOps REST
 service, including session deletion when the host never confirms one, a host
 retry that OpenCode prepares again, the stage inactivity watchdog stopping,
 naming and retrying a stalled stage while steady activity, streamed output, a
-slow AZPR tool and an announced retry wait are never stopped, a PR without changed files, and a
-review without candidate findings that still gets its verifier).
+slow AZPR tool and an announced retry wait are never stopped, a PR without changed files, a
+review without candidate findings that still gets its verifier, the token usage
+kept per request in stage records, and the project boundary for private roles
+whatever the host's default for external directories).
 
 ## REST API version check
 
@@ -66,7 +70,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | `/pr-comment` | PREVIEW, then `--publish` POSTED one summary and one inline comment with markers and file context. |
 | Restart | After restarting the host, `/pr-comment --publish` returned POSTED with ALREADY_PRESENT, no new writes and no model request. |
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
-| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. |
+| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. Since 2026-10-17 the fixture also greps `/etc`, an existing directory outside the project, which is refused with the same pointer on 2.0.22, 2.0.31 and 2.0.32 (see [OpenCode 2.0.32](#opencode-2032-the-tested-host-2026-10-17)). |
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
 | Provider retry (2026-10-14) | The fake provider answered the risk reviewer's first request with HTTP 503. OpenCode retried it in the same session after its backoff (1.6–2.3 s in eleven runs, two of them in CI); AZPR's `retry` hook allowed it (attempt 2), the resend passed the primary-request check (4 authorized primary requests, none rejected) and the review was COMPLETE without a new session. Fresh and `--replace` runs. |
 | Stalled and long streams (fresh run, 2026-10-15) | With `workflow.stageIdleSeconds` 60, two reviews ran at once. In the first, the fake provider sent the functional reviewer's response headers and then nothing. After 60.0 s the watchdog stopped the stage: `failure=idle`, error `Stage inactivity watchdog stopped this stage: no activity for 60 s after model request 1 was sent (workflow.stageIdleSeconds).`, an inactivity notice and a PROGRESS retry notice naming it. AZPR interrupted the session, OpenCode closed the provider stream and confirmed settlement (no cancellation warning), and a new session completed the review. In the second, the functional answer streamed one chunk per second for 66.0 s, longer than the window, and ran on without a stop or a new session. Both were COMPLETE 66.3 s after the commands. |
@@ -92,6 +96,60 @@ rule so the offline runtime tests catch a regression.
 | Publication | 20 threads (19 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
 | Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
 | REST calls | 74 |
+
+## OpenCode 2.0.32, the tested host (2026-10-17)
+
+Since 2026-10-17 the tested host is OpenCode CLI 2.0.32, the release the
+user's company runs (`TESTED_HOST_VERSION` in `src/host.mjs`; CI runs the
+exact-host fixtures with it), and receipts add a host notice for any other
+version. Other results on this page used 2.0.22 unless noted; 2.0.31 was
+checked on the way. The published 2.0.31 and 2.0.32 binaries embed Bun 1.4.2
+like 2.0.22:
+
+| Check | Observed |
+| --- | --- |
+| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. |
+| Project boundary | 2.0.31 dropped the `external_directory: ask` rule that 2.0.22 put in every new agent's default permissions, and 2.0.32 keeps it out, so external paths fall under `*: allow`. AZPR's permission hook only turned `ask` into `deny`, and on 2.0.31 a private reviewer's native `grep` on `/etc` ran and returned file contents. The hook now decides `external_directory` for private roles itself: allowed only when every resource is in AZPR's private data directory, otherwise refused with the pointer to the azpr tools. No live run used a native read tool outside the project; the one live review on 2.0.31 before the fix used only AZPR's tools. |
+| Missing local paths | 2.0.31 and 2.0.32 answer a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
+| Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31 and 2.0.32; both send `session-id`, `thread-id` and `x-client-request-id` on the ChatGPT token-sharing route (below). |
+| Live, after upgrading the user's background service from 2.0.22 to 2.0.31 | `/pr-check` of the 1-file PR was READY; a review-only `/pr-review` was COMPLETE in 75 s with the same three confirmed findings as on 2.0.22. With the boundary fix installed, `/pr-check` was READY again. |
+| Live on 2.0.32 (the service upgraded again, this revision installed) | `/pr-check` was READY without a host notice; a review-only `/pr-review` of the 1-file PR was COMPLETE in 75 s with the same three confirmed findings. The debug stage records held one token row per model request (4, 5 and 4 requests), and 54.4% of the run's input was read from the cache. |
+
+## Prompt cache with a ChatGPT subscription (2026-10-16/17)
+
+OpenCode reports for each assistant message `input` (without cached input),
+`cache.read` and `cache.write`; stage records keep these numbers as `tokens`
+([debugging](DEBUGGING.md)), and the cached share is
+`cache.read / (input + cache.read + cache.write)`. Measured with real models
+through the user's OpenCode service, with OpenAI signed in through "Sign in with
+ChatGPT" (token sharing: `api.openai.com/v1` over HTTP), gpt-6-luna unless
+noted:
+
+| Host and workload | Cache |
+| --- | --- |
+| 2.0.22, the same 2.8K-token prompt sent four times (`/generate`), on two days | 0 of 3 repeats each time |
+| 2.0.22, one ordinary session with 8 growing turns (gpt-6-luna, gpt-5.6-luna, gpt-6.1-sol) | 1, 0 and 1 of 7 follow-up requests read the previous prompt |
+| 2.0.22, review-only `/pr-review` of the 1-file PR, two runs | 4.4% and 4.6% of input |
+| 2.0.22 with a test build of AZPR that set `session_id` and `session-id` to each private session's ID | 51.9% and 61.4%; 17 of 20 follow-ups read 75–99% of the previous prompt |
+| 2.0.31, the same prompt four times | 2 of 3 repeats |
+| 2.0.31, one ordinary session with 8 turns | 7 of 7 follow-ups, 92–98% each |
+| 2.0.31, the same 1-file PR review with AZPR unchanged | 47.6% of input; 7 of 10 follow-ups |
+| 2.0.32, the same prompt four times | 2 of 3 repeats |
+| 2.0.32, one ordinary session with 8 turns | 7 of 7 follow-ups, 92–99% each |
+| 2.0.32, the same 1-file PR review (this revision, from the debug token records) | 54.4% of input; 7 of 10 follow-ups |
+
+AZPR's requests keep a stable prefix: with a loopback fake Responses provider,
+every follow-up's input extended the previous one, and instructions and tools
+did not change between requests. The low share came from the host: on 2.0.22
+the token-sharing route sent no session headers
+([anomalyco/opencode#53765](https://github.com/anomalyco/opencode/issues/53765)),
+which [anomalyco/opencode#53767](https://github.com/anomalyco/opencode/pull/53767)
+fixed with `session-id`, `thread-id` and `x-client-request-id` before 2.0.31.
+The Codex sign-in route (device code, in an isolated environment) already cached
+on 2.0.22: 3 of 3 repeats and 50% over 8 turns. Before 2026-10-10 the reviewers
+used MCP tools whose definitions formed a long prefix shared by all sessions,
+which most likely explains why the earliest live runs read 31–45% from the
+cache (their sessions no longer exist, so this was not checked per request).
 
 ## Proxy and TLS behaviour of OpenCode's runtime
 
@@ -644,3 +702,5 @@ transient failure, and its error names the last activity.
 - Streamed reasoning from a real reasoning model: the fixture streams answer
   text only. A model that thinks without streaming anything looks silent to
   the watchdog for that time.
+- The prompt cache of a large PR on OpenCode 2.0.32: only the 1-file PR above
+  was measured; on 2.0.22 the 316-file PR read 11–21% from the cache.
