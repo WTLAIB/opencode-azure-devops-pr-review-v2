@@ -25,7 +25,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals } from './host.mjs';
+import { TESTED_HOST_VERSION, fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -625,6 +625,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (network.verifyTls === false) {
       checks.push({ name: 'TLS verification', ok: true, warning: true,
         detail: 'Disabled by azure.verifyTls: false. Certificates are not checked, so anyone who can intercept the connection can read the PAT; prefer azure.caFile.' });
+    }
+    // Reviews still run; without the hook the host's own rules decide which paths native read tools reach.
+    if (!capabilities.permissionHook) {
+      checks.push({ name: 'Project boundary', ok: true, warning: true,
+        detail: `This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; the host's own permission rules decide which paths they can read. OpenCode ${TESTED_HOST_VERSION}, the tested version, has the hook.` });
     }
     let snapshot;
     try {

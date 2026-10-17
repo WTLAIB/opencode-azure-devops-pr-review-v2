@@ -197,7 +197,7 @@ troubleshooting.
 
 | Command | Behavior |
 | --- | --- |
-| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability. No model is used. |
+| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability; warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
 | `/pr-review <PR URL> [context]` | Sharded functional and risk reviews, then sharded verification. |
 | `/pr-deep <PR URL> [context]` | Same pipeline with the deep models and deeper analysis. |
 | `/pr-stop [run-id]` | Cancel this conversation's active command. |

@@ -60,7 +60,9 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Reliable notices.** PROGRESS notices during long runs; final receipts are
   retried and fall back to a file.
 - **Safer defaults.** Shell is denied for private roles by default and enforced
-  through the permission hook; `/pr-stop` only affects the caller's conversation.
+  through the permission hook, which also keeps native read tools inside the
+  project; a host without the hook gets a `/pr-check` warning. `/pr-stop` only
+  affects the caller's conversation.
 - **Maintainability.** Prompts are about a third of their former size, runtime is
   split into focused modules, host specifics live in `host.mjs`.
 
@@ -147,7 +149,10 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    model requests per session and each re-sends what was read. They already
    make 9–12 tool calls per round, so batch parameters for the read tools
    would save little and were not added (see [validation](VALIDATION.md)).
-   Next candidate: provider prompt caching (cache reads are 10–21 % of input).
+   Prompt caching is the host's part: with the ChatGPT sign-in route the
+   1-file PR read 4–5 % of its input from the cache on OpenCode 2.0.22, which
+   sent no session headers, and 54 % on 2.0.32. The 316-file PR read 11–21 % on
+   2.0.22 and is not yet measured on 2.0.32.
 5. Cross-shard evidence: a new test in one shard that contradicts unchanged
    code in another shard is found with content search (`azpr_search_code`, over
    the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and
@@ -158,8 +163,7 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    runs, so the initial reviewers' model decides what is found. A stronger
    model can be kept for selected PRs in the deep profile. Confirm on other
    real PRs.
-6. Check rendered comments, inline anchors and summaries in the Azure UI.
-7. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
+6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
 
 ## Quality principles
