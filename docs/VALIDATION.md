@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 293 tests across settings (including the
+`npm run check` and `npm test` pass: 294 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -43,8 +43,9 @@ retry that OpenCode prepares again, the stage inactivity watchdog stopping,
 naming and retrying a stalled stage while steady activity, streamed output, a
 slow AZPR tool and an announced retry wait are never stopped, a PR without changed files, a
 review without candidate findings that still gets its verifier, the token usage
-kept per request in stage records, and the project boundary for private roles
-whatever the host's default for external directories).
+kept per request in stage records, the project boundary for private roles
+whatever the host's default for external directories, and the `/pr-check`
+warning on a host without the permission hook).
 
 ## REST API version check
 
@@ -608,7 +609,10 @@ low-severity finding appears in the summary index only); a second
 `--publish` reported ALREADY_PRESENT for all 24. PR #4: the regression inside
 the diff confirmed (195 s, 0.6 M); 2 items VERIFIED (summary and
 `json_schema.py:874`), the second `--publish` ALREADY_PRESENT for both. No
-skip relied on another finding.
+skip relied on another finding. On 2026-10-17 the maintainer inspected these
+comments in the Azure DevOps web UI (the summary and 23 inline comments on
+PR #3, the summary and the inline comment on PR #4) and found no problems with
+their rendering or anchors.
 - Risk: those same-line duplicates must be merged by the verifier.
   gpt-5.6-luna and gpt-5.6-terra merged them in every run; gpt-6-luna did in
   three of four runs and in the fourth confirmed 17 duplicates on the same
@@ -689,7 +693,6 @@ transient failure, and its error names the last activity.
 - A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
   run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.
-- Rendered comments and anchors in the Azure DevOps UI were not inspected.
 - `azure.caFile` with a real proxy: the corporate network above ran with
   `verifyTls: false`; whether its proxy inspects TLS, and trusting its root CA
   instead, were not checked. `azure.caFile` was validated with the fixture

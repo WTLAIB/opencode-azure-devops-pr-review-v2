@@ -79,7 +79,7 @@ async function fixture(t, opts = {}) {
     location: { directory },
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
-    permission: { hook: hook('permission') },
+    ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
     ...(opts.events === false ? {} : { event: { subscribe() {
       const queue = [], waiting = [];
       const feed = event => { const next = waiting.shift(); if (next) next({ value: event, done: false }); else queue.push(event); };
@@ -752,7 +752,15 @@ test('azure.proxy, azure.caFile and azure.verifyTls reach every Azure DevOps req
   assert.match(insecure, /\| TLS verification \| WARNING \| Disabled by azure\.verifyTls: false\. Certificates are not checked/);
   assert.ok(b.inits.every(init => init.tls?.rejectUnauthorized === false && init.proxy === undefined));
   const plain = await fixture(t);
-  assert.doesNotMatch(await plain.command('pr-check'), /proxy|TLS verification/, 'Defaults add nothing.');
+  assert.doesNotMatch(await plain.command('pr-check'), /proxy|TLS verification|Project boundary/, 'Defaults add nothing.');
+});
+
+test('a host without the permission hook gets a /pr-check warning about the project boundary; reviews still run', async t => {
+  const f = await fixture(t, { permissionHook: false });
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.0\.32, the tested version, has the hook\. \|/);
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 
 test('an unusable azure.caFile, or proxy and TLS settings on a runtime whose fetch ignores them, stop loading', async t => {

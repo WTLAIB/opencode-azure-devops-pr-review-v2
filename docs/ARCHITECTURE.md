@@ -237,6 +237,9 @@ Reviewers have no Azure DevOps write tool at all; only the runtime writes.
 
 `host.mjs` normalizes list/record response shapes, detects optional capabilities
 (`permission.hook`, `tool.transform`) and holds the host continuation text.
+Without `permission.hook` the project boundary for native read tools is left to
+the host's own permission rules; `/pr-check` shows a WARNING row and reviews
+still run.
 Receipts note when the detected OpenCode version differs from the tested one
 (`TESTED_HOST_VERSION`, 2.0.32).
 REST paths and the pinned api-version live only in `azure.mjs`; see
