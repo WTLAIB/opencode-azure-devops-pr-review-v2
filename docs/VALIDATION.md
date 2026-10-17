@@ -113,6 +113,7 @@ like 2.0.22:
 | Missing local paths | 2.0.31 and 2.0.32 answer a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
 | Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31 and 2.0.32; both send `session-id`, `thread-id` and `x-client-request-id` on the ChatGPT token-sharing route (below). |
 | Live, after upgrading the user's background service from 2.0.22 to 2.0.31 | `/pr-check` of the 1-file PR was READY; a review-only `/pr-review` was COMPLETE in 75 s with the same three confirmed findings as on 2.0.22. With the boundary fix installed, `/pr-check` was READY again. |
+| Live on 2.0.32 (the service upgraded again, this revision installed) | `/pr-check` was READY without a host notice; a review-only `/pr-review` of the 1-file PR was COMPLETE in 75 s with the same three confirmed findings. The debug stage records held one token row per model request (4, 5 and 4 requests), and 54.4% of the run's input was read from the cache. |
 
 ## Prompt cache with a ChatGPT subscription (2026-10-16/17)
 
@@ -133,6 +134,9 @@ noted:
 | 2.0.31, the same prompt four times | 2 of 3 repeats |
 | 2.0.31, one ordinary session with 8 turns | 7 of 7 follow-ups, 92–98% each |
 | 2.0.31, the same 1-file PR review with AZPR unchanged | 47.6% of input; 7 of 10 follow-ups |
+| 2.0.32, the same prompt four times | 2 of 3 repeats |
+| 2.0.32, one ordinary session with 8 turns | 7 of 7 follow-ups, 92–99% each |
+| 2.0.32, the same 1-file PR review (this revision, from the debug token records) | 54.4% of input; 7 of 10 follow-ups |
 
 AZPR's requests keep a stable prefix: with a loopback fake Responses provider,
 every follow-up's input extended the previous one, and instructions and tools
@@ -698,8 +702,5 @@ transient failure, and its error names the last activity.
 - Streamed reasoning from a real reasoning model: the fixture streams answer
   text only. A model that thinks without streaming anything looks silent to
   the watchdog for that time.
-- The prompt cache of a large PR on OpenCode 2.0.31 or 2.0.32: only the 1-file
-  PR above was measured (on 2.0.31); on 2.0.22 the 316-file PR read 11–21% from
-  the cache.
-- A live review on OpenCode 2.0.32: the fixtures above passed with it; the live
-  checks used 2.0.31.
+- The prompt cache of a large PR on OpenCode 2.0.32: only the 1-file PR above
+  was measured; on 2.0.22 the 316-file PR read 11–21% from the cache.
