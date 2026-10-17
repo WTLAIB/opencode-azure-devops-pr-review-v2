@@ -1,6 +1,6 @@
 # Roadmap
 
-Tested with OpenCode CLI 2.0.22 and 2.0.31, the Azure DevOps Services REST API
+Tested with OpenCode CLI 2.0.32, the Azure DevOps Services REST API
 (api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
 with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 

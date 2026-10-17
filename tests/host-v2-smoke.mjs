@@ -1,7 +1,7 @@
 import { withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 import { fakeProxy } from './fake-proxy.mjs';
-import { TESTED_HOST_VERSIONS } from '../src/host.mjs';
+import { TESTED_HOST_VERSION } from '../src/host.mjs';
 /**
  * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
  * Isolated directories, a loopback deterministic provider, a loopback fake
@@ -128,7 +128,7 @@ const provider = createServer(async (request, response) => {
     if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
     // A reviewer mistaking a repository path for a local one must get an answer, not a pending approval.
     else if (toolResults === 1 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/scale_lab' } };
-    // An existing directory outside the project reaches the permission hook on every tested host.
+    // An existing directory outside the project reaches the permission hook, whatever the host's default.
     else if (toolResults === 2 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/etc' } };
     else if (toolResults === 1 && parsed.model === 'risk') call = { name: 'azpr_search_code', arguments: { query: 'second line of', path: '/src' } };
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
@@ -226,7 +226,7 @@ try {
   };
   const api = withCommandCompletion(rawApi, 120000);
   const hostVersion = (await api('/api/info')).version;
-  assert.ok(TESTED_HOST_VERSIONS.includes(hostVersion), `OpenCode ${hostVersion} is not a tested version.`);
+  assert.equal(hostVersion, TESTED_HOST_VERSION, `OpenCode ${hostVersion} is not the tested ${TESTED_HOST_VERSION}.`);
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
       if ((await api('/api/mcp')).data?.some(server => server.name === 'foreign' && server.status?.status === 'connected')) return;
@@ -277,7 +277,7 @@ try {
     'A reviewer searched file contents at HEAD through azpr_search_code.');
   assert.equal(azure.callsTo('items').filter(call => call.query.$format === 'zip').length, 1, 'Content search reads one repository archive per run and commit.');
   const afterGrep = count => reviewRequests.find(request => request.model === 'functional' && request.toolResults === count)?.lastTool ?? '';
-  // 2.0.22 asks for the missing repository path and AZPR refuses with guidance; 2.0.31 reports that it does not exist.
+  // OpenCode 2.0.32 reports that the path does not exist; a host that asks instead gets AZPR's refusal with guidance.
   assert.match(afterGrep(2), /outside the local OpenCode project|Search path does not exist: \/scale_lab/, 'A native grep on a repository path gets an answer instead of waiting for approval.');
   assert.match(afterGrep(3), /outside the local OpenCode project/, 'A native grep outside the project is refused with guidance instead of waiting for approval.');
   assert.equal((await api('/api/permission/request')).data?.length ?? 0, 0, 'No private session waits for an approval.');

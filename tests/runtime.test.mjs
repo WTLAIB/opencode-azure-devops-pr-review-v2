@@ -75,7 +75,7 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: '2.0.22' },
+    app: { version: '2.0.32' },
     location: { directory },
     model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
@@ -523,7 +523,7 @@ test('shell and foreign tools are hidden and refused; shell is forced to deny th
   const foreign = await f.emit('permission', 'evaluate', { agent: 'azpr-review-risk', action: 'external_directory', resources: ['/scale_lab/*'], effect: 'ask' });
   assert.equal(foreign.effect, 'deny');
   assert.match(foreign.message, /PR repository paths such as \/src\/app\.ts are read with azpr_read_file/);
-  // OpenCode 2.0.31 allows external directories by default; AZPR still keeps reviewers inside the project.
+  // OpenCode 2.0.31 and later allow external directories by default; AZPR still keeps reviewers inside the project.
   const allowedOutside = await f.emit('permission', 'evaluate', { agent: 'azpr-review-functional', action: 'external_directory', resources: ['/etc/*'], effect: 'allow' });
   assert.equal(allowedOutside.effect, 'deny');
   assert.match(allowedOutside.message, /cannot use paths outside the local OpenCode project/);

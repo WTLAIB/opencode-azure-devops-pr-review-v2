@@ -10,8 +10,9 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Environment
 
 Ubuntu 22.04.5 LTS (WSL2, kernel 6.18), Node 22.23.3, OpenCode CLI 2.0.22,
-Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. OpenCode CLI
-2.0.31 was added on 2026-10-17 ([below](#opencode-2031-2026-10-17)).
+Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
+2026-10-17 the tested host is OpenCode CLI 2.0.32
+([below](#opencode-2032-the-tested-host-2026-10-17)).
 
 ## Offline tests
 
@@ -69,7 +70,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | `/pr-comment` | PREVIEW, then `--publish` POSTED one summary and one inline comment with markers and file context. |
 | Restart | After restarting the host, `/pr-comment --publish` returned POSTED with ALREADY_PRESENT, no new writes and no model request. |
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
-| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. Since 2026-10-17 the fixture also greps `/etc`, an existing directory outside the project, which is refused with the same pointer on 2.0.22 and 2.0.31 (see [OpenCode 2.0.31](#opencode-2031-2026-10-17)). |
+| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. Since 2026-10-17 the fixture also greps `/etc`, an existing directory outside the project, which is refused with the same pointer on 2.0.22, 2.0.31 and 2.0.32 (see [OpenCode 2.0.32](#opencode-2032-the-tested-host-2026-10-17)). |
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
 | Provider retry (2026-10-14) | The fake provider answered the risk reviewer's first request with HTTP 503. OpenCode retried it in the same session after its backoff (1.6–2.3 s in eleven runs, two of them in CI); AZPR's `retry` hook allowed it (attempt 2), the resend passed the primary-request check (4 authorized primary requests, none rejected) and the review was COMPLETE without a new session. Fresh and `--replace` runs. |
 | Stalled and long streams (fresh run, 2026-10-15) | With `workflow.stageIdleSeconds` 60, two reviews ran at once. In the first, the fake provider sent the functional reviewer's response headers and then nothing. After 60.0 s the watchdog stopped the stage: `failure=idle`, error `Stage inactivity watchdog stopped this stage: no activity for 60 s after model request 1 was sent (workflow.stageIdleSeconds).`, an inactivity notice and a PROGRESS retry notice naming it. AZPR interrupted the session, OpenCode closed the provider stream and confirmed settlement (no cancellation warning), and a new session completed the review. In the second, the functional answer streamed one chunk per second for 66.0 s, longer than the window, and ran on without a stop or a new session. Both were COMPLETE 66.3 s after the commands. |
@@ -96,20 +97,22 @@ rule so the offline runtime tests catch a regression.
 | Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
 | REST calls | 74 |
 
-## OpenCode 2.0.31 (2026-10-17)
+## OpenCode 2.0.32, the tested host (2026-10-17)
 
-`TESTED_HOST_VERSIONS` in `src/host.mjs` lists 2.0.22 and 2.0.31; receipts add a
-host notice only for other versions, and CI runs the exact-host fixtures on
-both. Checked with the published 2.0.31 binary, which embeds Bun 1.4.2 like
-2.0.22:
+Since 2026-10-17 the tested host is OpenCode CLI 2.0.32, the release the
+user's company runs (`TESTED_HOST_VERSION` in `src/host.mjs`; CI runs the
+exact-host fixtures with it), and receipts add a host notice for any other
+version. Other results on this page used 2.0.22 unless noted; 2.0.31 was
+checked on the way. The published 2.0.31 and 2.0.32 binaries embed Bun 1.4.2
+like 2.0.22:
 
 | Check | Observed |
 | --- | --- |
-| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.31 and, with the same test revision, on 2.0.22: every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. |
-| Project boundary | 2.0.31 dropped the `external_directory: ask` rule that 2.0.22 put in every new agent's default permissions, so external paths fall under `*: allow`. AZPR's permission hook only turned `ask` into `deny`, and a private reviewer's native `grep` on `/etc` ran and returned file contents. The hook now decides `external_directory` for private roles itself: allowed only when every resource is in AZPR's private data directory, otherwise refused with the pointer to the azpr tools. No live run used a native read tool outside the project; the one live review on 2.0.31 before the fix used only AZPR's tools. |
-| Missing local paths | 2.0.31 answers a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
-| Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31. |
-| Live, after upgrading the user's background service from 2.0.22 | `/pr-check` of the 1-file PR was READY; a review-only `/pr-review` was COMPLETE in 75 s with the same three confirmed findings as on 2.0.22. |
+| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. |
+| Project boundary | 2.0.31 dropped the `external_directory: ask` rule that 2.0.22 put in every new agent's default permissions, and 2.0.32 keeps it out, so external paths fall under `*: allow`. AZPR's permission hook only turned `ask` into `deny`, and on 2.0.31 a private reviewer's native `grep` on `/etc` ran and returned file contents. The hook now decides `external_directory` for private roles itself: allowed only when every resource is in AZPR's private data directory, otherwise refused with the pointer to the azpr tools. No live run used a native read tool outside the project; the one live review on 2.0.31 before the fix used only AZPR's tools. |
+| Missing local paths | 2.0.31 and 2.0.32 answer a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
+| Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31 and 2.0.32; both send `session-id`, `thread-id` and `x-client-request-id` on the ChatGPT token-sharing route (below). |
+| Live, after upgrading the user's background service from 2.0.22 to 2.0.31 | `/pr-check` of the 1-file PR was READY; a review-only `/pr-review` was COMPLETE in 75 s with the same three confirmed findings as on 2.0.22. With the boundary fix installed, `/pr-check` was READY again. |
 
 ## Prompt cache with a ChatGPT subscription (2026-10-16/17)
 
@@ -695,5 +698,8 @@ transient failure, and its error names the last activity.
 - Streamed reasoning from a real reasoning model: the fixture streams answer
   text only. A model that thinks without streaming anything looks silent to
   the watchdog for that time.
-- The prompt cache of a large PR on OpenCode 2.0.31: only the 1-file PR above
-  was measured; on 2.0.22 the 316-file PR read 11–21% from the cache.
+- The prompt cache of a large PR on OpenCode 2.0.31 or 2.0.32: only the 1-file
+  PR above was measured (on 2.0.31); on 2.0.22 the 316-file PR read 11–21% from
+  the cache.
+- A live review on OpenCode 2.0.32: the fixtures above passed with it; the live
+  checks used 2.0.31.

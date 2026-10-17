@@ -1,14 +1,14 @@
 /**
  * OpenCode host compatibility helpers.
  *
- * The plugin was validated against the OpenCode releases below, but it should
- * detect capabilities instead of assuming exact response shapes. Every
- * host-specific constant and response normalization lives here so an upgrade
- * has one place to adjust.
+ * The plugin is validated against one OpenCode release, but it should detect
+ * capabilities instead of assuming exact response shapes. Every host-specific
+ * constant and response normalization lives here so an upgrade has one place
+ * to adjust.
  */
-export const TESTED_HOST_VERSIONS = Object.freeze(['2.0.22', '2.0.31']);
+export const TESTED_HOST_VERSION = '2.0.32';
 
-// Text OpenCode (2.0.22 and 2.0.31) queues after resuming an interrupted text stream.
+// Text OpenCode 2.0.32 queues after resuming an interrupted text stream.
 export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
 
 // Context message types that mean someone other than the admitted prompt
@@ -39,7 +39,7 @@ export function hostCapabilities(context) {
   const version = hostVersion(context);
   return {
     version,
-    tested: TESTED_HOST_VERSIONS.includes(version),
+    tested: version === TESTED_HOST_VERSION,
     permissionHook: fn('permission.hook'),
     toolTransform: fn('tool.transform'),
     sessionRemove: fn('session.remove'),
@@ -49,9 +49,9 @@ export function hostCapabilities(context) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * (2.0.22 and 2.0.31) emits one delta event per streamed chunk of answer text,
- * reasoning or tool-call input; the projected session context shows the text
- * only once the step ends.
+ * 2.0.32 emits one delta event per streamed chunk of answer text, reasoning
+ * or tool-call input; the projected session context shows the text only once
+ * the step ends.
  */
 const PROGRESS_EVENTS = new Map([
   ...['started', 'delta', 'ended'].map(phase => [`session.text.${phase}`, 'model output was streamed']),
@@ -71,7 +71,7 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.22 and 2.0.31), whose fetch accepts
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32), whose fetch accepts
  * per-request `proxy` and `tls` options. Node's fetch silently ignores both, so
  * a configured proxy would be bypassed; callers refuse instead.
  */

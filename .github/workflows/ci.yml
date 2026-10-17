@@ -18,20 +18,11 @@ jobs:
           node-version: '22'
       - run: npm run check
       - run: npm test
-      # Every tested host (TESTED_HOST_VERSIONS in src/host.mjs) runs the same exact-host fixtures.
-      - name: Install OpenCode 2.0.22 into a disposable prefix
-        run: npm install --prefix "$RUNNER_TEMP/azpr-host-2.0.22" --no-audit --no-fund @opencode/cli@2.0.22
-      - name: Exercise fresh installed package and host lifecycle (OpenCode 2.0.22)
-        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host-2.0.22/node_modules/.bin/opencode"
-      - name: Exercise replacement package and host lifecycle (OpenCode 2.0.22)
-        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host-2.0.22/node_modules/.bin/opencode" --replace
-      - name: Exercise sharded review, overflow split and idempotent publication at scale (OpenCode 2.0.22)
-        run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host-2.0.22/node_modules/.bin/opencode"
-      - name: Install OpenCode 2.0.31 into a disposable prefix
-        run: npm install --prefix "$RUNNER_TEMP/azpr-host-2.0.31" --no-audit --no-fund @opencode/cli@2.0.31
-      - name: Exercise fresh installed package and host lifecycle (OpenCode 2.0.31)
-        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host-2.0.31/node_modules/.bin/opencode"
-      - name: Exercise replacement package and host lifecycle (OpenCode 2.0.31)
-        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host-2.0.31/node_modules/.bin/opencode" --replace
-      - name: Exercise sharded review, overflow split and idempotent publication at scale (OpenCode 2.0.31)
-        run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host-2.0.31/node_modules/.bin/opencode"
+      - name: Install the tested host (OpenCode 2.0.32, TESTED_HOST_VERSION in src/host.mjs) into a disposable prefix
+        run: npm install --prefix "$RUNNER_TEMP/azpr-host" --no-audit --no-fund @opencode/cli@2.0.32
+      - name: Exercise fresh installed package and host lifecycle
+        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
+      - name: Exercise replacement package and host lifecycle
+        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --replace
+      - name: Exercise sharded review, overflow split and idempotent publication at scale
+        run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
