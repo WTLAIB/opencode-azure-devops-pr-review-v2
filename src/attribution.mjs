@@ -240,6 +240,7 @@ function renderStageReceipt(stage) {
     ['review-limitations', stage.reviewWarnings?.length],
   ];
   for (const [label, count] of counters) if (count) fields.push(`${label}=${count}`);
+  if (stage.followUp) fields.push(`follow-up=${stage.followUp.outcome}${stage.followUp.failureClass ? `:${stage.followUp.failureClass}` : ''}`);
   if (stage.failureClass) fields.push(`failure=${stage.failureClass}`);
   if (stage.error) fields.push(`error=${stage.error}`);
   return '- ' + fields.join('; ');
@@ -252,6 +253,7 @@ export function renderReceipt(run, report, status, error, settings) {
   let body = `[AZPR ${run.id}] ${status}${quick}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}${rows ? '\n' : ''}`;
   if (run.stages.some(s => s.repairs?.length)) body += '\nRepair notice: some answers did not meet the output contract and the same session was asked to correct them. Remaining problems were downgraded per item (UNREVIEWED, NEEDS_INFO or skipped comments) instead of discarding the review.\n';
   if (run.stages.some(s => s.attempt > 1)) body += '\nRetry notice: a stage failed for a transient reason and ran again in a new session.\n';
+  if (run.stages.some(s => s.followUp)) body += '\nFollow-up notice: a session answered PARTIAL and named unfinished work, so the same session was asked once to continue (follow-up=completed, still-partial, unusable or failed). A follow-up that failed or gave no usable answer kept the answer it followed.\n';
   if (run.draft) body += run.mode === 'quick'
     ? '\nIncomplete draft notice: the quick review did not complete; its observations are unconfirmed and not input for PR comments.\n'
     : '\nIncomplete draft notice: initial observations are unconfirmed because verification did not complete; they are not input for PR comments.\n';

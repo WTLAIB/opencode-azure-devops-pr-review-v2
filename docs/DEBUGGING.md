@@ -41,7 +41,7 @@ within the same limit of 20 runs.
 | `run.json` | Run identity, relevant settings and start time. |
 | `readiness.json` | Checked model slots, the Azure DevOps organization and api-version, and host capabilities. |
 | `NN-ROLE.request.json` | Stage identity, the literal payload and the role instructions. |
-| `NN-ROLE.response.json`, `NN-ROLE.response-repairN.json` | Visible answers of the first turn and each correction turn. |
+| `NN-ROLE.response.json`, `NN-ROLE.response-repairN.json`, `NN-ROLE.response-follow-upN.json` | Visible answers of the first turn, each correction turn and a quick review's follow-up turn. |
 | `NN-ROLE.result.json` | Status, repairs, unresolved issues, corrections, tool observations, failure class, timing and `tokens`: the token usage OpenCode reported for each model request of the stage (`input` without cached input, `cacheRead`, `cacheWrite`, `output`, `reasoning`), their sums and `cachedInputShare`. |
 | `report.md` / `draft.md` | Rendered report or unconfirmed draft. |
 | `comment-plan.json` | The saved plan with exact content, anchors, offsets and markers. |
@@ -78,6 +78,10 @@ in parallel.
    quick review, `sessionReads` counts the file contents that session's own
    `azpr_read_diff` and `azpr_read_file` calls showed, the reads its location
    checks accept; the result's `checks` hold each finding's location check.
+   `followUp` records a quick follow-up turn: the turn, the gaps the answer
+   named, how many assigned files it did not list as reviewed and the outcome
+   (`completed`, `still-partial`, `unusable`, or `failed` with its failure class
+   and error); the receipt shows `follow-up=<outcome>`.
 3. Cost and prompt cache: `tokens` in each stage record. `cachedInputShare` is
    `cacheRead / (input + cacheRead + cacheWrite)`. On a long session, a request
    whose `cacheRead` is close to the previous request's prompt reused it; a run

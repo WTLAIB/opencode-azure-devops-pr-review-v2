@@ -6,7 +6,7 @@
  * only the form and source of its findings, never whether they are right.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, quickRepairPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
+import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, quickRepairPrompt, quickFollowUpPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
 
 export { locationPath };
 const ID_SPAN = 1000;
@@ -411,6 +411,23 @@ export async function checkQuickLocation(finding, { snapshot, azure, run, reads 
  * location, plus the runtime's location and source checks. Field and location
  * problems get correction turns; what is still wrong afterwards is NEEDS_INFO.
  */
+/**
+ * A parsed quick answer is usable only with a findings array and at least one
+ * reviewed file or accepted finding. Uses the answer's own IDs (before they are
+ * made unique), which key `invalid` and `checks`.
+ */
+export function quickUsable(result, files) {
+  if (!result?.structured || result.envelope?.findings !== true) return false;
+  const reviewed = result.envelope?.coverage ? result.coverage.files.filter(path => files.includes(path)) : [];
+  const accepted = result.findings.filter(finding => !result.invalid?.[finding.id]?.length && result.checks?.[finding.id]?.ok).length;
+  return reviewed.length > 0 || accepted > 0;
+}
+
+/**
+ * `usable` follows quickUsable. A usable PARTIAL answer with nothing to repair
+ * that names unfinished work (gaps or assigned files not reviewed) also gets a
+ * `followUp`: the runtime may ask the same session once to continue.
+ */
 export async function evaluateQuick(answer, { task, snapshot, azure, run, reads }) {
   const { result, issues } = evaluateInitial(answer, { prefix: 'Q', assigned: task.files, inventory: snapshot.files, filesComplete: snapshot.filesComplete, requireLocation: true });
   // A plain object, so the stage record shows each finding's check.
@@ -419,8 +436,13 @@ export async function evaluateQuick(answer, { task, snapshot, azure, run, reads 
     if (!Object.hasOwn(result.invalid, finding.id)) checks[finding.id] = await checkQuickLocation(finding, { snapshot, azure, run, reads });
   }
   const all = [...issues, ...Object.entries(checks).filter(([, check]) => check.repairable).map(([id, check]) => `${id}: ${check.problem}`)];
-  return { result: { ...result, checks }, issues: all,
-    repairPrompt: all.length ? quickRepairPrompt(all, { parseOnly: !result.structured && syntaxProblem(all) }) : undefined };
+  const checked = { ...result, checks };
+  const usable = quickUsable(checked, task.files);
+  const uncovered = task.files.filter(path => !result.coverage.files.includes(path));
+  const unfinished = result.status === 'PARTIAL' && (result.coverage.gaps.length > 0 || uncovered.length > 0);
+  return { result: checked, issues: all, usable,
+    repairPrompt: all.length ? quickRepairPrompt(all, { parseOnly: !result.structured && syntaxProblem(all) }) : undefined,
+    ...(usable && !all.length && unfinished ? { followUp: { prompt: quickFollowUpPrompt({ gaps: result.coverage.gaps, uncovered }), gaps: result.coverage.gaps, uncovered } } : {}) };
 }
 
 const findingKey = finding => JSON.stringify(FINDING_FIELDS.filter(key => key !== 'id').map(key => String(finding?.[key] ?? '').replace(/\s+/g, ' ').trim()));
@@ -464,11 +486,9 @@ export async function runQuickReview(ctx, run, request) {
     }
     // Classify before IDs are made unique: the checks are keyed by the answer's IDs.
     const entries = result.findings.map(finding => ({ finding, problems: result.invalid?.[finding.id] ?? [], check: result.checks?.[finding.id] }));
+    const isUsable = quickUsable(result, task.files);
     uniqueIds(result.findings, 'Q', used);
-    const accepted = entries.filter(entry => !entry.problems.length && entry.check?.ok).length;
     const reviewed = result.envelope?.coverage ? result.coverage.files.filter(path => task.files.includes(path)) : [];
-    // A parsed answer is usable only with a findings array and at least one reviewed file or accepted finding.
-    const isUsable = result.structured && result.envelope?.findings === true && (reviewed.length > 0 || accepted > 0);
     if (!isUsable) {
       failedShards++;
       coverage[role].failedFiles.push(...task.files);

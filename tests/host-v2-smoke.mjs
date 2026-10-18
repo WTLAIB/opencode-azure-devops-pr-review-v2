@@ -132,6 +132,9 @@ const provider = createServer(async (request, response) => {
     // An existing directory outside the project reaches the permission hook, whatever the host's default.
     else if (toolResults === 2 && parsed.model === 'functional' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/etc' } };
     else if (toolResults === 1 && parsed.model === 'risk') call = { name: 'azpr_search_code', arguments: { query: 'second line of', path: '/src' } };
+    // A quick reviewer that stops early: PARTIAL with a gap; its one follow-up finishes the review or gives no usable answer.
+    else if (payload.userContext?.includes('follow-up') && parsed.model === 'quick' && !repair) final = JSON.stringify({ status: 'PARTIAL', coverage: { files, gaps: ['呼叫端尚未查核。'] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '提早停止。' });
+    else if (payload.userContext?.includes('follow-up-unusable') && parsed.model === 'quick') final = '還在查核呼叫端。';
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
   } else if (payload?.assignment?.findingIds) {
     const findings = payload.assignment.findings;
@@ -342,6 +345,25 @@ try {
   assert.match(quickPreview, /🔴 high: [^\n]+\n\n\*\*📝 Summary\*\*/);
   assert.ok(requests.slice(beforeQuick).every(request => request.model === 'quick'), 'The quick reviewer model planned the comments.');
   results.quick = 'COMPLETE with one quick session and no verifier; PREVIEW names the quick method';
+
+  // 3c. A quick answer that is PARTIAL with unfinished work gets one follow-up in the same session;
+  //     a follow-up without a usable answer keeps the answer it followed.
+  for (const [context, outcome] of [['follow-up-smoke', 'completed'], ['follow-up-unusable-smoke', 'unusable']]) {
+    const origin = await newOrigin(`Quick follow-up ${outcome}`);
+    const before = requests.length;
+    await api(`/api/session/${origin}/command`, { name: 'pr-quick', text: `${prUrl} ${context}`, delivery: 'steer' });
+    const receipt = await latest(origin);
+    assert.match(receipt, new RegExp(`\\] COMPLETE; coverage ${outcome === 'completed' ? 'complete' : 'incomplete'}; verification none`), receipt);
+    assert.match(receipt, new RegExp(`azpr-quick-reviewer: ${outcome === 'completed' ? 'COMPLETE' : 'PARTIAL'};[^\\n]*follow-up=${outcome}`), receipt);
+    const followRequests = requests.slice(before);
+    assert.equal(new Set(followRequests.map(request => request.sessionID)).size, 1, 'The follow-up stays in the same session.');
+    assert.equal(followRequests.filter(request => request.last.startsWith('AZPR runtime: your answer is PARTIAL')).length, 1, 'One follow-up prompt.');
+    const [stage] = await stageRecords(receipt);
+    assert.equal(stage.followUp.outcome, outcome);
+    assert.equal(stage.result.findings.length, 1, 'The finding survives the follow-up.');
+    if (outcome === 'unusable') assert.equal(stage.result.report, '提早停止。', 'The answer the follow-up followed stands.');
+  }
+  results.quickFollowUp = 'PARTIAL, then one follow-up in the same session: COMPLETE, or the earlier answer kept when the follow-up is unusable';
 
   // 4. Cancellation of a hanging provider request.
   const cancelOrigin = await newOrigin('Cancel');

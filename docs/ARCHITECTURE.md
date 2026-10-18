@@ -136,7 +136,17 @@ is real:
 - problems the reviewer can fix get the normal correction turns, with hints
   for deleted and renamed files; what is still wrong afterwards becomes
   NEEDS_INFO. Passing findings are REPORTED; only records identical in every
-  field are merged (findings on the same lines stay separate).
+  field are merged (findings on the same lines stay separate);
+- a usable answer that is PARTIAL and names unfinished work (coverage gaps or
+  assigned files it did not list as reviewed), with nothing left to correct,
+  gets one **follow-up** turn in the same session within the
+  `workflow.repairAttempts` budget: continue where the source is readable,
+  keep a gap only for a limit it cannot close, and return the whole answer
+  again. A second PARTIAL stands. When the follow-up, or a correction turn
+  after it, fails or gives no usable answer, the answer it followed stands;
+  cancellation and context overflow keep their usual handling (overflow
+  splits the shard). The stage record keeps the outcome (`followUp`). Review
+  and deep shards have two reviewers and get no follow-up.
 
 A location on a changed HEAD file may carry an inline comment; a BASE location
 or unchanged code stays in the summary index. Shard reports are joined by the
