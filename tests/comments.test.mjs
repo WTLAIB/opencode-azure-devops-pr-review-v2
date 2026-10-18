@@ -196,6 +196,18 @@ const quickReview = (dispositions, toolText = []) => ({ ...review([]), profile: 
   attribution: 'AI-generated review; not human review or approval. Review method: quick review, not independently verified. Models: `x/y`',
   final: { dispositions, newFindings: [], coverageSummary: { complete: true, unreviewedFiles: 0, filesComplete: true, reasons: [] } } });
 
+test('a summary note from a page that may not write one is dropped, not repaired', () => {
+  const r = review();
+  const text = answer([comment()], [], { summary: 'Not this page.', summaryDetails: '### Details' });
+  const page = evaluatePlanPage(text, { review: r, assigned: [finding('F-1')], allowSummary: false });
+  assert.deepEqual(page.issues, []);
+  assert.equal(page.result.summary, undefined);
+  assert.equal(page.result.summaryDetails, '### Details', 'The page keeps its details.');
+  assert.deepEqual(page.corrections.filter(c => /summary/.test(c.action)), [{ action: 'drop-unallowed-summary' }]);
+  assert.equal(evaluatePlanPage(text, { review: r, assigned: [finding('F-1')], allowSummary: false, final: true }).result.summary, undefined);
+  assert.equal(evaluatePlanPage(text, { review: r, assigned: [finding('F-1')] }).result.summary, 'Not this page.', 'A note is allowed unless the runtime says otherwise.');
+});
+
 test('publishable findings: confirmations for verified reviews, REPORTED for quick ones; unknown records are not trusted', () => {
   const verified = { ...review([finding('F-1')]), profile: 'review' };
   assert.equal(reviewVerification(verified), 'independent');

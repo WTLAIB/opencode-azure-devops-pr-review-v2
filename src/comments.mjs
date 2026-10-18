@@ -201,8 +201,10 @@ const aliases = (value, names) => {
  * may combine (`findingIds`); the runtime never combines findings itself.
  * `sources` are the page's source excerpts and `discussions` the live threads
  * the runtime read (null when it could not): skip causes are checked against them.
+ * With `allowSummary: false` a summary note is dropped, never repaired: only
+ * the page the runtime chose writes it.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], sources = [], discussions = null }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], sources = [], discussions = null, allowSummary = true }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -374,8 +376,10 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     }
   }
   if (status === 'INCOMPLETE') { corrections.push({ action: 'accept-incomplete-plan-page', reason: nonempty(value.reason) ? value.reason.trim() : '' }); status = 'READY'; }
-  const summary = nonempty(value.summary) && value.summary.length <= SUMMARY_NOTE_LIMIT && !/<!--|-->/.test(value.summary) ? value.summary.trim() : undefined;
-  if (nonempty(value.summary) && !summary) corrections.push({ action: 'drop-invalid-summary-note' });
+  const note = nonempty(value.summary) ? value.summary : '';
+  const summary = note && allowSummary && note.length <= SUMMARY_NOTE_LIMIT && !/<!--|-->/.test(note) ? note.trim() : undefined;
+  if (note && !allowSummary) corrections.push({ action: 'drop-unallowed-summary' });
+  else if (note && !summary) corrections.push({ action: 'drop-invalid-summary-note' });
   const summaryDetails = nonempty(value.summaryDetails) ? escapeComments(value.summaryDetails.trim()) : '';
   return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections };
 }

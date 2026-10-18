@@ -171,7 +171,7 @@ every concrete defect it finds, in any area, as a finding.
 | `azure.verifyTls` | `true`. `false` skips certificate checks for AZPR's Azure DevOps calls (like `curl -k`), so anyone who can intercept the connection can read the PAT; prefer `azure.caFile`. `/pr-check` warns while it is off. |
 | `workflow.shardFiles` | `25` changed files per initial-review session. |
 | `workflow.shardFindings` | At most `15` findings per verification session; one file's findings stay in the same session (a file is split only when it alone has more). |
-| `workflow.parallelSessions` | `4` reviewer sessions at once within a command. |
+| `workflow.parallelSessions` | `4` reviewer sessions at once within a command; comment planning runs at most two pages at once (one when this is `1`). |
 | `workflow.repairAttempts` | `2` correction turns when an answer breaks the output contract. A quick review's one follow-up turn for unfinished work uses the same budget. |
 | `workflow.stageRetries` | `1` new-session retry after a transient failure (provider 429/5xx, interrupted stream) or an inactivity stop. |
 | `workflow.stageIdleSeconds` | `600` (`0` turns it off, otherwise 60–7200): a reviewer stage that shows no activity this long while it waits on OpenCode (the model stream, a tool or the host stopped responding) is stopped with `failure=idle` and an error naming its last activity, then retried in a new session. Every model request, streamed chunk of output, tool start or end and announced host retry restarts the window, so a stage that keeps working, including a long answer that keeps streaming, is never cut. With shell allowed, an approval or a command that takes longer counts as inactivity. |
@@ -253,9 +253,11 @@ high-severity issue or left coverage incomplete, the receipt suggests
 
 `/pr-comment` plans one general summary plus inline comments for confirmed high
 and medium findings (low findings stay in the summary index). Planning runs in
-pages of at most four findings; each page may get a correction turn, and an item
-that still cannot be posted faithfully is skipped with a reason instead of
-failing the command. Inline titles start with `🔴 high:` or `🟡 medium:` followed
+pages of at most four findings, two pages at a time, and the pages are joined
+in page order, so the result does not depend on which page finishes first; each
+page may get a correction turn, and an item that still cannot be posted
+faithfully is skipped with a reason instead of failing the command. Inline
+titles start with `🔴 high:` or `🟡 medium:` followed
 by **📝 Summary**, **🔎 Evidence** and **💡 Suggested fix**; the summary starts
 with a 🤖 AI/model disclosure and may carry improvement suggestions. Comments of
 a quick review keep this layout; their disclosure line adds `Review method:

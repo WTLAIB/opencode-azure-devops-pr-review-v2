@@ -156,6 +156,8 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
    made the REST queue the bottleneck. The defaults stay 4 / 3 until other
    providers and organizations have been measured; raise both together.
+   Comment planning runs two pages at a time, which cut a nine-page plan from
+   140–175 s to 71–90 s; more lanes were not measured.
 4. Reduce input tokens further. Reading diffs with folded repeats cut the
    316-file review from 7.5–9.2 to about 5.5 million input tokens and a real
    35-file code PR from 6.15 to 0.55–0.79 million; reviewers still make 4–5.5

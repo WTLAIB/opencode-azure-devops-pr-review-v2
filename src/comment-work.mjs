@@ -10,9 +10,11 @@ const text = value => typeof value === 'string' && value.trim().length > 0;
 export const PLANNING_FINDINGS_PER_PAGE = 4;
 // Sessions that may continue a page after its first; what is still open then is skipped.
 export const PAGE_CONTINUATIONS = 3;
+// Pages planned at the same time (the runtime never exceeds workflow.parallelSessions).
+export const PLANNING_PARALLEL_PAGES = 2;
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-const evidenceKeys = review => [...new Set((review.commentEvidence ?? []).map(item =>
+const evidenceKeys = evidence => [...new Set(evidence.map(item =>
   JSON.stringify([item.tool, canonical(item.input), item.result?.sha256])))].sort();
 
 const MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
@@ -111,7 +113,7 @@ export function sourceWindow(text, { start = null, end = null, context = 25, who
     text: lines.slice(first - 1, last).map((line, index) => `${first + index} | ${line}`).join('\n') };
 }
 
-async function planningInput(review, store, findings, report, work, continuation, prepared, extras) {
+async function planningInput(review, store, findings, report, work, continuation, extras) {
   const { files, changes, description, commits, snapshotWarnings, iteration, ...snapshot } = review.snapshot;
   const sources = extras.sourceExcerpts ?? [];
   const covered = new Set(sources.flatMap(item => item.findingIds));
@@ -141,27 +143,33 @@ async function planningInput(review, store, findings, report, work, continuation
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
     ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
-    ...(prepared.length ? { priorPages: prepared.map(page => ({ comments: page.comments.map(c => ({ findingId: c.findingId, ...(c.findingIds ? { findingIds: c.findingIds } : {}), path: c.path, startLine: c.startLine })),
-      skipped: page.skipped.map(item => item.findingId), wroteSummary: Boolean(page.summary) })) } : {}),
-    ...(continuation && review.commentEvidence?.length ? { workEvidence: await store.put(review.commentEvidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
+    // This page's own earlier reads; pages planned at the same time keep theirs.
+    ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(extras.evidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
     commentWork: work,
   };
 }
 
 /**
- * Plan comments in bounded pages. Each page is one model stage with repair
- * turns; after repairs, invalid items become local skips instead of failing
- * the whole command.
+ * Plan comments in bounded pages, `parallel` pages at a time. Each page is one
+ * model stage with repair turns, continued in new sessions while it returns
+ * CONTINUE; after repairs, invalid items become local skips instead of failing
+ * the whole command. Nothing a page sees depends on which page finishes
+ * first: only the first page may write the summary note, a page treats the
+ * HEAD files of its own and earlier pages as observed source and keeps its own
+ * continuation state and evidence, and pages are assembled in page order, so
+ * markers and their ordinals match planning one page at a time.
+ * After a page fails, no page or continuation session starts; stages already
+ * running finish (with their repairs and retries) before the failure of the
+ * lowest failed page is thrown.
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
-export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null } = {}) {
+export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, parallel = PLANNING_PARALLEL_PAGES } = {}) {
   const all = publishableFindings(review);
   // Only a quick review, which has no verifier, offers candidate duplicates to the planner.
   const { pages: groups, offered } = candidatePages(all, reviewVerification(review) === 'none' ? mergeCandidates(all) : []);
   const reports = textPages(review.final.report ?? '');
   const count = Math.max(groups.length, reports.length, 1);
-  const pages = [], prepared = [], signatures = new Set();
   const sourceText = new Map();
   const source = path => {
     if (!fetchSource) return Promise.resolve(null);
@@ -184,45 +192,58 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     }
     return [...windows.values()];
   }
-  let summaryWritten = false;
+  // A page's observed HEAD source is that of its own and earlier pages' findings,
+  // as when pages ran one at a time; never whatever happens to be fetched already.
+  const headPaths = [];
   for (let index = 0; index < count; index++) {
-    let pending = groups[index] ?? [], continuation, sessions = 0;
+    const own = (groups[index] ?? []).map(finding => parseLocation(finding.location)).filter(at => at?.side === 'head').map(at => at.path);
+    headPaths.push([...new Set([...(headPaths[index - 1] ?? []), ...own])]);
+  }
+  let failure; // The lowest failed page: { index, error }.
+  async function planPage(index) {
+    const parts = [], signatures = new Set();
+    let pending = groups[index] ?? [], continuation, sessions = 0, summaryWritten = false;
     const report = reports[index]?.text ?? '';
+    // Tool results the runtime recorded for this page's sessions.
+    const evidence = () => (review.commentEvidence ?? []).filter(item => item.page === index + 1);
     progress?.(`Planning comments, page ${index + 1}/${count}`);
     do {
       const assigned = pending;
       // Groups whose findings are all still open on this page.
       const candidates = offered.filter(ids => ids.every(id => assigned.some(item => item.id === id)));
       const sourceExcerpts = await excerpts(assigned);
+      // Only the first page writes the summary note; a note from another page is dropped.
+      const allowSummary = index === 0 && !summaryWritten;
       const payload = await planningInput(review, store, assigned, report,
-        { kind: 'plan', page: index + 1, pages: count, allowSummary: !summaryWritten,
+        { kind: 'plan', page: index + 1, pages: count, allowSummary,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, pages, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates });
+        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, evidence: evidence() });
+      // Another page failed while this input was prepared: start no model work.
+      if (failure) return parts;
       const scoped = async answer => {
         const parsed = parseModelJSON(answer, { keys: ['status', 'comments', 'skipped'] });
         const comments = Array.isArray(parsed.value?.comments) ? parsed.value.comments : [];
-        // Source the runtime fetched counts as observed HEAD text for anchor checks.
+        // Source the runtime fetched for this and earlier pages counts as observed HEAD text for anchor checks.
         const fetched = [];
-        for (const [path, pending] of sourceText) {
-          const text = await pending;
+        for (const path of headPaths[index]) {
+          const text = await source(path);
           if (text !== null) fetched.push({ tool: 'runtime', input: { path, version: review.snapshot.head }, output: text });
         }
         return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head)] };
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, sources: sourceExcerpts, discussions });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, sources: sourceExcerpts, discussions, allowSummary });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, sources: sourceExcerpts, discussions });
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, sources: sourceExcerpts, discussions, allowSummary });
           return { ...result, corrections };
         },
       });
       sessions++;
       if (text(page.summary)) summaryWritten = true;
-      pages.push(page);
-      prepared.push(await store.object({ input: payload, result: page }));
+      parts.push(page);
       const accounted = new Set([...page.comments.flatMap(item => item.findingIds ?? [item.findingId]), ...page.skipped.map(item => item.findingId)]);
       pending = pending.filter(item => !accounted.has(item.id));
       continuation = page.status === 'CONTINUE' ? page.continuation : undefined;
@@ -231,8 +252,9 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         // Rephrasing a checkpoint or repeating the same reads is not progress, and
         // a page gets PAGE_CONTINUATIONS more sessions at most. Either way the page
         // ends here and keeps its finished work; only what is still open is skipped.
-        const details = [...new Set(pages.map(part => part.summaryDetails).filter(text))].sort();
-        const signature = JSON.stringify([index, pending.map(item => item.id), details, evidenceKeys(review)]);
+        // Details and reads of other pages are not this page's progress.
+        const details = [...new Set(parts.map(part => part.summaryDetails).filter(text))].sort();
+        const signature = JSON.stringify([pending.map(item => item.id), details, evidenceKeys(evidence())]);
         if (signatures.has(signature)) stopped = 'repeated a checkpoint without progress';
         else if (sessions > PAGE_CONTINUATIONS) stopped = `did not finish the page in ${sessions} sessions`;
         signatures.add(signature);
@@ -245,11 +267,26 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         // A READY page that left findings unaccounted was already finalized
         // with skips; anything still pending here is recorded explicitly.
         const reason = stopped ? `The comment planner ${stopped}` : 'The comment planner did not address this finding';
-        pages.push({ status: 'READY', comments: [], skipped: pending.map(item => ({ findingId: item.id, reason: `${reason}; it remains in the summary index.` })), summaryDetails: '' });
+        parts.push({ status: 'READY', comments: [], skipped: pending.map(item => ({ findingId: item.id, reason: `${reason}; it remains in the summary index.` })), summaryDetails: '' });
       }
-    } while (continuation);
+    } while (continuation && !failure);
+    return parts;
   }
-  return assemblePlan(review, pages);
+  // Lanes take pages in order and all finish before this returns or throws,
+  // so no planning stage is still running when the command ends.
+  const planned = new Array(count);
+  let next = 0;
+  const lane = async () => {
+    while (!failure && next < count) {
+      const index = next++;
+      try { planned[index] = await planPage(index); }
+      catch (error) { if (!failure || index < failure.index) failure = { index, error }; }
+    }
+  };
+  const lanes = Number.isSafeInteger(parallel) && parallel > 1 ? Math.min(parallel, count) : 1;
+  await Promise.all(Array.from({ length: lanes }, lane));
+  if (failure) throw failure.error;
+  return assemblePlan(review, planned.flat());
 }
 
 /**

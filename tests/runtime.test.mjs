@@ -13,6 +13,7 @@ const ROOT = new URL('../', import.meta.url);
 const clone = value => structuredClone(value);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const within = (promise, ms = 5000) => Promise.race([promise, sleep(ms)]);
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
 const pathOf = location => /^head:(\/[^:]+)/.exec(location)?.[1] ?? '/src/Main.java';
 const finding = (id, path, severity = 'high') => ({ id, summary: `Fixture defect ${id}`, location: `head:${path}:1`, severity,
@@ -819,6 +820,93 @@ test('planning gets runtime-read discussions and source; transient thread reads 
     for (const file of await readdir(debug)) assert.ok(!(await readFile(join(debug, file), 'utf8')).includes(secret), `${file} must not contain the PAT.`);
   }
   assert.equal(JSON.parse(await readFile(join(debug, 'result.json'), 'utf8')).azureRetries, 1);
+});
+
+/** Initial reviewers that report one finding per file, so a few files fill several planning pages. */
+const findingPerFile = files => ({ role, packet }) => {
+  if (ROLES[role].format !== 'initial') return undefined;
+  const [prefix, first] = packet.assignment.firstFindingId.split('-');
+  return { status: 'COMPLETE', coverage: { files: packet.assignment.files, gaps: [] }, additionalFiles: [], report: 'r',
+    findings: files.map((path, i) => finding(`${prefix}-${Number(first) + i}`, path)) };
+};
+
+test('comment pages are planned two at a time, never more than parallelSessions; planner evidence carries its page', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'];
+  for (const parallelSessions of [4, 1]) {
+    let inFlight = 0, most = 0;
+    const together = deferred(), initial = findingPerFile(files);
+    const f = await fixture(t, { files, settings: settings => { settings.workflow.parallelSessions = parallelSessions; },
+      answer: input => { if (input.role === 'azpr-review-comment-plan' && input.turn === 0) inFlight--; return initial(input); },
+      async during({ role, session, turn, invoke }) {
+        if (role !== 'azpr-review-comment-plan' || turn) return;
+        most = Math.max(most, ++inFlight);
+        await invoke(session, 'azpr_read_file', { path: '/src/A.java', version: 'head' });
+        // A planner waits, briefly, for a second one to start.
+        if (inFlight === 2) together.resolve();
+        await Promise.race([together.promise, sleep(200)]);
+      } });
+    const id = reviewId(await f.command());
+    const receipt = await f.command('pr-comment', '');
+    assert.match(receipt, /\] PREVIEW/);
+    const lanes = Math.min(2, parallelSessions);
+    assert.equal(most, lanes, `parallelSessions ${parallelSessions}`);
+    assert.deepEqual(f.sessionsFor('azpr-review-comment-plan').map(session => session.packet.commentWork.page).sort(), [1, 2], 'Six findings fill two pages.');
+    assert.deepEqual(f.calls.filter(call => call.kind === 'create' && call.agent === 'azpr-review-comment-plan').map(call => call.title.replace(/^\[AZPR [a-f0-9]{8}\] /, '')).sort(),
+      ['Comment plan page 1/2', 'Comment plan page 2/2']);
+    const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
+    assert.equal(saved.commentEvidence.length, 2);
+    assert.ok(saved.commentEvidence.every(item => item.page === f.sessions.get(item.sessionID).packet.commentWork.page), 'The runtime tags each planner tool result with its page.');
+    const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
+    assert.equal(JSON.parse(await readFile(join(debug, 'comment-plan.json'), 'utf8')).parallelPages, lanes);
+  }
+});
+
+test('when a planning page fails, the page already running finishes before the command reports the failure', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'];
+  const failed = deferred(), initial = findingPerFile(files);
+  const f = await fixture(t, { files,
+    answer: input => {
+      if (input.role === 'azpr-review-comment-plan' && input.packet.commentWork.page === 2) { failed.resolve(); return { $provider: 401 }; }
+      return initial(input);
+    },
+    async during({ role, packet, turn }) {
+      // Page 1 is still running when page 2 fails.
+      if (role === 'azpr-review-comment-plan' && packet.commentWork.page === 1 && !turn) { await within(failed.promise); await sleep(100); }
+    } });
+  const id = reviewId(await f.command());
+  const receipt = await f.command('pr-comment', '');
+  assert.match(receipt, /\] INCOMPLETE/);
+  const planners = (await stageRecords(receipt)).filter(stage => stage.stage === 'comment-plan');
+  assert.deepEqual(planners.map(stage => [stage.commentWork.page, stage.status]).sort(), [[1, 'READY'], [2, 'FAILED']], 'The running page finished; the failed page was not retried.');
+  const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
+  assert.equal(saved.plan, null);
+});
+
+test('/pr-stop cancels both running planning pages; nothing keeps running and no plan is kept', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'];
+  const both = deferred(), release = deferred();
+  let entered = 0, hold = true;
+  const f = await fixture(t, { files, answer: findingPerFile(files), async during({ role, turn }) {
+    if (role !== 'azpr-review-comment-plan' || turn || !hold) return;
+    if (++entered === 2) both.resolve();
+    await within(release.promise, 10000);
+  } });
+  t.after(() => release.resolve());
+  const id = reviewId(await f.command());
+  const running = f.command('pr-comment', '');
+  await within(both.promise);
+  const started = f.notices.filter(n => n.sessionID === 'ordinary' && /\] STARTED /.test(n.text)).at(-1).text;
+  const runId = /\[AZPR ([a-f0-9]{8})\] STARTED/.exec(started)[1];
+  assert.match(await f.command('pr-stop', runId), /cancellation requested/);
+  const receipt = await running;
+  assert.match(receipt, /\] CANCELLED/);
+  const planners = (await stageRecords(receipt)).filter(stage => stage.stage === 'comment-plan');
+  assert.deepEqual(planners.map(stage => [stage.status, stage.failureClass]), [['FAILED', 'cancelled'], ['FAILED', 'cancelled']], 'Both pages were stopped; none is left running.');
+  hold = false;
+  release.resolve();
+  const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
+  assert.equal(saved.plan, null, 'A cancelled refresh keeps no plan.');
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/, 'A later preview plans again.');
 });
 
 test('AZPR tools read ranges, list folders and threads for private reviewers only', async t => {

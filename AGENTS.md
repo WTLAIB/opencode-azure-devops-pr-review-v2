@@ -87,6 +87,10 @@ settings, backups and failure records. Never upload `.local/`.
   save each result immediately; read markers back. Re-running is always safe.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them.
+- Comment planning pages run side by side, so nothing a page sees or produces
+  may depend on which page finishes first: only the first page writes the
+  summary note, each page keeps its own continuation state and evidence, and
+  pages are assembled in page order (ordinals follow page order).
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

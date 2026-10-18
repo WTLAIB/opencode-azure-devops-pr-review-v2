@@ -217,6 +217,18 @@ findings and references to the complete lists), with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
 sessions per page, and a checkpoint without progress or a fourth unfinished
 session ends the page, keeping its finished comments and skipping what is open.
+Two pages run at a time (`PLANNING_PARALLEL_PAGES`, never more than
+`workflow.parallelSessions`), each continuing in its own lane, and nothing a page
+sees depends on which page finishes first: only the first page may write the
+summary note (the runtime drops a note from any other page without a correction
+turn); a page's anchor checks see the HEAD source the runtime fetched for its own
+and earlier pages' findings; a checkpoint counts only the page's own details and
+the planner tool results the runtime tagged with its page; and pages are
+assembled in page order, so markers and their ordinals match planning one page
+at a time. After a page fails, no page or continuation session starts, stages
+already running finish (with their repairs and retries), and the failure of the
+lowest failed page ends the command as before; `/pr-stop` cancels every running
+page.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
@@ -238,7 +250,7 @@ combination one row. The assembled plan stores exact content, offsets and marker
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both
-read deterministically; findings and earlier pages are inline. A page usually
+read deterministically; findings are inline. A page usually
 finishes in one model request without tools.
 
 Publication (runtime) rechecks that the PR is active and the head unchanged,
