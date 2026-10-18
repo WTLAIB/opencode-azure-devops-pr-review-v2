@@ -102,7 +102,8 @@ changed files, sample source and discussions, and checks the model catalog;
 it neither runs a review nor tests model-provider authentication or Azure write
 permissions. Fix any `NOT_READY` result before continuing. A **Quick model
 WARNING** also needs fixing before `/pr-quick`, even if the overall result is
-`READY`.
+`READY`; a **Deep model** WARNING likewise before `/pr-deep`. The **Deep models**
+row says whether `/pr-deep` is set up (see below).
 
 On a host without `permission.hook`, **Project boundary WARNING** means the
 host's own permission rules control where native read tools can read; reviews
@@ -150,6 +151,9 @@ If no preview exists, this command plans before publishing.
 
 For important changes, use `/pr-review` to run two reviewer roles followed by
 an independent verification session. The starter setup uses the same model in
-separate sessions; you can assign different models later. `/pr-deep` requires
-all three deep model slots. Both modes still produce AI findings that require
+separate sessions; you can assign different models later. `/pr-deep` runs the
+same review with the models of `models.deep`, so put a stronger (usually slower
+and costlier) model in all three deep slots and keep it for the changes that
+justify it; with the review's models it would only repeat `/pr-review`, and
+`/pr-check` warns about that. Both modes still produce AI findings that require
 human judgment; see [commands](../README.md#commands).

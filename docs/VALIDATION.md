@@ -12,8 +12,9 @@ acceptance runs, including the MCP-based runs, are preserved in
 The `codex/project-launch` changes, based on `d7cd0ac`, add onboarding,
 synthetic demo assets, an MIT license and release preparation. The installer
 now includes the license in the installed package; the documented minimal
-source package contains 31 files. Review and publication runtime code and
-prompts are unchanged.
+source package contains 31 files (30 since `deep.md` was dropped, see
+[deep versus review](#deep-versus-review-2026-10-19)). Review and publication
+runtime code and prompts are unchanged.
 
 - `npm run check` and all **345 tests** passed, including the updated manual
   source-package list, directory loading and installed license contents.
@@ -40,7 +41,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 345 tests across settings (including the
+`npm run check` and `npm test` pass: 347 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -134,6 +135,15 @@ source, page-scoped evidence, the check before a model call, the summary rule,
 waiting for running pages, two lanes, the `parallelSessions` cap, page labels,
 page-tagged evidence) made the matching tests fail; their waits are bounded, so
 a broken lane fails a test instead of hanging it.
+Dropping the deep-only prompt text (2026-10-19) changes the prompt test: every
+deep role must have the review role's system prompt and permissions with a
+different model, and the review roles keep their SHA-256 hashes; the installer
+and the manual copy list no longer carry `src/prompts/deep.md` (30 files with
+the license). New tests cover `/pr-check` saying that `/pr-deep` is off (no or
+only some deep models), would repeat `/pr-review` (the same models in all three
+roles, not when one differs) or lacks a model (a WARNING that leaves the check
+READY and `/pr-review` running), the command descriptions OpenCode lists and
+the error of an unconfigured `/pr-deep`.
 
 ## REST API version check
 
@@ -839,7 +849,8 @@ first run of each followed by a comment preview), deep once.
   covered every finding (5–8 s).
 - Planted defects: PR #3 policies quick 24 and 23, review 24 and 24, deep 24;
   its configuration defect quick 0 of 2, review 1 of 2, deep 0 of 1; PR #4's
-  seeded regression outside the diff quick 1 of 2, review 2 of 2, deep 1 of 1.
+  seeded regression in the diff quick 1 of 2, review 2 of 2, deep 1 of 1, the
+  one outside the diff in no run.
 - In the second PR #4 quick run the reviewer of the 25-file shard read the 25
   diffs in one request and answered PARTIAL in the next ("callers, related
   tests and function context not read") without a tool error, truncation or
@@ -993,6 +1004,55 @@ with the usual 8 (two pages at a time).
   that relied on another finding, after which the planner commented on it).
   Both finished pages out of order and rebuilt exactly. On 2026-10-18 the same
   PR's previews had planned 9 pages in 140 s (quick) and 163 s (review).
+
+## Deep versus review (2026-10-19)
+
+No new runs: this compares the 2026-10-18 runs above. Until this revision a
+deep agent's system prompt was the review agent's plus `deep.md` (854
+characters, the same text for all four roles) asking for more scrutiny; most of
+it restated `common.md`, `functional.md`, `risk.md` and `final.md`. Stages,
+inputs, tools, shards and correction turns were already the same. gpt-6-luna
+ran `/pr-review` five times per PR (twice on the `/pr-quick` branch, twice on
+`33fb851`, once on the following revision) and `/pr-deep` once on `33fb851`;
+gpt-6.1-sol ran each twice.
+
+| PR | gpt-6-luna review | gpt-6-luna deep | gpt-6.1-sol review | gpt-6.1-sol deep |
+| --- | --- | --- | --- | --- |
+| PR #2, 1 file | 57–75 s, 82–93 K input; the 3 known defects in 2 runs, 2 of them in 3 (one rejected by the verifier) | 68 s, 77 K; all 3 | 99–100 s, 85–86 K; all 3 | 93 s, 87–88 K; all 3 |
+| PR #4, 35 files | 37–68 s, 203–278 K; seeded regression in the diff 4 of 5, outside the diff 0 of 5 | 79 s, 383 K; in the diff only | 260–310 s, 1.74–1.87 M; both, plus 3 other real regressions in each run | 270–332 s, 1.82–2.25 M; both, plus 1 and 3 |
+| PR #3, 316 files | 226–289 s, 3.38–4.82 M; policies 24 of 24, configuration 2 of 5, one false finding in five runs | 245 s, 4.44 M; 24 of 24, no configuration, one false finding | 355–382 s, 4.22–4.51 M; 24 of 24 | 371–390 s, 4.58–4.62 M; 24 of 24 |
+
+- The deep text changed what gpt-6-luna read on PR #4, not what it found: the
+  review's functional and risk sessions read the 35 diffs with 0–5 whole files
+  and 0–3 searches, while deep's functional reviewer searched 10 times and its
+  risk reviewer read 7 files and searched 8 times (8 requests against 4–5).
+  That cost 38–89 % more input, and the regression outside the diff stayed
+  missed. On PR #2 and PR #3 deep stayed within the review's run-to-run range.
+- gpt-6.1-sol already reads past the diffs in a review, and deep made no
+  difference beyond run-to-run variation (on PR #3 about 5 % more input).
+- What changed results was the model: on 2026-10-18 gpt-6.1-sol found both
+  seeded regressions in all six of its runs (quick, review and deep), while
+  gpt-6-luna never found the one outside the diff, nor did it with high
+  reasoning effort earlier (see the model runs above).
+
+This revision drops `deep.md`: `/pr-deep` runs exactly the review's system
+prompts with the models of `models.deep`, so the gpt-6.1-sol review runs above
+describe a deep review with that model. Since the models are the only
+difference, `models.deep` is for stronger models than `models.review`; with the
+same models `/pr-deep` repeats `/pr-review`.
+
+Live check of this revision (2026-10-19, `models.deep` on gpt-6.1-sol, review
+and quick on gpt-6-luna, previews only): `/pr-check` was READY and listed the
+deep models as checked; every deep stage's system prompt was the review
+prompt byte for byte.
+
+| PR | Review | Input (cached) | API cost | Findings | Preview |
+| --- | --- | --- | --- | --- | --- |
+| PR #2, 1 file | COMPLETE, 86 s, 12 requests | 86 K (58 %) | $0.12 | the 3 known defects | 3 inline comments, 22 s |
+| PR #4, 35 files | COMPLETE, 351 s, 41 requests | 2.29 M (83 %) | $1.22 | both seeded regressions, two findings on another real one (chained pipeline constraints) and two debatable ones; none false | 1 inline comment; 5 findings skipped because threads of an earlier publication covered them, 21 s |
+
+No stage was retried, failed, stopped idle or hit a tool error; one PR #4
+reviewer answer repeated a JSON key and was fixed in its correction turn.
 
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 

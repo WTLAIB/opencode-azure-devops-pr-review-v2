@@ -64,7 +64,7 @@
         "deep": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Optional deep profile. Missing or empty roles disable deep mode; it never falls back to review models.",
+          "description": "Optional models for /pr-deep, which runs the same review as /pr-review with them: choose models stronger than models.review for the PRs that need them. Missing or empty roles disable deep mode; it never falls back to review models.",
           "properties": {
             "functional": {
               "type": "string",

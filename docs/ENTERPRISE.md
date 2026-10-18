@@ -89,7 +89,9 @@ Start in one OpenCode conversation with a small PR:
 `/pr-quick` runs one reviewer per shard and no independent verifier. Its
 findings are **reported, not verified**; inspect the coverage and limitations
 as well as the findings. Use `/pr-review` or `/pr-deep` when you want separate
-functional and risk reviewers followed by verification. None of these commands
+functional and risk reviewers followed by verification; `/pr-deep` runs the
+same review with the stronger models you set in `models.deep`, so its cost
+depends on those models. None of these commands
 posts to Azure DevOps.
 
 **Preview uses a model.** `/pr-comment` reads live discussions and plans the

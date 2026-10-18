@@ -78,8 +78,9 @@ async function fixture(t, opts = {}) {
   const context = {
     app: { version: '2.0.32' },
     location: { directory },
-    model: { async list() { return { data: Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
-      .map(value => ({ providerID: 'fixture', id: value.slice(8).split('#')[0], enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
+    // Like a host catalog, each configured model once, however many roles name it.
+    model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
+      .map(value => value.slice(8).split('#')[0]))].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
     ...(opts.events === false ? {} : { event: { subscribe() {
       const queue = [], waiting = [];
@@ -713,10 +714,50 @@ test('a configured model variant is bound to its reviewer sessions; an unknown v
 
 test('deep mode requires all three deep models', async t => {
   const f = await fixture(t, { settings(s) { s.models.deep = { functional: 'fixture/deep-functional', risk: '', verifier: '' }; } });
-  await assert.rejects(f.commands.get('pr-deep').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }), /only some are set/);
+  await assert.rejects(f.commands.get('pr-deep').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }),
+    /set all three roles \(only some are set\), preferably to models stronger than models\.review, then restart OpenCode\. No fallback/);
   const g = await fixture(t);
   assert.match(await g.command('pr-deep'), /\] COMPLETE/);
   assert.ok(g.sessionsFor('azpr-deep-verifier').length);
+});
+
+test('/pr-check reports whether /pr-deep is off, would repeat /pr-review or lacks a model', async t => {
+  const configured = await checkWith(t);
+  assert.match(configured, /\] READY/);
+  assert.match(configured, /Also checked for \/pr-deep: functional, risk, verifier \(profile deep\)\./);
+  assert.doesNotMatch(configured, /\| Deep models? \|/);
+  const unset = await checkWith(t, s => { s.models.deep = { functional: '', risk: '', verifier: '' }; });
+  assert.match(unset, /\| Deep models \| ok \| Not set: \/pr-deep stays off until all three models\.deep roles name models stronger than models\.review\. \|/);
+  assert.doesNotMatch(unset, /Also checked for \/pr-deep/);
+  assert.match(await checkWith(t, s => { s.models.deep.verifier = ''; }), /\| Deep models \| WARNING \| Only some models\.deep roles are set; \/pr-deep needs all three\. \|/);
+  const repeated = await checkWith(t, s => { s.models.deep = { ...s.models.review }; });
+  assert.match(repeated, /\] READY/);
+  assert.match(repeated, /\| Deep models \| WARNING \| models\.deep repeats models\.review, so \/pr-deep would only repeat \/pr-review; set stronger models there/);
+  // One deep model that differs is not a repeat.
+  assert.doesNotMatch(await checkWith(t, s => { s.models.deep = { ...s.models.review, verifier: 'fixture/deep-verifier' }; }), /\| Deep models? \|/);
+  const g = await fixture(t);
+  const list = g.context.model.list;
+  g.context.model.list = async () => ({ data: (await list()).data.filter(model => model.id !== 'deep-verifier') });
+  const unavailable = await g.command('pr-check');
+  assert.match(unavailable, /\] READY/);
+  assert.match(unavailable, /\| Deep model \| WARNING \| The selected deep\.verifier model \(fixture\/deep-verifier\) is unavailable in the host catalog\. \/pr-deep is unavailable until it is fixed; other commands are not affected\. \|/);
+  assert.match(await g.command('pr-review'), /\] COMPLETE\n/);
+});
+
+async function checkWith(t, settings) {
+  return (await fixture(t, settings ? { settings } : {})).command('pr-check');
+}
+
+test('command descriptions say what each command is for', async t => {
+  const f = await fixture(t);
+  const descriptions = Object.fromEntries([...f.commands].map(([name, command]) => [name, command.description]));
+  assert.match(descriptions['pr-check'], /readiness check; no model runs/);
+  assert.match(descriptions['pr-review'], /review with independent verification/);
+  assert.match(descriptions['pr-deep'], /review with the stronger models of models\.deep/);
+  assert.match(descriptions['pr-quick'], /not independently verified/);
+  assert.match(descriptions['pr-stop'], /^Cancel this conversation's AZPR command/);
+  assert.match(descriptions['pr-comment'], /--publish posts comments/);
+  for (const name of ['pr-check', 'pr-review', 'pr-deep', 'pr-quick', 'pr-stop']) assert.match(descriptions[name], /\(explicit invocation only\)$/, name);
 });
 
 test('/pr-check is deterministic and needs no model session', async t => {

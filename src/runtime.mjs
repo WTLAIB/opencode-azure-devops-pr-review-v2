@@ -140,9 +140,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   void store.sweep().catch(() => {});
 
   // ---------------------------------------------------------------- helpers
-  const commandDescription = name => name === 'pr-comment'
-    ? 'Preview the latest review; --publish posts comments (safe to repeat). Optional review ID.'
-    : `Azure DevOps PR review: ${COMMANDS[name]} (explicit invocation only)`;
+  // OpenCode lists these next to the command names, so each says what its command is for.
+  const COMMAND_DESCRIPTIONS = {
+    'pr-check': 'Azure DevOps PR readiness check; no model runs (explicit invocation only)',
+    'pr-review': 'Azure DevOps PR review with independent verification (explicit invocation only)',
+    'pr-deep': 'Azure DevOps PR review with the stronger models of models.deep (explicit invocation only)',
+    'pr-quick': 'Quick Azure DevOps PR review, not independently verified (explicit invocation only)',
+    'pr-stop': "Cancel this conversation's AZPR command (explicit invocation only)",
+    'pr-comment': 'Preview the latest review; --publish posts comments (safe to repeat). Optional review ID.',
+  };
+  const commandDescription = name => COMMAND_DESCRIPTIONS[name];
 
   async function checkCommands(signal) {
     const catalog = listOf(await scoped(() => context.command.list(), signal));
@@ -214,7 +221,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   /**
    * The model catalog only; no inference is submitted. A command checks only
    * the models it uses, so an unavailable optional model never blocks another
-   * mode; /pr-check reports a configured quick model as a warning.
+   * mode; /pr-check reports configured quick and deep models as warnings.
    */
   async function readiness(run) {
     requireMethods(context, ['model.list'], 'readiness checks');
@@ -222,9 +229,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (!modelRows) throw new Error('[AZPR] Invalid model catalog.');
     const slots = run.mode === 'comment' ? [commentSlot(run.profile)] : modelSlots(run.profile);
     const problems = modelProblems(modelRows, run.profile, slots);
-    const quick = run.mode === 'check' && settings.quickReady
-      ? { checkedModelSlots: modelSlots('quick'), modelProblems: modelProblems(modelRows, 'quick', modelSlots('quick')) } : undefined;
-    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems, ...(quick ? { quick } : {}),
+    const optional = mode => run.mode === 'check' && settings[`${mode}Ready`]
+      ? { checkedModelSlots: modelSlots(mode), modelProblems: modelProblems(modelRows, mode, modelSlots(mode)) } : undefined;
+    const deep = optional('deep'), quick = optional('quick');
+    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems, ...(deep ? { deep } : {}), ...(quick ? { quick } : {}),
       azure: { organization: settings.azure.organization, apiVersion: API_VERSION, ...network } };
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
   }
@@ -679,6 +687,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     for (const problem of run.readiness?.quick?.modelProblems ?? []) {
       checks.push({ name: 'Quick model', ok: true, warning: true, detail: `${problem} /pr-quick is unavailable until it is fixed; other commands are not affected.` });
     }
+    // Likewise for /pr-deep, which differs from /pr-review only in its models: say when it is off or would repeat /pr-review.
+    for (const problem of run.readiness?.deep?.modelProblems ?? []) {
+      checks.push({ name: 'Deep model', ok: true, warning: true, detail: `${problem} /pr-deep is unavailable until it is fixed; other commands are not affected.` });
+    }
+    if (settings.deepPartial) checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'Only some models.deep roles are set; /pr-deep needs all three.' });
+    else if (!settings.deepReady) checks.push({ name: 'Deep models', ok: true, detail: 'Not set: /pr-deep stays off until all three models.deep roles name models stronger than models.review.' });
+    else if (modelSlots('deep').every(slot => settings.models.deep[slot] === settings.models.review[slot])) {
+      checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models there for the PRs that need them.' });
+    }
     const route = [network.proxy ? `proxy ${network.proxy}${network.proxyCredentials ? ' with credentials' : ''}` : '',
       network.extraCaCertificates ? `${network.extraCaCertificates} extra CA certificate(s) from azure.caFile` : ''].filter(Boolean);
     checks.push({ name: 'Azure DevOps REST', ok: true, detail: `organization ${settings.azure.organization}, api-version ${API_VERSION}${route.map(part => `; ${part}`).join('')}` });
@@ -723,7 +740,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (request.target.organization.toLowerCase() !== settings.azure.organization.toLowerCase()) {
       throw new Error(`[AZPR] The PR belongs to organization "${request.target.organization}", but azure.organization is "${settings.azure.organization}". Use a PAT and settings for that organization.`);
     }
-    if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] All three models.deep roles must be configured before /pr-deep${settings.deepPartial ? ' (only some are set)' : ''}. No fallback to review models.`);
+    if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] /pr-deep runs the review with the models of models.deep: set all three roles${settings.deepPartial ? ' (only some are set)' : ''}, preferably to models stronger than models.review, then restart OpenCode. No fallback to review models.`);
     if (mode === 'quick' && !settings.quickReady) throw new Error('[AZPR] Set models.quick.reviewer before /pr-quick. No fallback to other models.');
     // /pr-check checks the review profile's models.
     const profile = mode === 'check' ? 'review' : mode;

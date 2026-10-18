@@ -40,11 +40,18 @@ settings, backups and failure records. Never upload `.local/`.
   `<!-- azpr:verified -->` / `<!-- azpr:quick -->` variants for the passages
   about where findings come from, the report and receipt state status,
   coverage and verification separately, and the comment disclosure line names
-  the quick method. The review and deep system prompts stay byte-identical
-  unless a change to them is deliberate (a hash test locks them).
+  the quick method. The review system prompts, which deep shares, stay
+  byte-identical unless a change to them is deliberate (a hash test locks them).
 - Only records identical in every field are merged as duplicates; findings on
   the same lines stay separate. A parsed answer without a usable review never
   makes a commentable COMPLETE, and zero findings never hide unreviewed files.
+
+**Deep reviews differ only in their models.**
+- `/pr-deep` runs the review's stages and system prompts with the models of
+  `models.deep`, which are meant to be stronger than the review models, and
+  never falls back to the review models. Deep-only prompt text was removed
+  after live runs showed it changed neither model's results; add
+  mode-specific instructions only with a measured benefit.
 
 **Keep useful work; degrade per item.**
 - Answers that break the output contract get a correction turn in the same
