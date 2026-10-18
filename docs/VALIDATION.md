@@ -7,6 +7,30 @@ passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
 
+## Onboarding and source distribution (2026-10-19)
+
+The `codex/project-launch` changes, based on `d7cd0ac`, add onboarding,
+synthetic demo assets, an MIT license and release preparation. The installer
+now includes the license in the installed package; the documented minimal
+source package contains 31 files. Review and publication runtime code and
+prompts are unchanged.
+
+- `npm run check` and all **345 tests** passed, including the updated manual
+  source-package list, directory loading and installed license contents.
+- Fresh and replacement installation passed with **OpenCode 2.0.32**. The
+  comment-scale fixture passed with 120 changed files, eight planner sessions,
+  at most two planning sessions in flight and 20 fake Azure threads.
+- These host tests use loopback fake Azure DevOps and model services in
+  isolated directories. No live model or Azure publication was run for this
+  documentation/distribution change.
+- Local guide links and anchors were checked. The demo's synthetic finding
+  passes the actual comment-plan validator and renderer; the SVG and GIF were
+  inspected visually. They demonstrate presentation, not model accuracy or
+  real Azure UI rendering.
+
+The 0.1.0 release notes remain a draft until a reviewed commit is tagged and
+published. Earlier live-run evidence and limitations below are unchanged.
+
 ## Environment
 
 Ubuntu 22.04.5 LTS (WSL2, kernel 6.18), Node 22.23.3, OpenCode CLI 2.0.22,

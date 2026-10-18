@@ -18,7 +18,7 @@ Usage: sh install.sh [--settings FILE] [--replace] [--config-dir DIR]
 Retired models._help documentation is omitted with a notice.
 Python 3 (standard library only) is required to merge JSON safely.
 No npm install, pip packages, jq, sudo, or network access is required.
-README.md, docs/, uninstall.sh, and config/settings.schema.json are optional.
+README.md, docs/, CHANGELOG.md, uninstall.sh, and config/settings.schema.json are optional.
 Installed module metadata is generated; the source package.json is not required.
 TXT
 }
@@ -38,7 +38,7 @@ runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comment
 prompt_names='common functional risk deep final dedupe quick comment-policy comment-plan'
 command_names='pr-check pr-review pr-deep pr-quick pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
-for file in scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
+for file in LICENSE scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
 for file in $runtime_files; do require_file "src/$file"; done
 for name in $prompt_names; do require_file "src/prompts/$name.md"; done
 copy_optional() {
@@ -127,11 +127,12 @@ stage=$(mktemp -d "$root/.azpr-v2-stage.XXXXXX")
 mkdir -p "$stage/new/$target/prompts"
 for file in $runtime_files; do cp "$src/src/$file" "$stage/new/$target/"; done
 for name in $prompt_names; do cp "$src/src/prompts/$name.md" "$stage/new/$target/prompts/"; done
+cp "$src/LICENSE" "$stage/new/$target/LICENSE"
 # OpenCode 2.0.22 resolves local package directories through server, then index.
 # Keep the entry inside the staged package so replacement and rollback own it.
 printf '%s\n' "export { default } from './plugin.js';" > "$stage/new/$target/server.js"
 printf '%s\n' '{"type":"module","exports":"./server.js","private":true}' > "$stage/new/$target/package.json"
-for file in config/settings.schema.json README.md uninstall.sh; do copy_optional "$file"; done
+for file in config/settings.schema.json README.md CHANGELOG.md uninstall.sh; do copy_optional "$file"; done
 if [ -d "$src/docs" ]; then
   cp -R "$src/docs" "$stage/new/plugins/azpr-v2/docs" || printf 'WARNING: Could not copy optional docs directory.\n' >&2
 fi

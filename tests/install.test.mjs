@@ -16,7 +16,7 @@ const pkg = dirname(dirname(fileURLToPath(import.meta.url)));
 const destination = 'plugins/azpr-v2';
 const TEAM_PAT = 'team-private-pat-0123456789abcdef';
 const requiredFiles = [
-  'install.sh', 'scripts/merge-settings.py', 'config/settings.example.json',
+  'install.sh', 'LICENSE', 'scripts/merge-settings.py', 'config/settings.example.json',
   ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs',
     'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'diff.mjs', 'search.mjs', 'review-tools.mjs', 'review-work.mjs', 'store.mjs'].map(name => 'src/' + name),
   ...['common', 'functional', 'risk', 'deep', 'final', 'dedupe', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
@@ -120,6 +120,7 @@ test('fresh installation creates one V2 package and preserves existing configura
   assert.deepEqual(readdirSync(join(s.root, 'commands')), ['my-command.md']);
   for (const name of ['azpr', 'skills', 'agents', 'azpr-v2-backups']) assert.ok(!existsSync(join(s.root, name)));
   assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
+  assert.equal(readFileSync(installed(s, 'LICENSE'), 'utf8'), readFileSync(join(pkg, 'LICENSE'), 'utf8'));
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).models, '_help'), false);
 });
 
@@ -140,7 +141,7 @@ test('local directory entry resolves and loads from a minimal fresh install', as
   const s = setup(); minimalSource(s);
   ok(install(s, ['--settings', profile(s)]));
   await loadDirectoryEntry(s);
-  assert.equal(readdirSync(installed(s, '')).length, 22); // 18 JS modules + entry + metadata + settings + prompts
+  assert.equal(readdirSync(installed(s, '')).length, 23); // 18 JS modules + entry + metadata + settings + prompts + license
   original(s); clean(s);
 });
 
@@ -166,8 +167,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('30-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 30);
+test('31-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 31);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);

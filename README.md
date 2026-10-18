@@ -1,11 +1,72 @@
 # OpenCode Azure DevOps PR Review — V2
 
-Explicit, independent Azure DevOps PR reviews for **`@opencode/cli`** (tested with
-**2.0.32**) and **Ubuntu 22.04**, using the **Azure DevOps Services REST API**
-(api-version **7.1**) with a personal access token from AZPR's own settings. No
-MCP server is needed. The plugin uses the OpenCode V2 plugin/session API.
+Review Azure DevOps pull requests in OpenCode, with quick and independently
+verified review modes, comment previews, and explicit publishing.
 
-How a review works:
+**Bring your configured OpenCode models. Read the review, preview the comments,
+and choose when to publish to Azure DevOps.** No MCP server is needed.
+
+[Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
+[Team setup and data handling](docs/ENTERPRISE.md) ·
+[Validation and limitations](docs/VALIDATION.md)
+
+![Illustrative Azure-style PR summary and inline comment for a synthetic defect; quick findings are not independently verified.](docs/assets/review-example.svg)
+
+*Illustrative example using a fictional PR, not a screenshot of a live Azure
+DevOps review. The [demo](docs/DEMO.md) explains the workflow and comment format.*
+
+## Choose a review
+
+| Command | Best starting point | What runs |
+| --- | --- | --- |
+| `/pr-quick` | Small or routine changes | One reviewer per shard covers function and risk. Findings are **reported, not independently verified**. |
+| `/pr-review` | Changes that need an independent second check | Functional and risk reviewers, followed by separate verification sessions. |
+| `/pr-deep` | Selected changes needing deeper analysis | The verified pipeline with your separately configured deep models and deeper prompts. |
+
+All three modes use the same Azure comment layout. Quick comments disclose their
+method. A separate verifier improves scrutiny; it does not guarantee that a
+finding is correct or that every defect was found.
+
+For a small PR that fits in one shard and one comment-planning page, quick
+usually needs one review session plus one planning session; review needs two
+reviewer sessions, a verifier, and comment planning. **Sessions are not API
+requests:** each can make multiple requests, and repairs, retries, larger PRs
+and extra planning pages add work. Previewing comments also uses a model.
+See [measured runs and their limits](docs/VALIDATION.md) for cost and timing
+examples, rather than treating a session count as a price guarantee.
+
+## Your first review
+
+Follow the [quickstart](docs/QUICKSTART.md) to download a pinned source revision,
+install it in your OpenCode V2 configuration directory, and set your model IDs
+and Azure PAT. Then, in one OpenCode conversation:
+
+```text
+/pr-check https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
+/pr-quick https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
+/pr-comment REVIEW_ID_FROM_RECEIPT
+```
+
+Run each command after the previous one finishes. `/pr-check` uses no model;
+`/pr-quick` reviews the PR; `/pr-comment` prepares a **preview**. Publication
+requires a separate `/pr-comment REVIEW_ID_FROM_RECEIPT --publish` command.
+Use the review ID from the completed receipt, not the literal placeholder.
+
+## Compatibility
+
+| Component | Tested target |
+| --- | --- |
+| OpenCode | **V2 `@opencode/cli` 2.0.32**; V1 plugins use a different API. |
+| Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
+| Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
+| Installation | POSIX `sh` and Python 3 standard library; no build step or npm dependencies. |
+| Models | Your OpenCode provider/model IDs with tool support. Each mode checks the models it uses. |
+
+The current distribution is source plus `install.sh`, not an npm package. A
+fresh install needs settings before it is ready. The [quickstart](docs/QUICKSTART.md)
+includes a model setup that also passes `/pr-check`.
+
+## How reviews work
 
 1. The runtime reads the PR deterministically from Azure DevOps: identity, the
    latest iteration's source commit and merge base, and the complete
@@ -24,9 +85,10 @@ How a review works:
    duplicates; it never drops a finding.
 4. The runtime rechecks the PR versions. Only a changed **source** commit makes
    the review STALE; a moved base is reported as a warning.
-5. `/pr-comment` plans comments with a model, then the runtime posts the saved
-   text itself, skipping comments that already exist and reading every created
-   comment back from Azure DevOps. Re-running a publish is safe.
+5. `/pr-comment` plans a preview with a model. With `--publish`, the runtime
+   posts the saved text itself, skipping comments that already exist and
+   reading every created comment back from Azure DevOps. Re-running a publish
+   is safe.
 
 `/pr-quick` is the lighter alternative for small or routine PRs: one reviewer
 per shard covers both the functional and the risk focus and checks its own
@@ -72,10 +134,11 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **30 files** are sufficient:
+These **31 files** include the runtime and its license:
 
 ```text
 install.sh
+LICENSE
 scripts/merge-settings.py
 config/settings.example.json
 src/plugin.js
@@ -107,7 +170,8 @@ src/prompts/comment-policy.md
 src/prompts/comment-plan.md
 ```
 
-README, `docs/`, the settings schema and `uninstall.sh` are optional.
+README, `docs/`, the changelog, the settings schema and `uninstall.sh` are optional.
+Keep `LICENSE` with copied or redistributed packages.
 
 ## Configuration
 
@@ -312,3 +376,9 @@ Uninstall without `--apply` previews; `--apply` archives only this package under
 [current validation](docs/VALIDATION.md) and [AI maintenance guidance](AGENTS.md)
 describe the current behavior. Never commit `.local/`, diagnostics, credentials
 or personal model selections.
+
+## License and releases
+
+[MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
+initial release scope and [release preparation](docs/RELEASING.md) for the
+pending 0.1.0 release. A pending release note is not a published tag.
