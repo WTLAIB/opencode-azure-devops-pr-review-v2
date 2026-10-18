@@ -29,6 +29,9 @@ tool call at all:
 - `sourceExcerpts`: HEAD source around each finding (`findingIds` says which),
   as `N | line` rows. `firstLine`/`lastLine`/`totalLines` tell you whether the
   excerpt is the whole file.
+- `snapshot.files` and `dispositions`: the changed files and the review's
+  decisions; on a large PR only those of this page's findings, with `allFiles`
+  and `allDispositions` holding the complete lists.
 - `existingDiscussions` (when `discussionsRead` is true): every live thread on
   the PR with its path, line, author and the start of its first comment.
   Deleted threads are already excluded.

@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 333 tests across settings (including the
+`npm run check` and `npm test` pass: 334 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -35,7 +35,8 @@ output acceptance and correction prompts (including verifier rows judged by
 their own fields, confirmations that move a finding to another file and the
 same-file duplicate check), comment validation and markers (including skips
 that rely on another finding, and skip causes checked against the finding, the
-page's source excerpts and the live threads), planning and publication, review sharding,
+page's source excerpts and the live threads, and pages of a large PR carrying
+only their own files and dispositions), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
 settings) and the runtime integration (fake host plus a fake Azure DevOps REST
@@ -828,6 +829,75 @@ coverage.gaps.").
   about the same on PR #3, where B had more two-request sessions. One more
   regression hit in ten runs is within run-to-run variation (one A run on PR
   #3 spent 30 requests in one shard). B is not part of this revision.
+
+## Live runs: skip causes and page-scoped planning input (2026-10-18, preview only)
+
+Same setup. The AZPR comments on PR #2 and PR #4 were deleted first (PR #3 had
+none), so every PR's planning writes real comments; nothing was posted. One
+quick and one review run per PR with a comment preview, compared with the
+preview runs on `33fb851` above (PR #2 and PR #4 skipped every finding there
+because earlier threads covered them).
+
+| PR #3 planning | `33fb851` quick | this revision quick | `33fb851` review | this revision review |
+| --- | --- | --- | --- | --- |
+| Payload per page (mean) | 27.8 K characters | 11.0 K | 27.8 K | 11.1 K |
+| Input (uncached + cached) | 136 K (93 K + 43 K) | 67 K (44 K + 23 K) | 162 K (86 K + 76 K) | 80 K (38 K + 42 K) |
+| Time | 169 s | 140 s | 161 s | 163 s |
+| Sessions, requests, correction turns | 10, 12, 3 | 9, 9, 0 | 8, 13, 1 | 9, 11, 0 |
+| Inline comments | 24 (15 combined, 15 candidate pairs) | 24 (10 combined, 10 pairs) | 26 of 30 findings | 33 of 34 |
+| Skips | none | 1 `low-severity` | 2 low, 2 "no source passage" with the file in the page | 1 `low-severity` |
+
+- The page-scoped lists halved planning input on the 316-file PR; time did not
+  follow the input, since a page's time goes to writing its answer.
+- Every planner skip named a valid cause and none needed a correction turn. No
+  planner claimed missing source this time, so the cause check did not trigger
+  live; the offline tests and the planning test cover it.
+- Every candidate pair of the quick runs became one comment, as before.
+- PR #2 now gets its three comments in either mode (18 s of planning); PR #4's
+  review gets one, and its quick run had no finding to plan.
+
+## Live runs: gpt-6.1-sol on the old and new revision (2026-10-18, preview only)
+
+OpenCode 2.0.32, every role on `openai/gpt-6.1-sol` (default variant), the
+same settings, no AZPR comments on the three PRs, nothing posted. Each PR ran
+`/pr-quick`, `/pr-review` and `/pr-deep` once on `33fb851` (old) and once on
+this revision (new), each followed by a comment preview; old and new were
+installed alternately per PR. Cost is the API equivalent at OpenAI's Standard
+prices (gpt-6.1-sol $2.00 input, $0.10 cached input, $10.00 output per million
+tokens; gpt-6-luna $0.10, $0.01, $0.50; reasoning counted as output); the
+ChatGPT sign-in the runs used reports no cost. Every reported finding outside
+the planted defects was checked against the source at both commits.
+
+| PR | Mode | Review time (old / new) | Review input | Review cost | Planning (old / new) | Findings |
+| --- | --- | --- | --- | --- | --- | --- |
+| PR #2 | quick / review / deep | 42 / 43 s, 99 / 100 s, 93 / 93 s | 25 K, 85 K, 87 K | $0.04, $0.13, $0.11–0.13 | 23–24 s, 6 K input | the 3 known defects in every run |
+| PR #4 | quick | 132 / 155 s | 0.61 / 1.11 M | $0.41 / $0.52 | 45 s, 15–16 K | both seeded regressions in every run, plus 1–2 confirmed and 1 debatable defect |
+| PR #4 | review | 260 / 310 s | 1.74 / 1.87 M | $1.09 / $1.11 | 50 / 54 s | both seeds, plus 3 confirmed and 1–2 debatable |
+| PR #4 | deep | 270 / 332 s | 1.82 / 2.25 M | $1.12 / $1.21 | 48 / 57 s | both seeds, plus 1–3 confirmed and 1–2 debatable |
+| PR #3 | quick | 191 / 198 s | 2.06 / 2.12 M | $1.75 / $1.79 | 219 / 218 s, 153 / 97 K | 24 of 24 policies (50 findings, planned as 24 comments); configuration 0 |
+| PR #3 | review | 355 / 382 s | 4.22 / 4.51 M | $3.81 / $3.84 | 156 / 150 s, 76 / 47 K | 24 of 24 (24 findings); configuration 0 |
+| PR #3 | deep | 390 / 371 s | 4.58 / 4.62 M | $4.05 / $3.91 | 154 / 153 s, 82 / 47 K | 24 of 24 (24 findings); configuration 0 |
+
+- Accuracy: none of the 250 reported findings was false. On PR #4 the model
+  also found five real regressions of the PR besides the seeds (chained
+  pipeline constraints overwrite each other, a case transform exceeds
+  max_length, nested serialization schemas disagree with the JSON schema, a
+  PEP 585 generic alias skips `__get_pydantic_core_schema__`, a resolved `Self`
+  keeps a stale origin) and two real but debatable changes (validation-mode
+  schemas follow `ser_json_temporal`, model ser schemas use the prebuilt
+  serializer). No verifier rejected a planted or known defect. gpt-6-luna on
+  the same day never found PR #4's second seed, reported two false PR #3
+  findings on test files (in review and deep) and had one review reject a
+  known PR #2 defect.
+- Cost and time: each version's nine runs cost about $13.4 with planning
+  (luna: under $0.6), a PR #3 review about $3.8 (luna $0.17–0.19). The input
+  volume was close to luna's; time was 1.3–1.6 times luna's on PR #2 and PR #3
+  and 3–5 times on PR #4, where the model read more (13–41 requests against
+  4–18).
+- Old against new: the review stages did not differ beyond run-to-run
+  variation and no PARTIAL answer occurred, so no follow-up ran. Planning input
+  fell by 37–43 % on PR #3 (planning time unchanged), every skip of the new
+  revision named a cause (`low-severity`) and none needed a correction turn.
 
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 

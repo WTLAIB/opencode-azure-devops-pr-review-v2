@@ -17,6 +17,9 @@ const evidenceKeys = review => [...new Set((review.commentEvidence ?? []).map(it
 
 const MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
 const INLINE_BUDGET = 40000;
+// Up to this size the changed-file list and the dispositions are inline on every
+// planning page; above it a page carries those of its findings and a reference.
+const PAGE_CONTEXT_CHARACTERS = 2000;
 
 /** Live (not deleted) discussions in a compact, model-readable form. */
 export function discussionDigest(threads) {
@@ -113,9 +116,17 @@ async function planningInput(review, store, findings, report, work, continuation
   const sources = extras.sourceExcerpts ?? [];
   const covered = new Set(sources.flatMap(item => item.findingIds));
   const needsEvidence = findings.some(finding => !covered.has(finding.id));
+  // A large PR repeats neither list on every page: the runtime checks against the complete ones.
+  const ids = new Set(findings.map(finding => finding.id));
+  const paths = new Set(findings.map(finding => parseLocation(finding.location)?.path).filter(Boolean));
+  const dispositions = compactDispositions(review.final.dispositions);
+  const wholeFiles = JSON.stringify(files).length <= PAGE_CONTEXT_CHARACTERS;
+  const wholeDispositions = JSON.stringify(dispositions).length <= PAGE_CONTEXT_CHARACTERS;
   return {
     reviewId: review.id,
-    snapshot: { ...snapshot, files: await store.pack(files), description: await store.pack(description ?? '', 3000) },
+    snapshot: { ...snapshot, files: wholeFiles ? files : files.filter(path => paths.has(path)),
+      ...(wholeFiles ? {} : { changedFileCount: files.length, allFiles: await store.pack(files, 0) }),
+      description: await store.pack(description ?? '', 3000) },
     outputLanguage: review.outputLanguage,
     findings,
     // Runtime-read HEAD source around each finding; anchors can come straight from here.
@@ -125,7 +136,8 @@ async function planningInput(review, store, findings, report, work, continuation
     discussionsRead: extras.discussions !== null,
     report: await store.pack(report, 16000),
     ...(extras.reportSegments > 1 ? { reportReference: await store.put(review.final.report ?? '') } : {}),
-    dispositions: await store.pack(compactDispositions(review.final.dispositions)),
+    dispositions: wholeDispositions ? dispositions : dispositions.filter(row => ids.has(row.id) || ids.has(row.mergedInto)),
+    ...(wholeDispositions ? {} : { allDispositions: await store.pack(dispositions, 0) }),
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
     ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),

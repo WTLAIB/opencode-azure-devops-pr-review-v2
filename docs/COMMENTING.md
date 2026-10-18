@@ -87,7 +87,10 @@ finding's file. Each page then receives, inline: the verified findings,
 `sourceExcerpts` (numbered HEAD lines around each finding, the whole file when it
 has at most 400 lines), `existingDiscussions` (live threads with path, line,
 author and the start of the first comment), the report segment and a summary of
-earlier pages. Most pages finish in one model request without tools; the
+earlier pages. The changed-file list and the review's dispositions are inline
+when they are small; on a large PR a page gets only those of its own findings
+(plus what merged into them) and references to the complete lists, which the
+runtime still uses for its own checks. Most pages finish in one model request without tools; the
 planner reads more only for lines outside an excerpt or a full comment body.
 A page that needs more reading returns `CONTINUE` with its finished items and a
 continuation note (tools are withdrawn after 12 requests or about 48,000

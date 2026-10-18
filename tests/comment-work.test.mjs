@@ -90,6 +90,28 @@ test('a skip whose cause the page contradicts goes back to the planner, which th
   assert.deepEqual(plan.skipped, [thread]);
 });
 
+test('on a large PR a page carries the files and dispositions of its findings and references the complete lists', async t => {
+  const findings = Array.from({ length: 6 }, (_, i) => ({ ...finding(`F-${i + 1}`), location: `head:/src/File${i + 1}.java:2` }));
+  const { review, store } = await setup(t, findings);
+  const files = Array.from({ length: 316 }, (_, i) => `/src/File${i + 1}.java`);
+  review.snapshot.files = files;
+  review.final.dispositions.push(...Array.from({ length: 40 }, (_, i) => ({ id: `R-${i + 1}`, status: 'MERGED', mergedInto: i ? 'F-6' : 'F-1', reason: 'Same root cause as the finding it merged into.' })));
+  const { invoke, payloads } = stages(async payload => JSON.stringify({ status: 'READY', comments: payload.findings.map(f => ({ ...comment(f.id), path: /head:([^:]+)/.exec(f.location)[1] })), skipped: [] }));
+  const plan = await prepareComments(review, store, invoke);
+  assert.equal(plan.comments.length, 6, 'The runtime still checks paths against every changed file.');
+  assert.deepEqual(payloads[0].snapshot.files, ['/src/File1.java', '/src/File2.java', '/src/File3.java', '/src/File4.java']);
+  assert.equal(payloads[0].snapshot.changedFileCount, 316);
+  assert.deepEqual(JSON.parse(await store.read(payloads[0].snapshot.allFiles.azprData)), files);
+  assert.deepEqual(payloads[0].dispositions.map(row => row.id), ['F-1', 'F-2', 'F-3', 'F-4', 'R-1'], "A page keeps its findings' decisions and what merged into them.");
+  assert.equal(JSON.parse(await store.read(payloads[1].allDispositions.azprData)).length, 46);
+  assert.ok(JSON.stringify(payloads[0]).length < 9000, `${JSON.stringify(payloads[0]).length} characters`);
+  // A small PR keeps both lists inline, as before.
+  const small = await setup(t, [finding('F-1')]);
+  const few = stages(async payload => JSON.stringify({ status: 'READY', comments: [comment('F-1')], skipped: [] }));
+  await prepareComments(small.review, small.store, few.invoke);
+  assert.deepEqual([few.payloads[0].snapshot.files, few.payloads[0].dispositions.length, few.payloads[0].allFiles, few.payloads[0].allDispositions], [['/src/Main.java'], 1, undefined, undefined]);
+});
+
 test('CONTINUE checkpoints keep finished work; a checkpoint without progress skips what is open instead of failing', async t => {
   const { review, store } = await setup(t, [finding('F-1'), finding('F-2')]);
   let sessions = 0;

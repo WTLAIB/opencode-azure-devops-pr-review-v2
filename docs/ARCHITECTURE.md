@@ -211,7 +211,9 @@ object.
 `publishableFindings` supplies the findings: CONFIRMED ones and verifier
 additions for review and deep, REPORTED ones for a quick review. A saved
 review without a verification field is trusted only when its profile is review
-or deep. Planning (model) uses pages of at most four findings plus report segments, with
+or deep. Planning (model) uses pages of at most four findings plus report segments
+(on a large PR each page carries the changed files and dispositions of its own
+findings and references to the complete lists), with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
 sessions per page, and a checkpoint without progress or a fourth unfinished
 session ends the page, keeping its finished comments and skipping what is open.
