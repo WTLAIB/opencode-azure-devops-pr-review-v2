@@ -127,8 +127,9 @@ is real:
 - the location (`head:` by default, `base:` for content that exists only in
   BASE) must exist at that commit with the lines in range, in a file whose
   content this session's own `azpr_read_diff` or `azpr_read_file` calls showed
-  (not the run's cache, another shard's reads or the runtime's own checks; a
-  binary or oversized file's "content is not shown" answer is not a read);
+  (not the run's cache, another shard's reads or the runtime's own checks).
+  Only answers that show source count: a binary or oversized side, an empty
+  file, identical versions or a line, column or hunk past the end show none;
 - problems the reviewer can fix get the normal correction turns, with hints
   for deleted and renamed files; what is still wrong afterwards becomes
   NEEDS_INFO. Passing findings are REPORTED; only records identical in every

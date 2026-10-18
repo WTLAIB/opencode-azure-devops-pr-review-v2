@@ -425,3 +425,22 @@ test('reads of another session do not count, and a location the runtime cannot c
   const check = await checkQuickLocation({ location: 'head:/a.ts:1' }, { snapshot: { head: 'h', base: 'b', changes: [] }, azure: failing, run: { active: true }, reads: new Set(['h\n/a.ts']) });
   assert.deepEqual(check, { problem: 'the runtime could not check /a.ts at HEAD (timeout).', repairable: false });
 });
+
+test('a quick finding needs a read that showed the file: answers past the end do not count', async t => {
+  const { runReviewTool } = await import('../src/review-tools.mjs');
+  const path = '/src/a.ts', head = 'b'.repeat(40), base = 'a'.repeat(40);
+  const outcomes = {};
+  for (const [name, input] of [['past-end-line', { tool: 'azpr_read_file', args: { path, startLine: 99 } }], ['past-end-hunk', { tool: 'azpr_read_diff', args: { path, fromHunk: 99 } }],
+    ['shown', { tool: 'azpr_read_file', args: { path } }]]) {
+    const f = await quickContext(t, { files: [path], sources: { [`${base}:${path}`]: 'export const enabled = false;\n', [`${head}:${path}`]: 'export const enabled = true;\n' },
+      behave: async ({ payload, read }) => {
+        // The session's own tool call decides what it read, as executeReviewTool does.
+        const outcome = await runReviewTool(input.tool, input.args, { azure: f.ctx.azure, run: f.run, snapshot: f.run.snapshot });
+        for (const shown of outcome.reads) read(shown.path, shown.version === base ? 'base' : 'head');
+        return quickAnswer(payload, [quickFinding('Q-1', `head:${path}:1`)]);
+      } });
+    const final = await runReview(f.ctx, f.run, f.request);
+    outcomes[name] = `${final.dispositions[0].status}:${f.calls[0].repairs.length}`;
+  }
+  assert.deepEqual(outcomes, { 'past-end-line': 'NEEDS_INFO:2', 'past-end-hunk': 'NEEDS_INFO:2', shown: 'REPORTED:0' });
+});

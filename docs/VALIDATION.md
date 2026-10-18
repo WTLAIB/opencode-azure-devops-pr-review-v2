@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 324 tests across settings (including the
+`npm run check` and `npm test` pass: 326 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -51,7 +51,9 @@ The quick review (2026-10-18) adds tests for: one reviewer per shard and no
 verifier; REPORTED and NEEDS_INFO decided by the runtime's form and source
 checks (deleted, renamed, unchanged and binary files, line ranges, and reads
 counted only for the session that made them, never another shard's or the
-runtime's own); different defects on the same line kept apart while only
+runtime's own, and only for versions whose source the answer showed, so a
+line, column or hunk past the end, an empty file or identical versions are no
+read); different defects on the same line kept apart while only
 records identical in every field are merged; a parsed answer without a usable
 review giving PARTIAL; zero findings with incomplete coverage (a failed shard,
 reviewer gaps, a partial change list); the quick disclosure line, report and
