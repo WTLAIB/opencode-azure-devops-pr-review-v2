@@ -50,7 +50,7 @@ test('planning pages hold at most four findings and assemble one plan with every
   const { review, store } = await setup(t, findings);
   const { invoke, payloads } = stages(async payload => JSON.stringify({ status: 'READY',
     comments: payload.findings.filter(f => f.severity !== 'low').map(f => comment(f.id)),
-    skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, reason: 'Low.' })),
+    skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low.' })),
     ...(payload.commentWork.allowSummary ? { summary: 'Purpose.' } : {}) }));
   const plan = await prepareComments(review, store, invoke);
   assert.equal(payloads.length, 3);
@@ -75,6 +75,41 @@ test('a page with problems is repaired in place; what stays broken is skipped, n
   assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1']);
   assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-2']);
   assert.match(plan.skipped[0].reason, /did not address/);
+});
+
+test('a skip whose cause the page contradicts goes back to the planner, which then comments', async t => {
+  // As in a live PR #3 plan: the page showed the finding's whole file and the planner said it had no source.
+  const { review, store } = await setup(t, [finding('F-1'), finding('F-2')]);
+  const thread = { findingId: 'F-2', cause: 'existing-thread', threadId: 5, reason: 'Thread 5 covers it.' };
+  const { invoke, payloads } = stages(async (payload, turn) => turn === 0
+    ? JSON.stringify({ status: 'READY', comments: [], skipped: [{ findingId: 'F-1', cause: 'cannot-anchor', reason: 'This page has no source passage for F-1.' }, thread] })
+    : JSON.stringify({ status: 'READY', comments: [{ ...comment('F-1'), startLine: 2, endLine: 2, anchor: 'const value = load();' }], skipped: [thread] }));
+  const plan = await prepareComments(review, store, invoke, { fetchSource: async () => 'line one\nconst value = load();\n', discussions: [{ threadId: 5, path: '/src/Main.java', line: 2 }] });
+  assert.deepEqual(payloads[0].sourceExcerpts.map(item => [item.findingIds.join(), item.firstLine, item.lastLine]), [['F-1,F-2', 1, 2]]);
+  assert.deepEqual(plan.comments.map(c => [c.findingId, c.startLine]), [['F-1', 2]]);
+  assert.deepEqual(plan.skipped, [thread]);
+});
+
+test('on a large PR a page carries the files and dispositions of its findings and references the complete lists', async t => {
+  const findings = Array.from({ length: 6 }, (_, i) => ({ ...finding(`F-${i + 1}`), location: `head:/src/File${i + 1}.java:2` }));
+  const { review, store } = await setup(t, findings);
+  const files = Array.from({ length: 316 }, (_, i) => `/src/File${i + 1}.java`);
+  review.snapshot.files = files;
+  review.final.dispositions.push(...Array.from({ length: 40 }, (_, i) => ({ id: `R-${i + 1}`, status: 'MERGED', mergedInto: i ? 'F-6' : 'F-1', reason: 'Same root cause as the finding it merged into.' })));
+  const { invoke, payloads } = stages(async payload => JSON.stringify({ status: 'READY', comments: payload.findings.map(f => ({ ...comment(f.id), path: /head:([^:]+)/.exec(f.location)[1] })), skipped: [] }));
+  const plan = await prepareComments(review, store, invoke);
+  assert.equal(plan.comments.length, 6, 'The runtime still checks paths against every changed file.');
+  assert.deepEqual(payloads[0].snapshot.files, ['/src/File1.java', '/src/File2.java', '/src/File3.java', '/src/File4.java']);
+  assert.equal(payloads[0].snapshot.changedFileCount, 316);
+  assert.deepEqual(JSON.parse(await store.read(payloads[0].snapshot.allFiles.azprData)), files);
+  assert.deepEqual(payloads[0].dispositions.map(row => row.id), ['F-1', 'F-2', 'F-3', 'F-4', 'R-1'], "A page keeps its findings' decisions and what merged into them.");
+  assert.equal(JSON.parse(await store.read(payloads[1].allDispositions.azprData)).length, 46);
+  assert.ok(JSON.stringify(payloads[0]).length < 9000, `${JSON.stringify(payloads[0]).length} characters`);
+  // A small PR keeps both lists inline, as before.
+  const small = await setup(t, [finding('F-1')]);
+  const few = stages(async payload => JSON.stringify({ status: 'READY', comments: [comment('F-1')], skipped: [] }));
+  await prepareComments(small.review, small.store, few.invoke);
+  assert.deepEqual([few.payloads[0].snapshot.files, few.payloads[0].dispositions.length, few.payloads[0].allFiles, few.payloads[0].allDispositions], [['/src/Main.java'], 1, undefined, undefined]);
 });
 
 test('CONTINUE checkpoints keep finished work; a checkpoint without progress skips what is open instead of failing', async t => {

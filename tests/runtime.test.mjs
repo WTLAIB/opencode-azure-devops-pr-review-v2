@@ -33,7 +33,7 @@ function defaultAnswer({ role, packet }) {
   const eligible = packet.findings.filter(f => f.severity !== 'low');
   return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}),
     comments: eligible.map(f => ({ findingId: f.id, severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.id} loses state\n\nTrigger, impact and correction.` })),
-    skipped: packet.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, reason: 'Low severity.' })) };
+    skipped: packet.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low severity.' })) };
 }
 
 async function fixture(t, opts = {}) {
@@ -972,6 +972,111 @@ test('a quick finding in a file that only another session read is NEEDS_INFO', a
   assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1001:NEEDS_INFO']);
   assert.match(saved.final.dispositions[0].reason, /this session did not read \/src\/A\.java at HEAD/);
   assert.equal(f.sessionsFor('azpr-quick-reviewer').find(session => session.packet.assignment.files[0] === '/src/B.java').turns, 3, 'Both correction turns were used.');
+});
+
+// A quick answer that is PARTIAL and names unfinished work gets one follow-up turn.
+const partialAnswer = (packet, findings, gaps = ['Callers of the changed method were not read.']) => ({ status: 'PARTIAL', coverage: { files: packet.assignment.files, gaps }, additionalFiles: [], report: 'Stopped early.', findings });
+const completeAnswer = (packet, findings) => ({ status: 'COMPLETE', coverage: { files: packet.assignment.files, gaps: [] }, additionalFiles: [], report: 'Finished.', findings });
+
+test('a quick reviewer that answers PARTIAL with unfinished work continues once in the same session', async t => {
+  const f = await fixture(t, { settings: quickSettings, answer({ role, packet, turn }) {
+    if (role !== 'azpr-quick-reviewer') return undefined;
+    const path = packet.assignment.files[0], first = finding(packet.assignment.firstFindingId, path);
+    return turn === 0 ? partialAnswer(packet, [first]) : completeAnswer(packet, [first, { ...finding('Q-2', path, 'medium'), summary: 'Found after reading the callers' }]);
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none \(quick review\)\n/);
+  assert.match(receipt, /azpr-quick-reviewer: COMPLETE; session=[^;\n]+; model=fixture\/quick-reviewer;[^\n]*follow-up=completed/);
+  assert.match(receipt, /Follow-up notice: a session answered PARTIAL and named unfinished work/);
+  const sessions = f.sessionsFor('azpr-quick-reviewer');
+  assert.equal(sessions.length, 1, 'The follow-up stays in the same session.');
+  const prompts = f.prompts().filter(call => call.sessionID === sessions[0].id);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1].text, /^AZPR runtime: your answer is PARTIAL and names work that is not finished\.\n- Callers of the changed method were not read\./);
+  assert.ok(f.notices.some(n => /Quick review reported unfinished work; asking the same session once to continue\./.test(n.text)));
+  const [saved] = await savedReviews(f);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED', 'Q-2:REPORTED']);
+  assert.equal(saved.final.coverageSummary.complete, true);
+  const [stage] = await stageRecords(receipt);
+  assert.deepEqual(stage.followUp, { turn: 1, gaps: ['Callers of the changed method were not read.'], uncoveredFiles: 0, outcome: 'completed' });
+});
+
+test('a second PARTIAL stands; complete answers, a zero turn budget and the verified pipeline get no follow-up', async t => {
+  const stop = ({ role, packet }) => ['azpr-quick-reviewer', 'azpr-review-functional'].includes(role)
+    ? partialAnswer(packet, [finding(packet.assignment.firstFindingId, packet.assignment.files[0])]) : undefined;
+  const f = await fixture(t, { settings: quickSettings, answer: stop });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /\] COMPLETE; coverage incomplete; verification none/);
+  assert.match(receipt, /follow-up=still-partial/);
+  assert.equal(f.sessionsFor('azpr-quick-reviewer')[0].turns, 2, 'One follow-up, then the reported limit stands.');
+  const [saved] = await savedReviews(f);
+  assert.deepEqual(saved.final.coverageSummary.reasons, ['reviewer-gaps']);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED']);
+  await f.command('pr-review');
+  assert.equal(f.sessionsFor('azpr-review-functional')[0].turns, 1, 'The verified pipeline is unchanged.');
+
+  const none = await fixture(t, { settings: s => { quickSettings(s); s.workflow.repairAttempts = 0; }, answer: stop });
+  assert.doesNotMatch(await none.command('pr-quick'), /follow-up=/);
+  assert.equal(none.sessionsFor('azpr-quick-reviewer')[0].turns, 1);
+  const done = await fixture(t, { settings: quickSettings });
+  assert.doesNotMatch(await done.command('pr-quick'), /follow-up=/);
+  assert.equal(done.sessionsFor('azpr-quick-reviewer')[0].turns, 1);
+});
+
+test('a follow-up without a usable answer keeps the answer it followed', async t => {
+  const f = await fixture(t, { settings: quickSettings, answer({ role, packet, turn }) {
+    if (role !== 'azpr-quick-reviewer') return undefined;
+    return turn === 0 ? partialAnswer(packet, [finding(packet.assignment.firstFindingId, packet.assignment.files[0])]) : 'Still reading the callers.';
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /\] COMPLETE; coverage incomplete/);
+  assert.match(receipt, /azpr-quick-reviewer: PARTIAL;[^\n]*follow-up=unusable/);
+  assert.equal(f.sessionsFor('azpr-quick-reviewer')[0].turns, 3, 'The follow-up, then one correction turn for its unusable answer.');
+  const [saved] = await savedReviews(f);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED']);
+  assert.deepEqual(saved.final.coverageSummary.reasons, ['reviewer-gaps']);
+  const [stage] = await stageRecords(receipt);
+  assert.equal(stage.result.report, 'Stopped early.', 'The stage result is the answer the follow-up followed.');
+  assert.equal(stage.unresolvedIssues, undefined);
+});
+
+test('a failed follow-up keeps the earlier answer; an overflow still splits the shard', async t => {
+  const f = await fixture(t, { settings: quickSettings, answer({ role, packet, turn }) {
+    if (role !== 'azpr-quick-reviewer') return undefined;
+    return turn === 0 ? partialAnswer(packet, [finding(packet.assignment.firstFindingId, packet.assignment.files[0])]) : { $provider: 503 };
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /\] COMPLETE; coverage incomplete/);
+  assert.match(receipt, /azpr-quick-reviewer: PARTIAL;[^\n]*follow-up=failed:transient/);
+  const sessions = f.sessionsFor('azpr-quick-reviewer');
+  assert.equal(sessions.length, 1, 'No retry in a new session: the earlier answer stands.');
+  assert.ok(f.calls.some(call => call.kind === 'interrupt' && call.sessionID === sessions[0].id), 'The failed follow-up is interrupted.');
+  const [saved] = await savedReviews(f);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED']);
+  const [stage] = await stageRecords(receipt);
+  assert.deepEqual([stage.followUp.outcome, stage.followUp.failureClass], ['failed', 'transient']);
+
+  // The follow-up's stream stops: the watchdog stops it and the earlier answer still stands.
+  const idle = await fixture(t, { stageIdleMs: 400, settings: quickSettings, async during({ session, role, turn }) {
+    if (role === 'azpr-quick-reviewer' && turn === 1) await new Promise(resolve => { session.onInterrupt = resolve; });
+  }, answer({ role, packet, turn }) {
+    return role === 'azpr-quick-reviewer' && turn === 0 ? partialAnswer(packet, [finding(packet.assignment.firstFindingId, packet.assignment.files[0])]) : undefined;
+  } });
+  const stopped = await idle.command('pr-quick');
+  assert.match(stopped, /\] COMPLETE; coverage incomplete/);
+  assert.match(stopped, /azpr-quick-reviewer: PARTIAL;[^\n]*follow-up=failed:idle/);
+  assert.equal(idle.sessionsFor('azpr-quick-reviewer').length, 1);
+  assert.deepEqual((await savedReviews(idle))[0].final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED']);
+  assert.match((await stageRecords(stopped))[0].followUp.error, /Stage inactivity watchdog stopped this stage/);
+
+  const g = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, async during({ session, role, turn, emit }) {
+    if (role === 'azpr-quick-reviewer' && turn === 1) await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'compaction' });
+  }, answer({ role, packet, turn }) {
+    return role === 'azpr-quick-reviewer' && turn === 0 && packet.assignment.files.length > 1 ? partialAnswer(packet, []) : undefined;
+  } });
+  const split = await g.command('pr-quick');
+  assert.match(split, /failure=overflow/);
+  assert.deepEqual(g.sessionsFor('azpr-quick-reviewer').map(s => s.packet.assignment.files.length), [2, 1, 1]);
 });
 
 test('quick then review on the same head: only complete markers are already present', async t => {

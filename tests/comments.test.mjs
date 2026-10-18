@@ -75,7 +75,7 @@ test('a skip that relies on another finding of this review gets a correction tur
   // As in a live PR #3 plan: R-12001 skipped because F-1009's comment on an earlier page "covered" it.
   const r = review([finding('F-1009'), finding('R-12001', 'medium'), finding('F-1'), finding('F-10')]);
   const assigned = [finding('R-12001', 'medium'), finding('F-10')];
-  const text = answer([], [{ findingId: 'R-12001', reason: '已由先前頁面的F-1009 inline 留言覆蓋相同根因。' }, { findingId: 'F-10', reason: 'Already discussed in thread 42; F-10 is UTF-8 safe there (TF401174).' }]);
+  const text = answer([], [{ findingId: 'R-12001', cause: 'existing-thread', reason: '已由先前頁面的F-1009 inline 留言覆蓋相同根因。' }, { findingId: 'F-10', cause: 'existing-thread', threadId: 42, reason: 'Already discussed in thread 42; F-10 is UTF-8 safe there (TF401174).' }]);
   const first = evaluatePlanPage(text, { review: r, assigned });
   assert.equal(first.issues.length, 1, 'Only the skip that names another finding is sent back; F-10 may name itself and is not read as F-1.');
   assert.match(first.issues[0], /skip for R-12001 relies on F-1009: findings of this review are separate issues/);
@@ -85,6 +85,42 @@ test('a skip that relies on another finding of this review gets a correction tur
   assert.deepEqual(final.result.skipped.map(s => s.findingId), ['R-12001', 'F-10']);
   assert.match(final.result.skipped[0].reason, /\[Runtime: other findings of this review do not cover this one; it remains in the summary index\.\]$/);
   assert.ok(final.corrections.some(c => c.action === 'keep-skip-citing-other-finding' && c.cited.join() === 'F-1009'));
+});
+
+test('a skip names its cause, and the runtime checks the facts the cause states', () => {
+  // As in a live PR #3 plan: F-1 skipped for "no source passage" while the page showed its whole file.
+  const r = review([finding('F-1', 'medium', { location: 'head:/src/a.ts:18' }), finding('F-2', 'low'), finding('F-3'), finding('F-4'), finding('F-5', 'high', { location: 'head:/src/b.ts:2' })]);
+  const assigned = r.final.dispositions.map(d => d.verifiedFinding);
+  const sources = [{ path: '/src/a.ts', version: head, findingIds: ['F-1', 'F-3', 'F-4'], firstLine: 1, lastLine: 18, totalLines: 18, text: '1 | ...' }];
+  const discussions = [{ threadId: 42, path: '/src/a.ts', line: 2 }];
+  const text = answer([], [
+    { findingId: 'F-1', cause: 'cannot-anchor', reason: 'This page has no source passage for F-1.' },
+    { findingId: 'F-2', cause: 'low-severity', reason: 'Low severity.' },
+    { findingId: 'F-3', cause: 'existing-thread', threadId: 41, reason: 'Thread 41 covers it.' },
+    { findingId: 'F-4', reason: 'Not worth a comment.' },
+    { findingId: 'F-5', cause: 'cannot-anchor', reason: 'No excerpt shows /src/b.ts.' },
+  ]);
+  const first = evaluatePlanPage(text, { review: r, assigned, sources, discussions });
+  assert.deepEqual(first.issues.map(issue => issue.split(':')[0]), ['skip for F-1', 'skip for F-3', 'skip for F-4']);
+  assert.equal(first.issues[0], 'skip for F-1: its lines /src/a.ts:18 are in sourceExcerpts (lines 1-18); quote them as the anchor. Comment on it, or skip it with the cause that applies.');
+  assert.match(first.issues[1], /thread 41 is not a live thread of this PR; give the "threadId" of the existingDiscussions thread that covers it/);
+  assert.match(first.issues[2], /a skip needs "cause": one of low-severity, no-inline-location, existing-thread, cannot-anchor, too-long/);
+  assert.deepEqual(first.result.skipped, [{ findingId: 'F-2', reason: 'Low severity.', cause: 'low-severity' }, { findingId: 'F-5', reason: 'No excerpt shows /src/b.ts.', cause: 'cannot-anchor' }]);
+  // A cause whose fact does not hold: a medium finding called low, an inline location called missing.
+  const wrong = evaluatePlanPage(answer([], [{ findingId: 'F-1', cause: 'low-severity', reason: 'Minor.' }, { findingId: 'F-3', cause: 'no-inline-location', reason: 'No location.' }]), { review: r, assigned: [assigned[0], assigned[2]], sources, discussions });
+  assert.match(wrong.issues[0], /skip for F-1: F-1 is medium, not low/);
+  assert.match(wrong.issues[1], /skip for F-3: F-3 is located on lines of a changed HEAD file that sourceExcerpts shows/);
+  // A live thread is accepted with its ID; without read threads the ID is not checked; too-long is the planner's call.
+  const accepted = evaluatePlanPage(answer([], [{ findingId: 'F-3', cause: 'existing-thread', threadId: '42', reason: 'Thread 42.' }, { findingId: 'F-4', cause: 'too-long', reason: 'Needs three triggers.' }]), { review: r, assigned: [assigned[2], assigned[3]], sources, discussions });
+  assert.deepEqual([accepted.issues, accepted.result.skipped], [[], [{ findingId: 'F-3', reason: 'Thread 42.', cause: 'existing-thread', threadId: 42 }, { findingId: 'F-4', reason: 'Needs three triggers.', cause: 'too-long' }]]);
+  assert.deepEqual(evaluatePlanPage(answer([], [{ findingId: 'F-3', cause: 'existing-thread', threadId: 7, reason: 'Thread 7.' }]), { review: r, assigned: [assigned[2]], sources }).issues, []);
+  // The final pass keeps every skip and says what the runtime found.
+  const final = evaluatePlanPage(text, { review: r, assigned, sources, discussions, final: true });
+  assert.deepEqual(final.issues, []);
+  assert.deepEqual(final.result.skipped.map(s => s.findingId), ['F-1', 'F-2', 'F-3', 'F-4', 'F-5']);
+  assert.match(final.result.skipped[0].reason, /^This page has no source passage for F-1\. \[Runtime: its lines \/src\/a\.ts:18 are in sourceExcerpts \(lines 1-18\); quote them as the anchor; it remains in the summary index\.\]$/);
+  assert.equal(final.result.skipped[3].cause, undefined, 'A skip without a valid cause keeps no cause.');
+  assert.deepEqual(final.corrections.filter(c => c.action === 'keep-skip-with-unconfirmed-cause').map(c => c.findingId), ['F-1', 'F-3', 'F-4']);
 });
 
 test('confirmed findings for planning and the summary carry the final location only', () => {
@@ -192,7 +228,7 @@ test('quick inline comments need a checked location and an anchor found in the H
   assert.match(accepted.result.skipped.find(s => s.findingId === 'Q-2').reason, /cannot carry an inline comment/);
   assert.ok(accepted.corrections.some(c => c.action === 'skip-location-without-inline'));
   // An anchor that is not in the source is a correction turn, then a skip.
-  const unfound = answer([comment({ findingId: 'Q-1', anchor: 'not in the source' })], [{ findingId: 'Q-2', reason: 'Summary only.' }]);
+  const unfound = answer([comment({ findingId: 'Q-1', anchor: 'not in the source' })], [{ findingId: 'Q-2', cause: 'no-inline-location', reason: 'Summary only.' }]);
   assert.match(evaluatePlanPage(unfound, { review: quick, assigned }).issues.join('\n'), /anchor text was not found in the HEAD source/);
   const final = evaluatePlanPage(unfound, { review: quick, assigned, final: true });
   assert.deepEqual(final.result.comments, []);

@@ -30,7 +30,12 @@ without `--publish`; `--publish` reuses an existing preview exactly.
 
 Low findings, findings that cannot be anchored, and issues that an existing
 discussion on the PR already covers are skipped with a local reason; skips are
-listed in the preview and receipt. Findings of the same review never cover each
+listed in the preview and receipt. Each planner skip names one cause
+(`low-severity`, `no-inline-location`, `existing-thread` with its `threadId`,
+`cannot-anchor` or `too-long`), and the runtime checks what the cause states:
+the severity, whether the location can carry an inline comment, that the
+thread is live, and that the finding's lines were not in the page's source
+excerpts. Whether a finding deserves a comment stays the planner's call. Findings of the same review never cover each
 other: the verifier already merged duplicates, so each confirmed high or medium
 finding gets its own comment unless one of those reasons applies.
 
@@ -82,7 +87,10 @@ finding's file. Each page then receives, inline: the verified findings,
 `sourceExcerpts` (numbered HEAD lines around each finding, the whole file when it
 has at most 400 lines), `existingDiscussions` (live threads with path, line,
 author and the start of the first comment), the report segment and a summary of
-earlier pages. Most pages finish in one model request without tools; the
+earlier pages. The changed-file list and the review's dispositions are inline
+when they are small; on a large PR a page gets only those of its own findings
+(plus what merged into them) and references to the complete lists, which the
+runtime still uses for its own checks. Most pages finish in one model request without tools; the
 planner reads more only for lines outside an excerpt or a full comment body.
 A page that needs more reading returns `CONTINUE` with its finished items and a
 continuation note (tools are withdrawn after 12 requests or about 48,000
@@ -103,6 +111,7 @@ Every page is validated item by item:
 | Anchor that exists at other lines in observed HEAD text | Moved to the unique matching lines. |
 | Body over 1,200 characters, unknown path, missing anchor, ambiguous anchor, missing findings | Sent back as a correction turn; after `workflow.repairAttempts` the item is skipped (bodies up to 4,000 characters are accepted on the last pass). |
 | A skip whose reason names another finding of this review | Sent back as a correction turn; on the last pass the skip stays, marked as not covered by the other finding. |
+| A skip without a cause, or whose cause does not hold (a medium finding called low, an inline location called missing, a thread that is not live, `cannot-anchor` while the page's excerpts show the finding's lines) | Sent back as a correction turn; on the last pass the skip stays with what the runtime found. |
 | Planner returns INCOMPLETE | Finished comments are kept; the rest are skipped with the planner's reason. |
 
 A low finding never becomes an inline comment, and the verified severity always

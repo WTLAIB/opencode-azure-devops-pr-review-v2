@@ -136,7 +136,17 @@ is real:
 - problems the reviewer can fix get the normal correction turns, with hints
   for deleted and renamed files; what is still wrong afterwards becomes
   NEEDS_INFO. Passing findings are REPORTED; only records identical in every
-  field are merged (findings on the same lines stay separate).
+  field are merged (findings on the same lines stay separate);
+- a usable answer that is PARTIAL and names unfinished work (coverage gaps or
+  assigned files it did not list as reviewed), with nothing left to correct,
+  gets one **follow-up** turn in the same session within the
+  `workflow.repairAttempts` budget: continue where the source is readable,
+  keep a gap only for a limit it cannot close, and return the whole answer
+  again. A second PARTIAL stands. When the follow-up, or a correction turn
+  after it, fails or gives no usable answer, the answer it followed stands;
+  cancellation and context overflow keep their usual handling (overflow
+  splits the shard). The stage record keeps the outcome (`followUp`). Review
+  and deep shards have two reviewers and get no follow-up.
 
 A location on a changed HEAD file may carry an inline comment; a BASE location
 or unchanged code stays in the summary index. Shard reports are joined by the
@@ -201,14 +211,19 @@ object.
 `publishableFindings` supplies the findings: CONFIRMED ones and verifier
 additions for review and deep, REPORTED ones for a quick review. A saved
 review without a verification field is trusted only when its profile is review
-or deep. Planning (model) uses pages of at most four findings plus report segments, with
+or deep. Planning (model) uses pages of at most four findings plus report segments
+(on a large PR each page carries the changed files and dispositions of its own
+findings and references to the complete lists), with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
 sessions per page, and a checkpoint without progress or a fourth unfinished
 session ends the page, keeping its finished comments and skipping what is open.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
-skipped with a reason. For a quick review an inline comment also needs a
+skipped with a reason. A planner skip names one cause, and the runtime checks
+the facts it states against the finding, the page's source excerpts and the
+live threads it read (a `cannot-anchor` skip whose lines the page showed goes
+back for correction). For a quick review an inline comment also needs a
 finding located on a changed HEAD file and an anchor found in the observed HEAD
 source; otherwise the finding stays in the summary index. The disclosure line
 of a quick review's comments names its method (and, in the summary, incomplete

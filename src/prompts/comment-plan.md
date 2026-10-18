@@ -29,6 +29,9 @@ tool call at all:
 - `sourceExcerpts`: HEAD source around each finding (`findingIds` says which),
   as `N | line` rows. `firstLine`/`lastLine`/`totalLines` tell you whether the
   excerpt is the whole file.
+- `snapshot.files` and `dispositions`: the changed files and the review's
+  decisions; on a large PR only those of this page's findings, with `allFiles`
+  and `allDispositions` holding the complete lists.
 - `existingDiscussions` (when `discussionsRead` is true): every live thread on
   the PR with its path, line, author and the start of its first comment.
   Deleted threads are already excluded.
@@ -76,15 +79,29 @@ final report retained, with affected code, benefit and direction). For zh-TW use
      "anchor": "exact text of line 12",
      "body": "🔴 high: Short concrete defect title\n\n**📝 Summary**\nTrigger and impact.\n\n**🔎 Evidence**\nMinimal source fact.\n\n**💡 Suggested fix**\nCorrection and a regression case."}
   ],
-  "skipped": [{"findingId": "R-1", "reason": "Already discussed in thread 42 with the same cause."}],
+  "skipped": [{"findingId": "R-1", "cause": "existing-thread", "threadId": 42, "reason": "Thread 42 already discusses the same missing guard."}],
   "summary": "Optional review note.",
   "summaryDetails": "Optional Markdown."
 }
 ```
 
+Every `skipped` entry names its `cause`, one of:
+- `low-severity`: a low finding, which the summary index lists;
+- `no-inline-location`: its location cannot carry an inline comment (not on a
+  changed HEAD file, or `"inline": false`);
+- `existing-thread`: a live thread already covers it; give that thread's
+  `threadId` from `existingDiscussions`;
+- `cannot-anchor`: the lines its claim needs are not in `sourceExcerpts` and
+  cannot be read;
+- `too-long`: its claim cannot be stated faithfully within the length limit.
+
+`reason` says why in one sentence. The runtime checks what a cause states (the
+severity, the location, the thread, the lines in `sourceExcerpts`) and asks you
+to correct a skip whose cause does not hold.
+
 When this page needs more reading than fits, return `"status": "CONTINUE"` with
 the comments and skips you finished plus `"continuation"`: exact data
 references, the checks already done and what remains. A fresh session continues
 the page with your saved work; do not repeat finished reads. If something you
-need is unavailable, skip the affected findings with a specific reason rather
-than failing the page.
+need is unavailable, skip the affected findings with their cause and a
+specific reason rather than failing the page.

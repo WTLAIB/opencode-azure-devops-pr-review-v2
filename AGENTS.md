@@ -52,6 +52,10 @@ settings, backups and failure records. Never upload `.local/`.
   degrade the affected item (UNREVIEWED, NEEDS_INFO, skipped comment) and keep the
   rest. Never discard a whole review for one bad item, and never invent a
   decision, evidence or a location.
+- A quick reviewer whose usable answer is PARTIAL with named unfinished work
+  gets one follow-up turn in the same session, within the same budget; a
+  follow-up that fails or gives no usable answer never replaces the answer it
+  followed.
 - Transient execution failures retry once in a new session; overflow splits the
   shard. Permanent failures and cancellations are not retried.
 - Only a changed source commit makes a review STALE.

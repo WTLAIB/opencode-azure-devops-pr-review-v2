@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 326 tests across settings (including the
+`npm run check` and `npm test` pass: 334 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -34,7 +34,9 @@ search, optional arguments sent as null or blank text),
 output acceptance and correction prompts (including verifier rows judged by
 their own fields, confirmations that move a finding to another file and the
 same-file duplicate check), comment validation and markers (including skips
-that rely on another finding), planning and publication, review sharding,
+that rely on another finding, and skip causes checked against the finding, the
+page's source excerpts and the live threads, and pages of a large PR carrying
+only their own files and dispositions), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
 settings) and the runtime integration (fake host plus a fake Azure DevOps REST
@@ -59,7 +61,12 @@ an answer cut to the tool-output limit reads nothing);
 different defects on the same line kept apart while only
 records identical in every field are merged; a parsed answer without a usable
 review giving PARTIAL; zero findings with incomplete coverage (a failed shard,
-reviewer gaps, a partial change list); the quick disclosure line, report and
+reviewer gaps, a partial change list); a usable PARTIAL answer that names
+unfinished work getting one follow-up turn in the same session (completed, a
+second PARTIAL that stands, none for COMPLETE answers, without turn budget or
+in the verified pipeline, and an unusable, failed or watchdog-stopped
+follow-up keeping the answer it followed while an overflow still splits the
+shard); the quick disclosure line, report and
 receipt; quick inline comments needing a changed HEAD file and an anchor found
 in the source; a saved quick review commented on after a restart, and saved
 records without a verification field trusted only for review and deep;
@@ -145,7 +152,7 @@ like 2.0.22:
 
 | Check | Observed |
 | --- | --- |
-| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. Since 2026-10-18 the smoke fixture also runs `/pr-quick` (one quick session, no verifier, the session's reads recorded) and its comment preview with the zh-TW quick disclosure line; fresh, `--replace` and the scale fixture passed on 2.0.32. |
+| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. Since 2026-10-18 the smoke fixture also runs `/pr-quick` (one quick session, no verifier, the session's reads recorded) and its comment preview with the zh-TW quick disclosure line; fresh, `--replace` and the scale fixture passed on 2.0.32. Since the quick follow-up, two more `/pr-quick` runs have a fake reviewer that answers PARTIAL first: its one follow-up prompt reaches the same session and completes the review, or gives no usable answer and the earlier answer with its finding stands (receipt `follow-up=completed` / `unusable`); fresh, `--replace` and the scale fixture passed on 2.0.32. |
 | Project boundary | 2.0.31 dropped the `external_directory: ask` rule that 2.0.22 put in every new agent's default permissions, and 2.0.32 keeps it out, so external paths fall under `*: allow`. AZPR's permission hook only turned `ask` into `deny`, and on 2.0.31 a private reviewer's native `grep` on `/etc` ran and returned file contents. The hook now decides `external_directory` for private roles itself: allowed only when every resource is in AZPR's private data directory, otherwise refused with the pointer to the azpr tools. No live run used a native read tool outside the project; the one live review on 2.0.31 before the fix used only AZPR's tools. |
 | Missing local paths | 2.0.31 and 2.0.32 answer a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
 | Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31 and 2.0.32; both send `session-id`, `thread-id` and `x-client-request-id` on the ChatGPT token-sharing route (below). |
@@ -765,6 +772,132 @@ comment preview, nothing posted:
 - The region-fallback claim (one of these three runs, and one run before) is
   not a planted defect, and neither review run reported it; it is
   unconfirmed.
+
+## Live runs: three modes on main and the quick follow-up (2026-10-18, review only)
+
+OpenCode 2.0.32, every role on `openai/gpt-6-luna`, `parallelSessions` 8,
+debug on, nothing posted. Time is from the run's start to its end in the debug
+records (without `/pr-check`); input is uncached plus cached prompt tokens.
+
+Main at `33fb851` (the merged `/pr-quick`): quick and review twice per PR (the
+first run of each followed by a comment preview), deep once.
+
+| PR | Quick | Review | Deep |
+| --- | --- | --- | --- |
+| PR #2, 1 file | 34–36 s, 4 requests, 26–27 K input | 64–71 s, 12–13, 82–88 K | 68 s, 11, 77 K |
+| PR #4, 35 files | 26–47 s, 4–7, 68–178 K | 60–62 s, 13, 203–212 K | 79 s, 18, 383 K |
+| PR #3, 316 files | 119–151 s, 57–58, 2.07–2.18 M | 241–274 s, 127–147, 3.90–4.82 M | 245 s, 142, 4.44 M |
+
+- Comment planning on PR #3: after quick 169 s, 10 sessions, 136 K input, 24
+  inline comments (15 of them combined); after review 161 s, 8 sessions,
+  162 K, 26 inline comments. On PR #2 and PR #4 existing threads already
+  covered every finding (5–8 s).
+- Planted defects: PR #3 policies quick 24 and 23, review 24 and 24, deep 24;
+  its configuration defect quick 0 of 2, review 1 of 2, deep 0 of 1; PR #4's
+  seeded regression outside the diff quick 1 of 2, review 2 of 2, deep 1 of 1.
+- In the second PR #4 quick run the reviewer of the 25-file shard read the 25
+  diffs in one request and answered PARTIAL in the next ("callers, related
+  tests and function context not read") without a tool error, truncation or
+  limit; the run reported incomplete coverage and no finding. In all recorded
+  PR #4 initial sessions since 2026-10-11, those that answered after two
+  requests found the seeded regression in 2 of 24, the others in 85 of 144. On
+  PR #3, whose planted defects are visible in the diff, two-request sessions
+  found all of theirs.
+
+This revision adds the quick follow-up (a usable PARTIAL answer that names
+unfinished work gets one more turn in the same session). The two AZPR comments
+on PR #4 were deleted first (one described the seeded regression; earlier
+quick runs had not read threads). Ten PR #4 and two PR #3 quick runs each: A
+is this revision, B adds one sentence to `quick.md` ("If a check you need is
+unfinished and the source it needs is readable with AZPR's tools, continue it
+before you answer; if a limit remains, keep PARTIAL and state it in
+coverage.gaps.").
+
+| | PR #4 A | PR #4 B | PR #3 A | PR #3 B |
+| --- | --- | --- | --- | --- |
+| Time (mean) | 40 s | 45 s | 156 s | 116 s |
+| Requests (mean) | 5.3 | 6.5 | 73 | 61 |
+| Input (mean, uncached) | 124 K (55 K) | 170 K (64 K) | 2.22 M (0.62 M) | 2.27 M (0.58 M) |
+| Sessions with at most two requests | 11 of 20 | 7 of 20 | 0 of 26 | 3 of 26 |
+| Planted defects | regression 7 of 10 | 8 of 10 | policies 24, 22; configuration 0 of 2 | 24, 24; 0 of 2 |
+| PARTIAL answers and follow-ups | 0 | 0 | 0 | 0 |
+
+- No reviewer answered PARTIAL in these 24 runs, so the follow-up never ran
+  live; its behaviour rests on the offline and exact-host tests.
+- With B the reviewer of PR #4's first shard read past the diffs in every run
+  (A: two runs answered after two requests), for 37% more input on PR #4 and
+  about the same on PR #3, where B had more two-request sessions. One more
+  regression hit in ten runs is within run-to-run variation (one A run on PR
+  #3 spent 30 requests in one shard). B is not part of this revision.
+
+## Live runs: skip causes and page-scoped planning input (2026-10-18, preview only)
+
+Same setup. The AZPR comments on PR #2 and PR #4 were deleted first (PR #3 had
+none), so every PR's planning writes real comments; nothing was posted. One
+quick and one review run per PR with a comment preview, compared with the
+preview runs on `33fb851` above (PR #2 and PR #4 skipped every finding there
+because earlier threads covered them).
+
+| PR #3 planning | `33fb851` quick | this revision quick | `33fb851` review | this revision review |
+| --- | --- | --- | --- | --- |
+| Payload per page (mean) | 27.8 K characters | 11.0 K | 27.8 K | 11.1 K |
+| Input (uncached + cached) | 136 K (93 K + 43 K) | 67 K (44 K + 23 K) | 162 K (86 K + 76 K) | 80 K (38 K + 42 K) |
+| Time | 169 s | 140 s | 161 s | 163 s |
+| Sessions, requests, correction turns | 10, 12, 3 | 9, 9, 0 | 8, 13, 1 | 9, 11, 0 |
+| Inline comments | 24 (15 combined, 15 candidate pairs) | 24 (10 combined, 10 pairs) | 26 of 30 findings | 33 of 34 |
+| Skips | none | 1 `low-severity` | 2 low, 2 "no source passage" with the file in the page | 1 `low-severity` |
+
+- The page-scoped lists halved planning input on the 316-file PR; time did not
+  follow the input, since a page's time goes to writing its answer.
+- Every planner skip named a valid cause and none needed a correction turn. No
+  planner claimed missing source this time, so the cause check did not trigger
+  live; the offline tests and the planning test cover it.
+- Every candidate pair of the quick runs became one comment, as before.
+- PR #2 now gets its three comments in either mode (18 s of planning); PR #4's
+  review gets one, and its quick run had no finding to plan.
+
+## Live runs: gpt-6.1-sol on the old and new revision (2026-10-18, preview only)
+
+OpenCode 2.0.32, every role on `openai/gpt-6.1-sol` (default variant), the
+same settings, no AZPR comments on the three PRs, nothing posted. Each PR ran
+`/pr-quick`, `/pr-review` and `/pr-deep` once on `33fb851` (old) and once on
+this revision (new), each followed by a comment preview; old and new were
+installed alternately per PR. Cost is the API equivalent at OpenAI's Standard
+prices (gpt-6.1-sol $2.00 input, $0.10 cached input, $10.00 output per million
+tokens; gpt-6-luna $0.10, $0.01, $0.50; reasoning counted as output); the
+ChatGPT sign-in the runs used reports no cost. Every reported finding outside
+the planted defects was checked against the source at both commits.
+
+| PR | Mode | Review time (old / new) | Review input | Review cost | Planning (old / new) | Findings |
+| --- | --- | --- | --- | --- | --- | --- |
+| PR #2 | quick / review / deep | 42 / 43 s, 99 / 100 s, 93 / 93 s | 25 K, 85 K, 87 K | $0.04, $0.13, $0.11–0.13 | 23–24 s, 6 K input | the 3 known defects in every run |
+| PR #4 | quick | 132 / 155 s | 0.61 / 1.11 M | $0.41 / $0.52 | 45 s, 15–16 K | both seeded regressions in every run, plus 1–2 confirmed and 1 debatable defect |
+| PR #4 | review | 260 / 310 s | 1.74 / 1.87 M | $1.09 / $1.11 | 50 / 54 s | both seeds, plus 3 confirmed and 1–2 debatable |
+| PR #4 | deep | 270 / 332 s | 1.82 / 2.25 M | $1.12 / $1.21 | 48 / 57 s | both seeds, plus 1–3 confirmed and 1–2 debatable |
+| PR #3 | quick | 191 / 198 s | 2.06 / 2.12 M | $1.75 / $1.79 | 219 / 218 s, 153 / 97 K | 24 of 24 policies (50 findings, planned as 24 comments); configuration 0 |
+| PR #3 | review | 355 / 382 s | 4.22 / 4.51 M | $3.81 / $3.84 | 156 / 150 s, 76 / 47 K | 24 of 24 (24 findings); configuration 0 |
+| PR #3 | deep | 390 / 371 s | 4.58 / 4.62 M | $4.05 / $3.91 | 154 / 153 s, 82 / 47 K | 24 of 24 (24 findings); configuration 0 |
+
+- Accuracy: none of the 250 reported findings was false. On PR #4 the model
+  also found five real regressions of the PR besides the seeds (chained
+  pipeline constraints overwrite each other, a case transform exceeds
+  max_length, nested serialization schemas disagree with the JSON schema, a
+  PEP 585 generic alias skips `__get_pydantic_core_schema__`, a resolved `Self`
+  keeps a stale origin) and two real but debatable changes (validation-mode
+  schemas follow `ser_json_temporal`, model ser schemas use the prebuilt
+  serializer). No verifier rejected a planted or known defect. gpt-6-luna on
+  the same day never found PR #4's second seed, reported two false PR #3
+  findings on test files (in review and deep) and had one review reject a
+  known PR #2 defect.
+- Cost and time: each version's nine runs cost about $13.4 with planning
+  (luna: under $0.6), a PR #3 review about $3.8 (luna $0.17–0.19). The input
+  volume was close to luna's; time was 1.3–1.6 times luna's on PR #2 and PR #3
+  and 3–5 times on PR #4, where the model read more (13–41 requests against
+  4–18).
+- Old against new: the review stages did not differ beyond run-to-run
+  variation and no PARTIAL answer occurred, so no follow-up ran. Planning input
+  fell by 37–43 % on PR #3 (planning time unchanged), every skip of the new
+  revision named a cause (`low-severity`) and none needed a correction turn.
 
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 

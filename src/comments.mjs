@@ -87,6 +87,31 @@ function citedFindings(reason, own, findingIds) {
   return [...new Set(named)].filter(id => id !== own && findingIds.has(id));
 }
 
+/** Why a planner may skip a finding: the policy's grounds, one cause each. */
+export const SKIP_CAUSES = Object.freeze(['low-severity', 'no-inline-location', 'existing-thread', 'cannot-anchor', 'too-long']);
+
+/**
+ * The facts a skip's cause states that the runtime can check: a low finding,
+ * no location that can carry an inline comment, a live thread of this PR, and
+ * lines the page did not show. Whether a finding deserves a comment stays the
+ * planner's judgment; `too-long` is not checked. '' when nothing is wrong.
+ */
+function skipProblem(finding, skip, { sources, discussions, inlineEligible }) {
+  const cause = String(skip.cause ?? '').trim().toLowerCase();
+  if (!SKIP_CAUSES.includes(cause)) return `a skip needs "cause": one of ${SKIP_CAUSES.join(', ')}`;
+  if (cause === 'low-severity' && finding.severity !== 'low') return `${finding.id} is ${finding.severity}, not low`;
+  if (cause === 'no-inline-location' && inlineEligible(finding)) return `${finding.id} is located on lines of a changed HEAD file that sourceExcerpts shows, so it can carry an inline comment`;
+  if (cause === 'existing-thread' && Array.isArray(discussions) && !discussions.some(thread => thread.threadId === Number(skip.threadId))) {
+    return `thread ${skip.threadId ?? '(none given)'} is not a live thread of this PR; give the "threadId" of the existingDiscussions thread that covers it`;
+  }
+  if (cause === 'cannot-anchor') {
+    const at = parseLocation(finding.location);
+    const shown = at?.side === 'head' && at.start && sources.find(item => item.path === at.path && item.firstLine <= at.start && at.end <= item.lastLine);
+    if (shown) return `its lines ${at.path}:${at.start}${at.end !== at.start ? `-${at.end}` : ''} are in sourceExcerpts (lines ${shown.firstLine}-${shown.lastLine}); quote them as the anchor`;
+  }
+  return '';
+}
+
 export function publicationItems(plan) {
   return [...(plan?.summary ? [plan.summary] : []), ...(plan?.comments ?? [])];
 }
@@ -174,8 +199,10 @@ const aliases = (value, names) => {
  * With `final`, every remaining problem becomes a local skip instead of an issue.
  * `candidates` lists the groups of a quick review whose findings one comment
  * may combine (`findingIds`); the runtime never combines findings itself.
+ * `sources` are the page's source excerpts and `discussions` the live threads
+ * the runtime read (null when it could not): skip causes are checked against them.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [] }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], sources = [], discussions = null }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -206,7 +233,13 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   // checked location and an anchor found in source text the runtime read.
   const quick = reviewVerification(review) === 'none';
   const comments = [], skipped = [], handled = new Set(), reported = new Set(), refusedCombinations = [];
-  const skip = (findingId, reason) => { if (!handled.has(findingId)) { handled.add(findingId); skipped.push({ findingId, reason }); } };
+  const skip = (findingId, reason, extra = {}) => { if (!handled.has(findingId)) { handled.add(findingId); skipped.push({ findingId, reason, ...extra }); } };
+  // A location that can carry an inline comment: on a changed HEAD file whose text the page shows.
+  const inlineEligible = finding => {
+    if (finding.inline === false) return false;
+    const at = parseLocation(finding.location);
+    return at?.side === 'head' && changed.has(at.path) && sources.some(item => item.path === at.path);
+  };
   // Body, path and anchor of one inline comment; `lines` bounds the anchor of a combined comment.
   function draft(c, label, severity, lines) {
     const problems = [];
@@ -304,7 +337,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   }
   const findingIds = new Set(publishableFindings(review).map(finding => finding.id));
   for (const [index, raw] of (Array.isArray(value.skipped) ? value.skipped : []).entries()) {
-    const s = isObject(raw) ? aliases(raw, ['findingId', 'reason']) : {};
+    const s = isObject(raw) ? aliases(raw, ['findingId', 'reason', 'cause', 'threadId']) : {};
     if (!eligible.has(s.findingId)) { corrections.push({ action: 'drop-unassigned-skip', index }); continue; }
     if (handled.has(s.findingId)) continue;
     const reason = nonempty(s.reason) ? s.reason.trim() : 'Skipped by the comment planner without a stated reason.';
@@ -316,8 +349,18 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       reported.add(s.findingId);
       continue;
     }
+    const problem = skipProblem(eligible.get(s.findingId), s, { sources, discussions, inlineEligible });
+    if (problem && !final) {
+      issues.push(`skip for ${s.findingId}: ${problem}. Comment on it, or skip it with the cause that applies.`);
+      reported.add(s.findingId);
+      continue;
+    }
     if (cited.length) corrections.push({ action: 'keep-skip-citing-other-finding', findingId: s.findingId, cited });
-    skip(s.findingId, cited.length ? `${reason} [Runtime: other findings of this review do not cover this one; it remains in the summary index.]` : reason);
+    if (problem) corrections.push({ action: 'keep-skip-with-unconfirmed-cause', findingId: s.findingId, problem });
+    const cause = String(s.cause ?? '').trim().toLowerCase();
+    skip(s.findingId, cited.length ? `${reason} [Runtime: other findings of this review do not cover this one; it remains in the summary index.]`
+      : problem ? `${reason} [Runtime: ${problem}; it remains in the summary index.]` : reason,
+    SKIP_CAUSES.includes(cause) ? { cause, ...(cause === 'existing-thread' && s.threadId !== undefined ? { threadId: Number(s.threadId) } : {}) } : {});
   }
   // A refused combination accounts for every finding it named that has no comment or skip of its own.
   for (const { ids, reason } of refusedCombinations) for (const id of ids) if (eligible.has(id)) skip(id, reason);

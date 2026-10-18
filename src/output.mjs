@@ -624,6 +624,16 @@ export function quickRepairPrompt(issues, { parseOnly = false } = {}) {
   return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). For a location problem, read the file with azpr_read_diff or azpr_read_file and correct the location, locate the finding at readable source that supports it, or move the concern to report. Keep every finding you still stand behind and keep the existing wording of fields that need no correction.`;
 }
 
+/**
+ * The one follow-up turn for a quick review that is PARTIAL with work it named:
+ * the same session continues where the source is readable and keeps honest limits.
+ */
+export function quickFollowUpPrompt({ gaps = [], uncovered = [] }) {
+  const listed = uncovered.slice(0, 20).join(', ') + (uncovered.length > 20 ? `, and ${uncovered.length - 20} more` : '');
+  const items = [...gaps, ...(uncovered.length ? [`Assigned files not listed as reviewed: ${listed}`] : [])];
+  return `AZPR runtime: your answer is PARTIAL and names work that is not finished.\n${listIssues(items)}\n\nWhere a check you need is unfinished and the source it needs is readable with AZPR's tools, continue it now. Keep a gap only for a limit you cannot close (binary, oversized or missing content, a tool that keeps failing) and say what stopped you. Then return the complete JSON object again (status, coverage, additionalFiles, findings, report): every finding you still stand behind and any you found now, with status COMPLETE only when every assigned file is reviewed and no gap remains.`;
+}
+
 /** Repair request for a verifier: only the decisions that are missing or invalid. */
 export function finalRepairPrompt(issues, ids, { includeNewFindings = false, full = false, parseOnly = false } = {}) {
   if (parseOnly) return parseRepairPrompt(issues);

@@ -480,25 +480,59 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try {
       await run.debug.write(`${stem}.request.json`, { ...record, payload, instructions: state.agents[role].system });
       g.timing?.promptStarted();
-      let prompt = input, evaluation, answerText = '';
+      let prompt = input, evaluation, answerText = '', followUp;
       const repairs = [];
       // What the handler may know about this session: the contents its own tools showed.
       const session = { reads: g.reads };
       for (let turn = 0; ; turn++) {
-        const answer = await ask(g, made.id, prompt, signal);
+        let answer;
+        try { answer = await ask(g, made.id, prompt, signal); }
+        catch (error) {
+          // A follow-up is optional: when it or a later turn fails, the answer it
+          // followed stands. Cancellation and context overflow keep their rules.
+          const failureClass = runSignal.aborted ? 'cancelled' : watch.error ? 'idle' : classifyFailure(error, { compactionRequested: g.compactionRequested });
+          if (!followUp || ['cancelled', 'overflow'].includes(failureClass)) throw error;
+          Object.assign(followUp, { outcome: 'failed', failureClass, error: errorText(watch.error ?? error).slice(0, 300) });
+          if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response-${followUp.turn === turn ? 'follow-up' : 'repair'}${turn}.json`, diagnosticResponse(error.response));
+          await abortSession(run, made.id);
+          ({ evaluation, answerText } = followUp.before);
+          break;
+        }
         answerText = visibleText(answer);
-        if (settings.debug.enabled) await run.debug.write(`${stem}.response${turn ? `-repair${turn}` : ''}.json`, diagnosticResponse(answer));
+        if (settings.debug.enabled) await run.debug.write(`${stem}.response${turn ? `-${followUp?.turn === turn ? 'follow-up' : 'repair'}${turn}` : ''}.json`, diagnosticResponse(answer));
         if (answer.continuation) {
           record.hostContinuations = (record.hostContinuations ?? 0) + answer.continuation.count;
           if (answer.continuation.restartedAt) record.continuationRestarts = (record.continuationRestarts ?? 0) + 1;
         }
         evaluation = await handler.evaluate(answerText, evaluation?.result, session);
-        if (!evaluation.issues?.length || !evaluation.repairPrompt || turn >= settings.workflow.repairAttempts) break;
-        repairs.push({ issues: evaluation.issues.slice(0, 25) });
-        prompt = evaluation.repairPrompt;
+        const budget = turn < settings.workflow.repairAttempts;
+        if (evaluation.issues?.length && evaluation.repairPrompt && budget) {
+          repairs.push({ issues: evaluation.issues.slice(0, 25) });
+          prompt = evaluation.repairPrompt;
+          continue;
+        }
+        // One follow-up per session, within the same turn budget, for a usable
+        // answer with nothing to repair that names unfinished work.
+        if (!evaluation.issues?.length && evaluation.followUp && !followUp && budget) {
+          followUp = { turn: turn + 1, gaps: evaluation.followUp.gaps, uncovered: evaluation.followUp.uncovered, before: { evaluation, answerText } };
+          progress(run, `${spec.label}${label ? ` ${label}` : ''} reported unfinished work; asking the same session once to continue.`);
+          prompt = evaluation.followUp.prompt;
+          continue;
+        }
+        break;
+      }
+      if (followUp && !followUp.outcome) {
+        // An answer that is not usable never replaces the usable one it followed.
+        if (evaluation.usable === false) { ({ evaluation, answerText } = followUp.before); followUp.outcome = 'unusable'; }
+        else followUp.outcome = evaluation.result?.status === 'COMPLETE' ? 'completed' : 'still-partial';
+      }
+      if (followUp) {
+        record.followUp = { turn: followUp.turn, gaps: followUp.gaps.slice(0, 10).map(gap => gap.slice(0, 300)), uncoveredFiles: followUp.uncovered.length,
+          outcome: followUp.outcome, ...(followUp.failureClass ? { failureClass: followUp.failureClass, error: followUp.error } : {}) };
       }
       g.timing?.promptSettled('returned');
-      if (!run.active || signal.aborted) throw abortError(signal);
+      // A watchdog stop of a failed follow-up is already settled: the earlier answer stands.
+      if (!run.active || runSignal.aborted || (signal.aborted && followUp?.outcome !== 'failed')) throw abortError(signal);
       const result = evaluation.issues?.length && handler.finalize ? await handler.finalize(answerText, evaluation.result, session) : evaluation.result;
       if (!result) throw new Error('The stage produced no usable result.');
       if (repairs.length) record.repairs = repairs;

@@ -447,3 +447,33 @@ test('a quick finding needs a read that showed that version of the file', async 
   }
   assert.deepEqual(outcomes, { 'past-end-line': 'NEEDS_INFO:2', 'past-end-hunk': 'NEEDS_INFO:2', 'removed-row-only': 'NEEDS_INFO:2', shown: 'REPORTED:0' });
 });
+
+test('only a usable PARTIAL quick answer that names unfinished work asks for one follow-up', async () => {
+  const { evaluateQuick, quickUsable } = await import('../src/review-work.mjs');
+  const snapshot = { head: 'h', base: 'b', files: ['/a.ts', '/b.ts'], filesComplete: true, changes: [{ path: '/a.ts', changeType: ['edit'] }, { path: '/b.ts', changeType: ['edit'] }] };
+  const azure = { readFile: async (_run, _snapshot, path, version) => ({ path, version, text: 'const a = 1;\n', size: 13 }) };
+  const context = { task: { files: ['/a.ts', '/b.ts'] }, snapshot, azure, run: { active: true }, reads: new Set(['h\n/a.ts']) };
+  const answer = (status, { files = ['/a.ts', '/b.ts'], gaps = [], findings = [] } = {}) => JSON.stringify({ status, coverage: { files, gaps }, additionalFiles: [], findings, report: 'r' });
+  const valid = quickFinding('Q-1', 'head:/a.ts:1');
+
+  const gap = await evaluateQuick(answer('PARTIAL', { gaps: ['Callers were not read.'], findings: [valid] }), context);
+  assert.equal(gap.usable, true);
+  assert.deepEqual([gap.issues, gap.followUp.gaps, gap.followUp.uncovered], [[], ['Callers were not read.'], []]);
+  assert.match(gap.followUp.prompt, /^AZPR runtime: your answer is PARTIAL and names work that is not finished\.\n- Callers were not read\.\n\nWhere a check you need is unfinished and the source it needs is readable/);
+  assert.match(gap.followUp.prompt, /Keep a gap only for a limit you cannot close/);
+
+  // Assigned files missing from coverage are unfinished work too.
+  const missing = await evaluateQuick(answer('PARTIAL', { files: ['/a.ts'] }), context);
+  assert.deepEqual(missing.followUp.uncovered, ['/b.ts']);
+  assert.match(missing.followUp.prompt, /- Assigned files not listed as reviewed: \/b\.ts/);
+
+  // COMPLETE (also with zero findings), something to repair first, or no usable answer: no follow-up.
+  assert.equal((await evaluateQuick(answer('COMPLETE'), context)).followUp, undefined);
+  const repair = await evaluateQuick(answer('PARTIAL', { gaps: ['g'], findings: [{ ...valid, location: undefined }] }), context);
+  assert.ok(repair.issues.length && !repair.followUp, 'A correction turn comes first.');
+  const plain = await evaluateQuick('I could not finish.', context);
+  assert.deepEqual([plain.usable, plain.followUp], [false, undefined]);
+  const noFiles = await evaluateQuick(answer('PARTIAL', { files: [], gaps: ['Nothing was read.'] }), context);
+  assert.deepEqual([noFiles.usable, noFiles.followUp], [false, undefined], 'No reviewed file and no accepted finding is not a usable answer.');
+  assert.equal(quickUsable({ structured: true, envelope: { findings: false, coverage: true }, coverage: { files: ['/a.ts'], gaps: [] }, findings: [] }, ['/a.ts']), false);
+});

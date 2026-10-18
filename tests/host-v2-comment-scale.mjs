@@ -62,7 +62,7 @@ const provider = createServer(async (request, response) => {
     } else if (payload?.commentWork?.kind === 'plan') {
       final = { status: 'READY', ...(payload.commentWork.allowSummary ? { summary: 'Fixture change.' } : {}),
         comments: payload.findings.filter(f => f.severity !== 'low').map(f => ({ findingId: f.id, severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.summary}\n\nTrigger, evidence and correction.` })),
-        skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, reason: 'Low severity stays in the summary.' })) };
+        skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low severity stays in the summary.' })) };
     } else {
       final = 'Fixture summary.';
     }
