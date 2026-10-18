@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   renderReceipt, renderDiagnosticNotices, renderCommentActions, renderFinalReport, renderCheckReport, renderPublication,
-  reviewProvenance, provenanceReport, renderIncompleteDraft, renderReviewSummary,
+  reviewProvenance, provenanceReport, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote,
 } from '../src/attribution.mjs';
 
 function freeze(value) {
@@ -139,4 +139,55 @@ test('check reports and publication ledgers are deterministic', () => {
   assert.match(ledger, /F-1 \(\/a:3\): FAILED; error=HTTP 503/);
   assert.match(ledger, /safe to retry with \/pr-comment abcdef12 --publish/);
   assert.match(renderReviewSummary([], 'zh-TW'), /未發現可確認缺陷/);
+});
+
+test('quick disclosure lines name the method and, for the summary, incomplete coverage; verified lines are unchanged', () => {
+  const provenance = { mode: 'quick', stages: [{ role: 'azpr-quick-reviewer', model: 'openai/gpt-6-luna', sessions: 1, findings: 1 }] };
+  assert.equal(commentAttribution(provenance, 'zh-TW', 'openai/gpt-6-luna', { verification: 'none' }), 'AI 審查，非人工審查或核准。審查方式：快速審查，未經獨立驗證。模型： `openai/gpt-6-luna`');
+  assert.equal(commentAttribution(provenance, 'zh-TW', 'openai/gpt-6-luna', { verification: 'none', coverage: { complete: false, unreviewedFiles: 2, filesComplete: true, reasons: ['shard-failed'] } }),
+    'AI 審查，非人工審查或核准。審查方式：快速審查，未經獨立驗證；覆蓋不完整（2 個變更檔未審查）。模型： `openai/gpt-6-luna`');
+  assert.equal(commentAttribution(provenance, 'en', 'p/m', { verification: 'none', coverage: { complete: false, unreviewedFiles: 0, filesComplete: false, reasons: ['partial-file-list', 'reviewer-gaps'] } }),
+    'AI-generated review; not human review or approval. Review method: quick review, not independently verified; coverage incomplete (Azure DevOps returned a partial change list; the reviewer reported unfinished checks). Models: `openai/gpt-6-luna`, `p/m`');
+  const verified = { mode: 'review', stages: [{ role: 'azpr-review-functional', model: 'p/f' }] };
+  assert.equal(commentAttribution(verified, 'zh-TW', 'p/r'), 'AI 審查，非人工審查或核准。模型： `p/f`, `p/r`');
+  assert.equal(commentAttribution(verified, 'zh-TW', 'p/r', { verification: 'independent', coverage: { complete: false, unreviewedFiles: 3 } }), 'AI 審查，非人工審查或核准。模型： `p/f`, `p/r`');
+  assert.equal(coverageNote({ complete: false, unreviewedFiles: 2, filesComplete: false, reasons: ['shard-failed', 'partial-file-list'] }, 'en'), 'at least 2 changed file(s) not reviewed; Azure DevOps returned a partial change list');
+  assert.equal(coverageNote({ complete: false, unreviewedFiles: 0, filesComplete: true, reasons: ['reviewer-gaps'] }, 'zh-TW'), '審查者回報有未完成的檢查');
+  assert.equal(coverageNote({ complete: true }, 'en'), '');
+  assert.match(renderReviewSummary([], 'zh-TW', '', { verification: 'none' }), /未回報缺陷；這不保證程式沒有問題。/);
+  assert.match(renderReviewSummary([], 'zh-TW'), /未發現可確認缺陷/);
+});
+
+test('a quick report states status, coverage and verification separately and keeps items that need information', () => {
+  const { id: _id, ...body } = finding('Q-1');
+  const quick = { status: 'COMPLETE', verification: 'none', snapshot: final().snapshot, freshness: { head: 'b'.repeat(40), base: 'a'.repeat(40), status: 'active' },
+    dispositions: [{ id: 'Q-1', status: 'REPORTED', reason: 'r', finding: body, inline: true }, { id: 'Q-2', status: 'NEEDS_INFO', reason: 'The location check failed.', partialFinding: { ...body, summary: 'Unchecked claim' } },
+      { id: 'Q-3', status: 'MERGED', mergedInto: 'Q-1', reason: 'Identical in every field to Q-1.' }],
+    newFindings: [], report: 'Checked the diff and callers.', reviewWarnings: [], coverage: { 'azpr-quick-reviewer': { assigned: 2, covered: 1, failedFiles: ['/src/b.ts'], gaps: [] } },
+    coverageSummary: { complete: false, unreviewedFiles: 1, filesComplete: true, reasons: ['shard-failed'] }, initialObservations: [], unstructuredInitials: [] };
+  const report = renderFinalReport(quick, 'en');
+  assert.match(report, /^\*\*Quick review: one reviewer per shard; the findings are not independently verified\.\*\*\n\n\*\*Coverage:\*\* incomplete \(1 changed file\(s\) not reviewed\)/);
+  assert.match(report, /## Reported findings \(quick review, not independently verified\)\n\n### Q-1/);
+  assert.match(report, /## Findings that need more information \(not eligible for comments\)\n\n### Q-2 — Unchecked claim/);
+  assert.match(report, /- \*\*Q-1 — REPORTED:\*\* passed the runtime's format and source checks; not independently verified\./);
+  assert.match(report, /- \*\*Q-3 — MERGED → Q-1:\*\*/);
+  assert.doesNotMatch(report, /Confirmed findings/);
+  assert.match(renderFinalReport({ ...quick, status: 'PARTIAL', coverageSummary: { complete: true } }, 'zh-TW'), /PARTIAL: 沒有任何快速審查工作階段產生可用結果/);
+  const provenance = provenanceReport({ mode: 'quick', stages: [{ role: 'azpr-quick-reviewer', model: 'p/q', sessions: 1, findings: 2 }] }, quick, 'en');
+  assert.match(provenance, /Quick review: one reviewer per shard covered functional and risk focus/);
+  assert.match(provenance, /\| Quick review \| `p\/q` \| 1 \| 2 \|/);
+  assert.doesNotMatch(provenance, /New verifier findings/);
+});
+
+test('a quick receipt carries coverage and verification on its first line and a verification hint', () => {
+  const quick = { ...run(), mode: 'quick', profile: 'quick', quickSummary: { coverage: { complete: false, unreviewedFiles: 1, filesComplete: true, reasons: ['shard-failed'] }, high: 1 } };
+  const text = renderReceipt(quick, 'report', 'COMPLETE', '', settings);
+  assert.match(text, /^\[AZPR 12345678\] COMPLETE; coverage incomplete; verification none \(quick review\)\n/);
+  assert.match(text, /Verification hint: 1 high-severity finding\(s\) and incomplete coverage\. Before publishing, consider \/pr-review/);
+  assert.match(text, /Quick findings are not independently verified/);
+  assert.match(text, /\/pr-comment 12345678 --publish/);
+  const clean = renderReceipt({ ...quick, quickSummary: { coverage: { complete: true }, high: 0 } }, 'report', 'COMPLETE', '', settings);
+  assert.match(clean, /^\[AZPR 12345678\] COMPLETE; coverage complete; verification none \(quick review\)\n/);
+  assert.doesNotMatch(clean, /Verification hint/);
+  assert.match(renderReceipt({ ...run() }, 'report', 'COMPLETE', '', settings), /^\[AZPR 12345678\] COMPLETE\n/, 'Verified receipts keep their first line.');
 });

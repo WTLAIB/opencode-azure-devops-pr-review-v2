@@ -388,7 +388,13 @@ async function reviewTool(name, input, { azure, run, snapshot }) {
     };
     const [base, head] = await Promise.all([read(change?.originalPath ?? path, snapshot.base, types.includes('add')), read(path, snapshot.head, types.includes('delete'))]);
     const text = renderDiff({ path, change, base, head, snapshot, context: args.context, fromHunk });
-    return { text, ...(typeof head?.text === 'string' ? { observation: { path, version: snapshot.head, text: head.text } } : {}) };
+    // What the answer showed: nothing for a binary or oversized side or for
+    // identical versions, otherwise the content of each existing side.
+    const readable = [base, head].every(file => !file?.binary && !file?.tooLarge);
+    const differs = !(typeof base?.text === 'string' && typeof head?.text === 'string' && base.text === head.text);
+    const reads = readable && differs ? [...(typeof base?.text === 'string' ? [{ path: change?.originalPath ?? path, version: snapshot.base }] : []),
+      ...(typeof head?.text === 'string' ? [{ path, version: snapshot.head }] : [])] : [];
+    return { text, reads, ...(typeof head?.text === 'string' ? { observation: { path, version: snapshot.head, text: head.text } } : {}) };
   }
   if (name === REVIEW_TOOLS.searchCode) {
     const query = typeof args.query === 'string' ? args.query : '';
@@ -415,7 +421,7 @@ async function reviewTool(name, input, { azure, run, snapshot }) {
     if (startLine && endLine && endLine < startLine) throw new ToolInputError('endLine must not be smaller than startLine.');
     if (startColumn && !startLine) throw new ToolInputError('startColumn continues startLine; give both.');
     const file = await azure.readFile(run, snapshot, path, sha);
-    return { ...renderFile(file, { label, startLine, endLine, startColumn }), ...(typeof file.text === 'string' ? { observation: { path, version: sha, text: file.text } } : {}) };
+    return { ...renderFile(file, { label, startLine, endLine, startColumn }), ...(typeof file.text === 'string' ? { observation: { path, version: sha, text: file.text }, reads: [{ path, version: sha }] } : { reads: [] }) };
   }
   if (name === REVIEW_TOOLS.listFiles) {
     const path = pathArgument(args.path, '/');

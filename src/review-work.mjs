@@ -1,14 +1,17 @@
 /**
  * Review orchestration: runtime-owned snapshot, sharded initial reviews,
  * sharded verification, a duplicate check for files whose findings different
- * verifiers confirmed, and a deterministic final version recheck.
+ * verifiers confirmed, and a deterministic final version recheck. A quick
+ * review has one reviewer per shard and no verification: the runtime checks
+ * only the form and source of its findings, never whether they are right.
  */
 import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, syntaxProblem, locationPath } from './output.mjs';
+import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, quickRepairPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
 
 export { locationPath };
 const ID_SPAN = 1000;
 const text = value => typeof value === 'string' && value.trim().length > 0;
+const shardLabel = task => task.count > 1 || task.part ? `shard ${task.index + 1}/${task.count}${task.part ?? ''}` : '';
 
 /** Sorted paths keep a directory's files in the same shard. */
 export function shardFiles(files, size) {
@@ -98,13 +101,9 @@ function uniqueIds(findings, prefix, used, valid = () => true) {
   }
 }
 
-/**
- * @param {object} ctx { azure, runStage, progress, settings, dataFor }
- * @param {object} run
- * @param {object} request parsed /pr-review arguments
- */
-export async function runReview(ctx, run, request) {
-  const { azure, runStage, progress, settings } = ctx;
+/** The PR snapshot every review starts from, with its warnings. */
+async function prepareSnapshot(ctx, run, request) {
+  const { azure, progress } = ctx;
   const store = await ctx.dataFor(run);
   const snapshot = await azure.snapshot(run, request.target);
   run.snapshot = snapshot;
@@ -114,41 +113,79 @@ export async function runReview(ctx, run, request) {
   progress(run, `PR #${snapshot.prId} at ${snapshot.head.slice(0, 10)}: ${snapshot.files.length} changed file(s)${snapshot.filesComplete ? '' : ' (partial list)'}.`);
   // A partial list asks reviewers to find the remaining paths; a complete empty one leaves nothing to review.
   if (!snapshot.files.length && snapshot.filesComplete) throw new Error(`PR #${snapshot.prId} has no changed files in its latest iteration; there is nothing to review.`);
+  return { store, snapshot, warnings, modelSnapshot: await snapshotForModel(snapshot, store) };
+}
 
-  const modelSnapshot = await snapshotForModel(snapshot, store);
-  const shards = shardFiles(snapshot.files, settings.workflow.shardFiles);
-  const roles = initialRoles(run.profile);
-  let nextBase = shards.length * ID_SPAN;
-  const tasks = roles.flatMap(role => shards.map((files, index) => ({ role, files, index, count: shards.length, idBase: index * ID_SPAN })));
-  progress(run, `Initial review: ${tasks.length} session(s) for ${roles.length} roles and ${shards.length} shard(s).`);
-
+/**
+ * One initial session per task; a task that fills its model context is split
+ * in half and both halves run (`counter.next` hands out their ID ranges).
+ * `handlerFor(task, prefix)` returns the stage handler that accepts answers.
+ */
+function initialRunner(ctx, run, request, { snapshot, modelSnapshot, counter, handlerFor }) {
+  const { runStage, progress, settings } = ctx;
+  const changes = new Map(snapshot.changes.map(change => [change.path, change]));
   async function initialTask(task) {
     const prefix = ROLES[task.role].prefix;
-    const changes = new Map(snapshot.changes.map(change => [change.path, change]));
     const payload = {
       prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
       assignment: { shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, files: task.files, changes: task.files.map(path => changes.get(path)).filter(Boolean),
         firstFindingId: `${prefix}-${task.idBase + 1}`, discoverFiles: !snapshot.filesComplete },
     };
     try {
-      const result = await runStage(run, task.role, payload, {
-        evaluate(answer) {
-          const { result, issues } = evaluateInitial(answer, { prefix, assigned: task.files, inventory: snapshot.files, filesComplete: snapshot.filesComplete });
-          return { result, issues, repairPrompt: issues.length ? initialRepairPrompt(issues, { parseOnly: !result.structured && syntaxProblem(issues) }) : undefined };
-        },
-      }, { label: task.count > 1 || task.part ? `shard ${task.index + 1}/${task.count}${task.part ?? ''}` : '' });
+      const result = await runStage(run, task.role, payload, handlerFor(task, prefix), { label: shardLabel(task) });
       return [{ task, result }];
     } catch (error) {
       if (!run.active) throw error;
       if (error?.failureClass === 'overflow' && task.files.length > 1) {
         const middle = Math.ceil(task.files.length / 2);
         progress(run, `${task.role} reached its context limit on ${task.files.length} files; splitting the shard in two.`);
-        const halves = [task.files.slice(0, middle), task.files.slice(middle)].map((files, half) => ({ ...task, files, idBase: (nextBase += ID_SPAN), part: `${task.part ?? ''}${half ? 'b' : 'a'}` }));
+        const halves = [task.files.slice(0, middle), task.files.slice(middle)].map((files, half) => ({ ...task, files, idBase: (counter.next += ID_SPAN), part: `${task.part ?? ''}${half ? 'b' : 'a'}` }));
         return [...await initialTask(halves[0]), ...await initialTask(halves[1])];
       }
       return [{ task, error }];
     }
   }
+  return initialTask;
+}
+
+/** Deterministic final version recheck. Only a changed source commit is stale. */
+async function finalRecheck(ctx, run, snapshot, warnings) {
+  let freshness;
+  try {
+    const now = await ctx.azure.versions(run, snapshot);
+    freshness = { ...now, checkedAt: new Date().toISOString() };
+    if (now.base && now.base !== snapshot.base) warnings.push(`The PR base moved during the review (${snapshot.base.slice(0, 10)} → ${now.base.slice(0, 10)}). Findings describe the PR source compared with the reviewed base.`);
+    if (now.status !== 'active') warnings.push(`The PR is now ${now.status}.`);
+  } catch (error) {
+    if (!run.active) throw error;
+    freshness = { error: String(error?.message ?? error) };
+    warnings.push(`The final version recheck failed (${freshness.error}); publication re-checks the source commit before posting.`);
+  }
+  const stale = Boolean(freshness.head && freshness.head !== snapshot.head);
+  if (stale) warnings.unshift(`The PR source changed during the review (${snapshot.head.slice(0, 10)} → ${freshness.head.slice(0, 10)}). Run a new review before commenting.`);
+  return { freshness, stale };
+}
+
+/**
+ * @param {object} ctx { azure, runStage, progress, settings, dataFor }
+ * @param {object} run
+ * @param {object} request parsed /pr-review arguments
+ */
+export async function runReview(ctx, run, request) {
+  if (run.profile === 'quick') return runQuickReview(ctx, run, request);
+  const { runStage, progress, settings } = ctx;
+  const { store, snapshot, warnings, modelSnapshot } = await prepareSnapshot(ctx, run, request);
+  const shards = shardFiles(snapshot.files, settings.workflow.shardFiles);
+  const roles = initialRoles(run.profile);
+  const counter = { next: shards.length * ID_SPAN };
+  const tasks = roles.flatMap(role => shards.map((files, index) => ({ role, files, index, count: shards.length, idBase: index * ID_SPAN })));
+  progress(run, `Initial review: ${tasks.length} session(s) for ${roles.length} roles and ${shards.length} shard(s).`);
+  const initialTask = initialRunner(ctx, run, request, { snapshot, modelSnapshot, counter, handlerFor: (task, prefix) => ({
+    evaluate(answer) {
+      const { result, issues } = evaluateInitial(answer, { prefix, assigned: task.files, inventory: snapshot.files, filesComplete: snapshot.filesComplete });
+      return { result, issues, repairPrompt: issues.length ? initialRepairPrompt(issues, { parseOnly: !result.structured && syntaxProblem(issues) }) : undefined };
+    },
+  }) });
 
   const outcomes = (await runPool(tasks, settings.workflow.parallelSessions, initialTask)).flat();
   if (!run.active) throw new Error(run.reason || 'Review stopped.');
@@ -307,21 +344,8 @@ export async function runReview(ctx, run, request) {
   const dangling = settleMergeTargets(dispositions, { unknownIsDangling: true, confirmedIds: new Set(newFindings.map(finding => finding.id)) });
   if (dangling.length) warnings.push(`Merged into findings that were not confirmed and shown as UNREVIEWED: ${dangling.map(row => `${row.id} → ${row.target} (${row.status})`).join(', ')}.`);
 
-  // Deterministic final version recheck. Only a changed source commit is stale.
-  let freshness;
-  try {
-    const now = await azure.versions(run, snapshot);
-    freshness = { ...now, checkedAt: new Date().toISOString() };
-    if (now.base && now.base !== snapshot.base) warnings.push(`The PR base moved during the review (${snapshot.base.slice(0, 10)} → ${now.base.slice(0, 10)}). Findings describe the PR source compared with the reviewed base.`);
-    if (now.status !== 'active') warnings.push(`The PR is now ${now.status}.`);
-  } catch (error) {
-    if (!run.active) throw error;
-    freshness = { error: String(error?.message ?? error) };
-    warnings.push(`The final version recheck failed (${freshness.error}); publication re-checks the source commit before posting.`);
-  }
-  const stale = Boolean(freshness.head && freshness.head !== snapshot.head);
+  const { freshness, stale } = await finalRecheck(ctx, run, snapshot, warnings);
   const status = stale ? 'STALE' : verified ? 'COMPLETE' : 'PARTIAL';
-  if (stale) warnings.unshift(`The PR source changed during the review (${snapshot.head.slice(0, 10)} → ${freshness.head.slice(0, 10)}). Run a new review before commenting.`);
   return {
     status, snapshot, freshness, dispositions, newFindings, findings,
     report: reports.join('\n\n'),
@@ -330,5 +354,177 @@ export async function runReview(ctx, run, request) {
     initialObservations: status === 'COMPLETE' ? [] : findings,
     unstructuredInitials: status === 'COMPLETE' ? [] : initialReports.filter(item => !item.structured).map(item => item.report),
     shards: { initial: shards.length, verification: groups.length, duplicateChecks: sameFile.length },
+  };
+}
+
+// ------------------------------------------------------------------ quick review
+
+const QUICK_LOCATION = /^(?:(head|base):)?(\/[^:\n]+?)(?::(\d+)(?:-(\d+))?)?\s*$/;
+const lineCount = source => {
+  const lines = source.replace(/\r\n/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.length;
+};
+export const QUICK_REPORTED_REASON = 'Reported by the quick reviewer; it passed the runtime\'s format and source checks and was not independently verified.';
+
+/**
+ * Check a quick finding's location against the reviewed commits: the file
+ * exists at that version, the lines are in range and this session's own tools
+ * showed that file's content. Only form and source are checked, never whether
+ * the defect is real. `repairable` problems go back to the reviewer; `inline`
+ * says whether the location is on a changed HEAD file.
+ * @param {object} finding
+ * @param {{snapshot: object, azure: object, run: object, reads?: Set<string>}} context
+ */
+export async function checkQuickLocation(finding, { snapshot, azure, run, reads }) {
+  const match = QUICK_LOCATION.exec(String(finding.location ?? '').trim());
+  if (!match) return { problem: `location ${JSON.stringify(finding.location ?? '')} must be head:/path:line or head:/path:start-end (base: only for content that exists only in BASE).`, repairable: true };
+  const side = match[1] ?? 'head', path = match[2], start = match[3] ? Number(match[3]) : null, end = match[4] ? Number(match[4]) : start;
+  const version = side === 'base' ? snapshot.base : snapshot.head, label = side.toUpperCase();
+  const change = (snapshot.changes ?? []).find(item => item.path === path);
+  let file;
+  try { file = await azure.readFile(run, snapshot, path, version); }
+  catch (error) {
+    if (!run.active) throw error;
+    if (error?.kind !== 'not-found') return { problem: `the runtime could not check ${path} at ${label} (${String(error?.message ?? error).slice(0, 200)}).`, repairable: false };
+    const renamed = (snapshot.changes ?? []).find(item => item.originalPath === path)?.path;
+    const hint = side === 'head' && change?.changeType?.includes('delete') ? ` It is deleted in this PR: use base:${path}:<line> for the removed content, or locate the finding at the HEAD code it affects.`
+      : side === 'head' && renamed ? ` It was renamed to ${renamed} in HEAD.`
+        : side === 'base' && change?.originalPath ? ` Its BASE path is ${change.originalPath}.`
+          : side === 'base' && change?.changeType?.includes('add') ? ' It is added in this PR: use head:.' : '';
+    return { problem: `${path} does not exist at ${label}.${hint}`, repairable: true };
+  }
+  if (file.binary || file.tooLarge) {
+    return { problem: `${path} is ${file.binary ? 'a binary file' : 'larger than AZPR reads'} at ${label}, so its lines cannot be read: locate the finding at the readable code or configuration that supports it, or move it to report.`, repairable: true };
+  }
+  if (!start) return { problem: `location ${finding.location} needs a line or line range.`, repairable: true };
+  const lines = lineCount(file.text);
+  if (end < start || end > lines) return { problem: `lines ${start}${end === start ? '' : `-${end}`} are outside ${path} at ${label}, which has ${lines} line(s).`, repairable: true };
+  if (!reads?.has(`${version}\n${path}`)) {
+    return { problem: `this session did not read ${path} at ${label} with azpr_read_diff or azpr_read_file; read it and confirm the location, or move the concern to report.`, repairable: true };
+  }
+  return { ok: true, inline: side === 'head' && Boolean(change) && !change.changeType?.includes('delete') };
+}
+
+/**
+ * Accept one quick-review answer: the initial-review contract with a required
+ * location, plus the runtime's location and source checks. Field and location
+ * problems get correction turns; what is still wrong afterwards is NEEDS_INFO.
+ */
+export async function evaluateQuick(answer, { task, snapshot, azure, run, reads }) {
+  const { result, issues } = evaluateInitial(answer, { prefix: 'Q', assigned: task.files, inventory: snapshot.files, filesComplete: snapshot.filesComplete, requireLocation: true });
+  // A plain object, so the stage record shows each finding's check.
+  const checks = {};
+  for (const finding of result.findings) {
+    if (!Object.hasOwn(result.invalid, finding.id)) checks[finding.id] = await checkQuickLocation(finding, { snapshot, azure, run, reads });
+  }
+  const all = [...issues, ...Object.entries(checks).filter(([, check]) => check.repairable).map(([id, check]) => `${id}: ${check.problem}`)];
+  return { result: { ...result, checks }, issues: all,
+    repairPrompt: all.length ? quickRepairPrompt(all, { parseOnly: !result.structured && syntaxProblem(all) }) : undefined };
+}
+
+const findingKey = finding => JSON.stringify(FINDING_FIELDS.filter(key => key !== 'id').map(key => String(finding?.[key] ?? '').replace(/\s+/g, ' ').trim()));
+const findingOnly = finding => Object.fromEntries(FINDING_FIELDS.filter(key => key !== 'id' && Object.hasOwn(finding, key)).map(key => [key, finding[key]]));
+
+/**
+ * Quick review: one reviewer per shard covers functional and risk focus and
+ * checks its own findings against the source; no verifier, duplicate check or
+ * summary session runs. Findings that pass the runtime's checks are REPORTED
+ * (not independently verified); the rest are NEEDS_INFO. Status, coverage and
+ * verification are reported separately: a parsed answer without a usable
+ * review never makes a commentable COMPLETE, and zero findings never hide
+ * files that were not reviewed.
+ */
+export async function runQuickReview(ctx, run, request) {
+  const { azure, progress, settings } = ctx;
+  const { snapshot, warnings, modelSnapshot } = await prepareSnapshot(ctx, run, request);
+  const shards = shardFiles(snapshot.files, settings.workflow.shardFiles);
+  const [role] = initialRoles('quick');
+  const counter = { next: shards.length * ID_SPAN };
+  const tasks = shards.map((files, index) => ({ role, files, index, count: shards.length, idBase: index * ID_SPAN }));
+  progress(run, `Quick review: ${tasks.length} session(s) for ${shards.length} shard(s); no independent verification follows.`);
+  const initialTask = initialRunner(ctx, run, request, { snapshot, modelSnapshot, counter, handlerFor: task => ({
+    evaluate: (answer, _previous, session) => evaluateQuick(answer, { task, snapshot, azure, run, reads: session?.reads }),
+  }) });
+  const outcomes = (await runPool(tasks, settings.workflow.parallelSessions, initialTask)).flat();
+  if (!run.active) throw new Error(run.reason || 'Review stopped.');
+  if (!outcomes.some(outcome => outcome.result)) throw new Error(`Every quick review session failed: ${[...new Set(outcomes.map(outcome => outcome.error?.message).filter(Boolean))].slice(0, 3).join(' | ')}`);
+
+  const findings = [], dispositions = [], reports = [], initialReports = [], unusableTexts = [], discovered = new Set(), covered = new Set(), used = new Set();
+  const coverage = { [role]: { assigned: 0, covered: 0, failedFiles: [], gaps: [] } };
+  let usable = 0, failedShards = 0, reviewerGaps = false;
+  for (const { task, result, error } of outcomes) {
+    const label = shardLabel(task);
+    coverage[role].assigned += task.files.length;
+    if (!result) {
+      failedShards++;
+      coverage[role].failedFiles.push(...task.files);
+      warnings.push(`The quick review ${label || 'session'} failed (${error?.message ?? 'unknown error'}); its ${task.files.length || 'unknown'} file(s) were not reviewed.`);
+      continue;
+    }
+    // Classify before IDs are made unique: the checks are keyed by the answer's IDs.
+    const entries = result.findings.map(finding => ({ finding, problems: result.invalid?.[finding.id] ?? [], check: result.checks?.[finding.id] }));
+    uniqueIds(result.findings, 'Q', used);
+    const accepted = entries.filter(entry => !entry.problems.length && entry.check?.ok).length;
+    const reviewed = result.envelope?.coverage ? result.coverage.files.filter(path => task.files.includes(path)) : [];
+    // A parsed answer is usable only with a findings array and at least one reviewed file or accepted finding.
+    const isUsable = result.structured && result.envelope?.findings === true && (reviewed.length > 0 || accepted > 0);
+    if (!isUsable) {
+      failedShards++;
+      coverage[role].failedFiles.push(...task.files);
+      warnings.push(`The quick review ${label || 'session'} returned no usable review (${result.structured ? 'no reviewed file or usable finding' : 'no structured answer'}); its ${task.files.length} file(s) count as not reviewed.`);
+      if (text(result.report)) unusableTexts.push(label ? `### ${label}\n\n${result.report}` : result.report);
+    } else {
+      usable++;
+      for (const path of reviewed) covered.add(path);
+      coverage[role].covered += reviewed.length;
+      coverage[role].gaps.push(...result.coverage.gaps);
+      if (result.coverage.gaps.length) reviewerGaps = true;
+      for (const path of result.additionalFiles) discovered.add(path);
+      if (text(result.report)) reports.push(label ? `### ${label}\n\n${result.report}` : result.report);
+    }
+    // The session that reported a finding, recorded by the runtime (never derived from IDs):
+    // comment planning may combine findings of different sessions that repeat one defect.
+    const shard = `${task.index + 1}/${task.count}${task.part ?? ''}`;
+    for (const { finding, problems, check } of entries) {
+      findings.push({ ...finding, origin: role });
+      const partial = findingOnly(finding);
+      if (!isUsable) dispositions.push({ id: finding.id, status: 'NEEDS_INFO', reason: 'The finding comes from a quick review answer that was not usable. [Runtime: not eligible for comments.]', partialFinding: partial, shard });
+      else if (problems.length) dispositions.push({ id: finding.id, status: 'NEEDS_INFO', reason: `The finding is ${problems.join('; ')} after the correction turns. [Runtime: not eligible for comments.]`, partialFinding: partial, shard });
+      else if (!check?.ok) dispositions.push({ id: finding.id, status: 'NEEDS_INFO', reason: `The location check failed: ${check?.problem ?? 'it was not checked.'} [Runtime: not eligible for comments.]`, partialFinding: partial, shard });
+      else dispositions.push({ id: finding.id, status: 'REPORTED', reason: QUICK_REPORTED_REASON, finding: partial, inline: check.inline, shard });
+    }
+    initialReports.push({ role, shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, files: task.files.length, status: result.status,
+      structured: result.structured, usable: isUsable, report: result.report, gaps: result.coverage.gaps, warnings: result.warnings });
+    warnings.push(...result.warnings.map(message => label ? `Quick review ${label}: ${message}` : `Quick review: ${message}`));
+  }
+  // Only records identical in every field are duplicates; findings on the same lines stay separate.
+  const kept = new Map();
+  let duplicates = 0;
+  for (const status of ['REPORTED', 'NEEDS_INFO']) for (const entry of dispositions.filter(row => row.status === status)) {
+    const key = findingKey(entry.finding ?? entry.partialFinding);
+    if (!kept.has(key)) { kept.set(key, entry.id); continue; }
+    Object.assign(entry, { status: 'MERGED', mergedInto: kept.get(key), reason: `Identical in every field to ${kept.get(key)}. [Runtime: exact duplicate.]` });
+    delete entry.finding; delete entry.inline; delete entry.partialFinding;
+    duplicates++;
+  }
+  if (duplicates) warnings.push(`Removed ${duplicates} exact duplicate finding(s); findings that differ in any field are kept.`);
+  if (discovered.size) warnings.push(`The quick reviewer reported ${discovered.size} changed path(s) missing from Azure's list: ${[...discovered].slice(0, 20).join(', ')}${discovered.size > 20 ? ', ...' : ''}`);
+  const unreviewedFiles = snapshot.files.filter(path => !covered.has(path)).length;
+  const reasons = [...(failedShards ? ['shard-failed'] : []), ...(snapshot.filesComplete ? [] : ['partial-file-list']), ...(reviewerGaps ? ['reviewer-gaps'] : [])];
+  const coverageSummary = { complete: !unreviewedFiles && !reasons.length, unreviewedFiles, filesComplete: snapshot.filesComplete, reasons };
+  const reported = dispositions.filter(row => row.status === 'REPORTED').length;
+  progress(run, `Quick review finished: ${reported} reported finding(s), ${dispositions.filter(row => row.status === 'NEEDS_INFO').length} need more information; coverage ${coverageSummary.complete ? 'complete' : 'incomplete'}.`);
+
+  const { freshness, stale } = await finalRecheck(ctx, run, snapshot, warnings);
+  const status = stale ? 'STALE' : usable ? 'COMPLETE' : 'PARTIAL';
+  return {
+    status, snapshot, freshness, dispositions, newFindings: [], findings,
+    report: reports.join('\n\n'),
+    reviewWarnings: [...new Set(warnings)],
+    coverage, coverageSummary, discoveredFiles: [...discovered], initialReports, verification: 'none',
+    initialObservations: status === 'COMPLETE' ? [] : findings,
+    unstructuredInitials: unusableTexts,
+    shards: { initial: shards.length, verification: 0, duplicateChecks: 0 },
   };
 }

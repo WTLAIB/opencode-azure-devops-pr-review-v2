@@ -34,9 +34,48 @@ listed in the preview and receipt. Findings of the same review never cover each
 other: the verifier already merged duplicates, so each confirmed high or medium
 finding gets its own comment unless one of those reasons applies.
 
+### Quick reviews
+
+A `/pr-quick` review is commented on with the same planner, preview,
+publication and markers, so its comments have the same layout. Its REPORTED
+findings take the place of confirmed ones; they were not independently
+verified, which the disclosure line says in both the summary and every inline
+comment, for example `AI-generated review; not human review or approval.
+Review method: quick review, not independently verified. Models: …` (in zh-TW
+`AI 審查，非人工審查或核准。審查方式：快速審查，未經獨立驗證。模型：…`). When the
+review's coverage was incomplete, the summary's disclosure line adds
+`coverage incomplete (…)` with the number of unreviewed changed files when it
+is known and fixed short reasons otherwise; reviewer text never goes there.
+
+Inline comments of a quick review are stricter: the finding's location must be
+on a changed file at HEAD (a BASE location or unchanged code stays in the
+summary index), and the planner's anchor must be found in the HEAD source the
+runtime read. The quick reviewer's model plans the comments.
+
+Without a verifier, two shards of a quick review can report one defect, for
+example when a shard's tests lead its reviewer into another shard's changed
+file. The runtime offers the planner such findings as `mergeCandidates`:
+inline-eligible high or medium findings of different review sessions (recorded
+by the runtime, not derived from IDs) with the same severity on overlapping
+lines of one HEAD file, kept on one planning page (a group that does not fit a
+page is not offered). The planner may then write one comment with `findingIds`
+and a `mergeReason`, only when the findings state the same root cause with
+compatible triggers and the same correction, and otherwise comments on each.
+The runtime accepts a combination only if every member is in one listed group,
+the members come from different sessions, share one severity and at least one
+line, and the anchor lies within the shared lines; otherwise it asks for a
+correction, and after the last one keeps the valid single comments and skips
+the rest with a reason (they stay in the summary index; it never splits one
+text into several). The summary index gives an accepted combination one row
+with all its IDs, and the counts follow the rows; the review keeps every
+finding. The runtime cannot tell a well-formed but wrong combination of two
+different defects, so the prompt says to keep findings apart when unsure. No
+dedicated duplicate stage runs, although planning pages, corrections or
+continuations can still add sessions and model requests.
+
 ## Planning
 
-Planning uses the review's risk model in pages of at most four findings, plus
+Planning uses the review's risk model (the quick reviewer's model for a quick review) in pages of at most four findings, plus
 segments of the final report for the summary details. Before planning, the
 runtime reads every live thread once and fetches the HEAD source of each
 finding's file. Each page then receives, inline: the verified findings,
@@ -127,6 +166,19 @@ Each item ends with `<!-- azpr-comment:<32 hex> -->`:
 - Summary: hash of PR identity, reviewed head and the inline markers, so a new
   review of the same commit with the same comments does not post a second
   summary.
+
+A combined comment is one inline item with one marker; the publication
+ledger records all its finding IDs (`findingIds`), and ledgers and plans saved
+before that field existed are read as before.
+
+Only an identical complete marker counts as already present. Neither the
+review mode, the finding IDs nor the disclosure text is part of a marker, so a
+`/pr-review` published after a `/pr-quick` of the same head finds the quick
+comments: an inline comment on the same anchor with the same ordinal is
+`ALREADY_PRESENT` (it keeps its quick disclosure; AZPR never edits it), a
+second issue on that anchor has ordinal 1 and is posted, and the summary is
+posted again only when the set of inline markers differs. A later review
+therefore does not guarantee a summary that says it was verified.
 
 Deleting a thread or comment removes its marker; the next publish posts it again.
 

@@ -264,3 +264,164 @@ test('an incomplete Azure file list asks reviewers to discover paths and records
   assert.deepEqual(final.discoveredFiles, ['/hidden.ts']);
   assert.ok(final.reviewWarnings.some(message => /incomplete changed-file list/.test(message)));
 });
+
+// ------------------------------------------------------------------ quick review
+
+/**
+ * A quick-review harness: `behave({ payload, turn, repair, read })` answers each
+ * turn and calls `read(path, side)` for what this session's own tools showed.
+ */
+async function quickContext(t, { files, workflow = {}, changes, missing, binary, sources, behave }) {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-quick-work-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const azure = fakeAzure({ files, changes, missing, binary, sources });
+  const client = createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 3, timeoutMs: 1000 }), fetch: azure.fetch, retryDelayMs: 1 });
+  const settings = validateSettings({ version: 2, models: { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' }, quick: { reviewer: 'p/q' } }, workflow, azure: { organization: 'org', pat: FAKE_PAT } });
+  const store = await createCommentData({ root: directory });
+  const calls = [], notices = [];
+  const run = { id: 'run12345', profile: 'quick', active: true, controller: new AbortController(), stages: [] };
+  const runStage = async (stageRun, role, payload, handler, options) => {
+    const call = { role, payload, label: options.label, reads: new Set(), repairs: [] };
+    calls.push(call);
+    const read = (path, side = 'head') => call.reads.add(`${side === 'base' ? azure.state.base : azure.state.head}\n${path}`);
+    let evaluation;
+    for (let turn = 0; ; turn++) {
+      const text = await behave({ role, payload, turn, repair: evaluation?.repairPrompt, read, calls });
+      evaluation = await handler.evaluate(text, evaluation?.result, { reads: call.reads });
+      if (!evaluation.issues?.length || turn >= settings.workflow.repairAttempts) break;
+      call.repairs.push(evaluation.repairPrompt);
+    }
+    return evaluation.result;
+  };
+  const ctx = { azure: client, runStage, progress: (_run, message) => notices.push(message), settings, dataFor: async () => store };
+  return { ctx, run, azure, calls, notices, request: { prUrl: azure.prUrl(), userContext: '', target: parsePullRequestUrl(azure.prUrl()) } };
+}
+const quickAnswer = (payload, findings, extra = {}) => JSON.stringify({ status: 'COMPLETE', coverage: { files: payload.assignment.files, gaps: [] }, additionalFiles: [], findings, report: `Checked ${payload.assignment.shard}`, ...extra });
+const quickFinding = (id, location, summary = `Defect ${id}`) => ({ id, summary, location, evidence: 'HEAD `x` drops the guard; BASE kept it.', counterevidence: 'No caller re-checks.', severity: 'medium', suggestion: 'Restore the guard; add a regression case.' });
+
+test('a quick review runs one reviewer per shard, no verifier, and reports checked findings', async t => {
+  const f = await quickContext(t, { files: ['/a/1.ts', '/a/2.ts', '/b/1.ts'], workflow: { shardFiles: 2 }, behave: async ({ payload, read }) => {
+    for (const path of payload.assignment.files) read(path);
+    return quickAnswer(payload, [quickFinding(payload.assignment.firstFindingId, `head:${payload.assignment.files[0]}:1`)]);
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(f.calls.map(call => call.role), ['azpr-quick-reviewer', 'azpr-quick-reviewer']);
+  assert.deepEqual(f.calls.map(call => call.payload.assignment.firstFindingId), ['Q-1', 'Q-1001']);
+  assert.equal(final.status, 'COMPLETE');
+  assert.equal(final.verification, 'none');
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}:${d.inline}`), ['Q-1:REPORTED:true', 'Q-1001:REPORTED:true']);
+  assert.ok(final.dispositions.every(d => !d.verifiedFinding && d.finding.location && !Object.hasOwn(d.finding, 'id')));
+  assert.deepEqual(final.coverageSummary, { complete: true, unreviewedFiles: 0, filesComplete: true, reasons: [] });
+  assert.match(final.report, /### shard 1\/2\n\nChecked 1\/2[\s\S]*### shard 2\/2\n\nChecked 2\/2/);
+  assert.deepEqual(final.shards, { initial: 2, verification: 0, duplicateChecks: 0 });
+  assert.ok(f.notices.some(message => /Quick review: 2 session\(s\) for 2 shard\(s\); no independent verification follows/.test(message)));
+});
+
+test('quick findings on the same line stay separate; only identical records are removed', async t => {
+  const f = await quickContext(t, { files: ['/src/pay.ts'], behave: async ({ payload, read }) => {
+    read('/src/pay.ts');
+    const authz = quickFinding('Q-1', 'head:/src/pay.ts:1', 'The permission check runs after the charge');
+    return quickAnswer(payload, [authz, quickFinding('Q-2', 'head:/src/pay.ts:1', 'A retry charges the card twice'), { ...authz, id: 'Q-3' }]);
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}${d.mergedInto ? `>${d.mergedInto}` : ''}`), ['Q-1:REPORTED', 'Q-2:REPORTED', 'Q-3:MERGED>Q-1']);
+  assert.match(final.dispositions[2].reason, /exact duplicate/);
+  assert.ok(final.reviewWarnings.some(message => /Removed 1 exact duplicate finding/.test(message)));
+});
+
+test('a parsed quick answer is not automatically usable: bad items degrade and no usable shard is PARTIAL', async t => {
+  const f = await quickContext(t, { files: ['/src/a.ts'], behave: async ({ payload, read }) => {
+    read('/src/a.ts');
+    const { location: _missing, ...noLocation } = quickFinding('Q-2', '');
+    return quickAnswer(payload, [quickFinding('Q-1', 'head:/src/a.ts:2'), noLocation]);
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.equal(f.calls[0].repairs.length, 2, 'The missing location got both correction turns.');
+  assert.match(f.calls[0].repairs[0], /findings\[1\] \(Q-2\): missing location/);
+  assert.equal(final.status, 'COMPLETE');
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED', 'Q-2:NEEDS_INFO']);
+  assert.match(final.dispositions[1].reason, /missing location after the correction turns/);
+  // JSON that parses but carries no usable review never becomes a commentable COMPLETE.
+  const g = await quickContext(t, { files: ['/src/a.ts'], behave: async () => JSON.stringify({ status: 'COMPLETE', findings: { summary: 'not a list' }, coverage: 'everything', report: 'Looked around.' }) });
+  const partial = await runReview(g.ctx, g.run, g.request);
+  assert.equal(partial.status, 'PARTIAL');
+  assert.ok(partial.dispositions.every(d => d.status === 'NEEDS_INFO'));
+  assert.deepEqual(partial.coverageSummary, { complete: false, unreviewedFiles: 1, filesComplete: true, reasons: ['shard-failed'] });
+  assert.deepEqual(partial.unstructuredInitials, ['Looked around.']);
+});
+
+test('zero quick findings never hide incomplete coverage', async t => {
+  // A failed shard: the number of unreviewed files is known.
+  const failed = await quickContext(t, { files: ['/a.ts', '/b.ts', '/c.ts'], workflow: { shardFiles: 2 }, behave: async ({ payload, read }) => {
+    if (payload.assignment.files.includes('/c.ts')) throw new Error('provider unavailable');
+    for (const path of payload.assignment.files) read(path);
+    return quickAnswer(payload, []);
+  } });
+  const one = await runReview(failed.ctx, failed.run, failed.request);
+  assert.equal(one.status, 'COMPLETE');
+  assert.deepEqual(one.coverageSummary, { complete: false, unreviewedFiles: 1, filesComplete: true, reasons: ['shard-failed'] });
+  assert.deepEqual(one.coverage['azpr-quick-reviewer'].failedFiles, ['/c.ts']);
+  // Every file reviewed, but the reviewer could not finish a check.
+  const gaps = await quickContext(t, { files: ['/a.ts'], behave: async ({ payload, read }) => {
+    read('/a.ts');
+    return quickAnswer(payload, [], { status: 'PARTIAL', coverage: { files: ['/a.ts'], gaps: ['The caller in /lib/x.ts could not be read.'] } });
+  } });
+  const two = await runReview(gaps.ctx, gaps.run, gaps.request);
+  assert.deepEqual(two.coverageSummary, { complete: false, unreviewedFiles: 0, filesComplete: true, reasons: ['reviewer-gaps'] });
+  // Azure returned part of the change list: the total is not known.
+  const partialList = await quickContext(t, { files: ['/a.ts'], behave: async ({ payload, read }) => { read('/a.ts'); return quickAnswer(payload, []); } });
+  const snapshot = partialList.ctx.azure.snapshot;
+  partialList.ctx.azure = { ...partialList.ctx.azure, snapshot: async (...args) => ({ ...(await snapshot(...args)), filesComplete: false }) };
+  const three = await runReview(partialList.ctx, partialList.run, partialList.request);
+  assert.deepEqual(three.coverageSummary, { complete: false, unreviewedFiles: 0, filesComplete: false, reasons: ['partial-file-list'] });
+});
+
+test('quick locations: deleted, renamed, unchanged and binary files, line ranges and the session\'s own reads', async t => {
+  const head = 'b'.repeat(40), base = 'a'.repeat(40);
+  const f = await quickContext(t, {
+    files: ['/src/edit.ts', '/src/gone.ts', '/src/new-name.ts', '/assets/logo.png'],
+    changes: { '/src/gone.ts': { changeType: 'delete' }, '/src/new-name.ts': { changeType: 'rename', originalPath: '/src/old-name.ts' } },
+    missing: [`${head}:/src/gone.ts`], binary: ['/assets/logo.png'],
+    sources: { [`${base}:/src/old-name.ts`]: 'old line 1\nold line 2\n', '/src/util.ts': 'export const util = 1;\n' },
+    behave: async ({ payload, turn, repair, read }) => {
+      read('/src/edit.ts'); read('/src/gone.ts', 'base'); read('/src/new-name.ts');
+      if (turn === 0) {
+        return quickAnswer(payload, [
+          quickFinding('Q-1', 'head:/src/edit.ts:1'), quickFinding('Q-2', 'head:/src/gone.ts:1'), quickFinding('Q-3', 'head:/src/old-name.ts:1'),
+          quickFinding('Q-4', 'head:/assets/logo.png:1'), quickFinding('Q-5', 'head:/src/edit.ts:99'), quickFinding('Q-6', 'head:/src/util.ts:1')]);
+      }
+      if (turn === 1) {
+        assert.match(repair, /Q-2: \/src\/gone\.ts does not exist at HEAD\. It is deleted in this PR: use base:\/src\/gone\.ts:<line>/);
+        assert.match(repair, /Q-3: \/src\/old-name\.ts does not exist at HEAD\. It was renamed to \/src\/new-name\.ts in HEAD/);
+        assert.match(repair, /Q-4: \/assets\/logo\.png is a binary file at HEAD, so its lines cannot be read/);
+        assert.match(repair, /Q-5: lines 99 are outside \/src\/edit\.ts at HEAD, which has 2 line\(s\)/);
+        assert.match(repair, /Q-6: this session did not read \/src\/util\.ts at HEAD/);
+      }
+      if (turn >= 1) read('/src/util.ts');
+      return quickAnswer(payload, [
+        quickFinding('Q-1', 'head:/src/edit.ts:1'), quickFinding('Q-2', 'base:/src/gone.ts:1'), quickFinding('Q-3', 'head:/src/new-name.ts:1'),
+        quickFinding('Q-4', 'head:/assets/logo.png'), quickFinding('Q-5', 'head:/src/edit.ts:2'), quickFinding('Q-6', 'head:/src/util.ts:1')]);
+    },
+  });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.equal(f.calls[0].repairs.length, 2);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}${d.status === 'REPORTED' ? `:${d.inline}` : ''}`),
+    ['Q-1:REPORTED:true', 'Q-2:REPORTED:false', 'Q-3:REPORTED:true', 'Q-4:NEEDS_INFO', 'Q-5:REPORTED:true', 'Q-6:REPORTED:false']);
+  // Only the unreadable message was received for the binary file: it is not evidence.
+  assert.match(final.dispositions[3].reason, /binary file at HEAD, so its lines cannot be read/);
+});
+
+test('reads of another session do not count, and a location the runtime cannot check is not repaired', async t => {
+  const f = await quickContext(t, { files: ['/a.ts', '/b.ts'], workflow: { shardFiles: 1 }, behave: async ({ payload, read }) => {
+    read(payload.assignment.files[0]);
+    // The second shard reports a defect in the first shard's file without reading it.
+    return quickAnswer(payload, payload.assignment.files[0] === '/b.ts' ? [quickFinding('Q-1001', 'head:/a.ts:1')] : []);
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1001:NEEDS_INFO']);
+  assert.match(final.dispositions[0].reason, /this session did not read \/a\.ts at HEAD/);
+  const { checkQuickLocation } = await import('../src/review-work.mjs');
+  const failing = { readFile: async () => { throw Object.assign(new Error('timeout'), { kind: 'timeout' }); } };
+  const check = await checkQuickLocation({ location: 'head:/a.ts:1' }, { snapshot: { head: 'h', base: 'b', changes: [] }, azure: failing, run: { active: true }, reads: new Set(['h\n/a.ts']) });
+  assert.deepEqual(check, { problem: 'the runtime could not check /a.ts at HEAD (timeout).', repairable: false });
+});

@@ -74,7 +74,10 @@ in parallel.
    interrupted provider streams and answers the model started over.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
-   was still wrong after the last turn and therefore downgraded per item.
+   was still wrong after the last turn and therefore downgraded per item. For a
+   quick review, `sessionReads` counts the file contents that session's own
+   `azpr_read_diff` and `azpr_read_file` calls showed, the reads its location
+   checks accept; the result's `checks` hold each finding's location check.
 3. Cost and prompt cache: `tokens` in each stage record. `cachedInputShare` is
    `cacheRead / (input + cacheRead + cacheWrite)`. On a long session, a request
    whose `cacheRead` is close to the previous request's prompt reused it; a run

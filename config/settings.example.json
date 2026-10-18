@@ -11,6 +11,9 @@
       "functional": "",
       "risk": "",
       "verifier": ""
+    },
+    "quick": {
+      "reviewer": ""
     }
   },
   "enabled": true,

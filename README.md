@@ -28,6 +28,14 @@ How a review works:
    text itself, skipping comments that already exist and reading every created
    comment back from Azure DevOps. Re-running a publish is safe.
 
+`/pr-quick` is the lighter alternative for small or routine PRs: one reviewer
+per shard covers both the functional and the risk focus and checks its own
+findings against the source it read; no verifier or duplicate check runs. The
+runtime checks only the form and source of those findings, so they are
+reported, not verified, and the report, the receipt and the posted comments
+say so. A small PR needs one review session (plus one planning session for
+comments) instead of three; each session still makes several model requests.
+
 Every command acknowledges `STARTED` immediately and continues in the current
 OpenCode process; short `PROGRESS` notices and a final receipt return to the
 invoking conversation. Use the displayed `/pr-stop <run-id>` to cancel.
@@ -64,7 +72,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **29 files** are sufficient:
+These **30 files** are sufficient:
 
 ```text
 install.sh
@@ -94,6 +102,7 @@ src/prompts/risk.md
 src/prompts/deep.md
 src/prompts/final.md
 src/prompts/dedupe.md
+src/prompts/quick.md
 src/prompts/comment-policy.md
 src/prompts/comment-plan.md
 ```
@@ -114,7 +123,8 @@ settings they started with.
       "risk": "YOUR_PROVIDER/YOUR_RISK_MODEL",
       "verifier": "YOUR_PROVIDER/YOUR_VERIFIER_MODEL"
     },
-    "deep": { "functional": "", "risk": "", "verifier": "" }
+    "deep": { "functional": "", "risk": "", "verifier": "" },
+    "quick": { "reviewer": "" }
   },
   "azure": {
     "organization": "YOUR_ORGANIZATION",
@@ -127,14 +137,17 @@ Model IDs use `provider/model` form and must exist in OpenCode. To choose a
 model variant such as a reasoning effort, use OpenCode's `provider/model#variant`
 form (for example `provider/model#high`); `/pr-check` reports a variant the
 model does not offer. Without a variant the model's default is used. `/pr-deep`
-needs all three deep models and never falls back to the review models. Comment
-planning uses the review's risk model.
+needs all three deep models and never falls back to the review models; likewise
+`/pr-quick` needs `models.quick.reviewer`, and a command checks only the models
+it uses, so an unavailable quick model never blocks `/pr-review`. Comment
+planning uses the review's risk model (the quick reviewer for a quick review).
 
 | Role | Focus and useful model capabilities |
 | --- | --- |
 | `functional` | Requirements, boundaries, state changes, API compatibility and regressions. Strong code comprehension in the project's language. |
 | `risk` | Failures, retries, concurrency, authorization and data consistency. Evidence-based reasoning across call paths and reliable tool use. Also plans comments. |
 | `verifier` | Independent source re-checks, counterevidence, duplicate merging (including the same-file duplicate check) and the final report. Strong evidence judgment and instruction following. |
+| `quick.reviewer` | `/pr-quick` only: both focuses in one session per shard, its own source checks, and comment planning for quick reviews. Strong code comprehension, evidence judgment and reliable tool use. |
 
 A role's focus orders its attention and is not a filter: every reviewer files
 every concrete defect it finds, in any area, as a finding.
@@ -197,9 +210,10 @@ troubleshooting.
 
 | Command | Behavior |
 | --- | --- |
-| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability; warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
+| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (a configured quick model only as a warning); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
 | `/pr-review <PR URL> [context]` | Sharded functional and risk reviews, then sharded verification. |
 | `/pr-deep <PR URL> [context]` | Same pipeline with the deep models and deeper analysis. |
+| `/pr-quick <PR URL> [context]` | One reviewer per shard for both focuses, no verification; findings are reported, not verified. |
 | `/pr-stop [run-id]` | Cancel this conversation's active command. |
 | `/pr-comment [review-id]` | Preview comments for this conversation's latest completed review. |
 | `/pr-comment [review-id] --publish` | Post the saved preview (planning it first if needed). Safe to repeat. |
@@ -220,6 +234,17 @@ Status meanings:
 - **INCOMPLETE / CANCELLED / TIMED_OUT**: the command did not finish; a review
   keeps an unconfirmed draft of finished initial work.
 
+A quick review states its status, coverage and verification separately; its
+receipt starts like `[AZPR 1a2b3c4d] COMPLETE; coverage incomplete;
+verification none (quick review)`. COMPLETE means at least one shard produced a
+usable result (a parsed answer is not enough) and the source did not change;
+its findings are REPORTED when they passed the runtime's checks (fields, a
+location that exists at that commit, a file the session read) and NEEDS_INFO
+otherwise, and only REPORTED ones can be commented on. Coverage says whether
+every changed file was reviewed, so zero findings never hide unreviewed files.
+When the quick review found a high-severity issue or left coverage incomplete,
+the receipt suggests `/pr-review` before publishing.
+
 ## Comments
 
 `/pr-comment` plans one general summary plus inline comments for confirmed high
@@ -228,7 +253,12 @@ pages of at most four findings; each page may get a correction turn, and an item
 that still cannot be posted faithfully is skipped with a reason instead of
 failing the command. Inline titles start with `🔴 high:` or `🟡 medium:` followed
 by **📝 Summary**, **🔎 Evidence** and **💡 Suggested fix**; the summary starts
-with a 🤖 AI/model disclosure and may carry improvement suggestions.
+with a 🤖 AI/model disclosure and may carry improvement suggestions. Comments of
+a quick review keep this layout; their disclosure line adds `Review method:
+quick review, not independently verified` (and, in the summary, incomplete
+coverage), and their inline comments need a location on a changed HEAD file.
+When two shards of a quick review report one defect, the planner may combine
+them into one comment under fixed rules (see [commenting](docs/COMMENTING.md)).
 
 Publication is runtime code: it refuses an inactive PR or a changed source
 commit, lists every existing thread, skips items whose hidden marker already

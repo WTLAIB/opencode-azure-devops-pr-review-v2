@@ -41,6 +41,8 @@ export function fakeAzure(options = {}) {
     projectId: 'pid', repositoryId: 'rid', pat: options.pat ?? FAKE_PAT,
     head: options.head ?? 'b'.repeat(40), base: options.base ?? 'a'.repeat(40), target: options.target ?? 'c'.repeat(40), status: options.status ?? 'active',
     iteration: 1, files: options.files ?? ['/src/Main.java'], binary: new Set(options.binary ?? []),
+    // Per-path change types ({ changeType: 'delete' | 'add' | 'rename', originalPath }) and "version:path" items that do not exist.
+    changes: options.changes ?? {}, missing: new Set(options.missing ?? []),
     sources: options.sources ?? {}, threads: [], nextThread: 1000, calls: [], fail: {}, afterVersions: null, snapshotTaken: false,
     commits: options.commits ?? [{ commitId: options.head ?? 'b'.repeat(40), comment: 'Fixture change' }],
   };
@@ -60,7 +62,8 @@ export function fakeAzure(options = {}) {
     ['iterations', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/iterations$/i, () => { moved(); return json(200, { value: iterations(), count: state.iteration }); }],
     ['changes', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/iterations\/(\d+)\/changes$/i, request => {
       const top = Math.min(Number(request.query.get('$top') ?? 100), 2000), skip = Number(request.query.get('$skip') ?? 0);
-      const entries = state.files.slice(skip, skip + top).map((path, index) => ({ changeTrackingId: skip + index + 1, changeId: skip + index + 1, item: { objectId: 'f'.repeat(40), path }, changeType: 'edit' }));
+      const entries = state.files.slice(skip, skip + top).map((path, index) => ({ changeTrackingId: skip + index + 1, changeId: skip + index + 1, item: { objectId: 'f'.repeat(40), path },
+        changeType: state.changes[path]?.changeType ?? 'edit', ...(state.changes[path]?.originalPath ? { originalPath: state.changes[path].originalPath } : {}) }));
       const more = skip + top < state.files.length;
       if (!more) state.snapshotTaken = true;
       return json(200, { changeEntries: entries, ...(more ? { nextSkip: skip + top, nextTop: top } : {}) });
@@ -87,7 +90,7 @@ export function fakeAzure(options = {}) {
         return { status: 200, headers: { 'content-type': 'application/zip', 'content-length': String(bytes.length), ...AZURE_HEADERS }, body: bytes };
       }
       if (path) {
-        if (!state.files.includes(path) && !Object.hasOwn(state.sources, path) && !Object.hasOwn(state.sources, `${version}:${path}`)) {
+        if (state.missing.has(`${version}:${path}`) || (!state.files.includes(path) && !Object.hasOwn(state.sources, path) && !Object.hasOwn(state.sources, `${version}:${path}`))) {
           return azureError(404, 'GitItemNotFoundException', `TF401174: The item '${path}' could not be found in the repository 'repo' at the version specified by '${version}'.`);
         }
         const bytes = state.binary.has(path) ? Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]) : Buffer.from(source(path, version), 'utf8');

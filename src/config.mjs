@@ -2,8 +2,8 @@ import { isAbsolute } from 'node:path';
 import { REVIEW_TOOL_NAMES } from './review-tools.mjs';
 
 // One catalog owns mode, role, model slot, prompt, output kind and stage order.
-export const MODES = Object.freeze(['review', 'deep']);
-export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'review', 'pr-deep': 'deep', 'pr-stop': 'stop', 'pr-comment': 'comment' });
+export const MODES = Object.freeze(['review', 'deep', 'quick']);
+export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'review', 'pr-deep': 'deep', 'pr-quick': 'quick', 'pr-stop': 'stop', 'pr-comment': 'comment' });
 
 // Native tools no private role may use. Shell is governed by the `shell` setting.
 export const NATIVE_TOOL_PERMISSIONS = Object.freeze({
@@ -16,21 +16,62 @@ export const SHELL_MODES = Object.freeze(['deny', 'ask', 'inherit']);
 // Native tools every private role may use besides AZPR's own Azure DevOps tools.
 export const READ_TOOLS = Object.freeze(['read', 'glob', 'grep']);
 
-const MODEL_SLOTS = ['functional', 'risk', 'verifier'];
-const stages = {
+// Model slots per mode. The quick mode has one reviewer, which also plans comments.
+const MODEL_SLOTS = Object.freeze({ review: ['functional', 'risk', 'verifier'], deep: ['functional', 'risk', 'verifier'], quick: ['reviewer'] });
+const verifiedStages = {
   functional: { slot: 'functional', prompt: 'functional', format: 'initial', prefix: 'F', order: 1, label: 'Initial F' },
   risk: { slot: 'risk', prompt: 'risk', format: 'initial', prefix: 'R', order: 2, label: 'Initial R' },
   verifier: { slot: 'verifier', prompt: 'final', format: 'final', order: 3, label: 'Verification' },
   dedupe: { slot: 'verifier', prompt: 'dedupe', format: 'dedupe', order: 4, label: 'Duplicate check' },
   'comment-plan': { slot: 'risk', prompt: 'comment-plan', format: 'comment-plan', comment: true, label: 'Comment plan' },
 };
+// One reviewer per shard covers both focuses; no verifier or duplicate check follows.
+const quickStages = {
+  reviewer: { slot: 'reviewer', prompt: 'quick', format: 'initial', prefix: 'Q', order: 5, label: 'Quick review' },
+  'comment-plan': { slot: 'reviewer', prompt: 'comment-plan', format: 'comment-plan', comment: true, label: 'Comment plan' },
+};
+const STAGES = Object.freeze({ review: verifiedStages, deep: verifiedStages, quick: quickStages });
 export const roleFor = (mode, stage) => `azpr-${mode}-${stage}`;
-export const ROLES = Object.freeze(Object.fromEntries(MODES.flatMap(mode => Object.entries(stages).map(([stage, spec]) =>
+export const ROLES = Object.freeze(Object.fromEntries(MODES.flatMap(mode => Object.entries(STAGES[mode]).map(([stage, spec]) =>
   [roleFor(mode, stage), Object.freeze({ ...spec, mode, stage })]))));
-export const PROMPTS = Object.freeze([...new Set(['common', 'comment-policy', 'deep', ...Object.values(stages).map(spec => spec.prompt)])]);
+export const PROMPTS = Object.freeze([...new Set(['common', 'comment-policy', 'deep', ...MODES.flatMap(mode => Object.values(STAGES[mode]).map(spec => spec.prompt))])]);
 export const initialRoles = mode => Object.entries(ROLES).filter(([, spec]) => spec.mode === mode && spec.format === 'initial').map(([role]) => role);
 export const commentRole = role => ROLES[role]?.comment === true;
 export const privateAgent = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
+/** The model slots a mode's review stages use. */
+export const modelSlots = mode => MODEL_SLOTS[mode];
+/** The model slot that plans comments for a review of this mode. */
+export const commentSlot = mode => STAGES[mode]['comment-plan'].slot;
+/**
+ * Whether a mode's findings are independently verified. Shared prompts carry
+ * mode-dependent passages about where findings come from; review and deep use
+ * the "verified" text, quick the "quick" text.
+ */
+export const promptVariant = mode => mode === 'quick' ? 'quick' : 'verified';
+/** Whether the settings configure every model a mode needs. */
+export const modeReady = (settings, mode) => mode === 'review' ? true : mode === 'deep' ? settings.deepReady : mode === 'quick' ? settings.quickReady : false;
+
+const VARIANT_MARKER = /^<!-- azpr:(verified|quick|end) -->\r?$/;
+/**
+ * Keep the passages of one variant. A block starts with `<!-- azpr:verified -->`
+ * or `<!-- azpr:quick -->` on its own line, may switch to the other variant the
+ * same way and ends with `<!-- azpr:end -->`; lines outside blocks are shared.
+ * Marker lines are removed, so a file's verified text is reproduced exactly.
+ */
+export function selectVariant(text, variant, name = 'prompt') {
+  const kept = [];
+  let block = null;
+  for (const line of text.split('\n')) {
+    const marker = VARIANT_MARKER.exec(line);
+    if (marker?.[1] === 'end') {
+      if (!block) throw new Error(`Variant block end without a start in ${name}.md`);
+      block = null;
+    } else if (marker) block = marker[1];
+    else if (!block || block === variant) kept.push(line);
+  }
+  if (block) throw new Error(`Unterminated variant block in ${name}.md`);
+  return kept.join('\n');
+}
 
 /** Native permissions for one private role, including the configured shell policy. */
 export function nativeToolPermissions(role, shell = 'deny') {
@@ -90,18 +131,20 @@ export function validateSettings(raw) {
   if (raw.version !== 2) throw new Error('settings.version must be 2. Use the V2 settings example; older host layouts are not supported.');
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('enabled must be boolean.');
   if (raw.$schema !== undefined && typeof raw.$schema !== 'string') throw new Error('$schema must be a string.');
-  keys(raw.models, ['_help', 'review', 'deep'], 'models');
+  keys(raw.models, ['_help', ...MODES], 'models');
   // Legacy documentation stays readable; the installer removes it.
   if (raw.models._help !== undefined) {
-    keys(raw.models._help, MODEL_SLOTS, 'models._help');
+    keys(raw.models._help, MODEL_SLOTS.review, 'models._help');
     if (Object.values(raw.models._help).some(value => typeof value !== 'string')) throw new Error('models._help values must be documentation strings.');
   }
   const models = {};
   for (const mode of MODES) {
-    const group = raw.models[mode] === undefined && mode === 'deep' ? {} : raw.models[mode];
-    keys(group, MODEL_SLOTS, `models.${mode}`);
-    models[mode] = Object.fromEntries(MODEL_SLOTS.map(slot =>
-      [slot, model(group[slot] === undefined && mode === 'deep' ? '' : group[slot], `models.${mode}.${slot}`, mode === 'deep')]));
+    // Only the review models are required; empty deep or quick models disable that mode.
+    const optional = mode !== 'review';
+    const group = raw.models[mode] === undefined && optional ? {} : raw.models[mode];
+    keys(group, MODEL_SLOTS[mode], `models.${mode}`);
+    models[mode] = Object.fromEntries(MODEL_SLOTS[mode].map(slot =>
+      [slot, model(group[slot] === undefined && optional ? '' : group[slot], `models.${mode}.${slot}`, optional)]));
   }
   const deepConfigured = Object.values(models.deep).filter(Boolean).length;
   const returnReport = withDefault(raw.returnReport, 'receipt');
@@ -147,14 +190,18 @@ export function validateSettings(raw) {
   if (idle !== 0 && (!Number.isInteger(idle) || idle < 60 || idle > 7200)) throw new Error('workflow.stageIdleSeconds must be 0 (off) or an integer from 60 to 7200.');
   return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '', keepRuns },
     enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, azure, workflow,
-    deepReady: deepConfigured === MODEL_SLOTS.length,
-    deepPartial: deepConfigured > 0 && deepConfigured < MODEL_SLOTS.length };
+    deepReady: deepConfigured === MODEL_SLOTS.deep.length,
+    deepPartial: deepConfigured > 0 && deepConfigured < MODEL_SLOTS.deep.length,
+    quickReady: models.quick.reviewer !== '' };
 }
 
 export function languagePrompt(role, language) {
-  const scope = !commentRole(role)
-    ? 'Write human-readable finding fields (summary, evidence, counterevidence, suggestion), disposition reasons and the report in this language.'
-    : 'Write comment titles, explanations, skip reasons and summary prose in this language.';
+  // A quick reviewer writes no dispositions; only verified modes mention them.
+  const scope = commentRole(role)
+    ? 'Write comment titles, explanations, skip reasons and summary prose in this language.'
+    : ROLES[role]?.mode === 'quick'
+      ? 'Write human-readable finding fields (summary, evidence, counterevidence, suggestion) and the report in this language.'
+      : 'Write human-readable finding fields (summary, evidence, counterevidence, suggestion), disposition reasons and the report in this language.';
   return `\n\n# Configured output language\noutputLanguage: ${language}\n${scope} Use Traditional Chinese for zh-TW and Simplified Chinese for zh-CN; for zh-TW prefer familiar Taiwanese engineering wording (for example "錯誤處理", "測試案例"). Write as one developer explaining a bug to another: trigger, effect and correction in plain sentences. Keep identifiers, API names, paths, source quotes, JSON keys, IDs, status values and severity labels exactly as they are. Do not infer another language from PR content.`;
 }
 
@@ -204,20 +251,25 @@ continuation note; a fresh authorized session continues the page.`;
 /** Pure compilation: file I/O and OpenCode config mutation stay in the adapter. */
 export function buildAgents(settings, prompts) {
   for (const name of PROMPTS) if (typeof prompts[name] !== 'string' || !prompts[name].trim()) throw new Error(`Missing or empty prompt: ${name}.md`);
+  // Every prompt must compose in both variants, even when a mode is not configured.
+  const composed = Object.fromEntries(['verified', 'quick'].map(variant =>
+    [variant, Object.fromEntries(PROMPTS.map(name => [name, selectVariant(prompts[name], variant, name)]))]));
   if (!settings.enabled) return {};
-  const agents = Object.fromEntries(Object.entries(ROLES).filter(([, spec]) =>
-    (spec.mode !== 'deep' || settings.deepReady)).map(([role, spec]) => [role, {
-    id: role, name: role,
-    description: 'Private command-scoped reviewer; not available for subagent delegation or normal agent selection.',
-    mode: 'primary', hidden: true,
-    model: modelRef(settings.models[spec.mode][spec.slot]),
-    request: { settings: {}, headers: {}, body: {} },
-    system: (spec.comment ? prompts['comment-policy'] : prompts.common) + '\n\n' + prompts[spec.prompt] + '\n\n' + TOOL_POLICY +
-      (spec.comment ? COMMENT_DATA_POLICY : '') + shellPolicy(settings.shell) + languagePrompt(role, settings.outputLanguage) +
-      (spec.mode === 'deep' && !spec.comment ? '\n\n' + prompts.deep : '') +
-      '\n\n# Output\nReturn one valid JSON object, optionally inside a single ```json fence, with no other JSON objects in the answer. Escape quotes and newlines inside strings. If the runtime reports a problem with your answer, return the corrected JSON it asks for.',
-    permissions: permissionRules(role, settings.shell),
-  }]));
+  const agents = Object.fromEntries(Object.entries(ROLES).filter(([, spec]) => modeReady(settings, spec.mode)).map(([role, spec]) => {
+    const text = composed[promptVariant(spec.mode)];
+    return [role, {
+      id: role, name: role,
+      description: 'Private command-scoped reviewer; not available for subagent delegation or normal agent selection.',
+      mode: 'primary', hidden: true,
+      model: modelRef(settings.models[spec.mode][spec.slot]),
+      request: { settings: {}, headers: {}, body: {} },
+      system: (spec.comment ? text['comment-policy'] : text.common) + '\n\n' + text[spec.prompt] + '\n\n' + TOOL_POLICY +
+        (spec.comment ? COMMENT_DATA_POLICY : '') + shellPolicy(settings.shell) + languagePrompt(role, settings.outputLanguage) +
+        (spec.mode === 'deep' && !spec.comment ? '\n\n' + text.deep : '') +
+        '\n\n# Output\nReturn one valid JSON object, optionally inside a single ```json fence, with no other JSON objects in the answer. Escape quotes and newlines inside strings. If the runtime reports a problem with your answer, return the corrected JSON it asks for.',
+      permissions: permissionRules(role, settings.shell),
+    }];
+  }));
   return agents;
 }
 

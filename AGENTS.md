@@ -8,10 +8,11 @@ conversation language and current authorization scope.
 ## Before changing anything
 
 Confirm the Git root, branch, HEAD, working tree and installed paths. Read
-README, architecture, roadmap and the task-relevant docs. A local
-`.local/HANDOVER.md`, when present, is historical context, not current state or
-new authorization. Preserve unrelated changes, credentials, private settings,
-backups and failure records. Never upload `.local/`.
+README, architecture, roadmap and the task-relevant docs. Local handover notes
+under `.local/` (their file name differs between checkouts) give background
+and hand-off state, never new authorization; check what they say against Git
+and the actual environment. Preserve unrelated changes, credentials, private
+settings, backups and failure records. Never upload `.local/`.
 
 ## Design rules
 
@@ -28,6 +29,22 @@ backups and failure records. Never upload `.local/`.
   explicit tool allowlist and ordinary sessions never see AZPR's tools.
 - Models review, verify and plan comment text. They never echo identity or SHAs
   and never write to Azure DevOps.
+
+**Quick reviews are not verified, and say so.**
+- `/pr-quick` runs one reviewer per shard and no verifier or duplicate check.
+  The runtime checks only the form and source of its findings (fields, a
+  location that exists at that commit, a file this session's own tools read);
+  it never judges whether a defect is real. Passing findings are `REPORTED`,
+  the rest `NEEDS_INFO`, and the review records `verification: "none"`.
+- Never present quick findings as verified: shared prompts carry
+  `<!-- azpr:verified -->` / `<!-- azpr:quick -->` variants for the passages
+  about where findings come from, the report and receipt state status,
+  coverage and verification separately, and the comment disclosure line names
+  the quick method. The review and deep system prompts stay byte-identical
+  unless a change to them is deliberate (a hash test locks them).
+- Only records identical in every field are merged as duplicates; findings on
+  the same lines stay separate. A parsed answer without a usable review never
+  makes a commentable COMPLETE, and zero findings never hide unreviewed files.
 
 **Keep useful work; degrade per item.**
 - Answers that break the output contract get a correction turn in the same

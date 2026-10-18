@@ -14,12 +14,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef } from './config.mjs';
+import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, commentSlot } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest } from './comment-work.mjs';
-import { publicationItems } from './comments.mjs';
+import { publicationItems, reviewVerification } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
@@ -107,7 +107,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const prompts = Object.fromEntries(await Promise.all(PROMPTS.map(async name =>
     [name, await readFile(join(baseDirectory, 'prompts', `${name}.md`), 'utf8')])));
   const agents = buildAgents(settings, prompts);
-  const state = { raw, settings, agents, fingerprints: {}, registrationPermissions: {}, agentsPinned: false };
+  const state = { raw, settings, agents, fingerprints: {}, registrationPermissions: {}, pinnedProfiles: new Set() };
   const queue = createToolQueue({ concurrency: settings.azure.concurrency, timeoutMs: options.azureTimeoutMs ?? settings.azure.callTimeoutSeconds * 1000 });
   const retryDelayMs = options.retryDelayMs ?? 1000;
   const stageIdleMs = options.stageIdleMs ?? settings.workflow.stageIdleSeconds * 1000;
@@ -156,10 +156,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
 
   // Host agent configuration applies after plugin transforms. Pin each private
-  // role's resolved definition before first use and refuse later changes.
-  async function pinAgents(signal) {
-    if (state.agentsPinned) return;
-    const resolved = await Promise.all(Object.entries(state.agents).map(async ([role, definition]) => {
+  // role's resolved definition before first use and refuse later changes. Each
+  // profile is pinned before its first use, so a problem with one profile's
+  // roles blocks only the commands that use them.
+  async function pinAgents(profile, signal) {
+    if (state.pinnedProfiles.has(profile)) return;
+    const roles = Object.entries(state.agents).filter(([role]) => ROLES[role].mode === profile);
+    const resolved = await Promise.all(roles.map(async ([role, definition]) => {
       const actual = recordOf(await scoped(() => context.agent.get({ agentID: role }), signal));
       if (!actual) throw new Error('[AZPR] Private reviewer definition is unavailable.');
       const { permissions, ...protectedFields } = clone(actual);
@@ -173,8 +176,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       return [role, clone(actual)];
     }));
     if (signal?.aborted) throw abortError(signal);
-    state.fingerprints = Object.fromEntries(resolved);
-    state.agentsPinned = true;
+    Object.assign(state.fingerprints, Object.fromEntries(resolved));
+    state.pinnedProfiles.add(profile);
   }
 
   async function checkRole(role, signal) {
@@ -195,22 +198,33 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return g;
   }
 
-  /** The model catalog only; no inference is submitted. */
+  function modelProblems(modelRows, profile, slots) {
+    const problems = [];
+    for (const slot of slots) {
+      const selected = settings.models[profile][slot], { providerID, id, variant } = modelRef(selected);
+      const matches = modelRows.filter(model => model.providerID === providerID && model.id === id && model.enabled !== false);
+      const variants = (Array.isArray(matches[0]?.variants) ? matches[0].variants : []).map(item => item?.id).filter(text);
+      if (matches.length !== 1) problems.push(`The selected ${profile}.${slot} model (${selected}) is unavailable in the host catalog.`);
+      else if (variant !== undefined && variant !== 'default' && !variants.includes(variant)) problems.push(`The selected ${profile}.${slot} model has no variant ${variant}${variants.length ? `; it offers ${variants.join(', ')}` : ''}.`);
+      else if (matches[0].capabilities?.tools !== true) problems.push(`The selected ${profile}.${slot} model does not advertise tool support.`);
+    }
+    return problems;
+  }
+
+  /**
+   * The model catalog only; no inference is submitted. A command checks only
+   * the models it uses, so an unavailable optional model never blocks another
+   * mode; /pr-check reports a configured quick model as a warning.
+   */
   async function readiness(run) {
     requireMethods(context, ['model.list'], 'readiness checks');
     const modelRows = listOf(await bounded(() => context.model.list(), run.controller.signal));
     if (!modelRows) throw new Error('[AZPR] Invalid model catalog.');
-    const slots = run.mode === 'comment' ? ['risk'] : ['functional', 'risk', 'verifier'];
-    const problems = [];
-    for (const slot of slots) {
-      const selected = settings.models[run.profile][slot], { providerID, id, variant } = modelRef(selected);
-      const matches = modelRows.filter(model => model.providerID === providerID && model.id === id && model.enabled !== false);
-      const variants = (Array.isArray(matches[0]?.variants) ? matches[0].variants : []).map(item => item?.id).filter(text);
-      if (matches.length !== 1) problems.push(`The selected ${run.profile}.${slot} model (${selected}) is unavailable in the host catalog.`);
-      else if (variant !== undefined && variant !== 'default' && !variants.includes(variant)) problems.push(`The selected ${run.profile}.${slot} model has no variant ${variant}${variants.length ? `; it offers ${variants.join(', ')}` : ''}.`);
-      else if (matches[0].capabilities?.tools !== true) problems.push(`The selected ${run.profile}.${slot} model does not advertise tool support.`);
-    }
-    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems,
+    const slots = run.mode === 'comment' ? [commentSlot(run.profile)] : modelSlots(run.profile);
+    const problems = modelProblems(modelRows, run.profile, slots);
+    const quick = run.mode === 'check' && settings.quickReady
+      ? { checkedModelSlots: modelSlots('quick'), modelProblems: modelProblems(modelRows, 'quick', modelSlots('quick')) } : undefined;
+    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems, ...(quick ? { quick } : {}),
       azure: { organization: settings.azure.organization, apiVersion: API_VERSION, ...network } };
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
   }
@@ -221,7 +235,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { throw new Error('[AZPR] settings.json is not readable.'); }
     if (now !== state.raw) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart OpenCode to use the new settings; running reviews are unaffected.');
     await checkCommands(signal);
-    await pinAgents(signal);
+    await pinAgents(run.profile, signal);
     await readiness(run);
     await run.debug.write('readiness.json', { ...run.readiness, ...(baseUrl === 'https://dev.azure.com' ? {} : { azureBaseUrl: baseUrl }), host: capabilities,
       stateDirectory: store.root, ...(storeFallback ? { stateDirectoryFallback: storeFallback } : {}) });
@@ -450,6 +464,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(), blockedNativeCalls: new Map(),
       toolArgumentCharacters: new Map(), toolTimeouts: 0, compactionRequested: false,
       visibleCharacters: input.length, checkpointRequested: false,
+      // "commit\npath" of the file contents this session's own tool calls showed;
+      // never the run's shared cache or another session's reads.
+      reads: new Set(),
       toolErrorDetails: settings.debug.enabled ? [] : undefined,
       timing: settings.debug.enabled ? createStageTiming() : undefined,
     };
@@ -465,6 +482,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.timing?.promptStarted();
       let prompt = input, evaluation, answerText = '';
       const repairs = [];
+      // What the handler may know about this session: the contents its own tools showed.
+      const session = { reads: g.reads };
       for (let turn = 0; ; turn++) {
         const answer = await ask(g, made.id, prompt, signal);
         answerText = visibleText(answer);
@@ -473,14 +492,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           record.hostContinuations = (record.hostContinuations ?? 0) + answer.continuation.count;
           if (answer.continuation.restartedAt) record.continuationRestarts = (record.continuationRestarts ?? 0) + 1;
         }
-        evaluation = await handler.evaluate(answerText, evaluation?.result);
+        evaluation = await handler.evaluate(answerText, evaluation?.result, session);
         if (!evaluation.issues?.length || !evaluation.repairPrompt || turn >= settings.workflow.repairAttempts) break;
         repairs.push({ issues: evaluation.issues.slice(0, 25) });
         prompt = evaluation.repairPrompt;
       }
       g.timing?.promptSettled('returned');
       if (!run.active || signal.aborted) throw abortError(signal);
-      const result = evaluation.issues?.length && handler.finalize ? await handler.finalize(answerText, evaluation.result) : evaluation.result;
+      const result = evaluation.issues?.length && handler.finalize ? await handler.finalize(answerText, evaluation.result, session) : evaluation.result;
       if (!result) throw new Error('The stage produced no usable result.');
       if (repairs.length) record.repairs = repairs;
       if (evaluation.issues?.length) record.unresolvedIssues = evaluation.issues.slice(0, 25);
@@ -516,6 +535,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       record.toolObservations = collectToolObservations(g);
       if (g.toolErrorDetails?.length) record.toolErrors = g.toolErrorDetails;
       record.modelRequests = g.calls;
+      if (g.reads.size) record.sessionReads = g.reads.size;
       if (commentRole(role)) record.visibleToolCharacters = g.visibleCharacters - input.length;
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls, rejected: g.rejectedRequests, retries: g.retryEvents };
       record.endedAt = new Date().toISOString();
@@ -593,8 +613,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     } catch (error) {
       outcome.failure = run.controller.signal.aborted ? run.reason : errorText(error);
       outcome.status = run.controller.signal.aborted ? run.stopStatus : 'INCOMPLETE';
-      if (outcome.status === 'INCOMPLETE' && ['review', 'deep'].includes(run.mode)) {
-        outcome.report = renderIncompleteDraft(run.stages, outcome.failure, settings.outputLanguage);
+      if (outcome.status === 'INCOMPLETE' && ['review', 'deep', 'quick'].includes(run.mode)) {
+        outcome.report = renderIncompleteDraft(run.stages, outcome.failure, settings.outputLanguage, { quick: run.mode === 'quick' });
         run.draft = Boolean(outcome.report);
         if (run.draft && run.active) await displayReport(run, outcome.report, outcome.status);
       }
@@ -619,6 +639,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function runCheck(run, request) {
     const checks = [];
     for (const problem of run.readiness?.modelProblems ?? []) checks.push({ name: 'Model', ok: false, detail: problem });
+    // A quick model problem affects only /pr-quick, so it does not make the PR check NOT_READY.
+    for (const problem of run.readiness?.quick?.modelProblems ?? []) {
+      checks.push({ name: 'Quick model', ok: true, warning: true, detail: `${problem} /pr-quick is unavailable until it is fixed; other commands are not affected.` });
+    }
     const route = [network.proxy ? `proxy ${network.proxy}${network.proxyCredentials ? ' with credentials' : ''}` : '',
       network.extraCaCertificates ? `${network.extraCaCertificates} extra CA certificate(s) from azure.caFile` : ''].filter(Boolean);
     checks.push({ name: 'Azure DevOps REST', ok: true, detail: `organization ${settings.azure.organization}, api-version ${API_VERSION}${route.map(part => `; ${part}`).join('')}` });
@@ -664,17 +688,24 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       throw new Error(`[AZPR] The PR belongs to organization "${request.target.organization}", but azure.organization is "${settings.azure.organization}". Use a PAT and settings for that organization.`);
     }
     if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] All three models.deep roles must be configured before /pr-deep${settings.deepPartial ? ' (only some are set)' : ''}. No fallback to review models.`);
-    const profile = mode === 'deep' ? 'deep' : 'review';
+    if (mode === 'quick' && !settings.quickReady) throw new Error('[AZPR] Set models.quick.reviewer before /pr-quick. No fallback to other models.');
+    // /pr-check checks the review profile's models.
+    const profile = mode === 'check' ? 'review' : mode;
     const { run, status, report, failure, review } = await workflow({ origin: input.sessionID, notifySession: input.sessionID, mode, profile,
       userContext: request.userContext, prUrl: request.prUrl }, async run => {
       if (mode === 'check') { run.phase = 'source check'; return runCheck(run, request); }
       run.phase = 'review';
       const final = await runReview({ azure, runStage, progress, settings, dataFor }, run, request);
+      if (final.verification === 'none') {
+        run.quickSummary = { coverage: final.coverageSummary,
+          high: final.dispositions.filter(d => d.status === 'REPORTED' && d.finding?.severity === 'high').length };
+      }
       const provenance = reviewProvenance(run);
       const rendered = `${renderFinalReport(final, settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, final, settings.outputLanguage)}${final.status === 'COMPLETE' ? '\n\n' + renderCommentActions(run.id, settings.outputLanguage) : ''}`;
       const completedReview = final.status !== 'COMPLETE' ? undefined : {
         id: run.id, origin: run.origin, status: final.status, completedAt: new Date().toISOString(),
         reportSessions: new Set(run.stages.map(stage => stage.sessionID)), profile: run.profile,
+        verification: final.verification ?? 'independent',
         request: input.arguments, prUrl: request.prUrl, target: request.target, snapshot: final.snapshot,
         outputLanguage: settings.outputLanguage, provenance, final: clone({ ...final, initialReports: undefined }),
         toolText: [...run.toolText.values()], dataDirectory: undefined, plan: null, publication: new Map(), commentEvidence: [],
@@ -693,7 +724,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
 
   function renderPlan(review) {
     const plan = review.plan;
-    const comments = plan.comments.map(c => `### ${c.findingId} — ${c.path}:${c.startLine}-${c.endLine}\n\n${c.content}`).join('\n\n') || 'No inline comments are proposed.';
+    // A combined comment lists every finding it covers and why (preview only; Azure DevOps gets the content).
+    const comments = plan.comments.map(c => `### ${(c.findingIds ?? [c.findingId]).join(', ')} — ${c.path}:${c.startLine}-${c.endLine}${c.mergeReason ? `\n\nCombined: ${c.mergeReason}` : ''}\n\n${c.content}`).join('\n\n') || 'No inline comments are proposed.';
     return `${plan.summary?.content ?? ''}\n\nInline comments prepared: ${plan.comments.length}\n\n${comments}\n\nSkipped findings:\n${plan.skipped.map(s => `- ${s.findingId}: ${s.reason}`).join('\n') || '- None.'}`;
   }
 
@@ -706,7 +738,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const belongs = review => review.origin === owner;
     const review = args.length ? completed.get(args[0]) : [...completed.values()].filter(belongs)
       .sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt))).at(-1);
-    if (!review || !belongs(review)) throw new Error(`[AZPR] No completed review is available for this conversation. The latest ${REVIEW_LIMIT} completed reviews are kept privately across restarts; run /pr-review or /pr-deep again if it has expired.`);
+    if (!review || !belongs(review)) throw new Error(`[AZPR] No completed review is available for this conversation. The latest ${REVIEW_LIMIT} completed reviews are kept privately across restarts; run /pr-review, /pr-quick or /pr-deep again if it has expired.`);
+    // A saved review whose verification cannot be established is never commented on.
+    const verification = reviewVerification(review);
+    if (!verification) throw new Error(`[AZPR] Review ${review.id} does not say whether its findings were verified; run a new review before commenting.`);
+    if (review.profile === 'quick' && !settings.quickReady) throw new Error(`[AZPR] Review ${review.id} is a quick review; set models.quick.reviewer, which plans its comments, before /pr-comment.`);
     let planning = false;
     const { run, status, report, failure } = await workflow({ origin: review.origin, notifySession: input.sessionID, mode: 'comment',
       profile: review.profile, review, lockKey: targetKey(review.target) }, async run => {
@@ -716,7 +752,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         run.phase = 'comment planning';
         review.plan = null; // Never leave an obsolete preview after a failed refresh.
         review.commentEvidence = []; // Evidence belongs to the plan being made.
-        review.attribution = commentAttribution(review.provenance, review.outputLanguage, settings.models[review.profile].risk);
+        // The disclosure names the method (and, in the summary, incomplete coverage) of a quick review.
+        const commentModel = settings.models[review.profile][commentSlot(review.profile)];
+        review.attribution = commentAttribution(review.provenance, review.outputLanguage, commentModel, { verification });
+        review.summaryAttribution = commentAttribution(review.provenance, review.outputLanguage, commentModel, { verification, coverage: review.final.coverageSummary });
         const data = await dataFor(run);
         // Read live discussions once for the planner's duplicate checks; the
         // planner can still read threads itself if this read fails.
@@ -798,6 +837,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.watch.toolsRunning--;
       touch(g, `tool ${name} ended`);
     }
+    // Only contents this call showed at the reviewed commits count as this session's reads.
+    for (const read of outcome.reads ?? []) if (read.version === snapshot.head || read.version === snapshot.base) g.reads.add(`${read.version}\n${read.path}`);
     if (outcome.observation && ['initial', 'final'].includes(ROLES[g.role].format)) {
       // Keep observed source text with its request for anchor checks in comment planning.
       try {
