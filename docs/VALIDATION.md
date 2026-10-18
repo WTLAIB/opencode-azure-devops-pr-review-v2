@@ -53,7 +53,10 @@ checks (deleted, renamed, unchanged and binary files, line ranges, and reads
 counted only for the session that made them, never another shard's or the
 runtime's own, and only for versions whose source the answer showed, so a
 line, column or hunk past the end, an empty file or identical versions are no
-read); different defects on the same line kept apart while only
+read; a diff showing only removed or only added rows, cut before the other
+version's rows or showing only folded repeats reads just what it showed, and
+an answer cut to the tool-output limit reads nothing);
+different defects on the same line kept apart while only
 records identical in every field are merged; a parsed answer without a usable
 review giving PARTIAL; zero findings with incomplete coverage (a failed shard,
 reviewer gaps, a partial change list); the quick disclosure line, report and

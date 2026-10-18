@@ -213,9 +213,12 @@ export function renderDiff(options) {
 }
 
 /**
- * The diff text and the versions ("base", "head") whose source it shows:
- * none for binary, oversized, missing or identical files or a hunk past the
- * end; one side for an added or deleted file with content.
+ * The diff text and the versions ("base", "head") whose source it shows,
+ * taken from the rows actually emitted after hunk paging and byte cuts: a
+ * row with a blank mark counts for both, "-" for BASE, "+" for HEAD; a
+ * folded repeat and a hunk title show no row. None for binary, oversized,
+ * missing or identical files or a hunk past the end; one side for an added or
+ * deleted file with content.
  */
 export function diffView({ path, change, base, head, snapshot, context, fromHunk = 1 }) {
   const kind = change ? `${change.changeType.join(', ') || 'changed'}${change.originalPath ? ` from ${change.originalPath}` : ''}` : 'not in the PR\'s changed files';
@@ -231,14 +234,21 @@ export function diffView({ path, change, base, head, snapshot, context, fromHunk
   if (!hunks.length) return { text: `${title}: no differences between BASE and HEAD.`, sides: [] };
   if (fromHunk > hunks.length) return { text: `${title} has ${hunks.length} hunk(s); fromHunk ${fromHunk} is past the end.`, sides: [] };
   const width = String(Math.max(baseLines, headLines)).length;
-  const parts = [];
+  const parts = [], shown = new Set();
   let characters = 0, next = fromHunk - 1;
   while (next < hunks.length) {
-    let rendered = renderHunk(hunks[next], width);
+    let rendered = renderHunk(hunks[next], width), rows = hunks[next].lines ?? [];
     if (parts.length && characters + bytes(rendered) > READ_BYTES) break;
     if (bytes(rendered) > READ_BYTES) {
       const end = fitEnd(rendered, 0, READ_BYTES - 300), cut = rendered.lastIndexOf('\n', end);
-      rendered = rendered.slice(0, cut > 0 ? cut : end) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+      const kept = rendered.slice(0, cut > 0 ? cut : end);
+      // The first line is the hunk header; each later line is one row.
+      rows = rows.slice(0, kept.split('\n').length - 1);
+      rendered = kept + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+    }
+    for (const row of rows) {
+      if (row.kind !== '+') shown.add('base');
+      if (row.kind !== '-') shown.add('head');
     }
     parts.push(rendered);
     characters += bytes(rendered) + 2;
@@ -247,7 +257,7 @@ export function diffView({ path, change, base, head, snapshot, context, fromHunk
   const more = next < hunks.length ? `\nHunks ${next + 1}-${hunks.length} follow: call again with fromHunk ${next + 1}.` : '';
   const folded = hunks.filter(hunk => hunk.repeats).length;
   const foldNote = folded ? `\n${folded} hunk(s) repeat an earlier change and are folded to one line: the same lines as the named hunk except for the listed string and number values (earlier→this). Read a folded hunk's exact lines with azpr_read_file.` : '';
-  return { text: `${title}: ${hunks.length} hunk(s)${folded ? `, ${folded} folded` : ''}; BASE ${baseLines} lines, HEAD ${headLines} lines.\n${DIFF_LEGEND}${foldNote}${more}\n\n${parts.join('\n\n')}`, sides: ['base', 'head'] };
+  return { text: `${title}: ${hunks.length} hunk(s)${folded ? `, ${folded} folded` : ''}; BASE ${baseLines} lines, HEAD ${headLines} lines.\n${DIFF_LEGEND}${foldNote}${more}\n\n${parts.join('\n\n')}`, sides: ['base', 'head'].filter(side => shown.has(side)) };
 }
 
 /**
@@ -379,8 +389,9 @@ export function renderThreads(threads, { path, threadId }) {
 export async function runReviewTool(name, input, context) {
   const result = await reviewTool(name, input, context);
   if (bytes(result.text) <= OUTPUT_BYTES) return result;
-  // Every renderer is bounded below this; the cut is only a safety net.
-  return { ...result, text: `${result.text.slice(0, fitEnd(result.text, 0, OUTPUT_BYTES - 200))}\n[Output cut to the tool-output limit; request a narrower range.]` };
+  // Every renderer is bounded below this; the cut is only a safety net. It may
+  // remove the only rows of a version, so a cut answer counts as no read.
+  return { ...result, reads: [], text: `${result.text.slice(0, fitEnd(result.text, 0, OUTPUT_BYTES - 200))}\n[Output cut to the tool-output limit; request a narrower range.]` };
 }
 
 async function reviewTool(name, input, { azure, run, snapshot }) {

@@ -130,6 +130,9 @@ is real:
   (not the run's cache, another shard's reads or the runtime's own checks).
   Only answers that show source count: a binary or oversized side, an empty
   file, identical versions or a line, column or hunk past the end show none;
+  a diff reads a version only through the rows it shows after paging and byte
+  cuts ("-" BASE, "+" HEAD, a blank mark both; folded repeats none), and an
+  answer cut to the tool-output limit is no read;
 - problems the reviewer can fix get the normal correction turns, with hints
   for deleted and renamed files; what is still wrong afterwards becomes
   NEEDS_INFO. Passing findings are REPORTED; only records identical in every
