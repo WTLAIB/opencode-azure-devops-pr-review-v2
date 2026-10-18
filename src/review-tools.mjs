@@ -145,7 +145,8 @@ const lineArgument = (value, name) => {
 /**
  * Numbered lines of one file, bounded by line count and bytes. A line longer
  * than one read is shown in parts: startColumn continues it, so no source is
- * out of reach.
+ * out of reach. `shown` is true only when source lines were emitted (not for
+ * binary, oversized or empty files or a range past the end).
  */
 export function renderFile(file, { label, startLine, endLine, startColumn }) {
   const head = `${file.path} at ${label} ${file.version.slice(0, 12)}`;
@@ -176,7 +177,7 @@ export function renderFile(file, { label, startLine, endLine, startColumn }) {
   const part = column > 1 || cut ? ` (line ${first} from character ${column}${cut ? ` to ${cut.next - 1} of ${cut.length}` : ''})` : '';
   const more = cut ? ` Line ${cut.number} continues: call again with startLine ${cut.number} and startColumn ${cut.next}.`
     : last < total ? ` Continue with startLine ${last + 1}.` : '';
-  return { text: `${head} — lines ${first}-${last} of ${total}${part}.${more}\nThe "N | " prefixes are line numbers, not file content.\n\n${rows.join('\n')}` };
+  return { text: `${head} — lines ${first}-${last} of ${total}${part}.${more}\nThe "N | " prefixes are line numbers, not file content.\n\n${rows.join('\n')}`, shown: true };
 }
 
 const DIFF_LEGEND = 'Each line is "<mark> <BASE line> <HEAD line> | text": "-" exists only in BASE, "+" only in HEAD, a blank mark in both; the prefix is not file content.';
@@ -207,25 +208,47 @@ function wholeFile(file, { title, mark, version }) {
  * BASE → HEAD hunks of one file, bounded by characters with hunk paging.
  * `base`/`head` are file reads, or null where the file does not exist.
  */
-export function renderDiff({ path, change, base, head, snapshot, context, fromHunk = 1 }) {
+export function renderDiff(options) {
+  return diffView(options).text;
+}
+
+/**
+ * The diff text and the versions ("base", "head") whose source it shows,
+ * taken from the rows actually emitted after hunk paging and byte cuts: a
+ * row with a blank mark counts for both, "-" for BASE, "+" for HEAD; a
+ * folded repeat and a hunk title show no row. None for binary, oversized,
+ * missing or identical files or a hunk past the end; one side for an added or
+ * deleted file with content.
+ */
+export function diffView({ path, change, base, head, snapshot, context, fromHunk = 1 }) {
   const kind = change ? `${change.changeType.join(', ') || 'changed'}${change.originalPath ? ` from ${change.originalPath}` : ''}` : 'not in the PR\'s changed files';
   const title = `${path} — BASE ${snapshot.base.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)} (${kind})`;
   const unreadable = [base, head].find(file => file?.binary || file?.tooLarge);
-  if (unreadable) return `${title}: ${unreadable.binary ? 'binary' : `larger than AZPR reads (${unreadable.size} bytes)`} at ${unreadable === base ? 'BASE' : 'HEAD'}; no diff is shown.`;
-  if (!base && !head) return `${title}: the file exists in neither version.`;
-  if (!base || !head) return wholeFile(head ?? base, { title, mark: head ? '+' : '-', version: head ? 'head' : 'base' });
+  if (unreadable) return { text: `${title}: ${unreadable.binary ? 'binary' : `larger than AZPR reads (${unreadable.size} bytes)`} at ${unreadable === base ? 'BASE' : 'HEAD'}; no diff is shown.`, sides: [] };
+  if (!base && !head) return { text: `${title}: the file exists in neither version.`, sides: [] };
+  if (!base || !head) {
+    const side = head ? 'head' : 'base';
+    return { text: wholeFile(head ?? base, { title, mark: head ? '+' : '-', version: side }), sides: splitLines((head ?? base).text).length ? [side] : [] };
+  }
   const { hunks, baseLines, headLines } = diffHunks(base.text, head.text, context === undefined ? {} : { before: context, after: context });
-  if (!hunks.length) return `${title}: no differences between BASE and HEAD.`;
-  if (fromHunk > hunks.length) return `${title} has ${hunks.length} hunk(s); fromHunk ${fromHunk} is past the end.`;
+  if (!hunks.length) return { text: `${title}: no differences between BASE and HEAD.`, sides: [] };
+  if (fromHunk > hunks.length) return { text: `${title} has ${hunks.length} hunk(s); fromHunk ${fromHunk} is past the end.`, sides: [] };
   const width = String(Math.max(baseLines, headLines)).length;
-  const parts = [];
+  const parts = [], shown = new Set();
   let characters = 0, next = fromHunk - 1;
   while (next < hunks.length) {
-    let rendered = renderHunk(hunks[next], width);
+    let rendered = renderHunk(hunks[next], width), rows = hunks[next].lines ?? [];
     if (parts.length && characters + bytes(rendered) > READ_BYTES) break;
     if (bytes(rendered) > READ_BYTES) {
       const end = fitEnd(rendered, 0, READ_BYTES - 300), cut = rendered.lastIndexOf('\n', end);
-      rendered = rendered.slice(0, cut > 0 ? cut : end) + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+      const kept = rendered.slice(0, cut > 0 ? cut : end);
+      // The first line is the hunk header; each later line is one row.
+      rows = rows.slice(0, kept.split('\n').length - 1);
+      rendered = kept + `\n[The rest of this hunk is not shown; read HEAD lines ${hunks[next].head} or BASE lines ${hunks[next].base} with azpr_read_file.]`;
+    }
+    for (const row of rows) {
+      if (row.kind !== '+') shown.add('base');
+      if (row.kind !== '-') shown.add('head');
     }
     parts.push(rendered);
     characters += bytes(rendered) + 2;
@@ -234,7 +257,7 @@ export function renderDiff({ path, change, base, head, snapshot, context, fromHu
   const more = next < hunks.length ? `\nHunks ${next + 1}-${hunks.length} follow: call again with fromHunk ${next + 1}.` : '';
   const folded = hunks.filter(hunk => hunk.repeats).length;
   const foldNote = folded ? `\n${folded} hunk(s) repeat an earlier change and are folded to one line: the same lines as the named hunk except for the listed string and number values (earlier→this). Read a folded hunk's exact lines with azpr_read_file.` : '';
-  return `${title}: ${hunks.length} hunk(s)${folded ? `, ${folded} folded` : ''}; BASE ${baseLines} lines, HEAD ${headLines} lines.\n${DIFF_LEGEND}${foldNote}${more}\n\n${parts.join('\n\n')}`;
+  return { text: `${title}: ${hunks.length} hunk(s)${folded ? `, ${folded} folded` : ''}; BASE ${baseLines} lines, HEAD ${headLines} lines.\n${DIFF_LEGEND}${foldNote}${more}\n\n${parts.join('\n\n')}`, sides: ['base', 'head'].filter(side => shown.has(side)) };
 }
 
 /**
@@ -366,8 +389,9 @@ export function renderThreads(threads, { path, threadId }) {
 export async function runReviewTool(name, input, context) {
   const result = await reviewTool(name, input, context);
   if (bytes(result.text) <= OUTPUT_BYTES) return result;
-  // Every renderer is bounded below this; the cut is only a safety net.
-  return { ...result, text: `${result.text.slice(0, fitEnd(result.text, 0, OUTPUT_BYTES - 200))}\n[Output cut to the tool-output limit; request a narrower range.]` };
+  // Every renderer is bounded below this; the cut is only a safety net. It may
+  // remove the only rows of a version, so a cut answer counts as no read.
+  return { ...result, reads: [], text: `${result.text.slice(0, fitEnd(result.text, 0, OUTPUT_BYTES - 200))}\n[Output cut to the tool-output limit; request a narrower range.]` };
 }
 
 async function reviewTool(name, input, { azure, run, snapshot }) {
@@ -387,8 +411,10 @@ async function reviewTool(name, input, { azure, run, snapshot }) {
       catch (error) { if (error?.kind === 'not-found') return null; throw error; }
     };
     const [base, head] = await Promise.all([read(change?.originalPath ?? path, snapshot.base, types.includes('add')), read(path, snapshot.head, types.includes('delete'))]);
-    const text = renderDiff({ path, change, base, head, snapshot, context: args.context, fromHunk });
-    return { text, ...(typeof head?.text === 'string' ? { observation: { path, version: snapshot.head, text: head.text } } : {}) };
+    const { text, sides } = diffView({ path, change, base, head, snapshot, context: args.context, fromHunk });
+    // Only versions whose source the answer showed count as read by the session.
+    const reads = sides.map(side => side === 'base' ? { path: change?.originalPath ?? path, version: snapshot.base } : { path, version: snapshot.head });
+    return { text, reads, ...(typeof head?.text === 'string' ? { observation: { path, version: snapshot.head, text: head.text } } : {}) };
   }
   if (name === REVIEW_TOOLS.searchCode) {
     const query = typeof args.query === 'string' ? args.query : '';
@@ -415,7 +441,9 @@ async function reviewTool(name, input, { azure, run, snapshot }) {
     if (startLine && endLine && endLine < startLine) throw new ToolInputError('endLine must not be smaller than startLine.');
     if (startColumn && !startLine) throw new ToolInputError('startColumn continues startLine; give both.');
     const file = await azure.readFile(run, snapshot, path, sha);
-    return { ...renderFile(file, { label, startLine, endLine, startColumn }), ...(typeof file.text === 'string' ? { observation: { path, version: sha, text: file.text } } : {}) };
+    const { text, shown } = renderFile(file, { label, startLine, endLine, startColumn });
+    // An answer about the range (past the end, an empty file) shows no source and is no read.
+    return { text, reads: shown ? [{ path, version: sha }] : [], ...(typeof file.text === 'string' ? { observation: { path, version: sha, text: file.text } } : {}) };
   }
   if (name === REVIEW_TOOLS.listFiles) {
     const path = pathArgument(args.path, '/');

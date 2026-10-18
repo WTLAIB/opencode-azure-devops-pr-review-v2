@@ -2,9 +2,21 @@ import { ROLES } from './config.mjs';
 import { TESTED_HOST_VERSION } from './host.mjs';
 // Deterministic attribution from invoked reviewer stages, not model-authored claims.
 const vocabulary = {
-  en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:' },
-  tw: { title: 'AI 審查來源', disclaimer: '本報告由 AI 產生，不代表人工核准。使用個人帳號發佈，不表示該使用者已驗證這些結論。', method: '各模型獨立初審，再由驗證模型回查原始碼、交叉驗證、合併重複問題並排除缺乏證據的結論；不是多數決。', roles: ['來源檢查', '功能初審', '風險初審', '驗證', '重複檢查'], stage: '階段', model: '實際選用的 provider/model ID', sessions: '工作階段數', count: '初審問題數', dispositions: '問題處置', finding: '問題', result: '結果', merged: '合併至', extra: '驗證新增問題', note: '此處記錄 OpenCode 實際選用的模型 ID，不是對供應商後端模型身分的獨立驗證；不包含主對話及宿主的輔助模型。', comment: 'AI 審查，非人工審查或核准。模型：' },
-  cn: { title: 'AI 审查来源', disclaimer: '本报告由 AI 产生，不代表人工批准。使用个人账号发布，不表示该用户已验证这些结论。', method: '各模型独立初审，再由验证模型回查源码、交叉验证、合并重复问题并排除缺乏证据的结论；不是多数决。', roles: ['来源检查', '功能初审', '风险初审', '验证', '重复检查'], stage: '阶段', model: '实际选用的 provider/model ID', sessions: '会话数', count: '初审问题数', dispositions: '问题处置', finding: '问题', result: '结果', merged: '合并至', extra: '验证新增问题', note: '此处记录 OpenCode 实际选用的模型 ID，不是对供应商后端模型身份的独立验证；不包含主对话及宿主的辅助模型。', comment: 'AI 审查，非人工审查或批准。模型：' },
+  en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check', 'Quick review'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
+    quickMethod: 'Quick review: one reviewer per shard covered functional and risk focus and checked its own findings against the source it read; no independent verification or duplicate merging. The runtime checked only the form and source of the findings.',
+    lead: 'AI-generated review; not human review or approval. ', quick: 'Review method: quick review, not independently verified', coverage: 'coverage incomplete', models: 'Models:', separator: '; ', end: '. ' },
+  tw: { title: 'AI 審查來源', disclaimer: '本報告由 AI 產生，不代表人工核准。使用個人帳號發佈，不表示該使用者已驗證這些結論。', method: '各模型獨立初審，再由驗證模型回查原始碼、交叉驗證、合併重複問題並排除缺乏證據的結論；不是多數決。', roles: ['來源檢查', '功能初審', '風險初審', '驗證', '重複檢查', '快速審查'], stage: '階段', model: '實際選用的 provider/model ID', sessions: '工作階段數', count: '初審問題數', dispositions: '問題處置', finding: '問題', result: '結果', merged: '合併至', extra: '驗證新增問題', note: '此處記錄 OpenCode 實際選用的模型 ID，不是對供應商後端模型身分的獨立驗證；不包含主對話及宿主的輔助模型。', comment: 'AI 審查，非人工審查或核准。模型：',
+    quickMethod: '快速審查：每個分片由一位審查者同時檢查功能與風險，並依自己讀到的原始碼回查發現；沒有獨立驗證，也沒有合併重複問題。runtime 只檢查發現的形式與來源。',
+    lead: 'AI 審查，非人工審查或核准。', quick: '審查方式：快速審查，未經獨立驗證', coverage: '覆蓋不完整', models: '模型：', separator: '；', end: '。' },
+  cn: { title: 'AI 审查来源', disclaimer: '本报告由 AI 产生，不代表人工批准。使用个人账号发布，不表示该用户已验证这些结论。', method: '各模型独立初审，再由验证模型回查源码、交叉验证、合并重复问题并排除缺乏证据的结论；不是多数决。', roles: ['来源检查', '功能初审', '风险初审', '验证', '重复检查', '快速审查'], stage: '阶段', model: '实际选用的 provider/model ID', sessions: '会话数', count: '初审问题数', dispositions: '问题处置', finding: '问题', result: '结果', merged: '合并至', extra: '验证新增问题', note: '此处记录 OpenCode 实际选用的模型 ID，不是对供应商后端模型身份的独立验证；不包含主对话及宿主的辅助模型。', comment: 'AI 审查，非人工审查或批准。模型：',
+    quickMethod: '快速审查：每个分片由一位审查者同时检查功能与风险，并依自己读到的源码回查发现；没有独立验证，也没有合并重复问题。runtime 只检查发现的形式与来源。',
+    lead: 'AI 审查，非人工审查或批准。', quick: '审查方式：快速审查，未经独立验证', coverage: '覆盖不完整', models: '模型：', separator: '；', end: '。' },
+};
+// Fixed coverage reasons for the summary disclosure; reviewer text never goes there.
+const coverageWords = {
+  en: { files: n => `${n} changed file(s) not reviewed`, atLeast: n => `at least ${n} changed file(s) not reviewed`, 'partial-file-list': 'Azure DevOps returned a partial change list', 'reviewer-gaps': 'the reviewer reported unfinished checks', 'shard-failed': 'a review session failed', join: '; ' },
+  tw: { files: n => `${n} 個變更檔未審查`, atLeast: n => `至少 ${n} 個變更檔未審查`, 'partial-file-list': 'Azure DevOps 只回傳部分變更清單', 'reviewer-gaps': '審查者回報有未完成的檢查', 'shard-failed': '有審查工作階段失敗', join: '、' },
+  cn: { files: n => `${n} 个变更文件未审查`, atLeast: n => `至少 ${n} 个变更文件未审查`, 'partial-file-list': 'Azure DevOps 只返回部分变更清单', 'reviewer-gaps': '审查者报告有未完成的检查', 'shard-failed': '有审查会话失败', join: '、' },
 };
 function words(language) {
   if (!/^zh(?:-|$)/i.test(language)) return vocabulary.en;
@@ -37,16 +49,36 @@ export function reviewProvenance(run) {
 
 export function provenanceReport(provenance, final, language) {
   const w = words(language);
+  const quick = provenance.mode === 'quick';
   const rows = provenance.stages.map(s => `| ${w.roles[ROLES[s.role]?.order]} | \`${s.model}\` | ${s.sessions} | ${ROLES[s.role]?.format === 'initial' ? s.findings : '—'} |`).join('\n');
   const dispositions = final.dispositions.map(d => `| ${d.id} | ${d.status} | ${d.mergedInto ?? '—'} |`).join('\n');
-  return `## ${w.title} (${provenance.mode})\n\n${w.disclaimer}\n\n${w.method}\n\n| ${w.stage} | ${w.model} | ${w.sessions} | ${w.count} |\n| --- | --- | --- | --- |\n${rows}\n\n${w.note}\n\n### ${w.dispositions}\n\n| ${w.finding} | ${w.result} | ${w.merged} |\n| --- | --- | --- |\n${dispositions || '| — | — | — |'}\n\n${w.extra}: ${(final.newFindings ?? []).map(f => f.id).join(', ') || '0'}`;
+  return `## ${w.title} (${provenance.mode})\n\n${w.disclaimer}\n\n${quick ? w.quickMethod : w.method}\n\n| ${w.stage} | ${w.model} | ${w.sessions} | ${w.count} |\n| --- | --- | --- | --- |\n${rows}\n\n${w.note}\n\n### ${w.dispositions}\n\n| ${w.finding} | ${w.result} | ${w.merged} |\n| --- | --- | --- |\n${dispositions || '| — | — | — |'}${quick ? '' : `\n\n${w.extra}: ${(final.newFindings ?? []).map(f => f.id).join(', ') || '0'}`}`;
 }
 
-export function commentAttribution(provenance, language, commentModel) {
+/** Fixed-phrase description of incomplete coverage; '' when coverage is complete or unknown. */
+export function coverageNote(coverage, language) {
+  if (!coverage || coverage.complete) return '';
+  const c = coverageWords[pick(language, 'en', 'tw', 'cn')];
+  const parts = [];
+  // The number is certain only for a complete change list; otherwise it is a lower bound.
+  if (coverage.unreviewedFiles > 0) parts.push(coverage.filesComplete ? c.files(coverage.unreviewedFiles) : c.atLeast(coverage.unreviewedFiles));
+  for (const reason of coverage.reasons ?? []) if (reason !== 'shard-failed' || !(coverage.unreviewedFiles > 0)) parts.push(c[reason] ?? reason);
+  return parts.join(c.join);
+}
+
+/**
+ * The disclosure line of AZPR's comments. Verified reviews keep the original
+ * line; a quick review names its method and, for the summary, incomplete
+ * coverage. The models are those of the review stages and comment planning.
+ */
+export function commentAttribution(provenance, language, commentModel, { verification = 'independent', coverage } = {}) {
   if (!provenance) return '';
   const w = words(language);
   const models = [...new Set([...provenance.stages.map(s => s.model), commentModel])].map(model => `\`${model}\``).join(', ');
-  return `${w.comment} ${models}`;
+  if (verification !== 'none') return `${w.comment} ${models}`;
+  const gap = coverageNote(coverage, language);
+  const brackets = pick(language, ['(', ')'], ['（', '）'], ['（', '）']);
+  return `${w.lead}${w.quick}${gap ? `${w.separator}${w.coverage}${pick(language, ' ', '', '')}${brackets[0]}${gap}${brackets[1]}` : ''}${w.end}${w.models} ${models}`;
 }
 
 // Presentation uses validated fields; it neither translates nor invents claims.
@@ -69,13 +101,26 @@ function displayLocation(value) {
 }
 
 /** A compact index of existing claims, not another model-authored assessment. */
-export function renderReviewSummary(findings, language, introduction = '') {
+export function renderReviewSummary(findings, language, introduction = '', { verification = 'independent', groups = [] } = {}) {
   const w = reportWords(language);
   const severityIcons = { high: '🔴', medium: '🟡', low: '🔵' };
   const cell = value => String(value ?? '—').replace(/[\r\n]+/g, ' ').replace(/[&<>|`*_[\]\\]/g, c => `&#${c.charCodeAt(0)};`);
+  // Findings that one comment combined share a row (the first one's text), and the counts follow the rows.
+  const groupOf = new Map(groups.flatMap(ids => ids.map(id => [id, ids])));
+  const entries = [], emitted = new Set();
+  for (const finding of findings) {
+    const ids = groupOf.get(finding.id);
+    if (ids && emitted.has(ids)) continue;
+    if (ids) emitted.add(ids);
+    entries.push({ ...(ids ? findings.find(other => other.id === ids[0]) ?? finding : finding), ids: ids ?? [finding.id] });
+  }
+  findings = entries;
   const counts = ['high', 'medium', 'low'].map(level => `${level}: ${findings.filter(f => f.severity === level).length}`).join(' · ');
-  const empty = pick(language, 'No confirmed defects found; this does not establish that the code is bug-free.', '未發現可確認缺陷；這不保證程式沒有問題。', '未发现可确认缺陷；这不保证程序没有问题。');
-  const rows = [...findings].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.severity) - ['high', 'medium', 'low'].indexOf(b.severity)).map(f => `| ${severityIcons[f.severity] ?? ''} ${cell(f.severity)} | ${cell(f.id)} — ${cell(f.summary)} | ${cell(displayLocation(f.location))} |`).join('\n');
+  // A quick review confirms nothing, so it does not speak of confirmed defects.
+  const empty = verification === 'none'
+    ? pick(language, 'No defects reported; this does not establish that the code is bug-free.', '未回報缺陷；這不保證程式沒有問題。', '未报告缺陷；这不保证程序没有问题。')
+    : pick(language, 'No confirmed defects found; this does not establish that the code is bug-free.', '未發現可確認缺陷；這不保證程式沒有問題。', '未发现可确认缺陷；这不保证程序没有问题。');
+  const rows = [...findings].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.severity) - ['high', 'medium', 'low'].indexOf(b.severity)).map(f => `| ${severityIcons[f.severity] ?? ''} ${cell(f.severity)} | ${f.ids.map(cell).join(', ')} — ${cell(f.summary)} | ${cell(displayLocation(f.location))} |`).join('\n');
   return `## PR Review Summary\n\n${introduction ? `${introduction}\n\n` : ''}${counts}\n\n${rows ? `| Severity | Summary | ${w.location} |\n| --- | --- | --- |\n${rows}` : empty}`;
 }
 
@@ -113,7 +158,37 @@ function renderCoverage(final, w) {
   return `\n\n**${w.coverage}**\n\n${rows}`;
 }
 
+const quickReportVocabulary = {
+  en: { banner: 'Quick review: one reviewer per shard; the findings are not independently verified.', coverage: 'Coverage', complete: 'complete', incomplete: 'incomplete',
+    findings: 'Reported findings (quick review, not independently verified)', partial: 'No quick review session produced a usable result. These claims are provisional and cannot be used for PR comments.',
+    reported: 'passed the runtime\'s format and source checks; not independently verified.', needsInfo: 'Findings that need more information (not eligible for comments)' },
+  tw: { banner: '快速審查：每個分片由一位審查者審查，發現未經獨立驗證。', coverage: '覆蓋', complete: '完整', incomplete: '不完整',
+    findings: '回報的問題（快速審查，未經獨立驗證）', partial: '沒有任何快速審查工作階段產生可用結果，下列結論僅供檢視，不能用於 PR 留言。',
+    reported: '通過 runtime 的形式與來源檢查，未經獨立驗證。', needsInfo: '需要更多資訊的發現（不能用於留言）' },
+  cn: { banner: '快速审查：每个分片由一位审查者审查，发现未经独立验证。', coverage: '覆盖', complete: '完整', incomplete: '不完整',
+    findings: '报告的问题（快速审查，未经独立验证）', partial: '没有任何快速审查会话产生可用结果，下列结论仅供查看，不能用于 PR 留言。',
+    reported: '通过 runtime 的形式与来源检查，未经独立验证。', needsInfo: '需要更多信息的发现（不能用于留言）' },
+};
+
+/** Status, coverage and verification of a quick review, stated separately at the top. */
+function renderQuickReport(final, language) {
+  const w = reportWords(language), q = quickReportVocabulary[pick(language, 'en', 'tw', 'cn')];
+  const reported = final.dispositions.filter(d => d.status === 'REPORTED').map(d => ({ ...d.finding, id: d.id }));
+  const pendingInfo = final.dispositions.filter(d => d.status === 'NEEDS_INFO' && d.partialFinding).map(d => ({ ...d.partialFinding, id: d.id }));
+  const gap = coverageNote(final.coverageSummary, language);
+  const coverageLine = `**${q.coverage}:** ${final.coverageSummary?.complete ? q.complete : `${q.incomplete}${gap ? ` (${gap})` : ''}`}`;
+  const banner = `${final.status === 'STALE' ? `**STALE: ${w.stale}**\n\n` : final.status !== 'COMPLETE' ? `**${final.status}: ${q.partial}**\n\n` : ''}**${q.banner}**\n\n${coverageLine}\n\n`;
+  const limitations = (final.reviewWarnings ?? []).map(message => `- ${message}`).join('\n');
+  const reportedIds = reported.map(f => f.id);
+  const decisions = [...(reportedIds.length ? [`- **${reportedIds.join(', ')} — REPORTED:** ${q.reported}`] : []),
+    ...final.dispositions.filter(d => d.status !== 'REPORTED').map(d => `- **${d.id || '—'} — ${d.status}${d.mergedInto ? ' → ' + d.mergedInto : ''}:** ${d.reason || w.none}`)].join('\n');
+  const reference = [...(final.initialObservations ?? []).map(f => renderFinding(f, w)), ...(final.unstructuredInitials ?? [])].join('\n\n');
+  const referenceTitle = pick(language, 'Initial observations (reference only, not final conclusions)', '初審觀察（參考資料，非最終結論）', '初审观察（参考资料，非最终结论）');
+  return `${banner}${final.status === 'COMPLETE' ? renderReviewSummary(reported, language, '', { verification: 'none' }) + '\n\n' : ''}## ${w.overview}\n\n${final.report || w.none}${limitations ? '\n\n' + limitations : ''}${renderCoverage(final, w)}\n\n## ${q.findings}\n\n${reported.map(f => renderFinding(f, w)).join('\n\n') || w.none}${pendingInfo.length && final.status === 'COMPLETE' ? `\n\n## ${q.needsInfo}\n\n${pendingInfo.map(f => renderFinding(f, w)).join('\n\n')}` : ''}\n\n## ${w.scope}\n\n${renderSnapshot(final)}\n\n## ${w.decisions}\n\n${decisions || w.none}${reference ? '\n\n## ' + referenceTitle + '\n\n' + reference : ''}`;
+}
+
 export function renderFinalReport(final, language) {
+  if (final.verification === 'none') return renderQuickReport(final, language);
   const w = reportWords(language);
   const findingTitle = final.status === 'COMPLETE' ? w.findings : pick(language, 'Model-reported findings (verification limited)', '模型提出的問題（驗證有限）', '模型提出的问题（验证有限）');
   const findings = [...final.dispositions.filter(d => d.status === 'CONFIRMED').map(d => d.verifiedFinding), ...(final.newFindings ?? [])];
@@ -127,10 +202,10 @@ export function renderFinalReport(final, language) {
 }
 
 /** Completed initial responses are retained when verification never finished. */
-export function renderIncompleteDraft(stages, failure, language) {
+export function renderIncompleteDraft(stages, failure, language, { quick = false } = {}) {
   const initials = stages.filter(s => ROLES[s.role]?.format === 'initial' && s.result);
   if (!initials.length) return '';
-  const w = reportWords(language);
+  const w = quick ? { ...reportWords(language), warning: pick(language, 'AI-generated, unconfirmed quick review observations. The quick review did not complete. This is not an approved review or input for PR comments.', 'AI 產生的快速審查觀察，審查沒有完成，不能視為已確認結論或用於 PR 留言。', 'AI 产生的快速审查观察，审查没有完成，不能视为已确认结论或用于 PR 留言。') } : reportWords(language);
   const ledger = stages.map(s => `- ${s.role}${s.label ? ` (${s.label})` : ''}: ${s.status}; session=${s.sessionID}; model=${s.model}`).join('\n');
   const observations = initials.map(s => `### ${s.role}${s.label ? ` — ${s.label}` : ''}\n\n${s.result.report || w.none}\n\n**${w.gaps}:** ${s.result.coverage?.gaps?.join('; ') || w.none}\n\n${s.result.findings.map(f => renderFinding(f, w)).join('\n\n') || w.none}`).join('\n\n');
   return `## ${w.draft}\n\n**${w.warning}**\n\n**${w.failure}:** ${failure}\n\n${ledger}\n\n## ${w.candidates}\n\n${observations}`;
@@ -139,14 +214,14 @@ export function renderIncompleteDraft(stages, failure, language) {
 /** Deterministic /pr-check report; no model was involved. */
 export function renderCheckReport(snapshot, checks, readiness) {
   const rows = checks.map(c => `| ${c.name} | ${!c.ok ? 'FAILED' : c.warning ? 'WARNING' : 'ok'} | ${String(c.detail ?? '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').slice(0, 300)} |`).join('\n');
-  const models = readiness?.checkedModelSlots?.length ? `\n\nModels checked: ${readiness.checkedModelSlots.join(', ')} (profile ${readiness.profile}).` : '';
+  const models = readiness?.checkedModelSlots?.length ? `\n\nModels checked: ${readiness.checkedModelSlots.join(', ')} (profile ${readiness.profile}).${readiness.quick ? ` Also checked for /pr-quick: ${readiness.quick.checkedModelSlots.join(', ')} (profile quick).` : ''}` : '';
   return `## Source readiness\n\n${snapshot ? `${snapshot.organization}/${snapshot.project}/${snapshot.repository} · PR #${snapshot.prId} · ${snapshot.status}${snapshot.title ? ` · "${snapshot.title}"` : ''}\n\n- head: \`${snapshot.head}\`\n- base: \`${snapshot.base}\`${snapshot.baseKind === 'target' ? ' (target branch tip; no merge base reported)' : ' (merge base)'}\n- changed files: ${snapshot.files.length} (${snapshot.filesComplete ? 'complete list' : 'partial list; reviewers will look for the rest'})\n\n` : ''}| Check | Result | Detail |\n| --- | --- | --- |\n${rows}${models}\n\nREADY means AZPR can read this PR through the Azure DevOps REST API with the configured PAT; it is not a review or an approval.`;
 }
 
 /** Publication ledger rows for receipts. */
 export function renderPublication(review, result) {
   const rows = [...(review.publication ?? new Map()).values()].map(entry =>
-    `- ${entry.kind === 'summary' ? 'PR summary' : `${entry.findingId} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}`).join('\n');
+    `- ${entry.kind === 'summary' ? 'PR summary' : `${(entry.findingIds ?? [entry.findingId]).join(', ')} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}`).join('\n');
   const counts = result?.counts ? Object.entries(result.counts).map(([state, count]) => `${state}=${count}`).join(', ') : '';
   return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. FAILED or UNVERIFIED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers. UNCERTAIN entries may still appear from an earlier attempt and are retried only after their marker check settles.`;
 }
@@ -172,17 +247,26 @@ function renderStageReceipt(stage) {
 
 export function renderReceipt(run, report, status, error, settings) {
   const rows = run.stages.map(renderStageReceipt).join('\n');
-  let body = `[AZPR ${run.id}] ${status}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}${rows ? '\n' : ''}`;
+  // A quick review states coverage and verification next to its status.
+  const quick = run.mode === 'quick' ? `${run.quickSummary ? `; coverage ${run.quickSummary.coverage?.complete ? 'complete' : 'incomplete'}` : ''}; verification none (quick review)` : '';
+  let body = `[AZPR ${run.id}] ${status}${quick}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}${rows ? '\n' : ''}`;
   if (run.stages.some(s => s.repairs?.length)) body += '\nRepair notice: some answers did not meet the output contract and the same session was asked to correct them. Remaining problems were downgraded per item (UNREVIEWED, NEEDS_INFO or skipped comments) instead of discarding the review.\n';
   if (run.stages.some(s => s.attempt > 1)) body += '\nRetry notice: a stage failed for a transient reason and ran again in a new session.\n';
-  if (run.draft) body += '\nIncomplete draft notice: initial observations are unconfirmed because verification did not complete; they are not input for PR comments.\n';
+  if (run.draft) body += run.mode === 'quick'
+    ? '\nIncomplete draft notice: the quick review did not complete; its observations are unconfirmed and not input for PR comments.\n'
+    : '\nIncomplete draft notice: initial observations are unconfirmed because verification did not complete; they are not input for PR comments.\n';
   body += renderDiagnosticNotices(run);
   if (run.compatibility && !run.compatibility.tested && run.compatibility.version !== 'unknown') body += `\nHost notice: OpenCode ${run.compatibility.version} differs from the tested ${TESTED_HOST_VERSION}; capabilities were detected at runtime.\n`;
   body += run.mode === 'check'
     ? '\nStatus: READY means AZPR can read the PR through the Azure DevOps REST API; it does not review or approve the PR.\n'
     : run.mode === 'comment'
       ? ''
-      : '\nStatus: COMPLETE means verification produced structured decisions and the PR source did not change; findings without a usable decision are listed as UNREVIEWED. STALE means the source changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
+      : run.mode === 'quick'
+        ? '\nStatus: COMPLETE means at least one quick review session produced a usable result and the PR source did not change. Quick findings are not independently verified: the runtime checked only their form and source, and findings that failed those checks are NEEDS_INFO. Coverage says whether every changed file was reviewed. STALE means the source changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n'
+        : '\nStatus: COMPLETE means verification produced structured decisions and the PR source did not change; findings without a usable decision are listed as UNREVIEWED. STALE means the source changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
+  if (run.mode === 'quick' && status === 'COMPLETE' && run.quickSummary && (run.quickSummary.high > 0 || !run.quickSummary.coverage?.complete)) {
+    body += `\nVerification hint: ${[run.quickSummary.high > 0 ? `${run.quickSummary.high} high-severity finding(s)` : '', !run.quickSummary.coverage?.complete ? 'incomplete coverage' : ''].filter(Boolean).join(' and ')}. Before publishing, consider /pr-review for an independently verified review.\n`;
+  }
   if (run.userContext) body += '\nSupplementary context applies to this command only.\n';
   if (report) {
     const last = run.reportStage;
@@ -192,7 +276,7 @@ export function renderReceipt(run, report, status, error, settings) {
       body += `\nReport data:\n<azpr_report_data>\n${report.replaceAll('</azpr_report_data>', '&lt;/azpr_report_data&gt;')}\n</azpr_report_data>\n`;
     }
   }
-  if (['review', 'deep'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage) + '\n';
+  if (['review', 'deep', 'quick'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage) + '\n';
   body += `\nThis command has ended and all reviewer grants have been revoked. outputLanguage=${settings.outputLanguage}.`;
   return body;
 }

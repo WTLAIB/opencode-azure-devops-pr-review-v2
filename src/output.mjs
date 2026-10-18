@@ -252,8 +252,13 @@ const listIssues = issues => issues.slice(0, MAX_LISTED_ISSUES).map(issue => `- 
 /**
  * Accept one initial-review answer for an assigned set of files.
  * Always returns a usable result; `issues` lists what a repair turn should fix.
+ * `invalid` maps finding IDs to the field problems that make them unusable (a
+ * plain object, so stage records keep it), and
+ * `envelope` says whether `findings` was an array and `coverage` an object: a
+ * parsed answer is not necessarily a usable review.
+ * @param {{prefix: string, assigned?: string[], inventory?: string[], filesComplete?: boolean, requireLocation?: boolean}} options
  */
-export function evaluateInitial(answerText, { prefix, assigned = [], inventory = [], filesComplete = true }) {
+export function evaluateInitial(answerText, { prefix, assigned = [], inventory = [], filesComplete = true, requireLocation = false }) {
   const warnings = new Set();
   const parsed = parseModelJSON(answerText, { keys: ['status', 'findings', 'coverage', 'report'] });
   if (!parsed.value) {
@@ -261,7 +266,8 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
     return {
       issues: [`Your answer could not be used: ${parsed.problem}.`],
       result: { status: 'PARTIAL', structured: false, coverage: { files: [], gaps: ['The reviewer answer was not structured JSON.'] },
-        additionalFiles: [], findings: [], report, warnings: ['The initial answer was not structured; its text is passed to verification as-is.'] },
+        additionalFiles: [], findings: [], report, warnings: ['The initial answer was not structured; its text is passed to verification as-is.'],
+        invalid: {}, envelope: { findings: false, coverage: false } },
     };
   }
   if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
@@ -270,14 +276,17 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
   const coverage = aliasFields(source.coverage, ['files', 'gaps'], warnings);
   const covered = rows(coverage.files, warnings, 'coverage.files').map(asText).filter(text);
   const gaps = rows(coverage.gaps, warnings, 'coverage.gaps').map(asText).filter(text);
-  if (!Array.isArray(source.findings)) issues.push('"findings" must be an array (use [] when there are none).');
-  if (!isObject(source.coverage)) issues.push('"coverage" must be an object with "files" (reviewed paths) and "gaps".');
+  const envelope = { findings: Array.isArray(source.findings), coverage: isObject(source.coverage) };
+  if (!envelope.findings) issues.push('"findings" must be an array (use [] when there are none).');
+  if (!envelope.coverage) issues.push('"coverage" must be an object with "files" (reviewed paths) and "gaps".');
   const findings = rows(source.findings, warnings, 'findings').map(row => normalizeFinding(row, warnings));
-  findings.forEach((row, index) => {
-    const problems = findingProblems(row, { requireLocation: false });
-    if (problems.length) issues.push(`findings[${index}]${text(row.id) ? ` (${row.id})` : ''}: ${problems.join('; ')}.`);
+  const problems = findings.map((row, index) => {
+    const found = findingProblems(row, { requireLocation });
+    if (found.length) issues.push(`findings[${index}]${text(row.id) ? ` (${row.id})` : ''}: ${found.join('; ')}.`);
+    return found;
   });
   assignIds(findings, prefix, warnings);
+  const invalid = Object.fromEntries(findings.map((row, index) => [row.id, problems[index]]).filter(([, found]) => found.length));
   const known = new Set([...inventory, ...assigned]);
   const additionalFiles = [...new Set(rows(source.additionalFiles, warnings, 'additionalFiles').map(asText)
     .filter(path => text(path) && !/[\0\r\n]/.test(path)).map(path => path.startsWith('/') ? path : '/' + path))]
@@ -297,7 +306,7 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
     issues,
     result: { status, structured: true, coverage: { files: covered, gaps }, additionalFiles, findings, report,
       warnings: [...warnings], ...(parsed.corrections ? { corrections: parsed.corrections } : {}),
-      ...(parsed.surroundingText ? { surroundingText: parsed.surroundingText } : {}) },
+      ...(parsed.surroundingText ? { surroundingText: parsed.surroundingText } : {}), invalid, envelope },
   };
 }
 
@@ -607,6 +616,12 @@ export const parseRepairPrompt = issues => `AZPR runtime: your previous answer w
 export function initialRepairPrompt(issues, { parseOnly = false } = {}) {
   if (parseOnly) return parseRepairPrompt(issues);
   return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). Keep every finding you still stand behind and keep the existing wording of fields that need no correction; read more source only if a correction needs it.`;
+}
+
+/** Repair request for a quick review: the whole object, with what to do about failed locations. */
+export function quickRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). For a location problem, read the file with azpr_read_diff or azpr_read_file and correct the location, locate the finding at readable source that supports it, or move the concern to report. Keep every finding you still stand behind and keep the existing wording of fields that need no correction.`;
 }
 
 /** Repair request for a verifier: only the decisions that are missing or invalid. */

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
-  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt,
+  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt, quickRepairPrompt,
 } from '../src/output.mjs';
 
 const finding = (id, extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.',
@@ -287,4 +287,20 @@ test('repair prompts: syntax errors ask for the same content; missing JSON asks 
   assert.match(initialRepairPrompt(['coverage missing']), /keep the existing wording/);
   assert.match(finalRepairPrompt(['no JSON object was found'], ['F-1'], { full: true }), /complete verification JSON object/);
   assert.match(finalRepairPrompt(['bad'], ['F-1'], { parseOnly: true }), /identical content/);
+});
+
+test('evaluateInitial can require locations and tells item problems from the answer envelope', () => {
+  const { result, issues } = evaluateInitial(initialAnswer([finding('Q-1'), finding('Q-2', { location: '' })]), { prefix: 'Q', assigned: ['/src/a.ts'], requireLocation: true });
+  assert.deepEqual(result.invalid, { 'Q-2': ['missing location'] });
+  assert.match(issues.join('\n'), /findings\[1\] \(Q-2\): missing location/);
+  assert.deepEqual(result.envelope, { findings: true, coverage: true });
+  // The verified modes still let the verifier settle a missing location.
+  assert.deepEqual(evaluateInitial(initialAnswer([finding('F-1', { location: '' })]), { prefix: 'F', assigned: ['/src/a.ts'] }).result.invalid, {});
+  // Parsed JSON is not a usable review by itself.
+  const odd = evaluateInitial(JSON.stringify({ status: 'COMPLETE', findings: { summary: 'x' }, coverage: 'all', report: 'r' }), { prefix: 'Q' });
+  assert.equal(odd.result.structured, true);
+  assert.deepEqual(odd.result.envelope, { findings: false, coverage: false });
+  assert.deepEqual(evaluateInitial('no json here', { prefix: 'Q' }).result.envelope, { findings: false, coverage: false });
+  assert.match(quickRepairPrompt(['Q-1: x']), /read the file with azpr_read_diff or azpr_read_file and correct the location/);
+  assert.match(quickRepairPrompt(['the JSON could not be parsed (x)'], { parseOnly: true }), /not valid JSON/);
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, sourceWindow } from '../src/comment-work.mjs';
+import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, sourceWindow, mergeCandidates, candidatePages } from '../src/comment-work.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
 import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -293,9 +293,11 @@ test('the discussion digest lists only live threads, compactly', () => {
 });
 
 test('locations and source windows', () => {
-  assert.deepEqual(parseLocation('head:/src/a.ts:12-14'), { path: '/src/a.ts', start: 12, end: 14 });
-  assert.deepEqual(parseLocation('/src/a.ts:7'), { path: '/src/a.ts', start: 7, end: 7 });
-  assert.deepEqual(parseLocation('head:/src/a.ts'), { path: '/src/a.ts', start: null, end: null });
+  assert.deepEqual(parseLocation('head:/src/a.ts:12-14'), { side: 'head', path: '/src/a.ts', start: 12, end: 14 });
+  assert.deepEqual(parseLocation('/src/a.ts:7'), { side: 'head', path: '/src/a.ts', start: 7, end: 7 });
+  assert.deepEqual(parseLocation('head:/src/a.ts'), { side: 'head', path: '/src/a.ts', start: null, end: null });
+  // A BASE location keeps its side, so HEAD source is never shown for BASE line numbers.
+  assert.deepEqual(parseLocation('base:/src/old.ts:3'), { side: 'base', path: '/src/old.ts', start: 3, end: 3 });
   assert.equal(parseLocation('somewhere'), null);
   const small = sourceWindow('a\nb\nc\n', { start: 2 });
   assert.deepEqual({ ...small, text: small.text.split('\n') }, { firstLine: 1, lastLine: 3, totalLines: 3, text: ['1 | a', '2 | b', '3 | c'] });
@@ -329,4 +331,40 @@ test('planning payloads inline source excerpts and the discussion digest; tools 
   await prepareComments(other.review, other.store, second.invoke, {});
   assert.equal(second.payloads[0].discussionsRead, false);
   assert.ok(second.payloads[0].evidenceIndex, 'The evidence index remains available without excerpts.');
+});
+
+const quickFinding = (id, shard, location, severity = 'medium', extra = {}) => ({ id, shard, location, severity, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', suggestion: 's', ...extra });
+
+test('merge candidates: findings of different sessions on overlapping lines of one file with the same severity', () => {
+  const a = quickFinding('Q-1', '1/2', 'head:/src/pay.ts:18');
+  const b = quickFinding('Q-1001', '2/2', 'head:/src/pay.ts:17-19');
+  assert.deepEqual(mergeCandidates([a, b]), [['Q-1', 'Q-1001']]);
+  // Never within one session, across severities, files or non-overlapping lines, or for summary-only or low findings.
+  assert.deepEqual(mergeCandidates([a, quickFinding('Q-2', '1/2', 'head:/src/pay.ts:18')]), []);
+  assert.deepEqual(mergeCandidates([a, { ...b, severity: 'high' }]), []);
+  assert.deepEqual(mergeCandidates([a, { ...b, location: 'head:/src/other.ts:18' }]), []);
+  assert.deepEqual(mergeCandidates([a, { ...b, location: 'head:/src/pay.ts:20-22' }]), []);
+  assert.deepEqual(mergeCandidates([a, { ...b, inline: false }]), []);
+  assert.deepEqual(mergeCandidates([{ ...a, severity: 'low' }, { ...b, severity: 'low' }]), []);
+  assert.deepEqual(mergeCandidates([a, { ...b, location: 'base:/src/pay.ts:18' }]), []);
+  // Overlaps chain into one candidate group; the planner's combination is checked member by member later.
+  const chain = [quickFinding('Q-1', '1/3', 'head:/a.ts:1-2'), quickFinding('Q-1001', '2/3', 'head:/a.ts:2-3'), quickFinding('Q-2001', '3/3', 'head:/a.ts:3-4')];
+  assert.deepEqual(mergeCandidates(chain), [['Q-1', 'Q-1001', 'Q-2001']]);
+  // A group larger than a planning page is not offered.
+  const crowd = Array.from({ length: PLANNING_FINDINGS_PER_PAGE + 1 }, (_, i) => quickFinding(`Q-${i * 1000 + 1}`, `${i + 1}/9`, 'head:/a.ts:5'));
+  assert.deepEqual(mergeCandidates(crowd), []);
+});
+
+test('candidate pages keep a group on one page and plan an oversized group separately', () => {
+  const a = quickFinding('Q-1', '1/2', 'head:/a.ts:1'), x = quickFinding('Q-2', '1/2', 'head:/b.ts:1'), y = quickFinding('Q-3', '1/2', 'head:/c.ts:1'),
+    z = quickFinding('Q-4', '1/2', 'head:/d.ts:1'), b = quickFinding('Q-1001', '2/2', 'head:/a.ts:1');
+  const ids = pages => pages.map(page => page.map(finding => finding.id));
+  const grouped = candidatePages([a, x, y, z, b], [['Q-1', 'Q-1001']]);
+  assert.deepEqual(ids(grouped.pages), [['Q-1', 'Q-1001', 'Q-2', 'Q-3'], ['Q-4']]);
+  assert.deepEqual(grouped.offered, [['Q-1', 'Q-1001']]);
+  assert.deepEqual(ids(candidatePages([a, x, y, z, b], []).pages), [['Q-1', 'Q-2', 'Q-3', 'Q-4'], ['Q-1001']], 'Without candidates paging is unchanged.');
+  const big = 'x'.repeat(7000);
+  const split = candidatePages([{ ...a, evidence: big }, { ...b, evidence: big }], [['Q-1', 'Q-1001']]);
+  assert.deepEqual(split.offered, [], 'A group that does not fit one page is not offered, and its evidence is not cut.');
+  assert.deepEqual(ids(split.pages), [['Q-1'], ['Q-1001']]);
 });

@@ -56,7 +56,7 @@ def current_settings(existing):
         raise ValueError("Models must be a current-layout JSON object.")
     if any(key in models for key in ("freeA", "freeB", "final")):
         raise ValueError("Legacy model settings are unsupported.")
-    if any(key in models and not isinstance(models[key], dict) for key in ("review", "deep")):
+    if any(key in models and not isinstance(models[key], dict) for key in ("review", "deep", "quick")):
         raise ValueError("Model roles must use the current nested layout.")
     if "_help" in models:
         help_text = models["_help"]

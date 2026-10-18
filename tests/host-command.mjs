@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 /** Fixtures wait for a terminal receipt, separately from HTTP admission. */
 export function withCommandCompletion(raw, milliseconds = 90000) {
   return async (path, body, ...rest) => {
-    const tracked = path.endsWith('/command') && /^pr-(review|deep|check|comment)$/.test(body?.name);
+    const tracked = path.endsWith('/command') && /^pr-(review|deep|quick|check|comment)$/.test(body?.name);
     const inbox = path.replace(/\/command$/, '/inbox');
     const before = tracked ? new Set((await raw(inbox, undefined, ...rest)).data.map(item => item.id)) : null;
     const value = await raw(path, body, ...rest);

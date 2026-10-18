@@ -1,5 +1,5 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
-import { confirmedFindings, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan } from './comments.mjs';
+import { publishableFindings, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads } from './azure.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
@@ -40,12 +40,59 @@ export function discussionDigest(threads) {
   return live;
 }
 
-/** "head:/src/a.ts:12-14" -> { path, start, end }; null when no path. */
-export function parseLocation(location) {
-  const match = /^(?:head|base)?:?(\/[^:]+?)(?::(\d+)(?:-(\d+))?)?\s*$/.exec(String(location ?? '').trim());
-  if (!match) return null;
-  const start = match[2] ? Number(match[2]) : null;
-  return { path: match[1], start, end: match[3] ? Number(match[3]) : start };
+export { parseLocation };
+
+/**
+ * Findings of a quick review that one comment might combine: inline-eligible
+ * high or medium findings of different review sessions with the same
+ * severity on overlapping lines of one HEAD file, joined into groups. Groups
+ * larger than a planning page are not offered. Only a candidate: the planner
+ * decides whether they state one defect, and the runtime checks the rules of
+ * each combination it proposes.
+ */
+export function mergeCandidates(findings, limit = PLANNING_FINDINGS_PER_PAGE) {
+  const located = findings.map(finding => ({ finding, at: parseLocation(finding.location) }))
+    .filter(({ finding, at }) => at?.side === 'head' && at.start && finding.inline !== false && finding.shard && ['high', 'medium'].includes(finding.severity));
+  const parent = new Map(located.map(({ finding }) => [finding.id, finding.id]));
+  const root = id => { while (parent.get(id) !== id) id = parent.get(id); return id; };
+  for (let i = 0; i < located.length; i++) for (let j = i + 1; j < located.length; j++) {
+    const a = located[i], b = located[j];
+    if (a.at.path === b.at.path && a.finding.severity === b.finding.severity && a.finding.shard !== b.finding.shard &&
+        a.at.start <= b.at.end && b.at.start <= a.at.end) parent.set(root(a.finding.id), root(b.finding.id));
+  }
+  const groups = new Map();
+  for (const { finding } of located) groups.set(root(finding.id), [...(groups.get(root(finding.id)) ?? []), finding.id]);
+  return [...groups.values()].filter(ids => ids.length > 1 && ids.length <= limit);
+}
+
+/**
+ * Planning pages that keep each candidate group on one page. A group that does
+ * not fit a page by itself is planned as separate findings, never truncated.
+ * @returns {{pages: object[][], offered: string[][]}}
+ */
+export function candidatePages(findings, candidates, size = PAGE_CHARACTERS, maxItems = PLANNING_FINDINGS_PER_PAGE) {
+  if (!candidates.length) return { pages: itemPages(findings, size, maxItems), offered: [] };
+  const byId = new Map(findings.map(finding => [finding.id, finding]));
+  const groupOf = new Map(candidates.flatMap(ids => ids.map(id => [id, ids])));
+  const units = [], placed = new Set();
+  for (const finding of findings) {
+    if (placed.has(finding.id)) continue;
+    const ids = groupOf.get(finding.id) ?? [finding.id];
+    for (const id of ids) placed.add(id);
+    const members = ids.map(id => byId.get(id));
+    const length = members.reduce((sum, member) => sum + JSON.stringify(member).length, 0);
+    if (members.length > 1 && length > size) units.push(...members.map(member => [member]));
+    else units.push(members);
+  }
+  const pages = [], offered = units.filter(unit => unit.length > 1).map(unit => unit.map(member => member.id));
+  let page = [], characters = 0;
+  for (const unit of units) {
+    const length = unit.reduce((sum, member) => sum + JSON.stringify(member).length, 0);
+    if (page.length && (characters + length > size || page.length + unit.length > maxItems)) { pages.push(page); page = []; characters = 0; }
+    page.push(...unit); characters += length;
+  }
+  if (page.length) pages.push(page);
+  return { pages, offered };
 }
 
 /** Numbered source lines: the whole file when small, else a window around the lines. */
@@ -81,7 +128,8 @@ async function planningInput(review, store, findings, report, work, continuation
     dispositions: await store.pack(compactDispositions(review.final.dispositions)),
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
     ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
-    ...(prepared.length ? { priorPages: prepared.map(page => ({ comments: page.comments.map(c => ({ findingId: c.findingId, path: c.path, startLine: c.startLine })),
+    ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
+    ...(prepared.length ? { priorPages: prepared.map(page => ({ comments: page.comments.map(c => ({ findingId: c.findingId, ...(c.findingIds ? { findingIds: c.findingIds } : {}), path: c.path, startLine: c.startLine })),
       skipped: page.skipped.map(item => item.findingId), wroteSummary: Boolean(page.summary) })) } : {}),
     ...(continuation && review.commentEvidence?.length ? { workEvidence: await store.put(review.commentEvidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
@@ -96,8 +144,9 @@ async function planningInput(review, store, findings, report, work, continuation
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
 export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null } = {}) {
-  const all = confirmedFindings(review);
-  const groups = itemPages(all, PAGE_CHARACTERS, PLANNING_FINDINGS_PER_PAGE);
+  const all = publishableFindings(review);
+  // Only a quick review, which has no verifier, offers candidate duplicates to the planner.
+  const { pages: groups, offered } = candidatePages(all, reviewVerification(review) === 'none' ? mergeCandidates(all) : []);
   const reports = textPages(review.final.report ?? '');
   const count = Math.max(groups.length, reports.length, 1);
   const pages = [], prepared = [], signatures = new Set();
@@ -111,7 +160,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     const windows = new Map();
     for (const finding of findings) {
       const location = parseLocation(finding.location);
-      if (!location) continue;
+      // Excerpts are HEAD source; BASE line numbers do not point into it.
+      if (!location || location.side !== 'head') continue;
       const text = await source(location.path);
       if (text === null) continue;
       const window = sourceWindow(text, location);
@@ -129,11 +179,13 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     progress?.(`Planning comments, page ${index + 1}/${count}`);
     do {
       const assigned = pending;
+      // Groups whose findings are all still open on this page.
+      const candidates = offered.filter(ids => ids.every(id => assigned.some(item => item.id === id)));
       const sourceExcerpts = await excerpts(assigned);
       const payload = await planningInput(review, store, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary: !summaryWritten,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, pages, { sourceExcerpts, discussions, reportSegments: reports.length });
+        continuation, pages, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates });
       const scoped = async answer => {
         const parsed = parseModelJSON(answer, { keys: ['status', 'comments', 'skipped'] });
         const comments = Array.isArray(parsed.value?.comments) ? parsed.value.comments : [];
@@ -147,11 +199,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true });
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates });
           return { ...result, corrections };
         },
       });
@@ -159,7 +211,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       if (text(page.summary)) summaryWritten = true;
       pages.push(page);
       prepared.push(await store.object({ input: payload, result: page }));
-      const accounted = new Set([...page.comments, ...page.skipped].map(item => item.findingId));
+      const accounted = new Set([...page.comments.flatMap(item => item.findingIds ?? [item.findingId]), ...page.skipped.map(item => item.findingId)]);
       pending = pending.filter(item => !accounted.has(item.id));
       continuation = page.status === 'CONTINUE' ? page.continuation : undefined;
       let stopped;
@@ -217,7 +269,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const present = markersInThreads(await azure.threads(run, review.snapshot));
   const at = () => new Date(now()).toISOString();
   const record = (item, entry) => ledger.set(item.marker, {
-    ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, path: item.path, startLine: item.startLine }),
+    ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
     ...entry, at: at() });
   // Attempts whose marker is now visible are settled.
   const visible = items.filter(item => present.has(item.marker) && attempts.get(item.marker)).map(item => item.marker);

@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 294 tests across settings (including the
+`npm run check` and `npm test` pass: 326 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -46,6 +46,42 @@ review without candidate findings that still gets its verifier, the token usage
 kept per request in stage records, the project boundary for private roles
 whatever the host's default for external directories, and the `/pr-check`
 warning on a host without the permission hook).
+
+The quick review (2026-10-18) adds tests for: one reviewer per shard and no
+verifier; REPORTED and NEEDS_INFO decided by the runtime's form and source
+checks (deleted, renamed, unchanged and binary files, line ranges, and reads
+counted only for the session that made them, never another shard's or the
+runtime's own, and only for versions whose source the answer showed, so a
+line, column or hunk past the end, an empty file or identical versions are no
+read; a diff showing only removed or only added rows, cut before the other
+version's rows or showing only folded repeats reads just what it showed, and
+an answer cut to the tool-output limit reads nothing);
+different defects on the same line kept apart while only
+records identical in every field are merged; a parsed answer without a usable
+review giving PARTIAL; zero findings with incomplete coverage (a failed shard,
+reviewer gaps, a partial change list); the quick disclosure line, report and
+receipt; quick inline comments needing a changed HEAD file and an anchor found
+in the source; a saved quick review commented on after a restart, and saved
+records without a verification field trusted only for review and deep;
+quick-then-review publication where only an identical complete marker is
+ALREADY_PRESENT (the same anchor with a second defect posts ordinal 1); an
+unavailable quick model or a changed quick agent blocking only `/pr-quick`;
+the installer adding an empty `models.quick.reviewer`; and the review and deep
+system prompts byte-identical to the previous revision (SHA-256 per role).
+Combining cross-shard duplicates in comment planning adds tests for: candidate
+groups only across sessions, with one severity and overlapping lines (never
+within a session, across files, for summary-only or low findings, or beyond a
+page); groups kept on one page and oversized groups planned apart; the
+combination rules (a chain of overlaps with no common line or two members of
+one session refused, a missing reason, an anchor outside the shared lines,
+verified reviews never combining); a refused combination keeping valid single
+comments and accounting for every ID; separate comments on one line staying
+separate; summary rows and counts following accepted combinations only;
+`findingIds` in the ledger with older plans still readable; and, end to end,
+one comment for a duplicate pair that a refreshed preview and a second
+publish leave alone, a later `/pr-review` finding the combined comment by its
+ordinal-0 marker, and a combination that never meets the rules leaving both
+findings in the summary index.
 
 ## REST API version check
 
@@ -109,7 +145,7 @@ like 2.0.22:
 
 | Check | Observed |
 | --- | --- |
-| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. |
+| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. Since 2026-10-18 the smoke fixture also runs `/pr-quick` (one quick session, no verifier, the session's reads recorded) and its comment preview with the zh-TW quick disclosure line; fresh, `--replace` and the scale fixture passed on 2.0.32. |
 | Project boundary | 2.0.31 dropped the `external_directory: ask` rule that 2.0.22 put in every new agent's default permissions, and 2.0.32 keeps it out, so external paths fall under `*: allow`. AZPR's permission hook only turned `ask` into `deny`, and on 2.0.31 a private reviewer's native `grep` on `/etc` ran and returned file contents. The hook now decides `external_directory` for private roles itself: allowed only when every resource is in AZPR's private data directory, otherwise refused with the pointer to the azpr tools. No live run used a native read tool outside the project; the one live review on 2.0.31 before the fix used only AZPR's tools. |
 | Missing local paths | 2.0.31 and 2.0.32 answer a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
 | Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31 and 2.0.32; both send `session-id`, `thread-id` and `x-client-request-id` on the ChatGPT token-sharing route (below). |
@@ -628,6 +664,108 @@ their rendering or anchors.
 - The configuration defect of PR #3: gpt-5.6-luna 4 of 4 new-prompt runs,
   gpt-6-luna 1 of 4, gpt-5.6-terra 0 of 2.
 
+## Live runs: `/pr-quick` versus `/pr-review` (2026-10-18, review only)
+
+OpenCode 2.0.32, every review role and `models.quick.reviewer` on
+`openai/gpt-6-luna` (default variant), `parallelSessions` 8,
+`azure.concurrency` 6, debug on. Both modes ran twice on each PR at the same
+heads, alternating quick and review, review only; nothing was posted. Time is
+from the command to its receipt; requests count model requests of the review
+stages; input is uncached plus cached prompt tokens from the debug stage
+records.
+
+| PR | Mode | Time | Sessions | Requests | Input (uncached + cached) | Output | Findings |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PR #2, 1 file | quick | 45 s / 30 s | 1 / 1 | 5 / 4 | 32 K / 25 K (8 K uncached each) | 1.5 K / 1.0 K | 3 / 2 of the 3 known defects |
+| PR #2 | review | 60 s / 60 s | 3 / 3 | 13 / 12 | 87 K / 82 K (41 K / 30 K) | 2.7 K / 3.0 K | 2 / 2 of the 3 |
+| PR #4, 35 files | quick | 45 s / 40 s | 2 / 2 | 8 / 5 | 206 K / 114 K (70 K / 66 K) | 2.4 K / 1.8 K | seeded regression in the diff 1 of 2; outside the diff 0 of 2 |
+| PR #4 | review | 70 s / 40 s | 5 / 5 | 15 / 11 | 268 K / 203 K (133 K / 125 K) | 4.4 K / 3.1 K | in the diff 1 of 2; outside 0 of 2 |
+| PR #3, 316 files | quick | 115 s / 110 s | 13 / 13 | 60 / 42 | 1.79 M / 1.38 M (0.54 M / 0.56 M) | 23 K / 22 K | 24 of 24 policy defects both times; configuration defect 0 of 2 |
+| PR #3 | review | 266 s / 230 s | 31 / 30 | 135 / 106 | 4.25 M / 3.38 M (1.25 M / 1.21 M) | 60 K / 50 K | 24 of 24 both times; configuration defect 1 of 2 |
+
+- Cost: a quick review needed 36–50 % of the review's model requests and
+  34–68 % of its input (42 % on the 316-file PR, 24–53 % of the uncached
+  input). Time fell to 45–63 % on the 1-file and 316-file PRs; on PR #4 one
+  review without candidates verified nothing and took 40 s, like the quick runs.
+- Findings: no quick or review run reported a defect outside the known ones.
+  Every quick finding passed the runtime's checks (no NEEDS_INFO, no correction
+  turn); the location and read checks refused nothing in these runs. Severity
+  agreed across all four PR #3 runs for 23 of the 24 policy files (one review
+  rated `reservation_atomicity` high, the other runs medium).
+- Duplicates across shards: on PR #3 the reviewer of the shard with eight
+  policy tests followed them into the policy implementations (changed files of
+  another shard) and filed the same defects there, so 7 and 8 of the 32 quick
+  findings repeat another finding on the same lines. Restricting where a quick
+  reviewer may file is not an option: the same path finds a defect whose test
+  and code are in different shards (PR #4's seeded regression outside the
+  diff). One review run also kept 13 same-line duplicates that its verifiers
+  did not merge (38 confirmed findings for 25 defects); the other merged all
+  of them. Single-shard PRs cannot produce cross-shard duplicates.
+- Comment preview of a quick PR #4 review: the summary's disclosure line read
+  "AI 審查，非人工審查或核准。審查方式：快速審查，未經獨立驗證。模型：" followed by
+  the model ID, with the usual index and marker; the planner skipped the inline
+  comment because thread 235 (the earlier publication) already covers the
+  issue. Nothing was posted.
+- Two runs per mode show how much both vary (the 1-file PR: 2 or 3 of 3; PR
+  #4's seeded regression in the diff: 1 of 2 in each mode); they do not
+  establish a quality difference.
+
+After combining cross-shard duplicates in comment planning was added, two
+more quick runs of PR #3 with a comment preview (nothing posted):
+
+| Run | Review | Candidate pairs | Planning | Inline comments | Skipped |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 160 s, 73 requests | 7 | 9 sessions, 12 requests (two correction turns on one page) | 1 | 31 |
+| 2 | 120 s, 51 requests | 0 | 8 sessions, 9 requests | 2 | 30 |
+
+- No combination was made, for two reasons outside the combination rules.
+  PR #3 still carries the 24 comments published on 2026-10-11 (threads
+  211–233, kept on purpose), and the planner skipped both members of every
+  candidate pair because one of those threads already discusses the defect.
+  In run 2 the reviewer of the shard with the policy tests located its eight
+  findings on the line of a region file that enables each policy instead of
+  the policy implementation, so they were in another file than their
+  repeats and no candidate. The combination path is therefore covered by
+  the offline and host fixtures only; a live check needs a multi-shard PR
+  without earlier comments.
+- Run 2's eight misplaced findings passed the runtime's checks (the file
+  exists, the lines are in range, the session read it): the checks cannot
+  tell that a location is the wrong place for a defect. The planner refused
+  to anchor four of them on a region file, and the other four duplicate
+  existing threads; in a summary index they would show the region file as
+  their location. A verifier corrects such locations; a quick review does not.
+- Run 1 reported one finding outside the known defects (a region route's
+  fallback that differs from its destination), which is unverified. Its
+  inline comment was refused after two correction turns because the planner
+  quoted lines that are not in the file, so it would appear only in the
+  summary index.
+
+Two changes followed: the quick prompts now say to file a defect the
+reviewer's files lead it to at that other changed file's defective lines (a
+configuration entry, test or caller that only uses the code is evidence, not
+the location), and the 24 earlier comments on PR #3 were deleted so that
+existing threads no longer cover its defects. Three more quick runs with a
+comment preview, nothing posted:
+
+| Run | Review | Findings | Candidate pairs | Combined | Inline comments | Planning |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 130 s, 53 requests | 33: 24 of 24 policy defects and one unconfirmed region-fallback claim | 8 | 6 | 27 | 9 sessions, 10 requests, one correction turn |
+| 2 | 120 s, 50 requests | 35: 24 of 24 | 9 | 9 | 25 | 9 sessions, 9 requests |
+| 3 | 110 s, 63 requests | 32: 24 of 24 | 8 | 8 | 23 | 8 sessions, 9 requests, one correction turn |
+
+- No finding sat on a line that only uses the defective code.
+- 23 of 25 candidate pairs became one comment. In run 1 the planner kept two
+  pairs apart, which the prompt allows when it is unsure, so those defects
+  would each get two comments. The correction turns added a missing
+  `mergeReason`. A combined comment keeps the usual layout and disclosure;
+  the summary index lists its IDs in one row, and the counts follow the rows
+  (run 3: 32 findings, 24 rows).
+- Planning used one request per page of four findings, as without
+  candidates: 8–9 sessions and 9–10 requests for 32–35 findings.
+- The region-fallback claim (one of these three runs, and one run before) is
+  not a planted defect, and neither review run reported it; it is
+  unconfirmed.
+
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 
 A stability review proposed batch parameters for `azpr_read_diff` and
@@ -705,5 +843,10 @@ transient failure, and its error names the last activity.
 - Streamed reasoning from a real reasoning model: the fixture streams answer
   text only. A model that thinks without streaming anything looks silent to
   the watchdog for that time.
-- The prompt cache of a large PR on OpenCode 2.0.32: only the 1-file PR above
-  was measured; on 2.0.22 the 316-file PR read 11–21% from the cache.
+- The prompt cache of a large PR on OpenCode 2.0.32: measured only incidentally
+  by the quick/review comparison above (the 316-file PR read 60–71 % of its
+  input from the cache in both modes); on 2.0.22 it read 11–21 %.
+- `/pr-quick` beyond these runs on three test PRs with one model: its
+  false-positive rate and misses on other PRs and models, a published quick
+  review (only previews were made), and combining duplicates on a real
+  multi-shard PR other than the test PR.

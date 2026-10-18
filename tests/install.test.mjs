@@ -19,7 +19,7 @@ const requiredFiles = [
   'install.sh', 'scripts/merge-settings.py', 'config/settings.example.json',
   ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs',
     'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'diff.mjs', 'search.mjs', 'review-tools.mjs', 'review-work.mjs', 'store.mjs'].map(name => 'src/' + name),
-  ...['common', 'functional', 'risk', 'deep', 'final', 'dedupe', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
+  ...['common', 'functional', 'risk', 'deep', 'final', 'dedupe', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
 test.after(() => {
@@ -166,8 +166,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('29-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 29);
+test('30-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 30);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
@@ -300,6 +300,29 @@ test('current partial settings merge only missing defaults and preserve existing
   for (const key of ['enabled', 'outputLanguage', 'custom']) assert.deepEqual(merged[key], partial[key]);
   assert.equal(merged.runTimeoutSeconds, null);
   assert.equal(readFileSync(file, 'utf8'), raw);
+  original(s); clean(s);
+});
+
+test('replacement adds an empty quick reviewer to settings without one and keeps every other value', () => {
+  const s = setup(); ok(install(s));
+  const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));
+  delete settings.models.quick;
+  settings.models.review = { functional: 'team/f', risk: 'team/r', verifier: 'team/v' };
+  writeFileSync(file, JSON.stringify(settings));
+  const result = install(s, ['--replace']); ok(result);
+  assert.match(result.stdout, /Settings defaults added: models\.quick/);
+  const merged = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(merged.models.quick, { reviewer: '' }, '/pr-quick stays off until a model is chosen.');
+  assert.deepEqual(merged.models.review, settings.models.review);
+  // A configured quick reviewer is kept as it is.
+  merged.models.quick.reviewer = 'team/quick';
+  writeFileSync(file, JSON.stringify(merged));
+  ok(install(s, ['--replace']));
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).models.quick.reviewer, 'team/quick');
+  for (const reserved of ['pr-quick']) {
+    const t = setup(); writeFileSync(join(t.root, 'opencode.json'), JSON.stringify({ command: { [reserved]: { template: 'x' } } }));
+    const refused = install(t); assert.notEqual(refused.status, 0); assert.match(refused.stderr, /Reserved command\/agent keys/);
+  }
   original(s); clean(s);
 });
 

@@ -908,3 +908,175 @@ test('a PR from another organization is refused before any Azure call; a rejecte
   assert.match(receipt, /\] NOT_READY[\s\S]*Azure DevOps rejected the PAT for organization "org" \(HTTP 203\)/);
   assert.equal(f.azure.callsTo('pr').length, 1, 'An authentication failure is not retried.');
 });
+
+// ------------------------------------------------------------------ quick review
+const quickSettings = s => { s.models.quick = { reviewer: 'fixture/quick-reviewer' }; };
+const savedReviews = async f => Promise.all((await readdir(join(f.stateDirectory, 'reviews'))).map(async file =>
+  JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', file), 'utf8')).body)));
+
+test('/pr-quick runs one reviewer per shard without verification and comments in the same format', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'], settings: s => { quickSettings(s); s.workflow.shardFiles = 1; } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none \(quick review\)\n/);
+  assert.match(receipt, /Status: COMPLETE means at least one quick review session produced a usable result/);
+  assert.match(receipt, /Verification hint: 2 high-severity finding\(s\)\. Before publishing, consider \/pr-review/);
+  assert.match(receipt, /\/pr-comment [a-f0-9]{8} --publish/);
+  assert.deepEqual([...new Set([...f.sessions.values()].map(session => session.agent))], ['azpr-quick-reviewer']);
+  assert.equal(f.sessionsFor('azpr-quick-reviewer').length, 2, 'One session per shard, no verifier.');
+  const [saved] = await savedReviews(f);
+  assert.equal(saved.profile, 'quick');
+  assert.equal(saved.verification, 'none');
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED', 'Q-1001:REPORTED']);
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW; source review=/);
+  assert.equal(f.sessionsFor('azpr-quick-comment-plan').length, 1, 'The quick reviewer model plans the comments.');
+  assert.match(preview, /🤖 AI-generated review; not human review or approval\. Review method: quick review, not independently verified\. Models: `fixture\/quick-reviewer`/);
+  assert.match(f.sessionsFor('azpr-quick-comment-plan')[0].packet.findings.map(x => x.id).join(','), /Q-1/);
+  assert.match(await f.command('pr-comment', '--publish'), /\] POSTED/);
+  const contents = f.azure.state.threads.map(thread => thread.comments[0].content);
+  assert.equal(contents.length, 3);
+  const inline = contents.filter(content => content.startsWith('🔴 high:'));
+  assert.equal(inline.length, 2);
+  for (const content of inline) assert.match(content, /^🔴 high: Q-1(001)? loses state\n\nTrigger, impact and correction\.\n\n---\nAI-generated review; not human review or approval\. Review method: quick review, not independently verified\. Models: `fixture\/quick-reviewer`\n\n<!-- azpr-comment:[a-f0-9]{32} -->$/);
+});
+
+test('/pr-quick needs its model, and an unavailable quick model blocks only /pr-quick', async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.commands.get('pr-quick').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }), /Set models\.quick\.reviewer before \/pr-quick\. No fallback/);
+  const g = await fixture(t, { settings: quickSettings });
+  const list = g.context.model.list;
+  g.context.model.list = async () => ({ data: (await list()).data.filter(model => model.id !== 'quick-reviewer') });
+  assert.match(await g.command('pr-quick'), /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none \(quick review\)\nReason \(workflow\): \[AZPR\] The selected quick\.reviewer model \(fixture\/quick-reviewer\) is unavailable in the host catalog/);
+  assert.match(await g.command('pr-review'), /\] COMPLETE\n/);
+  const check = await g.command('pr-check');
+  assert.match(check, /\] READY/);
+  assert.match(check, /\| Quick model \| WARNING \| The selected quick\.reviewer model \(fixture\/quick-reviewer\) is unavailable in the host catalog\. \/pr-quick is unavailable until it is fixed/);
+});
+
+test('a changed quick agent blocks only /pr-quick', async t => {
+  const f = await fixture(t, { settings: quickSettings });
+  f.agents.get('azpr-quick-reviewer').system += '\nforeign instructions';
+  assert.match(await f.command('pr-quick'), /\] INCOMPLETE[\s\S]*Host configuration changed private agent azpr-quick-reviewer/);
+  assert.match(await f.command('pr-review'), /\] COMPLETE\n/);
+});
+
+test('a quick finding in a file that only another session read is NEEDS_INFO', async t => {
+  const f = await fixture(t, { files: ['/src/A.java', '/src/B.java'], settings: s => { quickSettings(s); s.workflow.shardFiles = 1; }, answer({ role, packet }) {
+    if (role !== 'azpr-quick-reviewer') return undefined;
+    const files = packet.assignment.files;
+    // The B shard reports a defect in A, which only the A session read.
+    return { status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], report: 'r', findings: files[0] === '/src/B.java' ? [finding(packet.assignment.firstFindingId, '/src/A.java')] : [] };
+  } });
+  assert.match(await f.command('pr-quick'), /\] COMPLETE; coverage complete/);
+  const [saved] = await savedReviews(f);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1001:NEEDS_INFO']);
+  assert.match(saved.final.dispositions[0].reason, /this session did not read \/src\/A\.java at HEAD/);
+  assert.equal(f.sessionsFor('azpr-quick-reviewer').find(session => session.packet.assignment.files[0] === '/src/B.java').turns, 3, 'Both correction turns were used.');
+});
+
+test('quick then review on the same head: only complete markers are already present', async t => {
+  // One finding on the same anchor and the same comment set: nothing new is posted.
+  const merging = ({ role, packet }) => role !== 'azpr-review-verifier' ? undefined : { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], reason: 'ok' }],
+    merged: packet.assignment.findings.slice(1).map(x => ({ id: x.id, mergedInto: packet.assignment.findings[0].id, reason: 'Same defect.' })), rejected: [], needsInfo: [], newFindings: [], report: 'r' };
+  const f = await fixture(t, { settings: quickSettings, answer: merging });
+  await f.command('pr-quick');
+  assert.match(await f.command('pr-comment', '--publish'), /\] POSTED/);
+  assert.equal(f.azure.state.threads.length, 2);
+  await f.command('pr-review');
+  const same = await f.command('pr-comment', '--publish');
+  assert.match(same, /PR summary: ALREADY_PRESENT/);
+  assert.match(same, /F-1 \(\/src\/Main\.java:1\): ALREADY_PRESENT/);
+  assert.equal(f.azure.state.threads.length, 2, 'The quick comments stay; nothing is reposted or relabelled.');
+  // Another defect on the same anchor has ordinal 1: a new inline comment and a new summary.
+  const g = await fixture(t, { settings: quickSettings });
+  await g.command('pr-quick');
+  await g.command('pr-comment', '--publish');
+  await g.command('pr-review');
+  const more = await g.command('pr-comment', '--publish');
+  assert.match(more, /F-1 \(\/src\/Main\.java:1\): ALREADY_PRESENT/);
+  assert.match(more, /R-1 \(\/src\/Main\.java:1\): VERIFIED/);
+  assert.match(more, /PR summary: VERIFIED/);
+  assert.equal(g.azure.state.threads.length, 4);
+});
+
+test('a saved quick review is commented on after a restart; old and unknown saved records follow their profile', async t => {
+  const f = await fixture(t, { settings: quickSettings });
+  const quick = reviewId(await f.command('pr-quick'));
+  const verified = reviewId(await f.command('pr-review'));
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: quickSettings });
+  const preview = await g.command('pr-comment', quick);
+  assert.match(preview, /\] PREVIEW; source review=/);
+  assert.match(preview, /Review method: quick review, not independently verified/);
+  await g.cleanup();
+  // Records saved before the verification field existed: known review/deep ones stay commentable, others do not.
+  const store = await createReviewStore({ root: join(f.directory, 'state') });
+  const loaded = await store.load();
+  const legacy = ({ verification: _drop, ...rest }, id) => ({ ...rest, id, completedAt: new Date().toISOString() });
+  await store.save(legacy(loaded.find(review => review.id === verified), 'aaaa0001'));
+  await store.save(legacy(loaded.find(review => review.id === quick), 'aaaa0002'));
+  const h = await fixture(t, { directory: f.directory, azure: f.azure, settings: quickSettings });
+  assert.match(await h.command('pr-comment', 'aaaa0001'), /\] PREVIEW; source review=aaaa0001/);
+  await assert.rejects(h.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: 'aaaa0002' } }), /does not say whether its findings were verified/);
+  // A quick review cannot be commented on once its planner model is removed from the settings.
+  await h.cleanup();
+  const i = await fixture(t, { directory: f.directory, azure: f.azure });
+  await assert.rejects(i.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: quick } }), /is a quick review; set models\.quick\.reviewer/);
+});
+
+// Two shards report one defect in A.java; the B session read A.java too.
+function duplicateFixture(t, planner) {
+  return fixture(t, { files: ['/src/A.java', '/src/B.java'], settings: s => { quickSettings(s); s.workflow.shardFiles = 1; },
+    async during({ session, role, packet, turn, invoke }) {
+      if (role === 'azpr-quick-reviewer' && turn === 0 && packet.assignment.files[0] === '/src/B.java') await invoke(session, 'azpr_read_file', { path: '/src/A.java', version: 'head' });
+    },
+    answer({ role, packet, turn }) {
+      if (role === 'azpr-quick-reviewer') {
+        const files = packet.assignment.files;
+        return { status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], report: 'r', findings: [finding(packet.assignment.firstFindingId, '/src/A.java')] };
+      }
+      if (role === 'azpr-quick-comment-plan') return planner?.({ packet, turn });
+      return undefined;
+    } });
+}
+const combinedAnswer = (packet, extra = {}) => ({ status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}), skipped: [],
+  comments: packet.mergeCandidates.map(ids => ({ findingIds: ids, severity: 'high', path: '/src/A.java', startLine: 1, endLine: 1, anchor: 'fixture code',
+    body: '🔴 high: Both sessions found the lost state\n\nTrigger, impact and correction.', mergeReason: 'Same root cause and correction.', ...extra })) });
+
+test('a quick review combines one defect that two shards reported into one comment, idempotently and across modes', async t => {
+  const f = await duplicateFixture(t, ({ packet }) => packet.mergeCandidates?.length ? combinedAnswer(packet) : undefined);
+  assert.match(await f.command('pr-quick'), /\] COMPLETE; coverage complete/);
+  const [saved] = await savedReviews(f);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}:${d.shard}`), ['Q-1:REPORTED:1/2', 'Q-1001:REPORTED:2/2'], 'Both findings stay in the review.');
+  const preview = await f.command('pr-comment', '');
+  assert.deepEqual(f.sessionsFor('azpr-quick-comment-plan').map(session => session.packet.mergeCandidates), [[['Q-1', 'Q-1001']]]);
+  assert.match(preview, /Inline comments prepared: 1/);
+  assert.match(preview, /### Q-1, Q-1001 — \/src\/A\.java:1-1\n\nCombined: Same root cause and correction\./);
+  assert.match(preview, /high: 1 · medium: 0 · low: 0/);
+  assert.match(preview, /\| 🔴 high \| Q-1, Q-1001 — Fixture defect Q-1 \|/);
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, /Q-1, Q-1001 \(\/src\/A\.java:1\): VERIFIED/);
+  assert.equal(f.azure.state.threads.length, 2, 'One summary and one inline comment for the duplicate pair.');
+  // A refreshed preview and another publish post nothing new.
+  await f.command('pr-comment', '');
+  const again = await f.command('pr-comment', '--publish');
+  assert.match(again, /Q-1, Q-1001 \(\/src\/A\.java:1\): ALREADY_PRESENT/);
+  assert.match(again, /PR summary: ALREADY_PRESENT/);
+  assert.equal(f.azure.state.threads.length, 2);
+  // A later review of the same head: the same anchor with ordinal 0 is the combined comment.
+  await f.command('pr-review');
+  const review = await f.command('pr-comment', '--publish');
+  assert.match(review, /F-1 \(\/src\/A\.java:1\): ALREADY_PRESENT/);
+  assert.match(review, /R-1 \(\/src\/A\.java:1\): VERIFIED/);
+  assert.match(review, /PR summary: VERIFIED/);
+});
+
+test('a combination that never meets the rules keeps every finding accounted for in the summary index', async t => {
+  const f = await duplicateFixture(t, ({ packet }) => packet.mergeCandidates?.length ? combinedAnswer(packet, { mergeReason: '' }) : undefined);
+  await f.command('pr-quick');
+  const preview = await f.command('pr-comment', '');
+  assert.equal(f.sessionsFor('azpr-quick-comment-plan')[0].turns, 3, 'Both correction turns were used.');
+  assert.match(preview, /Inline comments prepared: 0/);
+  for (const id of ['Q-1', 'Q-1001']) assert.match(preview, new RegExp(`- ${id}: A combined comment for Q-1, Q-1001 did not meet the combination rules \\(a combined comment needs a mergeReason\\); the finding remains in the summary index\\.`));
+  assert.match(preview, /high: 2 · medium: 0 · low: 0/, 'Without an accepted combination both findings keep their rows.');
+});

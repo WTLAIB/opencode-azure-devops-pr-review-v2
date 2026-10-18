@@ -31,7 +31,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   item (UNREVIEWED, NEEDS_INFO, skipped comments) instead of failing the review.
 - **One place for duplicates.** Only verification merges duplicates: each
   verifier within its shard, and a duplicate check for files whose findings
-  different verifiers confirmed. Verifier rows are judged by their own fields,
+  different verifiers confirmed (a quick review, which has no verifier, merges
+  only records identical in every field). Verifier rows are judged by their own fields,
   a move to another file must be declared and the report shows the initial
   location, and the comment planner may not skip a finding because another
   finding of the review is commented.
@@ -45,6 +46,16 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   output, restarts the window.
 - **Nothing to review.** A PR whose complete change list is empty stops before
   any session.
+- **Quick review.** `/pr-quick` runs one reviewer per shard for both the
+  functional and the risk focus and no verifier, duplicate check or summary
+  session. The runtime checks only the form and source of its findings (a
+  required location that exists at that commit, in a file the session's own
+  tools read): passing findings are REPORTED, the rest NEEDS_INFO. The review
+  records `verification: none`, reports status, coverage and verification
+  separately, and its comments keep the layout with a disclosure line that
+  names the quick method. Shared prompts carry verified/quick variants; the
+  review and deep prompts are byte-identical to before (hash-tested), and a
+  command checks only its own profile's agents and models.
 - **Bounded Azure calls.** One queue with configurable concurrency and a
   per-call timeout that aborts the request, for both tool and runtime calls;
   slots are released in `finally`.
@@ -165,6 +176,14 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    real PRs.
 6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
+7. Quick review: two runs per mode on the three test PRs with gpt-6-luna used
+   36–50 % of the review's model requests and 34–68 % of its input with the
+   same planted-defect results except one configuration defect (see
+   [validation](VALIDATION.md)). Still open: other PRs and models, a published
+   quick review, and other multi-shard PRs: on the 316-file PR a shard's tests
+   led its reviewer into another shard's changed files (8–9 repeated defects
+   in 32–35 findings), and comment planning combined 23 of 25 such pairs into
+   one comment over three runs.
 
 ## Quality principles
 

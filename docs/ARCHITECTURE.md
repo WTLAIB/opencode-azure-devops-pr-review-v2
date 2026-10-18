@@ -13,16 +13,16 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/plugin.js` | V2 plugin definition and setup entry. |
 | `src/runtime.mjs` | Registration, hooks, grants, workflows, stage attempts (repair turns and retries), notices, cancellation and lifecycle. |
 | `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
-| `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies and agent compilation. |
+| `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies, prompt variants per mode and agent compilation. |
 | `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations, failure classification, interrupt and synthetic notices. |
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
 | `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_search_code`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
 | `src/diff.mjs` | Line diffs (Myers) with both line numbers, more context before a change than after, the enclosing block's start, and folding of repeated changes. |
 | `src/search.mjs` | Content search: reads the repository zip of one commit once per run (stored or deflated entries; bounded inflation; ZIP64 and encrypted archives refused), keeps its text files in memory and finds literal text, bounded per file and in total. |
-| `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck. |
+| `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck; the quick review and its location and source checks. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
-| `src/comments.mjs` | Comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
+| `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
 | `src/store.mjs` | Persistent reviews, data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit). |
@@ -33,7 +33,7 @@ repository through AZPR's own read-only tools, which use the same client.
 ## Commands and workflows
 
 `ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
-`/pr-stop` and `/pr-comment`. A command validates its arguments, registers a run
+`/pr-quick`, `/pr-stop` and `/pr-comment`. A command validates its arguments, registers a run
 with its origin lock (and a PR lock for comments), queues a `STARTED` notice and
 returns; the workflow continues in the background. The final receipt is queued
 to the invoking conversation with up to three attempts and is written to
@@ -42,9 +42,12 @@ to the invoking conversation with up to three attempts and is written to
 planning pages, posting). Notices never start a model response.
 
 Each workflow first runs one **preflight**: `settings.json` must be unchanged
-since load, reserved commands must still be ours, private agents are pinned and
-the selected models must exist and support tools (and offer the variant when a
-model is set as `provider/model#variant`). Review commands refuse a PR
+since load, reserved commands must still be ours, the private agents of the
+command's profile are pinned and the models the command uses must exist and
+support tools (and offer the variant when a model is set as
+`provider/model#variant`). Pinning and the model check are per profile, so a
+problem with the quick (or deep) roles or models blocks only the commands that
+use them; `/pr-check` reports a configured quick model as a warning. Review commands refuse a PR
 URL whose organization differs from `azure.organization` before any request.
 After preflight, hooks never re-read settings or catalogs.
 
@@ -106,6 +109,49 @@ After preflight, hooks never re-read settings or catalogs.
 COMPLETE reviews are cached (newest 20) and persisted with the source the
 reviewers read, so `/pr-comment` works after a restart in the same conversation.
 
+### Quick review
+
+`/pr-quick` uses the same snapshot, file shards, overflow splitting, stage
+retries, watchdog and final version recheck, with one role,
+`azpr-quick-reviewer`, per shard (IDs `Q-1`, `Q-1001`, …) and no verifier,
+duplicate check or summary session. The reviewer covers the functional and
+the risk focus and checks each finding against source it read in its own
+session. A defect its files lead it to in another changed file is filed at
+that file's defective lines (never at a line that only uses the code), so two
+shards can report one defect; comment planning may combine such repeats. The runtime then checks only form and source, never whether a defect
+is real:
+
+- the answer contract of an initial review with a required `location`; a
+  parsed answer is a usable result only with a `findings` array and at least
+  one reviewed file or accepted finding;
+- the location (`head:` by default, `base:` for content that exists only in
+  BASE) must exist at that commit with the lines in range, in a file whose
+  content this session's own `azpr_read_diff` or `azpr_read_file` calls showed
+  (not the run's cache, another shard's reads or the runtime's own checks).
+  Only answers that show source count: a binary or oversized side, an empty
+  file, identical versions or a line, column or hunk past the end show none;
+  a diff reads a version only through the rows it shows after paging and byte
+  cuts ("-" BASE, "+" HEAD, a blank mark both; folded repeats none), and an
+  answer cut to the tool-output limit is no read;
+- problems the reviewer can fix get the normal correction turns, with hints
+  for deleted and renamed files; what is still wrong afterwards becomes
+  NEEDS_INFO. Passing findings are REPORTED; only records identical in every
+  field are merged (findings on the same lines stay separate).
+
+A location on a changed HEAD file may carry an inline comment; a BASE location
+or unchanged code stays in the summary index. Shard reports are joined by the
+runtime. The review records `verification: "none"` and a coverage summary
+(complete, or the number of unreviewed files when it is known and fixed
+reasons: a failed shard, a partial change list, reviewer-reported gaps).
+COMPLETE needs at least one usable shard; without one the review is PARTIAL
+and cannot be commented on.
+
+Shared prompts mark the passages about where findings come from with
+`<!-- azpr:verified -->` and `<!-- azpr:quick -->` blocks. Review and deep
+agents get the verified text, so their system prompts are byte-identical to
+the files without markers; quick agents get the quick text, which never claims
+that findings were verified, confirmed or de-duplicated.
+
 ### Stage attempts
 
 A stage attempt creates a fresh role-bound session, admits the JSON payload as
@@ -152,15 +198,28 @@ object.
 
 ### Comments
 
-Planning (model) uses pages of at most four findings plus report segments, with
+`publishableFindings` supplies the findings: CONFIRMED ones and verifier
+additions for review and deep, REPORTED ones for a quick review. A saved
+review without a verification field is trusted only when its profile is review
+or deep. Planning (model) uses pages of at most four findings plus report segments, with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
 sessions per page, and a checkpoint without progress or a fourth unfinished
 session ends the page, keeping its finished comments and skipping what is open.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
-skipped with a reason. The assembled plan stores exact content, offsets and
-markers.
+skipped with a reason. For a quick review an inline comment also needs a
+finding located on a changed HEAD file and an anchor found in the observed HEAD
+source; otherwise the finding stays in the summary index. The disclosure line
+of a quick review's comments names its method (and, in the summary, incomplete
+coverage). For a quick review the runtime also groups findings of different
+sessions with the same severity on overlapping lines of one HEAD file into
+`mergeCandidates`, keeps each group on one page, and accepts a planner's
+combined comment (`findingIds`, `mergeReason`) only when its members are in one
+group, come from different sessions, share a severity and a line, and the
+anchor lies on the shared lines; a refused combination falls back to the valid
+single comments and reasoned skips. The summary index gives an accepted
+combination one row. The assembled plan stores exact content, offsets and markers.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both
@@ -177,7 +236,8 @@ publication is safe.
 
 ## Authorization and isolation
 
-Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`) are hidden
+Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`, and
+`azpr-quick-reviewer|comment-plan`) are hidden
 primary agents with explicit models (and variants, when configured). Every
 private session gets a grant with the run, role, model and a pending prompt
 (text + nonce); a request on another model or variant is refused. Hooks enforce it:

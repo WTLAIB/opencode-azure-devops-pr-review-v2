@@ -41,6 +41,7 @@ await mkdir(join(directories.config, 'plugins'), { recursive: true });
 const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
+settings.models.quick = { reviewer: 'fixture/quick' };
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 // The smallest inactivity window, so the stalled-stream step takes about a
 // minute; the hanging reviews below are stopped well before it (keep
@@ -180,7 +181,7 @@ await writeFile(join(directories.config, 'plugins', 'network-guard.js'), `export
 await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   update: 'disable', snapshots: false, warming: false, model: 'fixture/fixture',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'fixture-only' },
-    models: Object.fromEntries(['fixture', 'functional', 'risk', 'verifier'].map(id => [id, { limit: { context: 100000, output: 4000 } }])) } },
+    models: Object.fromEntries(['fixture', 'functional', 'risk', 'verifier', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])) } },
   mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false } } },
 }, null, 2));
 
@@ -236,9 +237,10 @@ try {
   };
   await waitForMcp();
   const commands = await api('/api/command');
-  for (const name of ['pr-check', 'pr-review', 'pr-stop', 'pr-deep', 'pr-comment']) assert.ok(commands.data.some(command => command.name === name), name);
+  for (const name of ['pr-check', 'pr-review', 'pr-stop', 'pr-deep', 'pr-quick', 'pr-comment']) assert.ok(commands.data.some(command => command.name === name), name);
   const agents = await api('/api/agent');
   for (const role of ['functional', 'risk', 'verifier', 'dedupe', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), role);
+  for (const role of ['reviewer', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-quick-${role}`), `quick ${role}`);
   const newOrigin = async title => (await api('/api/session', { title, location: { directory: directories.work } })).data.id;
   const latest = async origin => (await api(`/api/session/${origin}/inbox`)).data.at(-1)?.payload?.text ?? '';
   const inbox = async origin => (await api(`/api/session/${origin}/inbox`)).data.map(item => item.payload?.text ?? '');
@@ -318,6 +320,28 @@ try {
   assert.equal(azure.callsTo('createThread').length, writesBefore, 'No duplicate comments after a restart.');
   assert.equal(requests.length, beforeRepublish, 'Re-publishing a saved plan needs no model.');
   results.comments = 'PREVIEW, POSTED, restart, re-run ALREADY_PRESENT without duplicates';
+
+  // 3b. Quick review: one reviewer session, no verifier; the comment preview names the method.
+  const quickOrigin = await newOrigin('Quick');
+  const beforeQuick = requests.length;
+  await api(`/api/session/${quickOrigin}/command`, { name: 'pr-quick', text: prUrl, delivery: 'steer' });
+  const quickReceipt = await latest(quickOrigin);
+  assert.match(quickReceipt, /\] COMPLETE; coverage complete; verification none \(quick review\)\n/, quickReceipt);
+  assert.match(quickReceipt, /azpr-quick-reviewer: COMPLETE; session=[^;]+; model=fixture\/quick/);
+  const quickRequests = requests.slice(beforeQuick);
+  assert.ok(quickRequests.length >= 2 && quickRequests.every(request => request.model === 'quick'), 'Only the quick reviewer called a model.');
+  assert.equal(new Set(quickRequests.map(request => request.sessionID)).size, 1, 'One quick session for the one shard.');
+  assert.ok(quickRequests.every(request => !request.tools.includes('shell') && !request.tools.some(name => /foreign|lookup/.test(name))), 'The quick reviewer sees only its tools.');
+  const quickStages = await stageRecords(quickReceipt);
+  assert.deepEqual(quickStages.map(stage => stage.role), ['azpr-quick-reviewer']);
+  assert.ok(quickStages[0].sessionReads >= 1, 'The runtime recorded what the quick session read.');
+  await api(`/api/session/${quickOrigin}/command`, { name: 'pr-comment', text: '', delivery: 'steer' });
+  const quickPreview = await latest(quickOrigin);
+  assert.match(quickPreview, /\] PREVIEW; source review=/, quickPreview);
+  assert.match(quickPreview, /🤖 AI 審查，非人工審查或核准。審查方式：快速審查，未經獨立驗證。模型： `fixture\/quick`/);
+  assert.match(quickPreview, /🔴 high: [^\n]+\n\n\*\*📝 Summary\*\*/);
+  assert.ok(requests.slice(beforeQuick).every(request => request.model === 'quick'), 'The quick reviewer model planned the comments.');
+  results.quick = 'COMPLETE with one quick session and no verifier; PREVIEW names the quick method';
 
   // 4. Cancellation of a hanging provider request.
   const cancelOrigin = await newOrigin('Cancel');

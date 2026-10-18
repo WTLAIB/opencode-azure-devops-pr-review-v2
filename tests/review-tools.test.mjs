@@ -231,3 +231,63 @@ test('a single very long source line is read losslessly in parts and bounded in 
   assert.ok(Buffer.byteLength(added) < 48000);
   assert.match(added, /continue it with azpr_read_file \(version "head", startLine 1, startColumn \d+\)/);
 });
+
+test('a tool call counts as a read only for the versions whose source it showed', async () => {
+  const kept = 'export const enabled = true;\n';
+  const lines = (count, line) => Array.from({ length: count }, (_, i) => line(i)).join('\n') + '\n';
+  const long = prefix => lines(500, i => `${prefix}_${i} = "${'x'.repeat(150)}";`);
+  const repeated = value => lines(60, i => i % 20 === 10 ? `value = "${value}${i}";` : `keep_${i}`);
+  const sources = {
+    [`${snapshot.base}:/src/a.ts`]: 'const enabled = false;\n', [`${snapshot.head}:/src/a.ts`]: 'const enabled = true;\n',
+    [`${snapshot.head}:/src/new.ts`]: 'export const flag = true;\n', [`${snapshot.base}:/src/old.ts`]: 'export const legacy = 1;\n',
+    [`${snapshot.base}:/src/same.ts`]: 'x\n', [`${snapshot.head}:/src/same.ts`]: 'x\n', [`${snapshot.head}:/src/empty.ts`]: '',
+    [`${snapshot.base}:/src/before.ts`]: 'a\nb\n', [`${snapshot.head}:/src/after.ts`]: 'a\nB\n',
+    [`${snapshot.base}:/src/del.ts`]: `removed();\n${kept}`, [`${snapshot.head}:/src/del.ts`]: kept,
+    [`${snapshot.base}:/src/ins.ts`]: kept, [`${snapshot.head}:/src/ins.ts`]: `${kept}added();\n`,
+    [`${snapshot.base}:/src/long.ts`]: long('old'), [`${snapshot.head}:/src/long.ts`]: long('new'),
+    [`${snapshot.base}:/src/repeat.ts`]: repeated('a'), [`${snapshot.head}:/src/repeat.ts`]: repeated('b'),
+  };
+  const azure = { readFile: async (_run, _snapshot, path, version) => {
+    if (path === '/src/image.png') return { path, version, binary: true, size: 40 };
+    const text = sources[`${version}:${path}`];
+    if (text === undefined) throw Object.assign(new Error('missing'), { kind: 'not-found' });
+    return { path, version, text, size: text.length };
+  } };
+  const changes = [{ path: '/src/a.ts', changeType: ['edit'] }, { path: '/src/new.ts', changeType: ['add'] }, { path: '/src/old.ts', changeType: ['delete'] },
+    { path: '/src/empty.ts', changeType: ['add'] }, { path: '/src/after.ts', changeType: ['rename', 'edit'], originalPath: '/src/before.ts' }, { path: '/src/image.png', changeType: ['edit'] },
+    ...['/src/del.ts', '/src/ins.ts', '/src/long.ts', '/src/repeat.ts'].map(path => ({ path, changeType: ['edit'] }))];
+  const context = { azure, run: {}, snapshot: { ...snapshot, changes } };
+  const reads = async (name, input) => (await runReviewTool(name, input, context)).reads.map(read => `${read.version.slice(0, 1)}:${read.path}`);
+  assert.deepEqual(await reads('azpr_read_file', { path: '/src/a.ts' }), ['b:/src/a.ts']);
+  assert.deepEqual(await reads('azpr_read_file', { path: '/src/a.ts', version: 'base' }), ['a:/src/a.ts']);
+  // Answers about the range show no source (the PR #9 review's reproduction).
+  assert.deepEqual(await reads('azpr_read_file', { path: '/src/a.ts', startLine: 99 }), []);
+  assert.deepEqual(await reads('azpr_read_file', { path: '/src/a.ts', startLine: 1, startColumn: 99 }), []);
+  assert.deepEqual(await reads('azpr_read_file', { path: '/src/empty.ts' }), []);
+  assert.deepEqual(await reads('azpr_read_file', { path: '/src/image.png' }), []);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/a.ts' }), ['a:/src/a.ts', 'b:/src/a.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/a.ts', fromHunk: 99 }), []);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/new.ts' }), ['b:/src/new.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/old.ts' }), ['a:/src/old.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/after.ts' }), ['a:/src/before.ts', 'b:/src/after.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/empty.ts' }), []);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/same.ts' }), [], 'Identical versions show no lines.');
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/image.png' }), []);
+  // A diff reads a version only through the rows it shows: "-" BASE, "+" HEAD,
+  // a blank mark both (the PR #9 re-review's reproduction).
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/del.ts', context: 0 }), ['a:/src/del.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/del.ts' }), ['a:/src/del.ts', 'b:/src/del.ts'], 'A context row is in both versions.');
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/ins.ts', context: 0 }), ['b:/src/ins.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/long.ts' }), ['a:/src/long.ts'], 'The byte cut came before any HEAD row.');
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/repeat.ts' }), ['a:/src/repeat.ts', 'b:/src/repeat.ts']);
+  assert.deepEqual(await reads('azpr_read_diff', { path: '/src/repeat.ts', fromHunk: 2 }), [], 'Folded repeats show no row.');
+  // The tool-output safety cut may remove the rows of a version: a cut answer is no read.
+  const far = `/${'文'.repeat(999)}`, near = `/${'舊'.repeat(999)}`;
+  sources[`${snapshot.base}:${near}`] = long('old');
+  sources[`${snapshot.head}:${far}`] = long('new');
+  const cut = await runReviewTool('azpr_read_diff', { path: far }, { ...context, snapshot: { ...context.snapshot, changes: [{ path: far, changeType: ['rename', 'edit'], originalPath: near }] } });
+  assert.match(cut.text, /\[Output cut to the tool-output limit; request a narrower range\.\]$/);
+  assert.deepEqual(cut.reads, []);
+  // The observation used for comment anchors is the file read itself, whatever the answer showed.
+  assert.equal((await runReviewTool('azpr_read_file', { path: '/src/a.ts', startLine: 99 }, context)).observation.text, sources[`${snapshot.head}:/src/a.ts`]);
+});

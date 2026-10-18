@@ -4,9 +4,24 @@
 (at most four per page): each one appears exactly once, either in `comments` or
 in `skipped` with a reason. Other pages handle other findings; `priorPages`
 lists what earlier pages already produced so the summary stays consistent.
+<!-- azpr:verified -->
 The verifier already merged duplicate findings: each finding is a separate
 issue, so never skip one because another finding of this review has or will get
 a comment.
+<!-- azpr:quick -->
+Treat each finding as a separate issue, as the reviewer reported it: never skip
+one because another finding of this review has or will get a comment.
+Different sessions of a quick review can report one defect twice; the runtime
+lists such candidates in `mergeCandidates` (findings of different sessions on
+overlapping lines of one file, with the same severity). Combine findings of one
+group into one comment only when they state the same root cause, with
+compatible triggers and the same correction: give that comment `findingIds`
+with every finding it covers and a `mergeReason`, keep each trigger and the
+evidence each one needs, and quote an anchor within the lines all of them
+cover. A combined comment accounts for every finding it names. Otherwise, or
+when unsure, comment on each finding separately; never combine findings
+outside a listed group.
+<!-- azpr:end -->
 
 The runtime already read what this page normally needs, so most pages need no
 tool call at all:
@@ -39,8 +54,13 @@ description supports it, otherwise what changed, plus shared impact or fix
 priority if useful. No finding recap, counts, run IDs or SHAs.
 
 `summaryDetails` (optional Markdown after the index): only sections with real
+<!-- azpr:verified -->
 content, for example `### Additional finding details` (confirmed findings
 without an inline comment, including low severity) and
+<!-- azpr:quick -->
+content, for example `### Additional finding details` (findings without an
+inline comment, including low severity) and
+<!-- azpr:end -->
 `### 💡 Improvement suggestions` (every distinct non-defect recommendation the
 final report retained, with affected code, benefit and direction). For zh-TW use
 `### 補充問題說明` and `### 💡 改善建議`. The final report segment is in `report`;

@@ -79,6 +79,17 @@
               "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization. May be empty; deep runs only when all three IDs are configured."
             }
           }
+        },
+        "quick": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional quick profile for /pr-quick: one reviewer per shard covers functional and risk focus, with no independent verification. An empty reviewer disables /pr-quick; it never falls back to other models.",
+          "properties": {
+            "reviewer": {
+              "type": "string",
+              "description": "Exact provider/model ID (optionally provider/model#variant) for the quick reviewer, which also plans comments for quick reviews. Select for code comprehension, evidence judgment and reliable tool use. May be empty."
+            }
+          }
         }
       }
     },
