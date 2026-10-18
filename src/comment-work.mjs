@@ -199,11 +199,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, sources: sourceExcerpts, discussions });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates });
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, sources: sourceExcerpts, discussions });
           return { ...result, corrections };
         },
       });

@@ -50,7 +50,7 @@ test('planning pages hold at most four findings and assemble one plan with every
   const { review, store } = await setup(t, findings);
   const { invoke, payloads } = stages(async payload => JSON.stringify({ status: 'READY',
     comments: payload.findings.filter(f => f.severity !== 'low').map(f => comment(f.id)),
-    skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, reason: 'Low.' })),
+    skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low.' })),
     ...(payload.commentWork.allowSummary ? { summary: 'Purpose.' } : {}) }));
   const plan = await prepareComments(review, store, invoke);
   assert.equal(payloads.length, 3);
@@ -75,6 +75,19 @@ test('a page with problems is repaired in place; what stays broken is skipped, n
   assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1']);
   assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-2']);
   assert.match(plan.skipped[0].reason, /did not address/);
+});
+
+test('a skip whose cause the page contradicts goes back to the planner, which then comments', async t => {
+  // As in a live PR #3 plan: the page showed the finding's whole file and the planner said it had no source.
+  const { review, store } = await setup(t, [finding('F-1'), finding('F-2')]);
+  const thread = { findingId: 'F-2', cause: 'existing-thread', threadId: 5, reason: 'Thread 5 covers it.' };
+  const { invoke, payloads } = stages(async (payload, turn) => turn === 0
+    ? JSON.stringify({ status: 'READY', comments: [], skipped: [{ findingId: 'F-1', cause: 'cannot-anchor', reason: 'This page has no source passage for F-1.' }, thread] })
+    : JSON.stringify({ status: 'READY', comments: [{ ...comment('F-1'), startLine: 2, endLine: 2, anchor: 'const value = load();' }], skipped: [thread] }));
+  const plan = await prepareComments(review, store, invoke, { fetchSource: async () => 'line one\nconst value = load();\n', discussions: [{ threadId: 5, path: '/src/Main.java', line: 2 }] });
+  assert.deepEqual(payloads[0].sourceExcerpts.map(item => [item.findingIds.join(), item.firstLine, item.lastLine]), [['F-1,F-2', 1, 2]]);
+  assert.deepEqual(plan.comments.map(c => [c.findingId, c.startLine]), [['F-1', 2]]);
+  assert.deepEqual(plan.skipped, [thread]);
 });
 
 test('CONTINUE checkpoints keep finished work; a checkpoint without progress skips what is open instead of failing', async t => {

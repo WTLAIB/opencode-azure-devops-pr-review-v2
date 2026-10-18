@@ -33,7 +33,7 @@ function defaultAnswer({ role, packet }) {
   const eligible = packet.findings.filter(f => f.severity !== 'low');
   return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}),
     comments: eligible.map(f => ({ findingId: f.id, severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.id} loses state\n\nTrigger, impact and correction.` })),
-    skipped: packet.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, reason: 'Low severity.' })) };
+    skipped: packet.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low severity.' })) };
 }
 
 async function fixture(t, opts = {}) {

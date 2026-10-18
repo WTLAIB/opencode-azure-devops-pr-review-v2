@@ -218,7 +218,10 @@ session ends the page, keeping its finished comments and skipping what is open.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
-skipped with a reason. For a quick review an inline comment also needs a
+skipped with a reason. A planner skip names one cause, and the runtime checks
+the facts it states against the finding, the page's source excerpts and the
+live threads it read (a `cannot-anchor` skip whose lines the page showed goes
+back for correction). For a quick review an inline comment also needs a
 finding located on a changed HEAD file and an anchor found in the observed HEAD
 source; otherwise the finding stays in the summary index. The disclosure line
 of a quick review's comments names its method (and, in the summary, incomplete

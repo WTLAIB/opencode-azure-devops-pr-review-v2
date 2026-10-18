@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 331 tests across settings (including the
+`npm run check` and `npm test` pass: 333 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -34,7 +34,8 @@ search, optional arguments sent as null or blank text),
 output acceptance and correction prompts (including verifier rows judged by
 their own fields, confirmations that move a finding to another file and the
 same-file duplicate check), comment validation and markers (including skips
-that rely on another finding), planning and publication, review sharding,
+that rely on another finding, and skip causes checked against the finding, the
+page's source excerpts and the live threads), planning and publication, review sharding,
 persistence, rendering, installation (including an output pipe closed
 mid-install, which used to leave the lock and a staged copy of the previous
 settings) and the runtime integration (fake host plus a fake Azure DevOps REST
