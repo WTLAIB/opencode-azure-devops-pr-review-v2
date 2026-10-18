@@ -21,7 +21,7 @@ DevOps review. The [demo](docs/DEMO.md) explains the workflow and comment format
 | --- | --- | --- |
 | `/pr-quick` | Small or routine changes | One reviewer per shard covers function and risk. Findings are **reported, not independently verified**. |
 | `/pr-review` | Changes that need an independent second check | Functional and risk reviewers, followed by separate verification sessions. |
-| `/pr-deep` | Selected changes needing deeper analysis | The verified pipeline with your separately configured deep models and deeper prompts. |
+| `/pr-deep` | Important or risky changes worth a stronger model | The same verified pipeline as `/pr-review`, run with the stronger models you set in `models.deep`; usually slower and costlier. |
 
 All three modes use the same Azure comment layout. Quick comments disclose their
 method. A separate verifier improves scrutiny; it does not guarantee that a
@@ -98,6 +98,13 @@ reported, not verified, and the report, the receipt and the posted comments
 say so. A small PR needs one review session (plus one planning session for
 comments) instead of three; each session still makes several model requests.
 
+`/pr-deep` is the heavier alternative for PRs that justify a stronger model: it
+runs the same review as `/pr-review` with the models of `models.deep`, so its
+depth comes from those models alone. On the test PRs a stronger model found
+regressions that the everyday model missed, at many times its cost and time
+(see [deep versus review](docs/VALIDATION.md#deep-versus-review-2026-10-19)).
+`/pr-check` says when `/pr-deep` is off or its models repeat the review models.
+
 Every command acknowledges `STARTED` immediately and continues in the current
 OpenCode process; short `PROGRESS` notices and a final receipt return to the
 invoking conversation. Use the displayed `/pr-stop <run-id>` to cancel.
@@ -134,7 +141,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **31 files** include the runtime and its license:
+These **30 files** include the runtime and its license:
 
 ```text
 install.sh
@@ -162,7 +169,6 @@ src/store.mjs
 src/prompts/common.md
 src/prompts/functional.md
 src/prompts/risk.md
-src/prompts/deep.md
 src/prompts/final.md
 src/prompts/dedupe.md
 src/prompts/quick.md
@@ -201,10 +207,12 @@ Model IDs use `provider/model` form and must exist in OpenCode. To choose a
 model variant such as a reasoning effort, use OpenCode's `provider/model#variant`
 form (for example `provider/model#high`); `/pr-check` reports a variant the
 model does not offer. Without a variant the model's default is used. `/pr-deep`
-needs all three deep models and never falls back to the review models; likewise
-`/pr-quick` needs `models.quick.reviewer`, and a command checks only the models
-it uses, so an unavailable quick model never blocks `/pr-review`. Comment
-planning uses the review's risk model (the quick reviewer for a quick review).
+needs all three deep models and never falls back to the review models; choose
+models stronger than the review models there, since the models are the only
+difference from `/pr-review`. Likewise `/pr-quick` needs `models.quick.reviewer`,
+and a command checks only the models it uses, so an unavailable quick model
+never blocks `/pr-review`. Comment planning uses the review's risk model
+(`models.deep.risk` for a deep review, the quick reviewer for a quick review).
 
 | Role | Focus and useful model capabilities |
 | --- | --- |
@@ -274,9 +282,9 @@ troubleshooting.
 
 | Command | Behavior |
 | --- | --- |
-| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (a configured quick model only as a warning); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
+| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (configured quick and deep models only as warnings, and whether `/pr-deep` is off or would repeat `/pr-review`); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
 | `/pr-review <PR URL> [context]` | Sharded functional and risk reviews, then sharded verification. |
-| `/pr-deep <PR URL> [context]` | Same pipeline with the deep models and deeper analysis. |
+| `/pr-deep <PR URL> [context]` | The same review with the stronger models of `models.deep`; usually slower and costlier. |
 | `/pr-quick <PR URL> [context]` | One reviewer per shard for both focuses, no verification; findings are reported, not verified. |
 | `/pr-stop [run-id]` | Cancel this conversation's active command. |
 | `/pr-comment [review-id]` | Preview comments for this conversation's latest completed review. |

@@ -30,11 +30,12 @@ const quickStages = {
   reviewer: { slot: 'reviewer', prompt: 'quick', format: 'initial', prefix: 'Q', order: 5, label: 'Quick review' },
   'comment-plan': { slot: 'reviewer', prompt: 'comment-plan', format: 'comment-plan', comment: true, label: 'Comment plan' },
 };
+// Deep is the review with the models of models.deep: the same stages and prompts.
 const STAGES = Object.freeze({ review: verifiedStages, deep: verifiedStages, quick: quickStages });
 export const roleFor = (mode, stage) => `azpr-${mode}-${stage}`;
 export const ROLES = Object.freeze(Object.fromEntries(MODES.flatMap(mode => Object.entries(STAGES[mode]).map(([stage, spec]) =>
   [roleFor(mode, stage), Object.freeze({ ...spec, mode, stage })]))));
-export const PROMPTS = Object.freeze([...new Set(['common', 'comment-policy', 'deep', ...MODES.flatMap(mode => Object.values(STAGES[mode]).map(spec => spec.prompt))])]);
+export const PROMPTS = Object.freeze([...new Set(['common', 'comment-policy', ...MODES.flatMap(mode => Object.values(STAGES[mode]).map(spec => spec.prompt))])]);
 export const initialRoles = mode => Object.entries(ROLES).filter(([, spec]) => spec.mode === mode && spec.format === 'initial').map(([role]) => role);
 export const commentRole = role => ROLES[role]?.comment === true;
 export const privateAgent = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
@@ -265,7 +266,6 @@ export function buildAgents(settings, prompts) {
       request: { settings: {}, headers: {}, body: {} },
       system: (spec.comment ? text['comment-policy'] : text.common) + '\n\n' + text[spec.prompt] + '\n\n' + TOOL_POLICY +
         (spec.comment ? COMMENT_DATA_POLICY : '') + shellPolicy(settings.shell) + languagePrompt(role, settings.outputLanguage) +
-        (spec.mode === 'deep' && !spec.comment ? '\n\n' + text.deep : '') +
         '\n\n# Output\nReturn one valid JSON object, optionally inside a single ```json fence, with no other JSON objects in the answer. Escape quotes and newlines inside strings. If the runtime reports a problem with your answer, return the corrected JSON it asks for.',
       permissions: permissionRules(role, settings.shell),
     }];

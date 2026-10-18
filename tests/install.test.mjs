@@ -19,7 +19,7 @@ const requiredFiles = [
   'install.sh', 'LICENSE', 'scripts/merge-settings.py', 'config/settings.example.json',
   ...['plugin.js', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs',
     'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'diff.mjs', 'search.mjs', 'review-tools.mjs', 'review-work.mjs', 'store.mjs'].map(name => 'src/' + name),
-  ...['common', 'functional', 'risk', 'deep', 'final', 'dedupe', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
+  ...['common', 'functional', 'risk', 'final', 'dedupe', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
 test.after(() => {
@@ -167,8 +167,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('31-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 31);
+test('30-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 30);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);

@@ -35,7 +35,7 @@ while [ "$#" -gt 0 ]; do
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
 runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs diff.mjs search.mjs review-tools.mjs review-work.mjs store.mjs plugin.js'
-prompt_names='common functional risk deep final dedupe quick comment-policy comment-plan'
+prompt_names='common functional risk final dedupe quick comment-policy comment-plan'
 command_names='pr-check pr-review pr-deep pr-quick pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
 for file in LICENSE scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
@@ -162,7 +162,7 @@ success=1
 printf '\nAzure PR Review installed (target host: @opencode/cli 2.0.32; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
-1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep, and models.quick.reviewer to enable /pr-quick.
+1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep, the same review with models stronger than models.review for the PRs that need them, and models.quick.reviewer to enable /pr-quick.
 2. Set azure.organization and azure.pat: an Azure DevOps PAT for that organization with Code (Read) and Pull Request Threads (Read & write). AZPR calls the Azure DevOps REST API (api-version 7.1) itself; no MCP server is needed.
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
 Settings have not been API-validated. The plugin refuses incomplete configuration.

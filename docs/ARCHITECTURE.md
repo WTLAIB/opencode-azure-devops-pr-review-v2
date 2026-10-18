@@ -47,7 +47,8 @@ command's profile are pinned and the models the command uses must exist and
 support tools (and offer the variant when a model is set as
 `provider/model#variant`). Pinning and the model check are per profile, so a
 problem with the quick (or deep) roles or models blocks only the commands that
-use them; `/pr-check` reports a configured quick model as a warning. Review commands refuse a PR
+use them; `/pr-check` reports configured quick and deep models as warnings and says
+when the deep models are unset or repeat the review models. Review commands refuse a PR
 URL whose organization differs from `azure.organization` before any request.
 After preflight, hooks never re-read settings or catalogs.
 
@@ -160,7 +161,8 @@ Shared prompts mark the passages about where findings come from with
 `<!-- azpr:verified -->` and `<!-- azpr:quick -->` blocks. Review and deep
 agents get the verified text, so their system prompts are byte-identical to
 the files without markers; quick agents get the quick text, which never claims
-that findings were verified, confirmed or de-duplicated.
+that findings were verified, confirmed or de-duplicated. A deep agent's system
+prompt is the review agent's; only its model (from `models.deep`) differs.
 
 ### Stage attempts
 

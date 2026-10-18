@@ -56,8 +56,12 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   answer it followed. The review records `verification: none`, reports status, coverage and verification
   separately, and its comments keep the layout with a disclosure line that
   names the quick method. Shared prompts carry verified/quick variants; the
-  review and deep prompts are byte-identical to before (hash-tested), and a
-  command checks only its own profile's agents and models.
+  review prompts are byte-identical to before (hash-tested), and a command
+  checks only its own profile's agents and models.
+- **Deep means stronger models.** `/pr-deep` runs the same review as
+  `/pr-review` with the models of `models.deep`. Its extra prompt text was
+  dropped after it changed neither gpt-6-luna's nor gpt-6.1-sol's results on
+  the test PRs, so the deep profile is where a stronger, costlier model goes.
 - **Bounded Azure calls.** One queue with configurable concurrency and a
   per-call timeout that aborts the request, for both tool and runtime calls;
   slots are released in `finally`.
@@ -175,9 +179,9 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    the defective line in a search result. It is a model limit, so no runtime
    hints were added. A stronger verifier cannot make up for it: verifiers
    judge the candidates and added 1 new finding in 616 decisions over 21 live
-   runs, so the initial reviewers' model decides what is found. A stronger
-   model can be kept for selected PRs in the deep profile. Confirm on other
-   real PRs.
+   runs, so the initial reviewers' model decides what is found. `/pr-deep`
+   is for that: the review with the stronger models of `models.deep`, for
+   selected PRs. Confirm on other real PRs.
 6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
 7. Quick review: two runs per mode on the three test PRs with gpt-6-luna used
