@@ -3,12 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Explicit Azure DevOps PR review workflows for OpenCode V2",
+  "description": "Azure DevOps PR reviews in OpenCode V2 with quick and verified modes, comment previews, and explicit publishing",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "check": "node --check src/session.mjs && node --check src/runtime.mjs && node --check src/comment-data.mjs && node --check src/comment-work.mjs && node --check src/comments.mjs && node --check src/config.mjs && node --check src/output.mjs && node --check src/diagnostics.mjs && node --check src/attribution.mjs && node --check src/host.mjs && node --check src/tool-queue.mjs && node --check src/azure.mjs && node --check src/diff.mjs && node --check src/search.mjs && node --check src/review-tools.mjs && node --check src/review-work.mjs && node --check src/store.mjs && node --check src/plugin.js && sh -n install.sh && sh -n uninstall.sh"
   },
   "engines": {
     "node": ">=22.12.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git"
+  },
+  "homepage": "https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2#readme",
+  "bugs": {
+    "url": "https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "azure-devops",
+    "code-review",
+    "pull-request"
+  ],
+  "license": "MIT"
 }
