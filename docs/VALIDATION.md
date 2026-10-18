@@ -16,7 +16,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 334 tests across settings (including the
+`npm run check` and `npm test` pass: 345 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -89,6 +89,27 @@ one comment for a duplicate pair that a refreshed preview and a second
 publish leave alone, a later `/pr-review` finding the combined comment by its
 ordinal-0 marker, and a combination that never meets the rules leaving both
 findings in the summary index.
+Planning two pages at a time (2026-10-19) adds tests for: a plan identical to
+planning one page at a time, finding by finding and marker by marker, when page
+2 finishes first (including two pages quoting the same line, whose ordinals
+follow page order); at most `parallel` pages in flight and two lanes that do
+overlap; only the first page writing the summary note, a note from another page
+dropped without a correction turn while its details stay, and the first page's
+continuation still allowed to write it; a continuing page whose checkpoint and
+continuation evidence ignore another page's reads and details; after a failure
+no new page or continuation, a page still preparing its input starting no model
+work, the running page finishing before the failure is thrown, and the lower
+page's failure winning; anchor checks that see exactly the HEAD source of the
+page's own and earlier pages whichever fetch finishes first (review and quick);
+and, in the runtime, two planner sessions at once but one when
+`workflow.parallelSessions` is 1, session titles and evidence carrying the page,
+a failed page whose running neighbour finishes before INCOMPLETE, and `/pr-stop`
+cancelling both running pages and keeping no plan. Removing one rule at a time
+from a copy of the code (assembly in page order, the page's own observed
+source, page-scoped evidence, the check before a model call, the summary rule,
+waiting for running pages, two lanes, the `parallelSessions` cap, page labels,
+page-tagged evidence) made the matching tests fail; their waits are bounded, so
+a broken lane fails a test instead of hanging it.
 
 ## REST API version check
 
@@ -136,7 +157,7 @@ rule so the offline runtime tests catch a regression.
 | Context overflow | One functional shard reported a nearly full context; the host attempted compaction, AZPR refused it, and the shard was split into `1/5a` and `1/5b`, both COMPLETE |
 | Verification | 30 findings in 2 verification sessions; the second verifier moves one high finding into a file of the first |
 | Duplicate check | One `dedupe` session for that file, which merges the moved duplicate |
-| Planning | 8 pages of at most four findings (29 findings) |
+| Planning | 8 pages of at most four findings (29 findings); since 2026-10-19 two at a time: the fake provider holds the first page until a second arrives, and at most two planning requests were in flight |
 | Publication | 20 threads (19 inline, 1 summary; 10 low findings in the summary); a second publish wrote nothing |
 | Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
 | REST calls | 74 |
@@ -152,7 +173,7 @@ like 2.0.22:
 
 | Check | Observed |
 | --- | --- |
-| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. Since 2026-10-18 the smoke fixture also runs `/pr-quick` (one quick session, no verifier, the session's reads recorded) and its comment preview with the zh-TW quick disclosure line; fresh, `--replace` and the scale fixture passed on 2.0.32. Since the quick follow-up, two more `/pr-quick` runs have a fake reviewer that answers PARTIAL first: its one follow-up prompt reaches the same session and completes the review, or gives no usable answer and the earlier answer with its finding stands (receipt `follow-up=completed` / `unusable`); fresh, `--replace` and the scale fixture passed on 2.0.32. |
+| Exact-host fixtures | `host-v2-smoke.mjs` fresh and `--replace` and `host-v2-comment-scale.mjs` passed on 2.0.32 (and on 2.0.31 and 2.0.22 with the same checks): every scenario of the tables above, plus token usage in the debug stage records for every model request of the review. Since 2026-10-18 the smoke fixture also runs `/pr-quick` (one quick session, no verifier, the session's reads recorded) and its comment preview with the zh-TW quick disclosure line; fresh, `--replace` and the scale fixture passed on 2.0.32. Since the quick follow-up, two more `/pr-quick` runs have a fake reviewer that answers PARTIAL first: its one follow-up prompt reaches the same session and completes the review, or gives no usable answer and the earlier answer with its finding stands (receipt `follow-up=completed` / `unusable`); fresh, `--replace` and the scale fixture passed on 2.0.32. With planning two pages at a time (2026-10-19) fresh, `--replace` and the scale fixture passed on 2.0.32, the scale fixture with two planning requests in flight at once (8 planner sessions, 20 threads, a second publish writing nothing). |
 | Project boundary | 2.0.31 dropped the `external_directory: ask` rule that 2.0.22 put in every new agent's default permissions, and 2.0.32 keeps it out, so external paths fall under `*: allow`. AZPR's permission hook only turned `ask` into `deny`, and on 2.0.31 a private reviewer's native `grep` on `/etc` ran and returned file contents. The hook now decides `external_directory` for private roles itself: allowed only when every resource is in AZPR's private data directory, otherwise refused with the pointer to the azpr tools. No live run used a native read tool outside the project; the one live review on 2.0.31 before the fix used only AZPR's tools. |
 | Missing local paths | 2.0.31 and 2.0.32 answer a native `grep` on a path that does not exist locally, such as the repository path `/scale_lab`, at once with `Search path does not exist`, before any permission request; 2.0.22 asked, and AZPR refused with the pointer. Neither waits. |
 | Host constants | The continuation text, foreign message types and streaming event names in `host.mjs` are unchanged in 2.0.31 and 2.0.32; both send `session-id`, `thread-id` and `x-client-request-id` on the ChatGPT token-sharing route (below). |
@@ -899,6 +920,56 @@ the planted defects was checked against the source at both commits.
   fell by 37–43 % on PR #3 (planning time unchanged), every skip of the new
   revision named a cause (`low-severity`) and none needed a correction turn.
 
+## Live runs: planning two pages at a time (2026-10-19, preview only)
+
+OpenCode 2.0.32, every role on `openai/gpt-6-luna`, nothing posted. Three
+saved reviews were planned again with `/pr-comment <review-id>`, which gives
+every run the same findings, report and source: two of PR #3 (a quick review
+with 35 findings and a review with 34, nine pages each) and one of PR #4 (a
+review with 7 findings, two pages). `03fcf8a` (pages one at a time, with
+`priorPages`) planned each once; this revision planned each once with
+`workflow.parallelSessions` 1 (one page at a time, no `priorPages`) and twice
+with the usual 8 (two pages at a time).
+
+| Planning time | `03fcf8a` | this revision, one at a time | this revision, two at a time |
+| --- | --- | --- | --- |
+| PR #3 quick, 9 pages | 141 s (140 s on 2026-10-18) | 157 s | 76 s, 71 s |
+| PR #3 review, 9 pages | 175 s (163 s on 2026-10-18) | 161 s | 90 s, 86 s |
+| PR #4 review, 2 pages | 48 s | 47 s | 28 s, 27 s |
+
+- Two pages at a time halved planning on the nine-page plans and cut the
+  two-page plan by 42 %. Every two-lane run had two planner sessions in flight
+  and never more; with `parallelSessions` 1 the pages ran one at a time, and
+  removing `priorPages` alone did not change the time.
+- Every two-lane run finished pages out of order (page 2 before page 1, page 4
+  before page 3, page 8 before page 7). Rebuilding each plan offline from its
+  pages in page order reproduced the saved plan exactly (every finding's
+  marker, the comment texts and the summary) for all 14 plans compared,
+  including the earlier ones.
+- Every finding got the same decision (comment or skip, with the same cause)
+  in all plans of a review. Anchor lines agreed on 34 of 34 PR #3 quick
+  comments in every pair of plans and on 31–33 of 33 review comments; on PR #4
+  the planner chose different lines for 1–5 of 7 comments between any two
+  plans, including the two two-lane runs (4 of 7 equal), so this is the
+  planner's own variation. The quick plans combined the same 10 candidate
+  pairs in the two runs of `03fcf8a` and both two-lane runs; the one-lane run
+  combined 6: it left apart the two pairs of page 4 and those of page 1, whose
+  input carries nothing from other pages in either version.
+- The first page wrote the summary note in every plan; no other page wrote one,
+  so the runtime never had to drop one. One correction turn occurred, in the
+  one-lane quick run (a page left a finding unaccounted).
+- Input and output stayed at 63–80 K and 6–8 K tokens per PR #3 plan. The
+  cached share of the input rose from 29–34 % in the first runs to 84–100 % in
+  the two-lane runs because the same pages had just been planned, not because
+  of the lanes.
+- End to end on this revision, a new `/pr-quick` of PR #3 was COMPLETE in
+  255 s and its preview planned 8 pages in 62 s (24 inline comments, 6 of them
+  combined pairs); a new `/pr-review` was COMPLETE in 223 s and its preview
+  planned 8 pages in 80 s (29 inline comments; one correction turn for a skip
+  that relied on another finding, after which the planner commented on it).
+  Both finished pages out of order and rebuilt exactly. On 2026-10-18 the same
+  PR's previews had planned 9 pages in 140 s (quick) and 163 s (review).
+
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 
 A stability review proposed batch parameters for `azpr_read_diff` and
@@ -979,6 +1050,9 @@ transient failure, and its error names the last activity.
 - The prompt cache of a large PR on OpenCode 2.0.32: measured only incidentally
   by the quick/review comparison above (the 316-file PR read 60–71 % of its
   input from the cache in both modes); on 2.0.22 it read 11–21 %.
+- Planning more than two pages at a time (not measured), and `/pr-stop` while
+  pages are planned side by side with a real provider (only the fixtures and
+  offline tests cancel running pages).
 - `/pr-quick` beyond these runs on three test PRs with one model: its
   false-positive rate and misses on other PRs and models, a published quick
   review (only previews were made), and combining duplicates on a real

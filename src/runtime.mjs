@@ -18,7 +18,7 @@ import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTo
 import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
-import { prepareComments, publishPlan, discussionDigest } from './comment-work.mjs';
+import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { publicationItems, reviewVerification } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
@@ -464,6 +464,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(), blockedNativeCalls: new Map(),
       toolArgumentCharacters: new Map(), toolTimeouts: 0, compactionRequested: false,
       visibleCharacters: input.length, checkpointRequested: false,
+      // The planning page whose sessions this grant serves; its tool evidence is that page's.
+      commentPage: payload.commentWork?.page ?? null,
       // "commit\npath" of the file contents this session's own tool calls showed;
       // never the run's shared cache or another session's reads.
       reads: new Set(),
@@ -799,13 +801,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           if (!run.active) throw error;
           run.debug.warnings.push(`Existing discussions could not be read before planning: ${errorText(error)}`);
         }
-        review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler),
-          { progress: message => progress(run, message), discussions,
+        // Planning pages run side by side, never more than the configured sessions.
+        const parallelPages = Math.min(PLANNING_PARALLEL_PAGES, settings.workflow.parallelSessions);
+        review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler,
+          { label: `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
+          { progress: message => progress(run, message), discussions, parallel: parallelPages,
             fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
         planning = false;
         await persistReview(review);
-        await run.debug.write('comment-plan.json', { sourceReview: review.id, snapshot: review.snapshot, ...review.plan });
+        await run.debug.write('comment-plan.json', { sourceReview: review.id, snapshot: review.snapshot, parallelPages, ...review.plan });
       }
       const preview = renderPlan(review);
       if (!publish) return { status: 'PREVIEW', report: `${preview}\n\nNothing was posted. To post this exact preview: /pr-comment ${review.id} --publish` };
@@ -1041,7 +1046,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           const data = await dataFor(g.run);
           const reference = await data.object(event.result);
           g.run.review.commentEvidence ??= [];
-          g.run.review.commentEvidence.push({ sessionID: event.sessionID, tool: event.tool, input: await data.pack(event.input), result: reference });
+          g.run.review.commentEvidence.push({ sessionID: event.sessionID, ...(g.commentPage ? { page: g.commentPage } : {}), tool: event.tool, input: await data.pack(event.input), result: reference });
           let visible = JSON.stringify(event.result);
           if (visible.length > PAGE_CHARACTERS) {
             const notice = `AZPR saved this complete tool result privately. Read its pages with explicit offset/limit (one or two JSONL rows at a time); offsets are not source lines. ${JSON.stringify(reference)}`;

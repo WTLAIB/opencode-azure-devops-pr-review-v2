@@ -86,8 +86,8 @@ runtime reads every live thread once and fetches the HEAD source of each
 finding's file. Each page then receives, inline: the verified findings,
 `sourceExcerpts` (numbered HEAD lines around each finding, the whole file when it
 has at most 400 lines), `existingDiscussions` (live threads with path, line,
-author and the start of the first comment), the report segment and a summary of
-earlier pages. The changed-file list and the review's dispositions are inline
+author and the start of the first comment) and the report segment. The
+changed-file list and the review's dispositions are inline
 when they are small; on a large PR a page gets only those of its own findings
 (plus what merged into them) and references to the complete lists, which the
 runtime still uses for its own checks. Most pages finish in one model request without tools; the
@@ -101,6 +101,27 @@ still returns `CONTINUE`, the page ends there: its finished comments are kept,
 its open findings are skipped with that reason and stay in the summary index,
 and the other pages and publication go on. A PROGRESS notice names the page.
 
+Two pages are planned at a time (one at a time when `workflow.parallelSessions`
+is 1); a page's continuation sessions follow each other in its own lane, and the
+PROGRESS notices and session titles name the page. No page depends on another
+page's result:
+
+- Only the first page may write the summary's review note. A note from any
+  other page is dropped without a correction turn; when the first page writes
+  none, the summary is posted without review notes.
+- A page's anchor checks see the HEAD source the runtime fetched for its own
+  and earlier pages' findings, exactly as when pages ran one at a time.
+- A checkpoint counts only the page's own work: its details and the tool
+  results the runtime recorded for its sessions.
+- Pages are joined in page order, so the comments, their markers and the
+  ordinals of comments on identical lines do not depend on which page finishes
+  first.
+
+When a page fails, no further page or continuation session starts, the stages
+already running finish (including their correction turns and retries), and the
+command reports the failure of the lowest failed page (INCOMPLETE) as before;
+no preview is kept. `/pr-stop` cancels every running page.
+
 Every page is validated item by item:
 
 | Problem | Handling |
@@ -113,6 +134,7 @@ Every page is validated item by item:
 | A skip whose reason names another finding of this review | Sent back as a correction turn; on the last pass the skip stays, marked as not covered by the other finding. |
 | A skip without a cause, or whose cause does not hold (a medium finding called low, an inline location called missing, a thread that is not live, `cannot-anchor` while the page's excerpts show the finding's lines) | Sent back as a correction turn; on the last pass the skip stays with what the runtime found. |
 | Planner returns INCOMPLETE | Finished comments are kept; the rest are skipped with the planner's reason. |
+| A summary note from a page other than the first | Dropped (`drop-unallowed-summary`), without a correction turn; the page's details are kept. |
 
 A low finding never becomes an inline comment, and the verified severity always
 wins over the planner's label.

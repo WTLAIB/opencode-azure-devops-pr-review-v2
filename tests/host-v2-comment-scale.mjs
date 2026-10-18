@@ -6,8 +6,8 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * context so the host attempts compaction, which AZPR refuses and splits the
  * shard instead. 30 findings are verified in two sessions; the second verifier
  * moves one finding into a file of the first, so a duplicate-check session
- * merges it. The other 29 are planned in pages of four and published; a
- * second publish creates nothing.
+ * merges it. The other 29 are planned in pages of four, two pages at a time,
+ * and published; a second publish creates nothing.
  * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
@@ -28,6 +28,8 @@ await Promise.all(Object.values(dirs).map(path => mkdir(path, { recursive: true 
 const files = Array.from({ length: 120 }, (_, i) => `/src/module-${String(Math.floor(i / 10)).padStart(2, '0')}/file-${String(i).padStart(3, '0')}.ts`);
 const requests = [];
 let child, logs = '', overflowShards = 0;
+// Planning requests in flight: the first page waits for a second one, so two lanes must overlap.
+let planning = 0, planningMost = 0, planningGate = null;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
 const provider = createServer(async (request, response) => {
   try {
@@ -60,6 +62,12 @@ const provider = createServer(async (request, response) => {
       const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => f.severity === 'high') : undefined;
       final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
     } else if (payload?.commentWork?.kind === 'plan') {
+      planningMost = Math.max(planningMost, ++planning);
+      if (!planningGate) {
+        let open; planningGate = { promise: new Promise(resolve => { open = resolve; }), open };
+        await Promise.race([planningGate.promise, new Promise(resolve => setTimeout(resolve, 10000))]);
+      } else planningGate.open();
+      planning--;
       final = { status: 'READY', ...(payload.commentWork.allowSummary ? { summary: 'Fixture change.' } : {}),
         comments: payload.findings.filter(f => f.severity !== 'low').map(f => ({ findingId: f.id, severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.summary}\n\nTrigger, evidence and correction.` })),
         skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low severity stays in the summary.' })) };
@@ -128,11 +136,12 @@ try {
   assert.equal(state.threads.length, 20, '19 high findings inline plus one summary; 10 low findings stay in the summary.');
   const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
   assert.equal(planner.length, 8, '29 findings in planning pages of four.');
+  assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
   await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
   assert.match(await latest(), /ALREADY_PRESENT/);
   assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
   console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, plannerSessions: planner.length, threads: state.threads.length, providerRequests: requests.length,
+    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, plannerSessions: planner.length, planningInFlightMax: planningMost, threads: state.threads.length, providerRequests: requests.length,
     maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
