@@ -149,11 +149,13 @@ place of `azure.pat` and never both; a PAT read from an owner-only file that the
 fake service accepts, while neither the PAT nor the path appears in a receipt;
 a file that is missing, a symbolic link, a folder, readable by others, larger
 than 4 KB, empty, holding two tokens or a placeholder stopping the load with an
-error that never contains the content; a replaced or newly shared file blocking
+error that never contains the content; a FIFO refused at once instead of
+waiting for a writer, which would hang loading and every later command; a replaced or newly shared file blocking
 new commands while the running review completes; and the installer adding an
 empty `azure.patFile` without printing the PAT. Removing each check from a copy
 of the code (mode, symbolic link, recheck before a command, the file's PAT
-used for requests, both settings at once, the content check) made its test fail.
+used for requests, both settings at once, the content check, the non-blocking
+open) made its test fail.
 
 ## REST API version check
 
@@ -1085,6 +1087,11 @@ token on OpenCode 2.0.32 with `e673889` installed.
   showed "PAT from azure.patFile" without the path, `/pr-quick` with a preview
   was COMPLETE, and a scan of the configuration, state and OpenCode data
   directories found the PAT only in that file.
+- An external review found that a FIFO named by `azure.patFile` made opening it
+  wait for a writer, so loading hung (even process exit waited for the blocked
+  thread). Opened without blocking, a FIFO is now refused in 5 ms under
+  OpenCode's Bun 1.4.2 and 7 ms under Node 22, and `/pr-check` with the PAT
+  file stayed READY on OpenCode 2.0.32.
 
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 

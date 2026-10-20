@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
+import { closeSync, constants as fsConstants, openSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { rootCertificates } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -876,6 +878,21 @@ test('an unusable azure.patFile stops loading and never shows its content', asyn
   await mkdir(join(directory, 'folder'), { mode: 0o700 });
   await assert.rejects(load(join(directory, 'folder')), /azure\.patFile could not be used \(not a regular file\)/);
   await assert.rejects(load(await file('large', 'x'.repeat(5000))), /azure\.patFile could not be used \(larger than 4 KB\)/);
+  // A FIFO is refused at once: waiting for a writer would hang loading and every later command.
+  const fifo = join(directory, 'fifo');
+  execFileSync('mkfifo', ['-m', '600', fifo]);
+  const pending = load(fifo).then(() => null, error => error);
+  let timer;
+  try {
+    const outcome = await Promise.race([pending, new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), 5000); })]);
+    assert.notEqual(outcome, 'timeout', 'Loading must not wait for a writer on a FIFO.');
+    assert.match(outcome?.message ?? '', /azure\.patFile could not be used \(not a regular file\)/);
+  } finally {
+    clearTimeout(timer);
+    // Release a reader that a broken check left waiting, so the test process can still exit.
+    try { closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)); } catch {}
+    await pending;
+  }
   for (const [name, content, problem] of [['placeholder', 'YOUR_PERSONAL_ACCESS_TOKEN_0123456789', /still a placeholder/], ['two', `${FAKE_PAT} ${FAKE_PAT}`, /one token/], ['empty', '\n', /one token/]]) {
     const error = await load(await file(name, content)).then(() => null, caught => caught);
     assert.match(error?.message ?? '', /azure\.patFile must hold only the Azure DevOps PAT/);

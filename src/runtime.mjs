@@ -53,12 +53,13 @@ const PAT_FILE_BYTES = 4096;
 /**
  * azure.patFile: the PAT alone in a regular file that only its owner may read
  * or write (no symbolic link), read at load like the settings and again before
- * each command. Errors name the problem, never the content.
+ * each command. It is opened without blocking, so a FIFO is refused instead of
+ * waiting for a writer. Errors name the problem, never the content.
  */
 async function readPatFile(path) {
   let handle, text;
   try {
-    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     const info = await handle.stat();
     if (!info.isFile()) throw new Error('not a regular file');
     if (typeof process.getuid === 'function' && info.uid !== process.getuid()) throw new Error('owned by another user');
