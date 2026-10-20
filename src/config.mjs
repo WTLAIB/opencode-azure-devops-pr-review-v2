@@ -87,7 +87,7 @@ export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
   ? [...REVIEW_TOOL_NAMES, ...READ_TOOLS, ...(shell === 'deny' ? [] : ['shell'])] : [];
 
 const DEFAULTS = Object.freeze({
-  azure: Object.freeze({ organization: '', pat: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
+  azure: Object.freeze({ organization: '', pat: '', patFile: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
   workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 }),
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
@@ -122,10 +122,14 @@ function languageTag(value) {
   try { return Intl.getCanonicalLocales(value)[0]; } catch { throw new Error(message); }
 }
 
+/** Why a value cannot be the PAT ('' when it can); it never contains the value. */
+export const patProblem = value => typeof value !== 'string' || !/^[\x21-\x7e]{20,1024}$/.test(value)
+  ? 'not one token of 20 to 1024 printable characters' : /REPLACE|YOUR_/i.test(value) ? 'still a placeholder' : '';
+
 /** Validate local values only; model pricing, access and quality are external. */
 export function validateSettings(raw) {
   if (raw !== null && typeof raw === 'object' && Object.hasOwn(raw, 'mcp')) {
-    throw new Error('settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.pat, and remove mcp.');
+    throw new Error('settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.patFile (or azure.pat), and remove mcp.');
   }
   keys(raw, ['$schema', 'version', 'enabled', 'models', 'debug', 'outputLanguage', 'returnReport', 'runTimeoutSeconds',
     'shell', 'progressNotices', 'deletePrivateSessions', 'azure', 'workflow'], 'settings');
@@ -170,8 +174,13 @@ export function validateSettings(raw) {
   if (typeof azure.organization !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,49}$/.test(azure.organization)) {
     throw new Error('azure.organization must be your Azure DevOps organization name (the <org> in https://dev.azure.com/<org>).');
   }
-  if (typeof azure.pat !== 'string' || !/^[\x21-\x7e]{20,1024}$/.test(azure.pat) || /REPLACE|YOUR_/i.test(azure.pat)) {
-    throw new Error('azure.pat must be an Azure DevOps personal access token for azure.organization (scopes: Code Read; Pull Request Threads Read & write).');
+  // The PAT lives in settings (azure.pat) or alone in a file the adapter reads (azure.patFile), never both.
+  if (typeof azure.patFile !== 'string' || (azure.patFile !== '' && (!isAbsolute(azure.patFile) || /[\0\r\n]/.test(azure.patFile)))) {
+    throw new Error('azure.patFile must be empty or the absolute path of a file that holds only the PAT.');
+  }
+  if (azure.patFile !== '' && azure.pat !== '') throw new Error('Set either azure.pat or azure.patFile, not both: leave azure.pat empty when the PAT is in a file.');
+  if (azure.patFile === '' && patProblem(azure.pat)) {
+    throw new Error('azure.pat must be an Azure DevOps personal access token for azure.organization (scopes: Code Read; Pull Request Threads Read & write), or leave it empty and set azure.patFile.');
   }
   integer(azure.concurrency, 'azure.concurrency', 1, 8);
   integer(azure.callTimeoutSeconds, 'azure.callTimeoutSeconds', 10, 1800);

@@ -19,6 +19,9 @@ implementation, not an already published release.
 - Two comment-planning pages at a time, with deterministic page-order assembly.
 - Persistent private reports and publication records, plus Azure proxy and
   additional CA configuration.
+- The PAT can live alone in an owner-only file (`azure.patFile`), so
+  `settings.json` holds no secret; Code (Read) and Pull Request Threads
+  (Read & write) are confirmed to cover every call AZPR makes.
 - A first-review quickstart, illustrated demo, compatibility table and team
   data-handling guide.
 

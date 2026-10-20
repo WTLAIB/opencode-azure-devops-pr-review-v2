@@ -112,7 +112,7 @@ def main():
     if removed_help:
         print("Removed documentation-only models._help; see README.md for model-selection guidance.")
     if migrated:
-        print("Moved mcp.concurrency/callTimeoutSeconds to azure; mcp.server is no longer used. Set azure.organization and azure.pat.")
+        print("Moved mcp.concurrency/callTimeoutSeconds to azure; mcp.server is no longer used. Set azure.organization and azure.patFile (or azure.pat).")
     return 0
 
 

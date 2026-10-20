@@ -373,6 +373,27 @@ for (const rel of ['azpr/settings.json', 'plugins/azpr/settings.json', 'plugins/
   });
 }
 
+
+test('replacement adds an empty azure.patFile, keeps the PAT where it is and never prints it', () => {
+  const s = setup(); ok(install(s));
+  const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));
+  delete settings.azure.patFile;
+  Object.assign(settings.azure, { organization: 'team', pat: TEAM_PAT });
+  writeFileSync(file, JSON.stringify(settings));
+  const result = install(s, ['--replace']); ok(result);
+  assert.match(result.stdout, /Settings defaults added: azure\.patFile/);
+  assert.ok(!result.stdout.includes(TEAM_PAT) && !result.stderr.includes(TEAM_PAT));
+  const merged = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(merged.azure.patFile, '');
+  assert.equal(merged.azure.pat, TEAM_PAT);
+  // A PAT kept in its own file stays configured that way.
+  Object.assign(merged.azure, { pat: '', patFile: '/home/team/.config/azpr/pat' });
+  writeFileSync(file, JSON.stringify(merged));
+  ok(install(s, ['--replace']));
+  const again = JSON.parse(readFileSync(file, 'utf8')).azure;
+  assert.deepEqual([again.pat, again.patFile], ['', '/home/team/.config/azpr/pat']);
+  original(s); clean(s);
+});
 test('reserved JSONC keys stop installation without editing configuration', () => {
   const s = setup(), file = join(s.root, 'opencode.jsonc');
   const content = '// User comment\n{"command":{"pr-review":{"template":"mine"}}}\n'; writeFileSync(file, content);
@@ -507,7 +528,7 @@ test('replacement moves the retired mcp limits into azure and never prints the P
   assert.match(result.stdout, /Moved mcp\.concurrency\/callTimeoutSeconds to azure/);
   const migrated = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
   assert.equal(Object.hasOwn(migrated, 'mcp'), false);
-  assert.deepEqual(migrated.azure, { concurrency: 5, callTimeoutSeconds: 300, organization: '', pat: '', archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
+  assert.deepEqual(migrated.azure, { concurrency: 5, callTimeoutSeconds: 300, organization: '', pat: '', patFile: '', archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
   assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
   // A configured PAT survives replacement byte for byte and is never echoed.
   migrated.azure.organization = 'team'; migrated.azure.pat = TEAM_PAT;

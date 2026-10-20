@@ -31,6 +31,7 @@
   "azure": {
     "organization": "",
     "pat": "",
+    "patFile": "",
     "concurrency": 3,
     "callTimeoutSeconds": 120,
     "archiveMegabytes": 100,

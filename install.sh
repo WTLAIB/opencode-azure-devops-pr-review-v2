@@ -163,7 +163,7 @@ printf '\nAzure PR Review installed (target host: @opencode/cli 2.0.32; Ubuntu 2
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
 1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep, the same review with models stronger than models.review for the PRs that need them, and models.quick.reviewer to enable /pr-quick.
-2. Set azure.organization and azure.pat: an Azure DevOps PAT for that organization with Code (Read) and Pull Request Threads (Read & write). AZPR calls the Azure DevOps REST API (api-version 7.1) itself; no MCP server is needed.
+2. Set azure.organization and the PAT: an Azure DevOps PAT for that organization with Code (Read) and Pull Request Threads (Read & write), alone in a file only you can read (chmod 600) named by azure.patFile (recommended), or in azure.pat. AZPR calls the Azure DevOps REST API (api-version 7.1) itself; no MCP server is needed.
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
 Settings have not been API-validated. The plugin refuses incomplete configuration.
 TXT

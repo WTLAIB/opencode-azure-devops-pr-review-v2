@@ -7,14 +7,15 @@
  * REST API with AZPR's own organization and PAT. Reviewers read the repository
  * through AZPR's read-only tools, which use the same client.
  */
-import { readFile, stat } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { open, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, commentSlot } from './config.mjs';
+import { COMMANDS, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, commentSlot, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -48,6 +49,30 @@ const SESSION_REMOVALS = 8;
 // A retry wait the host announces suspends the inactivity watchdog at most this long.
 const HOST_PAUSE_LIMIT_MS = 60 * 60 * 1000;
 const CA_FILE_BYTES = 1024 * 1024;
+const PAT_FILE_BYTES = 4096;
+/**
+ * azure.patFile: the PAT alone in a regular file that only its owner may read
+ * or write (no symbolic link), read at load like the settings and again before
+ * each command. Errors name the problem, never the content.
+ */
+async function readPatFile(path) {
+  let handle, text;
+  try {
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error('not a regular file');
+    if (typeof process.getuid === 'function' && info.uid !== process.getuid()) throw new Error('owned by another user');
+    if (info.mode & 0o077) throw new Error('group or others may access it; run chmod 600 on it');
+    if (info.size > PAT_FILE_BYTES) throw new Error('larger than 4 KB');
+    text = (await handle.readFile('utf8')).trim();
+  } catch (error) {
+    const reason = error.code === 'ELOOP' ? 'a symbolic link' : error.code === 'ENOENT' ? 'not found' : error.code ?? error.message;
+    throw new Error(`[AZPR] azure.patFile could not be used (${reason}).`);
+  } finally { await handle?.close(); }
+  const problem = patProblem(text);
+  if (problem) throw new Error(`[AZPR] azure.patFile must hold only the Azure DevOps PAT (${problem}).`);
+  return text;
+}
 /** azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings. */
 async function readCaCertificates(path) {
   if (!path) return [];
@@ -113,6 +138,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const stageIdleMs = options.stageIdleMs ?? settings.workflow.stageIdleSeconds * 1000;
   const baseUrl = restBaseUrl(options.azureBaseUrl ?? process.env.AZPR_TEST_AZURE_BASE_URL);
   const caCertificates = await readCaCertificates(settings.azure.caFile);
+  const pat = settings.azure.patFile ? await readPatFile(settings.azure.patFile) : settings.azure.pat;
   const transport = fetchTransport({ proxy: settings.azure.proxy, caCertificates, verifyTls: settings.azure.verifyTls });
   if (Object.keys(transport).length && !options.fetch && !fetchTransportSupported()) {
     throw new Error('[AZPR] azure.proxy, azure.caFile and azure.verifyTls need OpenCode\'s Bun runtime, whose fetch applies per-request proxy and TLS options; this runtime would ignore them and connect directly.');
@@ -123,8 +149,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     ...(proxied ? { proxy: proxyLabel(settings.azure.proxy), ...(proxied.username || proxied.password ? { proxyCredentials: true } : {}) } : {}),
     ...(caCertificates.length ? { extraCaCertificates: caCertificates.length } : {}),
     ...(settings.azure.verifyTls ? {} : { verifyTls: false }),
+    patSource: settings.azure.patFile ? 'azure.patFile' : 'azure.pat',
   };
-  const azure = createAzureClient({ organization: settings.azure.organization, pat: settings.azure.pat, baseUrl, transport,
+  const azure = createAzureClient({ organization: settings.azure.organization, pat, baseUrl, transport,
     maxArchiveBytes: settings.azure.archiveMegabytes * 1024 * 1024, queue, retryDelayMs, fetch: options.fetch,
     onCall: (run, record) => { void run.debug?.append?.('azure-calls.jsonl', JSON.stringify({ at: new Date().toISOString(), ...record })); } });
   // An unwritable state directory must not disable the plugin: fall back to a
@@ -242,6 +269,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     let now;
     try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { throw new Error('[AZPR] settings.json is not readable.'); }
     if (now !== state.raw) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart OpenCode to use the new settings; running reviews are unaffected.');
+    if (settings.azure.patFile && await scoped(() => readPatFile(settings.azure.patFile), signal) !== pat) {
+      throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart OpenCode to use the new PAT; running reviews are unaffected.');
+    }
     await checkCommands(signal);
     await pinAgents(run.profile, signal);
     await readiness(run);
@@ -697,7 +727,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models there for the PRs that need them.' });
     }
     const route = [network.proxy ? `proxy ${network.proxy}${network.proxyCredentials ? ' with credentials' : ''}` : '',
-      network.extraCaCertificates ? `${network.extraCaCertificates} extra CA certificate(s) from azure.caFile` : ''].filter(Boolean);
+      network.extraCaCertificates ? `${network.extraCaCertificates} extra CA certificate(s) from azure.caFile` : '',
+      network.patSource === 'azure.patFile' ? 'PAT from azure.patFile' : 'PAT from azure.pat in settings.json'].filter(Boolean);
     checks.push({ name: 'Azure DevOps REST', ok: true, detail: `organization ${settings.azure.organization}, api-version ${API_VERSION}${route.map(part => `; ${part}`).join('')}` });
     if (network.verifyTls === false) {
       checks.push({ name: 'TLS verification', ok: true, warning: true,

@@ -19,7 +19,9 @@ settings, backups and failure records. Never upload `.local/`.
 **Deterministic facts are code; judgment is model work.**
 - PR identity, commit SHAs, the changed-file list, version rechecks, existing
   threads and all Azure DevOps writes go through `azure.mjs`, which calls the
-  REST API with `azure.organization` and `azure.pat` from AZPR's settings. Keep
+  REST API with `azure.organization` and the PAT from AZPR's settings
+  (`azure.pat`, or the owner-only file named by `azure.patFile`, which is read
+  only through its symbolic-link, owner and mode checks). Keep
   REST paths and the pinned api-version in `azure.mjs` only; never log, echo or
   persist the PAT, and send it only to the organization's REST endpoint.
   `azure.proxy`, `azure.caFile` and `azure.verifyTls` shape only that

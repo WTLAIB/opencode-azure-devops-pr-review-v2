@@ -300,7 +300,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
     const detail = clean(body?.message);
     const suffix = `${code ? ` ${code}` : ''}${detail ? `: ${detail}` : ''}`;
     if (status === 203 || status === 401 || (status >= 300 && status < 400)) {
-      return new AzureError(`Azure DevOps rejected the PAT for organization "${organization}" (HTTP ${status}). Check that azure.pat in AZPR settings is valid, not expired and created for this organization, then restart OpenCode.`, { kind: 'auth', status });
+      return new AzureError(`Azure DevOps rejected the PAT for organization "${organization}" (HTTP ${status}). Check that the PAT (azure.pat, or the file named by azure.patFile) is valid, not expired and created for this organization, then restart OpenCode.`, { kind: 'auth', status });
     }
     if (status === 403) return new AzureError(`Azure DevOps refused ${label} (HTTP 403${suffix}). The PAT needs Code (Read) and Pull Request Threads (Read & write) for this organization.`, { kind: 'permission', status, code });
     if (status === 404) return new AzureError(`Azure DevOps could not find ${label} (HTTP 404${suffix}).`, { kind: 'not-found', status, code });

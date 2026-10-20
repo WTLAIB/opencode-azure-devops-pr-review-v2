@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   BLOCKED_NATIVE_TOOLS, NATIVE_TOOL_PERMISSIONS, PROMPTS, ROLES, allowedTools, buildAgents,
-  nativeToolPermissions, validateSettings,
+  nativeToolPermissions, patProblem, validateSettings,
 } from '../src/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
@@ -39,7 +39,7 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
   assert.equal(settings.progressNotices, true);
   assert.equal(settings.deletePrivateSessions, true);
   assert.deepEqual(settings.debug, { enabled: false, directory: '', keepRuns: 20 });
-  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
+  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, patFile: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
   assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 });
   assert.deepEqual(validateSettings(input()).azure, settings.azure, 'The example matches the defaults.');
   assert.deepEqual(validateSettings(input()).workflow, settings.workflow);
@@ -65,7 +65,7 @@ test('proxy and TLS settings: accepted forms; rejections never echo the proxy UR
 });
 
 test('numeric and enum settings are range checked; partial objects take defaults', () => {
-  assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, concurrency: 1, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
+  assert.deepEqual(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, concurrency: 1 } }).azure, { organization: 'org', pat: PAT, patFile: '', concurrency: 1, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
   assert.equal(validateSettings({ ...input(), azure: { organization: 'org', pat: PAT, archiveMegabytes: 1024 } }).azure.archiveMegabytes, 1024);
   assert.equal(validateSettings({ ...input(), workflow: { repairAttempts: 0 } }).workflow.repairAttempts, 0);
   for (const value of [0, 60, 7200]) assert.equal(validateSettings({ ...input(), workflow: { stageIdleSeconds: value } }).workflow.stageIdleSeconds, value);
@@ -252,4 +252,22 @@ test('prompts: one JSON transport, shared tool policy, shell guidance and langua
 test('trimmed role instructions stay compact', () => {
   const agents = buildAgents(validateSettings(input()), prompts);
   for (const [role, agent] of Object.entries(agents)) if (agent.system) assert.ok(agent.system.length < 14000, `${role}: ${agent.system.length}`);
+});
+
+test('azure.patFile: an absolute path in place of azure.pat, never both; PAT problems never echo the value', () => {
+  const azure = extra => ({ ...input(), azure: { organization: 'org', ...extra } });
+  const settings = validateSettings(azure({ pat: '', patFile: '/home/me/.config/azpr/pat' }));
+  assert.equal(settings.azure.patFile, '/home/me/.config/azpr/pat');
+  assert.equal(settings.azure.pat, '');
+  assert.throws(() => validateSettings(azure({ pat: PAT, patFile: '/home/me/pat' })), /Set either azure\.pat or azure\.patFile, not both/);
+  for (const patFile of ['relative/pat', '/home/me/pat\n', 7]) {
+    assert.throws(() => validateSettings(azure({ pat: '', patFile })), /azure\.patFile must be empty or the absolute path of a file that holds only the PAT/);
+  }
+  assert.throws(() => validateSettings(azure({ pat: '' })), /azure\.pat must be an Azure DevOps personal access token .*or leave it empty and set azure\.patFile/);
+  assert.equal(patProblem(PAT), '');
+  for (const [value, problem] of [['short', /20 to 1024/], ['two tokens with spaces here', /one token/], ['YOUR_PERSONAL_ACCESS_TOKEN_0123456789', /placeholder/], [42, /one token/]]) {
+    assert.match(patProblem(value), problem);
+    if (typeof value === 'string') assert.ok(!patProblem(value).includes(value), 'The problem never contains the value.');
+  }
+  assert.ok(Object.hasOwn(schema.properties.azure.properties, 'patFile'));
 });

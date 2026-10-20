@@ -50,6 +50,14 @@ for conflict handling and manual copying.
 
 ## 3. Configure one model and your Azure organization
 
+First put your PAT alone in a file only you can read. The prompt does not echo
+it, and it stays out of your shell history:
+
+```sh
+umask 077 && mkdir -p ~/.config/azpr
+read -rs -p 'Azure DevOps PAT: ' AZPR_PAT && printf '%s' "$AZPR_PAT" > ~/.config/azpr/pat; unset AZPR_PAT; echo
+```
+
 Open `$AZPR_CONFIG_DIR/plugins/azpr-v2/settings.json` in your editor. Update
 the following fields **inside the installed file**, keeping its other fields
 (including `"version": 2`). Replace every placeholder:
@@ -67,7 +75,7 @@ the following fields **inside the installed file**, keeping its other fields
   },
   "azure": {
     "organization": "YOUR_ORGANIZATION",
-    "pat": "YOUR_PERSONAL_ACCESS_TOKEN"
+    "patFile": "/home/YOUR_USER/.config/azpr/pat"
   }
 }
 ```
@@ -80,7 +88,10 @@ AZPR from loading; a valid-looking but unavailable review model makes
 does not start them: `/pr-quick` uses only `quick.reviewer`.
 
 Use the organization name from `https://dev.azure.com/<organization>`, not the
-full URL. Keep the PAT in this private installed file, never in Git or chat.
+full URL. `patFile` is the absolute path of the file you just wrote; AZPR
+refuses it unless it is yours alone (mode 600). Leave `pat` empty: putting the
+PAT there instead also works but keeps a secret in `settings.json`. Never put
+the PAT in Git or chat.
 If your network requires a proxy or a company CA, configure it as described in
 [enterprise setup](ENTERPRISE.md). Leave `shell: "deny"` and TLS verification
 enabled. See [all settings](../README.md#configuration) for output language,

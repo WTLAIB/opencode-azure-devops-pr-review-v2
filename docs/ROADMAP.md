@@ -7,7 +7,9 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 ## Implemented (stability revision)
 
 - **Own Azure DevOps access.** AZPR calls the REST API (api-version 7.1, the
-  latest released version) with the organization and PAT from its settings;
+  latest released version) with the organization and PAT from its settings,
+  or from an owner-only PAT file (`azure.patFile`) so `settings.json` holds no
+  secret;
   no MCP server is needed. Reads retry transient failures, writes never retry,
   every call is bounded and the PAT is never logged.
 - **Runtime-owned facts.** PR identity, the latest iteration's head and merge
@@ -136,7 +138,8 @@ that need it is known.
 
 ### Other credential sources
 
-Only a PAT in AZPR's settings is supported. Microsoft recommends short-lived
+Only a PAT is supported, in AZPR's settings or in its own file
+(`azure.patFile`). Microsoft recommends short-lived
 Microsoft Entra tokens over PATs; an Entra or Azure CLI token source could be
 added if organizations restrict PAT creation.
 
@@ -152,9 +155,7 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    and the duplicate check worked in live reviews; an earlier commit passed
    review and publication of 25 items on a 316-file PR (see
    [validation](VALIDATION.md)).
-2. Confirm that a PAT limited to Code (Read) and Pull Request Threads
-   (Read & write) is sufficient.
-3. Measure how often correction turns and retries happen per model, and tune
+2. Measure how often correction turns and retries happen per model, and tune
    `workflow` defaults from those numbers. On the 316-file PR,
    `parallelSessions` 8 with `azure.concurrency` 6 cut the review from 719 s
    (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
@@ -162,7 +163,7 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    providers and organizations have been measured; raise both together.
    Comment planning runs two pages at a time, which cut a nine-page plan from
    140–175 s to 71–90 s; more lanes were not measured.
-4. Reduce input tokens further. Reading diffs with folded repeats cut the
+3. Reduce input tokens further. Reading diffs with folded repeats cut the
    316-file review from 7.5–9.2 to about 5.5 million input tokens and a real
    35-file code PR from 6.15 to 0.55–0.79 million; reviewers still make 4–5.5
    model requests per session and each re-sends what was read. They already
@@ -172,7 +173,7 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    1-file PR read 4–5 % of its input from the cache on OpenCode 2.0.22, which
    sent no session headers, and 54 % on 2.0.32. The 316-file PR read 11–21 % on
    2.0.22 and is not yet measured on 2.0.32.
-5. Cross-shard evidence: a new test in one shard that contradicts unchanged
+4. Cross-shard evidence: a new test in one shard that contradicts unchanged
    code in another shard is found with content search (`azpr_search_code`, over
    the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and
    missed by gpt-5.6-luna and gpt-6-luna, even with high reasoning effort and
@@ -182,9 +183,9 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    runs, so the initial reviewers' model decides what is found. `/pr-deep`
    is for that: the review with the stronger models of `models.deep`, for
    selected PRs. Confirm on other real PRs.
-6. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
+5. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
-7. Quick review: two runs per mode on the three test PRs with gpt-6-luna used
+6. Quick review: two runs per mode on the three test PRs with gpt-6-luna used
    36–50 % of the review's model requests and 34–68 % of its input with the
    same planted-defect results except one configuration defect (see
    [validation](VALIDATION.md)). Still open: other PRs and models, a published
