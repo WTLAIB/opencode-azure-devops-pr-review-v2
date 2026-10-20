@@ -13,9 +13,10 @@ with fake services and runs against real Azure DevOps and model providers.
 
 ## Azure access and credentials
 
-Configure an organization-scoped PAT in your installed
-`plugins/azpr-v2/settings.json`, alongside `azure.organization`. The recommended
-scopes are:
+Configure an organization-scoped PAT, preferably alone in a file that only its
+owner can read, named by `azure.patFile` in the installed
+`plugins/azpr-v2/settings.json` (otherwise in `azure.pat`), alongside
+`azure.organization`. The recommended scopes are:
 
 | Scope | Used for |
 | --- | --- |
@@ -24,8 +25,9 @@ scopes are:
 
 These correspond to Microsoft's documented [source read](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/items/get?view=azure-devops-rest-7.1#security)
 and [thread creation](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads/create?view=azure-devops-rest-7.1#security)
-scopes. **This minimum combination has not yet been confirmed in a live AZPR
-run**; it remains a [validation item](ROADMAP.md#remaining-validation-work).
+scopes. A live check on 2026-10-21 confirmed that this combination covers
+every read AZPR makes, including repository archives, and thread creation (see
+[validation](VALIDATION.md#pat-scopes-and-azurepatfile-2026-10-21)).
 The PAT owner also needs access to the project and repository. AZPR does not
 need permission to push code or merge PRs.
 
@@ -36,11 +38,19 @@ publish. Test publication separately on a suitable PR when you intend to post.
 AZPR's REST client uses the PAT only for the configured organization's
 `https://dev.azure.com/<organization>` endpoint, and refuses PR URLs for another
 organization. Credentials are not included in AZPR's model payloads or
-diagnostic settings. The installer creates `settings.json` with mode `600`
-and preserves it during `--replace`. Keep that file outside shared profiles
-and Git, and restart OpenCode after changing it. Only this PAT source is
-currently supported; there is no Azure CLI, Entra token or environment-variable
-credential setting. See [Azure DevOps access](AZURE_DEVOPS.md).
+diagnostic settings. With `azure.patFile`, `settings.json` holds no secret:
+AZPR opens the PAT file without following symbolic links and refuses it unless
+it is a regular file owned by the OpenCode user with no group or other access,
+and it reads the file at start and before each command, so a replaced PAT
+needs a restart. The installer creates `settings.json` with mode `600` and
+preserves it during `--replace`; keep it outside shared profiles and Git, and
+restart OpenCode after changing it. A file only its owner can read protects the
+PAT from other accounts, not from programs that run as the same user (an
+agent's shell commands, for example), so keep the PAT's scopes minimal and its
+lifetime short, and keep it out of environment variables that child processes
+inherit. Only a PAT is supported (in `azure.pat` or `azure.patFile`); there is
+no Azure CLI, Entra token or environment-variable credential setting. See
+[Azure DevOps access](AZURE_DEVOPS.md).
 
 ## What the selected model receives
 

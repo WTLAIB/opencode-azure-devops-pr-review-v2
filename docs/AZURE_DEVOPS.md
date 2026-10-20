@@ -1,8 +1,9 @@
 # Azure DevOps access
 
 AZPR calls the Azure DevOps Services REST API itself, with a personal access
-token (PAT) from its own `settings.json`. No MCP server is involved and AZPR
-reads no other component's configuration.
+token (PAT) from its own settings: alone in a file named by `azure.patFile`
+(recommended) or in `azure.pat`. No MCP server is involved and AZPR reads no
+other component's configuration.
 
 ## Configure
 
@@ -15,12 +16,21 @@ reads no other component's configuration.
    Global PATs ("All accessible organizations") stop working on 2026-12-01; use
    an organization-scoped token. `Code: Read & write` also works but allows
    pushing code, which AZPR never needs.
-2. Set both values in the installed `plugins/azpr-v2/settings.json` and restart
-   OpenCode:
+2. Put the PAT alone in a file only you can read, set the organization and
+   that file's absolute path in the installed `plugins/azpr-v2/settings.json`,
+   and restart OpenCode:
+
+   ```sh
+   umask 077 && mkdir -p ~/.config/azpr
+   read -rs -p 'Azure DevOps PAT: ' AZPR_PAT && printf '%s' "$AZPR_PAT" > ~/.config/azpr/pat; unset AZPR_PAT; echo
+   ```
 
    ```json
-   { "azure": { "organization": "YOUR_ORGANIZATION", "pat": "YOUR_PAT" } }
+   { "azure": { "organization": "YOUR_ORGANIZATION", "patFile": "/home/YOU/.config/azpr/pat" } }
    ```
+
+   `"pat": "YOUR_PAT"` in place of `patFile` also works but keeps the secret in
+   `settings.json`; set one of the two, not both.
 
 3. Run `/pr-check <PR URL>`; it reads the PR, its changes, one HEAD and one BASE
    file and the discussions without any model request.
@@ -28,7 +38,11 @@ reads no other component's configuration.
 The PAT is sent only to `https://dev.azure.com/<organization>` as
 `Authorization: Basic base64(":" + PAT)`, inside a `CONNECT` tunnel when
 `azure.proxy` is set. It never appears in receipts, reports,
-diagnostics or error messages. The installer keeps `settings.json` at mode 600
+diagnostics or error messages. AZPR opens `azure.patFile` without following
+symbolic links and refuses it unless it is a regular file owned by the OpenCode
+user with no group or other access (mode 600) holding one token; it reads the
+file at start and again before each command, and a file that changed blocks new
+commands until OpenCode restarts. The installer keeps `settings.json` at mode 600
 and preserves it on `--replace`; keep it out of repositories and shared profiles.
 PR URLs whose organization differs from `azure.organization` are refused before
 any request.
@@ -179,6 +193,9 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 | --- | --- |
 | `Azure DevOps rejected the PAT for organization "x" (HTTP 203)` (or 401) | The PAT is invalid, expired, revoked or not valid for this organization. Azure answers with a sign-in page (HTTP 203) instead of 401. |
 | `Azure DevOps refused … (HTTP 403 …)` | The PAT lacks a scope or the user lacks access to the project or repository. |
+| `azure.patFile could not be used (…)` | The file is missing, a symbolic link, not a regular file, owned by another user, accessible by group or others (`chmod 600` it) or larger than 4 KB. |
+| `azure.patFile must hold only the Azure DevOps PAT (…)` | The file is empty, holds more than one token or still a placeholder. |
+| `azure.patFile changed since OpenCode loaded it` | Restart OpenCode to use the new PAT; running commands keep the old one. |
 | `Azure DevOps could not find … (HTTP 404 TF…)` | Wrong project, repository, PR ID or path; Azure's error code is shown. |
 | `The PR belongs to organization "x", but azure.organization is "y"` | Configure the PAT and organization of that PR. |
 | `… did not finish within the per-call timeout` | Azure DevOps or the network did not answer; reads were retried. |

@@ -198,7 +198,7 @@ settings they started with.
   },
   "azure": {
     "organization": "YOUR_ORGANIZATION",
-    "pat": "YOUR_PERSONAL_ACCESS_TOKEN"
+    "patFile": "/absolute/path/to/your/pat-file"
   }
 }
 ```
@@ -234,7 +234,8 @@ every concrete defect it finds, in any area, as a finding.
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
 | `deletePrivateSessions` | `true`: AZPR deletes its private reviewer sessions once they are no longer needed (see [retention](#retention-and-privacy)); `false` keeps every session. |
 | `azure.organization` | Required. The `<org>` of `https://dev.azure.com/<org>`; PR URLs of other organizations are refused. |
-| `azure.pat` | Required. A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**. Sent only to `https://dev.azure.com/<org>` and never logged. |
+| `azure.pat` | A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**, or `""` when `azure.patFile` is set. Sent only to `https://dev.azure.com/<org>` and never logged. |
+| `azure.patFile` | `""`. Recommended: the absolute path of a file that holds only the PAT, so `settings.json` holds no secret. It must be a regular file you own that only you can access (mode 600, not a symbolic link). AZPR reads it at start and before each command; after replacing it, restart OpenCode. Set either this or `azure.pat`. |
 | `azure.concurrency` | `3` simultaneous Azure DevOps calls across all AZPR commands. |
 | `azure.callTimeoutSeconds` | `120`; a hung call is aborted and its slot released (reads are retried). |
 | `azure.archiveMegabytes` | `100` (1–1024): the largest repository zip that content search downloads per run and commit; a larger repository is not searched. It is held in memory during a review. |
@@ -262,10 +263,25 @@ working.
 AZPR talks to the Azure DevOps Services REST API itself (api-version 7.1). Create
 a PAT scoped to **one organization** (global "all accessible organizations"
 PATs stop working on 2026-12-01) with **Code: Read** and **Pull Request Threads:
-Read & write**, put it in `azure.pat` of the installed `settings.json` (the
-installer keeps that file at mode 600) and restart OpenCode. Keep the PAT out of
-this repository and out of shared settings profiles. Behind a corporate proxy,
-also set `azure.proxy`, and `azure.caFile` when the proxy inspects HTTPS (see
+Read & write**, which cover every call AZPR makes, and give it an expiry you
+renew. Keep it alone in a file that only you can read and point `azure.patFile`
+at it, so `settings.json` holds no secret (the prompt does not echo the PAT and
+it stays out of your shell history):
+
+```sh
+umask 077 && mkdir -p ~/.config/azpr
+read -rs -p 'Azure DevOps PAT: ' AZPR_PAT && printf '%s' "$AZPR_PAT" > ~/.config/azpr/pat; unset AZPR_PAT; echo
+```
+
+Then set `"patFile"` to that file's absolute path (for example
+`/home/you/.config/azpr/pat`) and leave `"pat"` empty in the installed
+`settings.json`, and restart OpenCode. `azure.pat` can hold the PAT instead; the
+installer keeps `settings.json` at mode 600. A file only you can read protects
+the PAT from other accounts, not from programs you run yourself, so keep its
+scopes minimal and its lifetime short. Keep the PAT out of this repository,
+shared settings profiles, chat and environment variables that child processes
+inherit. Behind a corporate proxy, also set `azure.proxy`, and `azure.caFile`
+when the proxy inspects HTTPS (see
 [proxies and TLS inspection](docs/AZURE_DEVOPS.md#proxies-and-tls-inspection)).
 
 Reviewers read source through six read-only AZPR tools (`azpr_read_diff`,

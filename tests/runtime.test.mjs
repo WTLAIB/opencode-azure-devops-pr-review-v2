@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, writeFile, cp, rm, readdir } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
+import { closeSync, constants as fsConstants, openSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { rootCertificates } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -783,7 +785,7 @@ test('azure.proxy, azure.caFile and azure.verifyTls reach every Azure DevOps req
   const f = await fixture(t, { azure: a.azure, settings(s) { s.azure.proxy = 'http://corp:secret-word@127.0.0.1:3128'; s.azure.caFile = caFile; } });
   const receipt = await f.command('pr-check');
   assert.match(receipt, /\] READY/);
-  assert.match(receipt, /\| Azure DevOps REST \| ok \| organization org, api-version 7\.1; proxy http:\/\/127\.0\.0\.1:3128 with credentials; 1 extra CA certificate\(s\) from azure\.caFile \|/);
+  assert.match(receipt, /\| Azure DevOps REST \| ok \| organization org, api-version 7\.1; proxy http:\/\/127\.0\.0\.1:3128 with credentials; 1 extra CA certificate\(s\) from azure\.caFile; PAT from azure\.pat in settings\.json \|/);
   assert.ok(!receipt.includes('secret-word') && !receipt.includes(caFile));
   assert.ok(a.inits.length >= 5 && a.inits.every(init => init.proxy === 'http://corp:secret-word@127.0.0.1:3128' && init.tls.ca.length === rootCertificates.length + 1));
 
@@ -827,6 +829,78 @@ test('an unusable azure.caFile, or proxy and TLS settings on a runtime whose fet
   for (const azure of [{ proxy: 'http://127.0.0.1:3128' }, { verifyTls: false }]) {
     await assert.rejects(load(azure, {}), /need OpenCode's Bun runtime, whose fetch applies per-request proxy and TLS options/);
   }
+});
+
+test('azure.patFile: the PAT comes from an owner-only file and is never shown; a changed file blocks new runs only', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-patfile-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const patFile = join(directory, 'pat');
+  await writeFile(patFile, `${FAKE_PAT}\n`, { mode: 0o600 });
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { settings(s) { s.azure.pat = ''; s.azure.patFile = patFile; },
+    async during({ role }) { if (role === 'azpr-review-verifier') { entered.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  // The fake service accepts only the PAT from the file.
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/);
+  assert.match(check, /\| Azure DevOps REST \| ok \| organization org, api-version 7\.1; PAT from azure\.patFile \|/);
+  assert.ok(!check.includes(FAKE_PAT) && !check.includes(patFile), 'Neither the PAT nor the file path is shown.');
+  const running = f.command('pr-review', f.azure.prUrl(), 'origin-a');
+  await entered.promise;
+  // A replaced PAT is used only after a restart, as with settings; the running review is unaffected.
+  await writeFile(patFile, 'rotated-fixture-pat-0123456789abcdefghijk\n', { mode: 0o600 });
+  release.resolve();
+  assert.match(await running, /\] COMPLETE/);
+  const blocked = await f.command('pr-review', f.azure.prUrl(), 'origin-b');
+  assert.match(blocked, /azure\.patFile changed since OpenCode loaded it\. Restart OpenCode to use the new PAT/);
+  assert.ok(!blocked.includes('rotated-fixture-pat'), 'The new PAT is not shown either.');
+  // A file that became readable by others also blocks new runs.
+  await writeFile(patFile, `${FAKE_PAT}\n`);
+  await chmod(patFile, 0o644);
+  assert.match(await f.command('pr-check', f.azure.prUrl(), 'origin-c'), /azure\.patFile could not be used \(group or others may access it; run chmod 600 on it\)/);
+});
+
+test('an unusable azure.patFile stops loading and never shows its content', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-patfile-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await cp(new URL('src/prompts', ROOT), join(directory, 'prompts'), { recursive: true });
+  const settings = JSON.parse(await readFile(new URL('config/settings.example.json', ROOT), 'utf8'));
+  for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/review-${role}`;
+  const load = async patFile => {
+    await writeFile(join(directory, 'settings.json'), JSON.stringify({ ...settings, azure: { ...settings.azure, organization: 'org', pat: '', patFile } }));
+    return setupAzurePrReview({}, directory, { stateDirectory: join(directory, 'state'), fetch: fakeAzure().fetch });
+  };
+  const file = async (name, content, mode = 0o600) => { const path = join(directory, name); await writeFile(path, content); await chmod(path, mode); return path; };
+  await assert.rejects(load(join(directory, 'missing')), /azure\.patFile could not be used \(not found\)/);
+  await assert.rejects(load(await file('shared', FAKE_PAT, 0o640)), /azure\.patFile could not be used \(group or others may access it; run chmod 600 on it\)/);
+  await symlink(await file('target', FAKE_PAT), join(directory, 'link'));
+  await assert.rejects(load(join(directory, 'link')), /azure\.patFile could not be used \(a symbolic link\)/);
+  await mkdir(join(directory, 'folder'), { mode: 0o700 });
+  await assert.rejects(load(join(directory, 'folder')), /azure\.patFile could not be used \(not a regular file\)/);
+  await assert.rejects(load(await file('large', 'x'.repeat(5000))), /azure\.patFile could not be used \(larger than 4 KB\)/);
+  // A FIFO is refused at once: waiting for a writer would hang loading and every later command.
+  const fifo = join(directory, 'fifo');
+  execFileSync('mkfifo', ['-m', '600', fifo]);
+  const pending = load(fifo).then(() => null, error => error);
+  let timer;
+  try {
+    const outcome = await Promise.race([pending, new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), 5000); })]);
+    assert.notEqual(outcome, 'timeout', 'Loading must not wait for a writer on a FIFO.');
+    assert.match(outcome?.message ?? '', /azure\.patFile could not be used \(not a regular file\)/);
+  } finally {
+    clearTimeout(timer);
+    // Release a reader that a broken check left waiting, so the test process can still exit.
+    try { closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)); } catch {}
+    await pending;
+  }
+  for (const [name, content, problem] of [['placeholder', 'YOUR_PERSONAL_ACCESS_TOKEN_0123456789', /still a placeholder/], ['two', `${FAKE_PAT} ${FAKE_PAT}`, /one token/], ['empty', '\n', /one token/]]) {
+    const error = await load(await file(name, content)).then(() => null, caught => caught);
+    assert.match(error?.message ?? '', /azure\.patFile must hold only the Azure DevOps PAT/);
+    assert.match(error.message, problem);
+    assert.ok(!error.message.includes(content.trim() || '\u0000'), 'The error never contains the content.');
+  }
+  // A good file passes; loading then stops only because this bare context offers no host APIs.
+  await assert.rejects(load(await file('good', `  ${FAKE_PAT}  \n`)), /AZPR registration is unavailable/);
 });
 
 test('an incomplete review keeps an unconfirmed draft and leaves no completed review', async t => {

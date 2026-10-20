@@ -41,7 +41,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 347 tests across settings (including the
+`npm run check` and `npm test` pass: 351 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -144,6 +144,18 @@ only some deep models), would repeat `/pr-review` (the same models in all three
 roles, not when one differs) or lacks a model (a WARNING that leaves the check
 READY and `/pr-review` running), the command descriptions OpenCode lists and
 the error of an unconfigured `/pr-deep`.
+The PAT file (2026-10-21) adds tests for: `azure.patFile` as an absolute path in
+place of `azure.pat` and never both; a PAT read from an owner-only file that the
+fake service accepts, while neither the PAT nor the path appears in a receipt;
+a file that is missing, a symbolic link, a folder, readable by others, larger
+than 4 KB, empty, holding two tokens or a placeholder stopping the load with an
+error that never contains the content; a FIFO refused at once instead of
+waiting for a writer, which would hang loading and every later command; a replaced or newly shared file blocking
+new commands while the running review completes; and the installer adding an
+empty `azure.patFile` without printing the PAT. Removing each check from a copy
+of the code (mode, symbolic link, recheck before a command, the file's PAT
+used for requests, both settings at once, the content check, the non-blocking
+open) made its test fail.
 
 ## REST API version check
 
@@ -1054,6 +1066,33 @@ prompt byte for byte.
 No stage was retried, failed, stopped idle or hit a tool error; one PR #4
 reviewer answer repeated a JSON key and was fixed in its correction turn.
 
+## PAT scopes and `azure.patFile` (2026-10-21)
+
+A new PAT for the test organization, organization-scoped with an expiry and only
+**Code (Read)** and **Pull Request Threads (Read & write)**, replaced the earlier
+token on OpenCode 2.0.32 with `e673889` installed.
+
+- Reads: `/pr-check` was READY on PR #2 (PR metadata, changed files, HEAD and
+  BASE reads, 164 threads), and `/pr-quick` with a comment preview was COMPLETE
+  (PR, iterations, changes, commits, files and a folder listing). The repository
+  archive that content search downloads answered HTTP 200 with a zip.
+- Write: thread creation, the only Azure DevOps write AZPR makes, answered
+  HTTP 200 on the same PR; the comment read back and was then deleted, which
+  the same scope allows. `/pr-comment --publish` could not show the write on
+  that PR: AZPR records each thread it created by marker and never sends that
+  marker again, and the PR's earlier AZPR comments had been deleted by hand, so
+  all four items stayed UNVERIFIED without a request.
+- `azure.patFile`: with this revision installed, `settings.json` set `pat` to
+  empty and `patFile` to the PAT file (mode 600). `/pr-check` was READY and
+  showed "PAT from azure.patFile" without the path, `/pr-quick` with a preview
+  was COMPLETE, and a scan of the configuration, state and OpenCode data
+  directories found the PAT only in that file.
+- An external review found that a FIFO named by `azure.patFile` made opening it
+  wait for a writer, so loading hung (even process exit waited for the blocked
+  thread). Opened without blocking, a FIFO is now refused in 5 ms under
+  OpenCode's Bun 1.4.2 and 7 ms under Node 22, and `/pr-check` with the PAT
+  file stayed READY on OpenCode 2.0.32.
+
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 
 A stability review proposed batch parameters for `azpr_read_diff` and
@@ -1116,8 +1155,6 @@ transient failure, and its error names the last activity.
   gpt-6-luna; other PRs are not yet measured.
 - A live publication with this revision: the rule against skips that rely on
   another finding.
-- A PAT limited to Code (Read) and Pull Request Threads (Read & write); the live
-  run used an existing PAT whose scopes were not inspected.
 - Azure DevOps Server, and repository files that are not UTF-8 text.
 - `azure.caFile` with a real proxy: the corporate network above ran with
   `verifyTls: false`; whether its proxy inspects TLS, and trusting its root CA

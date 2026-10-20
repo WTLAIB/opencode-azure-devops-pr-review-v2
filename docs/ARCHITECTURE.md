@@ -3,7 +3,8 @@
 AZPR is a source-only OpenCode V2 plugin. Model work runs in private,
 role-bound child sessions; deterministic facts and every Azure DevOps write are
 runtime code that calls the Azure DevOps Services REST API (api-version 7.1)
-with the organization and PAT from AZPR's own settings. Reviewers read the
+with the organization and PAT from AZPR's own settings (or the owner-only file
+named by `azure.patFile`). Reviewers read the
 repository through AZPR's own read-only tools, which use the same client.
 
 ## Components
@@ -41,8 +42,8 @@ to the invoking conversation with up to three attempts and is written to
 `PROGRESS` notices report phases (snapshot, shard counts, verification,
 planning pages, posting). Notices never start a model response.
 
-Each workflow first runs one **preflight**: `settings.json` must be unchanged
-since load, reserved commands must still be ours, the private agents of the
+Each workflow first runs one **preflight**: `settings.json`, and the PAT file
+when `azure.patFile` is set, must be unchanged since load, reserved commands must still be ours, the private agents of the
 command's profile are pinned and the models the command uses must exist and
 support tools (and offer the variant when a model is set as
 `provider/model#variant`). Pinning and the model check are per profile, so a

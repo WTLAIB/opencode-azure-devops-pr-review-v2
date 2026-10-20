@@ -189,8 +189,11 @@
         },
         "pat": {
           "type": "string",
-          "minLength": 20,
-          "description": "Personal access token for that organization (scopes: Code Read; Pull Request Threads Read & write). Sent only to https://dev.azure.com/<org> and never logged. Keep this file private (mode 600)."
+          "description": "Personal access token for that organization (scopes: Code Read; Pull Request Threads Read & write), or empty when azure.patFile names a file that holds it. Sent only to https://dev.azure.com/<org> and never logged. Keep this file private (mode 600)."
+        },
+        "patFile": {
+          "type": "string",
+          "description": "Recommended: the absolute path of a file that holds only the PAT, so settings.json holds no secret. AZPR refuses the file unless you own it, it is a regular file (not a symbolic link) and only you may access it (mode 600). Leave azure.pat empty when you use it, and restart OpenCode after replacing the file."
         },
         "concurrency": {
           "type": "integer",
