@@ -260,6 +260,19 @@ try {
     return raw ? JSON.parse(raw) : undefined;
   };
   const api = withCommandCompletion(rawApi, 120000);
+  // Listening and model readiness precede asynchronous Git-plugin command
+  // registration. Do not treat an incomplete startup catalog as a plugin error.
+  const waitForCommands = async (configured = true) => {
+    const end = Date.now() + 20000;
+    do {
+      const commands = (await rawApi('/api/command')).data;
+      if (['pr-setup', 'pr-check', 'pr-review', 'pr-deep', 'pr-quick', 'pr-stop', 'pr-comment'].every(name =>
+        commands.some(command => command.name === name && (!configured || !command.description?.includes('setup required'))))) return;
+      await new Promise(resolveReady => setTimeout(resolveReady, 100));
+    } while (Date.now() < end);
+    throw new Error('Fixture AZPR command catalog did not finish loading.');
+  };
+  await waitForCommands(!native);
   const hostVersion = (await api('/api/info')).version;
   assert.equal(hostVersion, TESTED_HOST_VERSION, `OpenCode ${hostVersion} is not the tested ${TESTED_HOST_VERSION}.`);
   let nativeSetup;
@@ -298,6 +311,7 @@ try {
     config.plugins = config.plugins.map(plugin => plugin === gitPackage ? { package: gitPackage, options: { settingsFile: selectedSettings } } : plugin);
     await writeFile(join(directories.config, 'opencode.json'), JSON.stringify(config, null, 2));
     url = await startHost();
+    await waitForCommands();
     nativeSetup = 'npm pack plus CLI plugin add from an isolated Git commit; missing config blocks reviews; setup validates model and private PAT file without network calls; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; package holds no settings or PAT';
   }
   const waitForMcp = async () => {
@@ -382,6 +396,7 @@ try {
   assert.ok(created.some(thread => thread.threadContext?.filePath === '/src/fixture.js'));
   await stopHost();
   url = await startHost();
+  await waitForCommands();
   await waitForMcp();
   const beforeRepublish = requests.length;
   const writesBefore = azure.callsTo('createThread').length;
@@ -565,6 +580,7 @@ try {
         await writeFile(installedSettings, JSON.stringify({ ...base, azure: { ...base.azure, proxy: '', caFile: '', verifyTls: true, ...network } }, null, 2));
         env.AZPR_TEST_AZURE_BASE_URL = `https://${tunnelTarget}`;
         url = await startHost();
+        await waitForCommands();
         const origin = await newOrigin('Proxy check');
         await api(`/api/session/${origin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
         return latest(origin);
