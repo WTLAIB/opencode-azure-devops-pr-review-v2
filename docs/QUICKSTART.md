@@ -30,7 +30,7 @@ Clone the repository into a new directory and select this known revision:
 ```sh
 git clone https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git
 cd opencode-azure-devops-pr-review-v2
-git checkout --detach 3bee7ef0b91a57d7d21145e1680cef7ec557e7e3
+git checkout --detach e678989cb0245efd717ef6a552008abbc42cb0b6
 ```
 
 Choose the **configuration directory your OpenCode V2 installation actually
