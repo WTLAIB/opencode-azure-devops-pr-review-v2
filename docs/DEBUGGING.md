@@ -18,7 +18,8 @@ acceptance, Azure source validity or report quality.
 
 ## Enable diagnostics
 
-In the installed `plugins/azpr-v2/settings.json`:
+In the settings file shown by `/pr-setup` (external configuration for native
+packages, or installed `plugins/azpr-v2/settings.json` for source installs):
 
 ```json
 { "debug": { "enabled": true, "directory": "", "keepRuns": 20 }, "returnReport": "full" }

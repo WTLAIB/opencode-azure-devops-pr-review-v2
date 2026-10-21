@@ -14,9 +14,12 @@ with fake services and runs against real Azure DevOps and model providers.
 ## Azure access and credentials
 
 Configure an organization-scoped PAT, preferably alone in a file that only its
-owner can read, named by `azure.patFile` in the installed
-`plugins/azpr-v2/settings.json` (otherwise in `azure.pat`), alongside
-`azure.organization`. The recommended scopes are:
+owner can read, named by `azure.patFile` in AZPR's settings (otherwise in
+`azure.pat`), alongside `azure.organization`. `/pr-setup` shows the active
+settings path: native packages use an external configuration file, while
+source installations keep `plugins/azpr-v2/settings.json`. Neither a package
+update nor removal deletes the native installation's external configuration.
+The recommended scopes are:
 
 | Scope | Used for |
 | --- | --- |
@@ -42,8 +45,9 @@ diagnostic settings. With `azure.patFile`, `settings.json` holds no secret:
 AZPR opens the PAT file without following symbolic links and refuses it unless
 it is a regular file owned by the OpenCode user with no group or other access,
 and it reads the file at start and before each command, so a replaced PAT
-needs a restart. The installer creates `settings.json` with mode `600` and
-preserves it during `--replace`; keep it outside shared profiles and Git, and
+needs a restart. The installer and `/pr-setup` create `settings.json` with mode
+`600`; source replacement preserves it, and native package updates do not
+write to it. Keep it outside shared profiles and Git, and
 restart OpenCode after changing it. A file only its owner can read protects the
 PAT from other accounts, not from programs that run as the same user (an
 agent's shell commands, for example), so keep the PAT's scopes minimal and its

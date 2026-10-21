@@ -56,7 +56,7 @@ const PAT_FILE_BYTES = 4096;
  * each command. It is opened without blocking, so a FIFO is refused instead of
  * waiting for a writer. Errors name the problem, never the content.
  */
-async function readPatFile(path) {
+export async function readPatFile(path) {
   let handle, text;
   try {
     handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
@@ -111,7 +111,7 @@ async function deadline(operation, milliseconds) {
  * AZPR_TEST_AZURE_BASE_URL for exact-host fixtures) must be a loopback test server.
  */
 export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, options = {}) {
-  const settingsPath = join(baseDirectory, 'settings.json');
+  const settingsPath = options.settingsPath ?? join(baseDirectory, 'settings.json');
   const runs = new Map();           // run ID -> active run
   const grants = new Map();         // private session ID -> grant
   const seenSessions = new Set();   // every private session this plugin created
