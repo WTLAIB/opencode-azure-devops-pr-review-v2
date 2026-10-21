@@ -41,7 +41,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 351 tests across settings (including the
+`npm run check` and `npm test` pass: 355 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -156,6 +156,19 @@ empty `azure.patFile` without printing the PAT. Removing each check from a copy
 of the code (mode, symbolic link, recheck before a command, the file's PAT
 used for requests, both settings at once, the content check, the non-blocking
 open) made its test fail.
+Comments deleted on the PR (2026-10-22) add tests for: a thread recognized as
+deleted when Azure DevOps lists it flagged deleted or with its first comment
+deleted and without content (a deleted reply leaves it live); a created item
+whose thread is deleted reported as `DELETED`, counted as settled and never
+posted again, by the same review or another one with the same marker, also
+when a run in between saw the comment and when the comment was found without
+a record of its own; a thread already deleted at read-back; and the receipt
+saying that `DELETED` items are not posted again and that `UNVERIFIED` items are
+never posted twice. The host fixture deletes the inline comment after the
+re-run and expects `DELETED` without a write. Reading back without the deleted
+check, or dropping the record of a comment once it is seen (the earlier
+behaviour, which posted it again after a deletion), made the matching tests
+fail.
 
 ## REST API version check
 
@@ -180,6 +193,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | `/pr-review` | COMPLETE; reviewers read HEAD through `azpr_read_file` and searched HEAD's file contents through `azpr_search_code` (one repository zip for the run); `shell`, `execute` and the foreign MCP tool were absent from every private model request; the verifier was corrected by one repair turn in the same session; the runtime read the change list and rechecked versions; PROGRESS notices reached the conversation; the review was persisted. |
 | `/pr-comment` | PREVIEW, then `--publish` POSTED one summary and one inline comment with markers and file context. |
 | Restart | After restarting the host, `/pr-comment --publish` returned POSTED with ALREADY_PRESENT, no new writes and no model request. |
+| Deleted comment (2026-10-22, OpenCode 2.0.32) | After the inline comment was deleted the way Azure DevOps deletes one (thread listed, flagged deleted, comment without content), `/pr-comment --publish` returned POSTED with that item `DELETED` and no new write. Fresh and `--replace` runs. |
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
 | Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. Since 2026-10-17 the fixture also greps `/etc`, an existing directory outside the project, which is refused with the same pointer on 2.0.22, 2.0.31 and 2.0.32 (see [OpenCode 2.0.32](#opencode-2032-the-tested-host-2026-10-17)). |
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
@@ -1066,6 +1080,49 @@ prompt byte for byte.
 No stage was retried, failed, stopped idle or hit a tool error; one PR #4
 reviewer answer repeated a JSON key and was fixed in its correction turn.
 
+## Live runs: the three modes after the deep change (2026-10-19, preview only)
+
+Two batches on OpenCode 2.0.32 with `workflow.parallelSessions` 8 and
+`azure.concurrency` 6, each review followed by a comment preview; nothing was
+posted. `d7cd0ac` ran `/pr-quick` and `/pr-review` with every role on
+`openai/gpt-6-luna`; `e673889` ran all three modes, `/pr-deep` with
+`openai/gpt-6.1-sol` in `models.deep`. Later revisions changed only how the PAT
+is read. The `e673889` batch:
+
+| PR | Mode (model) | Review | Sessions / requests | Input (cached) | API cost | Findings | Preview (inline) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PR #2, 1 file | quick (luna) | COMPLETE, 37 s | 1 / 5 | 32 K (70 %) | < $0.01 | the 3 known defects | 18 s (3) |
+| | review (luna) | COMPLETE, 84 s | 3 / 15, 2 corrections | 115 K (66 %) | $0.01 | 2 of the 3; the verifier rejected the partial reservation with a reason that confirms it | 22 s (3) |
+| | deep (sol) | COMPLETE, 100 s | 3 / 12 | 86 K (64 %) | $0.11 | the 3 known defects | 22 s (3) |
+| PR #4, 35 files | quick (luna) | COMPLETE, 47 s | 2 / 9 | 240 K (70 %) | $0.01 | the seeded regression in the diff only | 10 s (1) |
+| | review (luna) | COMPLETE, 58 s | 5 / 14 | 342 K (64 %) | $0.02 | no candidate for either seeded regression | 3 s (0) |
+| | deep (sol) | COMPLETE, 249 s | 5 / 36 | 1.61 M (78 %) | $1.07 | both seeded regressions, 2 other real ones, 1 debatable, none false | 32 s (5) |
+| PR #3, 316 files | quick (luna) | COMPLETE, 107 s | 13 / 53 | 1.91 M (67 %) | $0.09 | policies 24 of 24, not the configuration defect, nothing else | 56 s (25) |
+| | review (luna) | COMPLETE, 239 s | 31 / 143 | 4.60 M (71 %) | $0.19 | 24 of 24 (one rejected candidate was covered by another), not the configuration defect, nothing else | 51 s (23; 1 low skipped) |
+| | deep (sol) | COMPLETE, 394 s | 32 / 145 | 4.51 M (70 %) | $3.80 | 24 of 24, not the configuration defect, nothing else | 75 s (24) |
+
+- Execution: the 18 runs of this batch (nine reviews, nine previews) had no
+  AZPR retry, failed stage, inactivity stop, PARTIAL answer (so no quick
+  follow-up), tool error or timeout, blocked native tool, Azure DevOps retry or
+  warning, and every session was confirmed stopped. The only correction turns
+  were two for the PR #2 luna verifier: it merged a duplicate into a finding it
+  had rejected, then confirmed that finding without its fields. When the eight
+  gpt-6.1-sol functional shards of PR #3 started together, OpenCode resent each
+  first request once after about 2 s; no stage needed a second attempt.
+- All nine plans rebuilt exactly from their pages in page order; four had
+  finished pages out of order.
+- The `d7cd0ac` batch (12 runs) was as clean, without a correction turn. PR #2
+  had the 3 known defects and PR #3 24 of 24 in both modes. On PR #4 quick
+  found the seeded regression in the diff; in the review the risk reviewer
+  found it too, but the verifier rejected it with a reason ending "so the
+  candidate's claim does in fact hold". PR #3's 8–9 planning pages took
+  71–72 s (140–175 s one page at a time on 2026-10-18).
+- The `e673889` batch took 12.2 minutes and $0.33 API-equivalent for the six
+  luna runs (reviews and previews), and 14.5 minutes and $5.19 for the three
+  sol runs, $0.20 of it planning.
+- Prompt cache: the 316-file PR read 67–71 % of its input from the cache in
+  all three modes (11–21 % on OpenCode 2.0.22).
+
 ## PAT scopes and `azure.patFile` (2026-10-21)
 
 A new PAT for the test organization, organization-scoped with an expiry and only
@@ -1092,6 +1149,98 @@ token on OpenCode 2.0.32 with `e673889` installed.
   thread). Opened without blocking, a FIFO is now refused in 5 ms under
   OpenCode's Bun 1.4.2 and 7 ms under Node 22, and `/pr-check` with the PAT
   file stayed READY on OpenCode 2.0.32.
+
+## Verifier decisions on known defects (debug records, 2026-10-10 to 2026-10-19)
+
+The saved results and debug records of the 108 review and deep reviews of the
+three test PRs, earlier revisions included, were checked offline: for every
+functional or risk candidate that matches a known defect, the verifier's
+decision, and whether the defect was still among the publishable findings
+afterwards.
+
+| Verifier | Reviews | Known defects among the candidates | Lost at verification |
+| --- | --- | --- | --- |
+| gpt-6-luna | 48 | 423 | 3, in 3 reviews |
+| gpt-6.1-sol | 21 | 158 | none |
+| gpt-5.6-luna | 22 | 373 | 2, in 1 review |
+| gpt-5.6-terra | 15 | 135 | 5, in 5 reviews |
+
+- gpt-6-luna lost PR #2's partial reservation in 2 of 14 reviews and PR #4's
+  regression in the diff in 1 of 18, and none of 371 on PR #3. In two of the
+  three the rejection's own reason establishes the defect ("so the candidate's
+  claim does in fact hold"; "contradicts the README's contract that a rejected
+  batch leaves stock and history unchanged"): the answer filed a defect it had
+  checked under `rejected`. In the third the verifier described the base's
+  validate-then-deduct order as the head's. All three came from the first
+  answer, not from a correction turn. Two reviews with gpt-6-luna#high lost
+  none.
+- gpt-5.6-luna lost two policies in one review: it rejected two candidates as
+  "a valid issue; see the confirmed item with the same root cause" and merged
+  their duplicates into them. A merge into a rejected finding now gets a
+  correction turn.
+- gpt-5.6-terra rejected the configuration defect in all five reviews whose
+  reviewers found it, each time because no code reads the routing settings the
+  change drops, so no failure is reachable: a stricter bar for evidence, not a
+  contradiction.
+
+### A stronger verifier behind gpt-6-luna reviewers (2026-10-22, review only)
+
+OpenCode 2.0.32 with this revision; `models.deep` held gpt-6-luna functional
+and risk reviewers and a gpt-6.1-sol verifier, so `/pr-deep` ran the review
+with only the verifier changed, alternating with `/pr-review` on gpt-6-luna.
+All 28 reviews were COMPLETE; nothing was posted.
+
+| PR | Verifier | Reviews | Review | API cost per review (verifier) | Known defects kept | Correction turns |
+| --- | --- | --- | --- | --- | --- | --- |
+| PR #2, 1 file | gpt-6-luna | 8 | 58–82 s | $0.006 ($0.002) | all 3 in 7 runs; in the 8th no reviewer proposed the partial reservation | 1 |
+| | gpt-6.1-sol | 8 | 75–88 s | $0.049 ($0.046) | all 3 in all 8 | none |
+| PR #4, 35 files | gpt-6-luna | 4 | 41–69 s | $0.016 ($0.002) | the regression in the diff in 2 | none |
+| | gpt-6.1-sol | 4 | 39–95 s | $0.065 ($0.050) | the regression in the diff in 3 | none |
+| PR #3, 316 files | gpt-6-luna | 2 | 245–300 s | $0.19 ($0.02) | policies 24 of 24 | 3 |
+| | gpt-6.1-sol | 2 | 266–335 s | $0.66 ($0.41) | policies 24 of 24 | none |
+
+- Neither verifier lost a known defect this time. The gpt-6-luna verifier once
+  more rejected PR #2's partial reservation with a reason saying that it should
+  not be rejected; a duplicate candidate that it confirmed kept the defect. The
+  gpt-6.1-sol verifier rejected no known defect; on PR #3 it rightly rejected a
+  luna candidate claiming that schema-1 routes lose their retry fields.
+- The PR #4 difference came from the reviewers: in the other runs no candidate
+  named the regression in the diff. Neither combination found the one outside
+  the diff.
+- The gpt-6.1-sol verifier cost 8, 4 and 3.4 times the luna review on the
+  three PRs and added 9–29 s; a gpt-6.1-sol deep review costs $0.11, $1.07 and
+  $3.80 there.
+
+With the debug records above, the gpt-6-luna verifier lost 3 known defects in
+62 reviews and the gpt-6.1-sol verifier none in 35. A stronger model in
+`models.review.verifier` keeps more of what the reviewers find at a few times
+the luna cost; it does not change what they find.
+
+## Live publication with this revision (2026-10-22)
+
+OpenCode 2.0.32 with this revision, gpt-6-luna for review and quick.
+
+- PR #3, 316 files: `/pr-review` was COMPLETE in 271 s (policies 24 of 24;
+  66 candidates, 24 publishable; $0.18 API-equivalent). `/pr-comment
+  --publish` planned 6 pages in 67 s without a correction turn and posted the
+  summary and 23 inline comments, all VERIFIED; the one low finding went to
+  the summary index. No skip relied on another finding (the correction turn
+  for one was seen live in a preview on 2026-10-19). A second publish found
+  all 24 ALREADY_PRESENT.
+- Deleting three of those inline comments in Azure DevOps left their threads
+  listed, flagged deleted, with the comments flagged deleted and without
+  content. The next publish was POSTED with 21 ALREADY_PRESENT and 3 DELETED,
+  using four GET requests and no write.
+- PR #2, 1 file: a `/pr-quick` (35 s) planned exactly the four items that AZPR
+  had posted there on 2026-10-11 and that were later deleted by hand; on
+  2026-10-21 publishing them had given four UNVERIFIED items and FAILED. This
+  revision reported four DELETED items, the receipt POSTED, with four GET
+  requests and no write. With that PR's publication record moved aside, the
+  same quick review then posted its summary and three inline comments, all
+  VERIFIED and each naming the quick method in its disclosure line; a second
+  publish found all four ALREADY_PRESENT.
+- PR #4: two quick reviews (25 and 34 s) reported no finding, so nothing was
+  posted there.
 
 ## Reviewer rounds and session cleanup (debug records, offline tests)
 
@@ -1153,8 +1302,6 @@ transient failure, and its error names the last activity.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.
-- A live publication with this revision: the rule against skips that rely on
-  another finding.
 - Azure DevOps Server, and repository files that are not UTF-8 text.
 - `azure.caFile` with a real proxy: the corporate network above ran with
   `verifyTls: false`; whether its proxy inspects TLS, and trusting its root CA
@@ -1168,13 +1315,10 @@ transient failure, and its error names the last activity.
 - Streamed reasoning from a real reasoning model: the fixture streams answer
   text only. A model that thinks without streaming anything looks silent to
   the watchdog for that time.
-- The prompt cache of a large PR on OpenCode 2.0.32: measured only incidentally
-  by the quick/review comparison above (the 316-file PR read 60–71 % of its
-  input from the cache in both modes); on 2.0.22 it read 11–21 %.
 - Planning more than two pages at a time (not measured), and `/pr-stop` while
   pages are planned side by side with a real provider (only the fixtures and
   offline tests cancel running pages).
 - `/pr-quick` beyond these runs on three test PRs with one model: its
   false-positive rate and misses on other PRs and models, a published quick
-  review (only previews were made), and combining duplicates on a real
-  multi-shard PR other than the test PR.
+  review of a multi-shard PR (only the 1-file PR's was posted), and combining
+  duplicates on a real multi-shard PR other than the test PR.
