@@ -261,8 +261,9 @@ lists every thread, skips items whose marker exists, creates the rest with
 `POST …/threads` (right-side `threadContext` for inline items; Azure DevOps adds
 the iteration context itself), records each result immediately, and reads all
 markers back (`VERIFIED`). Creation results are `POSTED`, `ALREADY_PRESENT`,
-`FAILED`, `UNCERTAIN` (resolved by read-back) or `UNVERIFIED`. Re-running
-publication is safe.
+`FAILED`, `UNCERTAIN` (resolved by read-back), `UNVERIFIED` or `DELETED` (a
+recorded thread whose comment someone deleted on the PR; it is not posted
+again). Re-running publication is safe.
 
 ## Authorization and isolation
 

@@ -1,7 +1,7 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { publishableFindings, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
-import { markersInThreads } from './azure.mjs';
+import { markersInThreads, deletedThreads } from './azure.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -305,7 +305,9 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   lock between processes): an attempt is saved before its request and
  *   nothing is sent if that fails; a create that returned a thread ID is never
  *   sent again, and one with an unknown outcome not within UNCERTAIN_SETTLE_MS.
- * - Reads every created marker back from Azure DevOps.
+ *   The thread of an item found on the PR is recorded the same way.
+ * - Reads every created marker back from Azure DevOps. A recorded thread whose
+ *   comment was deleted on the PR is DELETED: settled, and never sent again.
  */
 export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS }) {
   const items = publicationItems(review.plan);
@@ -320,9 +322,13 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
     ...entry, at: at() });
-  // Attempts whose marker is now visible are settled.
-  const visible = items.filter(item => present.has(item.marker) && attempts.get(item.marker)).map(item => item.marker);
-  if (visible.length) await attempts.remove(visible).catch(() => {});
+  // Remember the thread of every item found on the PR (also one an uncertain create or an earlier
+  // version left without a record), so a comment deleted there later is not posted again.
+  for (const item of items) {
+    const threadId = present.get(item.marker), earlier = attempts.get(item.marker);
+    if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
+    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
+  }
   let written = 0, halted = '';
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
@@ -330,7 +336,8 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     if (halted) { record(item, { state: 'FAILED', error: halted }); continue; }
     const earlier = attempts.get(item.marker);
     if (earlier?.state === 'CREATED') {
-      // Azure DevOps returned a thread for it; a lagging thread list is no reason to send it again.
+      // Azure DevOps returned a thread for it; a lagging thread list is no reason to send it again,
+      // and a comment someone deleted on the PR stays deleted (read-back reports it).
       record(item, { state: 'POSTED', threadId: earlier.threadId, earlierAttempt: earlier.review ?? true });
       continue;
     }
@@ -366,12 +373,13 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   }
   let readBack = 'complete';
   try {
-    const after = markersInThreads(await azure.threads(run, review.snapshot));
+    const listedAfter = await azure.threads(run, review.snapshot);
+    const after = markersInThreads(listedAfter), removedAfter = deletedThreads(listedAfter);
     for (const item of items) {
       const entry = ledger.get(item.marker);
       if (!['POSTED', 'UNCERTAIN', 'FAILED'].includes(entry.state)) continue;
       if (after.has(item.marker)) Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker) });
-      else if (entry.state === 'POSTED') entry.state = 'UNVERIFIED';
+      else if (entry.state === 'POSTED') entry.state = removedAfter.has(entry.threadId) ? 'DELETED' : 'UNVERIFIED';
     }
   } catch (error) {
     if (!run.active) throw error;
@@ -379,7 +387,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   }
   await persist?.();
   const states = items.map(item => ledger.get(item.marker).state);
-  const succeeded = states.filter(state => ['VERIFIED', 'ALREADY_PRESENT', 'POSTED'].includes(state)).length;
+  const succeeded = states.filter(state => ['VERIFIED', 'ALREADY_PRESENT', 'POSTED', 'DELETED'].includes(state)).length;
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);

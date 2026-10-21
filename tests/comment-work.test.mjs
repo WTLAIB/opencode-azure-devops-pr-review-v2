@@ -506,6 +506,56 @@ test('a create that returned a thread is not sent again while the thread list la
   assert.ok([...review.publication.values()].every(entry => entry.state === 'UNVERIFIED' && entry.threadId > 50 && entry.earlierAttempt), 'Still reported as not read back.');
 });
 
+// As in Azure DevOps: the thread stays listed, flagged deleted, and the deleted comment has no content.
+const deleteOnPr = thread => Object.assign(thread, { isDeleted: true, comments: [{ id: 1, isDeleted: true, commentType: 'text' }] });
+
+test('a comment deleted on the PR is DELETED, settled and never posted again, also for another review', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'POSTED');
+  assert.deepEqual((await publishPlan({ run, review, azure: api, attempts })).counts, { ALREADY_PRESENT: 3 }, 'A re-run while the comments are visible keeps their record.');
+  const [, ...inline] = azure.state.threads;
+  inline.forEach(deleteOnPr);
+  const writes = azure.callsTo('createThread').length;
+  const again = await publishPlan({ run, review, azure: api, attempts });
+  assert.equal(again.status, 'POSTED', 'A deleted comment is not a failure to retry.');
+  assert.deepEqual(again.counts, { ALREADY_PRESENT: 1, DELETED: 2 });
+  assert.deepEqual([...review.publication.values()].filter(entry => entry.state === 'DELETED').map(entry => entry.threadId), inline.map(thread => thread.id));
+  const other = (await plannedReview(t, azure)).review;
+  assert.deepEqual((await publishPlan({ run, review: other, azure: api, attempts })).counts, { ALREADY_PRESENT: 1, DELETED: 2 });
+  assert.equal(azure.callsTo('createThread').length, writes, 'Neither review posts the deleted comments again.');
+});
+
+test('a comment found on the PR without a record of its own is remembered, so its deletion is recognized', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  await publishPlan({ run, review, azure: api, attempts });
+  // Posted before this record existed, or by another installation.
+  for (const marker of Object.keys(attempts.entries)) delete attempts.entries[marker];
+  assert.deepEqual((await publishPlan({ run, review, azure: api, attempts })).counts, { ALREADY_PRESENT: 3 });
+  assert.deepEqual(Object.values(attempts.entries).map(entry => [entry.state, entry.threadId]), azure.state.threads.map(thread => ['CREATED', thread.id]));
+  azure.state.threads.forEach(deleteOnPr);
+  const writes = azure.callsTo('createThread').length;
+  assert.deepEqual((await publishPlan({ run, review, azure: api, attempts })).counts, { DELETED: 3 });
+  assert.equal(azure.callsTo('createThread').length, writes);
+});
+
+test('a thread that is already deleted when it is read back is DELETED, not UNVERIFIED', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  azure.state.fail.createThread = () => {
+    const thread = deleteOnPr({ id: azure.state.nextThread++ });
+    azure.state.threads.push(thread);
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: thread.id, comments: [] }) };
+  };
+  const result = await publishPlan({ run, review, azure: api, attempts });
+  assert.equal(result.status, 'POSTED');
+  assert.ok([...review.publication.values()].every(entry => entry.state === 'DELETED' && entry.threadId >= 1000));
+});
+
 test('nothing is sent when the attempt cannot be saved first', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);

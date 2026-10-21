@@ -220,6 +220,21 @@ export function markersInThreads(threads) {
   return found;
 }
 
+/**
+ * IDs of threads whose first comment, the one AZPR posts when it creates a
+ * thread, was deleted on the PR. Azure DevOps keeps listing such a thread
+ * (flagged deleted once no comment is left) but drops the deleted comment's
+ * content, so its marker is gone and only the thread ID identifies it.
+ */
+export function deletedThreads(threads) {
+  const deleted = new Set();
+  for (const thread of threads) {
+    const first = Array.isArray(thread?.comments) ? thread.comments.find(comment => comment?.id === 1) : undefined;
+    if (Number.isSafeInteger(thread?.id) && (thread.isDeleted === true || first?.isDeleted === true)) deleted.add(thread.id);
+  }
+  return deleted;
+}
+
 /** Git's heuristic: a NUL byte in the first 8000 bytes means binary content. */
 export function isBinary(bytes) {
   const length = Math.min(bytes.length, 8000);

@@ -133,11 +133,15 @@ test('check reports and publication ledgers are deterministic', () => {
     [{ name: 'PR metadata', ok: true, detail: 'fine' }, { name: 'HEAD source read', ok: false, detail: 'denied | twice' }], { checkedModelSlots: ['risk'], profile: 'review' });
   assert.match(check, /partial list/);
   assert.match(check, /HEAD source read \| FAILED \| denied twice/);
-  const review = { id: 'abcdef12', publication: new Map([['m1', { kind: 'summary', state: 'VERIFIED', threadId: 5 }], ['m2', { kind: 'inline', findingId: 'F-1', path: '/a', startLine: 3, state: 'FAILED', error: 'HTTP 503' }]]) };
-  const ledger = renderPublication(review, { counts: { VERIFIED: 1, FAILED: 1 }, readBack: 'complete' });
+  const review = { id: 'abcdef12', publication: new Map([['m1', { kind: 'summary', state: 'VERIFIED', threadId: 5 }], ['m2', { kind: 'inline', findingId: 'F-1', path: '/a', startLine: 3, state: 'FAILED', error: 'HTTP 503' }],
+    ['m3', { kind: 'inline', findingId: 'F-2', path: '/b', startLine: 7, state: 'DELETED', threadId: 236, earlierAttempt: 'feedbeef' }]]) };
+  const ledger = renderPublication(review, { counts: { VERIFIED: 1, FAILED: 1, DELETED: 1 }, readBack: 'complete' });
   assert.match(ledger, /PR summary: VERIFIED; thread=5/);
   assert.match(ledger, /F-1 \(\/a:3\): FAILED; error=HTTP 503/);
-  assert.match(ledger, /safe to retry with \/pr-comment abcdef12 --publish/);
+  assert.match(ledger, /F-2 \(\/b:7\): DELETED; thread=236/);
+  assert.match(ledger, /FAILED entries are safe to retry with \/pr-comment abcdef12 --publish/);
+  assert.match(ledger, /DELETED entries were created by AZPR and later deleted on the PR; AZPR does not post them again/);
+  assert.doesNotMatch(ledger, /UNVERIFIED entries are safe to retry/, 'Retrying never re-sends an item whose create returned a thread.');
   assert.match(renderReviewSummary([], 'zh-TW'), /未發現可確認缺陷/);
 });
 

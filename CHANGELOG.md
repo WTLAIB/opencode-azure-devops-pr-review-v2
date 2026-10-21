@@ -15,7 +15,8 @@ implementation, not an already published release.
   retries, cancellation and visible coverage gaps.
 - Comment previews, explicit publication, stable duplicate markers and
   read-back of posted comments. Quick comments disclose that they were not
-  independently verified.
+  independently verified. A comment someone deletes on the PR is reported as
+  `DELETED` and not posted again.
 - Two comment-planning pages at a time, with deterministic page-order assembly.
 - Persistent private reports and publication records, plus Azure proxy and
   additional CA configuration.

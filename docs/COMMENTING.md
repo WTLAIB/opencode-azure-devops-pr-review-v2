@@ -157,16 +157,20 @@ Publication is deterministic runtime code using the Azure DevOps REST API
    automatically.
 4. List the threads again: created and uncertain items whose marker is present
    become `VERIFIED`; an uncertain item without a marker stays `UNCERTAIN`,
-   because Azure DevOps may still finish the request.
+   because Azure DevOps may still finish the request. A created item whose
+   recorded thread is listed with its comment deleted is `DELETED`; one whose
+   marker is simply not found is `UNVERIFIED`.
 
 Before each create, the attempt is recorded under `attempts/` in the state
-directory, per PR and marker and shared by every review of that PR. If that
-record cannot be written, nothing more is sent and the item is `FAILED`. A
+directory, per PR and marker and shared by every review of that PR; an item
+found on the PR is recorded with its thread as well. If that record cannot be
+written before a create, nothing more is sent and the item is `FAILED`. A
 later publication, from this review or another review of the same PR:
 
 - never sends an item again whose create returned a thread ID, even while the
   thread list does not show it yet (it is reported as `POSTED` or
-  `UNVERIFIED` with that thread);
+  `UNVERIFIED` with that thread) and even after someone deleted the comment
+  (`DELETED`);
 - does not send an item with an unknown outcome until its marker appears or 15
   minutes have passed since that attempt (`UNCERTAIN` until then);
 - may send an item again whose create failed with a definite error.
@@ -181,9 +185,10 @@ between processes: two separate OpenCode processes (for example a
 PR at the same moment can both create an item. The TUI and desktop app use
 the background service, so this needs a deliberately separate process.
 
-The receipt status is `POSTED` when every item is verified or already present,
-`PARTIALLY_POSTED` when some failed, and `FAILED` when none succeeded. Run the
-same command again to finish: existing items are skipped by their markers.
+The receipt status is `POSTED` when every item is verified, already present or
+deleted on the PR, `PARTIALLY_POSTED` when some failed, and `FAILED` when none
+succeeded. Run the same command again to finish: existing items are skipped by
+their markers.
 
 ### Markers
 
@@ -211,7 +216,14 @@ second issue on that anchor has ordinal 1 and is posted, and the summary is
 posted again only when the set of inline markers differs. A later review
 therefore does not guarantee a summary that says it was verified.
 
-Deleting a thread or comment removes its marker; the next publish posts it again.
+A comment someone deletes on the PR stays deleted. Azure DevOps keeps listing
+its thread, flagged deleted and without the comment's text, so the marker is
+gone; AZPR recognizes the thread by the ID it recorded (from its create, or
+from an earlier publication that found the comment) and reports the item as
+`DELETED` instead of posting it again, also for a later review whose item has
+the same marker. The record, and with it this protection, lasts 90 days from
+when AZPR created or first found the comment; a comment deleted before this
+machine's AZPR recorded it can be posted again.
 
 ## Retention
 

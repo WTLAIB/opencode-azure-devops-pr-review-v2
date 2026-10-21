@@ -91,7 +91,9 @@ in parallel.
    that a cancellation interrupted have no `tokens`.
 4. For comments: `comment-plan.json` and the publication ledger in the receipt.
    `FAILED` and `UNVERIFIED` items are safe to publish again; existing items are
-   skipped by their markers.
+   skipped by their markers, and an `UNVERIFIED` item is never sent twice.
+   `DELETED` items were deleted on the PR after AZPR created them and are not
+   posted again.
 
 Common receipts:
 

@@ -359,7 +359,8 @@ commit, lists every existing thread, skips items whose hidden marker already
 exists, creates the rest with the exact saved text, and reads the markers back.
 Markers are stable fingerprints of PR, file and anchored lines, so a later
 review of unchanged code does not post duplicates. A failed or uncertain item can
-simply be published again. See [commenting](docs/COMMENTING.md).
+simply be published again; a comment someone deleted on the PR is reported as
+`DELETED` and not posted again. See [commenting](docs/COMMENTING.md).
 
 ## Retention and privacy
 

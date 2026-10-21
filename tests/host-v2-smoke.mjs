@@ -322,7 +322,14 @@ try {
   assert.match(republished, /ALREADY_PRESENT/);
   assert.equal(azure.callsTo('createThread').length, writesBefore, 'No duplicate comments after a restart.');
   assert.equal(requests.length, beforeRepublish, 'Re-publishing a saved plan needs no model.');
-  results.comments = 'PREVIEW, POSTED, restart, re-run ALREADY_PRESENT without duplicates';
+  // Someone deletes the inline comment: as in Azure DevOps the thread stays listed, flagged deleted, without content.
+  Object.assign(created.find(thread => thread.threadContext), { isDeleted: true, comments: [{ id: 1, isDeleted: true, commentType: 'text' }] });
+  await api(`/api/session/${reviewOrigin}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+  const afterDelete = await latest(reviewOrigin);
+  assert.match(afterDelete, /\] POSTED/, afterDelete);
+  assert.match(afterDelete, /\(\/src\/fixture\.js:\d+\): DELETED; thread=\d+/, afterDelete);
+  assert.equal(azure.callsTo('createThread').length, writesBefore, 'A comment deleted on the PR is not posted again.');
+  results.comments = 'PREVIEW, POSTED, restart, re-run ALREADY_PRESENT without duplicates, a deleted comment DELETED and not posted again';
 
   // 3b. Quick review: one reviewer session, no verifier; the comment preview names the method.
   const quickOrigin = await newOrigin('Quick');

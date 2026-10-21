@@ -150,11 +150,12 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
 
 ## Remaining validation work
 
-1. Publish a large PR with this revision to confirm the planner rule on skips
-   that rely on another finding. Moved findings, decision rows in the wrong list
-   and the duplicate check worked in live reviews; an earlier commit passed
-   review and publication of 25 items on a 316-file PR (see
-   [validation](VALIDATION.md)).
+1. Publication on other repositories and organizations. On the 316-file test
+   PR this revision published 24 items, all read back, re-ran without a write
+   and reported comments deleted by hand as `DELETED`; the planner made no skip
+   that relied on another finding there, and the correction turn for one was
+   seen live in a preview. Moved findings, decision rows in the wrong list and
+   the duplicate check worked in live reviews (see [validation](VALIDATION.md)).
 2. Measure how often correction turns and retries happen per model, and tune
    `workflow` defaults from those numbers. On the 316-file PR,
    `parallelSessions` 8 with `azure.concurrency` 6 cut the review from 719 s
@@ -172,7 +173,8 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    Prompt caching is the host's part: with the ChatGPT sign-in route the
    1-file PR read 4–5 % of its input from the cache on OpenCode 2.0.22, which
    sent no session headers, and 54 % on 2.0.32. The 316-file PR read 11–21 % on
-   2.0.22 and is not yet measured on 2.0.32.
+   2.0.22 and 67–71 % on 2.0.32 in all three modes (see
+   [validation](VALIDATION.md)).
 4. Cross-shard evidence: a new test in one shard that contradicts unchanged
    code in another shard is found with content search (`azpr_search_code`, over
    the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and
@@ -182,16 +184,22 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
    judge the candidates and added 1 new finding in 616 decisions over 21 live
    runs, so the initial reviewers' model decides what is found. `/pr-deep`
    is for that: the review with the stronger models of `models.deep`, for
-   selected PRs. Confirm on other real PRs.
+   selected PRs. Confirm on other real PRs. A stronger verifier does keep
+   more of what the reviewers find: gpt-6-luna as verifier rejected 3 known
+   defects in 62 reviews, two of them with a reason that confirms the defect,
+   and gpt-6.1-sol none in 35; behind gpt-6-luna reviewers it cost 3–8 times
+   the luna review.
 5. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
 6. Quick review: two runs per mode on the three test PRs with gpt-6-luna used
    36–50 % of the review's model requests and 34–68 % of its input with the
    same planted-defect results except one configuration defect (see
-   [validation](VALIDATION.md)). Still open: other PRs and models, a published
-   quick review, and other multi-shard PRs: on the 316-file PR a shard's tests
-   led its reviewer into another shard's changed files (8–9 repeated defects
-   in 32–35 findings), and comment planning combined 23 of 25 such pairs into
+   [validation](VALIDATION.md)). A quick review of the 1-file test PR was
+   published and read back. Still open: other PRs and models, a published
+   multi-shard quick review, and other multi-shard PRs: on the 316-file PR a
+   shard's tests led its reviewer into another shard's changed files (8–9
+   repeated defects in 32–35 findings), and comment planning combined 23 of 25
+   such pairs into
    one comment over three runs. The quick follow-up for unfinished work has
    not run live yet (no PARTIAL answer in 24 runs); the larger loss is a
    reviewer that answers after reading only the diffs, which on PR #4 misses
