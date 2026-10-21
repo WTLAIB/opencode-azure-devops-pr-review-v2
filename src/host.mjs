@@ -6,9 +6,9 @@
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
  */
-export const TESTED_HOST_VERSION = '2.0.32';
+export const TESTED_HOST_VERSION = '2.1.2';
 
-// Text OpenCode 2.0.32 queues after resuming an interrupted text stream.
+// Text OpenCode (2.0.32 through 2.1.2) queues after resuming an interrupted text stream.
 export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
 
 // Context message types that mean someone other than the admitted prompt
@@ -49,7 +49,7 @@ export function hostCapabilities(context) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.0.32 emits one delta event per streamed chunk of answer text, reasoning
+ * 2.1.2 emits one delta event per streamed chunk of answer text, reasoning
  * or tool-call input; the projected session context shows the text only once
  * the step ends.
  */
@@ -71,7 +71,7 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.32), whose fetch accepts
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2), whose fetch accepts
  * per-request `proxy` and `tls` options. Node's fetch silently ignores both, so
  * a configured proxy would be bypassed; callers refuse instead.
  */

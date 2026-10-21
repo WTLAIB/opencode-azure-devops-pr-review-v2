@@ -35,13 +35,14 @@ published. Earlier live-run evidence and limitations below are unchanged.
 ## Environment
 
 Ubuntu 22.04.5 LTS (WSL2, kernel 6.18), Node 22.23.3, OpenCode CLI 2.0.22,
-Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. Since
-2026-10-17 the tested host is OpenCode CLI 2.0.32
-([below](#opencode-2032-the-tested-host-2026-10-17)).
+Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. From
+2026-10-17 the tested host was OpenCode CLI 2.0.32
+([below](#opencode-2032-2026-10-17)); since 2026-10-22 it is 2.1.2
+([below](#opencode-212-the-tested-host-2026-10-22)).
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 355 tests across settings (including the
+`npm run check` and `npm test` pass: 357 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
@@ -169,6 +170,13 @@ re-run and expects `DELETED` without a write. Reading back without the deleted
 check, or dropping the record of a comment once it is seen (the earlier
 behaviour, which posted it again after a deletion), made the matching tests
 fail.
+The move to OpenCode 2.1.2 (2026-10-22) adds tests for: a used-up provider
+quota (`provider.quota`) or OpenCode free-model limit (`provider.free-limit`)
+named in the stage error, with or without a valid HTTP status and without the
+provider's own text, classified as permanent, and, end to end, a 429 quota
+failure that starts no second session and says why in the receipt; and the
+tested host version. Removing the quota rule from a copy of the code made
+these tests fail.
 
 ## REST API version check
 
@@ -195,7 +203,7 @@ REST service and one foreign stdio MCP server. Both passed:
 | Restart | After restarting the host, `/pr-comment --publish` returned POSTED with ALREADY_PRESENT, no new writes and no model request. |
 | Deleted comment (2026-10-22, OpenCode 2.0.32) | After the inline comment was deleted the way Azure DevOps deletes one (thread listed, flagged deleted, comment without content), `/pr-comment --publish` returned POSTED with that item `DELETED` and no new write. Fresh and `--replace` runs. |
 | Tool scopes | An ordinary conversation's model request carried the foreign MCP tool and no `azpr_*` tool. |
-| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. Since 2026-10-17 the fixture also greps `/etc`, an existing directory outside the project, which is refused with the same pointer on 2.0.22, 2.0.31 and 2.0.32 (see [OpenCode 2.0.32](#opencode-2032-the-tested-host-2026-10-17)). |
+| Unattended approvals | A reviewer's native `grep` on the repository path `/scale_lab` was refused with a pointer to the azpr tools (`permission.rejected`) instead of waiting; no approval request remained open. Since 2026-10-17 the fixture also greps `/etc`, an existing directory outside the project, which is refused with the same pointer on 2.0.22, 2.0.31 and 2.0.32 (see [OpenCode 2.0.32](#opencode-2032-2026-10-17)). |
 | `/pr-stop` | A review hanging at the provider was CANCELLED. |
 | Provider retry (2026-10-14) | The fake provider answered the risk reviewer's first request with HTTP 503. OpenCode retried it in the same session after its backoff (1.6–2.3 s in eleven runs, two of them in CI); AZPR's `retry` hook allowed it (attempt 2), the resend passed the primary-request check (4 authorized primary requests, none rejected) and the review was COMPLETE without a new session. Fresh and `--replace` runs. |
 | Stalled and long streams (fresh run, 2026-10-15) | With `workflow.stageIdleSeconds` 60, two reviews ran at once. In the first, the fake provider sent the functional reviewer's response headers and then nothing. After 60.0 s the watchdog stopped the stage: `failure=idle`, error `Stage inactivity watchdog stopped this stage: no activity for 60 s after model request 1 was sent (workflow.stageIdleSeconds).`, an inactivity notice and a PROGRESS retry notice naming it. AZPR interrupted the session, OpenCode closed the provider stream and confirmed settlement (no cancellation warning), and a new session completed the review. In the second, the functional answer streamed one chunk per second for 66.0 s, longer than the window, and ran on without a stop or a new session. Both were COMPLETE 66.3 s after the commands. |
@@ -222,10 +230,62 @@ rule so the offline runtime tests catch a regression.
 | Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
 | REST calls | 74 |
 
-## OpenCode 2.0.32, the tested host (2026-10-17)
+## OpenCode 2.1.2, the tested host (2026-10-22)
 
-Since 2026-10-17 the tested host is OpenCode CLI 2.0.32, the release the
-user's company runs (`TESTED_HOST_VERSION` in `src/host.mjs`; CI runs the
+Since 2026-10-22 the tested host is OpenCode CLI 2.1.2, which the user's
+company runs (`TESTED_HOST_VERSION`; CI runs the exact-host fixtures with it).
+2.1.0 and 2.1.1 were not tested. Reviewing the 146 commits from `v2.0.32` to
+`v2.1.2` of the OpenCode source found nothing AZPR depends on changed:
+
+| Area | 2.0.32 → 2.1.2 |
+| --- | --- |
+| Plugin context | `session.list` was added (paged, 50 per page); every method AZPR calls is unchanged. Session archiving exists only in the HTTP API. |
+| Hooks AZPR uses | `prompt`, `context`, `model.request` (its `kind`), `retry` (`attempt`, `decision`), `permission.evaluate` and the tool hooks keep their shapes; the retry schedule moved into a shared module with the same event. |
+| v2.1 breaking changes | Provider replay data renamed to `native`, compactions referencing kept messages, `session.compacted` removed, credential form answers in `metadata`: AZPR reads none of them. A session that 2.1 compacts cannot be loaded by 2.0.x, so a downgrade needs the database backup taken before the upgrade. |
+| Host constants | The continuation text, the streamed event names and the embedded Bun 1.4.2 are unchanged; permission defaults are unchanged. A built-in `todowrite` tool exists behind an experimental flag; private roles see only their allowlist. |
+| Errors | Provider session errors may carry `retryAfterMs`, and OpenCode's free models report `provider.free-limit`. AZPR now treats it and `provider.quota` as permanent (see offline tests); before, a 429 status made them look transient and a new session repeated the failure. |
+| Idle locations | 2.0.32 interrupted the sessions of a location without session events for 60 minutes; 2.1.2 keeps a location with running sessions or background jobs (`experimental.location_idle_timeout` changes the period). A review's sessions emit events throughout, and AZPR's stage inactivity watchdog stops a silent stage after 600 s by default, long before either host would. |
+
+- Exact-host fixtures: `host-v2-smoke.mjs` fresh and `--replace` and
+  `host-v2-comment-scale.mjs` passed on 2.1.2 twice: first with the previous
+  revision changed only in its tested version (2.1.2 installed into a
+  disposable prefix), then with this revision on the upgraded system
+  install. Every scenario passed, including the provider 503 retried in place
+  (4 authorized primary requests, none rejected), the inactivity watchdog, the
+  refused compaction and shard split, publication with a deleted comment, and
+  the proxy.
+- Upgrade: with the background service stopped, its database was copied
+  first; then `npm install -g @opencode/cli@2.1.2` and a start. The previous
+  revision's `/pr-check` on the 1-file PR was READY on 2.1.2 with a host
+  notice; with this revision it was READY without one.
+
+Live on the upgraded background service with this revision (gpt-6-luna for
+quick and review, `workflow.parallelSessions` 8, each review followed by a
+comment preview; nothing was posted):
+
+| PR | Mode | Review | Sessions / requests | Input (cached) | Findings | Preview (inline) |
+| --- | --- | --- | --- | --- | --- | --- |
+| PR #2, 1 file | quick | COMPLETE, 35 s | 1 / 4 | 26 K (63 %) | the 3 known defects | 20 s (3) |
+| | review | COMPLETE, 79 s | 3 / 14, 1 correction | 100 K (72 %) | the 3 known defects | 19 s (3) |
+| PR #4, 35 files | quick | COMPLETE, 52 s | 2 / 7 | 176 K (61 %) | the seeded regression in the diff | 8 s (1) |
+| | review | COMPLETE, 86 s | 5 / 25 | 684 K (72 %) | no candidate for either seeded regression; the verifier rightly rejected the one other candidate | 3 s (0) |
+| PR #3, 316 files | quick | COMPLETE, 134 s | 13 / 56 | 2.07 M (71 %) | policies 23 of 24 (not `queue_priority`), not the configuration defect | 65 s (23, 3 combined) |
+| | review | COMPLETE, 370 s | 39 / 151, 2 corrections | 4.68 M (71 %) | policies 24 of 24, not the configuration defect, one false low finding on a test file (summary index only) | 87 s (25; 3 low skipped) |
+
+- The 12 runs had no AZPR retry, failed stage, inactivity stop, tool timeout,
+  blocked native tool, host retry, Azure DevOps retry or warning, and every
+  session was confirmed stopped; one reviewer tool call on PR #3 returned an
+  error. `/pr-check` was READY before each review, without a host notice.
+- The results stay within gpt-6-luna's earlier runs on 2.0.32: the PR #4
+  regression outside the diff is still missed, and the quick miss of one
+  policy and the false test-file finding occurred before. PR #3's review took
+  longer than earlier runs (226–300 s); it ran eight duplicate checks, for
+  verified findings that ended up in the same files.
+
+## OpenCode 2.0.32 (2026-10-17)
+
+From 2026-10-17 to 2026-10-21 the tested host was OpenCode CLI 2.0.32, the release the
+user's company ran (`TESTED_HOST_VERSION` in `src/host.mjs`; CI runs the
 exact-host fixtures with it), and receipts add a host notice for any other
 version. Other results on this page used 2.0.22 unless noted; 2.0.31 was
 checked on the way. The published 2.0.31 and 2.0.32 binaries embed Bun 1.4.2

@@ -282,7 +282,7 @@ try {
     'A reviewer searched file contents at HEAD through azpr_search_code.');
   assert.equal(azure.callsTo('items').filter(call => call.query.$format === 'zip').length, 1, 'Content search reads one repository archive per run and commit.');
   const afterGrep = count => reviewRequests.find(request => request.model === 'functional' && request.toolResults === count)?.lastTool ?? '';
-  // OpenCode 2.0.32 reports that the path does not exist; a host that asks instead gets AZPR's refusal with guidance.
+  // Depending on the host, OpenCode reports that the path does not exist (2.0.32 did) or asks, which AZPR refuses with guidance.
   assert.match(afterGrep(2), /outside the local OpenCode project|Search path does not exist: \/scale_lab/, 'A native grep on a repository path gets an answer instead of waiting for approval.');
   assert.match(afterGrep(3), /outside the local OpenCode project/, 'A native grep outside the project is refused with guidance instead of waiting for approval.');
   assert.equal((await api('/api/permission/request')).data?.length ?? 0, 0, 'No private session waits for an approval.');

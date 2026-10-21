@@ -176,6 +176,24 @@ test('provider failures expose status and observed tool turns while retaining pr
   }
 });
 
+test('a used-up quota or free-model limit is named and not retried, with or without an HTTP status', async () => {
+  for (const [type, status, named] of [['provider.quota', 429, /usage quota as used up \(provider\.quota\)/], ['provider.free-limit', 429, /free model's usage limit as reached \(provider\.free-limit\)/],
+    ['provider.quota', undefined, /provider\.quota/], ['provider.free-limit', 'PRIVATE_STATUS', /provider\.free-limit/]]) {
+    const detail = { type, ...(status === undefined ? {} : { status }), message: 'PRIVATE_PROVIDER_DETAIL', response: { body: 'PRIVATE_REQUEST_BODY' } };
+    const { context } = host({ get: async () => ({ id: sessionID, outcome: 'failed' }),
+      context: async () => [{ id: 'msg_input', type: 'user', text: input }, assistant({ finish: 'error', error: detail }), { ...idle(), outcome: 'failed' }] });
+    await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+      assert.match(error.message, named);
+      assert.match(error.message, /new session would fail the same way and is not started/);
+      assert.equal(error.message.includes('HTTP'), status === 429, 'Only a valid status is shown.');
+      assert.deepEqual(error.execution.provider, { ...(status === 429 ? { status } : {}), exhausted: type, toolCallsObserved: 0 });
+      assert.doesNotMatch(error.message + JSON.stringify(error.execution), /PRIVATE_/);
+      assert.equal(classifyFailure(error), 'permanent', `${type} ${status}`);
+      return true;
+    });
+  }
+});
+
 test('untrusted or missing provider metadata and interrupted runs keep the generic execution failure', async () => {
   for (const detail of [
     { type: 'provider.auth', status: '403 PRIVATE_DETAIL' },
@@ -317,6 +335,8 @@ test('a follow-up prompt in the same session only examines its own turn', async 
 test('failure classification drives stage retries and shard splitting', () => {
   const failure = (execution, extra = {}) => Object.assign(new Error('x'), { execution }, extra);
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 429 } })), 'transient');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 429, exhausted: 'provider.quota' } })), 'permanent');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { exhausted: 'provider.free-limit' } })), 'permanent');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 503 } })), 'transient');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 401 } })), 'permanent');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 413 } })), 'overflow');

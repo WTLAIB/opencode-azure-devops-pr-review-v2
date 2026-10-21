@@ -63,10 +63,10 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(listOf({}), null);
   assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
-  const capabilities = hostCapabilities({ app: { version: '2.0.32' }, permission: { hook() {} }, tool: { transform() {} } });
+  const capabilities = hostCapabilities({ app: { version: '2.1.2' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
-  assert.equal(TESTED_HOST_VERSION, '2.0.32');
-  for (const version of ['2.0.22', '2.0.31', '2.0.33']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
+  assert.equal(TESTED_HOST_VERSION, '2.1.2');
+  for (const version of ['2.0.32', '2.1.1', '2.1.3']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);

@@ -100,6 +100,7 @@ Common receipts:
 | Message | Next step |
 | --- | --- |
 | `Azure DevOps rejected the PAT for organization …` | Renew or correct the PAT in `azure.pat` or the file named by `azure.patFile` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart OpenCode. |
+| `The provider reports the usage quota as used up (provider.quota)` / `OpenCode reports the free model's usage limit as reached (provider.free-limit)` | The stage failed without a new-session retry, which would fail the same way. Choose another model in the settings, or wait until the provider's quota or the free limit resets. |
 | `azure.patFile could not be used …` / `azure.patFile changed since OpenCode loaded it` | Make it a regular file you own with only the PAT (`chmod 600`), or restart OpenCode after replacing it. |
 | `Azure DevOps refused … (HTTP 403 …)` | Add the missing PAT scope or project/repository access. |
 | `network error (ConnectionRefused)` with a hint to set `azure.proxy` | dev.azure.com is reachable only through a proxy; set `azure.proxy` (see [proxies](AZURE_DEVOPS.md#proxies-and-tls-inspection)). |

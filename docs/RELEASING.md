@@ -21,10 +21,10 @@ until a reviewed commit is tagged and published.
 4. Move the changelog's pending section to `0.1.0` with the actual release date,
    and remove the draft paragraph from the release notes when publishing.
 
-The current quickstart uses the implementation commit `3bee7ef`, the first
-whose runtime supports everything the quickstart configures (`azure.patFile`
-and the deep-model rows of `/pr-check`), so its download works before the first
-release exists. It does not pretend that
+The current quickstart uses the implementation commit `e678989`, the first
+whose tested host is OpenCode 2.1.2 and whose runtime supports everything the
+quickstart configures (`azure.patFile` and the deep-model rows of `/pr-check`),
+so its download works before the first release exists. It does not pretend that
 an unpublished version tag is downloadable.
 
 ## Publish when authorized

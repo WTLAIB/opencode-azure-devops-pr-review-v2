@@ -159,7 +159,7 @@ mv -- "$stage/new/$target" "$root/$target"
 success=1
 # Informational output only; an unwritable output must not fail a completed install.
 {
-printf '\nAzure PR Review installed (target host: @opencode/cli 2.0.32; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
+printf '\nAzure PR Review installed (target host: @opencode/cli 2.1.2; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
 1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep, the same review with models stronger than models.review for the PRs that need them, and models.quick.reviewer to enable /pr-quick.
