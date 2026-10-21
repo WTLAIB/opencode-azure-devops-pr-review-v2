@@ -332,6 +332,6 @@ Without `permission.hook` the project boundary for native read tools is left to
 the host's own permission rules; `/pr-check` shows a WARNING row and reviews
 still run.
 Receipts note when the detected OpenCode version differs from the tested one
-(`TESTED_HOST_VERSION`, 2.0.32).
+(`TESTED_HOST_VERSION`, 2.1.2).
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.

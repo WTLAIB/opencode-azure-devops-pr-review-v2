@@ -6,7 +6,7 @@ MCP dependency. Start with the [quickstart](QUICKSTART.md), then use
 this page to understand access, data flow and local retention before reviewing
 your team's repositories.
 
-The tested environment is **OpenCode V2 `@opencode/cli` 2.0.32 on Ubuntu
+The tested environment is **OpenCode V2 `@opencode/cli` 2.1.2 on Ubuntu
 22.04**. Azure DevOps Server URLs are not supported. See
 [current validation](VALIDATION.md) for the distinction between isolated tests
 with fake services and runs against real Azure DevOps and model providers.

@@ -78,7 +78,7 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: '2.0.32' },
+    app: { version: '2.1.2' },
     location: { directory },
     // Like a host catalog, each configured model once, however many roles name it.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
@@ -144,7 +144,7 @@ async function fixture(t, opts = {}) {
             const model = clone(session.model);
             if (result?.$provider) {
               session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
-                error: { type: 'provider.api', status: result.$provider, message: 'fixture' }, content: [] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
+                error: { type: result.$providerType ?? 'provider.api', status: result.$provider, message: 'fixture' }, content: [] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
               session.outcome = 'failed';
               return;
             }
@@ -310,6 +310,15 @@ test('a transient provider failure is retried once in a new session', async t =>
   assert.match(receipt, /azpr-review-risk: FAILED.*failure=transient/);
   assert.match(receipt, /azpr-review-risk: COMPLETE.*attempt=2/);
   assert.ok(f.notices.some(n => /retrying in a new session/.test(n.text)));
+});
+
+test('a used-up quota is not retried in a new session although its status is 429, and the receipt says why', async t => {
+  const f = await fixture(t, { answer({ role }) { return role === 'azpr-review-risk' ? { $provider: 429, $providerType: 'provider.quota' } : undefined; } });
+  const receipt = await f.command();
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 1);
+  assert.match(receipt, /azpr-review-risk: FAILED.*failure=permanent/);
+  assert.match(receipt, /usage quota as used up \(provider\.quota\), so a new session would fail the same way and is not started/);
+  assert.ok(!f.notices.some(n => /retrying in a new session/.test(n.text)));
 });
 
 test('a permanent provider failure is not retried and the sibling review continues', async t => {
@@ -803,7 +812,7 @@ test('a host without the permission hook gets a /pr-check warning about the proj
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.0\.32, the tested version, has the hook\. \|/);
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.1\.2, the tested version, has the hook\. \|/);
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 

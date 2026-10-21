@@ -104,11 +104,19 @@ function responseError(message, response, execution) {
 }
 
 // Bounded host metadata only; provider bodies can contain private request data.
+// Provider errors that a new session cannot fix: the usage limit is used up.
+const EXHAUSTED = {
+  'provider.quota': 'The provider reports the usage quota as used up',
+  'provider.free-limit': "OpenCode reports the free model's usage limit as reached",
+};
+
 function providerFailure(final, assistants) {
   const error = final?.error;
-  if (typeof error?.type !== 'string' || !error.type.startsWith('provider.') ||
-      !Number.isInteger(error.status) || error.status < 400 || error.status > 599) return undefined;
-  return { status: error.status,
+  if (typeof error?.type !== 'string' || !error.type.startsWith('provider.')) return undefined;
+  const exhausted = Object.hasOwn(EXHAUSTED, error.type);
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : undefined;
+  if (status === undefined && !exhausted) return undefined;
+  return { ...(status === undefined ? {} : { status }), ...(exhausted ? { exhausted: error.type } : {}),
     toolCallsObserved: assistants.reduce((count, message) => count +
       (Array.isArray(message.content) ? message.content.filter(part => part?.type === 'tool').length : 0), 0) };
 }
@@ -160,12 +168,13 @@ export function restartIndex(texts) {
  * - overflow: the host tried to compact (context full) or the provider rejected size.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
  *   unexpected host messages.
- * - permanent: everything else (authentication, bad request, cancellation).
+ * - permanent: everything else (authentication, bad request, a used-up quota or
+ *   free-model limit, whatever its HTTP status, cancellation).
  */
 export function classifyFailure(error, { compactionRequested = false } = {}) {
   if (compactionRequested) return 'overflow';
   const execution = error?.execution;
-  if (execution?.interrupted) return 'permanent';
+  if (execution?.interrupted || execution?.provider?.exhausted) return 'permanent';
   const status = execution?.provider?.status;
   if (status === 413) return 'overflow';
   if ([408, 409, 425, 429].includes(status) || (status >= 500 && status <= 599)) return 'transient';
@@ -224,8 +233,11 @@ export async function requestReview(context, { sessionID, text, role, model, met
       interrupted: session.outcome === 'interrupted' || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
     const provider = !execution.interrupted && providerFailure(final, assistants);
     if (provider) execution.provider = provider;
+    const hint = provider?.exhausted
+      ? ` ${EXHAUSTED[provider.exhausted]} (${provider.exhausted}), so a new session would fail the same way and is not started. Choose another model in the settings or wait until the limit resets.`
+      : [401, 403].includes(provider?.status) ? ' Check provider access and the role\'s tool permissions.' : '';
     const detail = provider
-      ? `Model provider request failed (HTTP ${provider.status}; ${provider.toolCallsObserved} tool calls observed).${[401, 403].includes(provider.status) ? ' Check provider access and the role\'s tool permissions.' : ''} `
+      ? `Model provider request failed (${provider.status ? `HTTP ${provider.status}; ` : ''}${provider.toolCallsObserved} tool calls observed).${hint} `
       : '';
     throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }

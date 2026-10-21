@@ -12,7 +12,8 @@ implementation, not an already published release.
   the same review with the stronger models of `models.deep`; `/pr-check` says
   when they are unset or repeat the review models.
 - Bounded shards, context-overflow splitting, correction turns, transient
-  retries, cancellation and visible coverage gaps.
+  retries (never for a used-up provider quota or free-model limit),
+  cancellation and visible coverage gaps.
 - Comment previews, explicit publication, stable duplicate markers and
   read-back of posted comments. Quick comments disclose that they were not
   independently verified. A comment someone deletes on the PR is reported as
@@ -26,6 +27,6 @@ implementation, not an already published release.
 - A first-review quickstart, illustrated demo, compatibility table and team
   data-handling guide.
 
-The tested target is OpenCode CLI 2.0.32 on Ubuntu 22.04, with Azure DevOps
+The tested target is OpenCode CLI 2.1.2 on Ubuntu 22.04, with Azure DevOps
 Services REST API 7.1. See [validation](docs/VALIDATION.md) for the distinction
 between offline tests, host fixtures and live runs, including remaining gaps.
