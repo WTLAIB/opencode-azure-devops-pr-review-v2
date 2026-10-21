@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { rootCertificates } from 'node:tls';
 import {
-  API_VERSION, buildSnapshot, changeTypes, createAzureClient, fetchTransport, isBinary, latestIteration, markersInThreads, pemCertificates, prStatus, prVersions,
+  API_VERSION, buildSnapshot, changeTypes, createAzureClient, deletedThreads, fetchTransport, isBinary, latestIteration, markersInThreads, pemCertificates, prStatus, prVersions,
   proxyLabel, restBaseUrl,
 } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -70,6 +70,18 @@ test('markers are found in live comments only', () => {
     { id: 3, comments: [{ content: marker('c'), isDeleted: true }, { content: `${marker('d')}` }] },
   ]);
   assert.deepEqual([...found.entries()], [[marker('a'), 1], [marker('d'), 3]]);
+});
+
+test('threads whose first comment was deleted on the PR are recognized by ID', () => {
+  // Azure DevOps lists a deleted comment without its content (and flags the thread once nothing is left).
+  const deleted = deletedThreads([
+    { id: 236, isDeleted: true, status: 'active', comments: [{ id: 1, isDeleted: true, commentType: 'text' }] },
+    { id: 237, isDeleted: false, comments: [{ id: 1, isDeleted: true, commentType: 'text' }, { id: 2, parentCommentId: 1, content: 'a reply' }] },
+    { id: 238, comments: [{ id: 1, content: 'live' }, { id: 2, parentCommentId: 1, isDeleted: true }] },
+    { id: 239, comments: [{ id: 1, content: 'live' }] },
+    { id: 'x', isDeleted: true, comments: [] },
+  ]);
+  assert.deepEqual([...deleted], [236, 237], 'A deleted reply leaves the thread live; an ID that is not an integer is ignored.');
 });
 
 test('base URL overrides are accepted only for loopback test servers', () => {
