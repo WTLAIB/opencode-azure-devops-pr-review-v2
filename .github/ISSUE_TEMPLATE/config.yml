@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup and troubleshooting
+    url: https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/blob/main/docs/QUICKSTART.md
+    about: Start with the quickstart and its troubleshooting links.
+  - name: Report a security vulnerability privately
+    url: https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/security/advisories/new
+    about: Use private reporting instead of a public issue for security defects.

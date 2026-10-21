@@ -34,9 +34,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
-runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs diff.mjs search.mjs review-tools.mjs review-work.mjs store.mjs plugin.js'
+runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs diff.mjs search.mjs review-tools.mjs review-work.mjs store.mjs setup.mjs plugin.js'
 prompt_names='common functional risk final dedupe quick comment-policy comment-plan'
-command_names='pr-check pr-review pr-deep pr-quick pr-stop pr-comment'
+command_names='pr-setup pr-check pr-review pr-deep pr-quick pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
 for file in LICENSE scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
 for file in $runtime_files; do require_file "src/$file"; done
@@ -95,7 +95,7 @@ trap '' PIPE
 
 # Refuse conflicts rather than trying to rewrite JSONC.
 for config in "$root/opencode.json" "$root/opencode.jsonc" "$root/config.json"; do
-  if [ -f "$config" ] && grep -Eq '"(pr-check|pr-review|pr-deep|pr-quick|pr-stop|pr-comment|azpr-[^"]+)"[[:space:]]*:' "$config"; then
+  if [ -f "$config" ] && grep -Eq '"(pr-setup|pr-check|pr-review|pr-deep|pr-quick|pr-stop|pr-comment|azpr-[^"]+)"[[:space:]]*:' "$config"; then
     die "Reserved command/agent keys appear in $config. Resolve them manually."
   fi
 done
@@ -165,6 +165,7 @@ cat <<'TXT'
 1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep, the same review with models stronger than models.review for the PRs that need them, and models.quick.reviewer to enable /pr-quick.
 2. Set azure.organization and the PAT: an Azure DevOps PAT for that organization with Code (Read) and Pull Request Threads (Read & write), alone in a file only you can read (chmod 600) named by azure.patFile (recommended), or in azure.pat. AZPR calls the Azure DevOps REST API (api-version 7.1) itself; no MCP server is needed.
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
-Settings have not been API-validated. The plugin refuses incomplete configuration.
+Alternatively, run /pr-setup --help in OpenCode for guided configuration.
+Settings have not been API-validated. Review commands stay blocked until configuration is complete.
 TXT
 } 2>/dev/null || true

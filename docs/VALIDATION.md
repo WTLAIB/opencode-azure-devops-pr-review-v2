@@ -1,11 +1,74 @@
 # Validation
 
-This page records what the current revision (branch `stability-hardening`, the
-Azure DevOps REST revision) was tested with. Host integration, provider
+This page records validation of the Azure DevOps REST implementation and the
+0.1.0 distribution. Host integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
+
+## 0.1.0 release acceptance (2026-10-22)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.2.
+The native package entry and first-run setup were added on top of the merged
+2.1.2 compatibility revision (`e1597ca`); review prompts were unchanged.
+
+- `npm run check` and **367 offline tests** passed. The ten setup tests cover
+  settings-path precedence, literal argument parsing, unavailable models and
+  variants, private PAT-file validation, refusal to overwrite without
+  `--replace`, preservation of advanced settings, atomic saves and blocked
+  review commands before setup. They make no model or Azure requests.
+- All four real-host fixtures passed with isolated profiles and fake model
+  and Azure services: fresh source installation, replacement installation,
+  native package installation and comment scale. The native fixture packs the
+  package, installs an isolated Git commit through `opencode plugin add`,
+  configures it with `/pr-setup`, restarts the host and exercises the review
+  and publication workflow. Both the default external settings path and
+  explicit `options.settingsFile` work; the file remains mode 600 and is
+  outside the package cache.
+- A separate clean profile installed public GitHub commit `f323aaa` with the
+  documented `github:WTLAIB/opencode-azure-devops-pr-review-v2#COMMIT` syntax.
+  The actual cached entry loaded, setup blocked reviews until configuration,
+  and restart enabled the review and quick agents with the external settings
+  unchanged. This acceptance made zero model or Azure requests. A clean source
+  archive also passed fresh and replacement installation, entry loading,
+  license and prompt checks, and preservation of settings and unrelated files.
+- The scale fixture reviewed 120 changed files, recovered one overflow split,
+  used seven functional, five risk and two verifier sessions plus one duplicate
+  check, and planned eight pages with at most two in flight. Its largest
+  captured provider request was 33,488 characters. It created 20 fake Azure
+  threads and re-published without duplicates. These are controlled fixture
+  measurements, not a bound on arbitrary real PRs or model behavior.
+- A separate **live** run used `openai/gpt-6-luna` for all three review roles
+  against the dedicated one-file Azure test PR #2, head `e8fc383` and base
+  `406f5b2`. Review `268cc3f3` completed in 65.0 seconds: six initial candidates,
+  three CONFIRMED findings and three MERGED duplicates. The findings matched
+  the fixture's seeded atomicity, snapshot-isolation and timestamp-ordering
+  regressions. The reviewers did not execute the fixture's tests.
+- Its comment preview completed in 15.6 seconds with three inline comments
+  and no skipped finding. Explicit publication took 1.5 seconds and read back
+  four VERIFIED threads (one summary and three inline comments). A repeated
+  publish took 0.5 seconds and reported four ALREADY_PRESENT items. An
+  independent Azure REST GET also found exactly those four active threads;
+  they were retained on the test PR. No active comment existed before this
+  run, and historical deleted comments were left alone.
+
+The [demo](DEMO.md) uses the actual terminal output and actual Azure comment
+read-back from this run. It shortens waits and navigation, as documented with
+the recording. It is evidence of this workflow on this test PR, not a claim of
+general model accuracy, and the Azure read-back is terminal output rather than
+an Azure web UI screenshot. The live run used an isolated source installation;
+native setup and package loading were tested separately by the host fixture.
+
+The first CI native-package run failed before the TUI admitted its startup
+command. Local failure traces and the OpenCode 2.1.2 source identified a startup
+race: `--prompt` can run before plugin commands reach the TUI catalog and become
+an ordinary model prompt. CI did not retain its raw terminal capture, so that
+run's cause cannot be established from its log alone. The fixture now waits for the actual native command in
+slash completion and submits it interactively, preserving both new/existing
+conversation and same-TUI cancellation checks. The runtime was unchanged;
+the [troubleshooting note](DEBUGGING.md#a-startup-slash-command-becomes-an-ordinary-prompt)
+records the host limitation.
 
 ## Onboarding and source distribution (2026-10-19)
 
@@ -29,8 +92,8 @@ runtime code and prompts are unchanged.
   inspected visually. They demonstrate presentation, not model accuracy or
   real Azure UI rendering.
 
-The 0.1.0 release notes remain a draft until a reviewed commit is tagged and
-published. Earlier live-run evidence and limitations below are unchanged.
+At that point, the 0.1.0 release notes were still a draft. See the release
+acceptance above for the subsequent native package and recorded live run.
 
 ## Environment
 
@@ -42,7 +105,7 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. From
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 357 tests across settings (including the
+`npm run check` and `npm test` pass: 367 tests across settings (including the
 `mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts

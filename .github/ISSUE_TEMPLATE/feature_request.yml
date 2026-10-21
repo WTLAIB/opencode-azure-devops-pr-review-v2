@@ -1,0 +1,21 @@
+name: Feature request
+description: Describe a use case or improvement.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/blob/main/docs/ROADMAP.md) and existing issues first. Keep examples free of company source and credentials.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the workflow and the limitation you encounter.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the outcome or give a small example. Mention alternatives you tried, if any.
+    validations:
+      required: true

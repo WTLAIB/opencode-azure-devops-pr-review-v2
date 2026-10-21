@@ -36,11 +36,17 @@ for existing in [False, True]:
     if pid == 0:
         os.chdir(directory)
         env = {**os.environ, 'TERM': 'xterm-256color', 'COLORTERM': 'truecolor'}
-        args = [binary, '--server', server, '--prompt', prompt] + (['--session', origin] if origin else [])
+        # The host's startup --prompt can run before a Git plugin's asynchronous
+        # command catalog arrives. Exercise the documented interactive path:
+        # wait until the native slash-command suggestion is visible, then submit.
+        args = [binary, '--server', server] + (['--session', origin] if origin else [])
         os.execvpe(binary, args, env)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 160, 0, 0))
     captured = bytearray()
     started_at = None
+    menu_requested = False
+    command_typed_at = None
+    command_submitted = False
     stop_sent = False
     stop_confirmed = False
     cancelled = False
@@ -56,6 +62,15 @@ for existing in [False, True]:
                     os.write(fd, b'\x1b[1;1R')
                 if b'\x1b[c' in chunk:
                     os.write(fd, b'\x1b[?1;2c')
+            if not menu_requested and b'ctrl+p' in captured and b'commands' in captured:
+                os.write(fd, b'\x15/pr-rev')
+                menu_requested = True
+            if menu_requested and command_typed_at is None and b'independent verification' in captured:
+                os.write(fd, b'\x15' + (prompt + ' ').encode())
+                command_typed_at = time.monotonic()
+            if command_typed_at is not None and not command_submitted and time.monotonic() - command_typed_at > 1:
+                os.write(fd, b'\x1b[13u')
+                command_submitted = True
             if time.monotonic() < next_poll:
                 continue
             next_poll = time.monotonic() + 0.25
@@ -81,11 +96,13 @@ for existing in [False, True]:
             if stop_sent and any('] CANCELLED\n' in text for text in notices):
                 cancelled = True
                 break
-        assert started_at, 'TUI never admitted the native command'
+        assert command_typed_at is not None, 'TUI never showed the native pr-review command suggestion'
+        assert started_at, 'TUI never admitted the interactive native command'
         assert cancelled, 'TUI did not retain its origin and cancel the admitted background run'
         session = api('/api/session/' + origin)['data']
         assert not session.get('time', {}).get('archived'), 'Origin was archived'
         (root / ('tui-' + label + '.json')).write_text(json.dumps({'origin': origin, 'startObserved': True,
+             'commandSuggestionObserved': True, 'inputMethod': 'interactive slash command',
              'heldSeconds': hold, 'cancelledFromSameTui': True, 'sessionRetained': True}, indent=2))
     finally:
         (root / ('tui-' + label + '.raw')).write_bytes(captured)

@@ -8,12 +8,15 @@ and choose when to publish to Azure DevOps.** No MCP server is needed.
 
 [Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
 [Team setup and data handling](docs/ENTERPRISE.md) ·
-[Validation and limitations](docs/VALIDATION.md)
+[Validation and limitations](docs/VALIDATION.md) ·
+[Download v0.1.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.1.0)
 
-![Illustrative Azure-style PR summary and inline comment for a synthetic defect; quick findings are not independently verified.](docs/assets/review-example.svg)
+[![Real OpenCode review, comment preview and verified publication on a dedicated Azure test PR.](docs/assets/live-review-teaser.gif)](docs/DEMO.md)
 
-*Illustrative example using a fictional PR, not a screenshot of a live Azure
-DevOps review. The [demo](docs/DEMO.md) explains the workflow and comment format.*
+*A 12-second edit of a real OpenCode 2.1.2 run. Watch the
+[73-second walkthrough](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.1.0/azpr-live-demo.mp4)
+or read the [demo and recording details](docs/DEMO.md). Waiting time is shortened;
+the Azure portion shows an actual REST read-back in a terminal.*
 
 ## Choose a review
 
@@ -37,9 +40,15 @@ examples, rather than treating a session count as a price guarantee.
 
 ## Your first review
 
-Follow the [quickstart](docs/QUICKSTART.md) to download a pinned source revision,
-install it in your OpenCode V2 configuration directory, and set your model IDs
-and Azure PAT. Then, in one OpenCode conversation:
+Install the versioned Git package using OpenCode's plugin manager:
+
+```sh
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'
+```
+
+Follow the [quickstart](docs/QUICKSTART.md) to put your PAT in a private file
+and run `/pr-setup` with your organization and one model. Restart OpenCode,
+then, in one conversation:
 
 ```text
 /pr-check https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
@@ -59,12 +68,13 @@ Use the review ID from the completed receipt, not the literal placeholder.
 | OpenCode | **V2 `@opencode/cli` 2.1.2**; V1 plugins use a different API. |
 | Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
 | Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
-| Installation | POSIX `sh` and Python 3 standard library; no build step or npm dependencies. |
+| Installation | OpenCode's Git package manager, or the source installer with POSIX `sh` and Python 3; no plugin build step or npm dependencies. |
 | Models | Your OpenCode provider/model IDs with tool support. Each mode checks the models it uses. |
 
-The current distribution is source plus `install.sh`, not an npm package. A
-fresh install needs settings before it is ready. The [quickstart](docs/QUICKSTART.md)
-includes a model setup that also passes `/pr-check`.
+The Git package and release source archive contain the same runtime. There is
+no npm registry publication. A fresh installation exposes `/pr-setup` before
+reviewing is enabled; the [quickstart](docs/QUICKSTART.md) configures one model
+for both quick and verified reviews.
 
 ## How reviews work
 
@@ -116,9 +126,40 @@ not; earlier runs are kept in [validation history](docs/VALIDATION_HISTORY.md).
 
 ## Requirements and installation
 
-The installer needs POSIX `sh` and Python 3's standard library; the plugin has no
-npm dependencies, build step or provider SDK. It calls the Azure DevOps REST API
-with the runtime's built-in `fetch`.
+The plugin has no npm dependencies, build step or provider SDK. It calls the
+Azure DevOps REST API with the runtime's built-in `fetch`.
+
+### Native Git package
+
+```sh
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'
+```
+
+Restart OpenCode, then run `/pr-setup` for setup instructions. Native packages
+use `${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`; configuration and the
+separate PAT file stay outside the package cache when the plugin is updated.
+To select another configuration file, use an absolute path in the host config:
+
+```json
+{
+  "plugins": [{
+    "package": "github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0",
+    "options": { "settingsFile": "/absolute/path/to/azpr/settings.json" }
+  }]
+}
+```
+
+Use one installation method per OpenCode profile. Existing source installations
+can keep using `install.sh --replace`. To move one to the native package,
+copy its settings to the external configuration path with owner-only
+permissions, archive the old installation with its uninstaller, then add the
+Git package. Keep the PAT file and private state directory in place.
+
+### Source archive or checkout
+
+Download the [v0.1.0 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.1.0.tar.gz)
+and extract it, or check out tag `v0.1.0`. The installer needs POSIX `sh` and
+Python 3's standard library. From that source directory:
 
 ```sh
 sh install.sh --config-dir /absolute/path/to/v2-opencode-config
@@ -127,9 +168,9 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config
 The installer creates `plugins/azpr-v2/` with a generated ESM `package.json`
 and a `server.js` entry that re-exports `plugin.js`. It never edits the main
 OpenCode configuration, provider choices or MCP connections, and it refuses
-conflicting V1 files, reserved command names and unowned packages. A clean
-install with placeholder model IDs and an empty PAT is not ready until you fill
-in the settings below.
+conflicting V1 files, reserved command names and unowned packages. Run
+`/pr-setup ... --replace` to configure the generated starter settings, or edit
+them yourself before restarting OpenCode.
 
 To replace an existing V2 installation (current settings are kept, new defaults
 are added, and a retired `mcp` section is moved into `azure`):
@@ -141,7 +182,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **30 files** include the runtime and its license:
+These **31 files** include the runtime and its license:
 
 ```text
 install.sh
@@ -149,6 +190,7 @@ LICENSE
 scripts/merge-settings.py
 config/settings.example.json
 src/plugin.js
+src/setup.mjs
 src/session.mjs
 src/runtime.mjs
 src/config.mjs
@@ -181,9 +223,23 @@ Keep `LICENSE` with copied or redistributed packages.
 
 ## Configuration
 
-Edit only your installed `plugins/azpr-v2/settings.json` and restart OpenCode.
+Run `/pr-setup` to see the active settings path. Native packages use the
+external configuration described above; source installations retain their
+installed `plugins/azpr-v2/settings.json`. Edit that file and restart OpenCode.
 A changed file blocks new commands until the restart; running commands keep the
 settings they started with.
+
+For initial setup, one command sets the organization, existing PAT file and
+the same model for review and quick roles without calling a model or Azure:
+
+```text
+/pr-setup --organization YOUR_ORG --model YOUR_PROVIDER/YOUR_MODEL --pat-file "/absolute/path/to/pat"
+```
+
+An existing file requires `--replace`; unrelated advanced settings and deep
+models are preserved. Setup checks the model catalog and PAT file before
+saving. It never accepts the PAT itself as a command argument. Restart after
+saving, then run `/pr-check` to verify Azure read access.
 
 ```json
 {
@@ -298,6 +354,7 @@ troubleshooting.
 
 | Command | Behavior |
 | --- | --- |
+| `/pr-setup [options]` | Show setup guidance or save an organization, one model and an existing PAT file. No model or Azure request. Restart the OpenCode service after saving. |
 | `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (configured quick and deep models only as warnings, and whether `/pr-deep` is off or would repeat `/pr-review`); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
 | `/pr-review <PR URL> [context]` | Sharded functional and risk reviews, then sharded verification. |
 | `/pr-deep <PR URL> [context]` | The same review with the stronger models of `models.deep`; usually slower and costlier. |
@@ -380,10 +437,15 @@ the same limit of 20 runs. Your own conversations are never deleted.
 
 ## Development and removal
 
+See [Contributing](CONTRIBUTING.md) for bug reports and development checks,
+and [Security](SECURITY.md) for private vulnerability reporting.
+
 ```sh
 npm run check
 npm test
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode
+node tests/host-v2-smoke.mjs /absolute/path/to/opencode --replace
+node tests/host-v2-smoke.mjs /absolute/path/to/opencode --native
 node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config --apply
@@ -394,6 +456,9 @@ and a loopback fake Azure DevOps REST service in disposable directories under
 `.local/`.
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
+For a native Git installation, use
+`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'`;
+the external settings, PAT file and private review state remain available.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
 [Azure DevOps access](docs/AZURE_DEVOPS.md), [verification](docs/VERIFICATION.md),
@@ -405,5 +470,6 @@ or personal model selections.
 ## License and releases
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
-initial release scope and [release preparation](docs/RELEASING.md) for the
-pending 0.1.0 release. A pending release note is not a published tag.
+release scope, [v0.1.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.1.0)
+for downloads and the recorded demonstration, and [releasing](docs/RELEASING.md)
+for the release process.

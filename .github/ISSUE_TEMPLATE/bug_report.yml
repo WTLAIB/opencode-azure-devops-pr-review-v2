@@ -1,0 +1,66 @@
+name: Bug report
+description: Report an installation, review or commenting problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. Do not upload settings, PATs, provider credentials, proxy credentials, company source, `.local/`, state directories or full diagnostics. Inspect and redact receipts and screenshots too.
+        For a suspected security defect, use [private vulnerability reporting](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/security/advisories/new).
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the visible error text, with private details removed.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Versions and environment
+      description: Give exact versions where available; write unknown if you cannot determine one. Do not paste configuration files.
+      placeholder: |
+        AZPR tag or commit:
+        OpenCode version (opencode --version):
+        Operating system, version and WSL status:
+        Installation method (installer / plugin add / other):
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Affected command or phase
+      multiple: true
+      options:
+        - Installation or loading
+        - /pr-check
+        - /pr-quick
+        - /pr-review
+        - /pr-deep
+        - /pr-comment preview
+        - /pr-comment --publish
+        - /pr-stop
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: List commands and steps with placeholders for private URLs. A synthetic example is best; do not rerun paid models or publish comments just to complete this form.
+      placeholder: |
+        1. ...
+        Approximate PR size (files / changed lines), if relevant:
+        Does it happen every time or intermittently?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Model and settings context (optional)
+      description: Name relevant provider/model IDs and variants, changed workflow settings, and whether a proxy or custom CA is used. Omit private deployment names, account details, credentials and complete settings files.
+  - type: textarea
+    id: receipt
+    attributes:
+      label: Sanitized receipt excerpt (optional)
+      description: Include only the final status, failing role/stage, failure class and relevant error or notice. Remove private URLs, paths, source and identifiers. Do not attach the debug directory.
+      render: text

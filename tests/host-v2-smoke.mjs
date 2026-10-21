@@ -3,7 +3,9 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 import { fakeProxy } from './fake-proxy.mjs';
 import { TESTED_HOST_VERSION } from '../src/host.mjs';
 /**
- * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace]
+ * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace|--native]
+ * --native packs the Git-distributed package, loads its real entry with external
+ * settings, exercises first-run setup and then runs the same review workflow.
  * Isolated directories, a loopback deterministic provider, a loopback fake
  * Azure DevOps REST service (api-version 7.1, persistent thread state) and one
  * foreign stdio MCP server. Covers the deterministic source check, a full
@@ -19,7 +21,7 @@ import { TESTED_HOST_VERSION } from '../src/host.mjs';
  * proxy or visual rendering.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
 import { spawn, spawnSync } from 'node:child_process';
@@ -32,6 +34,7 @@ const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const binary = process.argv[2];
 assert.ok(binary?.startsWith('/'), 'Supply the exact host binary as an absolute path.');
 const replacement = process.argv[3] === '--replace';
+const native = process.argv[3] === '--native';
 const fixturesRoot = join(sourceRoot, '.local');
 await mkdir(fixturesRoot, { recursive: true });
 const fixture = await mkdtemp(join(fixturesRoot, 'host-v2-smoke-'));
@@ -39,6 +42,11 @@ const directories = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp
 await Promise.all(Object.values(directories).map(path => mkdir(path, { recursive: true })));
 await mkdir(join(directories.config, 'plugins'), { recursive: true });
 const runtimeDirectory = join(directories.config, 'plugins', 'azpr-v2');
+const externalSettings = join(fixture, 'xdg-config', 'azpr', 'settings.json');
+const selectedSettings = join(fixture, 'private settings', 'settings.json');
+const installedSettingsPath = native ? selectedSettings : join(runtimeDirectory, 'settings.json');
+const packageDirectory = join(fixture, 'package');
+let gitPackage;
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.models.quick = { reviewer: 'fixture/quick' };
@@ -54,7 +62,23 @@ const install = args => {
   const result = spawnSync('/bin/sh', [join(sourceRoot, 'install.sh'), '--config-dir', directories.config, ...args], { encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
 };
-install(['--settings', join(fixture, 'settings.json')]);
+if (native) {
+  const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', fixture], { cwd: sourceRoot, encoding: 'utf8', timeout: 30000 });
+  assert.equal(pack.status, 0, pack.stderr);
+  const metadata = JSON.parse(pack.stdout)[0];
+  assert.ok(metadata.files.some(file => file.path === 'server.js'));
+  assert.ok(metadata.files.some(file => file.path === 'src/setup.mjs'));
+  assert.ok(metadata.files.every(file => !file.path.includes('.local/') && !file.path.endsWith('/settings.json')));
+  const extract = spawnSync('tar', ['-xzf', join(fixture, metadata.filename), '-C', fixture], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(extract.status, 0, extract.stderr);
+  for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=AZPR fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Native package fixture']]) {
+    const git = spawnSync('git', args, { cwd: packageDirectory, encoding: 'utf8', timeout: 15000 });
+    assert.equal(git.status, 0, git.stderr);
+  }
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: packageDirectory, encoding: 'utf8', timeout: 15000 });
+  assert.equal(sha.status, 0, sha.stderr);
+  gitPackage = `git+file://${packageDirectory}#${sha.stdout.trim()}`;
+} else install(['--settings', join(fixture, 'settings.json')]);
 if (replacement) {
   const before = await readFile(join(runtimeDirectory, 'settings.json'));
   await rm(join(runtimeDirectory, 'server.js'), { force: true });
@@ -197,6 +221,13 @@ const env = {
   OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1',
   AZPR_TEST_AZURE_BASE_URL: azureURL,
 };
+if (native) {
+  const added = spawnSync(binary, ['plugin', 'add', gitPackage], { cwd: directories.work, env, encoding: 'utf8', timeout: 60000 });
+  assert.equal(added.status, 0, added.stderr);
+  assert.match(added.stdout, /installed and added/);
+  const config = JSON.parse(await readFile(join(directories.config, 'opencode.json'), 'utf8'));
+  assert.ok(config.plugins.includes(gitPackage));
+}
 const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 const stopHost = async () => {
   if (child && child.exitCode === null) {
@@ -229,8 +260,60 @@ try {
     return raw ? JSON.parse(raw) : undefined;
   };
   const api = withCommandCompletion(rawApi, 120000);
+  // Listening and model readiness precede asynchronous Git-plugin command
+  // registration. Do not treat an incomplete startup catalog as a plugin error.
+  const waitForCommands = async (configured = true) => {
+    const end = Date.now() + 20000;
+    do {
+      const commands = (await rawApi('/api/command')).data;
+      if (['pr-setup', 'pr-check', 'pr-review', 'pr-deep', 'pr-quick', 'pr-stop', 'pr-comment'].every(name =>
+        commands.some(command => command.name === name && (!configured || !command.description?.includes('setup required'))))) return;
+      await new Promise(resolveReady => setTimeout(resolveReady, 100));
+    } while (Date.now() < end);
+    throw new Error('Fixture AZPR command catalog did not finish loading.');
+  };
+  await waitForCommands(!native);
   const hostVersion = (await api('/api/info')).version;
   assert.equal(hostVersion, TESTED_HOST_VERSION, `OpenCode ${hostVersion} is not the tested ${TESTED_HOST_VERSION}.`);
+  let nativeSetup;
+  if (native) {
+    const origin = (await rawApi('/api/session', { title: 'Native setup', location: { directory: directories.work } })).data.id;
+    const invoke = async (name, text) => {
+      await rawApi(`/api/session/${origin}/command`, { name, text, delivery: 'steer' });
+      return (await rawApi(`/api/session/${origin}/inbox`)).data.at(-1)?.payload?.text ?? '';
+    };
+    assert.ok(!(await rawApi('/api/agent')).data.some(agent => agent.name.startsWith('azpr-')));
+    assert.match(await invoke('pr-check', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123'), /SETUP REQUIRED/);
+    assert.match(await invoke('pr-setup', '--help'), /--organization[\s\S]*--model[\s\S]*--pat-file/);
+    const patFile = join(fixture, 'private PAT');
+    await writeFile(patFile, FAKE_PAT, { mode: 0o600 });
+    assert.match(await invoke('pr-setup', `--organization fixture --model fixture/missing --pat-file "${patFile}"`), /unavailable/);
+    await assert.rejects(stat(externalSettings), { code: 'ENOENT' });
+    assert.match(await invoke('pr-setup', `--organization fixture --model fixture/fixture --pat-file "${patFile}"`), /SETTINGS SAVED/);
+    const initial = JSON.parse(await readFile(externalSettings, 'utf8'));
+    assert.equal((await stat(externalSettings)).mode & 0o777, 0o600);
+    assert.ok(Object.values(initial.models.review).every(model => model === 'fixture/fixture'));
+    assert.equal(initial.models.quick.reviewer, 'fixture/fixture');
+    assert.equal(initial.azure.pat, '');
+    assert.equal(initial.azure.patFile, patFile);
+    assert.match(await invoke('pr-review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123'), /SETUP REQUIRED/);
+    assert.equal(requests.length, 0);
+    assert.equal(azure.state.calls.length, 0);
+    await assert.rejects(stat(join(packageDirectory, 'src', 'settings.json')), { code: 'ENOENT' });
+    // Use the workflow fixture's role-specific models and diagnostics after
+    // proving that setup saves exactly one selected model and no secret.
+    await stopHost();
+    settings.azure = { ...settings.azure, pat: '', patFile };
+    await mkdir(dirname(selectedSettings), { mode: 0o700 });
+    await writeFile(selectedSettings, JSON.stringify(settings, null, 2), { mode: 0o600 });
+    await rm(externalSettings);
+    const config = JSON.parse(await readFile(join(directories.config, 'opencode.json'), 'utf8'));
+    config.plugins = config.plugins.map(plugin => plugin === gitPackage ? { package: gitPackage, options: { settingsFile: selectedSettings } } : plugin);
+    await writeFile(join(directories.config, 'opencode.json'), JSON.stringify(config, null, 2));
+    url = await startHost();
+    await waitForCommands();
+    nativeSetup = 'npm pack plus CLI plugin add from an isolated Git commit; missing config blocks reviews; setup validates model and private PAT file without network calls; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; package holds no settings or PAT';
+  }
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
       if ((await api('/api/mcp')).data?.some(server => server.name === 'foreign' && server.status?.status === 'connected')) return;
@@ -248,7 +331,7 @@ try {
   const latest = async origin => (await api(`/api/session/${origin}/inbox`)).data.at(-1)?.payload?.text ?? '';
   const inbox = async origin => (await api(`/api/session/${origin}/inbox`)).data.map(item => item.payload?.text ?? '');
   const prUrl = 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123';
-  const results = {};
+  const results = nativeSetup ? { nativeSetup } : {};
   const stageRecords = async receipt => JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8')).stages;
 
   // 1. Deterministic source check: no model request.
@@ -313,6 +396,7 @@ try {
   assert.ok(created.some(thread => thread.threadContext?.filePath === '/src/fixture.js'));
   await stopHost();
   url = await startHost();
+  await waitForCommands();
   await waitForMcp();
   const beforeRepublish = requests.length;
   const writesBefore = azure.callsTo('createThread').length;
@@ -488,7 +572,7 @@ try {
     withCredentials.password = 'p@ss w0rd';
     const proxyShown = `proxy http://127.0.0.1:${withCredentials.port}`;
     try {
-      const installedSettings = join(runtimeDirectory, 'settings.json');
+      const installedSettings = installedSettingsPath;
       const base = JSON.parse(await readFile(installedSettings, 'utf8'));
       // Settings are read once, so every variant needs a host restart.
       const checkWith = async network => {
@@ -496,6 +580,7 @@ try {
         await writeFile(installedSettings, JSON.stringify({ ...base, azure: { ...base.azure, proxy: '', caFile: '', verifyTls: true, ...network } }, null, 2));
         env.AZPR_TEST_AZURE_BASE_URL = `https://${tunnelTarget}`;
         url = await startHost();
+        await waitForCommands();
         const origin = await newOrigin('Proxy check');
         await api(`/api/session/${origin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
         return latest(origin);
@@ -531,7 +616,7 @@ try {
     }
   }
 
-  console.log(JSON.stringify({ status: 'PASS', installation: replacement ? 'replace' : 'fresh', host: hostVersion, providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
+  console.log(JSON.stringify({ status: 'PASS', installation: native ? 'native' : replacement ? 'replace' : 'fresh', host: hostVersion, providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
 } finally {
   await stopHost();
   provider.closeAllConnections();

@@ -115,6 +115,9 @@ Detect capabilities; do not assume them.
 Run `npm run check` and `npm test`. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
 `--replace`) and `node tests/host-v2-comment-scale.mjs <opencode binary>`.
+For package entry points, first-run setup or settings-path changes, also run
+`node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
+packed artifact through OpenCode's plugin manager in an isolated profile.
 Installer tests must preserve unrelated files and private settings, reject
 conflicts and test rollback and archival uninstall. Keep the README manual-copy
 list exact.

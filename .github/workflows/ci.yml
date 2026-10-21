@@ -24,5 +24,7 @@ jobs:
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise replacement package and host lifecycle
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --replace
+      - name: Exercise native packed package, first-run setup and external configuration
+        run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --native
       - name: Exercise sharded review, overflow split and idempotent publication at scale
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"

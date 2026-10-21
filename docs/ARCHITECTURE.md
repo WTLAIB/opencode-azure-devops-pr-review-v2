@@ -1,6 +1,7 @@
 # Architecture
 
-AZPR is a source-only OpenCode V2 plugin. Model work runs in private,
+AZPR is an OpenCode V2 plugin distributed as a native Git package or source
+archive. Model work runs in private,
 role-bound child sessions; deterministic facts and every Azure DevOps write are
 runtime code that calls the Azure DevOps Services REST API (api-version 7.1)
 with the organization and PAT from AZPR's own settings (or the owner-only file
@@ -12,6 +13,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | File | Responsibility |
 | --- | --- |
 | `src/plugin.js` | V2 plugin definition and setup entry. |
+| `src/setup.mjs` | Native package bootstrap, external settings selection and the deterministic `/pr-setup` command. |
 | `src/runtime.mjs` | Registration, hooks, grants, workflows, stage attempts (repair turns and retries), notices, cancellation and lifecycle. |
 | `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
 | `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies, prompt variants per mode and agent compilation. |
@@ -32,6 +34,15 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/prompts/` | Shared review rules, role prompts and comment policy. |
 
 ## Commands and workflows
+
+The package's `server.js` exports the plugin definition. Native installations
+keep configuration outside the package cache, at an explicit absolute
+`options.settingsFile` or `${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`.
+Source installations retain their adjacent settings file. `/pr-setup` provides
+guidance before settings exist, validates one model and an existing private PAT
+file, and writes settings only on the explicit setup command. It makes no model
+or Azure request. Changes take effect after a restart; the loaded runtime and
+its active grants do not change in place.
 
 `ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
 `/pr-quick`, `/pr-stop` and `/pr-comment`. A command validates its arguments, registers a run

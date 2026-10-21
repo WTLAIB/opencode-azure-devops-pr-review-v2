@@ -1,9 +1,8 @@
 # Changelog
 
-## Unreleased — preparing 0.1.0
+## 0.1.0 — 2026-10-22
 
-The first tagged release is being prepared. This section describes the current
-implementation, not an already published release.
+First public release.
 
 - Azure DevOps Services PR reviews in OpenCode V2, using repository content at
   exact commits and runtime-owned REST access.
@@ -24,8 +23,13 @@ implementation, not an already published release.
 - The PAT can live alone in an owner-only file (`azure.patFile`), so
   `settings.json` holds no secret; Code (Read) and Pull Request Threads
   (Read & write) are confirmed to cover every call AZPR makes.
-- A first-review quickstart, illustrated demo, compatibility table and team
-  data-handling guide.
+- Native installation through OpenCode's Git package manager, with configuration
+  outside the package cache and an explicit `options.settingsFile` override.
+- `/pr-setup` validates one model and an existing PAT file and saves owner-only
+  settings without a model or Azure request. Existing source installations and
+  advanced settings remain supported.
+- A first-review quickstart, real recorded demonstration, compatibility table,
+  team data-handling guide, contribution guide and private vulnerability reporting.
 
 The tested target is OpenCode CLI 2.1.2 on Ubuntu 22.04, with Azure DevOps
 Services REST API 7.1. See [validation](docs/VALIDATION.md) for the distinction

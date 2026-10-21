@@ -1,11 +1,76 @@
 # See a review before installing
 
-This is an **illustrative example / synthetic PR**, not an Azure DevOps
-screenshot or an OpenCode session recording. A hand-written pagination defect
-shows the comment format and the commands you would use. No live model was
-called and no Azure comment was published to make this example.
+## A real review, preview and publication
 
-## A short walkthrough
+[Watch the 73-second walkthrough (MP4)](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.1.0/azpr-live-demo.mp4)
+
+![Real OpenCode terminal recording: inspect an independently verified finding, preview its comment, and repeat publication without duplicate comments.](assets/live-review-teaser.gif)
+
+The 12-second teaser and full walkthrough use a **real OpenCode 2.1.2 session,
+real configured model calls, and real Azure DevOps publication**. The dedicated
+test PR changes one `fulfillment.py` file with three deliberately seeded
+regressions. It is a reproducible workflow demonstration, not a benchmark of
+review accuracy or a promise about the time or cost of another PR.
+
+Recorded on **2026-10-22**, on Ubuntu 22.04 under WSL2, using
+`openai/gpt-6-luna` for the functional reviewer, risk reviewer, verifier, and
+comment planner. The installed plugin matched all 27 runtime and prompt files
+in commit [`f323aaa`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/f323aaab31e98da0ffed08a8f54fca94c7caf651),
+the v0.1.0 release candidate. Model IDs identify the configured selection, not
+an independently attested provider backend.
+
+The recording follows one conversation:
+
+1. `/pr-check <test-pr-url>` confirms access and model readiness.
+2. `/pr-review <test-pr-url>` runs two reviewers and an independent verifier.
+   The verifier confirms three findings and merges the three duplicate
+   candidates from the other reviewer.
+3. `/pr-comment 268cc3f3` prepares a summary and three inline comments. The
+   receipt explicitly says that nothing was posted.
+4. `/pr-comment 268cc3f3 --publish` creates four comments. Each is read back
+   from Azure DevOps and reported as `VERIFIED`.
+5. Repeating the publication command reports `ALREADY_PRESENT=4`. A separate
+   Azure REST read confirms the same four active threads, with no extra
+   comments. The successful demonstration comments are retained.
+
+Measured command durations were 64.95 seconds for review, 15.63 seconds for
+preview, 1.52 seconds for publication, and 0.51 seconds for repeated publication.
+The video includes reading pauses and cuts waiting and navigation time; its
+length is **not** a latency measurement.
+
+### Inspect the actual output
+
+![Actual OpenCode review: the verifier confirms that a shallow snapshot shares nested state, with source location, evidence, counterevidence and a correction.](assets/live-review.png)
+
+![Actual comment preview: the shallow-copy finding includes a summary, evidence, suggested fix and AI disclosure before publication.](assets/live-preview.png)
+
+![Actual Azure DevOps REST read-back: four active threads and the unchanged published shallow-copy comment.](assets/live-azure-readback.png)
+
+These are faithful rendered frames from terminal captures, **not Azure DevOps
+browser screenshots**. Commands were submitted through OpenCode's native
+command API to the same session shown in the attached TUI. The separate
+read-back clip executes an actual Azure DevOps GET and displays the returned
+comment; author details, deleted history and hidden publication markers are
+omitted, while the comment wording stays unchanged. The TUI frames preserve
+the displayed review text; only the bottom status/path row and its blank margin
+are cropped to avoid exposing the local workspace path. The original private
+cast is unchanged. Captions and the editing disclosure are outside the terminal
+content.
+
+No credential, provider configuration, or private reasoning is included in the
+published media. Raw recordings and connection files remain private. See the
+[capture and editing guide](assets/RECORDING.md) to reproduce this process, and
+[validation](VALIDATION.md) for the broader test evidence and limitations.
+
+## Illustrative quick-review example
+
+The example below is an **illustrative example / synthetic PR**, not an Azure
+DevOps screenshot or an OpenCode session recording. A hand-written pagination
+defect shows the quick-review comment format. No live model was called and no
+Azure comment was published to make these illustrations; they are separate
+from the real verified review above.
+
+### A short walkthrough
 
 The animation shows four steps, takes 21 seconds and plays twice. Its pacing is
 for reading; it does not measure review latency. Prefer no animation? Use the
@@ -36,7 +101,7 @@ The example is one small PR and one finding, not a promise about the number of
 sessions, requests, findings or cost for your PR. See [Commenting](COMMENTING.md)
 for publication details, retries, markers and their limits.
 
-## What the comments look like
+### What the comments look like
 
 ![Illustrative Azure DevOps-style layout: a medium pagination finding with Summary, Evidence and Suggested fix, followed by a PR summary index. Both show that quick review was not independently verified.](assets/review-example.svg)
 
@@ -54,7 +119,7 @@ The suggested change is `items.slice(start, start + size)`. This is a teaching
 example, not evidence of review accuracy. [Validation](VALIDATION.md) records
 actual tests and distinguishes simulated services from live runs.
 
-## Reproduce these illustrations
+### Reproduce these illustrations
 
 From the repository root, with Node.js 22.12 or later:
 
