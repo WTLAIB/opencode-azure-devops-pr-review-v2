@@ -14,7 +14,7 @@ Environment as below (Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode CLI
 `--no-comment` flags, the safeguards of automatic publication and the setup
 problem messages were added on top of 0.1.0; review prompts were unchanged.
 
-- `npm run check` and **384 offline tests** passed. The new tests cover the
+- `npm run check` and **386 offline tests** passed. The new tests cover the
   setting (defaults, partial objects, values never echoed), the flag parser
   (one flag right after the URL, refused typos, dashes and second flags,
   `/pr-check` taking none, context starting after the flag), the hand-off
@@ -23,7 +23,9 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   notice and no model request; a flag overrides the setting both ways), the
   safeguards (a quick review's high-severity finding or incomplete coverage;
   links, `@<…>` mentions, images and HTML in the summary or an inline comment,
-  while generics, decorators and AZPR's marker pass), a PR held by another
+  while generics, decorators and AZPR's marker pass; a plan that would only
+  repeat the summary because every finding is already discussed on the PR,
+  while a typed `--publish` still posts it), a PR held by another
   comment command, `/pr-stop` of the automatic step, the `/pr-check` row, the
   installer adding `afterReview` and setup naming the problem without values.
   Removing any one safeguard, the no-findings check, the busy-lock handling,
@@ -37,7 +39,9 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   to PREVIEW with the reason), a quick review without findings (one notice and
   no further provider request), and, after a restart with
   `afterReview.review: publish`, a plain `/pr-review` whose automatic
-  publication was POSTED and read back (VERIFIED=2).
+  publication was POSTED and read back (VERIFIED=2), then the same review
+  again with every finding planned as already discussed by that comment,
+  held back to PREVIEW with no second summary.
 - **Live** with this revision installed in the user's OpenCode 2.1.2 service:
   gpt-6-luna for every role, `afterReview` none for every mode and `--preview`
   on the command, so nothing was posted. Times are from first stage start to
@@ -65,6 +69,29 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   - Earlier attempts that day failed before any model request
     (`provider.auth`: the OpenAI sign-in could not be refreshed until it was
     renewed). Those INCOMPLETE reviews started no comment step.
+- **Live automatic publication**, with the user's consent, on the 35-file test
+  PR: gpt-6-luna, `/pr-review <URL> --publish`. Before the first run the PR's
+  publication record was moved aside: it held seven comments from an earlier
+  test that had been deleted on the PR, and with it AZPR would have reported
+  matching items as `DELETED` instead of posting them.
+  - The first review was COMPLETE in 92 s with the millisecond-format seed
+    confirmed. Its automatic publication, a run of its own, planned the
+    summary and one inline comment on `json_schema.py:874` and posted both in
+    10 s: VERIFIED=2, read back from Azure DevOps, and an independent thread
+    listing went from 0 to 2 live AZPR comments. No safeguard applied:
+    the findings were verified, and the text had no link, mention, image or
+    HTML.
+  - A second `/pr-review <URL> --publish` of the unchanged head confirmed the
+    same finding (76 s). Its planner skipped the finding as `existing-thread`,
+    naming the inline comment just posted, so no inline comment was repeated.
+    The summary's marker depends on the set of inline comments, though, so
+    the summary differed from the first one and was posted again (VERIFIED=1,
+    3 live AZPR comments).
+  - That repeated summary led to the last safeguard: automatic publication
+    now keeps such a plan (no inline comment, every finding skipped as
+    `existing-thread` with a live thread) to a preview. The runs above
+    predate it, and it was validated offline and with the host fixtures
+    only.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
@@ -1481,10 +1508,12 @@ transient failure, and its error names the last activity.
 
 ## Not yet validated
 
-- Automatic publication (`afterReview: publish` or `--publish` after the PR
-  URL) and its safeguards with a real model and real Azure DevOps: they were
-  validated with the fixture services only. The live runs of the automatic
-  step used `--preview`.
+- Automatic publication from the setting (`afterReview: publish`) with a
+  real model: the live publications above used the `--publish` flag, which
+  differs only in where the step comes from. The safeguards did not trigger
+  in any live run; they were validated with the fixture services and with
+  the saved live previews only, and the repeated-summary safeguard with the
+  fixture services alone.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.
