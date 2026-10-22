@@ -48,9 +48,14 @@ publication after a review:
    such as `on…=`, `href=`, `src=` or `style=`, or an HTML comment other than
    AZPR's marker). These checks are literal and prefer a false alarm: `![`
    inside code holds back too, while generics such as `List<String>` and
-   decorators such as `@property` pass. The saved preview is then posted
-   exactly by `/pr-comment <id> --publish`, which, like every command you
-   type, applies none of these safeguards.
+   decorators such as `@property` pass. It also keeps to a preview when the
+   plan has no inline comment and the planner skipped every finding as
+   `existing-thread` with a thread the runtime found live before planning,
+   typically AZPR's own comment from an earlier run: the summary's marker
+   follows the inline comments, so posting would add a second summary for the
+   same findings each time an unchanged PR is reviewed again. The saved
+   preview is then posted exactly by `/pr-comment <id> --publish`, which,
+   like every command you type, applies none of these safeguards.
 
 Publication then follows the usual rules below (PR active, unchanged head,
 markers, read-back). Automatic publication posts as the PAT owner, like

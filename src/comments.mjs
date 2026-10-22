@@ -131,6 +131,22 @@ export function automaticPublicationHolds(review) {
   ];
 }
 
+/**
+ * Why automatic publication would add only another summary: the plan has no
+ * inline comment, and the planner skipped every finding because a live thread
+ * of the PR already discusses it (checked against `discussions`, the threads
+ * the runtime read before planning), typically AZPR's own comment from an
+ * earlier run. The summary's marker follows the inline comments, so it would
+ * be posted again. [] otherwise, also when the threads could not be read.
+ */
+export function automaticPublicationRepeats(plan, discussions) {
+  const skipped = plan?.skipped ?? [];
+  if (plan?.comments?.length || !skipped.length || !Array.isArray(discussions)) return [];
+  const live = new Set(discussions.map(thread => thread.threadId));
+  if (!skipped.every(skip => skip.cause === 'existing-thread' && live.has(skip.threadId))) return [];
+  return [`every finding is already discussed on the PR (${[...new Set(skipped.map(skip => `thread ${skip.threadId}`))].join(', ')}), so there is no new inline comment and only a repeated summary would be posted`];
+}
+
 // Comment text that automatic publication never posts unseen: it could reach
 // outside Azure DevOps, notify people or render markup. The checks are literal
 // and prefer a false alarm to a miss; generics such as List<String> are no

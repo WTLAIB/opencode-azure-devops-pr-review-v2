@@ -448,10 +448,13 @@ or on the PR, the step is skipped and the notice names the command to run.
 Automatic publication posts as the PAT owner. It keeps the comments to a
 preview, and the receipt says why, when a quick review reported a
 high-severity finding or left coverage incomplete (findings that were not
-independently verified), or when any comment text contains a link, an
-`@<…>` mention, an image or HTML (literal checks that prefer a false alarm;
-generics such as `List<String>` are text). Publication itself still rechecks
-that the PR is active and unchanged. A command you type, such as
+independently verified), when any comment text contains a link, an `@<…>`
+mention, an image or HTML (literal checks that prefer a false alarm; generics
+such as `List<String>` are text), or when every finding is already discussed
+on the PR, so that only a repeated summary would be posted (the summary's
+marker follows the inline comments, so re-reviewing an unchanged PR would
+otherwise add a summary each time). Publication itself still rechecks that
+the PR is active and unchanged. A command you type, such as
 `/pr-comment <id> --publish`, applies none of these safeguards.
 
 ### Publication

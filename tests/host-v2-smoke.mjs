@@ -94,7 +94,7 @@ if (replacement) {
 // ------------------------------------------------------------ fake provider
 const requests = [];
 const overloaded = new Set();
-let child, logs = '', stall = null, longStream = null, commentLink = false;
+let child, logs = '', stall = null, longStream = null, commentLink = false, commentDiscussed = false;
 const lastUser = messages => messages?.findLast(message => message.role === 'user')?.content;
 const firstUser = messages => messages?.find(message => message.role === 'user')?.content;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
@@ -171,6 +171,10 @@ const provider = createServer(async (request, response) => {
     final = repair
       ? JSON.stringify({ dispositions: findings.slice(1).map(item => ({ id: item.id, status: 'MERGED', mergedInto: findings[0].id, reason: '相同根因。' })) })
       : JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...findings[0], reason: '已回查原始碼。' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: '驗證完成。' });
+  } else if (payload?.commentWork?.kind === 'plan' && commentDiscussed && Array.isArray(payload.existingDiscussions)) {
+    // Every finding is already discussed by AZPR's own comment on the PR.
+    const threadId = payload.existingDiscussions.find(thread => thread.azpr && thread.path)?.threadId;
+    final = JSON.stringify({ status: 'READY', comments: [], skipped: payload.findings.map(item => ({ findingId: item.id, cause: 'existing-thread', threadId, reason: `討論串 ${threadId} 已說明。` })) });
   } else if (payload?.commentWork?.kind === 'plan') {
     final = JSON.stringify({ status: 'READY', ...(payload.commentWork.allowSummary ? { summary: '此 PR 調整 fixture 的狀態處理。' } : {}),
       comments: payload.findings.map(item => ({ findingId: item.id, severity: item.severity, path: /head:([^:]+)/.exec(item.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${item.summary}\n\n**📝 Summary**\n觸發與影響。\n\n**🔎 Evidence**\n原始碼事實。\n\n**💡 Suggested fix**\n修正方式。${commentLink ? '詳見 https://evil.example/report' : ''}` })),
@@ -631,9 +635,19 @@ try {
   assert.equal(settingThreads.length, 2, 'One summary and one inline comment.');
   assert.ok(settingThreads.every(thread => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(thread.comments[0].content)));
   assert.equal(azure.callsTo('createThread').length - writesBeforeSetting, 2);
+  // The same review again: every finding is already discussed by that comment, so automatic
+  // publication holds back the repeated summary instead of posting it.
+  commentDiscussed = true;
+  const repeatOrigin = await newOrigin('Automatic publication again');
+  await api(`/api/session/${repeatOrigin}/command`, { name: 'pr-review', text: prUrl, delivery: 'steer' });
+  const repeated = await commentStep(repeatOrigin, await reviewReceipt(repeatOrigin, 'pr-review'));
+  commentDiscussed = false;
+  assert.match(repeated.receipt ?? '', /\] PREVIEW; source review=[a-f0-9]{8}\nStarted automatically [^\n]+\nAutomatic publication held back: every finding is already discussed on the PR \(thread \d+\), so there is no new inline comment and only a repeated summary would be posted\./, JSON.stringify(repeated));
+  assert.equal((await threads()).length, 2, 'No second summary.');
+  assert.equal(azure.callsTo('createThread').length - writesBeforeSetting, 2);
   // Restore the settings; the next restart loads them.
   await writeFile(installedSettingsPath, settingsText);
-  results.afterReviewSetting = 'afterReview.review publish: COMPLETE review, then its own comment run POSTED, VERIFIED=2 read back';
+  results.afterReviewSetting = 'afterReview.review publish: COMPLETE review, then its own comment run POSTED, VERIFIED=2 read back; the same review again with every finding already discussed held back to PREVIEW, no second summary';
 
   // 7. A corporate network: Azure DevOps over HTTPS only through an authenticating
   // CONNECT proxy that re-signs TLS with its own CA (azure.proxy, azure.caFile, azure.verifyTls).

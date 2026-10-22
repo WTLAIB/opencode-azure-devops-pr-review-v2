@@ -36,9 +36,9 @@ export function renderCommentActions(id, language, after) {
     `**自動預覽**（${source}）：AZPR 接著以另一道指令規劃留言預覽，並另送收據；不會發布。沒有可留言的發現時不會預覽。`,
     `**自动预览**（${source}）：AZPR 接着以另一条命令规划留言预览，并另送回执；不会发布。没有可留言的发现时不会预览。`)
     : after?.mode === 'publish' ? pick(language,
-      `**Automatic publication** (${source}): AZPR now plans the comments and posts them as the PAT owner, as a separate command with its own receipt. It keeps them to a preview when a quick review has a high-severity finding or incomplete coverage, or when the text contains a link, an @mention, an image or HTML. A review without findings to comment on gets no comments.`,
-      `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。快速審查有 high 發現或覆蓋不完整，或留言含連結、@提及、圖片或 HTML 時，只產生預覽。沒有可留言的發現時不會留言。`,
-      `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。快速审查有 high 发现或覆盖不完整，或留言含链接、@提及、图片或 HTML 时，只生成预览。没有可留言的发现时不会留言。`)
+      `**Automatic publication** (${source}): AZPR now plans the comments and posts them as the PAT owner, as a separate command with its own receipt. It keeps them to a preview when a quick review has a high-severity finding or incomplete coverage, when the text contains a link, an @mention, an image or HTML, or when every finding is already discussed on the PR. A review without findings to comment on gets no comments.`,
+      `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。快速審查有 high 發現或覆蓋不完整、留言含連結、@提及、圖片或 HTML，或每個發現在 PR 上都已有討論時，只產生預覽。沒有可留言的發現時不會留言。`,
+      `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。快速审查有 high 发现或覆盖不完整、留言含链接、@提及、图片或 HTML，或每个发现在 PR 上都已有讨论时，只生成预览。没有可留言的发现时不会留言。`)
       : after ? pick(language, `Automatic comments are off for this review (${source}).`, `這份審查不自動留言（${source}）。`, `这份审查不自动留言（${source}）。`) : '';
   const [heading, publish, preview, omit, retention] = pick(language,
     ['PR comments', 'Prepare and publish comments', 'Preview comments only', 'You can omit the ID: `/pr-comment --publish` selects the latest completed review in the original conversation, or this review in its report session.', 'Reviews and previews are saved privately (latest 20) and survive an OpenCode restart. Publishing skips comments that already exist on the PR, so it is safe to run again.'],

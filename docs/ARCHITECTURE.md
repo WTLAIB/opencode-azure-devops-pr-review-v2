@@ -66,8 +66,11 @@ otherwise the runtime starts the comment workflow of `/pr-comment` as a new run
 with its own run ID, `STARTED` notice and receipt, under the same origin and
 PR locks (a held lock skips the step with a notice naming the command to run).
 Automatic publication keeps the plan to a preview when a safeguard applies: a
-quick review with a REPORTED high-severity finding or incomplete coverage, or
-saved text with a link, an `@<…>` mention, an image or HTML. A comment run
+quick review with a REPORTED high-severity finding or incomplete coverage,
+saved text with a link, an `@<…>` mention, an image or HTML, or a plan without
+inline comments whose findings the planner all skipped as `existing-thread`
+with threads read live before planning (only a repeated summary would be
+posted). A comment run
 hands on nothing; non-COMPLETE reviews and an unloading plugin start nothing.
 
 Each workflow first runs one **preflight**: `settings.json`, and the PAT file

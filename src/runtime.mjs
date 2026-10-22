@@ -20,7 +20,7 @@ import { parseUniqueJSON, parseReviewRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
-import { automaticPublicationHolds, automaticPublicationProblems, publicationItems, publishableFindings, reviewVerification } from './comments.mjs';
+import { automaticPublicationHolds, automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewVerification } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
@@ -857,7 +857,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const verification = reviewVerification(review);
     if (!verification) throw new Error(`[AZPR] Review ${review.id} does not say whether its findings were verified; run a new review before commenting.`);
     if (review.profile === 'quick' && !settings.quickReady) throw new Error(`[AZPR] Review ${review.id} is a quick review; set models.quick.reviewer, which plans its comments, before /pr-comment.`);
-    let planning = false, held = [];
+    let planning = false, held = [], discussions = null;
     const step = auto && `(automatic ${auto.mode === 'publish' ? 'publication' : 'preview'} after review ${review.id} completed; ${auto.source})`;
     const { run, status, report, failure } = await workflow({ origin: review.origin, notifySession, mode: 'comment',
       profile: review.profile, review, lockKey: targetKey(review.target), ...(auto ? { auto, startLabel: step } : {}) }, async run => {
@@ -874,7 +874,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         const data = await dataFor(run);
         // Read live discussions once for the planner's duplicate checks; the
         // planner can still read threads itself if this read fails.
-        let discussions = null;
         try { discussions = discussionDigest(await azure.threads(run, review.snapshot)); }
         catch (error) {
           if (!run.active) throw error;
@@ -893,7 +892,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       const preview = renderPlan(review);
       // Automatic publication posts nothing a safeguard holds back; the saved preview waits for /pr-comment --publish.
-      if (publish && auto) held = run.heldBack = [...automaticPublicationHolds(review), ...automaticPublicationProblems(review.plan)];
+      if (publish && auto) held = run.heldBack = [...automaticPublicationHolds(review), ...automaticPublicationRepeats(review.plan, discussions), ...automaticPublicationProblems(review.plan)];
       if (!publish || held.length) return { status: 'PREVIEW', report: `${preview}\n\nNothing was posted. To post this exact preview: /pr-comment ${review.id} --publish` };
       if (!publicationItems(review.plan).length) return { status: 'NOTHING_TO_POST', report: preview };
       run.phase = 'publication';

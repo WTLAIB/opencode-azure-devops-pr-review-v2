@@ -1559,6 +1559,25 @@ test('automatic publication holds back comment text with a link, a mention, an i
   assert.equal(generic.azure.state.threads.length, 3);
 });
 
+test('a repeated automatic publication of an unchanged PR posts no second summary; a typed --publish still can', async t => {
+  let discussed = null;
+  const f = await fixture(t, { answer({ role, packet }) {
+    if (ROLES[role].format !== 'comment-plan' || discussed === null) return undefined;
+    return { status: 'READY', comments: [], skipped: packet.findings.map(item => ({ findingId: item.id, cause: 'existing-thread', threadId: discussed, reason: `Thread ${discussed} already discusses it.` })) };
+  } });
+  const first = await commentStep(f, await f.command('pr-review', `${f.azure.prUrl()} --publish`));
+  assert.match(first.receipt, /\] POSTED; /);
+  assert.equal(f.azure.state.threads.length, 3);
+  discussed = f.azure.state.threads.find(thread => thread.threadContext).id;
+  const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  const again = await commentStep(f, receipt);
+  assert.match(again.receipt, new RegExp(`\\] PREVIEW; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back: every finding is already discussed on the PR \\(thread ${discussed}\\), so there is no new inline comment and only a repeated summary would be posted\\. Nothing was posted`));
+  assert.equal(f.azure.state.threads.length, 3, 'No second summary was posted.');
+  // The person who reads the preview decides: a typed --publish posts the summary.
+  assert.match(await f.command('pr-comment', `${reviewId(receipt)} --publish`), /\] POSTED/);
+  assert.equal(f.azure.state.threads.length, 4);
+});
+
 test('a busy PR or conversation skips the automatic step and names the command to run', async t => {
   const entered = deferred(), release = deferred();
   let hold = false;

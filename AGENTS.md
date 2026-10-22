@@ -100,8 +100,9 @@ settings, backups and failure records. Never upload `.local/`.
 - Automatic publication (`afterReview: publish` or `--publish` after the PR
   URL) follows only a COMPLETE review with findings to comment on, and keeps
   to a preview, saying why, for a quick review with a high-severity finding or
-  incomplete coverage and for text with a link, an `@<…>` mention, an image or
-  HTML. Its checks are deterministic and prefer a false alarm; never relax them
+  incomplete coverage, for text with a link, an `@<…>` mention, an image or
+  HTML, and for a plan that would post only a repeated summary (every finding
+  skipped as already discussed on the PR). Its checks are deterministic and prefer a false alarm; never relax them
   to model judgment. Commands the user types keep their behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them.

@@ -13,8 +13,10 @@
   run. Other option-like text there is refused, so a mistyped flag never falls
   back to the setting; `/pr-check` takes no flag.
 - Automatic publication keeps to a preview, and its receipt says why, for a
-  quick review with a high-severity finding or incomplete coverage and for
-  comment text with a link, an `@<…>` mention, an image or HTML.
+  quick review with a high-severity finding or incomplete coverage, for
+  comment text with a link, an `@<…>` mention, an image or HTML, and when
+  every finding is already discussed on the PR, so that re-reviewing an
+  unchanged PR does not add a summary each time.
 - `/pr-check` shows the `afterReview` of each mode, with a warning for modes
   that publish automatically.
 - `/pr-setup` and the blocked review commands name the settings problem found

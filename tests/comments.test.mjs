@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
-  publishableFindings, reviewVerification, combinationProblems, automaticPublicationHolds, automaticPublicationProblems,
+  publishableFindings, reviewVerification, combinationProblems, automaticPublicationHolds, automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
@@ -384,4 +384,20 @@ test('automatic publication leaves links, mentions, images and HTML to a person;
   assert.deepEqual(automaticPublicationProblems(noted), ['the PR summary contains an external link and an image']);
   const combined = assemblePlan(review([finding('F-1'), finding('F-2')]), [{ comments: [comment({ findingIds: ['F-1', 'F-2'], body: '🔴 high: x\n\n<b onmouseover=x>' })], skipped: [] }]);
   assert.deepEqual(automaticPublicationProblems(combined), ['the comment for F-1, F-2 (/src/a.ts:2) contains HTML']);
+});
+
+test('automatic publication holds back a summary that would only repeat findings already discussed on the PR', () => {
+  const live = [{ threadId: 281 }, { threadId: 290 }];
+  const plan = skipped => ({ summary: { kind: 'summary', content: 'Summary.' }, comments: [], skipped });
+  const discussed = (id, threadId = 281) => ({ findingId: id, reason: `Thread ${threadId} covers it.`, cause: 'existing-thread', threadId });
+  assert.deepEqual(automaticPublicationRepeats(plan([discussed('F-1'), discussed('F-2', 290), discussed('F-3')]), live),
+    ['every finding is already discussed on the PR (thread 281, thread 290), so there is no new inline comment and only a repeated summary would be posted']);
+  for (const [label, value, threads] of [
+    ['an inline comment is new', { ...plan([discussed('F-1')]), comments: [{ findingId: 'F-2' }] }, live],
+    ['another cause', plan([discussed('F-1'), { findingId: 'F-2', reason: 'Low severity.', cause: 'low-severity' }]), live],
+    ['a skip without a cause', plan([discussed('F-1'), { findingId: 'F-2', reason: 'The planner stopped.' }]), live],
+    ['a thread that is not live', plan([discussed('F-1', 999)]), live],
+    ['threads that could not be read', plan([discussed('F-1')]), null],
+    ['nothing skipped', plan([]), live],
+  ]) assert.deepEqual(automaticPublicationRepeats(value, threads), [], label);
 });
