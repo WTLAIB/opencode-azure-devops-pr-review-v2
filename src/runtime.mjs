@@ -688,6 +688,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       Object.assign(outcome, await action(run));
       if (!run.active) throw new Error(run.reason || 'Review stopped.');
       await displayReport(run, outcome.report, outcome.status);
+      // A stop, timeout or unload while the report was delivered keeps the finished
+      // result, but nothing may follow it (the caller hands on no comment step).
+      if (!run.active) outcome.stopped = run.reason;
     } catch (error) {
       outcome.failure = run.controller.signal.aborted ? run.reason : errorText(error);
       outcome.status = run.controller.signal.aborted ? run.stopStatus : 'INCOMPLETE';
@@ -793,7 +796,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const shown = after && (after.mode !== 'none' || request.flag) ? after : undefined;
     const startNote = after?.mode === 'preview' ? ` After a COMPLETE review it previews the comments automatically (${after.source}); nothing is posted.`
       : after?.mode === 'publish' ? ` After a COMPLETE review it plans the comments and posts them automatically as the PAT owner (${after.source}), unless a safeguard keeps them to a preview.` : '';
-    const { run, status, report, failure, review } = await workflow({ origin: input.sessionID, notifySession: input.sessionID, mode, profile,
+    const { run, status, report, failure, review, stopped } = await workflow({ origin: input.sessionID, notifySession: input.sessionID, mode, profile,
       userContext: request.userContext, prUrl: request.prUrl, ...(shown ? { afterReview: shown } : {}), ...(startNote ? { startNote } : {}) }, async run => {
       if (mode === 'check') { run.phase = 'source check'; return runCheck(run, request); }
       run.phase = 'review';
@@ -821,9 +824,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }, dispatch);
     if (status === 'COMPLETE' && review) await rememberReview(review);
     else await releaseUnfinished(run);
-    output.text = renderReceipt(run, report, status, failure, settings);
-    // Only a COMPLETE review hands on to the comment step, after its receipt.
-    if (status === 'COMPLETE' && review && after.mode !== 'none') output.next = { review, after };
+    // A review stopped while its report was delivered stays COMPLETE, but its comment step is off,
+    // also in the report the receipt encloses, which was rendered before the stop.
+    let enclosed = report;
+    if (stopped && after && after.mode !== 'none') {
+      run.afterReview = { mode: 'none', source: `stopped: ${stopped}` };
+      enclosed = report.replace(renderCommentActions(run.id, settings.outputLanguage, shown), renderCommentActions(run.id, settings.outputLanguage, run.afterReview));
+    }
+    output.text = renderReceipt(run, enclosed, status, failure, settings);
+    // Only a COMPLETE review that nothing stopped hands on to the comment step, after its receipt.
+    if (status === 'COMPLETE' && review && after.mode !== 'none' && !stopped) output.next = { review, after };
   }
 
   function renderPlan(review) {

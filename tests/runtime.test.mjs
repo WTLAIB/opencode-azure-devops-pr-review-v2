@@ -166,6 +166,7 @@ async function fixture(t, opts = {}) {
       async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) { s.outcome = 'interrupted'; s.onInterrupt?.(); } return { interrupted: true }; },
       async synthetic(input) {
         if (opts.syntheticFailure?.(input)) throw new Error('Fixture notice unavailable');
+        await opts.syntheticDelay?.(input);
         notices.push(clone(input));
         for (const notify of waiters) notify();
         return { id: `notice_${++seq}`, type: 'synthetic', sessionID: input.sessionID, delivery: input.delivery, payload: { text: input.text } };
@@ -1549,7 +1550,8 @@ test('automatic publication holds back comment text with a link, a mention, an i
   assert.equal(f.azure.callsTo('createThread').length, 0);
   const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(step.receipt)[1], 'result.json'), 'utf8'));
   assert.equal(result.automatic.heldBack.length, 2);
-  for (const [text, kind] of [['Ask @<6D6A2A6A-0000-0000-0000-000000000000>.', 'an @mention'], ['![x](y.png)', 'an image'], ['<img src=x onerror=alert(1)>', 'HTML']]) {
+  for (const [text, kind] of [['Ask @<6D6A2A6A-0000-0000-0000-000000000000>.', 'an @mention'], ['![x](y.png)', 'an image'], ['<img src=x onerror=alert(1)>', 'HTML'],
+    ['See [details](https&#58;//outside.example/report).', 'an external link'], ['See [details](https\\://outside.example/report).', 'an external link']]) {
     const g = await fixture(t, { answer: body(text) });
     assert.match((await commentStep(g, await g.command('pr-review', `${g.azure.prUrl()} --publish`))).receipt, new RegExp(`held back: the comment for F-1 [^;]+ contains ${kind};`), text);
     assert.equal(g.azure.callsTo('createThread').length, 0, text);
@@ -1576,6 +1578,26 @@ test('a repeated automatic publication of an unchanged PR posts no second summar
   // The person who reads the preview decides: a typed --publish posts the summary.
   assert.match(await f.command('pr-comment', `${reviewId(receipt)} --publish`), /\] POSTED/);
   assert.equal(f.azure.state.threads.length, 4);
+});
+
+test('a stop while the review report is delivered keeps the COMPLETE review but starts no comment step', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { async syntheticDelay(input) {
+    if (/^# AZPR [a-f0-9]{8} — COMPLETE/.test(input.text)) { entered.resolve(); await within(release.promise, 10000); }
+  } });
+  t.after(() => release.resolve());
+  const running = f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /Authorization revoked and cancellation requested/);
+  release.resolve();
+  const receipt = await running;
+  assert.match(receipt, /\] COMPLETE\n/, 'The finished review stays COMPLETE.');
+  assert.match(receipt, /Automatic comments are off for this review \(`stopped: User requested \/pr-stop\.`\)\./);
+  assert.doesNotMatch(receipt, /\*\*Automatic publication\*\*/);
+  await noCommentStep(f);
+  assert.equal(f.azure.callsTo('createThread').length, 0, 'Nothing is posted after /pr-stop.');
+  // The review is kept: a person can still comment on it.
+  assert.match(await f.command('pr-comment', reviewId(receipt)), /\] PREVIEW; source review=/);
 });
 
 test('a busy PR or conversation skips the automatic step and names the command to run', async t => {

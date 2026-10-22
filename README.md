@@ -440,7 +440,8 @@ The step runs after the review's receipt as a separate comment command with
 its own run ID, `STARTED` notice and receipt; `/pr-stop` stops it like any
 command. It is the same planning and publication as `/pr-comment`, so a
 preview uses a model, and `/pr-comment <id> --publish` later posts exactly that
-preview. Nothing follows a review that is not COMPLETE. A review without
+preview. Nothing follows a review that is not COMPLETE, or that was stopped
+while its report was delivered. A review without
 findings to comment on gets one notice instead, with no planning, model
 request or comment. When another AZPR command is running in the conversation
 or on the PR, the step is skipped and the notice names the command to run.
@@ -449,8 +450,9 @@ Automatic publication posts as the PAT owner. It keeps the comments to a
 preview, and the receipt says why, when a quick review reported a
 high-severity finding or left coverage incomplete (findings that were not
 independently verified), when any comment text contains a link, an `@<…>`
-mention, an image or HTML (literal checks that prefer a false alarm; generics
-such as `List<String>` are text), or when every finding is already discussed
+mention, an image or HTML (checks that prefer a false alarm and also decode
+escapes and character references in links and mentions; generics such as
+`List<String>` are text), or when every finding is already discussed
 on the PR, so that only a repeated summary would be posted (the summary's
 marker follows the inline comments, so re-reviewing an unchanged PR would
 otherwise add a summary each time). Publication itself still rechecks that

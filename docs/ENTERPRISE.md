@@ -130,7 +130,8 @@ for a mode, or add `--publish` after the PR URL for one review. Automatic
 publication posts under the PAT owner's identity without anyone reading the
 text first, so it keeps to a preview when a quick review reported a
 high-severity finding or left coverage incomplete, when the text contains a
-link, an `@<…>` mention, an image or HTML, or when every finding is already
+link, an `@<…>` mention, an image or HTML (links and mentions also when encoded
+with escapes or character references), or when every finding is already
 discussed on the PR; it posts nothing for a review without findings to
 comment on, and `/pr-check` shows a warning for each mode that publishes
 automatically. An automatic preview still uses a model.

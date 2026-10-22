@@ -24,7 +24,11 @@ flag right after the PR URL of a review command (`--preview`, `--publish`,
 publication after a review:
 
 1. Only a COMPLETE review hands on; STALE, PARTIAL, INCOMPLETE, CANCELLED and
-   TIMED_OUT reviews never do, and nothing starts while the plugin unloads.
+   TIMED_OUT reviews never do, and nothing starts while the plugin unloads. A
+   `/pr-stop`, timeout or unload that arrives while a finished review's report
+   is still being delivered keeps the review COMPLETE (it can still be
+   commented on by hand) but starts no step; its receipt says `Automatic
+   comments are off for this review (stopped: …)`.
    The review's `STARTED` notice and its receipt's PR comments section say
    which step follows (and why: the setting or the flag).
 2. After the review's receipt, a review without findings to comment on gets
@@ -43,7 +47,10 @@ publication after a review:
    independently verified; the receipt's verification hint), or when the
    summary or an inline comment contains a link (`http://`, `https://`,
    another `scheme://`, `mailto:`, `javascript:`, `data:`, `www.` or a
-   protocol-relative link target), an Azure DevOps mention (`@<…>`), an image
+   protocol-relative link target, also when it is written with backslash
+   escapes or character references such as `https\://` or `https&#58;//`,
+   which CommonMark decodes), an Azure DevOps mention (`@<…>`, decoded the same
+   way), an image
    (`![`) or HTML (tags such as `a`, `img`, `iframe` or `script`, attributes
    such as `on…=`, `href=`, `src=` or `style=`, or an HTML comment other than
    AZPR's marker). These checks are literal and prefer a false alarm: `![`

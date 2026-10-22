@@ -378,7 +378,19 @@ test('automatic publication leaves links, mentions, images and HTML to a person;
     ['<div onclick="x()">text</div>', 'HTML'],
     ['<IFRAME>', 'HTML'],
     ['hidden <!-- note --> text', 'HTML'],
+    // CommonMark decodes escapes and character references in link destinations and text.
+    ['[details](https&#58;//outside.example/report)', 'an external link'],
+    ['[details](https\\://outside.example/report)', 'an external link'],
+    ['[d](https&#x3A;//x.example)', 'an external link'],
+    ['[d](&#47;&#47;evil.example/a)', 'an external link'],
+    ['See https&colon;//x.example now.', 'an external link'],
+    ['Visit www&period;evil&period;example today.', 'an external link'],
+    ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
   ]) assert.deepEqual(automaticPublicationProblems(plan([text])), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
+  // A decoded character never forms markup, and AZPR's own escaping of <!-- stays text.
+  for (const text of ['Kept &lt;!-- note --&gt; as text.', 'Shown as &#60;img src=x&#62; text.', 'Paths C:\\Users\\dev and \\d+\\.\\d+; a &amp; b; &constructor; &nbsp;']) {
+    assert.deepEqual(automaticPublicationProblems(plan([text])), [], text);
+  }
   // The summary is checked like an inline comment, and several kinds are named together.
   const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'See https://x.example and ![i](y)' }]);
   assert.deepEqual(automaticPublicationProblems(noted), ['the PR summary contains an external link and an image']);

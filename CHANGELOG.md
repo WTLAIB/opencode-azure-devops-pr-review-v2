@@ -7,14 +7,16 @@
   step runs as a separate comment command with its own run ID, `STARTED`
   notice and receipt, and `/pr-stop` stops it. A review without findings to
   comment on gets one notice and no planning or model request; a busy
-  conversation or PR skips the step and names the command to run.
+  conversation or PR skips the step and names the command to run; a review
+  stopped while its report is delivered stays COMPLETE but starts no step.
 - One flag right after the PR URL of `/pr-review`, `/pr-deep` or `/pr-quick`
   (`--preview`, `--publish` or `--no-comment`) overrides `afterReview` for that
   run. Other option-like text there is refused, so a mistyped flag never falls
   back to the setting; `/pr-check` takes no flag.
 - Automatic publication keeps to a preview, and its receipt says why, for a
   quick review with a high-severity finding or incomplete coverage, for
-  comment text with a link, an `@<…>` mention, an image or HTML, and when
+  comment text with a link, an `@<…>` mention, an image or HTML (links and
+  mentions also when written with escapes or character references), and when
   every finding is already discussed on the PR, so that re-reviewing an
   unchanged PR does not add a summary each time.
 - `/pr-check` shows the `afterReview` of each mode, with a warning for modes

@@ -65,9 +65,12 @@ queued: without publishable findings one notice says so and nothing is planned;
 otherwise the runtime starts the comment workflow of `/pr-comment` as a new run
 with its own run ID, `STARTED` notice and receipt, under the same origin and
 PR locks (a held lock skips the step with a notice naming the command to run).
+A stop, timeout or unload while a finished review's report is delivered keeps
+the review COMPLETE but hands on nothing.
 Automatic publication keeps the plan to a preview when a safeguard applies: a
 quick review with a REPORTED high-severity finding or incomplete coverage,
-saved text with a link, an `@<…>` mention, an image or HTML, or a plan without
+saved text with a link, an `@<…>` mention (both also checked after decoding
+backslash escapes and character references), an image or HTML, or a plan without
 inline comments whose findings the planner all skipped as `existing-thread`
 with threads read live before planning (only a repeated summary would be
 posted). A comment run

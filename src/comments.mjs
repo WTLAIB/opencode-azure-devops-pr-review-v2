@@ -150,22 +150,47 @@ export function automaticPublicationRepeats(plan, discussions) {
 // Comment text that automatic publication never posts unseen: it could reach
 // outside Azure DevOps, notify people or render markup. The checks are literal
 // and prefer a false alarm to a miss; generics such as List<String> are no
-// HTML, and AZPR's own marker is removed before the checks.
+// HTML, and AZPR's own marker is removed before the checks. Links and mentions
+// are also checked after decoding (see decodedText); images and HTML only as
+// written, since a decoded character never forms markup.
 const UNSEEN_TEXT = [
   ['an external link', [/\b[a-z][a-z0-9+.-]*:\/\//i, /\b(?:mailto|javascript|vbscript):/i, /\bdata:[a-z]+\//i,
-    /(?<![\w.@/-])www\.[a-z0-9-]+\.[a-z]/i, /\]\(\s*<?\/\//, /^\s*\[[^\]\n]+\]:\s*<?\/\//m]],
-  ['an @mention', [/@</]],
+    /(?<![\w.@/-])www\.[a-z0-9-]+\.[a-z]/i, /\]\(\s*<?\/\//, /^\s*\[[^\]\n]+\]:\s*<?\/\//m], true],
+  ['an @mention', [/@</], true],
   ['an image', [/!\[/]],
   ['HTML', [/<\/?(?:a|img|image|iframe|frame|frameset|script|style|link|meta|base|object|embed|applet|form|input|button|textarea|select|svg|math|video|audio|source|track|picture|portal)(?=[\s/>]|$)/im,
     /<[a-z][a-z0-9-]*\s[^<>]*?\b(?:on[a-z]+|href|src|srcset|style|action|formaction|background|poster|xlink:href)\s*=/i, /<!--/]],
 ];
 const OWN_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
+// The named character references that stand for ASCII punctuation, the only
+// characters besides letters and digits that the link and mention checks look for.
+const PUNCTUATION_REFERENCES = Object.freeze({
+  excl: '!', quot: '"', QUOT: '"', num: '#', dollar: '$', percnt: '%', amp: '&', AMP: '&', apos: "'", lpar: '(', rpar: ')',
+  ast: '*', midast: '*', plus: '+', comma: ',', period: '.', sol: '/', colon: ':', semi: ';', lt: '<', LT: '<', equals: '=',
+  gt: '>', GT: '>', quest: '?', commat: '@', lsqb: '[', lbrack: '[', bsol: '\\', rsqb: ']', rbrack: ']', Hat: '^',
+  lowbar: '_', UnderBar: '_', grave: '`', DiacriticalGrave: '`', lcub: '{', lbrace: '{', verbar: '|', vert: '|',
+  VerticalLine: '|', rcub: '}', rbrace: '}',
+});
+/**
+ * What CommonMark makes of escapes and character references in link
+ * destinations and text: `https&#58;//`, `https\://` and `&#47;&#47;host` are
+ * links. Decoding errs towards finding more (a reference after a backslash is
+ * decoded too); `&lt`, `&gt`, `&amp` and `&quot` count without a semicolon.
+ */
+function decodedText(text) {
+  return text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    .replace(/&#(?:([0-9]{1,7})|[xX]([0-9a-fA-F]{1,6}));/g, (_, decimal, hex) => {
+      const code = decimal === undefined ? parseInt(hex, 16) : Number(decimal);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd';
+    })
+    .replace(/&([A-Za-z][A-Za-z0-9]*);|&(lt|gt|amp|quot|LT|GT|AMP|QUOT)(?![A-Za-z0-9;])/g, (whole, name, legacy) => Object.hasOwn(PUNCTUATION_REFERENCES, name ?? legacy) ? PUNCTUATION_REFERENCES[name ?? legacy] : whole);
+}
 
 /** Which saved items carry text that automatic publication leaves to a person, and what it is. */
 export function automaticPublicationProblems(plan) {
   return publicationItems(plan).flatMap(item => {
-    const text = item.content.replace(OWN_MARKER, '');
-    const kinds = UNSEEN_TEXT.filter(([, patterns]) => patterns.some(pattern => pattern.test(text))).map(([kind]) => kind);
+    const text = item.content.replace(OWN_MARKER, ''), decoded = decodedText(text);
+    const kinds = UNSEEN_TEXT.filter(([, patterns, decodes]) => patterns.some(pattern => pattern.test(text) || (decodes && pattern.test(decoded)))).map(([kind]) => kind);
     if (!kinds.length) return [];
     const name = item.kind === 'summary' ? 'the PR summary' : `the comment for ${(item.findingIds ?? [item.findingId]).join(', ')} (${item.path}:${item.startLine})`;
     return [`${name} contains ${kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds.at(-1)}` : kinds[0]}`];
