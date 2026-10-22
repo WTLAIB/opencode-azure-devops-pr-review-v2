@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- `afterReview` sets, per mode (`quick`, `review`, `deep`), what follows a
+  COMPLETE review: `none` (default, as before), `preview` or `publish`. The
+  step runs as a separate comment command with its own run ID, `STARTED`
+  notice and receipt, and `/pr-stop` stops it. A review without findings to
+  comment on gets one notice and no planning or model request; a busy
+  conversation or PR skips the step and names the command to run.
+- One flag right after the PR URL of `/pr-review`, `/pr-deep` or `/pr-quick`
+  (`--preview`, `--publish` or `--no-comment`) overrides `afterReview` for that
+  run. Other option-like text there is refused, so a mistyped flag never falls
+  back to the setting; `/pr-check` takes no flag.
+- Automatic publication keeps to a preview, and its receipt says why, for a
+  quick review with a high-severity finding or incomplete coverage and for
+  comment text with a link, an `@<…>` mention, an image or HTML.
+- `/pr-check` shows the `afterReview` of each mode, with a warning for modes
+  that publish automatically.
+- `/pr-setup` and the blocked review commands name the settings problem found
+  at load, without any setting value; an unknown settings key is named only
+  when it looks like a setting name.
+
 ## 0.1.0 — 2026-10-22
 
 First public release.

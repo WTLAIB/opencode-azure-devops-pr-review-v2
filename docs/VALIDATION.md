@@ -7,6 +7,48 @@ passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
 
+## Automatic comments after a review (unreleased, 2026-10-22)
+
+Environment as below (Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode CLI
+2.1.2). `afterReview`, the review commands' `--preview`, `--publish` and
+`--no-comment` flags, the safeguards of automatic publication and the setup
+problem messages were added on top of 0.1.0; review prompts were unchanged.
+
+- `npm run check` and **384 offline tests** passed. The new tests cover the
+  setting (defaults, partial objects, values never echoed), the flag parser
+  (one flag right after the URL, refused typos, dashes and second flags,
+  `/pr-check` taking none, context starting after the flag), the hand-off
+  (a COMPLETE review previews or publishes in a run of its own; STALE and
+  cancelled reviews hand on nothing; a review without findings gets one
+  notice and no model request; a flag overrides the setting both ways), the
+  safeguards (a quick review's high-severity finding or incomplete coverage;
+  links, `@<…>` mentions, images and HTML in the summary or an inline comment,
+  while generics, decorators and AZPR's marker pass), a PR held by another
+  comment command, `/pr-stop` of the automatic step, the `/pr-check` row, the
+  installer adding `afterReview` and setup naming the problem without values.
+  Removing any one safeguard, the no-findings check, the busy-lock handling,
+  the typo refusal or the setting itself makes a test fail.
+- All four real-host fixtures passed on OpenCode 2.1.2 with fake model and
+  Azure services: fresh, replacement and native installation, and comment
+  scale. The smoke fixture additionally ran `/pr-review <URL> --preview`
+  (COMPLETE, then a PREVIEW in a run of its own, nothing posted),
+  `/pr-quick <URL> --publish` with a high-severity finding and
+  `/pr-review <URL> --publish` with a link in the planned text (both held back
+  to PREVIEW with the reason), a quick review without findings (one notice and
+  no further provider request), and, after a restart with
+  `afterReview.review: publish`, a plain `/pr-review` whose automatic
+  publication was POSTED and read back (VERIFIED=2).
+- Live attempts with this revision installed in the user's OpenCode 2.1.2
+  service (`afterReview` none for every mode, `--preview` on the command)
+  could not reach the model: OpenCode failed every reviewer session with
+  `provider.auth` (`Integration.Authorization: Request failed: 400`) before
+  any model request, because the sign-in of the account's OpenAI provider
+  could not be refreshed. These runs establish only what needs no model:
+  `/pr-check` of the one-file and the 35-file test PRs was READY with the new
+  `Automatic comments` row (`afterReview: review none, deep none, quick none
+  (no automatic comments)`), the review commands' STARTED notices named the
+  automatic preview, and the INCOMPLETE reviews started no comment step.
+
 ## 0.1.0 release acceptance (2026-10-22)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.2.
@@ -105,8 +147,8 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. From
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 367 tests across settings (including the
-`mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
+`npm run check` and `npm test` pass: 384 tests across settings (including the
+`mcp` → `azure` migration, the proxy and TLS settings and `afterReview`), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
@@ -1422,6 +1464,10 @@ transient failure, and its error names the last activity.
 
 ## Not yet validated
 
+- The automatic comment step with a real model and real Azure DevOps: the
+  preview and publication hand-offs and their safeguards were validated with
+  the fixture services only. The live attempts above failed before any model
+  request, so no live automatic preview or publication has run yet.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.

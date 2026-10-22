@@ -25,7 +25,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/search.mjs` | Content search: reads the repository zip of one commit once per run (stored or deflated entries; bounded inflation; ZIP64 and encrypted archives refused), keeps its text files in memory and finds literal text, bounded per file and in total. |
 | `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck; the quick review and its location and source checks. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
-| `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers and plan assembly. |
+| `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
 | `src/store.mjs` | Persistent reviews, data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit). |
@@ -42,7 +42,11 @@ Source installations retain their adjacent settings file. `/pr-setup` provides
 guidance before settings exist, validates one model and an existing private PAT
 file, and writes settings only on the explicit setup command. It makes no model
 or Azure request. Changes take effect after a restart; the loaded runtime and
-its active grants do not change in place.
+its active grants do not change in place. While settings are missing or
+unusable, the review commands answer `SETUP REQUIRED` and name the problem
+found at load (no file yet, an unreadable file's error code, invalid JSON, a
+validation error or an unusable PAT file), never a setting value; an unknown
+key is named only when it looks like a setting name.
 
 `ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
 `/pr-quick`, `/pr-stop` and `/pr-comment`. A command validates its arguments, registers a run
@@ -52,6 +56,19 @@ to the invoking conversation with up to three attempts and is written to
 `receipts/` in the state directory if the conversation cannot be reached.
 `PROGRESS` notices report phases (snapshot, shard counts, verification,
 planning pages, posting). Notices never start a model response.
+
+A review command takes at most one flag right after the PR URL (`--preview`,
+`--publish`, `--no-comment`); it sets `afterReview` for that run, and other
+option-like text there is refused before any request. When the resulting step
+is `preview` or `publish`, a COMPLETE review hands on after its receipt is
+queued: without publishable findings one notice says so and nothing is planned;
+otherwise the runtime starts the comment workflow of `/pr-comment` as a new run
+with its own run ID, `STARTED` notice and receipt, under the same origin and
+PR locks (a held lock skips the step with a notice naming the command to run).
+Automatic publication keeps the plan to a preview when a safeguard applies: a
+quick review with a REPORTED high-severity finding or incomplete coverage, or
+saved text with a link, an `@<…>` mention, an image or HTML. A comment run
+hands on nothing; non-COMPLETE reviews and an unloading plugin start nothing.
 
 Each workflow first runs one **preflight**: `settings.json`, and the PAT file
 when `azure.patFile` is set, must be unchanged since load, reserved commands must still be ours, the private agents of the

@@ -173,6 +173,28 @@
       "default": true,
       "description": "Delete AZPR's private reviewer sessions when they are no longer needed: a completed review's sessions when the review is evicted (the newest 20 are kept, as /pr-comment needs them), and the sessions of an unfinished review at once except the one holding its report or draft (all of them while debug is enabled); those kept sessions follow the same 20-run limit. false keeps every session."
     },
+    "afterReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What AZPR does after a COMPLETE review of each mode. none (default): nothing; run /pr-comment yourself. preview: plan a comment preview as a separate command with its own receipt; planning uses a model and nothing is posted. publish: plan the comments and post them as the PAT owner, unless a safeguard keeps them to a preview (a quick review with a high-severity finding or incomplete coverage; comment text with a link, an @mention, an image or HTML). A review without findings to comment on gets neither. A flag right after the PR URL (--preview, --publish or --no-comment) overrides this for one run.",
+      "properties": {
+        "quick": {
+          "enum": ["none", "preview", "publish"],
+          "default": "none",
+          "description": "After /pr-quick."
+        },
+        "review": {
+          "enum": ["none", "preview", "publish"],
+          "default": "none",
+          "description": "After /pr-review."
+        },
+        "deep": {
+          "enum": ["none", "preview", "publish"],
+          "default": "none",
+          "description": "After /pr-deep; its comments are planned with models.deep.risk."
+        }
+      }
+    },
     "azure": {
       "type": "object",
       "additionalProperties": false,

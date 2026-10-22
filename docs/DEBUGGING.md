@@ -63,7 +63,7 @@ within the same limit of 20 runs.
 | `report.md` / `draft.md` | Rendered report or unconfirmed draft. |
 | `comment-plan.json` | The saved plan with exact content, anchors, offsets and markers. |
 | `azure-calls.jsonl` | Every Azure DevOps REST call, from the runtime and the reviewers' AZPR tools: method, call, file path or change page, attempt, HTTP status or error kind, duration, bytes, and whether it will be retried. Never credentials or comment bodies. |
-| `result.json` | Final status, every stage record, Azure call and retry counts, the run's token totals with `cachedInputShare`, and warnings. |
+| `result.json` | Final status, every stage record, Azure call and retry counts, the run's token totals with `cachedInputShare`, and warnings. A review records the comment step it hands on (`afterReview`: mode and source, when a step or `--no-comment` applies); an automatic comment run records `automatic` (mode, source, `sourceReview` and the reasons in `heldBack`). |
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
 
 The numeric prefix is stage creation order; shards and verification sessions run
@@ -129,6 +129,12 @@ Common receipts:
 | `Host configuration changed private agent …` | Another config or plugin changed an `azpr-*` agent; resolve it and reload. |
 | `No completed review is available for this conversation` | Run the comment command in the review's conversation, or run a new review. |
 | `PR source commit changed after the review` | The PR got new commits; run a new review before commenting. |
+| `Started automatically after review <id> completed (afterReview.review: preview)` or `(--publish)` | This comment run followed a COMPLETE review because of `afterReview` or the review command's flag; it is otherwise an ordinary `/pr-comment` run. |
+| `Automatic publication held back: …` (status `PREVIEW`) | A safeguard kept automatic publication to a preview: a quick review with a high-severity finding or incomplete coverage, or comment text with a link, an `@<…>` mention, an image or HTML. Read the preview, then post it with `/pr-comment <id> --publish`, or run `/pr-review` first. |
+| `Automatic preview skipped: the review has no findings to comment on` (or `publication`) | Nothing was planned, posted or sent to a model. `/pr-comment <id>` still previews a summary-only comment. |
+| `Automatic … skipped: another AZPR command is running in this conversation or on this PR` | Wait for that command, then run the `/pr-comment` command the notice names. |
+| `Unknown option after the PR URL` / `Use at most one of --preview, --publish or --no-comment` | Only these flags may follow the URL, at most one; start your context with a word. Nothing was started. |
+| `SETUP REQUIRED` … `could not be used when OpenCode loaded AZPR: …` | The reason names the problem (no file yet, an unreadable file, invalid JSON, a setting that fails validation or an unusable PAT file) without its value. Fix it, then restart OpenCode. |
 | `This review's private data is no longer available` | The review was evicted or its data removed; run a new review. |
 | Skipped finding: `The comment planner repeated a checkpoint without progress` or `did not finish the page in 4 sessions` | The planner kept asking for more reading on that page; the finding has no inline comment but stays in the summary index, and the other comments were planned as usual. Inspect the page's planning stages; `/pr-comment <id>` (a preview) plans again. |
 | `Stage inactivity watchdog stopped this stage: no activity for … s after …` (`failure=idle`, plus an inactivity notice) | The model stream, a tool or OpenCode stopped responding for `workflow.stageIdleSeconds`; the stage ran again in a new session. Repeated stops after `model request N was sent` point at the provider. Raise the setting only if a model really needs longer for one answer (live stages so far stayed under 151 s without any event). |

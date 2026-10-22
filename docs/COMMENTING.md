@@ -16,6 +16,46 @@ report) route to that conversation. Reviews are persisted, so this also works
 after an OpenCode restart. A preview is refreshed on every `/pr-comment`
 without `--publish`; `--publish` reuses an existing preview exactly.
 
+## Automatic comments after a review
+
+`afterReview` (per mode: `none`, the default, `preview` or `publish`) or a
+flag right after the PR URL of a review command (`--preview`, `--publish`,
+`--no-comment`, which wins for that run) starts the same planning and
+publication after a review:
+
+1. Only a COMPLETE review hands on; STALE, PARTIAL, INCOMPLETE, CANCELLED and
+   TIMED_OUT reviews never do, and nothing starts while the plugin unloads.
+   The review's `STARTED` notice and its receipt's PR comments section say
+   which step follows (and why: the setting or the flag).
+2. After the review's receipt, a review without findings to comment on gets
+   one notice, `Automatic preview skipped` or `Automatic publication
+   skipped`: nothing is planned or posted and no model runs. A manual
+   `/pr-comment` still previews a summary-only comment.
+3. Otherwise a separate comment run starts with its own run ID, `STARTED`
+   notice (`automatic preview after review <id> completed`) and receipt
+   (`Started automatically after review <id> completed`). `/pr-stop` stops it
+   like any run. When another AZPR command holds the conversation or the PR,
+   the step is skipped with a notice that names the `/pr-comment` command to
+   run when that command has finished.
+4. Automatic publication keeps the comments to a preview (status `PREVIEW`,
+   `Automatic publication held back: …`) when a quick review reported a
+   high-severity finding or left coverage incomplete (its findings were not
+   independently verified; the receipt's verification hint), or when the
+   summary or an inline comment contains a link (`http://`, `https://`,
+   another `scheme://`, `mailto:`, `javascript:`, `data:`, `www.` or a
+   protocol-relative link target), an Azure DevOps mention (`@<…>`), an image
+   (`![`) or HTML (tags such as `a`, `img`, `iframe` or `script`, attributes
+   such as `on…=`, `href=`, `src=` or `style=`, or an HTML comment other than
+   AZPR's marker). These checks are literal and prefer a false alarm: `![`
+   inside code holds back too, while generics such as `List<String>` and
+   decorators such as `@property` pass. The saved preview is then posted
+   exactly by `/pr-comment <id> --publish`, which, like every command you
+   type, applies none of these safeguards.
+
+Publication then follows the usual rules below (PR active, unchanged head,
+markers, read-back). Automatic publication posts as the PAT owner, like
+`/pr-comment --publish`.
+
 ## What is posted
 
 - **One summary thread** (no file anchor): a 🤖 AI/model disclosure, optional

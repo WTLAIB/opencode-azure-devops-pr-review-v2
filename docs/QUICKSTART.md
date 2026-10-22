@@ -166,7 +166,10 @@ default.
 This explicit command posts the saved preview through your PAT after checking
 the PR is active and its source commit is unchanged. Existing markers are
 skipped. Check the publication receipt for failures or incomplete read-back.
-If no preview exists, this command plans before publishing.
+If no preview exists, this command plans before publishing. To get the preview
+without typing `/pr-comment`, add `--preview` right after the PR URL of the
+review command; [automatic comments](COMMENTING.md#automatic-comments-after-a-review)
+explains `afterReview` and automatic publication.
 
 For important changes, use `/pr-review` to run two reviewer roles followed by
 an independent verification session. The starter setup uses the same model in

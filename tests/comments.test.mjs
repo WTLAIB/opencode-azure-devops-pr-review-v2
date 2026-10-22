@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
-  publishableFindings, reviewVerification, combinationProblems,
+  publishableFindings, reviewVerification, combinationProblems, automaticPublicationHolds, automaticPublicationProblems,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
@@ -332,4 +332,56 @@ test('the summary index follows accepted combinations only, and old plan records
   const old = assemblePlan(review([finding('F-1')]), [{ status: 'READY', comments: [{ findingId: 'F-1', severity: 'high', path: '/src/a.ts', startLine: 2, endLine: 2, anchor: 'x', body: '🔴 high: T\n\nB.' }], skipped: [], summaryDetails: '' }]);
   assert.equal(old.comments[0].findingIds, undefined);
   assert.match(old.summary.content, /\| 🔴 high \| F-1 — Defect F-1 \|/);
+});
+
+test('automatic publication keeps a quick review with a high-severity finding or incomplete coverage to a preview', () => {
+  assert.deepEqual(automaticPublicationHolds({ ...review([finding('F-1')]), profile: 'review' }), [], 'Verified reviews have no quick hold.');
+  const reported = (id, severity) => ({ id, status: 'REPORTED', reason: 'r', finding: { ...body(id), severity } });
+  assert.deepEqual(automaticPublicationHolds(quickReview([reported('Q-1', 'medium'), reported('Q-2', 'low')])), []);
+  assert.deepEqual(automaticPublicationHolds(quickReview([reported('Q-1', 'high'), reported('Q-2', 'high'), reported('Q-3', 'medium')])),
+    ['the quick review reported 2 high-severity finding(s) that were not independently verified (consider /pr-review)']);
+  assert.deepEqual(automaticPublicationHolds(quickReview([{ id: 'Q-1', status: 'NEEDS_INFO', reason: 'r', partialFinding: { ...body('Q-1'), severity: 'high' } }])), [],
+    'A high finding that is not REPORTED is not commented on, so it holds nothing.');
+  const incomplete = quickReview([reported('Q-1', 'high')]);
+  incomplete.final.coverageSummary = { complete: false, unreviewedFiles: 3 };
+  assert.equal(automaticPublicationHolds(incomplete).length, 2);
+  assert.equal(automaticPublicationHolds(incomplete)[1], 'the quick review left coverage incomplete');
+});
+
+test('automatic publication leaves links, mentions, images and HTML to a person; generics and the marker are plain text', () => {
+  const plan = texts => assemblePlan(review(texts.map((_, index) => finding(`F-${index + 1}`))),
+    [{ comments: texts.map((text, index) => comment({ findingId: `F-${index + 1}`, anchor: `line ${index}`, body: `🔴 high: Issue ${index}\n\n${text}` })), skipped: [] }]);
+  const plain = [
+    '`List<String>` drops `Map<String, List<Integer>>` entries when `i < a && j > b`.',
+    'Use Optional<T>, <T extends Comparable<T>> and vector<int>; Result<(), Error> too.',
+    'A decorator @property, an email user@example.com, work item #12, PR !34 and `if (!a[0])`.',
+    'Path /src/a.ts:12, index.md and `handlers[name](event)`; ratio 3 < 4 > 2.',
+  ];
+  const clean = plan(plain);
+  assert.ok(publicationItems(clean).every(item => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(item.content)), 'Every item carries its marker.');
+  assert.deepEqual(automaticPublicationProblems(clean), [], 'Plain text, generics and the marker pass.');
+  for (const [text, kind] of [
+    ['See https://evil.example/x for details.', 'an external link'],
+    ['Open HTTP://EXAMPLE.ORG today.', 'an external link'],
+    ['Clone ssh://git.example/repo first.', 'an external link'],
+    ['Visit www.example.com now.', 'an external link'],
+    ['[docs](//evil.example/a)', 'an external link'],
+    ['[x]: //evil.example/a.png', 'an external link'],
+    ['[mail](mailto:someone@example.com)', 'an external link'],
+    ['[x](javascript:alert(1))', 'an external link'],
+    ['Ping @<6D6A2A6A-0000-0000-0000-000000000000> about it.', 'an @mention'],
+    ['![diagram](diagram.png)', 'an image'],
+    ['`if (![a].length)`', 'an image'], // The literal check prefers this false alarm.
+    ['<img src=x onerror=alert(1)>', 'HTML'],
+    ['<a href="/x">click</a>', 'HTML'],
+    ['<script>steal()</script>', 'HTML'],
+    ['<div onclick="x()">text</div>', 'HTML'],
+    ['<IFRAME>', 'HTML'],
+    ['hidden <!-- note --> text', 'HTML'],
+  ]) assert.deepEqual(automaticPublicationProblems(plan([text])), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
+  // The summary is checked like an inline comment, and several kinds are named together.
+  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'See https://x.example and ![i](y)' }]);
+  assert.deepEqual(automaticPublicationProblems(noted), ['the PR summary contains an external link and an image']);
+  const combined = assemblePlan(review([finding('F-1'), finding('F-2')]), [{ comments: [comment({ findingIds: ['F-1', 'F-2'], body: '🔴 high: x\n\n<b onmouseover=x>' })], skipped: [] }]);
+  assert.deepEqual(automaticPublicationProblems(combined), ['the comment for F-1, F-2 (/src/a.ts:2) contains HTML']);
 });

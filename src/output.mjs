@@ -641,11 +641,29 @@ export function finalRepairPrompt(issues, ids, { includeNewFindings = false, ful
   return `AZPR runtime: some decisions need correction.\n${listIssues(issues)}\n\nReturn one JSON object {"dispositions": [...]${includeNewFindings ? ', "newFindings": [...]' : ''}} containing decisions only for: ${ids.join(', ')}. Each row has id, status (CONFIRMED, MERGED, REJECTED or NEEDS_INFO) and reason; CONFIRMED rows include "verifiedFinding" with summary, evidence, counterevidence, location, severity and suggestion (plus "movedFrom" when the location is in another file than the candidate's); MERGED rows include "mergedInto". Earlier decisions are kept.`;
 }
 
-/** Keep supplementary text literal; do not shell-tokenize, unquote or expand it. */
-export function parseReviewRequest(raw) {
+/** The flags a review command takes right after the PR URL, and the afterReview mode each sets for that run. */
+export const REVIEW_FLAGS = Object.freeze({ '--preview': 'preview', '--publish': 'publish', '--no-comment': 'none' });
+const FLAG_NAMES = '--preview, --publish or --no-comment';
+// What looks like an option: dashes (also typographic ones) directly followed by a name.
+const OPTION = /^([-–—]\S+)(?:\s+([\s\S]*))?$/;
+
+/**
+ * Keep supplementary text literal; do not shell-tokenize, unquote or expand it.
+ * At most one flag may follow the URL directly (`flags: false` for a command
+ * without comments takes none); anything else there that looks like an
+ * option is refused, so a mistyped --no-comment never falls back to the
+ * afterReview setting. Context starts with the first word after that.
+ */
+export function parseReviewRequest(raw, { flags = true } = {}) {
   if (typeof raw !== 'string' || raw.length > 16000 || raw.includes('\0')) throw new Error('[AZPR] Supply a PR URL and optional context (maximum 16000 characters).');
   const match = /^\s*(\S+)(?:\s+([\s\S]*))?$/.exec(raw);
   if (!match) throw new Error('[AZPR] Supply a PR URL and optional context.');
+  if (OPTION.test(match[1])) throw new Error(`[AZPR] Put the PR URL first${flags ? `, then at most one of ${FLAG_NAMES}, then your context` : ''}.`);
   const target = parsePullRequestUrl(match[1]);
-  return { request: raw, prUrl: match[1], userContext: match[2] ?? '', target };
+  const option = OPTION.exec(match[2] ?? '');
+  if (option && !flags) throw new Error('[AZPR] This command makes no comments and takes no option after the PR URL; start any context with a word.');
+  if (option && !Object.hasOwn(REVIEW_FLAGS, option[1])) throw new Error(`[AZPR] Unknown option after the PR URL. Use ${FLAG_NAMES} right after the URL, and start your context with a word.`);
+  const userContext = option ? option[2] ?? '' : match[2] ?? '';
+  if (option && OPTION.test(userContext)) throw new Error(`[AZPR] Use at most one of ${FLAG_NAMES}, right after the PR URL, and start your context with a word.`);
+  return { request: raw, prUrl: match[1], userContext, target, ...(option ? { flag: option[1], afterReview: REVIEW_FLAGS[option[1]] } : {}) };
 }

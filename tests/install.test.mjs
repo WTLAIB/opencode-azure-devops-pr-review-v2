@@ -374,6 +374,24 @@ for (const rel of ['azpr/settings.json', 'plugins/azpr/settings.json', 'plugins/
 }
 
 
+test('replacement adds afterReview with every mode none and keeps a chosen comment step', () => {
+  const s = setup(); ok(install(s));
+  const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));
+  delete settings.afterReview;
+  writeFileSync(file, JSON.stringify(settings));
+  const result = install(s, ['--replace']); ok(result);
+  assert.match(result.stdout, /Settings defaults added: afterReview\n/);
+  const merged = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(merged.afterReview, { quick: 'none', review: 'none', deep: 'none' }, 'Nothing follows a review until it is chosen.');
+  // A partial choice keeps its value and gains only the missing modes.
+  merged.afterReview = { review: 'publish' };
+  writeFileSync(file, JSON.stringify(merged));
+  const again = install(s, ['--replace']); ok(again);
+  assert.match(again.stdout, /Settings defaults added: afterReview\.quick, afterReview\.deep/);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).afterReview, { review: 'publish', quick: 'none', deep: 'none' });
+  original(s); clean(s);
+});
+
 test('replacement adds an empty azure.patFile, keeps the PAT where it is and never prints it', () => {
   const s = setup(); ok(install(s));
   const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));

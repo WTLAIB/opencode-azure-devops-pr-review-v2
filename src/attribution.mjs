@@ -24,12 +24,27 @@ function words(language) {
 }
 const pick = (language, en, tw, cn) => words(language) === vocabulary.tw ? tw : words(language) === vocabulary.cn ? cn : en;
 
-export function renderCommentActions(id, language) {
+/**
+ * The PR comments section of a COMPLETE review. `after` ({ mode, source }) is
+ * the comment step that follows this review automatically (afterReview or the
+ * command's flag); the manual commands stay valid either way.
+ */
+export function renderCommentActions(id, language, after) {
+  const source = after ? `\`${after.source}\`` : '';
+  const automatic = after?.mode === 'preview' ? pick(language,
+    `**Automatic preview** (${source}): AZPR now plans a comment preview as a separate command with its own receipt; nothing is posted. A review without findings to comment on gets no preview.`,
+    `**自動預覽**（${source}）：AZPR 接著以另一道指令規劃留言預覽，並另送收據；不會發布。沒有可留言的發現時不會預覽。`,
+    `**自动预览**（${source}）：AZPR 接着以另一条命令规划留言预览，并另送回执；不会发布。没有可留言的发现时不会预览。`)
+    : after?.mode === 'publish' ? pick(language,
+      `**Automatic publication** (${source}): AZPR now plans the comments and posts them as the PAT owner, as a separate command with its own receipt. It keeps them to a preview when a quick review has a high-severity finding or incomplete coverage, or when the text contains a link, an @mention, an image or HTML. A review without findings to comment on gets no comments.`,
+      `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。快速審查有 high 發現或覆蓋不完整，或留言含連結、@提及、圖片或 HTML 時，只產生預覽。沒有可留言的發現時不會留言。`,
+      `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。快速审查有 high 发现或覆盖不完整，或留言含链接、@提及、图片或 HTML 时，只生成预览。没有可留言的发现时不会留言。`)
+      : after ? pick(language, `Automatic comments are off for this review (${source}).`, `這份審查不自動留言（${source}）。`, `这份审查不自动留言（${source}）。`) : '';
   const [heading, publish, preview, omit, retention] = pick(language,
     ['PR comments', 'Prepare and publish comments', 'Preview comments only', 'You can omit the ID: `/pr-comment --publish` selects the latest completed review in the original conversation, or this review in its report session.', 'Reviews and previews are saved privately (latest 20) and survive an OpenCode restart. Publishing skips comments that already exist on the PR, so it is safe to run again.'],
     ['PR 留言', '直接準備並發布留言', '只看留言預覽', '也可省略 ID：`/pr-comment --publish` 會選原對話最近完成的 review；在本報告對話中會選本份報告。', 'Review 與預覽私下保存（最近 20 份），重啟 OpenCode 後仍可使用。發布時會跳過 PR 上已存在的留言，可以安全地重跑。'],
     ['PR 留言', '直接准备并发布留言', '只看留言预览', '也可省略 ID：`/pr-comment --publish` 会选原对话最近完成的 review；在本报告对话中会选本份报告。', 'Review 与预览私下保存（最近 20 份），重启 OpenCode 后仍可使用。发布时会跳过 PR 上已存在的留言，可以安全地重跑。']);
-  return `## ${heading}\n\n${publish}:\n\n\`\`\`text\n/pr-comment ${id} --publish\n\`\`\`\n\n${preview}: \`/pr-comment ${id}\`\n\n${omit}\n\n${retention}`;
+  return `## ${heading}\n\n${automatic ? `${automatic}\n\n` : ''}${publish}:\n\n\`\`\`text\n/pr-comment ${id} --publish\n\`\`\`\n\n${preview}: \`/pr-comment ${id}\`\n\n${omit}\n\n${retention}`;
 }
 
 /** Models per role, aggregated over shards and retries. */
@@ -278,7 +293,7 @@ export function renderReceipt(run, report, status, error, settings) {
       body += `\nReport data:\n<azpr_report_data>\n${report.replaceAll('</azpr_report_data>', '&lt;/azpr_report_data&gt;')}\n</azpr_report_data>\n`;
     }
   }
-  if (['review', 'deep', 'quick'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage) + '\n';
+  if (['review', 'deep', 'quick'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage, run.afterReview) + '\n';
   body += `\nThis command has ended and all reviewer grants have been revoked. outputLanguage=${settings.outputLanguage}.`;
   return body;
 }

@@ -33,6 +33,22 @@ test('comment actions give exact commands and explain persistent retention and s
   assert.match(renderCommentActions('12345678', 'en'), /safe to run again/);
 });
 
+test('the PR comments section says which comment step follows automatically; the manual commands stay', () => {
+  assert.doesNotMatch(renderCommentActions('12345678', 'en'), /Automatic/);
+  const preview = renderCommentActions('12345678', 'en', { mode: 'preview', source: 'afterReview.review: preview' });
+  assert.match(preview, /^## PR comments\n\n\*\*Automatic preview\*\* \(`afterReview\.review: preview`\): AZPR now plans a comment preview as a separate command with its own receipt; nothing is posted\./);
+  assert.match(preview, /\/pr-comment 12345678 --publish/);
+  const publish = renderCommentActions('12345678', 'en', { mode: 'publish', source: '--publish' });
+  assert.match(publish, /\*\*Automatic publication\*\* \(`--publish`\): AZPR now plans the comments and posts them as the PAT owner/);
+  assert.match(publish, /high-severity finding or incomplete coverage, or when the text contains a link, an @mention, an image or HTML/);
+  assert.match(renderCommentActions('12345678', 'en', { mode: 'none', source: '--no-comment' }), /Automatic comments are off for this review \(`--no-comment`\)\./);
+  assert.match(renderCommentActions('12345678', 'zh-TW', { mode: 'preview', source: '--preview' }), /\*\*自動預覽\*\*（`--preview`）：AZPR 接著以另一道指令規劃留言預覽/);
+  assert.match(renderCommentActions('12345678', 'zh-TW', { mode: 'publish', source: '--publish' }), /\*\*自動發布\*\*（`--publish`）：[^\n]*PAT 擁有者/);
+  assert.match(renderCommentActions('12345678', 'zh-CN', { mode: 'publish', source: '--publish' }), /\*\*自动发布\*\*/);
+  const receipt = renderReceipt({ ...run(), afterReview: { mode: 'preview', source: '--preview' } }, '', 'COMPLETE', '', { ...settings, outputLanguage: 'en' });
+  assert.match(receipt, /## PR comments\n\n\*\*Automatic preview\*\* \(`--preview`\)/);
+});
+
 test('receipt rendering is pure and encloses the report in full mode or when it was not queued', () => {
   const value = freeze({ ...run(), reportStage: { sessionID: 'ses_fixture', reportQueued: true } });
   const before = JSON.stringify(value);

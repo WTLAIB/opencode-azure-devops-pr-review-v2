@@ -116,6 +116,46 @@ export function publicationItems(plan) {
   return [...(plan?.summary ? [plan.summary] : []), ...(plan?.comments ?? [])];
 }
 
+/**
+ * Why automatic publication (afterReview or a review's --publish flag) keeps a
+ * quick review to a preview: its findings were not independently verified, so
+ * a high-severity one or incomplete coverage waits for a person (the receipt's
+ * verification hint). [] for review and deep.
+ */
+export function automaticPublicationHolds(review) {
+  if (reviewVerification(review) !== 'none') return [];
+  const high = review.final.dispositions.filter(d => d.status === 'REPORTED' && d.finding?.severity === 'high').length;
+  return [
+    ...(high ? [`the quick review reported ${high} high-severity finding(s) that were not independently verified (consider /pr-review)`] : []),
+    ...(review.final.coverageSummary?.complete ? [] : ['the quick review left coverage incomplete']),
+  ];
+}
+
+// Comment text that automatic publication never posts unseen: it could reach
+// outside Azure DevOps, notify people or render markup. The checks are literal
+// and prefer a false alarm to a miss; generics such as List<String> are no
+// HTML, and AZPR's own marker is removed before the checks.
+const UNSEEN_TEXT = [
+  ['an external link', [/\b[a-z][a-z0-9+.-]*:\/\//i, /\b(?:mailto|javascript|vbscript):/i, /\bdata:[a-z]+\//i,
+    /(?<![\w.@/-])www\.[a-z0-9-]+\.[a-z]/i, /\]\(\s*<?\/\//, /^\s*\[[^\]\n]+\]:\s*<?\/\//m]],
+  ['an @mention', [/@</]],
+  ['an image', [/!\[/]],
+  ['HTML', [/<\/?(?:a|img|image|iframe|frame|frameset|script|style|link|meta|base|object|embed|applet|form|input|button|textarea|select|svg|math|video|audio|source|track|picture|portal)(?=[\s/>]|$)/im,
+    /<[a-z][a-z0-9-]*\s[^<>]*?\b(?:on[a-z]+|href|src|srcset|style|action|formaction|background|poster|xlink:href)\s*=/i, /<!--/]],
+];
+const OWN_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
+
+/** Which saved items carry text that automatic publication leaves to a person, and what it is. */
+export function automaticPublicationProblems(plan) {
+  return publicationItems(plan).flatMap(item => {
+    const text = item.content.replace(OWN_MARKER, '');
+    const kinds = UNSEEN_TEXT.filter(([, patterns]) => patterns.some(pattern => pattern.test(text))).map(([kind]) => kind);
+    if (!kinds.length) return [];
+    const name = item.kind === 'summary' ? 'the PR summary' : `the comment for ${(item.findingIds ?? [item.findingId]).join(', ')} (${item.path}:${item.startLine})`;
+    return [`${name} contains ${kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds.at(-1)}` : kinds[0]}`];
+  });
+}
+
 /** Whitespace-insensitive anchor text, so re-reviews of unchanged code match. */
 export const normalizedAnchor = anchor => anchor.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).join('\n').trim();
 

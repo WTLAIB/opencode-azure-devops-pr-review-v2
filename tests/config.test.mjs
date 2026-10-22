@@ -28,6 +28,33 @@ test('settings reject removed transports and unknown keys', () => {
   assert.throws(() => validateSettings({ ...input(), workflow: { shards: 2 } }), /Unknown setting workflow\.shards/);
 });
 
+test('afterReview: none for every mode by default, preview or publish per mode; errors name the setting, never its value', () => {
+  assert.deepEqual(example.afterReview, { quick: 'none', review: 'none', deep: 'none' });
+  assert.deepEqual(Object.keys(schema.properties.afterReview.properties).sort(), ['deep', 'quick', 'review']);
+  for (const mode of ['quick', 'review', 'deep']) assert.deepEqual(schema.properties.afterReview.properties[mode].enum, ['none', 'preview', 'publish']);
+  const raw = input();
+  delete raw.afterReview;
+  assert.deepEqual(validateSettings(raw).afterReview, { quick: 'none', review: 'none', deep: 'none' });
+  assert.deepEqual(validateSettings(input()).afterReview, validateSettings(raw).afterReview, 'The example matches the defaults.');
+  assert.deepEqual(validateSettings({ ...input(), afterReview: { review: 'publish' } }).afterReview, { quick: 'none', review: 'publish', deep: 'none' }, 'A missing mode is none.');
+  assert.deepEqual(validateSettings({ ...input(), afterReview: { quick: 'preview', review: 'none', deep: 'publish' } }).afterReview, { quick: 'preview', review: 'none', deep: 'publish' });
+  for (const value of ['Publish', 'post', '', true, null, 1, 'secret-value-123']) {
+    assert.throws(() => validateSettings({ ...input(), afterReview: { review: value } }),
+      error => error.message === 'afterReview.review must be none, preview or publish.' && !error.message.includes('secret-value'), String(value));
+  }
+  assert.throws(() => validateSettings({ ...input(), afterReview: { check: 'none' } }), /Unknown setting afterReview\.check/);
+  for (const value of ['publish', ['publish'], null]) assert.throws(() => validateSettings({ ...input(), afterReview: value }), /afterReview must be a JSON object/);
+});
+
+test('an unknown key is named only when it looks like a setting name, so a pasted secret is not shown', () => {
+  assert.throws(() => validateSettings({ ...input(), azure: { ...input().azure, patfile: '/x' } }), /Unknown setting azure\.patfile; check for a typo/);
+  const pasted = 'abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop';
+  for (const container of ['settings', 'azure']) {
+    const raw = container === 'settings' ? { ...input(), [pasted]: '' } : { ...input(), azure: { ...input().azure, [pasted]: '' } };
+    assert.throws(() => validateSettings(raw), error => error.message.startsWith(`Unknown setting in ${container} (its name is not shown`) && !error.message.includes(pasted.slice(0, 20)));
+  }
+});
+
 test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls and sharded workflow', () => {
   const raw = input();
   for (const key of ['runTimeoutSeconds', 'shell', 'progressNotices', 'deletePrivateSessions', 'workflow']) delete raw[key];
