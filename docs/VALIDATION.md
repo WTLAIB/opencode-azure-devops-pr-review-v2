@@ -38,16 +38,33 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   no further provider request), and, after a restart with
   `afterReview.review: publish`, a plain `/pr-review` whose automatic
   publication was POSTED and read back (VERIFIED=2).
-- Live attempts with this revision installed in the user's OpenCode 2.1.2
-  service (`afterReview` none for every mode, `--preview` on the command)
-  could not reach the model: OpenCode failed every reviewer session with
-  `provider.auth` (`Integration.Authorization: Request failed: 400`) before
-  any model request, because the sign-in of the account's OpenAI provider
-  could not be refreshed. These runs establish only what needs no model:
-  `/pr-check` of the one-file and the 35-file test PRs was READY with the new
-  `Automatic comments` row (`afterReview: review none, deep none, quick none
-  (no automatic comments)`), the review commands' STARTED notices named the
-  automatic preview, and the INCOMPLETE reviews started no comment step.
+- **Live** with this revision installed in the user's OpenCode 2.1.2 service:
+  gpt-6-luna for every role, `afterReview` none for every mode and `--preview`
+  on the command, so nothing was posted. Times are from first stage start to
+  last stage end.
+  - The one-file test PR: `/pr-quick <URL> --preview` was COMPLETE in 36 s
+    with two REPORTED findings (two of the three known defects), and its
+    automatic preview took 6 s.
+    `/pr-review <URL> --preview` was COMPLETE in 93 s with the three known
+    defects confirmed, and its automatic preview took 24 s. Both previews
+    proposed no inline comment: each finding was skipped as `existing-thread`,
+    naming the demo threads that already discuss it.
+  - The 35-file test PR: `/pr-quick <URL> --preview` was COMPLETE in 44 s
+    with no finding (both seeds missed). It got the one notice (`Automatic preview skipped: the
+    review has no findings to comment on …`) and no planning session.
+    `/pr-review <URL> --preview` was COMPLETE in 88 s with the seeded
+    millisecond-format regression confirmed; the other seed was missed, as
+    in earlier gpt-6-luna runs. Its automatic preview took 10 s and proposed
+    one inline comment.
+  - Each automatic preview started less than a second after its review's
+    last stage, as a run of its own. Its STARTED notice and receipt named the
+    source (`--preview`), and its Azure DevOps calls were reads only.
+    `/pr-check` was READY with the new `Automatic comments` row
+    (`afterReview: review none, deep none, quick none (no automatic
+    comments)`).
+  - Earlier attempts that day failed before any model request
+    (`provider.auth`: the OpenAI sign-in could not be refreshed until it was
+    renewed). Those INCOMPLETE reviews started no comment step.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
@@ -1464,10 +1481,10 @@ transient failure, and its error names the last activity.
 
 ## Not yet validated
 
-- The automatic comment step with a real model and real Azure DevOps: the
-  preview and publication hand-offs and their safeguards were validated with
-  the fixture services only. The live attempts above failed before any model
-  request, so no live automatic preview or publication has run yet.
+- Automatic publication (`afterReview: publish` or `--publish` after the PR
+  URL) and its safeguards with a real model and real Azure DevOps: they were
+  validated with the fixture services only. The live runs of the automatic
+  step used `--preview`.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.
