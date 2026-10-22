@@ -14,7 +14,7 @@ Environment as below (Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode CLI
 `--no-comment` flags, the safeguards of automatic publication and the setup
 problem messages were added on top of 0.1.0; review prompts were unchanged.
 
-- `npm run check` and **386 offline tests** passed. The new tests cover the
+- `npm run check` and **387 offline tests** passed. The new tests cover the
   setting (defaults, partial objects, values never echoed), the flag parser
   (one flag right after the URL, refused typos, dashes and second flags,
   `/pr-check` taking none, context starting after the flag), the hand-off
@@ -23,9 +23,13 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   notice and no model request; a flag overrides the setting both ways), the
   safeguards (a quick review's high-severity finding or incomplete coverage;
   links, `@<…>` mentions, images and HTML in the summary or an inline comment,
-  while generics, decorators and AZPR's marker pass; a plan that would only
+  links and mentions also when written with backslash escapes or character
+  references, while generics, decorators, AZPR's marker and its own
+  `&lt;!--` escaping pass; a plan that would only
   repeat the summary because every finding is already discussed on the PR,
-  while a typed `--publish` still posts it), a PR held by another
+  while a typed `--publish` still posts it), a `/pr-stop` that arrives while a
+  finished review's report is delivered (the review stays COMPLETE and
+  nothing follows), a PR held by another
   comment command, `/pr-stop` of the automatic step, the `/pr-check` row, the
   installer adding `afterReview` and setup naming the problem without values.
   Removing any one safeguard, the no-findings check, the busy-lock handling,
@@ -89,9 +93,26 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     3 live AZPR comments).
   - That repeated summary led to the last safeguard: automatic publication
     now keeps such a plan (no inline comment, every finding skipped as
-    `existing-thread` with a live thread) to a preview. The runs above
-    predate it, and it was validated offline and with the host fixtures
-    only.
+    `existing-thread` with a live thread) to a preview.
+- **Live, with the review fixes** (the repeated-summary rule, links and
+  mentions checked after decoding, and no hand-off after a stop during report
+  delivery), on the same PR with those comments deleted and its record moved
+  aside again, six more `/pr-review <URL> --publish` runs:
+  - Two reviews confirmed the millisecond-format seed. The first was posted
+    automatically in 9 s (summary and one inline comment,
+    VERIFIED=2, two thread creations). The decoded checks found nothing in
+    the real comment text.
+  - The second, run while that inline comment was live, was held back to a
+    preview in 4 s with "every finding is already discussed on the PR
+    (thread …), so there is no new inline comment and only a repeated
+    summary would be posted", and created no thread.
+  - Four reviews confirmed no finding: three had no candidate and one had a
+    candidate that verification did not confirm. Each got only the
+    "Automatic publication skipped: the review has no findings to comment on"
+    notice, with no planning session and no write.
+  - A stop during report delivery and encoded links cannot be produced on
+    demand with a real model; those cases are covered offline. The test
+    comments were deleted afterwards.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
@@ -1510,10 +1531,10 @@ transient failure, and its error names the last activity.
 
 - Automatic publication from the setting (`afterReview: publish`) with a
   real model: the live publications above used the `--publish` flag, which
-  differs only in where the step comes from. The safeguards did not trigger
-  in any live run; they were validated with the fixture services and with
-  the saved live previews only, and the repeated-summary safeguard with the
-  fixture services alone.
+  differs only in where the step comes from. The quick-review and
+  comment-text safeguards did not trigger in any live run; they were
+  validated with the fixture services and with the saved live previews only.
+  The repeated-summary safeguard did trigger live (above).
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.
