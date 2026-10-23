@@ -67,19 +67,20 @@ with its own run ID, `STARTED` notice and receipt, under the same origin and
 PR locks (a held lock skips the step with a notice naming the command to run).
 A stop, timeout or unload while a finished review's report is delivered keeps
 the review COMPLETE but hands on nothing.
-Automatic publication posts the items no safeguard holds back
-(`publishPlan` with `only`): an item whose saved text has an `@<…>` mention, a
-`javascript:`, `vbscript:`, `data:` or `file://` link (both also checked after
-decoding backslash escapes and character references), an image, or HTML that
-embeds content, runs a script (attributes read from every `<` the way a
-browser reads a tag, `hasActiveAttribute`) or hides text waits in the saved
-plan, and the receipt names
-it. Only mentions are checked inside literal code (`withoutCode` blanks fenced
-code and code spans where every CommonMark reading agrees, and leaves the rest
-of the text checked). A plan without inline comments whose findings the planner all skipped as
-`existing-thread` with threads read live before planning posts nothing
-(`NOTHING_TO_POST`; only a repeated summary would be posted). A comment run
-hands on nothing; non-COMPLETE reviews and an unloading plugin start nothing.
+Automatic publication posts the items no safeguard holds back (`publishPlan`
+with `only`): an item whose saved text has an `@<…>` mention, a `javascript:`,
+`vbscript:`, `data:` or `file://` link (both also checked after decoding
+backslash escapes and character references, script links also without tabs and
+line breaks, which a browser drops from a URL), an image, or HTML that embeds
+content, runs a script (attributes read from every `<` the way a browser reads
+a tag, `hasActiveAttribute`) or hides text waits in the saved plan, and the
+receipt names it. Only mentions are checked inside literal code (`withoutCode`
+blanks fenced code and code spans where every CommonMark reading agrees, and
+leaves the rest of the text checked). A plan without inline comments whose
+findings the planner all skipped as `existing-thread` with threads read live
+before planning posts nothing (`NOTHING_TO_POST`; only a repeated summary would
+be posted). A comment run hands on nothing; non-COMPLETE reviews and an
+unloading plugin start nothing.
 
 Each workflow first runs one **preflight**: `settings.json`, and the PAT file
 when `azure.patFile` is set, must be unchanged since load, reserved commands must still be ours, the private agents of the

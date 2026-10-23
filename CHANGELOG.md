@@ -17,7 +17,8 @@
   `@<…>` mention, an image, HTML that embeds content, runs a script or hides
   text (attributes read as a browser reads a tag), or a
   `javascript:`, `vbscript:`, `data:` or `file://` link (mentions and script
-  links also when written with escapes or character references) waits in the
+  links also when written with escapes or character references, script links
+  also with a tab or line break inside) waits in the
   saved preview for a person, and the receipt names it; the other items are
   posted. Ordinary links, markup in examples and literal code (fenced code
   blocks and code spans, where the Markdown can be read only one way) are

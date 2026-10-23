@@ -102,7 +102,8 @@ settings, backups and failure records. Never upload `.local/`.
   stopped. It posts item by item: an item whose text has an `@<…>` mention,
   an image, HTML that embeds content, runs a script or hides text, or a `javascript:`,
   `vbscript:`, `data:` or `file://` link (mentions and script links also after
-  decoding escapes and character references) waits for a person, and the
+  decoding escapes and character references, script links also without tabs
+  and line breaks) waits for a person, and the
   receipt names it; ordinary links are posted, and literal code is skipped
   (except for mentions) only where every reading of the Markdown agrees. A
   plan that would post only a

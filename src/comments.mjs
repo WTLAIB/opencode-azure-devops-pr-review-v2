@@ -138,13 +138,15 @@ export function automaticPublicationRepeats(plan, discussions) {
 // script. Ordinary links are posted. The checks are literal and prefer a false
 // alarm to a miss; AZPR's own marker is removed first. Script links and
 // mentions are also checked after decoding (see decodedText); images and HTML
-// only as written, since a decoded character never forms markup. Literal code
-// renders as text, so only the mention check reads it (see withoutCode): Azure
-// DevOps may resolve a mention wherever it is written.
+// only as written, since a decoded character never forms markup. A browser
+// drops tabs and line breaks from a URL, so the script-link check also reads
+// the text without them. Literal code renders as text, so only the mention
+// check reads it (see withoutCode): Azure DevOps may resolve a mention wherever
+// it is written.
 const ACTIVE_ATTRIBUTES = 'on[a-z]+|src|srcset|style|background|poster|xlink:href';
 const ACTIVE_ATTRIBUTE = new RegExp(`^(?:${ACTIVE_ATTRIBUTES})$`);
 const UNSEEN_TEXT = [
-  ['a script, data or local-file link', [/\b(?:javascript|vbscript):/i, /\bdata:[a-z]+\//i, /\bfile:\/\//i], { decoded: true }],
+  ['a script, data or local-file link', [/\b(?:javascript|vbscript):/i, /\bdata:[a-z]+\//i, /\bfile:\/\//i], { decoded: true, url: true }],
   ['an @mention', [/@</], { decoded: true, code: true }],
   ['an image', [/!\[/], {}],
   ['HTML that embeds content or runs a script', [/<\/?(?:img|image|iframe|frame|frameset|object|embed|applet|video|audio|source|track|picture|svg|script|style|link|meta|base|portal)(?=[\s/>]|$)/im,
@@ -153,29 +155,31 @@ const UNSEEN_TEXT = [
   ['HTML that hides text', [/<[!?]|<\/(?![a-z])/i], {}],
 ];
 const OWN_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
-// The named character references that stand for ASCII punctuation, the only
-// characters besides letters and digits that the script-link and mention checks look for.
-const PUNCTUATION_REFERENCES = Object.freeze({
+// The named character references for ASCII punctuation, tab and line feed: besides
+// letters and digits, the only characters the script-link and mention checks read.
+const NAMED_REFERENCES = Object.freeze({
   excl: '!', quot: '"', QUOT: '"', num: '#', dollar: '$', percnt: '%', amp: '&', AMP: '&', apos: "'", lpar: '(', rpar: ')',
   ast: '*', midast: '*', plus: '+', comma: ',', period: '.', sol: '/', colon: ':', semi: ';', lt: '<', LT: '<', equals: '=',
   gt: '>', GT: '>', quest: '?', commat: '@', lsqb: '[', lbrack: '[', bsol: '\\', rsqb: ']', rbrack: ']', Hat: '^',
   lowbar: '_', UnderBar: '_', grave: '`', DiacriticalGrave: '`', lcub: '{', lbrace: '{', verbar: '|', vert: '|',
-  VerticalLine: '|', rcub: '}', rbrace: '}',
+  VerticalLine: '|', rcub: '}', rbrace: '}', Tab: '\t', NewLine: '\n',
 });
 /**
  * What CommonMark makes of escapes and character references in link
- * destinations and text: `java&#115;cript:` and `javascript\:` are script
- * links, `@&lt;…&gt;` a mention. Decoding errs towards finding more (a
- * reference after a backslash is decoded too); `&lt`, `&gt`, `&amp` and `&quot`
- * count without a semicolon.
+ * destinations and text, and a browser of character references in raw HTML:
+ * `java&#115;cript:` and `javascript\:` are script links, `@&lt;…&gt;` a
+ * mention. Decoding errs towards finding more (a reference after a backslash
+ * is decoded too); a numeric reference counts with any number of digits and
+ * without a semicolon, as a browser reads it, and `&lt`, `&gt`, `&amp` and
+ * `&quot` count without a semicolon.
  */
 function decodedText(text) {
   return text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
-    .replace(/&#(?:([0-9]{1,7})|[xX]([0-9a-fA-F]{1,6}));/g, (_, decimal, hex) => {
+    .replace(/&#(?:([0-9]+)|[xX]([0-9a-fA-F]+));?/g, (_, decimal, hex) => {
       const code = decimal === undefined ? parseInt(hex, 16) : Number(decimal);
       return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd';
     })
-    .replace(/&([A-Za-z][A-Za-z0-9]*);|&(lt|gt|amp|quot|LT|GT|AMP|QUOT)(?![A-Za-z0-9;])/g, (whole, name, legacy) => Object.hasOwn(PUNCTUATION_REFERENCES, name ?? legacy) ? PUNCTUATION_REFERENCES[name ?? legacy] : whole);
+    .replace(/&([A-Za-z][A-Za-z0-9]*);|&(lt|gt|amp|quot|LT|GT|AMP|QUOT)(?![A-Za-z0-9;])/g, (whole, name, legacy) => Object.hasOwn(NAMED_REFERENCES, name ?? legacy) ? NAMED_REFERENCES[name ?? legacy] : whole);
 }
 
 /**
@@ -305,9 +309,10 @@ export function automaticPublicationProblems(plan) {
   return publicationItems(plan).flatMap(item => {
     const text = item.content.replace(OWN_MARKER, ''), shown = withoutCode(text);
     const forms = { all: [text, decodedText(text)], shown: [shown, decodedText(shown)] };
-    const kinds = UNSEEN_TEXT.filter(([, patterns, { decoded, code }]) => {
+    const kinds = UNSEEN_TEXT.filter(([, patterns, { decoded, code, url }]) => {
       const [plain, decodedForm] = code ? forms.all : forms.shown;
-      return patterns.some(pattern => pattern.test(plain) || (decoded && pattern.test(decodedForm)));
+      const read = (decoded ? [plain, decodedForm] : [plain]).flatMap(form => url ? [form, form.replace(/[\t\n\r]/g, '')] : [form]);
+      return patterns.some(pattern => read.some(form => pattern.test(form)));
     }).map(([kind]) => kind);
     if (!kinds.length) return [];
     const name = item.kind === 'summary' ? 'the PR summary' : `the comment for ${(item.findingIds ?? [item.findingId]).join(', ')} (${item.path}:${item.startLine})`;

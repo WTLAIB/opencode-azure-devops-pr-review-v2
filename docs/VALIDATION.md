@@ -186,7 +186,8 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     saved from real reviews still have no held item. No live run: real
     comment text has not contained the held constructs, in code or not.
 
-- **Closed gaps of the literal HTML checks** (this revision): HTML that
+- **Closed gaps of the literal HTML checks** (the revision before script links
+  with a tab or line break, below): HTML that
   hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name, which a
   browser turns into a comment) is a kind of its own; attributes are also read
   the way a browser reads a tag (a quoted value may hold `<` and `>`, a slash
@@ -213,6 +214,25 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     text that it held is posted now (200,000 texts). The exact check of
     blanked code found nothing active in 1,000,000 texts.
   - All four real-host fixtures passed on OpenCode 2.1.2. No live run.
+
+- **Script links with a tab or line break** (this revision): a browser drops
+  tabs and line breaks from a URL, so `<a href="java&#9;script:…">`, or one
+  with a raw tab or line break inside the scheme, is a script link. The
+  script-link check now also reads the text, as written and decoded, without
+  them, and character references are decoded as a browser decodes them in
+  raw HTML: numeric ones with any number of digits or without a semicolon,
+  and `&Tab;` and `&NewLine;`.
+  - `npm run check` and 388 offline tests passed. 7 mutations of these rules
+    are caught, as are the 19, 10 and 13 of the revisions before.
+  - The fuzz detector now reads a URL as a browser does (leading and trailing
+    control characters and spaces trimmed, tabs and line breaks removed).
+    With it, the previous revision missed 674 such links per 100,000 texts;
+    this revision misses none, and over 500,000 texts the gap statistics
+    found no active construct that the checks miss. No text the previous
+    revision held is posted now (200,000 texts), and the exact check of
+    blanked code found nothing active in 300,000.
+  - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
+    saved from real reviews still have no held item. No live run.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
@@ -1636,13 +1656,9 @@ transient failure, and its error names the last activity.
   they were validated with the fixture services and the saved live previews
   only. A quick review's automatic publication has not run live. The
   repeated-summary rule did trigger live (above).
-- A gap the fuzzing still finds: a URL attribute whose scheme holds a tab or
-  a line break, as written or as a character reference
-  (`<a href="java&#9;script:…">`), is a script link to a browser, which
-  removes those characters from URLs, but not to the script-link check
-  (about 690 of 100,000 generated texts). Azure DevOps's own rendering and
-  sanitizing of comments was not tested; the fuzzing used commonmark.js and
-  markdown-it.
+- Azure DevOps's own rendering and sanitizing of comments was not tested
+  against the content checks of automatic publication: the fuzzing rendered
+  with commonmark.js and markdown-it and read the HTML with parse5.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.

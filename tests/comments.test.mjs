@@ -350,6 +350,7 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     // Markup that neither loads content nor runs a script is posted too.
     'Markup in examples: `<input name="id">`, <a href="/x">click</a>, <button type="submit">, <div class="x">.',
     'Hearts <3, a < b > c, Map<K, V>, <https://learn.microsoft.com/x> and <p title="a > b">.',
+    'Tab-separated: java\tdata\tvalue, and the script: field.',
   ];
   const clean = plan(plain);
   assert.ok(publicationItems(clean).every(item => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(item.content)), 'Every item carries its marker.');
@@ -362,6 +363,11 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     // CommonMark decodes escapes and character references in link destinations and text.
     ['[x](java&#115;cript:alert(1))', 'a script, data or local-file link'],
     ['[x](javascript\\:alert(1))', 'a script, data or local-file link'],
+    // A browser drops tabs and line breaks from a URL, written or as references, which it decodes in raw HTML
+    // with any number of digits and without a semicolon.
+    ...['java&#9;script:', 'java\tscript:', 'jav\nascript:', 'java&#x0A;script:', 'java&Tab;script:', 'java&NewLine;script:',
+      'java&#0000000009;script:', 'java&#x0000000009;script:', 'java&#9script:', 'vb&#13;script:', 'da&#9;ta:text/html,x', 'fi&#9;le:///etc'].map(url =>
+      [`<a href="${url}f()">x</a>`, 'a script, data or local-file link']),
     ['Ping @<6D6A2A6A-0000-0000-0000-000000000000> about it.', 'an @mention'],
     ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
     ['![diagram](diagram.png)', 'an image'],

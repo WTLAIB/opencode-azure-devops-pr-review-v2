@@ -132,7 +132,9 @@ text first. It holds back, item by item, a comment whose text would notify
 people, load or run something when viewed, or hide text from readers: an
 `@<…>` mention, an image, HTML that embeds content, runs a script or hides
 text, or a `javascript:`, `vbscript:`, `data:` or `file://` link (script links
-and mentions also when encoded with escapes or character references). Literal code is skipped where its reading is certain,
+and mentions also when encoded with escapes or character references, and
+script links also with a tab or line break inside, which a browser drops from
+a URL). Literal code is skipped where its reading is certain,
 except for mentions. Held items wait in the saved preview for a person; the
 others, ordinary web links included, are posted. A quick review's comments
 carry the disclosure that they were not independently verified; teams that

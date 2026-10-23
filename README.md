@@ -456,7 +456,9 @@ that hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name), or a
 preview for a person;
 the other items are posted, and the receipt names each held item and why. The
 checks prefer a false alarm and also decode escapes and character references
-in script links and mentions. Ordinary web and mail links, markup that neither
+in script links and mentions, and read a link without tabs and line breaks, as
+a browser does (`java&#9;script:` is a script link). Ordinary web and mail
+links, markup that neither
 loads content nor runs a script (such as `<input name="id">` or
 `List<String>`), and literal code (fenced code blocks and code spans, such as
 `` `<img src="a.png">` ``) are posted; only mentions are checked in code too,

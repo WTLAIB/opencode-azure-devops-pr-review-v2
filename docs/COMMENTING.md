@@ -56,7 +56,11 @@ publication after a review:
    or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script
    links and mentions also count when written with backslash escapes or
    character references, such as `javascript\:` or `java&#115;cript:`, which
-   CommonMark decodes. These checks are literal and prefer a false alarm.
+   CommonMark decodes; a numeric reference also with any number of digits or
+   without a semicolon, as a browser decodes it in raw HTML. A script link
+   also counts with a tab or line break inside, written or as a reference
+   (`java&#9;script:`, `java&Tab;script:`), since a browser drops those from
+   a URL. These checks are literal and prefer a false alarm.
    Ordinary web and mail links (`https://`, protocol-relative destinations,
    `mailto:`, email autolinks, reference definitions) and markup that neither
    loads content nor runs a script, such as `<input name="id">` in an
