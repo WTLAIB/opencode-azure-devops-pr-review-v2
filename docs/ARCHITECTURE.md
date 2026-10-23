@@ -71,7 +71,9 @@ Automatic publication posts the items no safeguard holds back
 (`publishPlan` with `only`): an item whose saved text has an `@<…>` mention, a
 `javascript:`, `vbscript:`, `data:` or `file://` link (both also checked after
 decoding backslash escapes and character references), an image, or HTML that
-embeds content or runs a script waits in the saved plan, and the receipt names
+embeds content, runs a script (attributes read from every `<` the way a
+browser reads a tag, `hasActiveAttribute`) or hides text waits in the saved
+plan, and the receipt names
 it. Only mentions are checked inside literal code (`withoutCode` blanks fenced
 code and code spans where every CommonMark reading agrees, and leaves the rest
 of the text checked). A plan without inline comments whose findings the planner all skipped as

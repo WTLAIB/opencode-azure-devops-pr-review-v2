@@ -129,10 +129,10 @@ Teams that want comments without that step can set `afterReview` to `publish`
 for a mode, or add `--publish` after the PR URL for one review. Automatic
 publication posts under the PAT owner's identity without anyone reading the
 text first. It holds back, item by item, a comment whose text would notify
-people or load or run something when viewed: an `@<…>` mention, an image, HTML
-that embeds content or runs a script, or a `javascript:`, `vbscript:`, `data:`
-or `file://` link (script links and mentions also when encoded with escapes or
-character references). Literal code is skipped where its reading is certain,
+people, load or run something when viewed, or hide text from readers: an
+`@<…>` mention, an image, HTML that embeds content, runs a script or hides
+text, or a `javascript:`, `vbscript:`, `data:` or `file://` link (script links
+and mentions also when encoded with escapes or character references). Literal code is skipped where its reading is certain,
 except for mentions. Held items wait in the saved preview for a person; the
 others, ordinary web links included, are posted. A quick review's comments
 carry the disclosure that they were not independently verified; teams that

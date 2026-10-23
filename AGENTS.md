@@ -100,7 +100,7 @@ settings, backups and failure records. Never upload `.local/`.
 - Automatic publication (`afterReview: publish` or `--publish` after the PR
   URL) follows only a COMPLETE review with findings to comment on that nothing
   stopped. It posts item by item: an item whose text has an `@<…>` mention,
-  an image, HTML that embeds content or runs a script, or a `javascript:`,
+  an image, HTML that embeds content, runs a script or hides text, or a `javascript:`,
   `vbscript:`, `data:` or `file://` link (mentions and script links also after
   decoding escapes and character references) waits for a person, and the
   receipt names it; ordinary links are posted, and literal code is skipped

@@ -449,9 +449,11 @@ or on the PR, the step is skipped and the notice names the command to run.
 
 Automatic publication posts as the PAT owner, item by item. A comment (or the
 summary) whose text contains an `@<…>` mention, an image, HTML that embeds
-content or runs a script (such as `<img>`, `<iframe>`, `<script>`, an `on…=`,
-`src=` or `style=` attribute, or an HTML comment), or a `javascript:`,
-`vbscript:`, `data:` or `file://` link waits in the saved preview for a person;
+content or runs a script (such as `<img>`, `<iframe>`, `<script>`, or an
+`on…=`, `src=` or `style=` attribute, read as a browser reads a tag), HTML
+that hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name), or a
+`javascript:`, `vbscript:`, `data:` or `file://` link waits in the saved
+preview for a person;
 the other items are posted, and the receipt names each held item and why. The
 checks prefer a false alarm and also decode escapes and character references
 in script links and mentions. Ordinary web and mail links, markup that neither
@@ -459,8 +461,9 @@ loads content nor runs a script (such as `<input name="id">` or
 `List<String>`), and literal code (fenced code blocks and code spans, such as
 `` `<img src="a.png">` ``) are posted; only mentions are checked in code too,
 since Azure DevOps may resolve them anywhere. Where a renderer could read the
-code differently, for example a fence inside a list or after an HTML line, or
-a backtick that a link or tag could take, the text is checked as written. A
+code differently, for example a fence inside a list, code next to an HTML
+line, or a backtick that a link or tag could take, the text is checked as
+written. A
 quick review is posted when you chose
 it: its comments keep the disclosure `quick review, not independently
 verified`, and its summary names incomplete coverage; its verification hint

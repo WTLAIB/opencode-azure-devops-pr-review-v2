@@ -47,8 +47,13 @@ publication after a review:
    (`![`), HTML that embeds content or runs a script (tags such as `img`,
    `iframe`, `object`, `embed`, `video`, `audio`, `svg`, `script`, `style`,
    `link`, `meta` or `base`; attributes such as `on…=`, `src=`, `srcset=`,
-   `style=`, `background=` or `poster=`; or an HTML comment other than AZPR's
-   marker), or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script
+   `style=`, `background=` or `poster=`, read as a browser reads a tag: a
+   quoted value may hold `<` and `>`, a slash separates attributes, a tag
+   name runs to a space, slash or `>`, and every `<` may start a tag, since a
+   renderer may show an earlier one as text), HTML that hides text (a comment
+   other than AZPR's marker, a declaration `<!…>`, a processing instruction
+   `<?…>` or `</` without a tag name, which a browser turns into a comment),
+   or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script
    links and mentions also count when written with backslash escapes or
    character references, such as `javascript\:` or `java&#115;cript:`, which
    CommonMark decodes. These checks are literal and prefer a false alarm.
@@ -66,7 +71,9 @@ publication after a review:
    list; and a code span whose backticks pair on one line, with no pipe
    inside and no link destination, HTML tag with quotes, math or bare address
    before it in the paragraph that could take a backtick (a renderer that
-   links `https://…` may take a backslash or backtick along). Otherwise the
+   links `https://…` may take a backslash or backtick along), in a paragraph
+   that ends before such a line (the line may continue the paragraph, and
+   markdown-it then reads earlier backticks differently). Otherwise the
    text is checked as written, so `![` in such code still holds back. Fuzzing
    against commonmark.js and markdown-it found nothing skipped that renders
    as markup (see [validation](VALIDATION.md)).

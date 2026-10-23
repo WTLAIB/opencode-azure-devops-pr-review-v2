@@ -141,12 +141,16 @@ export function automaticPublicationRepeats(plan, discussions) {
 // only as written, since a decoded character never forms markup. Literal code
 // renders as text, so only the mention check reads it (see withoutCode): Azure
 // DevOps may resolve a mention wherever it is written.
+const ACTIVE_ATTRIBUTES = 'on[a-z]+|src|srcset|style|background|poster|xlink:href';
+const ACTIVE_ATTRIBUTE = new RegExp(`^(?:${ACTIVE_ATTRIBUTES})$`);
 const UNSEEN_TEXT = [
   ['a script, data or local-file link', [/\b(?:javascript|vbscript):/i, /\bdata:[a-z]+\//i, /\bfile:\/\//i], { decoded: true }],
   ['an @mention', [/@</], { decoded: true, code: true }],
   ['an image', [/!\[/], {}],
   ['HTML that embeds content or runs a script', [/<\/?(?:img|image|iframe|frame|frameset|object|embed|applet|video|audio|source|track|picture|svg|script|style|link|meta|base|portal)(?=[\s/>]|$)/im,
-    /<[a-z][a-z0-9-]*\s[^<>]*?\b(?:on[a-z]+|src|srcset|style|background|poster|xlink:href)\s*=/i, /<!--/], {}],
+    new RegExp(`<[a-z][a-z0-9-]*\\s[^<>]*?\\b(?:${ACTIVE_ATTRIBUTES})\\s*=`, 'i'), { test: hasActiveAttribute }], {}],
+  // A comment, declaration, processing instruction or malformed end tag, which a browser does not show.
+  ['HTML that hides text', [/<[!?]|<\/(?![a-z])/i], {}],
 ];
 const OWN_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
 // The named character references that stand for ASCII punctuation, the only
@@ -175,12 +179,39 @@ function decodedText(text) {
 }
 
 /**
+ * Whether a start tag has an attribute that loads content or runs a script,
+ * read the way a browser reads an HTML block: a tag name runs to a space, a
+ * slash or >, slashes separate attributes, and only a value that opens with a
+ * quote is quoted, so it may hold < and >. A tag ends at the first > outside
+ * such a value. Every < counts as a possible start, since a renderer may show
+ * an earlier one as text; a reading that reaches a point between attributes
+ * where an earlier one was continues as that one did, so it stops there.
+ */
+function hasActiveAttribute(text) {
+  const tag = /<[a-z][^\s/>]*/gi, name = /[^\s/>][^\s/>=]*/y, value = /\s*=\s*(?:"[^"]*"?|'[^']*'?|[^\s>]*)/y;
+  const read = new Uint8Array(text.length + 1);
+  for (let start; (start = tag.exec(text)); tag.lastIndex = start.index + 1) {
+    for (let i = tag.lastIndex; i < text.length && text[i] !== '>' && !read[i];) {
+      read[i] = 1;
+      if (/[\s/]/.test(text[i])) { i++; continue; }
+      name.lastIndex = i;
+      const attribute = name.exec(text)[0];
+      if (ACTIVE_ATTRIBUTE.test(attribute.toLowerCase())) return true;
+      value.lastIndex = i += attribute.length;
+      if (value.exec(text)) i = value.lastIndex;
+    }
+  }
+  return false;
+}
+
+/**
  * The text with its literal code blanked: the content lines of fenced code
  * blocks and the code spans, which render as text. Recognition errs towards
  * checking, since a wrong guess would hide markup that renders. A fence counts
  * only in column 0 and outside a table; from the first line that may start an
  * HTML block, or a fence that is indented or inside a quote or list, nothing
- * more is blanked. Code spans follow codeSpans, paragraph by paragraph.
+ * more is blanked, nor in the paragraph that line may continue. Code spans
+ * follow codeSpans, paragraph by paragraph.
  */
 function withoutCode(text) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n'), shown = [...lines];
@@ -204,7 +235,8 @@ function withoutCode(text) {
       blankSpans();
       closer = new RegExp(`^ {0,3}${open[1] ? '`' : '~'}{${(open[1] ?? open[2]).length},}[ \\t]*$`);
     } else if (open || /^[\s>*+\-.)\d]*</.test(line) || /^[\s>*+\-.)\d]+(?:`{3}|~{3})/.test(line)) {
-      blankSpans();
+      // The paragraph may go on in this line, whose backticks could pair with its own.
+      paragraph = [];
       break;
     } else if (/^[ \t]*$/.test(line)) {
       blankSpans();

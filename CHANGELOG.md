@@ -14,7 +14,8 @@
   run. Other option-like text there is refused, so a mistyped flag never falls
   back to the setting; `/pr-check` takes no flag.
 - Automatic publication posts item by item. A comment whose text has an
-  `@<…>` mention, an image, HTML that embeds content or runs a script, or a
+  `@<…>` mention, an image, HTML that embeds content, runs a script or hides
+  text (attributes read as a browser reads a tag), or a
   `javascript:`, `vbscript:`, `data:` or `file://` link (mentions and script
   links also when written with escapes or character references) waits in the
   saved preview for a person, and the receipt names it; the other items are

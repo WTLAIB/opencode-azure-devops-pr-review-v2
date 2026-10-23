@@ -150,10 +150,11 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     at 2 live AZPR comments.
   - The real comment text again had none of the held constructs. The test
     comments were deleted afterwards.
-- **Literal code** (this revision, after an external review found that a
-  code example such as `` `<img src="avatar.png">` `` or a fenced `<script>`
-  example still held back its comment): the checks other than mentions now
-  skip fenced code and code spans where every reading of the Markdown agrees.
+- **Literal code** (the revision before the closed gaps below, after an
+  external review found that a code example such as `` `<img src="avatar.png">` ``
+  or a fenced `<script>` example still held back its comment): the checks
+  other than mentions now skip fenced code and code spans where every reading
+  of the Markdown agrees.
   - `npm run check` and **388 offline tests** passed. The review's four
     examples are posted; texts whose backticks or fences could be read
     another way stay checked (an escaped backtick, a span across lines or a
@@ -184,6 +185,34 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
     saved from real reviews still have no held item. No live run: real
     comment text has not contained the held constructs, in code or not.
+
+- **Closed gaps of the literal HTML checks** (this revision): HTML that
+  hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name, which a
+  browser turns into a comment) is a kind of its own; attributes are also read
+  the way a browser reads a tag (a quoted value may hold `<` and `>`, a slash
+  separates attributes, a tag name runs to a space, slash or `>`, and every
+  `<` may start a tag, since a renderer may show an earlier one as text); and
+  code in a paragraph that runs into the first line where blanking stops is
+  checked as written.
+  - That last rule closes a literal-code case the previous revision posted:
+    once a link label's lookahead in markdown-it 14.1.0 reaches an unpaired
+    backtick later in the paragraph, markdown-it reads every earlier backtick
+    as text, so `` [`![a](b.png)` x `` followed by `<b>`` ` `` on the next line
+    renders an image. Extended fuzz templates found it; a copy without the
+    rule has 244 such cases per 100,000 texts.
+  - `npm run check` and 388 offline tests passed. 11 mutations of these rules
+    (each hidden-text form, the browser reading of attributes and its every-`<`
+    start, attribute-name case, the shared attribute list, the paragraph at a
+    stop) are caught, as are the 18 and 13 of the two revisions before.
+    Reading attributes from every `<` stays linear: 100,000-character
+    adversarial texts take 12 to 40 ms.
+  - Gap statistics with parse5 over both renderers' HTML (100,000 texts each,
+    random tokens and templates): the previous revision missed 2,235 hidden
+    comments and 1,344 active attributes behind quotes or unusual tag names;
+    this revision misses none of either. Against the previous revision, no
+    text that it held is posted now (200,000 texts). The exact check of
+    blanked code found nothing active in 1,000,000 texts.
+  - All four real-host fixtures passed on OpenCode 2.1.2. No live run.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
@@ -1607,13 +1636,13 @@ transient failure, and its error names the last activity.
   they were validated with the fixture services and the saved live previews
   only. A quick review's automatic publication has not run live. The
   repeated-summary rule did trigger live (above).
-- The literal HTML checks have gaps that fuzzing found, older than the
-  literal-code rule: `<?…>` and `<!X…>` become hidden comments in a browser
-  but only `<!--` is checked; a `<` or `>` inside a quoted attribute value
-  hides a later `on…=` from the attribute check; and a tag name with a
-  character such as `:` inside an HTML block is not read as a tag. Azure
-  DevOps's own rendering and sanitizing of comments was not tested; the
-  fuzzing used commonmark.js and markdown-it.
+- A gap the fuzzing still finds: a URL attribute whose scheme holds a tab or
+  a line break, as written or as a character reference
+  (`<a href="java&#9;script:…">`), is a script link to a browser, which
+  removes those characters from URLs, but not to the script-link check
+  (about 690 of 100,000 generated texts). Azure DevOps's own rendering and
+  sanitizing of comments was not tested; the fuzzing used commonmark.js and
+  markdown-it.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.

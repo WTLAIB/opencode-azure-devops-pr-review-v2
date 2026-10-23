@@ -349,6 +349,7 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     'Clone ssh://git.example/repo and see [mail](mailto:someone@example.com) or [x](https&#58;//outside.example).',
     // Markup that neither loads content nor runs a script is posted too.
     'Markup in examples: `<input name="id">`, <a href="/x">click</a>, <button type="submit">, <div class="x">.',
+    'Hearts <3, a < b > c, Map<K, V>, <https://learn.microsoft.com/x> and <p title="a > b">.',
   ];
   const clean = plan(plain);
   assert.ok(publicationItems(clean).every(item => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(item.content)), 'Every item carries its marker.');
@@ -372,7 +373,20 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     ['<video poster="p.png">', 'HTML that embeds content or runs a script'],
     ['<input type="image" src="https://outside.example/a.png">', 'HTML that embeds content or runs a script'],
     ['<p style="background:url(x)">', 'HTML that embeds content or runs a script'],
-    ['hidden <!-- note --> text', 'HTML that embeds content or runs a script'],
+    ['hidden <!-- note --> text', 'HTML that hides text'],
+    // Declarations, processing instructions and malformed end tags become hidden comments in a browser.
+    ['<?php echo $x ?> runs', 'HTML that hides text'], ['<!DOCTYPE x> here', 'HTML that hides text'],
+    ['a <![CDATA[ x ]]> b', 'an image and HTML that hides text'], // `![` also reads as an image.
+    ['text </ hidden> more', 'HTML that hides text'],
+    // Attributes are read as a browser reads them: quoted values may hold < and >, slashes separate
+    // attributes, and a tag name runs to a space, slash or >.
+    ['<p title=">" onMouseOver="f()">', 'HTML that embeds content or runs a script'],
+    ["<p title='</div>' onclick='f()'>", 'HTML that embeds content or runs a script'],
+    ['<x y=">" z=a"b onclick=f()>', 'HTML that embeds content or runs a script'],
+    ['<p/onclick="f()">', 'HTML that embeds content or runs a script'],
+    ['<div>\n<https:x onclick=f()>\n</div>', 'HTML that embeds content or runs a script'],
+    // A renderer shows the unfinished first tag as text, so the second one is a tag of its own.
+    ['x <p title="\n`y`<p title=\'<\' onmouseover=\'f()\'>', 'HTML that embeds content or runs a script'],
   ]) assert.deepEqual(automaticPublicationProblems(plan([text])).map(problem => problem.reason), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
   // A decoded character never forms markup, and AZPR's own escaping of <!-- stays text.
   for (const text of ['Kept &lt;!-- note --&gt; as text.', 'Shown as &#60;img src=x&#62; text.', 'Paths C:\\Users\\dev and \\d+\\.\\d+; a &amp; b; &constructor; &nbsp;',
@@ -426,6 +440,7 @@ test('automatic publication posts literal code, and checks code it cannot tell a
     ['```x`y\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // A backtick in the info string: no fence.
     ['| a | b |\n|---|---|\n```\n<img src=x onerror=f()>\n```', 'HTML that embeds content or runs a script'],
     ['```\r\n<img src=x>\r\n```\r\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // The fence ends at a CRLF closer.
+    ['[`![a](b.png)` x\n<b>`', 'an image'], // The HTML line continues the paragraph; markdown-it then shows no code span.
     ['`@<6D6A2A6A-0000-0000-0000-000000000000>` and\n```\n@<6D6A2A6A-0000-0000-0000-000000000000>\n```', 'an @mention'],
   ]) assert.deepEqual(held(text), [kind], text);
   // The summary is read the same way.
