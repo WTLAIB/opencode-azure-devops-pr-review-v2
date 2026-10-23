@@ -5,9 +5,9 @@ Use a small, active Azure DevOps Services PR for the first run.
 
 ## 1. Check the prerequisites
 
-- OpenCode **V2** (`@opencode/cli`), tested with **2.1.2** on **Ubuntu
+- **OpenCode CLI 2.1.2** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
   22.04.5 LTS (WSL2)**. Other host versions and operating systems are not
-  validated; see [validation](VALIDATION.md). This is not a V1 plugin.
+  validated; see [validation](VALIDATION.md). OpenCode 1.x is not supported.
 - An authenticated OpenCode model with tool support. Copy its exact
   `provider/model` ID from your host's model selection or `opencode models`.
   AZPR uses your existing provider account.
@@ -113,8 +113,9 @@ If you run `opencode serve` yourself, restart that process instead.
 If your network needs a proxy or company CA, configure it in that settings file
 as described in [enterprise setup](ENTERPRISE.md), then restart. Leave
 `shell: "deny"` and TLS verification enabled. See
-[all settings](../README.md#configuration) for output language, model variants
-and separate models for each role.
+[all settings](../README.md#all-settings-and-defaults) for output language and
+other options, and [model configuration](../README.md#configuration) for model
+variants and separate models for each role.
 
 ## 4. Check access without a model request
 
@@ -137,33 +138,38 @@ host's own permission rules control where native read tools can read; reviews
 remain available. The tested OpenCode 2.1.2 host has that hook. `READY` is an
 access check, not a security audit or an approval of the PR.
 
-## 5. Run a quick review, then preview its comments
+## 5. Run a review and preview its comments
 
 ```text
-/pr-quick https://dev.azure.com/YOUR_ORGANIZATION/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
+/pr-review https://dev.azure.com/YOUR_ORGANIZATION/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123 --preview
 ```
 
-This starts model work. Follow the progress notices and wait for the final
-receipt. Use its eight-character review ID in the **same conversation** below
-(`1a2b3c4d` is an example):
+This starts functional and risk reviewers, followed by separate verification.
+The starter setup uses the same model in separate sessions; you can assign
+models per role later. For a lighter pass, use `/pr-quick <PR URL> --preview`
+instead: it runs one reviewer per shard without independent verification.
 
-```text
-/pr-comment 1a2b3c4d
-```
+Follow the progress notices and wait for the review receipt. If the COMPLETE
+review has findings to comment on, `--preview` starts a separate comment run
+that saves a preview; wait for its receipt too. **Neither command posts to
+Azure**, even if your settings normally enable automatic publication. A review
+with no findings to comment on produces a notice without running a planner.
+A review that is `PARTIAL` or `STALE` cannot be commented on; resolve the cause
+and run a new review.
 
-This runs comment planning and saves a preview; **it does not post to Azure**.
-Inspect the proposed summary, inline comments and skipped findings. A quick
-review's findings are `REPORTED`, with `verification none`; `COMPLETE` can
-still have incomplete coverage. Read the coverage and limitations before
-deciding what to publish. A review that is `PARTIAL` or `STALE` cannot be
-commented on; resolve the cause and run a new review.
+Inspect the report, proposed summary, inline comments and skipped findings.
+Check coverage and limitations: COMPLETE does not mean every file was reviewed
+or every finding confirmed. Quick findings are `REPORTED`, with `verification
+none`. Keep the review's eight-character ID for publication in the **same
+conversation** (`1a2b3c4d` below is an example).
 
-For a small PR, quick review commonly uses one review session plus one comment
-planning session. **A session is not a single model request**: tool reads,
-corrections, retries, more shards or planning pages add requests and cost.
-Refreshing a preview with `/pr-comment` runs planning again. Use the displayed
-`/pr-stop <run-id>` to cancel an active command; no cost cap is configured by
-default.
+For a small PR, `/pr-review` commonly uses two reviewer sessions, a verifier
+session and a comment-planning session; `/pr-quick` commonly uses one review
+session plus comment planning. **A session is not a single model request**:
+tool reads, corrections, retries, more shards or planning pages add requests
+and cost. Refreshing a preview with `/pr-comment <review-id>` runs planning
+again. Use the displayed `/pr-stop <run-id>` to cancel an active command; no
+cost cap is configured by default.
 
 ## Optional: publish after inspecting the preview
 
@@ -174,16 +180,14 @@ default.
 This explicit command posts the saved preview through your PAT after checking
 the PR is active and its source commit is unchanged. Existing markers are
 skipped. Check the publication receipt for failures or incomplete read-back.
-If no preview exists, this command plans before publishing. To get the preview
-without typing `/pr-comment`, add `--preview` right after the PR URL of the
-review command; [automatic comments](COMMENTING.md#automatic-comments-after-a-review)
-explains `afterReview` and automatic publication.
+If no preview exists, this command plans before publishing; use
+`/pr-comment <review-id>` to prepare and inspect a preview first. See
+[automatic comments](COMMENTING.md#automatic-comments-after-a-review) for
+`afterReview` and the flags that override it for one review.
 
-For important changes, use `/pr-review` to run two reviewer roles followed by
-an independent verification session. The starter setup uses the same model in
-separate sessions; you can assign different models later. `/pr-deep` runs the
-same review with the models of `models.deep`, so put a stronger (usually slower
-and costlier) model in all three deep slots and keep it for the changes that
-justify it; with the review's models it would only repeat `/pr-review`, and
-`/pr-check` warns about that. Both modes still produce AI findings that require
-human judgment; see [commands](../README.md#commands).
+For important changes, `/pr-deep` runs the same review as `/pr-review` with
+the models of `models.deep`. Put stronger (usually slower and costlier) models
+in all three deep slots and keep it for changes that justify the cost; with
+the review's models it would only repeat `/pr-review`, and `/pr-check` warns
+about that. All modes produce AI findings that require human judgment; see
+[commands](../README.md#commands).
