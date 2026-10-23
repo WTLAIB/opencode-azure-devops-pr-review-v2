@@ -1,11 +1,40 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation and the
-0.1.0, 0.2.0, 0.2.1 and 0.2.2 distributions. Host integration, provider
+0.1.0, 0.2.0, 0.2.1, 0.2.2 and 0.2.3 distributions. Host integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
+
+## 0.2.3 release acceptance (2026-10-24)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.4.
+This release carries the OpenCode 2.1.4 changes recorded
+[below](#opencode-214-the-tested-host-2026-10-24): the refused-tunnel mapping,
+the Azure DevOps call timeout and the overflow classification after a refused
+background summary. Prompts, settings and installers are unchanged from 0.2.2.
+
+- `npm run check` and **394 offline tests** passed.
+- All five real-host fixture runs passed with isolated profiles and fake model
+  and Azure services: fresh source installation, replacement installation,
+  native packed package installation, comment scale, and background
+  compaction followed by a permanent failure. The fresh and native runs
+  include the authenticating proxy, the untrusted certificate and the 407. The
+  scale fixture split the overflowing shard and used eight planning sessions
+  with at most two in flight; its largest provider request was 33,419
+  characters. The background-compaction fixture ran one functional session,
+  classified permanent.
+- `npm pack --dry-run --json` lists **70 files** (about 882 KB), including the
+  entry, runtime, prompts, configuration example and schema, license and the
+  new release notes. It excludes tests, private settings and `.local/` records.
+- The release notes use absolute HTTPS links; the relative links and anchors
+  of the README, quickstart, changelog and the changed guides resolve.
+- These fixtures make no paid-model request or real Azure publication. The
+  live reviews on 2.1.4 preceded the call-timeout and background-summary
+  changes. Public Git installation, archive acceptance, and post-publication
+  registry integrity and native installation are checked on the pushed commit
+  and the published package as the [releasing guide](RELEASING.md) describes.
 
 ## 0.2.2 release acceptance (2026-10-23)
 
