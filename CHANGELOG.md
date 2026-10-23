@@ -13,14 +13,19 @@
   (`--preview`, `--publish` or `--no-comment`) overrides `afterReview` for that
   run. Other option-like text there is refused, so a mistyped flag never falls
   back to the setting; `/pr-check` takes no flag.
-- Automatic publication keeps to a preview, and its receipt says why, for a
-  quick review with a high-severity finding or incomplete coverage, for
-  comment text with a link, an `@<…>` mention, an image or HTML (links and
-  mentions also when written with escapes or character references), and when
-  every finding is already discussed on the PR, so that re-reviewing an
-  unchanged PR does not add a summary each time.
-- `/pr-check` shows the `afterReview` of each mode, with a warning for modes
-  that publish automatically.
+- Automatic publication posts item by item. A comment whose text has an
+  `@<…>` mention, an image, HTML that embeds content or runs a script, or a
+  `javascript:`, `vbscript:`, `data:` or `file://` link (mentions and script
+  links also when written with escapes or character references) waits in the
+  saved preview for a person, and the receipt names it; the other items are
+  posted. Ordinary links and literal markup in examples are posted. A quick
+  review's comments are posted with their "not independently verified"
+  disclosure, also a high-severity finding or incomplete coverage (named in
+  the summary); the verification hint is advisory. When every finding is
+  already discussed on the PR, nothing new is posted (`NOTHING_TO_POST`), so
+  re-reviewing an unchanged PR does not add a summary each time.
+- `/pr-check` shows the `afterReview` of each mode and, for modes that publish
+  automatically, who posts.
 - `/pr-setup` and the blocked review commands name the settings problem found
   at load, without any setting value; an unknown settings key is named only
   when it looks like a setting name.

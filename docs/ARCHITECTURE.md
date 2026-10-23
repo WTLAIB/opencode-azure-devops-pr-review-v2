@@ -67,13 +67,14 @@ with its own run ID, `STARTED` notice and receipt, under the same origin and
 PR locks (a held lock skips the step with a notice naming the command to run).
 A stop, timeout or unload while a finished review's report is delivered keeps
 the review COMPLETE but hands on nothing.
-Automatic publication keeps the plan to a preview when a safeguard applies: a
-quick review with a REPORTED high-severity finding or incomplete coverage,
-saved text with a link, an `@<…>` mention (both also checked after decoding
-backslash escapes and character references), an image or HTML, or a plan without
-inline comments whose findings the planner all skipped as `existing-thread`
-with threads read live before planning (only a repeated summary would be
-posted). A comment run
+Automatic publication posts the items no safeguard holds back
+(`publishPlan` with `only`): an item whose saved text has an `@<…>` mention, a
+`javascript:`, `vbscript:`, `data:` or `file://` link (both also checked after
+decoding backslash escapes and character references), an image, or HTML that
+embeds content or runs a script waits in the saved plan, and the receipt names
+it. A plan without inline comments whose findings the planner all skipped as
+`existing-thread` with threads read live before planning posts nothing
+(`NOTHING_TO_POST`; only a repeated summary would be posted). A comment run
 hands on nothing; non-COMPLETE reviews and an unloading plugin start nothing.
 
 Each workflow first runs one **preflight**: `settings.json`, and the PAT file

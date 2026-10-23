@@ -14,10 +14,11 @@ import { TESTED_HOST_VERSION } from '../src/host.mjs';
  * across a host restart, cancellation, a provider 503 that OpenCode retries in
  * the same session, and private auxiliary-request denial. Automatic comment
  * steps: a flag after the PR URL previews the comments of a COMPLETE review in
- * a run of its own, safeguards keep automatic publication of a quick review
- * with a high-severity finding or of comment text with a link to a preview, a
- * review without findings gets no step, and afterReview publish posts and
- * reads the comments back. The fresh run also
+ * a run of its own, automatic publication posts a quick review's
+ * high-severity finding and holds back only a comment with an image until a
+ * typed --publish, a review without findings gets no step, afterReview publish
+ * posts and reads the comments back, and a repeated plan whose findings are all
+ * discussed posts nothing. The fresh run also
  * stalls a model stream until the stage inactivity watchdog stops it, while an
  * answer that keeps streaming longer than the watchdog's window runs on.
  * The fresh run also reaches Azure DevOps over HTTPS only through an
@@ -94,7 +95,7 @@ if (replacement) {
 // ------------------------------------------------------------ fake provider
 const requests = [];
 const overloaded = new Set();
-let child, logs = '', stall = null, longStream = null, commentLink = false, commentDiscussed = false;
+let child, logs = '', stall = null, longStream = null, commentImage = false, commentDiscussed = false;
 const lastUser = messages => messages?.findLast(message => message.role === 'user')?.content;
 const firstUser = messages => messages?.find(message => message.role === 'user')?.content;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
@@ -177,7 +178,10 @@ const provider = createServer(async (request, response) => {
     final = JSON.stringify({ status: 'READY', comments: [], skipped: payload.findings.map(item => ({ findingId: item.id, cause: 'existing-thread', threadId, reason: `討論串 ${threadId} 已說明。` })) });
   } else if (payload?.commentWork?.kind === 'plan') {
     final = JSON.stringify({ status: 'READY', ...(payload.commentWork.allowSummary ? { summary: '此 PR 調整 fixture 的狀態處理。' } : {}),
-      comments: payload.findings.map(item => ({ findingId: item.id, severity: item.severity, path: /head:([^:]+)/.exec(item.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${item.summary}\n\n**📝 Summary**\n觸發與影響。\n\n**🔎 Evidence**\n原始碼事實。\n\n**💡 Suggested fix**\n修正方式。${commentLink ? '詳見 https://evil.example/report' : ''}` })),
+      // With commentImage the comment sits on the second line (a new marker) and shows an image.
+      comments: payload.findings.map(item => { const path = /head:([^:]+)/.exec(item.location)[1]; return { findingId: item.id, severity: item.severity, path,
+        startLine: commentImage ? 2 : 1, endLine: commentImage ? 2 : 1, anchor: commentImage ? `second line of ${path}` : 'fixture code',
+        body: `🔴 high: ${item.summary}\n\n**📝 Summary**\n觸發與影響。\n\n**🔎 Evidence**\n原始碼事實。\n\n**💡 Suggested fix**\n修正方式。${commentImage ? '\n\n![trace](https://outside.example/trace.png)' : ''}` }; }),
       skipped: [] });
   }
   const delta = call ? { tool_calls: [{ index: 0, id: 'call_' + requests.length, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { content: final };
@@ -490,7 +494,8 @@ try {
   results.quickFollowUp = 'PARTIAL, then one follow-up in the same session: COMPLETE, or the earlier answer kept when the follow-up is unusable';
 
   // 3d. Automatic comment steps from a flag right after the PR URL: a preview in a run of its own;
-  //     safeguards keep automatic publication to a preview; a review without findings gets no step.
+  //     automatic publication posts a quick high-severity finding and holds back only a comment with
+  //     an image, which a typed --publish posts; a review without findings gets no step.
   const writesBeforeAuto = azure.callsTo('createThread').length;
   const autoOrigin = await newOrigin('Automatic preview');
   await api(`/api/session/${autoOrigin}/command`, { name: 'pr-review', text: `${prUrl} --preview`, delivery: 'steer' });
@@ -501,16 +506,31 @@ try {
   const autoPreview = await commentStep(autoOrigin, autoReceipt);
   assert.match(autoPreview.started ?? '', new RegExp(`STARTED /pr-comment \\(automatic preview after review ${autoReview} completed; --preview\\)`), JSON.stringify(autoPreview));
   assert.match(autoPreview.receipt, new RegExp(`\\] PREVIEW; source review=${autoReview}\\nStarted automatically after review ${autoReview} completed \\(--preview\\)\\.\\n`), autoPreview.receipt);
-  const heldOrigin = await newOrigin('Automatic quick publication');
-  await api(`/api/session/${heldOrigin}/command`, { name: 'pr-quick', text: `${prUrl} --publish`, delivery: 'steer' });
-  const held = await commentStep(heldOrigin, await reviewReceipt(heldOrigin, 'pr-quick'));
-  assert.match(held.receipt ?? '', /\] PREVIEW; [^\n]+\nStarted automatically [^\n]+\(--publish\)\.\nAutomatic publication held back: the quick review reported 1 high-severity finding\(s\) that were not independently verified/, JSON.stringify(held));
-  commentLink = true;
-  const linkOrigin = await newOrigin('Automatic publication with a link');
-  await api(`/api/session/${linkOrigin}/command`, { name: 'pr-review', text: `${prUrl} --publish`, delivery: 'steer' });
-  const linked = await commentStep(linkOrigin, await reviewReceipt(linkOrigin, 'pr-review'));
-  commentLink = false;
-  assert.match(linked.receipt ?? '', /\] PREVIEW; [^\n]+\nStarted automatically [^\n]+\nAutomatic publication held back: the comment for F-1 \(\/src\/fixture\.js:1\) contains an external link\./, JSON.stringify(linked));
+  const quickPublishOrigin = await newOrigin('Automatic quick publication');
+  await api(`/api/session/${quickPublishOrigin}/command`, { name: 'pr-quick', text: `${prUrl} --publish`, delivery: 'steer' });
+  const quickPublishReceipt = await reviewReceipt(quickPublishOrigin, 'pr-quick');
+  assert.match(quickPublishReceipt, /Verification hint: 1 high-severity finding\(s\)\. These findings are not independently verified; the automatic publication posts them with that disclosure/, quickPublishReceipt);
+  const quickPublished = await commentStep(quickPublishOrigin, quickPublishReceipt);
+  // Its markers are those of section 3: the summary is present and the deleted comment stays deleted.
+  assert.match(quickPublished.receipt ?? '', /\] POSTED; [^\n]+\nStarted automatically [^\n]+\(--publish\)\.\n(?!Automatic publication held back)/, JSON.stringify(quickPublished));
+  assert.equal(azure.callsTo('createThread').length, writesBeforeAuto);
+  commentImage = true;
+  const imageOrigin = await newOrigin('Automatic publication with an image');
+  await api(`/api/session/${imageOrigin}/command`, { name: 'pr-review', text: `${prUrl} --publish`, delivery: 'steer' });
+  const imageReceipt = await reviewReceipt(imageOrigin, 'pr-review');
+  const imaged = await commentStep(imageOrigin, imageReceipt);
+  commentImage = false;
+  assert.match(imaged.receipt ?? '', /\] POSTED; [^\n]+\nStarted automatically [^\n]+\nAutomatic publication held back 1 item\(s\) for a person: the comment for F-1 \(\/src\/fixture\.js:2\) contains an image\. They are not published; after reading the preview, post them with \/pr-comment [a-f0-9]{8} --publish\n/, JSON.stringify(imaged));
+  assert.match(imaged.receipt, /Publication \(VERIFIED=1\)/, imaged.receipt);
+  assert.equal(azure.callsTo('createThread').length, writesBeforeAuto + 1, 'Only the summary was posted automatically.');
+  const imageReview = /\[AZPR ([a-f0-9]{8})\]/.exec(imageReceipt)[1];
+  const beforeTyped = requests.length;
+  await api(`/api/session/${imageOrigin}/command`, { name: 'pr-comment', text: `${imageReview} --publish`, delivery: 'steer' });
+  const typed = await latest(imageOrigin);
+  assert.match(typed, /\] POSTED; source review=/, typed);
+  assert.match(typed, /Publication \((?=[^)]*VERIFIED=1)(?=[^)]*ALREADY_PRESENT=1)[^)]*\)/, typed);
+  assert.equal(azure.callsTo('createThread').length, writesBeforeAuto + 2, 'The typed --publish posted the held comment.');
+  assert.equal(requests.length, beforeTyped, 'Posting the saved plan needs no model.');
   const emptyOrigin = await newOrigin('Automatic step without findings');
   await api(`/api/session/${emptyOrigin}/command`, { name: 'pr-quick', text: `${prUrl} --publish no-findings-smoke`, delivery: 'steer' });
   const emptyReceipt = await reviewReceipt(emptyOrigin, 'pr-quick');
@@ -519,8 +539,8 @@ try {
   const empty = await commentStep(emptyOrigin, emptyReceipt);
   assert.match(empty.skipped ?? '', /Automatic publication skipped: the review has no findings to comment on, so nothing was planned or posted and no model was used\./, JSON.stringify(empty));
   assert.equal(requests.length, requestsAfterEmpty, 'No model request follows a review without findings.');
-  assert.equal(azure.callsTo('createThread').length, writesBeforeAuto, 'Nothing was posted automatically.');
-  results.automatic = '--preview: COMPLETE review, then its own PREVIEW run; --publish held back to PREVIEW for a quick high-severity finding and for a link in the text; no findings: one notice, no model request';
+  assert.equal(azure.callsTo('createThread').length, writesBeforeAuto + 2, 'Nothing more was posted.');
+  results.automatic = '--preview: COMPLETE review, then its own PREVIEW run; quick --publish with a high-severity finding POSTED; --publish with an image in its inline comment: the summary POSTED, that comment held back until a typed --publish posted it; no findings: one notice, no model request';
 
   // 4. Cancellation of a hanging provider request.
   const cancelOrigin = await newOrigin('Cancel');
@@ -636,18 +656,18 @@ try {
   assert.ok(settingThreads.every(thread => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(thread.comments[0].content)));
   assert.equal(azure.callsTo('createThread').length - writesBeforeSetting, 2);
   // The same review again: every finding is already discussed by that comment, so automatic
-  // publication holds back the repeated summary instead of posting it.
+  // publication has nothing new to post and posts no second summary.
   commentDiscussed = true;
   const repeatOrigin = await newOrigin('Automatic publication again');
   await api(`/api/session/${repeatOrigin}/command`, { name: 'pr-review', text: prUrl, delivery: 'steer' });
   const repeated = await commentStep(repeatOrigin, await reviewReceipt(repeatOrigin, 'pr-review'));
   commentDiscussed = false;
-  assert.match(repeated.receipt ?? '', /\] PREVIEW; source review=[a-f0-9]{8}\nStarted automatically [^\n]+\nAutomatic publication held back: every finding is already discussed on the PR \(thread \d+\), so there is no new inline comment and only a repeated summary would be posted\./, JSON.stringify(repeated));
+  assert.match(repeated.receipt ?? '', /\] NOTHING_TO_POST; source review=[a-f0-9]{8}\nStarted automatically [^\n]+\nAutomatic publication found nothing new to post: every finding is already discussed on the PR \(thread \d+\)\. The plan is saved\.\n/, JSON.stringify(repeated));
   assert.equal((await threads()).length, 2, 'No second summary.');
   assert.equal(azure.callsTo('createThread').length - writesBeforeSetting, 2);
   // Restore the settings; the next restart loads them.
   await writeFile(installedSettingsPath, settingsText);
-  results.afterReviewSetting = 'afterReview.review publish: COMPLETE review, then its own comment run POSTED, VERIFIED=2 read back; the same review again with every finding already discussed held back to PREVIEW, no second summary';
+  results.afterReviewSetting = 'afterReview.review publish: COMPLETE review, then its own comment run POSTED, VERIFIED=2 read back; the same review again with every finding already discussed: NOTHING_TO_POST, no second summary';
 
   // 7. A corporate network: Azure DevOps over HTTPS only through an authenticating
   // CONNECT proxy that re-signs TLS with its own CA (azure.proxy, azure.caFile, azure.verifyTls).

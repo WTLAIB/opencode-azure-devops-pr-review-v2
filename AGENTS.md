@@ -99,13 +99,15 @@ settings, backups and failure records. Never upload `.local/`.
   save each result immediately; read markers back. Re-running is always safe.
 - Automatic publication (`afterReview: publish` or `--publish` after the PR
   URL) follows only a COMPLETE review with findings to comment on that nothing
-  stopped, and keeps to a preview, saying why, for a quick review with a
-  high-severity finding or incomplete coverage, for text with a link, an
-  `@<…>` mention, an image or HTML (links and mentions also after decoding
-  escapes and character references), and for a plan that would post only a
-  repeated summary (every finding skipped as already discussed on the PR).
-  Its checks are deterministic and prefer a false alarm; never relax them to
-  model judgment. Commands the user types keep their behavior.
+  stopped. It posts item by item: an item whose text has an `@<…>` mention,
+  an image, HTML that embeds content or runs a script, or a `javascript:`,
+  `vbscript:`, `data:` or `file://` link (mentions and script links also after
+  decoding escapes and character references) waits for a person, and the
+  receipt names it; ordinary links are posted. A plan that would post only a
+  repeated summary (every finding skipped as already discussed on the PR) is
+  `NOTHING_TO_POST`. Its checks are deterministic and prefer a false alarm;
+  never relax them to model judgment. Commands the user types keep their
+  behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them.
 - Comment planning pages run side by side, so nothing a page sees or produces

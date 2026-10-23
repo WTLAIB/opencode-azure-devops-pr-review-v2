@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
-  publishableFindings, reviewVerification, combinationProblems, automaticPublicationHolds, automaticPublicationProblems, automaticPublicationRepeats,
+  publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
@@ -334,21 +334,7 @@ test('the summary index follows accepted combinations only, and old plan records
   assert.match(old.summary.content, /\| 🔴 high \| F-1 — Defect F-1 \|/);
 });
 
-test('automatic publication keeps a quick review with a high-severity finding or incomplete coverage to a preview', () => {
-  assert.deepEqual(automaticPublicationHolds({ ...review([finding('F-1')]), profile: 'review' }), [], 'Verified reviews have no quick hold.');
-  const reported = (id, severity) => ({ id, status: 'REPORTED', reason: 'r', finding: { ...body(id), severity } });
-  assert.deepEqual(automaticPublicationHolds(quickReview([reported('Q-1', 'medium'), reported('Q-2', 'low')])), []);
-  assert.deepEqual(automaticPublicationHolds(quickReview([reported('Q-1', 'high'), reported('Q-2', 'high'), reported('Q-3', 'medium')])),
-    ['the quick review reported 2 high-severity finding(s) that were not independently verified (consider /pr-review)']);
-  assert.deepEqual(automaticPublicationHolds(quickReview([{ id: 'Q-1', status: 'NEEDS_INFO', reason: 'r', partialFinding: { ...body('Q-1'), severity: 'high' } }])), [],
-    'A high finding that is not REPORTED is not commented on, so it holds nothing.');
-  const incomplete = quickReview([reported('Q-1', 'high')]);
-  incomplete.final.coverageSummary = { complete: false, unreviewedFiles: 3 };
-  assert.equal(automaticPublicationHolds(incomplete).length, 2);
-  assert.equal(automaticPublicationHolds(incomplete)[1], 'the quick review left coverage incomplete');
-});
-
-test('automatic publication leaves links, mentions, images and HTML to a person; generics and the marker are plain text', () => {
+test('automatic publication posts ordinary links and markup in examples, and leaves mentions, images, embedded content and script links to a person', () => {
   const plan = texts => assemblePlan(review(texts.map((_, index) => finding(`F-${index + 1}`))),
     [{ comments: texts.map((text, index) => comment({ findingId: `F-${index + 1}`, anchor: `line ${index}`, body: `🔴 high: Issue ${index}\n\n${text}` })), skipped: [] }]);
   const plain = [
@@ -356,64 +342,58 @@ test('automatic publication leaves links, mentions, images and HTML to a person;
     'Use Optional<T>, <T extends Comparable<T>> and vector<int>; Result<(), Error> too.',
     'A decorator @property, an email user@example.com, work item #12, PR !34 and `if (!a[0])`.',
     'Path /src/a.ts:12, index.md and `handlers[name](event)`; ratio 3 < 4 > 2.',
+    // Ordinary links are posted, however they are written.
+    'See https://learn.microsoft.com/dotnet/api for details; the client calls `https://api.example.com/v1`.',
+    'Visit www.example.com, mail <help@outside.example> or read [docs](//outside.example/a).',
+    '> [details][ref]\n>\n> [ref]: &#47;&#47;outside.example/report',
+    'Clone ssh://git.example/repo and see [mail](mailto:someone@example.com) or [x](https&#58;//outside.example).',
+    // Markup that neither loads content nor runs a script is posted too.
+    'Markup in examples: `<input name="id">`, <a href="/x">click</a>, <button type="submit">, <div class="x">.',
   ];
   const clean = plan(plain);
   assert.ok(publicationItems(clean).every(item => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(item.content)), 'Every item carries its marker.');
-  assert.deepEqual(automaticPublicationProblems(clean), [], 'Plain text, generics and the marker pass.');
+  assert.deepEqual(automaticPublicationProblems(clean), [], 'Plain text, ordinary links, harmless markup and the marker pass.');
   for (const [text, kind] of [
-    ['See https://evil.example/x for details.', 'an external link'],
-    ['Open HTTP://EXAMPLE.ORG today.', 'an external link'],
-    ['Clone ssh://git.example/repo first.', 'an external link'],
-    ['Visit www.example.com now.', 'an external link'],
-    ['[docs](//evil.example/a)', 'an external link'],
-    ['[x]: //evil.example/a.png', 'an external link'],
-    ['[mail](mailto:someone@example.com)', 'an external link'],
-    ['[x](javascript:alert(1))', 'an external link'],
+    ['[x](javascript:alert(1))', 'a script, data or local-file link'],
+    ['[x](VBScript:msgbox)', 'a script, data or local-file link'],
+    ['[x](data:text/html;base64,PHNjcmlwdD4=)', 'a script, data or local-file link'],
+    ['Open file:///etc/passwd', 'a script, data or local-file link'],
+    // CommonMark decodes escapes and character references in link destinations and text.
+    ['[x](java&#115;cript:alert(1))', 'a script, data or local-file link'],
+    ['[x](javascript\\:alert(1))', 'a script, data or local-file link'],
     ['Ping @<6D6A2A6A-0000-0000-0000-000000000000> about it.', 'an @mention'],
+    ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
     ['![diagram](diagram.png)', 'an image'],
     ['`if (![a].length)`', 'an image'], // The literal check prefers this false alarm.
-    ['<img src=x onerror=alert(1)>', 'HTML'],
-    ['<a href="/x">click</a>', 'HTML'],
-    ['<script>steal()</script>', 'HTML'],
-    ['<div onclick="x()">text</div>', 'HTML'],
-    ['<IFRAME>', 'HTML'],
-    ['hidden <!-- note --> text', 'HTML'],
-    // CommonMark decodes escapes and character references in link destinations and text.
-    ['[details](https&#58;//outside.example/report)', 'an external link'],
-    ['[details](https\\://outside.example/report)', 'an external link'],
-    ['[d](https&#x3A;//x.example)', 'an external link'],
-    ['[d](&#47;&#47;evil.example/a)', 'an external link'],
-    ['See https&colon;//x.example now.', 'an external link'],
-    ['Visit www&period;evil&period;example today.', 'an external link'],
-    ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
-    // Reference definitions also live in block quotes and list items, and a destination may follow a line break.
-    ['> [details][ref]\n>\n> [ref]: //outside.example/report', 'an external link'],
-    ['> [details][ref]\n>\n> [ref]: &#47;&#47;outside.example/report', 'an external link'],
-    ['[details][ref]\n\n- [ref]: //outside.example/report', 'an external link'],
-    ['[details][ref]\n\n1. [ref]: //outside.example/report', 'an external link'],
-    ['> - [details][ref]\n>\n> - [ref]: //outside.example/report', 'an external link'],
-    ['> [details][ref]\n>\n> [ref]:\n> //outside.example/report', 'an external link'],
-    ['> [details](\n> //outside.example/report)', 'an external link'],
-    ['Contact <help@outside.example> for details.', 'an external link'],
-  ]) assert.deepEqual(automaticPublicationProblems(plan([text])), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
+    ['<img src=x onerror=alert(1)>', 'HTML that embeds content or runs a script'],
+    ['<script>steal()</script>', 'HTML that embeds content or runs a script'],
+    ['<div onclick="x()">text</div>', 'HTML that embeds content or runs a script'],
+    ['<IFRAME>', 'HTML that embeds content or runs a script'],
+    ['<video poster="p.png">', 'HTML that embeds content or runs a script'],
+    ['<input type="image" src="https://outside.example/a.png">', 'HTML that embeds content or runs a script'],
+    ['<p style="background:url(x)">', 'HTML that embeds content or runs a script'],
+    ['hidden <!-- note --> text', 'HTML that embeds content or runs a script'],
+  ]) assert.deepEqual(automaticPublicationProblems(plan([text])).map(problem => problem.reason), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
   // A decoded character never forms markup, and AZPR's own escaping of <!-- stays text.
   for (const text of ['Kept &lt;!-- note --&gt; as text.', 'Shown as &#60;img src=x&#62; text.', 'Paths C:\\Users\\dev and \\d+\\.\\d+; a &amp; b; &constructor; &nbsp;',
     '`y = arr[i]: z` and List<@NonNull String> stay text.', '> A quoted note\n> - with a list item']) {
     assert.deepEqual(automaticPublicationProblems(plan([text])), [], text);
   }
-  // The summary is checked like an inline comment, and several kinds are named together.
-  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'See https://x.example and ![i](y)' }]);
-  assert.deepEqual(automaticPublicationProblems(noted), ['the PR summary contains an external link and an image']);
+  // Each problem names its item; the summary is checked like an inline comment, and several kinds are named together.
+  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Ask @<6D6A2A6A-0000-0000-0000-000000000000> and see ![i](y)' }]);
+  assert.deepEqual(automaticPublicationProblems(noted), [{ marker: noted.summary.marker, reason: 'the PR summary contains an @mention and an image' }]);
   const combined = assemblePlan(review([finding('F-1'), finding('F-2')]), [{ comments: [comment({ findingIds: ['F-1', 'F-2'], body: '🔴 high: x\n\n<b onmouseover=x>' })], skipped: [] }]);
-  assert.deepEqual(automaticPublicationProblems(combined), ['the comment for F-1, F-2 (/src/a.ts:2) contains HTML']);
+  assert.deepEqual(automaticPublicationProblems(combined), [{ marker: combined.comments[0].marker, reason: 'the comment for F-1, F-2 (/src/a.ts:2) contains HTML that embeds content or runs a script' }]);
+  const mixed = plan(['Plain text.', '![d](d.png)']);
+  assert.deepEqual(automaticPublicationProblems(mixed).map(problem => problem.marker), [mixed.comments[1].marker], 'Only the item with the image is held.');
 });
 
-test('automatic publication holds back a summary that would only repeat findings already discussed on the PR', () => {
+test('automatic publication finds nothing new when every finding is already discussed on the PR', () => {
   const live = [{ threadId: 281 }, { threadId: 290 }];
   const plan = skipped => ({ summary: { kind: 'summary', content: 'Summary.' }, comments: [], skipped });
   const discussed = (id, threadId = 281) => ({ findingId: id, reason: `Thread ${threadId} covers it.`, cause: 'existing-thread', threadId });
-  assert.deepEqual(automaticPublicationRepeats(plan([discussed('F-1'), discussed('F-2', 290), discussed('F-3')]), live),
-    ['every finding is already discussed on the PR (thread 281, thread 290), so there is no new inline comment and only a repeated summary would be posted']);
+  assert.equal(automaticPublicationRepeats(plan([discussed('F-1'), discussed('F-2', 290), discussed('F-3')]), live),
+    'every finding is already discussed on the PR (thread 281, thread 290)');
   for (const [label, value, threads] of [
     ['an inline comment is new', { ...plan([discussed('F-1')]), comments: [{ findingId: 'F-2' }] }, live],
     ['another cause', plan([discussed('F-1'), { findingId: 'F-2', reason: 'Low severity.', cause: 'low-severity' }]), live],
@@ -421,5 +401,5 @@ test('automatic publication holds back a summary that would only repeat findings
     ['a thread that is not live', plan([discussed('F-1', 999)]), live],
     ['threads that could not be read', plan([discussed('F-1')]), null],
     ['nothing skipped', plan([]), live],
-  ]) assert.deepEqual(automaticPublicationRepeats(value, threads), [], label);
+  ]) assert.equal(automaticPublicationRepeats(value, threads), '', label);
 });

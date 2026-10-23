@@ -7,7 +7,7 @@ passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
 
-## Automatic comments after a review (unreleased, 2026-10-22)
+## Automatic comments after a review (unreleased, 2026-10-22 and 23)
 
 Environment as below (Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode CLI
 2.1.2). `afterReview`, the review commands' `--preview`, `--publish` and
@@ -21,32 +21,50 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   (a COMPLETE review previews or publishes in a run of its own; STALE and
   cancelled reviews hand on nothing; a review without findings gets one
   notice and no model request; a flag overrides the setting both ways), the
-  safeguards (a quick review's high-severity finding or incomplete coverage;
-  links, `@<…>` mentions, images and HTML in the summary or an inline comment,
-  links and mentions also when written with backslash escapes or character
-  references, reference definitions inside block quotes and list items and
-  email autolinks, while generics, decorators, AZPR's marker and its own
-  `&lt;!--` escaping pass; a plan that would only
-  repeat the summary because every finding is already discussed on the PR,
-  while a typed `--publish` still posts it), a `/pr-stop` that arrives while a
-  finished review's report is delivered (the review stays COMPLETE and
-  nothing follows), a PR held by another
-  comment command, `/pr-stop` of the automatic step, the `/pr-check` row, the
-  installer adding `afterReview` and setup naming the problem without values.
-  Removing any one safeguard, the no-findings check, the busy-lock handling,
-  the typo refusal or the setting itself makes a test fail.
+  safeguards item by item (an `@<…>` mention, an image, HTML that embeds
+  content or runs a script, or a `javascript:`, `vbscript:`, `data:` or
+  `file://` link in the summary or an inline comment holds back that item
+  while the others are posted and read back, and a typed `--publish` then
+  posts it; mentions and script links also when written with backslash
+  escapes or character references; when every item is held nothing is
+  posted; when the PR changed before publication the run is STALE, posts
+  nothing and does not offer the held items), what passes (ordinary links, also encoded, protocol-relative, in
+  reference definitions inside block quotes and list items, `mailto:` and
+  email autolinks; markup such as `<input name="id">` or `<a href>`;
+  generics, decorators, AZPR's marker and its own `&lt;!--` escaping), a
+  quick review whose high-severity finding or incomplete coverage is posted
+  with the quick disclosure and an advisory hint, a plan that would only
+  repeat the summary because every finding is already discussed on the PR
+  (`NOTHING_TO_POST`, while a typed `--publish` still posts it), a
+  `/pr-stop` that arrives while a finished review's report is delivered (the
+  review stays COMPLETE and nothing follows), a PR held by another comment
+  command, `/pr-stop` of the automatic step, the `/pr-check` row (information,
+  no warning), the installer adding `afterReview` and setup naming the problem
+  without values. Removing any one safeguard, the per-item filter, the
+  nothing-new rule, the no-findings check, the busy-lock handling, the typo
+  refusal or the setting itself makes a test fail; so does holding ordinary
+  links or `<a>` again, or offering held items for publication after a STALE
+  check (14 mutations of this revision's changes, all caught).
 - All four real-host fixtures passed on OpenCode 2.1.2 with fake model and
   Azure services: fresh, replacement and native installation, and comment
   scale. The smoke fixture additionally ran `/pr-review <URL> --preview`
   (COMPLETE, then a PREVIEW in a run of its own, nothing posted),
-  `/pr-quick <URL> --publish` with a high-severity finding and
-  `/pr-review <URL> --publish` with a link in the planned text (both held back
-  to PREVIEW with the reason), a quick review without findings (one notice and
-  no further provider request), and, after a restart with
-  `afterReview.review: publish`, a plain `/pr-review` whose automatic
+  `/pr-quick <URL> --publish` with a high-severity finding (POSTED, no item
+  held; its markers were settled by an earlier step, so nothing new was
+  created), `/pr-review <URL> --publish` with an image in its inline comment
+  (the summary POSTED and read back, VERIFIED=1, that comment held back with
+  the reason; a typed `/pr-comment <id> --publish` then posted it with the
+  summary ALREADY_PRESENT and no model request), a quick review without
+  findings (one notice and no further provider request), and, after a restart
+  with `afterReview.review: publish`, a plain `/pr-review` whose automatic
   publication was POSTED and read back (VERIFIED=2), then the same review
-  again with every finding planned as already discussed by that comment,
-  held back to PREVIEW with no second summary.
+  again with every finding planned as already discussed by that comment:
+  `NOTHING_TO_POST`, no second summary.
+- The 15 comment previews saved from real reviews (76 items) contain none of
+  the held constructs, so the item checks hold back nothing in them. The
+  earlier quick-review rule would have held back one of them in full: a quick
+  preview of the 316-file test PR with two high-severity findings (24 items),
+  which is now posted with the quick disclosure.
 - **Live** with this revision installed in the user's OpenCode 2.1.2 service:
   gpt-6-luna for every role, `afterReview` none for every mode and `--preview`
   on the command, so nothing was posted. Times are from first stage start to
@@ -92,9 +110,10 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     The summary's marker depends on the set of inline comments, though, so
     the summary differed from the first one and was posted again (VERIFIED=1,
     3 live AZPR comments).
-  - That repeated summary led to the last safeguard: automatic publication
-    now keeps such a plan (no inline comment, every finding skipped as
-    `existing-thread` with a live thread) to a preview.
+  - That repeated summary led to the repeated-summary rule: automatic
+    publication posts no summary for such a plan (no inline comment, every
+    finding skipped as `existing-thread` with a live thread). It first kept
+    the plan to a preview; it is now `NOTHING_TO_POST` (below).
 - **Live, with the review fixes** (the repeated-summary rule, links and
   mentions checked after decoding, and no hand-off after a stop during report
   delivery), on the same PR with those comments deleted and its record moved
@@ -106,13 +125,30 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   - The second, run while that inline comment was live, was held back to a
     preview in 4 s with "every finding is already discussed on the PR
     (thread …), so there is no new inline comment and only a repeated
-    summary would be posted", and created no thread.
+    summary would be posted", and created no thread (the behavior of that
+    revision; see below for `NOTHING_TO_POST`).
   - Four reviews confirmed no finding: three had no candidate and one had a
     candidate that verification did not confirm. Each got only the
     "Automatic publication skipped: the review has no findings to comment on"
     notice, with no planning session and no write.
   - A stop during report delivery and encoded links cannot be produced on
     demand with a real model; those cases are covered offline. The test
+    comments were deleted afterwards.
+- **Live, with the per-item safeguards** (this revision), on the same PR with
+  those comments deleted and its record moved aside again, two
+  `/pr-review <URL> --publish` runs with gpt-6-luna:
+  - The first review was COMPLETE in 73 s with the millisecond-format seed
+    confirmed. Its automatic publication posted the summary and one inline
+    comment on `json_schema.py:874` in 9 s: VERIFIED=2, no item held, and an
+    independent thread listing went from 0 to 2 live AZPR comments.
+  - The second review of the unchanged head confirmed the same finding
+    (84 s). Its automatic run took 7 s: the planner skipped the finding as
+    already discussed in the inline comment just posted, and the run ended
+    `NOTHING_TO_POST` with "Automatic publication found nothing new to post:
+    every finding is already discussed on the PR (thread …). The plan is
+    saved." It made two Azure DevOps reads and no write; the listing stayed
+    at 2 live AZPR comments.
+  - The real comment text again had none of the held constructs. The test
     comments were deleted afterwards.
 
 ## 0.1.0 release acceptance (2026-10-22)
@@ -1532,10 +1568,11 @@ transient failure, and its error names the last activity.
 
 - Automatic publication from the setting (`afterReview: publish`) with a
   real model: the live publications above used the `--publish` flag, which
-  differs only in where the step comes from. The quick-review and
-  comment-text safeguards did not trigger in any live run; they were
-  validated with the fixture services and with the saved live previews only.
-  The repeated-summary safeguard did trigger live (above).
+  differs only in where the step comes from. The item checks did not trigger
+  in any live run, since real comment text had none of the held constructs;
+  they were validated with the fixture services and the saved live previews
+  only. A quick review's automatic publication has not run live. The
+  repeated-summary rule did trigger live (above).
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.

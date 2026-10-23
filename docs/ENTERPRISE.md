@@ -128,13 +128,18 @@ After inspecting a preview, explicitly publish the named review:
 Teams that want comments without that step can set `afterReview` to `publish`
 for a mode, or add `--publish` after the PR URL for one review. Automatic
 publication posts under the PAT owner's identity without anyone reading the
-text first, so it keeps to a preview when a quick review reported a
-high-severity finding or left coverage incomplete, when the text contains a
-link, an `@<…>` mention, an image or HTML (links and mentions also when encoded
-with escapes or character references), or when every finding is already
-discussed on the PR; it posts nothing for a review without findings to
-comment on, and `/pr-check` shows a warning for each mode that publishes
-automatically. An automatic preview still uses a model.
+text first. It holds back, item by item, a comment whose text would notify
+people or load or run something when viewed: an `@<…>` mention, an image, HTML
+that embeds content or runs a script, or a `javascript:`, `vbscript:`, `data:`
+or `file://` link (script links and mentions also when encoded with escapes or
+character references). Held items wait in the saved preview for a person; the
+others, ordinary web links included, are posted. A quick review's comments
+carry the disclosure that they were not independently verified; teams that
+want a person to read them first set `afterReview.quick` to `preview`.
+Automatic publication posts nothing for a review without findings to comment
+on, or when every finding is already discussed on the PR. `/pr-check` lists
+the `afterReview` setting of each mode and who posts. An automatic preview
+still uses a model.
 
 The runtime posts the saved preview, rechecks that the PR is active and its
 source commit is unchanged, and skips existing comment markers. If no preview

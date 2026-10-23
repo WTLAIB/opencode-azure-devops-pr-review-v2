@@ -41,29 +41,37 @@ publication after a review:
    like any run. When another AZPR command holds the conversation or the PR,
    the step is skipped with a notice that names the `/pr-comment` command to
    run when that command has finished.
-4. Automatic publication keeps the comments to a preview (status `PREVIEW`,
-   `Automatic publication held back: …`) when a quick review reported a
-   high-severity finding or left coverage incomplete (its findings were not
-   independently verified; the receipt's verification hint), or when the
-   summary or an inline comment contains a link (`http://`, `https://`,
-   another `scheme://`, `mailto:`, `javascript:`, `data:`, `www.`, an email
-   autolink such as `<name@host>`, or a protocol-relative destination of an
-   inline link or a reference definition, also one inside a block quote or a
-   list item; all of these also when written with backslash escapes or
-   character references such as `https\://` or `https&#58;//`, which
-   CommonMark decodes), an Azure DevOps mention (`@<…>`, decoded the same
-   way), an image (`![`) or HTML (tags such as `a`, `img`, `iframe` or
-   `script`, attributes such as `on…=`, `href=`, `src=` or `style=`, or an
-   HTML comment other than AZPR's marker). These checks are literal and
-   prefer a false alarm: `![` inside code holds back too, while generics such
-   as `List<String>` and decorators such as `@property` pass. It also keeps to a preview when the
-   plan has no inline comment and the planner skipped every finding as
-   `existing-thread` with a thread the runtime found live before planning,
-   typically AZPR's own comment from an earlier run: the summary's marker
-   follows the inline comments, so posting would add a second summary for the
-   same findings each time an unchanged PR is reviewed again. The saved
-   preview is then posted exactly by `/pr-comment <id> --publish`, which,
-   like every command you type, applies none of these safeguards.
+4. Automatic publication posts each item that no safeguard holds back. An
+   item, the summary or an inline comment, waits in the saved preview for a
+   person when its text contains an Azure DevOps mention (`@<…>`), an image
+   (`![`), HTML that embeds content or runs a script (tags such as `img`,
+   `iframe`, `object`, `embed`, `video`, `audio`, `svg`, `script`, `style`,
+   `link`, `meta` or `base`; attributes such as `on…=`, `src=`, `srcset=`,
+   `style=`, `background=` or `poster=`; or an HTML comment other than AZPR's
+   marker), or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script
+   links and mentions also count when written with backslash escapes or
+   character references, such as `javascript\:` or `java&#115;cript:`, which
+   CommonMark decodes. These checks are literal and prefer a false alarm:
+   `![` inside code holds back too. Ordinary web and mail links (`https://`,
+   protocol-relative destinations, `mailto:`, email autolinks, reference
+   definitions) and markup that neither loads content nor runs a script, such
+   as `<input name="id">` in an example, generics such as `List<String>` or
+   decorators such as `@property`, are posted. The receipt says `Automatic
+   publication held back N item(s) for a person: …` with each item and why;
+   when every item is held, nothing is posted and the status is `PREVIEW`
+   (`held back every item`). A quick review's findings are posted with its
+   disclosure (`quick review, not independently verified`; the summary also
+   names incomplete coverage), also a high-severity finding: its verification
+   hint is advisory. When the plan has no inline comment and the planner
+   skipped every finding as `existing-thread` with a thread the runtime found
+   live before planning, typically AZPR's own comment from an earlier run,
+   there is nothing new to post: status `NOTHING_TO_POST`, `Automatic
+   publication found nothing new to post: …`, and the plan is saved (the
+   summary's marker follows the inline comments, so posting would add a
+   second summary for the same findings each time an unchanged PR is reviewed
+   again). `/pr-comment <id> --publish`, like every command you type, applies
+   none of these safeguards: it posts every item of the saved preview, and
+   items already posted are `ALREADY_PRESENT`.
 
 Publication then follows the usual rules below (PR active, unchanged head,
 markers, read-back). Automatic publication posts as the PAT owner, like

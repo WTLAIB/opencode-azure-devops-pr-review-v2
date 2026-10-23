@@ -308,9 +308,11 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   The thread of an item found on the PR is recorded the same way.
  * - Reads every created marker back from Azure DevOps. A recorded thread whose
  *   comment was deleted on the PR is DELETED: settled, and never sent again.
+ * - With `only` (a set of markers), handles just those items; the others stay
+ *   in the saved plan for a later publication.
  */
-export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS }) {
-  const items = publicationItems(review.plan);
+export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only }) {
+  const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
   const ledger = review.publication ??= new Map();
   const current = await azure.versions(run, review.snapshot);
   if (current.status !== 'active') return { status: 'INCOMPLETE', reason: `The PR is ${current.status}; nothing was posted.` };

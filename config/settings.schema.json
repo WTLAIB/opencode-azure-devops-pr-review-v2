@@ -176,7 +176,7 @@
     "afterReview": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What AZPR does after a COMPLETE review of each mode. none (default): nothing; run /pr-comment yourself. preview: plan a comment preview as a separate command with its own receipt; planning uses a model and nothing is posted. publish: plan the comments and post them as the PAT owner, unless a safeguard keeps them to a preview (a quick review with a high-severity finding or incomplete coverage; comment text with a link, an @mention, an image or HTML; every finding already discussed on the PR, so that only a repeated summary would be posted). A review without findings to comment on gets neither. A flag right after the PR URL (--preview, --publish or --no-comment) overrides this for one run.",
+      "description": "What AZPR does after a COMPLETE review of each mode. none (default): nothing; run /pr-comment yourself. preview: plan a comment preview as a separate command with its own receipt; planning uses a model and nothing is posted. publish: plan the comments and post them as the PAT owner; a comment whose text has an @mention, an image, HTML that embeds content or runs a script, or a javascript:, vbscript:, data: or file:// link waits in the preview for a person, and nothing is posted when every finding is already discussed on the PR. Quick review comments are posted with their not-independently-verified disclosure. A review without findings to comment on gets neither. A flag right after the PR URL (--preview, --publish or --no-comment) overrides this for one run.",
       "properties": {
         "quick": {
           "enum": ["none", "preview", "publish"],

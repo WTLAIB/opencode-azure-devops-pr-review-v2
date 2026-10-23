@@ -40,7 +40,7 @@ test('the PR comments section says which comment step follows automatically; the
   assert.match(preview, /\/pr-comment 12345678 --publish/);
   const publish = renderCommentActions('12345678', 'en', { mode: 'publish', source: '--publish' });
   assert.match(publish, /\*\*Automatic publication\*\* \(`--publish`\): AZPR now plans the comments and posts them as the PAT owner/);
-  assert.match(publish, /high-severity finding or incomplete coverage, when the text contains a link, an @mention, an image or HTML, or when every finding is already discussed on the PR\./);
+  assert.match(publish, /A comment with an @mention, an image, embedded content or a script link waits in the preview for a person while the others are posted, and nothing new is posted when every finding is already discussed on the PR\./);
   assert.match(renderCommentActions('12345678', 'en', { mode: 'none', source: '--no-comment' }), /Automatic comments are off for this review \(`--no-comment`\)\./);
   assert.match(renderCommentActions('12345678', 'zh-TW', { mode: 'preview', source: '--preview' }), /\*\*自動預覽\*\*（`--preview`）：AZPR 接著以另一道指令規劃留言預覽/);
   assert.match(renderCommentActions('12345678', 'zh-TW', { mode: 'publish', source: '--publish' }), /\*\*自動發布\*\*（`--publish`）：[^\n]*PAT 擁有者/);

@@ -293,7 +293,7 @@ every concrete defect it finds, in any area, as a finding.
 | `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode. `inherit`: host permissions decide. |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
 | `deletePrivateSessions` | `true`: AZPR deletes its private reviewer sessions once they are no longer needed (see [retention](#retention-and-privacy)); `false` keeps every session. |
-| `afterReview.quick` / `.review` / `.deep` | `none` each: nothing follows a review; run `/pr-comment` yourself. `preview` plans a comment preview after a COMPLETE review of that mode (a model runs; nothing is posted); `publish` plans and posts it as the PAT owner unless a safeguard keeps it to a preview. A flag after the PR URL overrides it for one run. See [automatic comments](#automatic-comments). |
+| `afterReview.quick` / `.review` / `.deep` | `none` each: nothing follows a review; run `/pr-comment` yourself. `preview` plans a comment preview after a COMPLETE review of that mode (a model runs; nothing is posted); `publish` plans and posts it as the PAT owner; a comment that a safeguard holds back waits for a person. A flag after the PR URL overrides it for one run. See [automatic comments](#automatic-comments). |
 | `azure.organization` | Required. The `<org>` of `https://dev.azure.com/<org>`; PR URLs of other organizations are refused. |
 | `azure.pat` | A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**, or `""` when `azure.patFile` is set. Sent only to `https://dev.azure.com/<org>` and never logged. |
 | `azure.patFile` | `""`. Recommended: the absolute path of a file that holds only the PAT, so `settings.json` holds no secret. It must be a regular file you own that only you can access (mode 600, not a symbolic link). AZPR reads it at start and before each command; after replacing it, restart OpenCode. Set either this or `azure.pat`. |
@@ -401,7 +401,8 @@ once, in the same session, to continue (receipt `follow-up=completed`,
 `still-partial`, `unusable` or `failed`); a follow-up that fails or gives no
 usable answer keeps the answer it followed. When the quick review found a
 high-severity issue or left coverage incomplete, the receipt suggests
-`/pr-review` before publishing.
+`/pr-review` before publishing; the hint is advisory, also when automatic
+publication follows (see [automatic comments](#automatic-comments)).
 
 ## Comments
 
@@ -446,18 +447,26 @@ findings to comment on gets one notice instead, with no planning, model
 request or comment. When another AZPR command is running in the conversation
 or on the PR, the step is skipped and the notice names the command to run.
 
-Automatic publication posts as the PAT owner. It keeps the comments to a
-preview, and the receipt says why, when a quick review reported a
-high-severity finding or left coverage incomplete (findings that were not
-independently verified), when any comment text contains a link, an `@<…>`
-mention, an image or HTML (checks that prefer a false alarm and also decode
-escapes and character references in links and mentions; generics such as
-`List<String>` are text), or when every finding is already discussed
-on the PR, so that only a repeated summary would be posted (the summary's
-marker follows the inline comments, so re-reviewing an unchanged PR would
-otherwise add a summary each time). Publication itself still rechecks that
-the PR is active and unchanged. A command you type, such as
-`/pr-comment <id> --publish`, applies none of these safeguards.
+Automatic publication posts as the PAT owner, item by item. A comment (or the
+summary) whose text contains an `@<…>` mention, an image, HTML that embeds
+content or runs a script (such as `<img>`, `<iframe>`, `<script>`, an `on…=`,
+`src=` or `style=` attribute, or an HTML comment), or a `javascript:`,
+`vbscript:`, `data:` or `file://` link waits in the saved preview for a person;
+the other items are posted, and the receipt names each held item and why. The
+checks prefer a false alarm and also decode escapes and character references
+in script links and mentions. Ordinary web and mail links, and markup that
+neither loads content nor runs a script (such as `<input name="id">` in an
+example or `List<String>`), are posted. A quick review is posted when you chose
+it: its comments keep the disclosure `quick review, not independently
+verified`, and its summary names incomplete coverage; its verification hint
+is advisory (set `afterReview.quick` to `preview` to read the comments first).
+When every finding is already discussed on the PR, typically by AZPR's own
+comment from an earlier run, there is nothing new to post: the receipt says
+`NOTHING_TO_POST` and the plan is saved (the summary's marker follows the
+inline comments, so re-reviewing an unchanged PR would otherwise add a summary
+each time). Publication itself still rechecks that the PR is active and
+unchanged. A command you type, such as `/pr-comment <id> --publish`, posts
+every item of the saved preview, held ones included.
 
 ### Publication
 

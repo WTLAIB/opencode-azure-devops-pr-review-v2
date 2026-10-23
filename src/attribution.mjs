@@ -36,9 +36,9 @@ export function renderCommentActions(id, language, after) {
     `**自動預覽**（${source}）：AZPR 接著以另一道指令規劃留言預覽，並另送收據；不會發布。沒有可留言的發現時不會預覽。`,
     `**自动预览**（${source}）：AZPR 接着以另一条命令规划留言预览，并另送回执；不会发布。没有可留言的发现时不会预览。`)
     : after?.mode === 'publish' ? pick(language,
-      `**Automatic publication** (${source}): AZPR now plans the comments and posts them as the PAT owner, as a separate command with its own receipt. It keeps them to a preview when a quick review has a high-severity finding or incomplete coverage, when the text contains a link, an @mention, an image or HTML, or when every finding is already discussed on the PR. A review without findings to comment on gets no comments.`,
-      `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。快速審查有 high 發現或覆蓋不完整、留言含連結、@提及、圖片或 HTML，或每個發現在 PR 上都已有討論時，只產生預覽。沒有可留言的發現時不會留言。`,
-      `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。快速审查有 high 发现或覆盖不完整、留言含链接、@提及、图片或 HTML，或每个发现在 PR 上都已有讨论时，只生成预览。没有可留言的发现时不会留言。`)
+      `**Automatic publication** (${source}): AZPR now plans the comments and posts them as the PAT owner, as a separate command with its own receipt. A comment with an @mention, an image, embedded content or a script link waits in the preview for a person while the others are posted, and nothing new is posted when every finding is already discussed on the PR. A review without findings to comment on gets no comments.`,
+      `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。含 @提及、圖片、嵌入內容或指令碼連結的留言會留在預覽等人確認，其他照常發布；每個發現在 PR 上都已有討論時，不會再發布。沒有可留言的發現時不會留言。`,
+      `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。含 @提及、图片、嵌入内容或脚本链接的留言会留在预览等人确认，其他照常发布；每个发现在 PR 上都已有讨论时，不会再发布。没有可留言的发现时不会留言。`)
       : after ? pick(language, `Automatic comments are off for this review (${source}).`, `這份審查不自動留言（${source}）。`, `这份审查不自动留言（${source}）。`) : '';
   const [heading, publish, preview, omit, retention] = pick(language,
     ['PR comments', 'Prepare and publish comments', 'Preview comments only', 'You can omit the ID: `/pr-comment --publish` selects the latest completed review in the original conversation, or this review in its report session.', 'Reviews and previews are saved privately (latest 20) and survive an OpenCode restart. Publishing skips comments that already exist on the PR, so it is safe to run again.'],
@@ -282,7 +282,11 @@ export function renderReceipt(run, report, status, error, settings) {
         ? '\nStatus: COMPLETE means at least one quick review session produced a usable result and the PR source did not change. Quick findings are not independently verified: the runtime checked only their form and source, and findings that failed those checks are NEEDS_INFO. Coverage says whether every changed file was reviewed. STALE means the source changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n'
         : '\nStatus: COMPLETE means verification produced structured decisions and the PR source did not change; findings without a usable decision are listed as UNREVIEWED. STALE means the source changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
   if (run.mode === 'quick' && status === 'COMPLETE' && run.quickSummary && (run.quickSummary.high > 0 || !run.quickSummary.coverage?.complete)) {
-    body += `\nVerification hint: ${[run.quickSummary.high > 0 ? `${run.quickSummary.high} high-severity finding(s)` : '', !run.quickSummary.coverage?.complete ? 'incomplete coverage' : ''].filter(Boolean).join(' and ')}. Before publishing, consider /pr-review for an independently verified review.\n`;
+    const hint = [run.quickSummary.high > 0 ? `${run.quickSummary.high} high-severity finding(s)` : '', !run.quickSummary.coverage?.complete ? 'incomplete coverage' : ''].filter(Boolean).join(' and ');
+    // Automatic publication follows the user's explicit choice; the hint stays advisory.
+    body += run.afterReview?.mode === 'publish'
+      ? `\nVerification hint: ${hint}. These findings are not independently verified; the automatic publication posts them with that disclosure (and the summary with the coverage). For an independent check first, set afterReview.quick to preview or use /pr-review.\n`
+      : `\nVerification hint: ${hint}. Before publishing, consider /pr-review for an independently verified review.\n`;
   }
   if (run.userContext) body += '\nSupplementary context applies to this command only.\n';
   if (report) {
