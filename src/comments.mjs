@@ -189,20 +189,40 @@ function decodedText(text) {
  * quote is quoted, so it may hold < and >. A tag ends at the first > outside
  * such a value. Every < counts as a possible start, since a renderer may show
  * an earlier one as text; a reading that reaches a point between attributes
- * where an earlier one was continues as that one did, so it stops there.
+ * where an earlier one was continues as that one did, so it stops there. The
+ * end of every name and value is looked up in tables built once, so the work
+ * stays linear in the length of the text, however many < it holds.
  */
 function hasActiveAttribute(text) {
-  const tag = /<[a-z][^\s/>]*/gi, name = /[^\s/>][^\s/>=]*/y, value = /\s*=\s*(?:"[^"]*"?|'[^']*'?|[^\s>]*)/y;
-  const read = new Uint8Array(text.length + 1);
-  for (let start; (start = tag.exec(text)); tag.lastIndex = start.index + 1) {
-    for (let i = tag.lastIndex; i < text.length && text[i] !== '>' && !read[i];) {
+  if (!/<[a-z]/i.test(text)) return false;
+  const length = text.length, space = char => /[\t\n\f\r ]/.test(char);
+  // For each offset, the first offset at or after it whose character passes the test.
+  const next = test => {
+    const found = new Int32Array(length + 1).fill(length);
+    for (let k = length - 1; k >= 0; k--) found[k] = test(text[k]) ? k : found[k + 1];
+    return found;
+  };
+  const tagEnd = next(char => space(char) || char === '/' || char === '>'), solid = next(char => !space(char));
+  const nameEnd = next(char => space(char) || char === '/' || char === '>' || char === '=');
+  const valueEnd = next(char => space(char) || char === '>');
+  const quoteEnd = { '"': next(char => char === '"'), "'": next(char => char === "'") };
+  // An event handler name of any length is "on" and letters; other names are short enough to compare.
+  const letters = new Int32Array(length + 1);
+  for (let k = length - 1; k >= 0; k--) letters[k] = /[a-z]/i.test(text[k]) ? letters[k + 1] + 1 : 0;
+  const active = (from, to) => to - from <= 32 ? ACTIVE_ATTRIBUTE.test(text.slice(from, to).toLowerCase())
+    : /^on/i.test(text.slice(from, from + 2)) && letters[from] >= to - from;
+  const read = new Uint8Array(length + 1);
+  for (let start = text.indexOf('<'); start !== -1; start = text.indexOf('<', start + 1)) {
+    if (!/[a-z]/i.test(text[start + 1] ?? '')) continue;
+    for (let i = tagEnd[start + 1]; i < length && text[i] !== '>' && !read[i];) {
       read[i] = 1;
-      if (/[\s/]/.test(text[i])) { i++; continue; }
-      name.lastIndex = i;
-      const attribute = name.exec(text)[0];
-      if (ACTIVE_ATTRIBUTE.test(attribute.toLowerCase())) return true;
-      value.lastIndex = i += attribute.length;
-      if (value.exec(text)) i = value.lastIndex;
+      if (space(text[i]) || text[i] === '/') { i++; continue; }
+      // A name may open with =; a value follows an = after the name and any spaces.
+      const end = nameEnd[i + 1], equals = solid[end];
+      if (active(i, end)) return true;
+      if (text[equals] !== '=') { i = end; continue; }
+      const value = solid[equals + 1], open = text[value];
+      i = open === '"' || open === "'" ? Math.min(length, quoteEnd[open][value + 1] + 1) : open === '>' ? value : valueEnd[value];
     }
   }
   return false;

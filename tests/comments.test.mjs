@@ -391,6 +391,8 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     ['<x y=">" z=a"b onclick=f()>', 'HTML that embeds content or runs a script'],
     ['<p/onclick="f()">', 'HTML that embeds content or runs a script'],
     ['<div>\n<https:x onclick=f()>\n</div>', 'HTML that embeds content or runs a script'],
+    // Only ASCII whitespace separates attributes, so the value runs on past a no-break space.
+    ['<p t=">" a=x\u00a0b="y onclick=f()">', 'HTML that embeds content or runs a script'],
     // A renderer shows the unfinished first tag as text, so the second one is a tag of its own.
     ['x <p title="\n`y`<p title=\'<\' onmouseover=\'f()\'>', 'HTML that embeds content or runs a script'],
   ]) assert.deepEqual(automaticPublicationProblems(plan([text])).map(problem => problem.reason), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
@@ -452,6 +454,18 @@ test('automatic publication posts literal code, and checks code it cannot tell a
   // The summary is read the same way.
   const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Escape `<script>` in templates.' }]);
   assert.deepEqual(automaticPublicationProblems(noted), []);
+});
+
+test('automatic publication reads long tag-like text in linear time', () => {
+  // Reading again from every < would take seconds for each of these; a linear reading takes milliseconds.
+  for (const [text, held] of [['<a'.repeat(100000), false], [`x <p title="${'<a'.repeat(100000)}">`, false], ['<a b="'.repeat(40000), false],
+    ['x <a/'.repeat(50000), false], [`<p t=">" on${'c'.repeat(200000)}=f()>`, true]]) {
+    const started = performance.now();
+    const problems = automaticPublicationProblems({ summary: { kind: 'summary', marker: 'm', content: text }, comments: [] });
+    const milliseconds = performance.now() - started;
+    assert.ok(milliseconds < 2000, `${text.slice(0, 12)}…: ${Math.round(milliseconds)} ms`);
+    assert.equal(problems.length > 0, held, text.slice(0, 12));
+  }
 });
 
 test('automatic publication finds nothing new when every finding is already discussed on the PR', () => {

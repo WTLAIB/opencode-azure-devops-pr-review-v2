@@ -49,8 +49,9 @@ publication after a review:
    `link`, `meta` or `base`; attributes such as `on…=`, `src=`, `srcset=`,
    `style=`, `background=` or `poster=`, read as a browser reads a tag: a
    quoted value may hold `<` and `>`, a slash separates attributes, a tag
-   name runs to a space, slash or `>`, and every `<` may start a tag, since a
-   renderer may show an earlier one as text), HTML that hides text (a comment
+   name runs to a space, slash or `>` (spaces are ASCII whitespace only, so a
+   no-break space does not end a value), and every `<` may start a tag, since
+   a renderer may show an earlier one as text), HTML that hides text (a comment
    other than AZPR's marker, a declaration `<!…>`, a processing instruction
    `<?…>` or `</` without a tag name, which a browser turns into a comment),
    or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script

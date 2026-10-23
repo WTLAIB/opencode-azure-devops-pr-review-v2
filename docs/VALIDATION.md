@@ -215,7 +215,8 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     blanked code found nothing active in 1,000,000 texts.
   - All four real-host fixtures passed on OpenCode 2.1.2. No live run.
 
-- **Script links with a tab or line break** (this revision): a browser drops
+- **Script links with a tab or line break** (the revision before linear
+  attribute reading, below): a browser drops
   tabs and line breaks from a URL, so `<a href="java&#9;script:…">`, or one
   with a raw tab or line break inside the scheme, is a script link. The
   script-link check now also reads the text, as written and decoded, without
@@ -233,6 +234,32 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     blanked code found nothing active in 300,000.
   - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
     saved from real reviews still have no held item. No live run.
+
+- **Linear attribute reading** (this revision, after an external review found
+  that reading attributes from every `<` rescanned the rest of a tag name
+  each time): a tag name runs to a space, slash or `>`, so a long run such as
+  `<a<a<a…`, also inside a quoted value, took quadratic time and blocked the
+  plugin while the check ran. The end of every tag name, attribute name and
+  value is now looked up in tables built once per text, and each point
+  between attributes is read once. Attributes are separated by ASCII
+  whitespace only, as in a browser, since a no-break space ending a value
+  could pair quotes differently and hide an `on…=`.
+  - Measured on the same machine for `<a` repeated: 212, 854 and 3,439 ms for
+    32,000, 64,000 and 128,000 characters before; 20, 18, 32 and 62 ms for
+    32,000 to 256,000 characters now. The same inside a quoted value: 245 and
+    883 ms for 32,000 and 64,000 characters before; 65 and 136 ms for 64,000
+    and 256,000 now. Other repeated tag-like units of 256,000 characters take
+    47 to 122 ms, and 40 random 100,000-character tag-like texts at most
+    56 ms.
+  - `npm run check` and **389 offline tests** passed, among them a test that
+    bounds the time for five long tag-like texts and one for the no-break
+    space. 9 mutations of the reading (the tables, the quoted values, slashes,
+    name case, every `<` as a start, ASCII whitespace, the read points, long
+    event-handler names, a rescanned tag name) are caught, the slow ones by
+    the time bound, as are the 19, 7 and 13 of the revisions before.
+  - Fuzzing: no gap over 200,000 texts, the same holds as the previous
+    revision on 200,000, and nothing active in blanked code on 100,000. All
+    four real-host fixtures passed on OpenCode 2.1.2. No live run.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
