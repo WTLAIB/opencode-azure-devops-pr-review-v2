@@ -46,8 +46,9 @@ the Azure portion shows an actual REST read-back in a terminal.*
 
 Content search downloads a bounded repository archive into memory; source
 context is sent through your selected model providers, and review records are
-saved locally. See [team setup and data handling](docs/ENTERPRISE.md) for archive
-limits, proxy authentication and retention.
+saved locally. See [content-search limits](docs/AZURE_DEVOPS.md#who-calls-what)
+for archive and file-size bounds, and [team setup and data handling](docs/ENTERPRISE.md)
+for proxy authentication and retention.
 
 ## Your first review
 
@@ -120,7 +121,7 @@ integration; AZPR runs when you invoke a command. If your work includes editing
 code or running the project's tests, use a local checkout for that work.
 
 The [validation record](docs/VALIDATION.md) includes real model/Azure runs, a
-316-file test PR, isolated OpenCode host checks, and 392 offline tests for
+316-file test PR, isolated OpenCode host checks, and an offline test suite for
 runtime and packaging behavior. It also records missed defects and untested
 environments. The demo shows the workflow; these checks do not establish a
 general review-accuracy score.
@@ -129,7 +130,7 @@ general review-accuracy score.
 
 | Component | Tested target |
 | --- | --- |
-| OpenCode | **OpenCode CLI 2.1.2** (`@opencode/cli`; V2 plugin API). |
+| OpenCode | **OpenCode CLI 2.1.2** (`@opencode/cli`; V2 plugin API). OpenCode 1.x is not supported. |
 | Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
 | Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
 | Installation | OpenCode's plugin manager with the npm package or the versioned Git package, or the source installer with POSIX `sh` and Python 3; no plugin build step or npm dependencies. |
@@ -250,7 +251,7 @@ review command flag.
 ### Source archive or checkout
 
 <details>
-<summary>Source installation, replacement and manual copying</summary>
+<summary>Source installation and replacement</summary>
 
 Download the [v0.2.1 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.1.tar.gz)
 and extract it, or check out tag `v0.2.1`. The installer needs POSIX `sh` and
@@ -274,10 +275,15 @@ are added, and a retired `mcp` section is moved into `azure`):
 sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ```
 
+</details>
+
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
 These **31 files** include the runtime and its license:
+
+<details>
+<summary>Show the required files</summary>
 
 ```text
 install.sh
@@ -377,8 +383,10 @@ never blocks `/pr-review`. Comment planning uses the review's risk model
 A role's focus orders its attention and is not a filter: every reviewer files
 every concrete defect it finds, in any area, as a finding.
 
+### All settings and defaults
+
 <details>
-<summary>All settings and defaults</summary>
+<summary>Show the settings reference</summary>
 
 | Setting | Default and meaning |
 | --- | --- |
