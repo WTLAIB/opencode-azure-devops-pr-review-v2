@@ -1,11 +1,35 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation and the
-0.1.0, 0.2.0 and 0.2.1 distributions. Host integration, provider
+0.1.0, 0.2.0, 0.2.1 and 0.2.2 distributions. Host integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
+
+## 0.2.2 release acceptance (2026-10-23)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.2.
+This release updates documentation and package metadata. The runtime, prompts,
+settings and installers are unchanged from 0.2.1.
+
+- `npm run check` and **392 offline tests** passed.
+- All four real-host fixtures passed with isolated profiles and fake model
+  and Azure services: fresh source installation, replacement installation,
+  native packed package installation and comment scale. The native fixture
+  covers first-run setup, default external settings and `options.settingsFile`.
+  The scale fixture used eight planning sessions with at most two in flight;
+  its largest provider request was 33,479 characters.
+- `npm pack --dry-run --json` lists **69 files**, including the entry, runtime,
+  prompts, configuration example and schema, license and the new release notes.
+  It excludes tests, private settings and `.local/` records.
+- The release notes use absolute HTTPS links. Current installation commands,
+  local documentation links and anchors were checked, and the existing
+  demonstration remains linked to its original v0.2.0 release.
+- These fixtures make no paid-model request or real Azure publication. Public
+  Git installation, archive acceptance and post-publication registry integrity
+  and native installation checks follow the [releasing guide](RELEASING.md);
+  their private evidence is kept separately from this pre-publication record.
 
 ## 0.2.1 release acceptance (2026-10-23)
 
