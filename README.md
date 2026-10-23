@@ -628,6 +628,7 @@ node tests/host-v2-smoke.mjs /absolute/path/to/opencode
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode --replace
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode --native
 node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode
+node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config --apply
 ```

@@ -113,13 +113,14 @@ After preflight, hooks never re-read settings or catalogs.
    reviewer files every concrete defect it finds as a finding: a role's focus
    orders its attention and is not a filter, and `report` carries exclusions,
    advice and limitations only.
-3. **Overflow** — private sessions may not compact. A compaction request (or a
-   413) marks the stage as `overflow`; the runtime splits that shard in half
-   and runs both halves (labels `shard 1/5a`, `1/5b`). OpenCode's opt-in
-   `experimental.background_compaction` (2.1.4) asks for a summary through the
-   same request before the context is full; it is refused before anything is
-   sent and the stage continues, but a later failure of that stage counts as
-   overflow.
+3. **Overflow** — private sessions may not compact. A compaction the host
+   attempts in a reviewer's turn opens its message first and is refused, which
+   ends the turn; that message (or a 413) marks the stage as `overflow`, and the
+   runtime splits that shard in half and runs both halves (labels
+   `shard 1/5a`, `1/5b`). OpenCode's opt-in `experimental.background_compaction`
+   (2.1.4) asks for a summary through the same request before the context is
+   full and publishes nothing; it is refused before anything is sent and the
+   turn goes on, so a later failure is classified by its own cause.
 4. **Verification** — findings are grouped by file into shards of at most
    `workflow.shardFindings`; shards end only between files, so every finding on
    a file reaches the same verifier (a file is split only when it alone has
@@ -325,7 +326,8 @@ private session gets a grant with the run, role, model and a pending prompt
   removed. Ordinary sessions lose only AZPR's tools. Comment pages that read too
   much get their tools removed to force a checkpoint.
 - `model.request`: only primary requests after an authorized context; compaction,
-  generation and title requests are refused (compaction marks overflow).
+  generation and title requests are refused (a compaction the host attempts
+  in the turn ends it as overflow).
 - `retry`: host retries continue only while the grant is active; the announced
   wait does not count as inactivity. OpenCode prepares the resend again
   (`context`, then `model.request`), so it passes the primary-request check.

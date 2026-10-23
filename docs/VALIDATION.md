@@ -587,7 +587,11 @@ makes a write uncertain. Removing the mapping, the not-sent code or the
 not-forwarded flag from a copy of the code made these tests fail. Every Azure
 DevOps request now also asks the runtime for no idle limit of its own
 (`timeout: false`), so `azure.callTimeoutSeconds` alone ends a silent call;
-removing the option made its test fail.
+removing the option made its test fail. A refused background summary no longer
+marks a stage as overflow: tests cover it followed by an HTTP 401 in the first
+turn and in a follow-up (permanent, no split, the earlier answer stands) and a
+failed turn with and without the host's compaction message. The previous code
+failed them.
 
 ## REST API version check
 
@@ -655,7 +659,7 @@ behaviour of the embedded runtime:
 | Hooks AZPR uses | `prompt`, `context`, `model.request` (kinds `primary`, `compaction`, `generate` and `title`), `retry`, `permission.evaluate` and the tool hooks keep their shapes, as do the token counts on assistant messages. |
 | Host constants | The continuation text, the streamed event names and the permission defaults are unchanged. |
 | Runtime | The embedded Bun moved from 1.4.2 to 1.4.4. When a proxy refuses the CONNECT tunnel, for example with HTTP 407, `fetch` now rejects with `ERR_PROXY_TUNNEL` and the proxy's status instead of returning the proxy's answer, and it resets the proxy connection. AZPR maps the rejection to the same proxy messages and retry rules as before, and a refused tunnel never makes a write uncertain. A refused connection is now `ECONNREFUSED` rather than `ConnectionRefused`; AZPR already recognized both. |
-| Compaction | `experimental.background_compaction` (off by default) prepares summaries through the same `compaction` request, which AZPR refuses for private reviewers before anything is sent. More provider context-overflow errors now reach AZPR as compaction requests and therefore split the shard. |
+| Compaction | `experimental.background_compaction` (off by default) prepares summaries through the same `compaction` request, which AZPR refuses for private reviewers before anything is sent; the turn goes on. A compaction the host attempts in the turn opens its message first and ends the turn, so overflow is now read from the failed turn's messages (see below). More provider context-overflow errors now reach AZPR as compaction attempts and therefore split the shard. |
 | Models | With a ChatGPT sign-in, the OpenAI context caps moved into a built-in plugin with the same input limits (272,000 tokens; 500,000 for gpt-6.1-sol). A session without its own model now uses its agent's model; AZPR always sets both. |
 | New tools | The experimental TUI terminal tools and client-hosted MCP tools are outside the private roles' allowlist, so reviewers neither see nor run them. |
 
@@ -666,6 +670,17 @@ behaviour of the embedded runtime:
   replacement and comment-scale runs passed. With the mapping and a fixture
   proxy that tolerates a reset, all four passed: fresh, replacement, native
   and comment scale.
+- An external review of this revision found that a refused background summary
+  still marked its stage as overflow. On the exact host with background
+  compaction on, a functional reviewer whose first response passed the
+  background threshold and whose next request failed with HTTP 401 was split
+  into new sessions that failed the same way: 7 functional sessions for 4
+  files. Overflow is now read from the failed turn's messages. The new
+  `host-v2-background-compaction.mjs` fixture passes with one functional
+  session classified permanent and fails with the previous code; the other
+  four fixtures still pass, including the refused foreground compaction and
+  split at scale, whose failed turn holds the host's compaction message (still
+  `running` when the turn ended).
 - A probe in each runtime (`BUN_BE_BUN=1 opencode`) showed the difference: for
   407, 403 and 502 answers to CONNECT, Bun 1.4.2 resolves with that status and
   Bun 1.4.4 rejects with `ERR_PROXY_TUNNEL` carrying it; a proxy that closes

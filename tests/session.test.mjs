@@ -332,6 +332,32 @@ test('a follow-up prompt in the same session only examines its own turn', async 
   assert.deepEqual(answer.parts, [{ type: 'text', text: '{"fixed":true}' }]);
 });
 
+test('only a compaction the host attempted in the failed turn marks it; a refused background summary leaves no trace', async () => {
+  const failed = async messages => {
+    const { context } = host({ get: async () => ({ id: sessionID, outcome: 'failed' }), context: async () => messages });
+    let caught;
+    await requestReview(context, { sessionID, text: input }).catch(error => { caught = error; });
+    assert.ok(caught?.execution, 'The failed turn is described.');
+    return caught;
+  };
+  const prompt = { id: 'msg_input', type: 'user', text: input };
+  const toolTurn = assistant({ id: 'msg_tools', finish: 'tool-calls', content: [{ type: 'tool', id: 'tool_0', state: { status: 'completed' } }] });
+  const expired = assistant({ finish: 'error', error: { type: 'provider.auth', status: 401, message: 'expired' } });
+  // OpenCode opens the compaction's message before it asks for the summary; AZPR refuses it and the turn ends.
+  const full = await failed([prompt, toolTurn, { id: 'cmp_1', type: 'compaction', status: 'failed' }, { ...idle(), outcome: 'failed' }]);
+  assert.equal(full.execution.compaction, 'failed');
+  assert.equal(classifyFailure(full), 'overflow');
+  assert.equal((await failed([prompt, toolTurn, { id: 'cmp_1', type: 'compaction', status: 'new' }, { ...idle(), outcome: 'failed' }])).execution.compaction, 'unknown');
+  // A background summary publishes nothing, so the provider failure that ended the turn decides.
+  const auth = await failed([prompt, toolTurn, expired, { ...idle(), outcome: 'failed' }]);
+  assert.equal(auth.execution.compaction, undefined);
+  assert.equal(classifyFailure(auth), 'permanent');
+  // A compaction message before this turn's prompt belongs to an earlier turn.
+  const earlier = await failed([{ id: 'cmp_0', type: 'compaction', status: 'failed' }, prompt, expired, { ...idle(), outcome: 'failed' }]);
+  assert.equal(earlier.execution.compaction, undefined);
+  assert.equal(classifyFailure(earlier), 'permanent');
+});
+
 test('failure classification drives stage retries and shard splitting', () => {
   const failure = (execution, extra = {}) => Object.assign(new Error('x'), { execution }, extra);
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 429 } })), 'transient');
@@ -340,7 +366,10 @@ test('failure classification drives stage retries and shard splitting', () => {
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 503 } })), 'transient');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 401 } })), 'permanent');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', provider: { status: 413 } })), 'overflow');
-  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed' }), { compactionRequested: true }), 'overflow');
+  // A compaction the host attempted in the failed turn means a full context, whatever ended the turn.
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', compaction: 'failed' })), 'overflow');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed', compaction: 'failed', provider: { status: 400 } })), 'overflow');
+  assert.equal(classifyFailure(failure({ terminalOutcome: 'failed' })), 'transient');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'missing-idle' })), 'transient');
   assert.equal(classifyFailure(failure({ terminalOutcome: 'interrupted', interrupted: true })), 'permanent');
   assert.equal(classifyFailure(Object.assign(new Error('x'), { contextChanged: true })), 'transient');

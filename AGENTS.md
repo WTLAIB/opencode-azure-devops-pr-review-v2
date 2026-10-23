@@ -73,7 +73,9 @@ settings, backups and failure records. Never upload `.local/`.
 - All AZPR Azure DevOps traffic shares the queue in `tool-queue.mjs` (concurrency and
   per-call timeout). Release slots in `finally`; never depend on a hook running.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
-  compact, and a compaction request means "split this shard".
+  compact, and a compaction the host attempts in a reviewer's turn means "split
+  this shard". A refused background summary (`experimental.background_compaction`)
+  ends nothing, so the turn's own failure decides its class.
 - There is deliberately no default whole-run timeout and no per-stage step cap;
   see the roadmap's Deferred section before adding either.
 
@@ -131,7 +133,8 @@ Detect capabilities; do not assume them.
 
 Run `npm run check` and `npm test`. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
-`--replace`) and `node tests/host-v2-comment-scale.mjs <opencode binary>`.
+`--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>` and
+`node tests/host-v2-background-compaction.mjs <opencode binary>`.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.

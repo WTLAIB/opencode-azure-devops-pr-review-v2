@@ -28,3 +28,5 @@ jobs:
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --native
       - name: Exercise sharded review, overflow split and idempotent publication at scale
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
+      - name: Exercise a refused background summary followed by a permanent failure
+        run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
