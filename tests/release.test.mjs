@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const pkg = JSON.parse(read('package.json'));
@@ -27,5 +27,13 @@ test('release notes and install instructions name the package version', () => {
     for (const [, other] of text.matchAll(/opencode plugin (?:add|remove) (?:opencode-azure-devops-pr-review@|'github:WTLAIB\/opencode-azure-devops-pr-review-v2#v)(\d+\.\d+\.\d+)/g)) {
       assert.equal(other, version, `${path} installs or removes only v${version}`);
     }
+  }
+});
+
+test('release notes link only absolute URLs, since they become the GitHub Release body', () => {
+  for (const name of readdirSync(new URL('../docs/releases/', import.meta.url))) {
+    const text = read(`docs/releases/${name}`);
+    const targets = [...text.matchAll(/\]\(([^)\s]+)/g), ...text.matchAll(/^\[[^\]]+\]:\s*(\S+)/gm)].map(match => match[1]);
+    for (const target of targets) assert.match(target, /^https:\/\//, `${name} links ${target}`);
   }
 });

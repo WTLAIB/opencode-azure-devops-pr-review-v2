@@ -14,9 +14,11 @@ The release publishes the 0.2.0 runtime to the npm registry as
 `opencode-azure-devops-pr-review`; it changes package metadata, documentation
 and test tooling only.
 
-- `npm run check` and **391 offline tests** passed. New tests check that the
-  package is publishable (no private flag, dependencies or install scripts) and
-  that the changelog, release notes, README and quickstart name its version.
+- `npm run check` and **392 offline tests** passed. New tests check that the
+  package is publishable (no private flag, dependencies or install scripts),
+  that the changelog, release notes, README and quickstart name its version,
+  and that release notes, which become the GitHub Release body, link only
+  absolute URLs.
 - All four real-host fixtures passed with isolated profiles and fake model
   and Azure services: fresh source installation, replacement installation,
   native packed package installation and comment scale (eight planning
