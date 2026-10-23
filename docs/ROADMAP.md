@@ -20,8 +20,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   or removing the package does not remove external settings or review records.
 - **Public distribution and contribution.** An npm package, versioned release
   notes, a real recorded review and publication, contribution and private
-  vulnerability reporting guides, and issue and pull-request templates support
-  adoption.
+  vulnerability reporting guides, a code of conduct, and issue and
+  pull-request templates support adoption.
 - **Own Azure DevOps access.** AZPR calls the REST API (api-version 7.1, the
   latest released version) with the organization and PAT from its settings,
   or from an owner-only PAT file (`azure.patFile`) so `settings.json` holds no

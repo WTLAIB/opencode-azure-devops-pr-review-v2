@@ -534,7 +534,8 @@ the same limit of 20 runs. Your own conversations are never deleted.
 ## Development and removal
 
 See [Contributing](CONTRIBUTING.md) for bug reports and development checks,
-and [Security](SECURITY.md) for private vulnerability reporting.
+[Security](SECURITY.md) for private vulnerability reporting, and the
+[code of conduct](CODE_OF_CONDUCT.md) for community conduct.
 
 ```sh
 npm run check

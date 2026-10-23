@@ -11,6 +11,8 @@
   Git to npm.
 - `tests/host-v2-smoke.mjs --native --package SPEC` runs the native fixture
   against a published package after a release.
+- The repository adopts the Contributor Covenant 2.1 as its code of conduct,
+  with an address for reports.
 - No runtime, prompt or settings change.
 
 ## 0.2.0 — 2026-10-23

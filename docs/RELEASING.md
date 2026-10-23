@@ -89,7 +89,7 @@ fixtures and live runs. A shorter edit must label accelerated or removed waits.
 
 Keep the GitHub About description, homepage (the npm package page), topics and
 the `package.json` description and keywords aligned. The README should link the
-current release, npm package, quickstart, real demo, contribution guide and
-private vulnerability reporting. When OpenCode's ecosystem directory accepts
+current release, npm package, quickstart, real demo, contribution guide, code
+of conduct and private vulnerability reporting. When OpenCode's ecosystem directory accepts
 entries, submit a focused request that follows its current rules. A directory
 listing is not a compatibility certification.
