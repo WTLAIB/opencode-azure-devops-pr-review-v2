@@ -27,9 +27,9 @@ settings and installers are unchanged from 0.2.1.
   local documentation links and anchors were checked, and the existing
   demonstration remains linked to its original v0.2.0 release.
 - These fixtures make no paid-model request or real Azure publication. Public
-  Git installation, archive acceptance and post-publication registry integrity
-  and native installation checks follow the [releasing guide](RELEASING.md);
-  their private evidence is kept separately from this pre-publication record.
+  Git installation, archive acceptance, and post-publication registry integrity
+  and native installation results are not included in this pre-publication
+  record; they are recorded separately under the [releasing guide](RELEASING.md).
 
 ## 0.2.1 release acceptance (2026-10-23)
 
