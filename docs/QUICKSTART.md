@@ -5,7 +5,7 @@ Use a small, active Azure DevOps Services PR for the first run.
 
 ## 1. Check the prerequisites
 
-- **OpenCode CLI 2.1.2** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
+- **OpenCode CLI 2.1.4** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
   22.04.5 LTS (WSL2)**. Other host versions and operating systems are not
   validated; see [validation](VALIDATION.md). OpenCode 1.x is not supported.
 - An authenticated OpenCode model with tool support. Copy its exact
@@ -135,7 +135,7 @@ row says whether `/pr-deep` is set up (see below).
 
 On a host without `permission.hook`, **Project boundary WARNING** means the
 host's own permission rules control where native read tools can read; reviews
-remain available. The tested OpenCode 2.1.2 host has that hook. `READY` is an
+remain available. The tested OpenCode 2.1.4 host has that hook. `READY` is an
 access check, not a security audit or an approval of the PR.
 
 ## 5. Run a review and preview its comments

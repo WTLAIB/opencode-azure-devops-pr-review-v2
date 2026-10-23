@@ -78,7 +78,7 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: '2.1.2' },
+    app: { version: '2.1.4' },
     location: { directory },
     // Like a host catalog, each configured model once, however many roles name it.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
@@ -136,7 +136,15 @@ async function fixture(t, opts = {}) {
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-            await opts.during?.({ session, role, packet, turn, invoke, emit, publish });
+            // Like OpenCode 2.1.4: a compaction it attempts in the turn opens its message first, and AZPR's refusal
+            // ends the turn; a background summary publishes nothing, and its refusal stays in the background.
+            const compact = async ({ background = false } = {}) => {
+              const message = background ? undefined : { id: `compaction_${++seq}`, type: 'compaction', status: 'running' };
+              if (message) session.history.push(message);
+              try { await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'compaction' }); }
+              catch (error) { if (!message) return; message.status = 'failed'; throw error; }
+            };
+            await opts.during?.({ session, role, packet, turn, invoke, emit, publish, compact });
             if (turn === 0 && ROLES[role].format === 'initial' && packet.assignment.files.length) {
               await invoke(session, 'azpr_read_file', { path: packet.assignment.files[0], version: 'head' });
             }
@@ -468,11 +476,9 @@ test('without candidate findings one verifier still runs and writes the checks a
   assert.match(report, /VERIFIER_SUMMARY: the narrowed assertion is a coverage loss, not a defect\./);
 });
 
-test('a compaction request marks context overflow and the shard is split', async t => {
-  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ session, role, packet, emit }) {
-    if (role === 'azpr-review-functional' && packet.assignment.files.length > 1) {
-      await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'compaction' });
-    }
+test('a compaction the host attempts marks context overflow and the shard is split', async t => {
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ role, packet, compact }) {
+    if (role === 'azpr-review-functional' && packet.assignment.files.length > 1) await compact();
   } });
   const receipt = await f.command();
   assert.match(receipt, /\] COMPLETE/);
@@ -480,11 +486,25 @@ test('a compaction request marks context overflow and the shard is split', async
   assert.match(receipt, /failure=overflow/);
 });
 
+test('a refused background summary does not turn a later permanent failure into an overflow split', async t => {
+  // experimental.background_compaction (OpenCode 2.1.4) asks for a summary before the context is full; the turn goes on.
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ role, packet, compact }) {
+    if (role === 'azpr-review-functional' && packet.assignment.files.length > 1) await compact({ background: true });
+  }, answer({ role, packet }) {
+    return role === 'azpr-review-functional' && packet.assignment.files.length > 1 ? { $provider: 401, $providerType: 'provider.auth' } : undefined;
+  } });
+  const receipt = await f.command();
+  assert.deepEqual(f.sessionsFor('azpr-review-functional').map(s => s.packet.assignment.files.length), [2], 'No split and no new session.');
+  assert.match(receipt, /azpr-review-functional[^\n]*failure=permanent/);
+  assert.doesNotMatch(receipt, /failure=overflow|context limit/);
+  const functional = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-functional');
+  assert.deepEqual([functional.requestObservations.kinds.compaction, functional.requestObservations.rejected], [1, 1], 'The summary request was refused.');
+  assert.equal(functional.execution.compaction, undefined);
+});
+
 test('a verifier assignment that overflows the context is split instead of becoming UNREVIEWED', async t => {
-  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ session, role, packet, emit }) {
-    if (role === 'azpr-review-verifier' && packet.assignment.findings.length > 1) {
-      await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'compaction' });
-    }
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ role, packet, compact }) {
+    if (role === 'azpr-review-verifier' && packet.assignment.findings.length > 1) await compact();
   } });
   const receipt = await f.command();
   assert.match(receipt, /\] COMPLETE/);
@@ -818,7 +838,7 @@ test('a host without the permission hook gets a /pr-check warning about the proj
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.1\.2, the tested version, has the hook\. \|/);
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.1\.4, the tested version, has the hook\. \|/);
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 
@@ -1287,14 +1307,26 @@ test('a failed follow-up keeps the earlier answer; an overflow still splits the 
   assert.deepEqual((await savedReviews(idle))[0].final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED']);
   assert.match((await stageRecords(stopped))[0].followUp.error, /Stage inactivity watchdog stopped this stage/);
 
-  const g = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, async during({ session, role, turn, emit }) {
-    if (role === 'azpr-quick-reviewer' && turn === 1) await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'compaction' });
+  const g = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, async during({ role, turn, compact }) {
+    if (role === 'azpr-quick-reviewer' && turn === 1) await compact();
   }, answer({ role, packet, turn }) {
     return role === 'azpr-quick-reviewer' && turn === 0 && packet.assignment.files.length > 1 ? partialAnswer(packet, []) : undefined;
   } });
   const split = await g.command('pr-quick');
   assert.match(split, /failure=overflow/);
   assert.deepEqual(g.sessionsFor('azpr-quick-reviewer').map(s => s.packet.assignment.files.length), [2, 1, 1]);
+
+  // A refused background summary during the follow-up is no overflow: the follow-up's own failure decides and the earlier answer stands.
+  const kept = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, async during({ role, turn, compact }) {
+    if (role === 'azpr-quick-reviewer' && turn === 1) await compact({ background: true });
+  }, answer({ role, packet, turn }) {
+    if (role !== 'azpr-quick-reviewer') return undefined;
+    return turn === 0 ? partialAnswer(packet, [finding(packet.assignment.firstFindingId, packet.assignment.files[0])]) : { $provider: 401, $providerType: 'provider.auth' };
+  } });
+  const permanent = await kept.command('pr-quick');
+  assert.match(permanent, /azpr-quick-reviewer: PARTIAL;[^\n]*follow-up=failed:permanent/);
+  assert.equal(kept.sessionsFor('azpr-quick-reviewer').length, 1, 'No split: the earlier answer stands.');
+  assert.deepEqual((await savedReviews(kept))[0].final.dispositions.map(d => `${d.id}:${d.status}`), ['Q-1:REPORTED']);
 });
 
 test('quick then review on the same head: only complete markers are already present', async t => {

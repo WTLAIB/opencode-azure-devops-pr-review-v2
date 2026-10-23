@@ -501,7 +501,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(), blockedNativeCalls: new Map(),
-      toolArgumentCharacters: new Map(), toolTimeouts: 0, compactionRequested: false,
+      toolArgumentCharacters: new Map(), toolTimeouts: 0,
       visibleCharacters: input.length, checkpointRequested: false,
       // The planning page whose sessions this grant serves; its tool evidence is that page's.
       commentPage: payload.commentWork?.page ?? null,
@@ -531,7 +531,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         catch (error) {
           // A follow-up is optional: when it or a later turn fails, the answer it
           // followed stands. Cancellation and context overflow keep their rules.
-          const failureClass = runSignal.aborted ? 'cancelled' : watch.error ? 'idle' : classifyFailure(error, { compactionRequested: g.compactionRequested });
+          const failureClass = runSignal.aborted ? 'cancelled' : watch.error ? 'idle' : classifyFailure(error);
           if (!followUp || ['cancelled', 'overflow'].includes(failureClass)) throw error;
           Object.assign(followUp, { outcome: 'failed', failureClass, error: errorText(watch.error ?? error).slice(0, 300) });
           if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response-${followUp.turn === turn ? 'follow-up' : 'repair'}${turn}.json`, diagnosticResponse(error.response));
@@ -594,7 +594,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       record.error = errorText(error);
       if (error?.execution) record.execution = { ...error.execution, authorizedPrimaryRequests: g.calls };
       if (idle) record.idleStop = watch.idleStop;
-      const failureClass = runSignal.aborted ? 'cancelled' : idle ? 'idle' : classifyFailure(error, { compactionRequested: g.compactionRequested });
+      const failureClass = runSignal.aborted ? 'cancelled' : idle ? 'idle' : classifyFailure(error);
       record.failureClass = failureClass;
       if (error instanceof Error) error.failureClass = failureClass;
       grants.delete(made.id);
@@ -1119,10 +1119,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (observed) observed.requestKinds[kind]++;
       try {
         const g = authorize(event.sessionID, event.agent, event.model);
+        // Refused before anything is sent. Whether the stage overflowed is read from its failed turn: a
+        // compaction OpenCode attempts there ends it, a background summary (OpenCode 2.1.4) does not.
         if (event.kind !== 'primary') {
-          if (event.kind === 'compaction') g.compactionRequested = true;
           throw new Error(event.kind === 'compaction'
-            ? '[AZPR] Private review compaction is not authorized; the runtime splits the work into smaller sessions instead.'
+            ? '[AZPR] Private review compaction is not authorized; a reviewer whose context fills is split into smaller sessions instead.'
             : '[AZPR] Auxiliary model requests are not authorized for private reviewers.');
         }
         if (!g.admitted || !g.primaryPrepared) throw new Error('[AZPR] Model request has no authorized primary context.');
@@ -1152,7 +1153,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Enforce the shell setting and the project boundary, regardless of
       // permission rules the host appends after this plugin. Outside the
       // project only AZPR's own private data is readable; the host's default
-      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.1.2 allow).
+      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.1.4 allow).
       // Private reviewers run unattended: a request that would wait for
       // approval is refused at once. Only shell keeps host approvals, and only
       // when the user allowed it (shell: "ask" or "inherit").

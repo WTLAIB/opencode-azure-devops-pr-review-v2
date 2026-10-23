@@ -1,6 +1,6 @@
 # Roadmap
 
-Tested with OpenCode CLI 2.1.2, the Azure DevOps Services REST API
+Tested with OpenCode CLI 2.1.4, the Azure DevOps Services REST API
 (api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
 with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
@@ -42,8 +42,10 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   is STALE. Publication rechecks the head before writing.
 - **Sharded reviews.** Initial reviews run per file shard with disjoint finding-ID
   ranges; verification runs per finding shard; parallelism is bounded.
-- **Context overflow is recovered.** A refused compaction marks the stage as
-  overflow and the shard is split and rerun (validated on the real host).
+- **Context overflow is recovered.** A compaction the host attempts in a
+  reviewer's turn is refused, which ends the turn as overflow, and the shard is
+  split and rerun (validated on the real host). A refused background summary
+  (`experimental.background_compaction`) leaves the turn's own failure to decide.
 - **Correction turns.** Answers that break the output contract are corrected in
   the same session (`workflow.repairAttempts`); remaining problems degrade per
   item (UNREVIEWED, NEEDS_INFO, skipped comments) instead of failing the review.

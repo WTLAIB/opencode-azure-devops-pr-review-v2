@@ -165,15 +165,18 @@ export function restartIndex(texts) {
 
 /**
  * Classify a failed stage for the runtime's retry policy.
- * - overflow: the host tried to compact (context full) or the provider rejected size.
+ * - overflow: the host attempted compaction in the failed turn (context full) or
+ *   the provider rejected size. A refused background summary
+ *   (`experimental.background_compaction`) is not evidence: the turn went on, so
+ *   its own failure decides.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
  *   unexpected host messages.
  * - permanent: everything else (authentication, bad request, a used-up quota or
  *   free-model limit, whatever its HTTP status, cancellation).
  */
-export function classifyFailure(error, { compactionRequested = false } = {}) {
-  if (compactionRequested) return 'overflow';
+export function classifyFailure(error) {
   const execution = error?.execution;
+  if (execution?.compaction) return 'overflow';
   if (execution?.interrupted || execution?.provider?.exhausted) return 'permanent';
   const status = execution?.provider?.status;
   if (status === 413) return 'overflow';
@@ -231,6 +234,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
       terminalOutcome: terminal?.type === 'idle' ? outcome(terminal.outcome) : 'missing-idle',
       assistantResponses: assistants.length, lastFinish: finish,
       interrupted: session.outcome === 'interrupted' || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
+    // OpenCode opens a compaction's message before it asks for the summary, so a compaction it attempted in this
+    // turn, which AZPR refuses, shows here. A background summary (OpenCode 2.1.4) publishes nothing.
+    const compaction = turn.filter(message => message?.type === 'compaction').at(-1);
+    if (compaction) execution.compaction = ['running', 'completed', 'failed'].includes(compaction.status) ? compaction.status : 'unknown';
     const provider = !execution.interrupted && providerFailure(final, assistants);
     if (provider) execution.provider = provider;
     const hint = provider?.exhausted

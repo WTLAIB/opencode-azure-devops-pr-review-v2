@@ -176,6 +176,9 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 
 - All calls share one queue (`azure.concurrency`) with a per-call timeout
   (`azure.callTimeoutSeconds`) that aborts the HTTP request and frees the slot.
+  AZPR switches off the runtime's own idle limit for these requests (Bun's
+  fetch would end a call that receives nothing for five to six minutes), so a
+  longer timeout takes effect.
 - Reads retry network errors, timeouts, throttling (429, honouring
   `Retry-After` up to 60 seconds) and 5xx responses twice with backoff.
 - Writes are never retried. A write whose outcome is unknown (timeout, a lost

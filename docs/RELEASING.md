@@ -11,8 +11,8 @@ source tree and contain the same runtime.
    and download links to that version.
 2. Run `npm run check` and `npm test`. Follow `AGENTS.md` for required host
    checks. Release validation includes fresh and replacement source installs,
-   `host-v2-smoke.mjs --native`, and `host-v2-comment-scale.mjs` on the exact
-   documented host. Keep simulated services and live model/Azure results distinct.
+   `host-v2-smoke.mjs --native`, `host-v2-comment-scale.mjs` and
+   `host-v2-background-compaction.mjs` on the exact documented host. Keep simulated services and live model/Azure results distinct.
 3. Inspect `npm pack --dry-run --json`: the entry, runtime modules, prompts,
    configuration example and license must be present; private settings, `.local/`,
    credentials, diagnostics and temporary recordings must be absent. The native
