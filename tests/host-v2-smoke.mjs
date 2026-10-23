@@ -226,7 +226,7 @@ await writeFile(join(directories.config, 'plugins', 'network-guard.js'), `export
 } };`);
 await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   update: 'disable', snapshots: false, warming: false, model: 'fixture/fixture',
-  providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'fixture-only' },
+  providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
     models: Object.fromEntries(['fixture', 'functional', 'risk', 'verifier', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])) } },
   mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false } } },
 }, null, 2));
