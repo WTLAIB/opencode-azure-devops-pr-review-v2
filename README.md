@@ -9,12 +9,12 @@ and choose when to publish to Azure DevOps.** No MCP server is needed.
 [Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
 [Team setup and data handling](docs/ENTERPRISE.md) ·
 [Validation and limitations](docs/VALIDATION.md) ·
-[Download v0.1.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.1.0)
+[Download v0.2.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.0)
 
 [![Real OpenCode review, comment preview and verified publication on a dedicated Azure test PR.](docs/assets/live-review-teaser.gif)](docs/DEMO.md)
 
 *A 12-second edit of a real OpenCode 2.1.2 run. Watch the
-[73-second walkthrough](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.1.0/azpr-live-demo.mp4)
+[73-second walkthrough](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.2.0/azpr-live-demo.mp4)
 or read the [demo and recording details](docs/DEMO.md). Waiting time is shortened;
 the Azure portion shows an actual REST read-back in a terminal.*
 
@@ -43,7 +43,7 @@ examples, rather than treating a session count as a price guarantee.
 Install the versioned Git package using OpenCode's plugin manager:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.0'
 ```
 
 Follow the [quickstart](docs/QUICKSTART.md) to put your PAT in a private file
@@ -136,7 +136,7 @@ Azure DevOps REST API with the runtime's built-in `fetch`.
 ### Native Git package
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.0'
 ```
 
 Restart OpenCode, then run `/pr-setup` for setup instructions. Native packages
@@ -147,7 +147,7 @@ To select another configuration file, use an absolute path in the host config:
 ```json
 {
   "plugins": [{
-    "package": "github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0",
+    "package": "github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.0",
     "options": { "settingsFile": "/absolute/path/to/azpr/settings.json" }
   }]
 }
@@ -159,10 +159,18 @@ copy its settings to the external configuration path with owner-only
 permissions, archive the old installation with its uninstaller, then add the
 Git package. Keep the PAT file and private state directory in place.
 
+To upgrade a native installation from v0.1.0, change its existing `plugins`
+entry from `#v0.1.0` to `#v0.2.0` in the OpenCode configuration. Preserve any
+`options.settingsFile` and other options; keep one AZPR entry. Restart the
+OpenCode service to load the new version. External settings, the PAT file and
+review records stay in place. Automatic comments remain disabled unless you
+configure `afterReview` or request them with a review command flag. See the
+[0.2.0 release notes](docs/releases/v0.2.0.md) for examples and upgrade details.
+
 ### Source archive or checkout
 
-Download the [v0.1.0 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.1.0.tar.gz)
-and extract it, or check out tag `v0.1.0`. The installer needs POSIX `sh` and
+Download the [v0.2.0 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.0.tar.gz)
+and extract it, or check out tag `v0.2.0`. The installer needs POSIX `sh` and
 Python 3's standard library. From that source directory:
 
 ```sh
@@ -526,7 +534,7 @@ and a loopback fake Azure DevOps REST service in disposable directories under
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 For a native Git installation, use
-`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'`;
+`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.0'`;
 the external settings, PAT file and private review state remain available.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
@@ -539,6 +547,6 @@ or personal model selections.
 ## License and releases
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
-release scope, [v0.1.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.1.0)
+release scope, [v0.2.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.0)
 for downloads and the recorded demonstration, and [releasing](docs/RELEASING.md)
 for the release process.

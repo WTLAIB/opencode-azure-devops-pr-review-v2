@@ -1,13 +1,42 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation and the
-0.1.0 distribution. Host integration, provider
+0.1.0 and 0.2.0 distributions. Host integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
 
-## Automatic comments after a review (unreleased, 2026-10-22 and 23)
+## 0.2.0 release acceptance (2026-10-23)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.2.
+The release packages the automatic-comment implementation merged in PR #18;
+release preparation changes version metadata and documentation only.
+
+- `npm run check` and **389 offline tests** passed.
+- All four real-host fixtures passed with isolated profiles and fake model
+  and Azure services: fresh source installation, replacement installation,
+  native packed package installation and comment scale. They exercise
+  automatic preview/publication, held items, no-findings and repeated-summary
+  handling, cancellation, restart, overflow splitting and idempotent writes.
+  The scale fixture used eight planning sessions with at most two in flight;
+  its largest provider request was 33,470 characters.
+- `npm pack --dry-run --json` includes the entry, runtime, eight prompts,
+  configuration example/schema, license and release notes. No private settings
+  or `.local/` files are included.
+- A clean Git archive passed fresh and replacement source installation,
+  runtime/entry, license and prompt checks. An actual v0.1.0 source installation
+  upgraded with `--replace`, preserving its settings and adding `afterReview`
+  as `none` for every mode. Unrelated files and owner-only settings permissions
+  were preserved. Archive-relative documentation and image links were checked;
+  two obsolete MCP links in the historical record now point to the original
+  version of that document.
+- The release reuses the inspected v0.1.0 demonstration video unchanged. Its
+  recording date, source commit and manual workflow remain explicit in the
+  demo guide. No live model request or Azure publication was made for this
+  release acceptance; the development evidence below records earlier live runs.
+
+## Automatic comments after a review (0.2.0 development, 2026-10-22 and 23)
 
 Environment as below (Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode CLI
 2.1.2). `afterReview`, the review commands' `--preview`, `--publish` and

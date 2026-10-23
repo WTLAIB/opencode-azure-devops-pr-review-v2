@@ -23,12 +23,15 @@ Check the host version:
 opencode --version
 ```
 
-## 2. Install v0.1.0
+## 2. Install v0.2.0
+
+Already using v0.1.0? Follow the [upgrade instructions](releases/v0.2.0.md#upgrading-from-010)
+to preserve your current configuration and use one AZPR installation.
 
 In your terminal:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.1.0'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.0'
 ```
 
 Restart OpenCode and open an ordinary conversation. This is the host's native
@@ -40,7 +43,7 @@ follow the migration notes in [installation](../README.md#native-git-package).
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.1.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.1.0.tar.gz),
+[v0.2.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.0.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings; add `--replace` to the setup
