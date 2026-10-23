@@ -78,7 +78,10 @@ settings, backups and failure records. Never upload `.local/`.
   see the roadmap's Deferred section before adding either.
 
 **Authorization.**
-- Only explicit commands start private sessions. Every private prompt is the
+- Only explicit commands start private sessions, and the comment step a
+  COMPLETE review hands on when `afterReview` or the review command's flag
+  (`--preview`, `--publish`) asks for it; that step is a run of its own with a
+  STARTED notice and a receipt. Every private prompt is the
   exact runtime-pending text with a fresh nonce; private agents cannot be
   mentioned, delegated, compacted or used for auxiliary requests.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
@@ -94,6 +97,20 @@ settings, backups and failure records. Never upload `.local/`.
 **Publication is idempotent.**
 - Recheck the PR (active, unchanged head) before writing; skip existing markers;
   save each result immediately; read markers back. Re-running is always safe.
+- Automatic publication (`afterReview: publish` or `--publish` after the PR
+  URL) follows only a COMPLETE review with findings to comment on that nothing
+  stopped. It posts item by item: an item whose text has an `@<…>` mention,
+  an image, HTML that embeds content, runs a script or hides text, or a `javascript:`,
+  `vbscript:`, `data:` or `file://` link (mentions and script links also after
+  decoding escapes and character references, script links also without tabs
+  and line breaks) waits for a person, and the
+  receipt names it; ordinary links are posted, and literal code is skipped
+  (except for mentions) only where every reading of the Markdown agrees. A
+  plan that would post only a
+  repeated summary (every finding skipped as already discussed on the PR) is
+  `NOTHING_TO_POST`. Its checks are deterministic and prefer a false alarm;
+  never relax them to model judgment. Commands the user types keep their
+  behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them.
 - Comment planning pages run side by side, so nothing a page sees or produces

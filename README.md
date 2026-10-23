@@ -60,6 +60,9 @@ Run each command after the previous one finishes. `/pr-check` uses no model;
 `/pr-quick` reviews the PR; `/pr-comment` prepares a **preview**. Publication
 requires a separate `/pr-comment REVIEW_ID_FROM_RECEIPT --publish` command.
 Use the review ID from the completed receipt, not the literal placeholder.
+`/pr-quick <PR URL> --preview` prepares the preview right after a COMPLETE
+review; [automatic comments](#automatic-comments) can also publish, but only
+when you ask for it.
 
 ## Compatibility
 
@@ -98,7 +101,8 @@ for both quick and verified reviews.
 5. `/pr-comment` plans a preview with a model. With `--publish`, the runtime
    posts the saved text itself, skipping comments that already exist and
    reading every created comment back from Azure DevOps. Re-running a publish
-   is safe.
+   is safe. `afterReview` or a flag after the PR URL can start this step after
+   a COMPLETE review ([automatic comments](#automatic-comments)).
 
 `/pr-quick` is the lighter alternative for small or routine PRs: one reviewer
 per shard covers both the functional and the risk focus and checks its own
@@ -289,6 +293,7 @@ every concrete defect it finds, in any area, as a finding.
 | `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode. `inherit`: host permissions decide. |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
 | `deletePrivateSessions` | `true`: AZPR deletes its private reviewer sessions once they are no longer needed (see [retention](#retention-and-privacy)); `false` keeps every session. |
+| `afterReview.quick` / `.review` / `.deep` | `none` each: nothing follows a review; run `/pr-comment` yourself. `preview` plans a comment preview after a COMPLETE review of that mode (a model runs; nothing is posted); `publish` plans and posts it as the PAT owner; a comment that a safeguard holds back waits for a person. A flag after the PR URL overrides it for one run. See [automatic comments](#automatic-comments). |
 | `azure.organization` | Required. The `<org>` of `https://dev.azure.com/<org>`; PR URLs of other organizations are refused. |
 | `azure.pat` | A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**, or `""` when `azure.patFile` is set. Sent only to `https://dev.azure.com/<org>` and never logged. |
 | `azure.patFile` | `""`. Recommended: the absolute path of a file that holds only the PAT, so `settings.json` holds no secret. It must be a regular file you own that only you can access (mode 600, not a symbolic link). AZPR reads it at start and before each command; after replacing it, restart OpenCode. Set either this or `azure.pat`. |
@@ -355,18 +360,22 @@ troubleshooting.
 | Command | Behavior |
 | --- | --- |
 | `/pr-setup [options]` | Show setup guidance or save an organization, one model and an existing PAT file. No model or Azure request. Restart the OpenCode service after saving. |
-| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (configured quick and deep models only as warnings, and whether `/pr-deep` is off or would repeat `/pr-review`); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
-| `/pr-review <PR URL> [context]` | Sharded functional and risk reviews, then sharded verification. |
-| `/pr-deep <PR URL> [context]` | The same review with the stronger models of `models.deep`; usually slower and costlier. |
-| `/pr-quick <PR URL> [context]` | One reviewer per shard for both focuses, no verification; findings are reported, not verified. |
+| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (configured quick and deep models only as warnings, and whether `/pr-deep` is off or would repeat `/pr-review`), and `afterReview` (the configured modes and posting identity, shown as information); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
+| `/pr-review <PR URL> [flag] [context]` | Sharded functional and risk reviews, then sharded verification. |
+| `/pr-deep <PR URL> [flag] [context]` | The same review with the stronger models of `models.deep`; usually slower and costlier. |
+| `/pr-quick <PR URL> [flag] [context]` | One reviewer per shard for both focuses, no verification; findings are reported, not verified. |
 | `/pr-stop [run-id]` | Cancel this conversation's active command. |
 | `/pr-comment [review-id]` | Preview comments for this conversation's latest completed review. |
 | `/pr-comment [review-id] --publish` | Post the saved preview (planning it first if needed). Safe to repeat. |
 
 Supported PR URLs are `https://dev.azure.com/<org>/<project>/_git/<repo>/pullrequest/<id>`
 and `https://<org>.visualstudio.com/[DefaultCollection/]<project>/_git/<repo>/pullrequest/<id>`.
-Text after the URL is supplementary context for that command only. PR content,
-comments and tool responses are untrusted data.
+The optional flag of a review command, `--preview`, `--publish` or
+`--no-comment`, comes right after the URL and sets [`afterReview`](#automatic-comments)
+for that run only; `/pr-check` takes none. Anything else there that looks like
+an option (`--no-coment`, `-p`) is refused, so start your context with a word.
+Text after the URL (and the flag) is supplementary context for that command
+only. PR content, comments and tool responses are untrusted data.
 
 Status meanings:
 
@@ -392,7 +401,8 @@ once, in the same session, to continue (receipt `follow-up=completed`,
 `still-partial`, `unusable` or `failed`); a follow-up that fails or gives no
 usable answer keeps the answer it followed. When the quick review found a
 high-severity issue or left coverage incomplete, the receipt suggests
-`/pr-review` before publishing.
+`/pr-review` before publishing; the hint is advisory, also when automatic
+publication follows (see [automatic comments](#automatic-comments)).
 
 ## Comments
 
@@ -410,6 +420,65 @@ quick review, not independently verified` (and, in the summary, incomplete
 coverage), and their inline comments need a location on a changed HEAD file.
 When two shards of a quick review report one defect, the planner may combine
 them into one comment under fixed rules (see [commenting](docs/COMMENTING.md)).
+
+### Automatic comments
+
+By default nothing follows a review: you preview with `/pr-comment` and post
+with `/pr-comment <id> --publish`. `afterReview` sets, per mode, what follows
+a COMPLETE review, and a flag right after the PR URL sets it for one run:
+
+```json
+{ "afterReview": { "quick": "preview", "review": "none", "deep": "none" } }
+```
+
+```text
+/pr-review <PR URL> --preview     plan a preview after a COMPLETE review
+/pr-review <PR URL> --publish     plan and post the comments after a COMPLETE review
+/pr-review <PR URL> --no-comment  nothing follows this review, whatever afterReview says
+```
+
+The step runs after the review's receipt as a separate comment command with
+its own run ID, `STARTED` notice and receipt; `/pr-stop` stops it like any
+command. It is the same planning and publication as `/pr-comment`, so a
+preview uses a model, and `/pr-comment <id> --publish` later posts exactly that
+preview. Nothing follows a review that is not COMPLETE, or that was stopped
+while its report was delivered. A review without
+findings to comment on gets one notice instead, with no planning, model
+request or comment. When another AZPR command is running in the conversation
+or on the PR, the step is skipped and the notice names the command to run.
+
+Automatic publication posts as the PAT owner, item by item. A comment (or the
+summary) whose text contains an `@<…>` mention, an image, HTML that embeds
+content or runs a script (such as `<img>`, `<iframe>`, `<script>`, or an
+`on…=`, `src=` or `style=` attribute, read as a browser reads a tag), HTML
+that hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name), or a
+`javascript:`, `vbscript:`, `data:` or `file://` link waits in the saved
+preview for a person;
+the other items are posted, and the receipt names each held item and why. The
+checks prefer a false alarm and also decode escapes and character references
+in script links and mentions, and read a link without tabs and line breaks, as
+a browser does (`java&#9;script:` is a script link). Ordinary web and mail
+links, markup that neither
+loads content nor runs a script (such as `<input name="id">` or
+`List<String>`), and literal code (fenced code blocks and code spans, such as
+`` `<img src="a.png">` ``) are posted; only mentions are checked in code too,
+since Azure DevOps may resolve them anywhere. Where a renderer could read the
+code differently, for example a fence inside a list, code next to an HTML
+line, or a backtick that a link or tag could take, the text is checked as
+written. A
+quick review is posted when you chose
+it: its comments keep the disclosure `quick review, not independently
+verified`, and its summary names incomplete coverage; its verification hint
+is advisory (set `afterReview.quick` to `preview` to read the comments first).
+When every finding is already discussed on the PR, typically by AZPR's own
+comment from an earlier run, there is nothing new to post: the receipt says
+`NOTHING_TO_POST` and the plan is saved (the summary's marker follows the
+inline comments, so re-reviewing an unchanged PR would otherwise add a summary
+each time). Publication itself still rechecks that the PR is active and
+unchanged. A command you type, such as `/pr-comment <id> --publish`, posts
+every item of the saved preview, held ones included.
+
+### Publication
 
 Publication is runtime code: it refuses an inactive PR or a changed source
 commit, lists every existing thread, skips items whose hidden marker already

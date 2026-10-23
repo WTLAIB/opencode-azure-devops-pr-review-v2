@@ -86,7 +86,11 @@ export function nativeToolPermissions(role, shell = 'deny') {
 export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
   ? [...REVIEW_TOOL_NAMES, ...READ_TOOLS, ...(shell === 'deny' ? [] : ['shell'])] : [];
 
+// The comment step that follows a COMPLETE review of each mode (afterReview).
+export const AFTER_REVIEW = Object.freeze(['none', 'preview', 'publish']);
+
 const DEFAULTS = Object.freeze({
+  afterReview: Object.freeze({ quick: 'none', review: 'none', deep: 'none' }),
   azure: Object.freeze({ organization: '', pat: '', patFile: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
   workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 }),
 });
@@ -94,7 +98,10 @@ const withDefault = (value, fallback) => value === undefined ? fallback : value;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function keys(value, allowed, at) {
   if (!isObject(value)) throw new Error(`${at} must be a JSON object.`);
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`Unknown setting ${at}.${key}; check for a typo.`);
+  // Name an unknown key only when it looks like a setting name: a long one may be a pasted secret.
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) {
+    throw new Error(/^[A-Za-z_$][\w$-]{0,31}$/.test(key) ? `Unknown setting ${at}.${key}; check for a typo.` : `Unknown setting in ${at} (its name is not shown because it does not look like a setting name); check for a typo.`);
+  }
 }
 function integer(value, at, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${at} must be an integer from ${min} to ${max}.`);
@@ -132,7 +139,7 @@ export function validateSettings(raw) {
     throw new Error('settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.patFile (or azure.pat), and remove mcp.');
   }
   keys(raw, ['$schema', 'version', 'enabled', 'models', 'debug', 'outputLanguage', 'returnReport', 'runTimeoutSeconds',
-    'shell', 'progressNotices', 'deletePrivateSessions', 'azure', 'workflow'], 'settings');
+    'shell', 'progressNotices', 'deletePrivateSessions', 'afterReview', 'azure', 'workflow'], 'settings');
   if (raw.version !== 2) throw new Error('settings.version must be 2. Use the V2 settings example; older host layouts are not supported.');
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('enabled must be boolean.');
   if (raw.$schema !== undefined && typeof raw.$schema !== 'string') throw new Error('$schema must be a string.');
@@ -169,6 +176,9 @@ export function validateSettings(raw) {
   if (typeof progressNotices !== 'boolean') throw new Error('progressNotices must be boolean.');
   const deletePrivateSessions = withDefault(raw.deletePrivateSessions, true);
   if (typeof deletePrivateSessions !== 'boolean') throw new Error('deletePrivateSessions must be boolean.');
+  // A missing mode makes no comments after its reviews.
+  const afterReview = { ...DEFAULTS.afterReview, ...(raw.afterReview === undefined ? {} : (keys(raw.afterReview, MODES, 'afterReview'), raw.afterReview)) };
+  for (const mode of MODES) if (!AFTER_REVIEW.includes(afterReview[mode])) throw new Error(`afterReview.${mode} must be none, preview or publish.`);
   const azure = { ...DEFAULTS.azure, ...(raw.azure === undefined ? {} : (keys(raw.azure, Object.keys(DEFAULTS.azure), 'azure'), raw.azure)) };
   // Never echo the PAT in an error.
   if (typeof azure.organization !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,49}$/.test(azure.organization)) {
@@ -199,7 +209,7 @@ export function validateSettings(raw) {
   const idle = workflow.stageIdleSeconds;
   if (idle !== 0 && (!Number.isInteger(idle) || idle < 60 || idle > 7200)) throw new Error('workflow.stageIdleSeconds must be 0 (off) or an integer from 60 to 7200.');
   return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '', keepRuns },
-    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, azure, workflow,
+    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, afterReview, azure, workflow,
     deepReady: deepConfigured === MODEL_SLOTS.deep.length,
     deepPartial: deepConfigured > 0 && deepConfigured < MODEL_SLOTS.deep.length,
     quickReady: models.quick.reviewer !== '' };

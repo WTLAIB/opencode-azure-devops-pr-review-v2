@@ -66,7 +66,7 @@ not control their retention or training policies.
 | --- | --- |
 | Azure DevOps → AZPR runtime | PR identity and description, changed-file inventory, commit messages, discussions, source files at exact commits, and a repository archive when content search needs one. |
 | AZPR → selected models through OpenCode | PR context, assigned paths, commit messages for reviewers, supplementary text after the PR URL, tool results, findings and verification reports. Planning also receives source excerpts and existing-discussion digests, including author names and comment excerpts. |
-| AZPR runtime → Azure DevOps | Saved summary and inline comment text, including AI/model disclosure and anchors, only during explicit publication. |
+| AZPR runtime → Azure DevOps | Saved summary and inline comment text, including AI/model disclosure and anchors, only during publication you asked for: `/pr-comment --publish`, or automatic publication after a COMPLETE review when `afterReview` or the review command's `--publish` flag says so. |
 
 Reviewers can follow definitions, callers and tests outside the changed files.
 Content search downloads a repository archive into runtime memory, searches it
@@ -106,7 +106,10 @@ as well as the findings. Use `/pr-review` or `/pr-deep` when you want separate
 functional and risk reviewers followed by verification; `/pr-deep` runs the
 same review with the stronger models you set in `models.deep`, so its cost
 depends on those models. None of these commands
-posts to Azure DevOps.
+posts to Azure DevOps by default. `afterReview` (per mode) or a flag after the
+PR URL can follow a COMPLETE review with a preview (`preview`, `--preview`) or
+with publication (`publish`, `--publish`); see
+[automatic comments](COMMENTING.md#automatic-comments-after-a-review).
 
 **Preview uses a model.** `/pr-comment` reads live discussions and plans the
 comments; each new preview replans and can incur provider charges. One session
@@ -121,6 +124,25 @@ After inspecting a preview, explicitly publish the named review:
 ```text
 /pr-comment <review-id> --publish
 ```
+
+Teams that want comments without that step can set `afterReview` to `publish`
+for a mode, or add `--publish` after the PR URL for one review. Automatic
+publication posts under the PAT owner's identity without anyone reading the
+text first. It holds back, item by item, a comment whose text would notify
+people, load or run something when viewed, or hide text from readers: an
+`@<…>` mention, an image, HTML that embeds content, runs a script or hides
+text, or a `javascript:`, `vbscript:`, `data:` or `file://` link (script links
+and mentions also when encoded with escapes or character references, and
+script links also with a tab or line break inside, which a browser drops from
+a URL). Literal code is skipped where its reading is certain,
+except for mentions. Held items wait in the saved preview for a person; the
+others, ordinary web links included, are posted. A quick review's comments
+carry the disclosure that they were not independently verified; teams that
+want a person to read them first set `afterReview.quick` to `preview`.
+Automatic publication posts nothing for a review without findings to comment
+on, or when every finding is already discussed on the PR. `/pr-check` lists
+the `afterReview` setting of each mode and who posts. An automatic preview
+still uses a model.
 
 The runtime posts the saved preview, rechecks that the PR is active and its
 source commit is unchanged, and skips existing comment markers. If no preview

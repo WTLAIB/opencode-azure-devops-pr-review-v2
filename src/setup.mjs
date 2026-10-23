@@ -157,11 +157,11 @@ async function writeTemporary(path, text) {
   try { await handle.writeFile(text); await handle.sync(); } finally { await handle.close(); }
 }
 
-async function guide(context, path, blocked) {
+async function guide(context, path, problem) {
   let catalog = [];
   try { catalog = (listOf(await context.model.list()) ?? []).filter(item => item.enabled !== false && item.capabilities?.tools === true); } catch { /* Help remains usable before provider setup. */ }
   const models = catalog.slice(0, 12).map(item => `${item.providerID}/${item.id}`);
-  return `[AZPR] SETUP${blocked ? ' REQUIRED' : ''}\nSettings: ${path}\n\n` +
+  return `[AZPR] SETUP${problem ? ' REQUIRED' : ''}\nSettings: ${path}\n${problem ? `Problem when OpenCode loaded AZPR: ${problem}\n` : ''}\n` +
     `1. Connect your provider in OpenCode and choose one tool-capable model ID (${models.length ? models.join(', ') : 'run opencode models'}).\n` +
     '2. Create an Azure DevOps PAT for one organization with Code (Read) and Pull Request Threads (Read & write). Keep it alone in an existing regular file owned by you, with mode 600; never paste it into this conversation.\n' +
     `3. Run ${USAGE}\n\n` +
@@ -169,15 +169,32 @@ async function guide(context, path, blocked) {
     'After saving, restart OpenCode and run /pr-check <PR URL>. Settings changes do not affect reviews already running.';
 }
 
-/** Missing/invalid settings expose only setup and blocked command explanations. */
+/**
+ * Why settings cannot be used (problem '' when they can, or when AZPR is
+ * disabled), without their values: a missing or unreadable file (its error
+ * code), JSON (the generic message, as a parser excerpt may hold the PAT),
+ * validation or the PAT file, whose messages name settings and problems only.
+ */
+async function settingsProblem(path) {
+  let text;
+  try { text = await readFile(path, 'utf8'); }
+  catch (error) { return { problem: error.code === 'ENOENT' ? 'there is no settings file yet.' : `the settings file could not be read (${error.code ?? 'unknown error'}).` }; }
+  try {
+    const raw = settingsJSON(text);
+    if (raw.enabled === false) return { disabled: true, problem: '' };
+    const settings = validateSettings(raw);
+    if (settings.azure.patFile) await readPatFile(settings.azure.patFile);
+    return { problem: '' };
+  } catch (error) {
+    return { problem: error instanceof Error && error.message ? error.message.replace(/^\[AZPR\] /, '') : 'the settings could not be loaded.' };
+  }
+}
+
+/** Missing/invalid settings expose only setup and blocked command explanations, with the reason. */
 export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, testOptions = {}) {
   const path = await settingsFileFor(context.options ?? {}, sourceDirectory);
-  let blocked = false, disabled = false;
-  try {
-    const raw = settingsJSON(await readFile(path, 'utf8'));
-    disabled = raw.enabled === false;
-    if (!disabled) { const settings = validateSettings(raw); if (settings.azure.patFile) await readPatFile(settings.azure.patFile); }
-  } catch { blocked = true; }
+  const { problem, disabled } = await settingsProblem(path);
+  const blocked = Boolean(problem);
   if (disabled) return async () => {};
   requireMethods(context, ['command.list', 'command.transform'], 'AZPR setup');
   const catalog = listOf(await context.command.list());
@@ -193,7 +210,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
       let text;
       try {
         const arguments_ = parseSetupArguments(event.prompt.text ?? '');
-        if (arguments_ === null) text = await guide(context, path, blocked);
+        if (arguments_ === null) text = await guide(context, path, problem);
         else {
           if (pending) throw new Error('[AZPR] Another setup is active.');
           pending = true;
@@ -208,7 +225,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
     } });
     if (blocked) for (const name of Object.keys(COMMANDS)) editor.add({ name, description: 'AZPR setup required; run /pr-setup', async execute(event) {
       await appendReport(context, { sessionID: event.sessionID,
-        text: `[AZPR] SETUP REQUIRED\nNo review or Azure request was started. Settings are missing or invalid at ${path}. Run /pr-setup --help; repair an existing settings file if necessary, then restart OpenCode.` });
+        text: `[AZPR] SETUP REQUIRED\nNo review or Azure request was started. Settings at ${path} could not be used when OpenCode loaded AZPR: ${problem} Run /pr-setup --help; repair an existing settings file if necessary, then restart OpenCode.` });
     } });
   });
   let cleanup;

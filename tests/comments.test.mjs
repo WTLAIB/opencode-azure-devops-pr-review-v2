@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
-  publishableFindings, reviewVerification, combinationProblems,
+  publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
@@ -332,4 +332,154 @@ test('the summary index follows accepted combinations only, and old plan records
   const old = assemblePlan(review([finding('F-1')]), [{ status: 'READY', comments: [{ findingId: 'F-1', severity: 'high', path: '/src/a.ts', startLine: 2, endLine: 2, anchor: 'x', body: '🔴 high: T\n\nB.' }], skipped: [], summaryDetails: '' }]);
   assert.equal(old.comments[0].findingIds, undefined);
   assert.match(old.summary.content, /\| 🔴 high \| F-1 — Defect F-1 \|/);
+});
+
+test('automatic publication posts ordinary links and markup in examples, and leaves mentions, images, embedded content and script links to a person', () => {
+  const plan = texts => assemblePlan(review(texts.map((_, index) => finding(`F-${index + 1}`))),
+    [{ comments: texts.map((text, index) => comment({ findingId: `F-${index + 1}`, anchor: `line ${index}`, body: `🔴 high: Issue ${index}\n\n${text}` })), skipped: [] }]);
+  const plain = [
+    '`List<String>` drops `Map<String, List<Integer>>` entries when `i < a && j > b`.',
+    'Use Optional<T>, <T extends Comparable<T>> and vector<int>; Result<(), Error> too.',
+    'A decorator @property, an email user@example.com, work item #12, PR !34 and `if (!a[0])`.',
+    'Path /src/a.ts:12, index.md and `handlers[name](event)`; ratio 3 < 4 > 2.',
+    // Ordinary links are posted, however they are written.
+    'See https://learn.microsoft.com/dotnet/api for details; the client calls `https://api.example.com/v1`.',
+    'Visit www.example.com, mail <help@outside.example> or read [docs](//outside.example/a).',
+    '> [details][ref]\n>\n> [ref]: &#47;&#47;outside.example/report',
+    'Clone ssh://git.example/repo and see [mail](mailto:someone@example.com) or [x](https&#58;//outside.example).',
+    // Markup that neither loads content nor runs a script is posted too.
+    'Markup in examples: `<input name="id">`, <a href="/x">click</a>, <button type="submit">, <div class="x">.',
+    'Hearts <3, a < b > c, Map<K, V>, <https://learn.microsoft.com/x> and <p title="a > b">.',
+    'Tab-separated: java\tdata\tvalue, and the script: field.',
+  ];
+  const clean = plan(plain);
+  assert.ok(publicationItems(clean).every(item => /<!-- azpr-comment:[a-f0-9]{32} -->$/.test(item.content)), 'Every item carries its marker.');
+  assert.deepEqual(automaticPublicationProblems(clean), [], 'Plain text, ordinary links, harmless markup and the marker pass.');
+  for (const [text, kind] of [
+    ['[x](javascript:alert(1))', 'a script, data or local-file link'],
+    ['[x](VBScript:msgbox)', 'a script, data or local-file link'],
+    ['[x](data:text/html;base64,PHNjcmlwdD4=)', 'a script, data or local-file link'],
+    ['Open file:///etc/passwd', 'a script, data or local-file link'],
+    // CommonMark decodes escapes and character references in link destinations and text.
+    ['[x](java&#115;cript:alert(1))', 'a script, data or local-file link'],
+    ['[x](javascript\\:alert(1))', 'a script, data or local-file link'],
+    // A browser drops tabs and line breaks from a URL, written or as references, which it decodes in raw HTML
+    // with any number of digits and without a semicolon.
+    ...['java&#9;script:', 'java\tscript:', 'jav\nascript:', 'java&#x0A;script:', 'java&Tab;script:', 'java&NewLine;script:',
+      'java&#0000000009;script:', 'java&#x0000000009;script:', 'java&#9script:', 'vb&#13;script:', 'da&#9;ta:text/html,x', 'fi&#9;le:///etc'].map(url =>
+      [`<a href="${url}f()">x</a>`, 'a script, data or local-file link']),
+    ['Ping @<6D6A2A6A-0000-0000-0000-000000000000> about it.', 'an @mention'],
+    ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
+    ['![diagram](diagram.png)', 'an image'],
+    ['if (![a].length)', 'an image'], // The literal check prefers this false alarm outside code.
+    ['<img src=x onerror=alert(1)>', 'HTML that embeds content or runs a script'],
+    ['<script>steal()</script>', 'HTML that embeds content or runs a script'],
+    ['<div onclick="x()">text</div>', 'HTML that embeds content or runs a script'],
+    ['<IFRAME>', 'HTML that embeds content or runs a script'],
+    ['<video poster="p.png">', 'HTML that embeds content or runs a script'],
+    ['<input type="image" src="https://outside.example/a.png">', 'HTML that embeds content or runs a script'],
+    ['<p style="background:url(x)">', 'HTML that embeds content or runs a script'],
+    ['hidden <!-- note --> text', 'HTML that hides text'],
+    // Declarations, processing instructions and malformed end tags become hidden comments in a browser.
+    ['<?php echo $x ?> runs', 'HTML that hides text'], ['<!DOCTYPE x> here', 'HTML that hides text'],
+    ['a <![CDATA[ x ]]> b', 'an image and HTML that hides text'], // `![` also reads as an image.
+    ['text </ hidden> more', 'HTML that hides text'],
+    // Attributes are read as a browser reads them: quoted values may hold < and >, slashes separate
+    // attributes, and a tag name runs to a space, slash or >.
+    ['<p title=">" onMouseOver="f()">', 'HTML that embeds content or runs a script'],
+    ["<p title='</div>' onclick='f()'>", 'HTML that embeds content or runs a script'],
+    ['<x y=">" z=a"b onclick=f()>', 'HTML that embeds content or runs a script'],
+    ['<p/onclick="f()">', 'HTML that embeds content or runs a script'],
+    ['<div>\n<https:x onclick=f()>\n</div>', 'HTML that embeds content or runs a script'],
+    // Only ASCII whitespace separates attributes, so the value runs on past a no-break space.
+    ['<p t=">" a=x\u00a0b="y onclick=f()">', 'HTML that embeds content or runs a script'],
+    // A renderer shows the unfinished first tag as text, so the second one is a tag of its own.
+    ['x <p title="\n`y`<p title=\'<\' onmouseover=\'f()\'>', 'HTML that embeds content or runs a script'],
+  ]) assert.deepEqual(automaticPublicationProblems(plan([text])).map(problem => problem.reason), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
+  // A decoded character never forms markup, and AZPR's own escaping of <!-- stays text.
+  for (const text of ['Kept &lt;!-- note --&gt; as text.', 'Shown as &#60;img src=x&#62; text.', 'Paths C:\\Users\\dev and \\d+\\.\\d+; a &amp; b; &constructor; &nbsp;',
+    '`y = arr[i]: z` and List<@NonNull String> stay text.', '> A quoted note\n> - with a list item']) {
+    assert.deepEqual(automaticPublicationProblems(plan([text])), [], text);
+  }
+  // Each problem names its item; the summary is checked like an inline comment, and several kinds are named together.
+  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Ask @<6D6A2A6A-0000-0000-0000-000000000000> and see ![i](y)' }]);
+  assert.deepEqual(automaticPublicationProblems(noted), [{ marker: noted.summary.marker, reason: 'the PR summary contains an @mention and an image' }]);
+  const combined = assemblePlan(review([finding('F-1'), finding('F-2')]), [{ comments: [comment({ findingIds: ['F-1', 'F-2'], body: '🔴 high: x\n\n<b onmouseover=x>' })], skipped: [] }]);
+  assert.deepEqual(automaticPublicationProblems(combined), [{ marker: combined.comments[0].marker, reason: 'the comment for F-1, F-2 (/src/a.ts:2) contains HTML that embeds content or runs a script' }]);
+  const mixed = plan(['Plain text.', '![d](d.png)']);
+  assert.deepEqual(automaticPublicationProblems(mixed).map(problem => problem.marker), [mixed.comments[1].marker], 'Only the item with the image is held.');
+});
+
+test('automatic publication posts literal code, and checks code it cannot tell apart from markup', () => {
+  const held = text => automaticPublicationProblems(assemblePlan(review([finding('F-1')]), [{ comments: [comment({ body: `🔴 high: Issue\n\n${text}` })], skipped: [] }]))
+    .map(problem => problem.reason.replace('the comment for F-1 (/src/a.ts:2) contains ', ''));
+  // Fenced code blocks and code spans render as text.
+  for (const text of [
+    'The avatar has no alternative text: `<img src="avatar.png">`. Add an alt attribute.',
+    'The old URL remains in this source example:\n\n```html\n<script src="old.js"></script>\n```',
+    'The documentation uses a broken relative path:\n\n```markdown\n![diagram](../missing.png)\n```',
+    'This span hides the failure message: `<span style="display:none">failure</span>`.',
+    'Without a blank line:\n```js\nel.innerHTML = "<img src=x onerror=f()>";\n```\nAfter the fence, `javascript:void(0)` and `data:text/html,x`.',
+    '~~~\n<iframe src="x"></iframe>\n~~~', '````\n```\n<img src=x>\n```\n````', 'Unclosed:\n\n```\n<script>x()</script>',
+    '```\ncode\n    ```\n<img src=x onerror=f()>', '``a ` <img src=x> ``', 'See [docs](https://learn.microsoft.com/x) and `<img src=x>`.',
+    '- item `<img src=x>`\n> quoted `<script>`\n# Heading `![a](b)`', '| a | b |\n|---|---|\n| `<img src=x>` | c |',
+    '\\\\`<img src=x>`', '```\r\n<img src=x>\r\n```\r\nafter',
+  ]) assert.deepEqual(held(text), [], text);
+  // Where the pairing of backticks or the end of a fence is not certain, the text stays checked.
+  for (const [text, kind] of [
+    ['\\`<img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // An escaped backtick opens nothing.
+    ['a `b\nc` <img src=x onerror=f()> `d`', 'HTML that embeds content or runs a script'], // The first span crosses lines,
+    ['x `<img src=x onerror=f()>\n# y` z', 'HTML that embeds content or runs a script'], // and a heading ends a paragraph.
+    ['a ` <img src=x onerror=f()>', 'HTML that embeds content or runs a script'],
+    ['[t](x`y) <img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // The destination swallows a backtick.
+    ['see <p title="`" onmouseover="f()" x="`">', 'HTML that embeds content or runs a script'], // So does an attribute value.
+    ['see <p title="`" onclick="f()"\nx="`">', 'HTML that embeds content or runs a script'],
+    ['https://a.example/`x <img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // A bare address may be linked first,
+    ['https://a.example/\\``<img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // with escapes and backticks,
+    ['https://a.example/\\<p title="`" onclick="f()" x="`">', 'HTML that embeds content or runs a script'], // so the backslash escapes nothing.
+    ['| 🔴🔴 | h |\n|---|---|\n| `|<img src=x onerror=f()>` |', 'HTML that embeds content or runs a script'], // Offsets count UTF-16 units.
+    ['$a`$ <img src=x onerror=f()> `', 'HTML that embeds content or runs a script'], // Math may take the first backtick.
+    ['| a | b |\n|---|---|\n| `x | <img src=x onerror=f()> | y` |', 'HTML that embeds content or runs a script'], // Cells split first.
+    ['<div>\n```\n<img src=x onerror=f()>\n```\n</div>', 'HTML that embeds content or runs a script'], // An HTML block holds the fence.
+    ['- item\n  ```\n<img src=x onerror=f()>\n  ```', 'HTML that embeds content or runs a script'], // The list item ends the fence.
+    [' ```\nok\n```\n<img src=x onerror=f()>\n```', 'HTML that embeds content or runs a script'],
+    ['```\ncode\n   ```\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'],
+    ['```a|b\n---|---\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // A table header, not a fence.
+    ['```x`y\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // A backtick in the info string: no fence.
+    ['| a | b |\n|---|---|\n```\n<img src=x onerror=f()>\n```', 'HTML that embeds content or runs a script'],
+    ['```\r\n<img src=x>\r\n```\r\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // The fence ends at a CRLF closer.
+    ['[`![a](b.png)` x\n<b>`', 'an image'], // The HTML line continues the paragraph; markdown-it then shows no code span.
+    ['`@<6D6A2A6A-0000-0000-0000-000000000000>` and\n```\n@<6D6A2A6A-0000-0000-0000-000000000000>\n```', 'an @mention'],
+  ]) assert.deepEqual(held(text), [kind], text);
+  // The summary is read the same way.
+  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Escape `<script>` in templates.' }]);
+  assert.deepEqual(automaticPublicationProblems(noted), []);
+});
+
+test('automatic publication reads long tag-like text in linear time', () => {
+  // Reading again from every < would take seconds for each of these; a linear reading takes milliseconds.
+  for (const [text, held] of [['<a'.repeat(100000), false], [`x <p title="${'<a'.repeat(100000)}">`, false], ['<a b="'.repeat(40000), false],
+    ['x <a/'.repeat(50000), false], [`<p t=">" on${'c'.repeat(200000)}=f()>`, true]]) {
+    const started = performance.now();
+    const problems = automaticPublicationProblems({ summary: { kind: 'summary', marker: 'm', content: text }, comments: [] });
+    const milliseconds = performance.now() - started;
+    assert.ok(milliseconds < 2000, `${text.slice(0, 12)}…: ${Math.round(milliseconds)} ms`);
+    assert.equal(problems.length > 0, held, text.slice(0, 12));
+  }
+});
+
+test('automatic publication finds nothing new when every finding is already discussed on the PR', () => {
+  const live = [{ threadId: 281 }, { threadId: 290 }];
+  const plan = skipped => ({ summary: { kind: 'summary', content: 'Summary.' }, comments: [], skipped });
+  const discussed = (id, threadId = 281) => ({ findingId: id, reason: `Thread ${threadId} covers it.`, cause: 'existing-thread', threadId });
+  assert.equal(automaticPublicationRepeats(plan([discussed('F-1'), discussed('F-2', 290), discussed('F-3')]), live),
+    'every finding is already discussed on the PR (thread 281, thread 290)');
+  for (const [label, value, threads] of [
+    ['an inline comment is new', { ...plan([discussed('F-1')]), comments: [{ findingId: 'F-2' }] }, live],
+    ['another cause', plan([discussed('F-1'), { findingId: 'F-2', reason: 'Low severity.', cause: 'low-severity' }]), live],
+    ['a skip without a cause', plan([discussed('F-1'), { findingId: 'F-2', reason: 'The planner stopped.' }]), live],
+    ['a thread that is not live', plan([discussed('F-1', 999)]), live],
+    ['threads that could not be read', plan([discussed('F-1')]), null],
+    ['nothing skipped', plan([]), live],
+  ]) assert.equal(automaticPublicationRepeats(value, threads), '', label);
 });

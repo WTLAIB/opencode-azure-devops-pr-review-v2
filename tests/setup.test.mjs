@@ -207,3 +207,41 @@ test('legacy installed configuration loads without migration and changes still b
   assert.ok(f.reports.some(report => report.includes('changed since OpenCode')));
   assert.equal(f.azure.state.calls.length, 0);
 });
+
+test('SETUP REQUIRED and /pr-setup --help name the problem, never a setting value or the PAT', async t => {
+  const f = await fixture(t);
+  const shown = async () => {
+    const cleanup = await f.setup();
+    try { return [await f.invoke('pr-review', f.azure.prUrl()), await f.invoke('pr-setup', '--help')]; } finally { await cleanup(); }
+  };
+  const [blocked, help] = await shown();
+  assert.match(blocked, /^\[AZPR\] SETUP REQUIRED\nNo review or Azure request was started\. Settings at .+ could not be used when OpenCode loaded AZPR: there is no settings file yet\. Run \/pr-setup --help/);
+  assert.match(help, /^\[AZPR\] SETUP REQUIRED\nSettings: .+\nProblem when OpenCode loaded AZPR: there is no settings file yet\.\n\n1\. /);
+  await saveSetup(f.context, f.path, f.args);
+  const valid = JSON.parse(await readFile(f.path, 'utf8'));
+  const cases = [
+    ['{"azure":{"pat":"PRIVATE_TOKEN_0123456789abcdef",}', /settings\.json must be a JSON object without duplicate keys; repair it manually before setup\./],
+    [JSON.stringify({ ...valid, afterReview: { review: 'PRIVATE_VALUE' } }), /afterReview\.review must be none, preview or publish\./],
+    [JSON.stringify({ ...valid, models: { review: { functional: 'PRIVATE_VALUE', risk: 'fixture/model', verifier: 'fixture/model' } } }), /models\.review\.functional: select an actual provider\/model ID/],
+    [JSON.stringify({ ...valid, azure: { ...valid.azure, pat: 'PRIVATE_TOKEN_0123456789abcdef' } }), /Set either azure\.pat or azure\.patFile, not both/],
+    [JSON.stringify({ ...valid, azure: { ...valid.azure, PRIVATE_TOKEN_0123456789abcdefghijklmnopqrstuvwxyz: '' } }), /Unknown setting in azure \(its name is not shown/],
+  ];
+  for (const [content, problem] of cases) {
+    await writeFile(f.path, content);
+    for (const text of await shown()) {
+      assert.match(text, problem, content);
+      assert.doesNotMatch(text, /PRIVATE_|fixture-pat/, 'No setting value or PAT is shown.');
+    }
+  }
+  await writeFile(f.path, JSON.stringify(valid));
+  await chmod(f.pat, 0o644);
+  for (const text of await shown()) assert.match(text, /azure\.patFile could not be used \(group or others may access it; run chmod 600 on it\)\./);
+  await chmod(f.pat, 0o600);
+  await chmod(f.path, 0o000);
+  try { for (const text of await shown()) assert.match(text, /the settings file could not be read \(EACCES\)\./); }
+  finally { await chmod(f.path, 0o600); }
+  const cleanup = await f.setup();
+  t.after(cleanup);
+  assert.match(await f.invoke('pr-setup', '--help'), /^\[AZPR\] SETUP\nSettings: .+\n\n1\. /, 'Usable settings show no problem.');
+  assert.ok(f.reports.every(report => !report.includes(FAKE_PAT)));
+});

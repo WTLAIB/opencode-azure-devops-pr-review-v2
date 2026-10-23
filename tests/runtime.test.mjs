@@ -166,6 +166,7 @@ async function fixture(t, opts = {}) {
       async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) { s.outcome = 'interrupted'; s.onInterrupt?.(); } return { interrupted: true }; },
       async synthetic(input) {
         if (opts.syntheticFailure?.(input)) throw new Error('Fixture notice unavailable');
+        await opts.syntheticDelay?.(input);
         notices.push(clone(input));
         for (const notify of waiters) notify();
         return { id: `notice_${++seq}`, type: 'synthetic', sessionID: input.sessionID, delivery: input.delivery, payload: { text: input.text } };
@@ -177,6 +178,11 @@ async function fixture(t, opts = {}) {
   t.after(cleanup);
   return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, publish,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
+    // Resolves with the first truthy result of `find(notices)`, checked on every new notice.
+    waitFor: find => new Promise(resolve => {
+      const check = () => { const found = find(notices); if (found) { waiters.delete(check); resolve(found); } };
+      waiters.add(check); check();
+    }),
     sessionsFor: role => [...sessions.values()].filter(session => session.agent === role),
     async command(name = 'pr-review', text = azure.prUrl(), origin = 'ordinary') {
       const before = notices.length;
@@ -1396,4 +1402,275 @@ test('a combination that never meets the rules keeps every finding accounted for
   assert.match(preview, /Inline comments prepared: 0/);
   for (const id of ['Q-1', 'Q-1001']) assert.match(preview, new RegExp(`- ${id}: A combined comment for Q-1, Q-1001 did not meet the combination rules \\(a combined comment needs a mergeReason\\); the finding remains in the summary index\\.`));
   assert.match(preview, /high: 2 · medium: 0 · low: 0/, 'Without an accepted combination both findings keep their rows.');
+});
+
+// The comment step a COMPLETE review hands on: the STARTED notice and receipt
+// of its own run, or the one notice that says it was skipped.
+const commentStep = (f, receipt, origin = 'ordinary') => {
+  const review = reviewId(receipt);
+  return f.waitFor(notices => {
+    const later = notices.slice(notices.findIndex(n => n.sessionID === origin && n.text === receipt) + 1).filter(n => n.sessionID === origin);
+    const skipped = later.find(n => n.text.startsWith(`[AZPR ${review}] Automatic `));
+    if (skipped) return { skipped: skipped.text };
+    const started = later.find(n => /\] STARTED \/pr-comment /.test(n.text));
+    const done = started && later.find(n => n.text.startsWith(started.text.split(']')[0] + ']') && RECEIPT.test(n.text));
+    return done && { started: started.text, receipt: done.text, run: reviewId(started.text) };
+  });
+};
+const noCommentStep = async (f, origin = 'ordinary') => {
+  await sleep(100);
+  assert.ok(!f.notices.some(n => n.sessionID === origin && /\] STARTED \/pr-comment |\] Automatic /.test(n.text)), 'No comment step follows.');
+  assert.ok(![...f.sessions.values()].some(session => session.parentID === origin && /comment-plan$/.test(session.agent)), 'No comments were planned.');
+};
+
+test('--preview after the PR URL previews the comments of a COMPLETE review in a run of its own; nothing is posted', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const receipt = await f.command('pr-review', `${f.azure.prUrl()} --preview focus on state`);
+  const review = reviewId(receipt);
+  assert.match(f.notices.find(n => n.text.startsWith(`[AZPR ${review}] STARTED`)).text,
+    /STARTED \/pr-review\. Work continues [^\n]*conversation\. After a COMPLETE review it previews the comments automatically \(--preview\); nothing is posted\. Stop with/);
+  assert.match(receipt, /\] COMPLETE\n/);
+  assert.match(receipt, /## PR comments\n\n\*\*Automatic preview\*\* \(`--preview`\): AZPR now plans a comment preview/);
+  assert.equal(f.sessionsFor('azpr-review-functional')[0].packet.userContext, 'focus on state', 'The flag is not part of the context.');
+  const step = await commentStep(f, receipt);
+  assert.notEqual(step.run, review, 'The comment step is a run of its own.');
+  assert.match(step.started, new RegExp(`STARTED /pr-comment \\(automatic preview after review ${review} completed; --preview\\)\\. Work continues .* Stop with /pr-stop ${step.run}\\.$`));
+  assert.match(step.receipt, new RegExp(`^\\[AZPR ${step.run}\\] PREVIEW; source review=${review}\\nStarted automatically after review ${review} completed \\(--preview\\)\\.\\n`));
+  assert.match(step.receipt, /Inline comments prepared: 2/);
+  assert.doesNotMatch(step.receipt, /held back/);
+  assert.equal(f.azure.callsTo('createThread').length, 0, 'Nothing was posted.');
+  const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(step.receipt)[1], 'result.json'), 'utf8'));
+  assert.deepEqual(result.automatic, { mode: 'preview', source: '--preview', sourceReview: review, heldBack: [] });
+  // /pr-comment --publish posts exactly that preview without planning again.
+  const before = f.prompts().length;
+  assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED/);
+  assert.equal(f.prompts().length, before);
+  assert.equal(f.azure.state.threads.length, 3);
+});
+
+test('afterReview publish posts after a COMPLETE review and reads the comments back; a flag overrides the setting for one run', async t => {
+  const f = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
+  const receipt = await f.command();
+  const review = reviewId(receipt);
+  assert.match(f.notices.find(n => n.text.startsWith(`[AZPR ${review}] STARTED`)).text,
+    /After a COMPLETE review it plans the comments and posts them automatically as the PAT owner \(afterReview\.review: publish\); a comment that a safeguard holds back waits for a person\./);
+  assert.match(receipt, /\*\*Automatic publication\*\* \(`afterReview\.review: publish`\)/);
+  const step = await commentStep(f, receipt);
+  assert.match(step.started, /STARTED \/pr-comment \(automatic publication after review [a-f0-9]{8} completed; afterReview\.review: publish\)/);
+  assert.match(step.receipt, /\] POSTED; source review=[a-f0-9]{8}\nStarted automatically after review [a-f0-9]{8} completed \(afterReview\.review: publish\)\.\n/);
+  assert.match(step.receipt, /Publication \(VERIFIED=3\)/);
+  assert.equal(f.azure.state.threads.length, 3);
+  assert.match(await f.command('pr-comment', `${review} --publish`), /ALREADY_PRESENT/, 'Publishing again is safe.');
+  assert.equal(f.azure.state.threads.length, 3);
+  // A flag decides for its run only.
+  const off = await f.command('pr-review', `${f.azure.prUrl()} --no-comment`, 'other');
+  assert.match(off, /Automatic comments are off for this review \(`--no-comment`\)\./);
+  await noCommentStep(f, 'other');
+  const g = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
+  const preview = await commentStep(g, await g.command('pr-review', `${g.azure.prUrl()} --preview`));
+  assert.match(preview.receipt, /\] PREVIEW; source review=[a-f0-9]{8}\nStarted automatically after review [a-f0-9]{8} completed \(--preview\)\.\n/);
+  assert.equal(g.azure.callsTo('createThread').length, 0);
+  // A setting of none gives the receipt no automatic line and nothing follows.
+  const h = await fixture(t);
+  assert.doesNotMatch(await h.command(), /Automatic/);
+  await noCommentStep(h);
+});
+
+test('only a COMPLETE review hands on: STALE and cancelled reviews make no comments', async t => {
+  const stale = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
+  stale.azure.state.afterVersions = { head: 'c'.repeat(40) };
+  assert.match(await stale.command(), /\] STALE/);
+  await noCommentStep(stale);
+  assert.equal(stale.azure.callsTo('createThread').length, 0);
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { async during({ role }) { if (ROLES[role].format === 'initial') { entered.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  const running = f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /cancellation requested/);
+  release.resolve();
+  assert.match(await running, /\] CANCELLED/);
+  await noCommentStep(f);
+});
+
+test('a review without findings to comment on gets one notice and no planning, model or publication', async t => {
+  const empty = ({ role, packet }) => {
+    if (ROLES[role].format === 'initial') return { status: 'COMPLETE', coverage: { files: packet.assignment.files, gaps: [] }, additionalFiles: [], findings: [], report: 'No defects.' };
+    if (ROLES[role].format === 'final') return { status: 'COMPLETE', confirmed: [], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Nothing to confirm.' };
+    return undefined;
+  };
+  const f = await fixture(t, { answer: empty, settings: s => { quickSettings(s); s.afterReview = { review: 'preview' }; } });
+  const receipt = await f.command();
+  const prompts = f.prompts().length;
+  const step = await commentStep(f, receipt);
+  assert.equal(step.skipped, `[AZPR ${reviewId(receipt)}] Automatic preview skipped: the review has no findings to comment on, so nothing was planned or posted and no model was used. /pr-comment ${reviewId(receipt)} still previews a summary-only comment.`);
+  assert.equal(f.prompts().length, prompts, 'No model request after the review.');
+  const quick = await f.command('pr-quick', `${f.azure.prUrl()} --publish`, 'quick');
+  assert.match((await commentStep(f, quick, 'quick')).skipped, /^\[AZPR [a-f0-9]{8}\] Automatic publication skipped: the review has no findings to comment on/);
+  await sleep(50);
+  assert.ok(![...f.sessions.values()].some(session => /comment-plan$/.test(session.agent)));
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+  // A manual preview is still possible and shows the summary only.
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW[\s\S]*Inline comments prepared: 0/);
+});
+
+test('automatic publication of a quick review posts its findings with the quick disclosure, also high-severity ones and with incomplete coverage', async t => {
+  const f = await fixture(t, { settings: quickSettings });
+  const receipt = await f.command('pr-quick', `${f.azure.prUrl()} --publish`);
+  assert.match(receipt, /Verification hint: 1 high-severity finding\(s\)\. These findings are not independently verified; the automatic publication posts them with that disclosure/);
+  const step = await commentStep(f, receipt);
+  assert.match(step.receipt, new RegExp(`\\] POSTED; source review=${reviewId(receipt)}\\n`));
+  assert.doesNotMatch(step.receipt, /held back/);
+  const contents = f.azure.state.threads.map(thread => thread.comments[0].content);
+  assert.equal(contents.length, 2, 'The summary and the high-severity inline comment are posted.');
+  assert.ok(contents.every(content => /Review method: quick review, not independently verified/.test(content)), 'Every posted comment names the quick method.');
+  // Incomplete coverage is posted too, and the summary says so.
+  const gap = ({ role, packet }) => role !== 'azpr-quick-reviewer' ? undefined : partialAnswer(packet, [finding(packet.assignment.firstFindingId, packet.assignment.files[0], 'medium')]);
+  const h = await fixture(t, { settings: quickSettings, answer: gap });
+  const partial = await h.command('pr-quick', `${h.azure.prUrl()} --publish`);
+  assert.match(partial, /coverage incomplete/);
+  assert.match((await commentStep(h, partial)).receipt, /\] POSTED; /);
+  assert.match(h.azure.state.threads.find(thread => !thread.threadContext).comments[0].content, /coverage incomplete/);
+});
+
+test('automatic publication posts ordinary links and holds back only the comments with a mention, an image, embedded content or a script link', async t => {
+  const body = (text, only) => ({ role, packet }) => {
+    const plan = defaultAnswer({ role, packet });
+    if (ROLES[role].format !== 'comment-plan') return plan;
+    return { ...plan, ...(only ? {} : { summary: `${plan.summary} ${text}` }),
+      comments: plan.comments.map(c => !only || c.findingId === only ? { ...c, body: `${c.body}\n\n${text}` } : c) };
+  };
+  // Ordinary links and markup that neither loads content nor runs a script are posted.
+  const linked = await fixture(t, { answer: body('See https://learn.microsoft.com/dotnet/api, [ref](//docs.example/a) and `<input name="id">`.') });
+  const plain = await commentStep(linked, await linked.command('pr-review', `${linked.azure.prUrl()} --publish`));
+  assert.match(plain.receipt, /\] POSTED; /);
+  assert.doesNotMatch(plain.receipt, /held back/);
+  assert.equal(linked.azure.state.threads.length, 3);
+  // One comment with an image waits; the summary and the other comment are posted.
+  for (const [text, kind] of [['![trace](https://outside.example/t.png)', 'an image'], ['Ask @<6D6A2A6A-0000-0000-0000-000000000000>.', 'an @mention'],
+    ['<img src=x onerror=alert(1)>', 'HTML that embeds content or runs a script'], ['[x](java&#115;cript:alert(1))', 'a script, data or local-file link']]) {
+    const f = await fixture(t, { answer: body(text, 'F-1') });
+    const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
+    const step = await commentStep(f, receipt);
+    assert.match(step.receipt, new RegExp(`\\] POSTED; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back 1 item\\(s\\) for a person: the comment for F-1 \\(/src/Main\\.java:1\\) contains ${kind}\\. They are not published; after reading the preview, post them with /pr-comment ${reviewId(receipt)} --publish\\n`), text);
+    assert.equal(f.azure.state.threads.length, 2, `${text}: the summary and R-1 are posted, F-1 waits.`);
+    const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(step.receipt)[1], 'result.json'), 'utf8'));
+    assert.equal(result.automatic.heldBack.length, 1);
+    // The person posts the held comment; the posted ones are already present.
+    const manual = await f.command('pr-comment', `${reviewId(receipt)} --publish`);
+    assert.match(manual, /\] POSTED/);
+    assert.equal((manual.match(/ALREADY_PRESENT/g) ?? []).length >= 2, true, manual);
+    assert.equal(f.azure.state.threads.length, 3, text);
+  }
+  // When every item is held, nothing is posted.
+  const g = await fixture(t, { answer: body('![x](y.png)') });
+  const all = await g.command('pr-review', `${g.azure.prUrl()} --publish`);
+  assert.match((await commentStep(g, all)).receipt, new RegExp(`\\] PREVIEW; source review=${reviewId(all)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back every item: the PR summary contains an image; the comment for F-1 \\(/src/Main\\.java:1\\) contains an image; the comment for R-1 \\(/src/Main\\.java:1\\) contains an image\\. Nothing was posted; after reading the preview, post it with /pr-comment ${reviewId(all)} --publish\\n`));
+  assert.equal(g.azure.callsTo('createThread').length, 0);
+});
+
+test('automatic publication that finds the PR changed posts nothing and does not offer the held items for publication', async t => {
+  let f;
+  f = await fixture(t, { answer: ({ role, packet }) => {
+    const plan = defaultAnswer({ role, packet });
+    if (ROLES[role].format !== 'comment-plan') return plan;
+    f.azure.state.head = 'e'.repeat(40);
+    return { ...plan, comments: plan.comments.map(c => c.findingId === 'F-1' ? { ...c, body: `${c.body}\n\n![x](y.png)` } : c) };
+  } });
+  const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  const step = await commentStep(f, receipt);
+  assert.match(step.receipt, new RegExp(`\\] STALE; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back 1 item\\(s\\) for a person: the comment for F-1 \\(/src/Main\\.java:1\\) contains an image\\. They are not published\\.\\nReason: The PR source commit changed after the review`));
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+});
+
+test('a repeated automatic publication of an unchanged PR has nothing new to post; a typed --publish still can', async t => {
+  let discussed = null;
+  const f = await fixture(t, { answer({ role, packet }) {
+    if (ROLES[role].format !== 'comment-plan' || discussed === null) return undefined;
+    return { status: 'READY', comments: [], skipped: packet.findings.map(item => ({ findingId: item.id, cause: 'existing-thread', threadId: discussed, reason: `Thread ${discussed} already discusses it.` })) };
+  } });
+  const first = await commentStep(f, await f.command('pr-review', `${f.azure.prUrl()} --publish`));
+  assert.match(first.receipt, /\] POSTED; /);
+  assert.equal(f.azure.state.threads.length, 3);
+  discussed = f.azure.state.threads.find(thread => thread.threadContext).id;
+  const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  const again = await commentStep(f, receipt);
+  assert.match(again.receipt, new RegExp(`\\] NOTHING_TO_POST; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication found nothing new to post: every finding is already discussed on the PR \\(thread ${discussed}\\)\\. The plan is saved\\.\\n`));
+  assert.doesNotMatch(again.receipt, /post it with \/pr-comment/, 'Nothing new needs a follow-up command.');
+  assert.equal(f.azure.state.threads.length, 3, 'No second summary was posted.');
+  // The person who reads the preview decides: a typed --publish posts the summary.
+  assert.match(await f.command('pr-comment', `${reviewId(receipt)} --publish`), /\] POSTED/);
+  assert.equal(f.azure.state.threads.length, 4);
+});
+
+test('a stop while the review report is delivered keeps the COMPLETE review but starts no comment step', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { async syntheticDelay(input) {
+    if (/^# AZPR [a-f0-9]{8} — COMPLETE/.test(input.text)) { entered.resolve(); await within(release.promise, 10000); }
+  } });
+  t.after(() => release.resolve());
+  const running = f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /Authorization revoked and cancellation requested/);
+  release.resolve();
+  const receipt = await running;
+  assert.match(receipt, /\] COMPLETE\n/, 'The finished review stays COMPLETE.');
+  assert.match(receipt, /Automatic comments are off for this review \(`stopped: User requested \/pr-stop\.`\)\./);
+  assert.doesNotMatch(receipt, /\*\*Automatic publication\*\*/);
+  await noCommentStep(f);
+  assert.equal(f.azure.callsTo('createThread').length, 0, 'Nothing is posted after /pr-stop.');
+  // The review is kept: a person can still comment on it.
+  assert.match(await f.command('pr-comment', reviewId(receipt)), /\] PREVIEW; source review=/);
+});
+
+test('a busy PR or conversation skips the automatic step and names the command to run', async t => {
+  const entered = deferred(), release = deferred();
+  let hold = false;
+  const f = await fixture(t, { async during({ role }) { if (hold && role === 'azpr-review-comment-plan') { hold = false; entered.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  await f.command('pr-review', f.azure.prUrl(), 'origin-b');
+  hold = true;
+  const manual = f.command('pr-comment', '', 'origin-b');
+  await entered.promise;
+  // Another conversation reviews the same PR while origin-b's comment command holds the PR.
+  const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`, 'origin-a');
+  const review = reviewId(receipt);
+  assert.equal((await commentStep(f, receipt, 'origin-a')).skipped,
+    `[AZPR ${review}] Automatic publication skipped: another AZPR command is running in this conversation or on this PR. When it has finished, run /pr-comment ${review}, then /pr-comment ${review} --publish yourself.`);
+  release.resolve();
+  assert.match(await manual, /\] PREVIEW/);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+});
+
+test('/pr-stop cancels an automatic comment step like any run; no preview is kept', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { async during({ role }) { if (role === 'azpr-review-comment-plan') { entered.resolve(); await within(release.promise, 10000); } } });
+  t.after(() => release.resolve());
+  const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
+  await entered.promise;
+  const started = f.notices.find(n => /\] STARTED \/pr-comment /.test(n.text)).text;
+  assert.match(await f.command('pr-stop', ''), new RegExp(`\\[AZPR ${reviewId(started)}\\] Authorization revoked and cancellation requested`));
+  const step = await commentStep(f, receipt);
+  assert.match(step.receipt, /\] CANCELLED; source review=/);
+  release.resolve();
+  const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${reviewId(receipt)}.json`), 'utf8')).body);
+  assert.equal(saved.plan, null);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+});
+
+test('flags belong to the review commands: /pr-check refuses them and unknown options start nothing', async t => {
+  const f = await fixture(t, { settings: s => { s.afterReview = { quick: 'preview', review: 'publish' }; } });
+  const check = await f.command('pr-check');
+  assert.match(check, /\| Automatic comments \| ok \| afterReview: review publish, deep none, quick preview\. After a COMPLETE \/pr-review, AZPR posts its comments as the PAT owner; a comment a safeguard holds back waits for a person\. A flag right after the PR URL \(--preview, --publish, --no-comment\) sets it for one run\. \|/);
+  assert.match(check, /\] READY/);
+  const g = await fixture(t);
+  assert.match(await g.command('pr-check'), /\| Automatic comments \| ok \| afterReview: review none, deep none, quick none \(no automatic comments\)\. A flag right after the PR URL/);
+  const calls = g.azure.state.calls.length;
+  await assert.rejects(g.commands.get('pr-check').execute({ sessionID: 'ordinary', prompt: { text: `${g.azure.prUrl()} --preview` } }), /makes no comments and takes no option/);
+  for (const text of [`${g.azure.prUrl()} --no-coment`, `${g.azure.prUrl()} --preview --publish`, `--publish ${g.azure.prUrl()}`]) {
+    await assert.rejects(g.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text } }), /\[AZPR\] (Unknown option|Use at most one|Put the PR URL first)/, text);
+  }
+  await assert.rejects(g.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: '' } }), /Usage: \/pr-review <Azure PR URL> \[--preview\|--publish\|--no-comment\] \[your context\]/);
+  assert.equal(g.prompts().length, 0);
+  assert.equal(g.azure.state.calls.length, calls, 'A refused command makes no Azure DevOps call.');
 });

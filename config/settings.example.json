@@ -28,6 +28,11 @@
   "shell": "deny",
   "progressNotices": true,
   "deletePrivateSessions": true,
+  "afterReview": {
+    "quick": "none",
+    "review": "none",
+    "deep": "none"
+  },
   "azure": {
     "organization": "",
     "pat": "",

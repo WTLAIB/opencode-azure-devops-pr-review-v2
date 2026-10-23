@@ -16,6 +16,94 @@ report) route to that conversation. Reviews are persisted, so this also works
 after an OpenCode restart. A preview is refreshed on every `/pr-comment`
 without `--publish`; `--publish` reuses an existing preview exactly.
 
+## Automatic comments after a review
+
+`afterReview` (per mode: `none`, the default, `preview` or `publish`) or a
+flag right after the PR URL of a review command (`--preview`, `--publish`,
+`--no-comment`, which wins for that run) starts the same planning and
+publication after a review:
+
+1. Only a COMPLETE review hands on; STALE, PARTIAL, INCOMPLETE, CANCELLED and
+   TIMED_OUT reviews never do, and nothing starts while the plugin unloads. A
+   `/pr-stop`, timeout or unload that arrives while a finished review's report
+   is still being delivered keeps the review COMPLETE (it can still be
+   commented on by hand) but starts no step; its receipt says `Automatic
+   comments are off for this review (stopped: …)`.
+   The review's `STARTED` notice and its receipt's PR comments section say
+   which step follows (and why: the setting or the flag).
+2. After the review's receipt, a review without findings to comment on gets
+   one notice, `Automatic preview skipped` or `Automatic publication
+   skipped`: nothing is planned or posted and no model runs. A manual
+   `/pr-comment` still previews a summary-only comment.
+3. Otherwise a separate comment run starts with its own run ID, `STARTED`
+   notice (`automatic preview after review <id> completed`) and receipt
+   (`Started automatically after review <id> completed`). `/pr-stop` stops it
+   like any run. When another AZPR command holds the conversation or the PR,
+   the step is skipped with a notice that names the `/pr-comment` command to
+   run when that command has finished.
+4. Automatic publication posts each item that no safeguard holds back. An
+   item, the summary or an inline comment, waits in the saved preview for a
+   person when its text contains an Azure DevOps mention (`@<…>`), an image
+   (`![`), HTML that embeds content or runs a script (tags such as `img`,
+   `iframe`, `object`, `embed`, `video`, `audio`, `svg`, `script`, `style`,
+   `link`, `meta` or `base`; attributes such as `on…=`, `src=`, `srcset=`,
+   `style=`, `background=` or `poster=`, read as a browser reads a tag: a
+   quoted value may hold `<` and `>`, a slash separates attributes, a tag
+   name runs to a space, slash or `>` (spaces are ASCII whitespace only, so a
+   no-break space does not end a value), and every `<` may start a tag, since
+   a renderer may show an earlier one as text), HTML that hides text (a comment
+   other than AZPR's marker, a declaration `<!…>`, a processing instruction
+   `<?…>` or `</` without a tag name, which a browser turns into a comment),
+   or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script
+   links and mentions also count when written with backslash escapes or
+   character references, such as `javascript\:` or `java&#115;cript:`, which
+   CommonMark decodes; a numeric reference also with any number of digits or
+   without a semicolon, as a browser decodes it in raw HTML. A script link
+   also counts with a tab or line break inside, written or as a reference
+   (`java&#9;script:`, `java&Tab;script:`), since a browser drops those from
+   a URL. These checks are literal and prefer a false alarm.
+   Ordinary web and mail links (`https://`, protocol-relative destinations,
+   `mailto:`, email autolinks, reference definitions) and markup that neither
+   loads content nor runs a script, such as `<input name="id">` in an
+   example, generics such as `List<String>` or decorators such as
+   `@property`, are posted.
+
+   Literal code renders as text, so the checks except mentions (which Azure
+   DevOps may resolve anywhere) skip the content of a fenced code block and
+   of a code span. They skip it only where the reading is certain: a fence
+   that starts in column 0 outside a table, before any line that could start
+   an HTML block and before any fence that is indented or inside a quote or
+   list; and a code span whose backticks pair on one line, with no pipe
+   inside and no link destination, HTML tag with quotes, math or bare address
+   before it in the paragraph that could take a backtick (a renderer that
+   links `https://…` may take a backslash or backtick along), in a paragraph
+   that ends before such a line (the line may continue the paragraph, and
+   markdown-it then reads earlier backticks differently). Otherwise the
+   text is checked as written, so `![` in such code still holds back. Fuzzing
+   against commonmark.js and markdown-it found nothing skipped that renders
+   as markup (see [validation](VALIDATION.md)).
+
+   The receipt says `Automatic
+   publication held back N item(s) for a person: …` with each item and why;
+   when every item is held, nothing is posted and the status is `PREVIEW`
+   (`held back every item`). A quick review's findings are posted with its
+   disclosure (`quick review, not independently verified`; the summary also
+   names incomplete coverage), also a high-severity finding: its verification
+   hint is advisory. When the plan has no inline comment and the planner
+   skipped every finding as `existing-thread` with a thread the runtime found
+   live before planning, typically AZPR's own comment from an earlier run,
+   there is nothing new to post: status `NOTHING_TO_POST`, `Automatic
+   publication found nothing new to post: …`, and the plan is saved (the
+   summary's marker follows the inline comments, so posting would add a
+   second summary for the same findings each time an unchanged PR is reviewed
+   again). `/pr-comment <id> --publish`, like every command you type, applies
+   none of these safeguards: it posts every item of the saved preview, and
+   items already posted are `ALREADY_PRESENT`.
+
+Publication then follows the usual rules below (PR active, unchanged head,
+markers, read-back). Automatic publication posts as the PAT owner, like
+`/pr-comment --publish`.
+
 ## What is posted
 
 - **One summary thread** (no file anchor): a 🤖 AI/model disclosure, optional

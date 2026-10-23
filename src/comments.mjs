@@ -116,6 +116,230 @@ export function publicationItems(plan) {
   return [...(plan?.summary ? [plan.summary] : []), ...(plan?.comments ?? [])];
 }
 
+/**
+ * Why automatic publication has nothing new to post: the plan has no inline
+ * comment, and the planner skipped every finding because a live thread of the
+ * PR already discusses it (checked against `discussions`, the threads the
+ * runtime read before planning), typically AZPR's own comment from an earlier
+ * run. The summary's marker follows the inline comments, so posting it would
+ * add a second summary for the same findings. '' otherwise, also when the
+ * threads could not be read.
+ */
+export function automaticPublicationRepeats(plan, discussions) {
+  const skipped = plan?.skipped ?? [];
+  if (plan?.comments?.length || !skipped.length || !Array.isArray(discussions)) return '';
+  const live = new Set(discussions.map(thread => thread.threadId));
+  if (!skipped.every(skip => skip.cause === 'existing-thread' && live.has(skip.threadId))) return '';
+  return `every finding is already discussed on the PR (${[...new Set(skipped.map(skip => `thread ${skip.threadId}`))].join(', ')})`;
+}
+
+// Comment text that automatic publication leaves to a person, item by item:
+// it would notify people, load content when the comment is viewed, or run a
+// script. Ordinary links are posted. The checks are literal and prefer a false
+// alarm to a miss; AZPR's own marker is removed first. Script links and
+// mentions are also checked after decoding (see decodedText); images and HTML
+// only as written, since a decoded character never forms markup. A browser
+// drops tabs and line breaks from a URL, so the script-link check also reads
+// the text without them. Literal code renders as text, so only the mention
+// check reads it (see withoutCode): Azure DevOps may resolve a mention wherever
+// it is written.
+const ACTIVE_ATTRIBUTES = 'on[a-z]+|src|srcset|style|background|poster|xlink:href';
+const ACTIVE_ATTRIBUTE = new RegExp(`^(?:${ACTIVE_ATTRIBUTES})$`);
+const UNSEEN_TEXT = [
+  ['a script, data or local-file link', [/\b(?:javascript|vbscript):/i, /\bdata:[a-z]+\//i, /\bfile:\/\//i], { decoded: true, url: true }],
+  ['an @mention', [/@</], { decoded: true, code: true }],
+  ['an image', [/!\[/], {}],
+  ['HTML that embeds content or runs a script', [/<\/?(?:img|image|iframe|frame|frameset|object|embed|applet|video|audio|source|track|picture|svg|script|style|link|meta|base|portal)(?=[\s/>]|$)/im,
+    new RegExp(`<[a-z][a-z0-9-]*\\s[^<>]*?\\b(?:${ACTIVE_ATTRIBUTES})\\s*=`, 'i'), { test: hasActiveAttribute }], {}],
+  // A comment, declaration, processing instruction or malformed end tag, which a browser does not show.
+  ['HTML that hides text', [/<[!?]|<\/(?![a-z])/i], {}],
+];
+const OWN_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
+// The named character references for ASCII punctuation, tab and line feed: besides
+// letters and digits, the only characters the script-link and mention checks read.
+const NAMED_REFERENCES = Object.freeze({
+  excl: '!', quot: '"', QUOT: '"', num: '#', dollar: '$', percnt: '%', amp: '&', AMP: '&', apos: "'", lpar: '(', rpar: ')',
+  ast: '*', midast: '*', plus: '+', comma: ',', period: '.', sol: '/', colon: ':', semi: ';', lt: '<', LT: '<', equals: '=',
+  gt: '>', GT: '>', quest: '?', commat: '@', lsqb: '[', lbrack: '[', bsol: '\\', rsqb: ']', rbrack: ']', Hat: '^',
+  lowbar: '_', UnderBar: '_', grave: '`', DiacriticalGrave: '`', lcub: '{', lbrace: '{', verbar: '|', vert: '|',
+  VerticalLine: '|', rcub: '}', rbrace: '}', Tab: '\t', NewLine: '\n',
+});
+/**
+ * What CommonMark makes of escapes and character references in link
+ * destinations and text, and a browser of character references in raw HTML:
+ * `java&#115;cript:` and `javascript\:` are script links, `@&lt;…&gt;` a
+ * mention. Decoding errs towards finding more (a reference after a backslash
+ * is decoded too); a numeric reference counts with any number of digits and
+ * without a semicolon, as a browser reads it, and `&lt`, `&gt`, `&amp` and
+ * `&quot` count without a semicolon.
+ */
+function decodedText(text) {
+  return text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    .replace(/&#(?:([0-9]+)|[xX]([0-9a-fA-F]+));?/g, (_, decimal, hex) => {
+      const code = decimal === undefined ? parseInt(hex, 16) : Number(decimal);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd';
+    })
+    .replace(/&([A-Za-z][A-Za-z0-9]*);|&(lt|gt|amp|quot|LT|GT|AMP|QUOT)(?![A-Za-z0-9;])/g, (whole, name, legacy) => Object.hasOwn(NAMED_REFERENCES, name ?? legacy) ? NAMED_REFERENCES[name ?? legacy] : whole);
+}
+
+/**
+ * Whether a start tag has an attribute that loads content or runs a script,
+ * read the way a browser reads an HTML block: a tag name runs to a space, a
+ * slash or >, slashes separate attributes, and only a value that opens with a
+ * quote is quoted, so it may hold < and >. A tag ends at the first > outside
+ * such a value. Every < counts as a possible start, since a renderer may show
+ * an earlier one as text; a reading that reaches a point between attributes
+ * where an earlier one was continues as that one did, so it stops there. The
+ * end of every name and value is looked up in tables built once, so the work
+ * stays linear in the length of the text, however many < it holds.
+ */
+function hasActiveAttribute(text) {
+  if (!/<[a-z]/i.test(text)) return false;
+  const length = text.length, space = char => /[\t\n\f\r ]/.test(char);
+  // For each offset, the first offset at or after it whose character passes the test.
+  const next = test => {
+    const found = new Int32Array(length + 1).fill(length);
+    for (let k = length - 1; k >= 0; k--) found[k] = test(text[k]) ? k : found[k + 1];
+    return found;
+  };
+  const tagEnd = next(char => space(char) || char === '/' || char === '>'), solid = next(char => !space(char));
+  const nameEnd = next(char => space(char) || char === '/' || char === '>' || char === '=');
+  const valueEnd = next(char => space(char) || char === '>');
+  const quoteEnd = { '"': next(char => char === '"'), "'": next(char => char === "'") };
+  // An event handler name of any length is "on" and letters; other names are short enough to compare.
+  const letters = new Int32Array(length + 1);
+  for (let k = length - 1; k >= 0; k--) letters[k] = /[a-z]/i.test(text[k]) ? letters[k + 1] + 1 : 0;
+  const active = (from, to) => to - from <= 32 ? ACTIVE_ATTRIBUTE.test(text.slice(from, to).toLowerCase())
+    : /^on/i.test(text.slice(from, from + 2)) && letters[from] >= to - from;
+  const read = new Uint8Array(length + 1);
+  for (let start = text.indexOf('<'); start !== -1; start = text.indexOf('<', start + 1)) {
+    if (!/[a-z]/i.test(text[start + 1] ?? '')) continue;
+    for (let i = tagEnd[start + 1]; i < length && text[i] !== '>' && !read[i];) {
+      read[i] = 1;
+      if (space(text[i]) || text[i] === '/') { i++; continue; }
+      // A name may open with =; a value follows an = after the name and any spaces.
+      const end = nameEnd[i + 1], equals = solid[end];
+      if (active(i, end)) return true;
+      if (text[equals] !== '=') { i = end; continue; }
+      const value = solid[equals + 1], open = text[value];
+      i = open === '"' || open === "'" ? Math.min(length, quoteEnd[open][value + 1] + 1) : open === '>' ? value : valueEnd[value];
+    }
+  }
+  return false;
+}
+
+/**
+ * The text with its literal code blanked: the content lines of fenced code
+ * blocks and the code spans, which render as text. Recognition errs towards
+ * checking, since a wrong guess would hide markup that renders. A fence counts
+ * only in column 0 and outside a table; from the first line that may start an
+ * HTML block, or a fence that is indented or inside a quote or list, nothing
+ * more is blanked, nor in the paragraph that line may continue. Code spans
+ * follow codeSpans, paragraph by paragraph.
+ */
+function withoutCode(text) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n'), shown = [...lines];
+  let closer = null, table = false, paragraph = [];
+  const blankSpans = () => {
+    if (!paragraph.length) return;
+    const joined = paragraph.map(n => lines[n]).join('\n');
+    let blanked = '', at = 0;
+    for (const [start, end] of codeSpans(joined) ?? []) { blanked += `${joined.slice(at, start)} `; at = end; }
+    `${blanked}${joined.slice(at)}`.split('\n').forEach((line, index) => { shown[paragraph[index]] = line; });
+    paragraph = [];
+  };
+  for (const [n, line] of lines.entries()) {
+    if (closer) {
+      if (closer.test(line)) closer = null;
+      else shown[n] = '';
+      continue;
+    }
+    const open = /^(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
+    if (open && !table && !line.includes('|')) {
+      blankSpans();
+      closer = new RegExp(`^ {0,3}${open[1] ? '`' : '~'}{${(open[1] ?? open[2]).length},}[ \\t]*$`);
+    } else if (open || /^[\s>*+\-.)\d]*</.test(line) || /^[\s>*+\-.)\d]+(?:`{3}|~{3})/.test(line)) {
+      // The paragraph may go on in this line, whose backticks could pair with its own.
+      paragraph = [];
+      break;
+    } else if (/^[ \t]*$/.test(line)) {
+      blankSpans();
+      table = false;
+    } else {
+      table ||= line.includes('|');
+      paragraph.push(n);
+    }
+  }
+  blankSpans();
+  return shown.join('\n');
+}
+
+/**
+ * The [start, end) offsets of one paragraph's code spans, or null when their
+ * pairing is uncertain: a backtick run without a partner on its line (it may
+ * pair across lines), a span with a pipe (a table splits its cells first), or a
+ * backtick after something that can swallow one: a link destination or label,
+ * an HTML tag with quotes or without an end, a comment, math, or a bare
+ * address that a renderer may turn into a link, backslash included.
+ */
+function codeSpans(paragraph) {
+  const spans = [], last = paragraph.lastIndexOf('`'), closers = new Map(), found = {};
+  // Running tallies, so that each look back or ahead below takes constant time.
+  const address = [false], quotes = [0], nesting = [0], pipes = [0];
+  for (let i = 0; i < paragraph.length; i++) {
+    const char = paragraph[i];
+    address.push(!/[\s<]/.test(char) && (address[i] || /[:.@]/.test(char)));
+    quotes.push(quotes[i] + /[`"']/.test(char));
+    nesting.push(nesting[i] + /[`"'(<\\]/.test(char));
+    pipes.push(pipes[i] + (char === '|'));
+  }
+  const ahead = (char, from) => {
+    if (!(found[char] >= from)) found[char] = paragraph.indexOf(char, from) === -1 ? Infinity : paragraph.indexOf(char, from);
+    return found[char];
+  };
+  for (let i = 0; i < paragraph.length; i++) {
+    const char = paragraph[i], next = paragraph[i + 1] ?? '', later = i < last;
+    // A renderer that links a bare address may take the backslash along, so it escapes nothing there.
+    if (char === '\\' && /[!-/:-@[-`{-~]/.test(next) && !address[i]) i++;
+    else if (char === '`') {
+      let run = 1;
+      while (paragraph[i + run] === '`') run++;
+      if (!closers.has(run)) closers.set(run, new RegExp(`(?<!\`)\`{${run}}(?!\`)`, 'g'));
+      const closer = closers.get(run);
+      closer.lastIndex = i + run;
+      const close = closer.exec(paragraph);
+      if (!close || close.index > ahead('\n', i) || pipes[close.index] > pipes[i + run] || address[i]) return null;
+      spans.push([i, close.index + run]);
+      i = close.index + run - 1;
+    } else if (!later) break;
+    else if (char === '<' && /\S/.test(next)) {
+      const end = ahead('>', i);
+      if (end === Infinity || /[!?]/.test(next) || quotes[end] > quotes[i]) return null;
+    } else if (char === ']' && /[([]/.test(next)) {
+      // A link that ends at the first closing bracket without quotes, escapes or nesting swallows no backtick.
+      const end = ahead(next === '(' ? ')' : ']', i + 2);
+      if (end === Infinity || nesting[end] > nesting[i + 2]) return null;
+    } else if (char === '$') return null;
+  }
+  return spans;
+}
+
+/** The saved items whose text automatic publication leaves to a person: { marker, reason } each. */
+export function automaticPublicationProblems(plan) {
+  return publicationItems(plan).flatMap(item => {
+    const text = item.content.replace(OWN_MARKER, ''), shown = withoutCode(text);
+    const forms = { all: [text, decodedText(text)], shown: [shown, decodedText(shown)] };
+    const kinds = UNSEEN_TEXT.filter(([, patterns, { decoded, code, url }]) => {
+      const [plain, decodedForm] = code ? forms.all : forms.shown;
+      const read = (decoded ? [plain, decodedForm] : [plain]).flatMap(form => url ? [form, form.replace(/[\t\n\r]/g, '')] : [form]);
+      return patterns.some(pattern => read.some(form => pattern.test(form)));
+    }).map(([kind]) => kind);
+    if (!kinds.length) return [];
+    const name = item.kind === 'summary' ? 'the PR summary' : `the comment for ${(item.findingIds ?? [item.findingId]).join(', ')} (${item.path}:${item.startLine})`;
+    return [{ marker: item.marker, reason: `${name} contains ${kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds.at(-1)}` : kinds[0]}` }];
+  });
+}
+
 /** Whitespace-insensitive anchor text, so re-reviews of unchanged code match. */
 export const normalizedAnchor = anchor => anchor.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).join('\n').trim();
 

@@ -7,6 +7,260 @@ passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
 
+## Automatic comments after a review (unreleased, 2026-10-22 and 23)
+
+Environment as below (Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode CLI
+2.1.2). `afterReview`, the review commands' `--preview`, `--publish` and
+`--no-comment` flags, the safeguards of automatic publication and the setup
+problem messages were added on top of 0.1.0; review prompts were unchanged.
+
+- `npm run check` and **387 offline tests** passed. The new tests cover the
+  setting (defaults, partial objects, values never echoed), the flag parser
+  (one flag right after the URL, refused typos, dashes and second flags,
+  `/pr-check` taking none, context starting after the flag), the hand-off
+  (a COMPLETE review previews or publishes in a run of its own; STALE and
+  cancelled reviews hand on nothing; a review without findings gets one
+  notice and no model request; a flag overrides the setting both ways), the
+  safeguards item by item (an `@<…>` mention, an image, HTML that embeds
+  content or runs a script, or a `javascript:`, `vbscript:`, `data:` or
+  `file://` link in the summary or an inline comment holds back that item
+  while the others are posted and read back, and a typed `--publish` then
+  posts it; mentions and script links also when written with backslash
+  escapes or character references; when every item is held nothing is
+  posted; when the PR changed before publication the run is STALE, posts
+  nothing and does not offer the held items), what passes (ordinary links, also encoded, protocol-relative, in
+  reference definitions inside block quotes and list items, `mailto:` and
+  email autolinks; markup such as `<input name="id">` or `<a href>`;
+  generics, decorators, AZPR's marker and its own `&lt;!--` escaping), a
+  quick review whose high-severity finding or incomplete coverage is posted
+  with the quick disclosure and an advisory hint, a plan that would only
+  repeat the summary because every finding is already discussed on the PR
+  (`NOTHING_TO_POST`, while a typed `--publish` still posts it), a
+  `/pr-stop` that arrives while a finished review's report is delivered (the
+  review stays COMPLETE and nothing follows), a PR held by another comment
+  command, `/pr-stop` of the automatic step, the `/pr-check` row (information,
+  no warning), the installer adding `afterReview` and setup naming the problem
+  without values. Removing any one safeguard, the per-item filter, the
+  nothing-new rule, the no-findings check, the busy-lock handling, the typo
+  refusal or the setting itself makes a test fail; so does holding ordinary
+  links or `<a>` again, or offering held items for publication after a STALE
+  check (14 mutations of this revision's changes, all caught).
+- All four real-host fixtures passed on OpenCode 2.1.2 with fake model and
+  Azure services: fresh, replacement and native installation, and comment
+  scale. The smoke fixture additionally ran `/pr-review <URL> --preview`
+  (COMPLETE, then a PREVIEW in a run of its own, nothing posted),
+  `/pr-quick <URL> --publish` with a high-severity finding (POSTED, no item
+  held; its markers were settled by an earlier step, so nothing new was
+  created), `/pr-review <URL> --publish` with an image in its inline comment
+  (the summary POSTED and read back, VERIFIED=1, that comment held back with
+  the reason; a typed `/pr-comment <id> --publish` then posted it with the
+  summary ALREADY_PRESENT and no model request), a quick review without
+  findings (one notice and no further provider request), and, after a restart
+  with `afterReview.review: publish`, a plain `/pr-review` whose automatic
+  publication was POSTED and read back (VERIFIED=2), then the same review
+  again with every finding planned as already discussed by that comment:
+  `NOTHING_TO_POST`, no second summary.
+- The 15 comment previews saved from real reviews (76 items) contain none of
+  the held constructs, so the item checks hold back nothing in them. The
+  earlier quick-review rule would have held back one of them in full: a quick
+  preview of the 316-file test PR with two high-severity findings (24 items),
+  which is now posted with the quick disclosure.
+- **Live** with this revision installed in the user's OpenCode 2.1.2 service:
+  gpt-6-luna for every role, `afterReview` none for every mode and `--preview`
+  on the command, so nothing was posted. Times are from first stage start to
+  last stage end.
+  - The one-file test PR: `/pr-quick <URL> --preview` was COMPLETE in 36 s
+    with two REPORTED findings (two of the three known defects), and its
+    automatic preview took 6 s.
+    `/pr-review <URL> --preview` was COMPLETE in 93 s with the three known
+    defects confirmed, and its automatic preview took 24 s. Both previews
+    proposed no inline comment: each finding was skipped as `existing-thread`,
+    naming the demo threads that already discuss it.
+  - The 35-file test PR: `/pr-quick <URL> --preview` was COMPLETE in 44 s
+    with no finding (both seeds missed). It got the one notice (`Automatic preview skipped: the
+    review has no findings to comment on …`) and no planning session.
+    `/pr-review <URL> --preview` was COMPLETE in 88 s with the seeded
+    millisecond-format regression confirmed; the other seed was missed, as
+    in earlier gpt-6-luna runs. Its automatic preview took 10 s and proposed
+    one inline comment.
+  - Each automatic preview started less than a second after its review's
+    last stage, as a run of its own. Its STARTED notice and receipt named the
+    source (`--preview`), and its Azure DevOps calls were reads only.
+    `/pr-check` was READY with the new `Automatic comments` row
+    (`afterReview: review none, deep none, quick none (no automatic
+    comments)`).
+  - Earlier attempts that day failed before any model request
+    (`provider.auth`: the OpenAI sign-in could not be refreshed until it was
+    renewed). Those INCOMPLETE reviews started no comment step.
+- **Live automatic publication**, with the user's consent, on the 35-file test
+  PR: gpt-6-luna, `/pr-review <URL> --publish`. Before the first run the PR's
+  publication record was moved aside: it held seven comments from an earlier
+  test that had been deleted on the PR, and with it AZPR would have reported
+  matching items as `DELETED` instead of posting them.
+  - The first review was COMPLETE in 92 s with the millisecond-format seed
+    confirmed. Its automatic publication, a run of its own, planned the
+    summary and one inline comment on `json_schema.py:874` and posted both in
+    10 s: VERIFIED=2, read back from Azure DevOps, and an independent thread
+    listing went from 0 to 2 live AZPR comments. No safeguard applied:
+    the findings were verified, and the text had no link, mention, image or
+    HTML.
+  - A second `/pr-review <URL> --publish` of the unchanged head confirmed the
+    same finding (76 s). Its planner skipped the finding as `existing-thread`,
+    naming the inline comment just posted, so no inline comment was repeated.
+    The summary's marker depends on the set of inline comments, though, so
+    the summary differed from the first one and was posted again (VERIFIED=1,
+    3 live AZPR comments).
+  - That repeated summary led to the repeated-summary rule: automatic
+    publication posts no summary for such a plan (no inline comment, every
+    finding skipped as `existing-thread` with a live thread). It first kept
+    the plan to a preview; it is now `NOTHING_TO_POST` (below).
+- **Live, with the review fixes** (the repeated-summary rule, links and
+  mentions checked after decoding, and no hand-off after a stop during report
+  delivery), on the same PR with those comments deleted and its record moved
+  aside again, six more `/pr-review <URL> --publish` runs:
+  - Two reviews confirmed the millisecond-format seed. The first was posted
+    automatically in 9 s (summary and one inline comment,
+    VERIFIED=2, two thread creations). The decoded checks found nothing in
+    the real comment text.
+  - The second, run while that inline comment was live, was held back to a
+    preview in 4 s with "every finding is already discussed on the PR
+    (thread …), so there is no new inline comment and only a repeated
+    summary would be posted", and created no thread (the behavior of that
+    revision; see below for `NOTHING_TO_POST`).
+  - Four reviews confirmed no finding: three had no candidate and one had a
+    candidate that verification did not confirm. Each got only the
+    "Automatic publication skipped: the review has no findings to comment on"
+    notice, with no planning session and no write.
+  - A stop during report delivery and encoded links cannot be produced on
+    demand with a real model; those cases are covered offline. The test
+    comments were deleted afterwards.
+- **Live, with the per-item safeguards** (the revision before the literal-code
+  rule below), on the same PR with those comments deleted and its record
+  moved aside again, two `/pr-review <URL> --publish` runs with gpt-6-luna:
+  - The first review was COMPLETE in 73 s with the millisecond-format seed
+    confirmed. Its automatic publication posted the summary and one inline
+    comment on `json_schema.py:874` in 9 s: VERIFIED=2, no item held, and an
+    independent thread listing went from 0 to 2 live AZPR comments.
+  - The second review of the unchanged head confirmed the same finding
+    (84 s). Its automatic run took 7 s: the planner skipped the finding as
+    already discussed in the inline comment just posted, and the run ended
+    `NOTHING_TO_POST` with "Automatic publication found nothing new to post:
+    every finding is already discussed on the PR (thread …). The plan is
+    saved." It made two Azure DevOps reads and no write; the listing stayed
+    at 2 live AZPR comments.
+  - The real comment text again had none of the held constructs. The test
+    comments were deleted afterwards.
+- **Literal code** (the revision before the closed gaps below, after an
+  external review found that a code example such as `` `<img src="avatar.png">` ``
+  or a fenced `<script>` example still held back its comment): the checks
+  other than mentions now skip fenced code and code spans where every reading
+  of the Markdown agrees.
+  - `npm run check` and **388 offline tests** passed. The review's four
+    examples are posted; texts whose backticks or fences could be read
+    another way stay checked (an escaped backtick, a span across lines or a
+    heading, a link destination, attribute value, math or bare address that
+    takes a backtick, a backslash that a linked address takes along, a pipe
+    in a table cell, an HTML block, a fence in a list or indented, a table
+    header, a backtick in the info string, CRLF closers, UTF-16 offsets after
+    emoji), and mentions stay checked in code. Removing any one of those
+    rules, or blanking nothing, makes a test fail (18 mutations); the 13
+    mutations of the previous revision are still caught. A 176,000-character
+    summary is checked in 15 ms, and the check is linear (a 400,000-character
+    line of code spans: 150 ms).
+  - Differential fuzzing against commonmark.js 0.31.2 and markdown-it 14.1.0
+    (`html` and `linkify` on), outside the repository: 1,000,000 generated
+    texts, half random tokens and half templates that put a backtick-taking
+    construct before code with markup, blanked about 240,000 code spans and
+    124,000 fenced lines; on its source line none of them was raw HTML, a
+    link or image destination, or image text for either renderer. Copies
+    with one rule removed were caught each time (from 24 to 2,191 hits per
+    100,000 texts); two such cases found this way, a backslash or escaped
+    backtick taken into a linked address, are fixed and tested.
+  - Rendering both renderers' HTML with parse5 7.1.2 over 300,000 texts:
+    about 6,600 per 100,000 that the previous revision held are now posted,
+    and all but 0 to 6 of them render no active markup. Those few contain
+    `<!X…>` or `<?…>`, which browsers turn into comments and no rule checks;
+    the previous revision held them only because of code elsewhere in the
+    text. The same run found the gaps listed under Not yet validated.
+  - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
+    saved from real reviews still have no held item. No live run: real
+    comment text has not contained the held constructs, in code or not.
+
+- **Closed gaps of the literal HTML checks** (the revision before script links
+  with a tab or line break, below): HTML that
+  hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name, which a
+  browser turns into a comment) is a kind of its own; attributes are also read
+  the way a browser reads a tag (a quoted value may hold `<` and `>`, a slash
+  separates attributes, a tag name runs to a space, slash or `>`, and every
+  `<` may start a tag, since a renderer may show an earlier one as text); and
+  code in a paragraph that runs into the first line where blanking stops is
+  checked as written.
+  - That last rule closes a literal-code case the previous revision posted:
+    once a link label's lookahead in markdown-it 14.1.0 reaches an unpaired
+    backtick later in the paragraph, markdown-it reads every earlier backtick
+    as text, so `` [`![a](b.png)` x `` followed by `<b>`` ` `` on the next line
+    renders an image. Extended fuzz templates found it; a copy without the
+    rule has 244 such cases per 100,000 texts.
+  - `npm run check` and 388 offline tests passed. 11 mutations of these rules
+    (each hidden-text form, the browser reading of attributes and its every-`<`
+    start, attribute-name case, the shared attribute list, the paragraph at a
+    stop) are caught, as are the 18 and 13 of the two revisions before.
+    Reading attributes from every `<` stays linear: 100,000-character
+    adversarial texts take 12 to 40 ms.
+  - Gap statistics with parse5 over both renderers' HTML (100,000 texts each,
+    random tokens and templates): the previous revision missed 2,235 hidden
+    comments and 1,344 active attributes behind quotes or unusual tag names;
+    this revision misses none of either. Against the previous revision, no
+    text that it held is posted now (200,000 texts). The exact check of
+    blanked code found nothing active in 1,000,000 texts.
+  - All four real-host fixtures passed on OpenCode 2.1.2. No live run.
+
+- **Script links with a tab or line break** (the revision before linear
+  attribute reading, below): a browser drops
+  tabs and line breaks from a URL, so `<a href="java&#9;script:…">`, or one
+  with a raw tab or line break inside the scheme, is a script link. The
+  script-link check now also reads the text, as written and decoded, without
+  them, and character references are decoded as a browser decodes them in
+  raw HTML: numeric ones with any number of digits or without a semicolon,
+  and `&Tab;` and `&NewLine;`.
+  - `npm run check` and 388 offline tests passed. 7 mutations of these rules
+    are caught, as are the 19, 10 and 13 of the revisions before.
+  - The fuzz detector now reads a URL as a browser does (leading and trailing
+    control characters and spaces trimmed, tabs and line breaks removed).
+    With it, the previous revision missed 674 such links per 100,000 texts;
+    this revision misses none, and over 500,000 texts the gap statistics
+    found no active construct that the checks miss. No text the previous
+    revision held is posted now (200,000 texts), and the exact check of
+    blanked code found nothing active in 300,000.
+  - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
+    saved from real reviews still have no held item. No live run.
+
+- **Linear attribute reading** (this revision, after an external review found
+  that reading attributes from every `<` rescanned the rest of a tag name
+  each time): a tag name runs to a space, slash or `>`, so a long run such as
+  `<a<a<a…`, also inside a quoted value, took quadratic time and blocked the
+  plugin while the check ran. The end of every tag name, attribute name and
+  value is now looked up in tables built once per text, and each point
+  between attributes is read once. Attributes are separated by ASCII
+  whitespace only, as in a browser, since a no-break space ending a value
+  could pair quotes differently and hide an `on…=`.
+  - Measured on the same machine for `<a` repeated: 212, 854 and 3,439 ms for
+    32,000, 64,000 and 128,000 characters before; 20, 18, 32 and 62 ms for
+    32,000 to 256,000 characters now. The same inside a quoted value: 245 and
+    883 ms for 32,000 and 64,000 characters before; 65 and 136 ms for 64,000
+    and 256,000 now. Other repeated tag-like units of 256,000 characters take
+    47 to 122 ms, and 40 random 100,000-character tag-like texts at most
+    56 ms.
+  - `npm run check` and **389 offline tests** passed, among them a test that
+    bounds the time for five long tag-like texts and one for the no-break
+    space. 9 mutations of the reading (the tables, the quoted values, slashes,
+    name case, every `<` as a start, ASCII whitespace, the read points, long
+    event-handler names, a rescanned tag name) are caught, the slow ones by
+    the time bound, as are the 19, 7 and 13 of the revisions before.
+  - Fuzzing: no gap over 200,000 texts, the same holds as the previous
+    revision on 200,000, and nothing active in blanked code on 100,000. All
+    four real-host fixtures passed on OpenCode 2.1.2. No live run.
+
 ## 0.1.0 release acceptance (2026-10-22)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.2.
@@ -105,8 +359,8 @@ Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. From
 
 ## Offline tests
 
-`npm run check` and `npm test` pass: 367 tests across settings (including the
-`mcp` → `azure` migration and the proxy and TLS settings), host helpers, session
+`npm run check` and `npm test` pass: 384 tests across settings (including the
+`mcp` → `azure` migration, the proxy and TLS settings and `afterReview`), host helpers, session
 transport, the shared queue,
 the REST client (change paging, merge base, error classes, retries, timeouts
 that abort requests, binary and oversized files, the per-run cache, PAT never
@@ -1422,6 +1676,16 @@ transient failure, and its error names the last activity.
 
 ## Not yet validated
 
+- Automatic publication from the setting (`afterReview: publish`) with a
+  real model: the live publications above used the `--publish` flag, which
+  differs only in where the step comes from. The item checks did not trigger
+  in any live run, since real comment text had none of the held constructs;
+  they were validated with the fixture services and the saved live previews
+  only. A quick review's automatic publication has not run live. The
+  repeated-summary rule did trigger live (above).
+- Azure DevOps's own rendering and sanitizing of comments was not tested
+  against the content checks of automatic publication: the fuzzing rendered
+  with commonmark.js and markdown-it and read the HTML with parse5.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.

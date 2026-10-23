@@ -24,12 +24,27 @@ function words(language) {
 }
 const pick = (language, en, tw, cn) => words(language) === vocabulary.tw ? tw : words(language) === vocabulary.cn ? cn : en;
 
-export function renderCommentActions(id, language) {
+/**
+ * The PR comments section of a COMPLETE review. `after` ({ mode, source }) is
+ * the comment step that follows this review automatically (afterReview or the
+ * command's flag); the manual commands stay valid either way.
+ */
+export function renderCommentActions(id, language, after) {
+  const source = after ? `\`${after.source}\`` : '';
+  const automatic = after?.mode === 'preview' ? pick(language,
+    `**Automatic preview** (${source}): AZPR now plans a comment preview as a separate command with its own receipt; nothing is posted. A review without findings to comment on gets no preview.`,
+    `**自動預覽**（${source}）：AZPR 接著以另一道指令規劃留言預覽，並另送收據；不會發布。沒有可留言的發現時不會預覽。`,
+    `**自动预览**（${source}）：AZPR 接着以另一条命令规划留言预览，并另送回执；不会发布。没有可留言的发现时不会预览。`)
+    : after?.mode === 'publish' ? pick(language,
+      `**Automatic publication** (${source}): AZPR now plans the comments and posts them as the PAT owner, as a separate command with its own receipt. A comment with an @mention, an image, embedded content, hidden text or a script link waits in the preview for a person while the others are posted, and nothing new is posted when every finding is already discussed on the PR. A review without findings to comment on gets no comments.`,
+      `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。含 @提及、圖片、嵌入內容、隱藏文字或指令碼連結的留言會留在預覽等人確認，其他照常發布；每個發現在 PR 上都已有討論時，不會再發布。沒有可留言的發現時不會留言。`,
+      `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。含 @提及、图片、嵌入内容、隐藏文字或脚本链接的留言会留在预览等人确认，其他照常发布；每个发现在 PR 上都已有讨论时，不会再发布。没有可留言的发现时不会留言。`)
+      : after ? pick(language, `Automatic comments are off for this review (${source}).`, `這份審查不自動留言（${source}）。`, `这份审查不自动留言（${source}）。`) : '';
   const [heading, publish, preview, omit, retention] = pick(language,
     ['PR comments', 'Prepare and publish comments', 'Preview comments only', 'You can omit the ID: `/pr-comment --publish` selects the latest completed review in the original conversation, or this review in its report session.', 'Reviews and previews are saved privately (latest 20) and survive an OpenCode restart. Publishing skips comments that already exist on the PR, so it is safe to run again.'],
     ['PR 留言', '直接準備並發布留言', '只看留言預覽', '也可省略 ID：`/pr-comment --publish` 會選原對話最近完成的 review；在本報告對話中會選本份報告。', 'Review 與預覽私下保存（最近 20 份），重啟 OpenCode 後仍可使用。發布時會跳過 PR 上已存在的留言，可以安全地重跑。'],
     ['PR 留言', '直接准备并发布留言', '只看留言预览', '也可省略 ID：`/pr-comment --publish` 会选原对话最近完成的 review；在本报告对话中会选本份报告。', 'Review 与预览私下保存（最近 20 份），重启 OpenCode 后仍可使用。发布时会跳过 PR 上已存在的留言，可以安全地重跑。']);
-  return `## ${heading}\n\n${publish}:\n\n\`\`\`text\n/pr-comment ${id} --publish\n\`\`\`\n\n${preview}: \`/pr-comment ${id}\`\n\n${omit}\n\n${retention}`;
+  return `## ${heading}\n\n${automatic ? `${automatic}\n\n` : ''}${publish}:\n\n\`\`\`text\n/pr-comment ${id} --publish\n\`\`\`\n\n${preview}: \`/pr-comment ${id}\`\n\n${omit}\n\n${retention}`;
 }
 
 /** Models per role, aggregated over shards and retries. */
@@ -267,7 +282,11 @@ export function renderReceipt(run, report, status, error, settings) {
         ? '\nStatus: COMPLETE means at least one quick review session produced a usable result and the PR source did not change. Quick findings are not independently verified: the runtime checked only their form and source, and findings that failed those checks are NEEDS_INFO. Coverage says whether every changed file was reviewed. STALE means the source changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n'
         : '\nStatus: COMPLETE means verification produced structured decisions and the PR source did not change; findings without a usable decision are listed as UNREVIEWED. STALE means the source changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
   if (run.mode === 'quick' && status === 'COMPLETE' && run.quickSummary && (run.quickSummary.high > 0 || !run.quickSummary.coverage?.complete)) {
-    body += `\nVerification hint: ${[run.quickSummary.high > 0 ? `${run.quickSummary.high} high-severity finding(s)` : '', !run.quickSummary.coverage?.complete ? 'incomplete coverage' : ''].filter(Boolean).join(' and ')}. Before publishing, consider /pr-review for an independently verified review.\n`;
+    const hint = [run.quickSummary.high > 0 ? `${run.quickSummary.high} high-severity finding(s)` : '', !run.quickSummary.coverage?.complete ? 'incomplete coverage' : ''].filter(Boolean).join(' and ');
+    // Automatic publication follows the user's explicit choice; the hint stays advisory.
+    body += run.afterReview?.mode === 'publish'
+      ? `\nVerification hint: ${hint}. These findings are not independently verified; the automatic publication posts them with that disclosure (and the summary with the coverage). For an independent check first, set afterReview.quick to preview or use /pr-review.\n`
+      : `\nVerification hint: ${hint}. Before publishing, consider /pr-review for an independently verified review.\n`;
   }
   if (run.userContext) body += '\nSupplementary context applies to this command only.\n';
   if (report) {
@@ -278,7 +297,7 @@ export function renderReceipt(run, report, status, error, settings) {
       body += `\nReport data:\n<azpr_report_data>\n${report.replaceAll('</azpr_report_data>', '&lt;/azpr_report_data&gt;')}\n</azpr_report_data>\n`;
     }
   }
-  if (['review', 'deep', 'quick'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage) + '\n';
+  if (['review', 'deep', 'quick'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage, run.afterReview) + '\n';
   body += `\nThis command has ended and all reviewer grants have been revoked. outputLanguage=${settings.outputLanguage}.`;
   return body;
 }

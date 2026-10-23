@@ -19,6 +19,33 @@ test('request parser preserves Unicode, multiline text, quotes and literal metac
   }
 });
 
+test('one flag right after the PR URL sets afterReview for that run; anything else there that looks like an option is refused', () => {
+  const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
+  for (const [flag, mode] of [['--preview', 'preview'], ['--publish', 'publish'], ['--no-comment', 'none']]) {
+    const parsed = parseReviewRequest(`${url} ${flag} 重點檢查 --publish 的行為\n第二行`);
+    assert.equal(parsed.flag, flag);
+    assert.equal(parsed.afterReview, mode);
+    assert.equal(parsed.userContext, '重點檢查 --publish 的行為\n第二行', 'Context starts after the flag and keeps later dashes literal.');
+    assert.equal(parseReviewRequest(`${url}\n${flag}`).userContext, '');
+  }
+  const plain = parseReviewRequest(`${url} please check --publish handling`);
+  assert.equal(plain.afterReview, undefined, 'Without a flag the setting applies.');
+  assert.equal(plain.flag, undefined);
+  assert.equal(plain.userContext, 'please check --publish handling');
+  assert.equal(parseReviewRequest(`${url} - focus on retries`).userContext, '- focus on retries', 'A lone dash starts a list item, not an option.');
+  for (const raw of [`${url} --no-coment`, `${url} --pubish focus`, `${url} -p`, `${url} \u2014publish`, `${url} \u2013preview`, `${url} --Preview`]) {
+    assert.throws(() => parseReviewRequest(raw), /Unknown option after the PR URL\. Use --preview, --publish or --no-comment/, raw);
+  }
+  for (const raw of [`${url} --preview --publish`, `${url} --publish --no-comment`, `${url} --preview --typo context`]) {
+    assert.throws(() => parseReviewRequest(raw), /at most one of --preview, --publish or --no-comment/, raw);
+  }
+  assert.throws(() => parseReviewRequest(`--publish ${url}`), /Put the PR URL first, then at most one of/);
+  // A command that makes no comments takes no option.
+  assert.throws(() => parseReviewRequest(`${url} --preview`, { flags: false }), /makes no comments and takes no option after the PR URL/);
+  assert.throws(() => parseReviewRequest(`${url} --typo`, { flags: false }), /takes no option/);
+  assert.equal(parseReviewRequest(`${url} check --preview later`, { flags: false }).userContext, 'check --preview later');
+});
+
 test('URL identity separates organization, project and repository and rejects unsupported layouts', () => {
   const cases = [
     ['https://dev.azure.com/team/Project%20A/_git/Repo%2BOne/pullrequest/12/', { organization: 'team', project: 'Project A', repository: 'Repo+One', pullRequestId: 12 }],
