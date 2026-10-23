@@ -1,11 +1,42 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation and the
-0.1.0 and 0.2.0 distributions. Host integration, provider
+0.1.0, 0.2.0 and 0.2.1 distributions. Host integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
+
+## 0.2.1 release acceptance (2026-10-23)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.2.
+The release publishes the 0.2.0 runtime to the npm registry as
+`opencode-azure-devops-pr-review`; it changes package metadata, documentation
+and test tooling only.
+
+- `npm run check` and **392 offline tests** passed. New tests check that the
+  package is publishable (no private flag, dependencies or install scripts),
+  that the changelog, release notes, README and quickstart name its version,
+  and that release notes, which become the GitHub Release body, link only
+  absolute URLs.
+- All four real-host fixtures passed with isolated profiles and fake model
+  and Azure services: fresh source installation, replacement installation,
+  native packed package installation and comment scale (eight planning
+  sessions with at most two in flight; largest provider request 33,419
+  characters). The native fixture now also checks that the copy OpenCode
+  installed in its package cache holds no settings.
+- `--native --package` installed the public v0.2.0 Git tag through the plugin
+  manager and passed the same native workflow; this is the option used to
+  check the published npm package.
+- `npm pack --dry-run --json` for `opencode-azure-devops-pr-review@0.2.1`
+  lists 68 files (about 874 KB): the entry, runtime, eight prompts,
+  configuration example and schema, license and release notes. No private
+  settings, tests or `.local/` files are included.
+- Relative links and anchors in the changed documentation resolve.
+- Publication to npm and the checks after it (registry integrity, the native
+  fixture against the registry package) follow the [releasing guide](RELEASING.md)
+  once the tag exists; they are not part of this record. No live model request
+  or Azure publication was made.
 
 ## 0.2.0 release acceptance (2026-10-23)
 

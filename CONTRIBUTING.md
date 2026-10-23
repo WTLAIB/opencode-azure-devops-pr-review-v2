@@ -3,6 +3,8 @@
 Bug reports, focused fixes and documentation improvements are welcome. Start
 with the [quickstart](docs/QUICKSTART.md), [architecture](docs/ARCHITECTURE.md)
 and [roadmap](docs/ROADMAP.md). Public source and documentation use English.
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md), which
+also says where to report a conduct problem.
 
 ## Report a problem or suggest a change
 

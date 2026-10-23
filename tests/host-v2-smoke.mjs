@@ -3,9 +3,12 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 import { fakeProxy } from './fake-proxy.mjs';
 import { TESTED_HOST_VERSION } from '../src/host.mjs';
 /**
- * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace|--native]
- * --native packs the Git-distributed package, loads its real entry with external
+ * Opt-in exact-host fixture: node tests/host-v2-smoke.mjs /absolute/path/opencode [--replace|--native [--package SPEC]]
+ * --native packs the package, loads its real entry with external
  * settings, exercises first-run setup and then runs the same review workflow.
+ * --package SPEC installs that published package instead (an npm version such
+ * as opencode-azure-devops-pr-review@0.2.1, or a Git specification; needs the
+ * network) to check a release after publication.
  * Isolated directories, a loopback deterministic provider, a loopback fake
  * Azure DevOps REST service (api-version 7.1, persistent thread state) and one
  * foreign stdio MCP server. Covers the deterministic source check, a full
@@ -41,6 +44,8 @@ const binary = process.argv[2];
 assert.ok(binary?.startsWith('/'), 'Supply the exact host binary as an absolute path.');
 const replacement = process.argv[3] === '--replace';
 const native = process.argv[3] === '--native';
+const publishedPackage = native && process.argv[4] === '--package' ? process.argv[5] : undefined;
+assert.ok(process.argv.length <= 4 || (publishedPackage && process.argv.length === 6), 'Only --native accepts a following --package SPEC.');
 const fixturesRoot = join(sourceRoot, '.local');
 await mkdir(fixturesRoot, { recursive: true });
 const fixture = await mkdtemp(join(fixturesRoot, 'host-v2-smoke-'));
@@ -52,7 +57,7 @@ const externalSettings = join(fixture, 'xdg-config', 'azpr', 'settings.json');
 const selectedSettings = join(fixture, 'private settings', 'settings.json');
 const installedSettingsPath = native ? selectedSettings : join(runtimeDirectory, 'settings.json');
 const packageDirectory = join(fixture, 'package');
-let gitPackage;
+let nativePackage = publishedPackage;
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.models.quick = { reviewer: 'fixture/quick' };
@@ -68,7 +73,7 @@ const install = args => {
   const result = spawnSync('/bin/sh', [join(sourceRoot, 'install.sh'), '--config-dir', directories.config, ...args], { encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
 };
-if (native) {
+if (native && !publishedPackage) {
   const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', fixture], { cwd: sourceRoot, encoding: 'utf8', timeout: 30000 });
   assert.equal(pack.status, 0, pack.stderr);
   const metadata = JSON.parse(pack.stdout)[0];
@@ -83,8 +88,8 @@ if (native) {
   }
   const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: packageDirectory, encoding: 'utf8', timeout: 15000 });
   assert.equal(sha.status, 0, sha.stderr);
-  gitPackage = `git+file://${packageDirectory}#${sha.stdout.trim()}`;
-} else install(['--settings', join(fixture, 'settings.json')]);
+  nativePackage = `git+file://${packageDirectory}#${sha.stdout.trim()}`;
+} else if (!native) install(['--settings', join(fixture, 'settings.json')]);
 if (replacement) {
   const before = await readFile(join(runtimeDirectory, 'settings.json'));
   await rm(join(runtimeDirectory, 'server.js'), { force: true });
@@ -236,11 +241,11 @@ const env = {
   AZPR_TEST_AZURE_BASE_URL: azureURL,
 };
 if (native) {
-  const added = spawnSync(binary, ['plugin', 'add', gitPackage], { cwd: directories.work, env, encoding: 'utf8', timeout: 60000 });
+  const added = spawnSync(binary, ['plugin', 'add', nativePackage], { cwd: directories.work, env, encoding: 'utf8', timeout: 120000 });
   assert.equal(added.status, 0, added.stderr);
   assert.match(added.stdout, /installed and added/);
   const config = JSON.parse(await readFile(join(directories.config, 'opencode.json'), 'utf8'));
-  assert.ok(config.plugins.includes(gitPackage));
+  assert.ok(config.plugins.includes(nativePackage));
 }
 const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
 const stopHost = async () => {
@@ -313,7 +318,12 @@ try {
     assert.match(await invoke('pr-review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123'), /SETUP REQUIRED/);
     assert.equal(requests.length, 0);
     assert.equal(azure.state.calls.length, 0);
-    await assert.rejects(stat(join(packageDirectory, 'src', 'settings.json')), { code: 'ENOENT' });
+    // The copy OpenCode installed (under its package cache) holds no settings.
+    const installedCopies = (await readdir(directories.cache, { recursive: true }))
+      .filter(path => path.includes('node_modules') && path.endsWith(join('src', 'setup.mjs')))
+      .map(path => join(directories.cache, dirname(dirname(path))));
+    assert.ok(installedCopies.length > 0, 'OpenCode installed the AZPR package under its cache.');
+    for (const copy of [packageDirectory, ...installedCopies]) await assert.rejects(stat(join(copy, 'src', 'settings.json')), { code: 'ENOENT' });
     // Use the workflow fixture's role-specific models and diagnostics after
     // proving that setup saves exactly one selected model and no secret.
     await stopHost();
@@ -322,11 +332,11 @@ try {
     await writeFile(selectedSettings, JSON.stringify(settings, null, 2), { mode: 0o600 });
     await rm(externalSettings);
     const config = JSON.parse(await readFile(join(directories.config, 'opencode.json'), 'utf8'));
-    config.plugins = config.plugins.map(plugin => plugin === gitPackage ? { package: gitPackage, options: { settingsFile: selectedSettings } } : plugin);
+    config.plugins = config.plugins.map(plugin => plugin === nativePackage ? { package: nativePackage, options: { settingsFile: selectedSettings } } : plugin);
     await writeFile(join(directories.config, 'opencode.json'), JSON.stringify(config, null, 2));
     url = await startHost();
     await waitForCommands();
-    nativeSetup = 'npm pack plus CLI plugin add from an isolated Git commit; missing config blocks reviews; setup validates model and private PAT file without network calls; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; package holds no settings or PAT';
+    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews; setup validates model and private PAT file without network calls; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
   }
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {

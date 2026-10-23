@@ -145,5 +145,5 @@ move superseded validation pages to `docs/VALIDATION_HISTORY.md` instead of
 rewriting earlier results.
 
 Do not start live models, publish PR comments, change personal settings,
-upgrade installed tools or publish a repository without authorization for that
-action. Authorization applies to the current request only.
+upgrade installed tools or publish a repository or package without authorization
+for that action. Authorization applies to the current request only.

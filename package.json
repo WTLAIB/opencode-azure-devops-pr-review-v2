@@ -1,7 +1,6 @@
 {
-  "name": "opencode-azure-devops-pr-review-v2",
-  "version": "0.2.0",
-  "private": true,
+  "name": "opencode-azure-devops-pr-review",
+  "version": "0.2.1",
   "type": "module",
   "description": "Azure DevOps PR reviews in OpenCode V2 with quick and verified modes, comment previews, and explicit publishing",
   "scripts": {
@@ -24,7 +23,10 @@
     "opencode-plugin",
     "azure-devops",
     "code-review",
-    "pull-request"
+    "pull-request",
+    "opencode-plugins",
+    "azure-repos",
+    "ai-code-review"
   ],
   "license": "MIT",
   "exports": "./server.js",
@@ -42,5 +44,8 @@
     "AGENTS.md",
     "CONTRIBUTING.md",
     "SECURITY.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

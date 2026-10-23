@@ -1,7 +1,7 @@
 # Architecture
 
-AZPR is an OpenCode V2 plugin distributed as a native Git package or source
-archive. Model work runs in private,
+AZPR is an OpenCode V2 plugin distributed as an npm package, a native Git
+package or a source archive. Model work runs in private,
 role-bound child sessions; deterministic facts and every Azure DevOps write are
 runtime code that calls the Azure DevOps Services REST API (api-version 7.1)
 with the organization and PAT from AZPR's own settings (or the owner-only file
