@@ -154,8 +154,12 @@ export function automaticPublicationRepeats(plan, discussions) {
 // are also checked after decoding (see decodedText); images and HTML only as
 // written, since a decoded character never forms markup.
 const UNSEEN_TEXT = [
+  // A protocol-relative destination of an inline link or a reference definition may follow
+  // line breaks and block-quote markers (definitions also live in quotes and list items);
+  // <name@host> is an email autolink, which renders as a mailto: link.
   ['an external link', [/\b[a-z][a-z0-9+.-]*:\/\//i, /\b(?:mailto|javascript|vbscript):/i, /\bdata:[a-z]+\//i,
-    /(?<![\w.@/-])www\.[a-z0-9-]+\.[a-z]/i, /\]\(\s*<?\/\//, /^\s*\[[^\]\n]+\]:\s*<?\/\//m], true],
+    /(?<![\w.@/-])www\.[a-z0-9-]+\.[a-z]/i, /\]\((?:\s|>)*<?\/\//, /\]:(?:\s|>)*<?\/\//,
+    /<[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*>/i], true],
   ['an @mention', [/@</], true],
   ['an image', [/!\[/]],
   ['HTML', [/<\/?(?:a|img|image|iframe|frame|frameset|script|style|link|meta|base|object|embed|applet|form|input|button|textarea|select|svg|math|video|audio|source|track|picture|portal)(?=[\s/>]|$)/im,

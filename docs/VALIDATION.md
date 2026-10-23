@@ -24,7 +24,8 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   safeguards (a quick review's high-severity finding or incomplete coverage;
   links, `@<…>` mentions, images and HTML in the summary or an inline comment,
   links and mentions also when written with backslash escapes or character
-  references, while generics, decorators, AZPR's marker and its own
+  references, reference definitions inside block quotes and list items and
+  email autolinks, while generics, decorators, AZPR's marker and its own
   `&lt;!--` escaping pass; a plan that would only
   repeat the summary because every finding is already discussed on the PR,
   while a typed `--publish` still posts it), a `/pr-stop` that arrives while a

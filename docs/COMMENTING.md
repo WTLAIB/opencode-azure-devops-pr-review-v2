@@ -46,16 +46,17 @@ publication after a review:
    high-severity finding or left coverage incomplete (its findings were not
    independently verified; the receipt's verification hint), or when the
    summary or an inline comment contains a link (`http://`, `https://`,
-   another `scheme://`, `mailto:`, `javascript:`, `data:`, `www.` or a
-   protocol-relative link target, also when it is written with backslash
-   escapes or character references such as `https\://` or `https&#58;//`,
-   which CommonMark decodes), an Azure DevOps mention (`@<…>`, decoded the same
-   way), an image
-   (`![`) or HTML (tags such as `a`, `img`, `iframe` or `script`, attributes
-   such as `on…=`, `href=`, `src=` or `style=`, or an HTML comment other than
-   AZPR's marker). These checks are literal and prefer a false alarm: `![`
-   inside code holds back too, while generics such as `List<String>` and
-   decorators such as `@property` pass. It also keeps to a preview when the
+   another `scheme://`, `mailto:`, `javascript:`, `data:`, `www.`, an email
+   autolink such as `<name@host>`, or a protocol-relative destination of an
+   inline link or a reference definition, also one inside a block quote or a
+   list item; all of these also when written with backslash escapes or
+   character references such as `https\://` or `https&#58;//`, which
+   CommonMark decodes), an Azure DevOps mention (`@<…>`, decoded the same
+   way), an image (`![`) or HTML (tags such as `a`, `img`, `iframe` or
+   `script`, attributes such as `on…=`, `href=`, `src=` or `style=`, or an
+   HTML comment other than AZPR's marker). These checks are literal and
+   prefer a false alarm: `![` inside code holds back too, while generics such
+   as `List<String>` and decorators such as `@property` pass. It also keeps to a preview when the
    plan has no inline comment and the planner skipped every finding as
    `existing-thread` with a thread the runtime found live before planning,
    typically AZPR's own comment from an earlier run: the summary's marker

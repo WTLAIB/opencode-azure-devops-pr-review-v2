@@ -386,9 +386,19 @@ test('automatic publication leaves links, mentions, images and HTML to a person;
     ['See https&colon;//x.example now.', 'an external link'],
     ['Visit www&period;evil&period;example today.', 'an external link'],
     ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
+    // Reference definitions also live in block quotes and list items, and a destination may follow a line break.
+    ['> [details][ref]\n>\n> [ref]: //outside.example/report', 'an external link'],
+    ['> [details][ref]\n>\n> [ref]: &#47;&#47;outside.example/report', 'an external link'],
+    ['[details][ref]\n\n- [ref]: //outside.example/report', 'an external link'],
+    ['[details][ref]\n\n1. [ref]: //outside.example/report', 'an external link'],
+    ['> - [details][ref]\n>\n> - [ref]: //outside.example/report', 'an external link'],
+    ['> [details][ref]\n>\n> [ref]:\n> //outside.example/report', 'an external link'],
+    ['> [details](\n> //outside.example/report)', 'an external link'],
+    ['Contact <help@outside.example> for details.', 'an external link'],
   ]) assert.deepEqual(automaticPublicationProblems(plan([text])), [`the comment for F-1 (/src/a.ts:2) contains ${kind}`], text);
   // A decoded character never forms markup, and AZPR's own escaping of <!-- stays text.
-  for (const text of ['Kept &lt;!-- note --&gt; as text.', 'Shown as &#60;img src=x&#62; text.', 'Paths C:\\Users\\dev and \\d+\\.\\d+; a &amp; b; &constructor; &nbsp;']) {
+  for (const text of ['Kept &lt;!-- note --&gt; as text.', 'Shown as &#60;img src=x&#62; text.', 'Paths C:\\Users\\dev and \\d+\\.\\d+; a &amp; b; &constructor; &nbsp;',
+    '`y = arr[i]: z` and List<@NonNull String> stay text.', '> A quoted note\n> - with a list item']) {
     assert.deepEqual(automaticPublicationProblems(plan([text])), [], text);
   }
   // The summary is checked like an inline comment, and several kinds are named together.

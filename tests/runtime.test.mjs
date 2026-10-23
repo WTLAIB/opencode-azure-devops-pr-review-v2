@@ -1551,7 +1551,8 @@ test('automatic publication holds back comment text with a link, a mention, an i
   const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(step.receipt)[1], 'result.json'), 'utf8'));
   assert.equal(result.automatic.heldBack.length, 2);
   for (const [text, kind] of [['Ask @<6D6A2A6A-0000-0000-0000-000000000000>.', 'an @mention'], ['![x](y.png)', 'an image'], ['<img src=x onerror=alert(1)>', 'HTML'],
-    ['See [details](https&#58;//outside.example/report).', 'an external link'], ['See [details](https\\://outside.example/report).', 'an external link']]) {
+    ['See [details](https&#58;//outside.example/report).', 'an external link'], ['See [details](https\\://outside.example/report).', 'an external link'],
+    ['> [details][ref]\n>\n> [ref]: //outside.example/report', 'an external link']]) {
     const g = await fixture(t, { answer: body(text) });
     assert.match((await commentStep(g, await g.command('pr-review', `${g.azure.prUrl()} --publish`))).receipt, new RegExp(`held back: the comment for F-1 [^;]+ contains ${kind};`), text);
     assert.equal(g.azure.callsTo('createThread').length, 0, text);
