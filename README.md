@@ -12,6 +12,9 @@ managing a local clone of each project. AZPR uses your OpenCode models to inspec
 the changes, check findings, and prepare inline comments you can preview before
 publishing. No MCP server or CI pipeline setup is required.
 
+AZPR is an independent community project. It is not built by or affiliated with
+the OpenCode team.
+
 [Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
 [Team setup and data handling](docs/ENTERPRISE.md) ·
 [Validation and limitations](docs/VALIDATION.md) ·
