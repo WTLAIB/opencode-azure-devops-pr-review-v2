@@ -929,7 +929,7 @@ CodeMode denial is necessary because the pinned runtime exposes a `fetch` global
 outside ordinary web-tool permission checks. Inner tool hooks alone cannot make
 that container safe for private reviewers. CodeMode-only resource helpers are
 unavailable; validate that missing direct evidence remains a disclosed gap.
-See [MCP setup](AZURE_MCP.md).
+See [MCP setup](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/blob/0bc97910368d5a4a403078efc6be27bcad8f2af9/docs/AZURE_MCP.md).
 
 These checks establish only the behavior observed in that host fixture. A fake
 provider cannot establish real provider schema acceptance, quotas, cost, model
@@ -1097,7 +1097,7 @@ content-read failure, and a Code Search HTTP 400 use different operation paths.
 Preserve an error followed by a successful identical read and disclose the
 recovery; success does not prove a transient cause. For MCP 2.9.0, specifically
 check PR-change pagination, branch-only directory hints, indexed search versions,
-and the exact content selector. See the audited [MCP limitations](AZURE_MCP.md).
+and the exact content selector. See the audited [MCP limitations](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/blob/0bc97910368d5a4a403078efc6be27bcad8f2af9/docs/AZURE_MCP.md).
 
 Audit authorized native commands, tested checkouts, their side effects and
 cancellation separately from forbidden attempts or unexpected publication. Record any

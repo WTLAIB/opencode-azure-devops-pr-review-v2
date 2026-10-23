@@ -2,7 +2,7 @@
 
 ## A real review, preview and publication
 
-[Watch the 73-second walkthrough (MP4)](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.1.0/azpr-live-demo.mp4)
+[Watch the 73-second walkthrough (MP4)](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.2.0/azpr-live-demo.mp4)
 
 ![Real OpenCode terminal recording: inspect an independently verified finding, preview its comment, and repeat publication without duplicate comments.](assets/live-review-teaser.gif)
 
@@ -17,7 +17,9 @@ Recorded on **2026-10-22**, on Ubuntu 22.04 under WSL2, using
 comment planner. The installed plugin matched all 27 runtime and prompt files
 in commit [`f323aaa`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/f323aaab31e98da0ffed08a8f54fca94c7caf651),
 the v0.1.0 release candidate. Model IDs identify the configured selection, not
-an independently attested provider backend.
+an independently attested provider backend. The v0.2.0 release reuses this
+recording unchanged; it demonstrates the manual workflow, not the new automatic
+comment step.
 
 The recording follows one conversation:
 

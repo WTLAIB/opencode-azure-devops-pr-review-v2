@@ -1,6 +1,6 @@
 {
   "name": "opencode-azure-devops-pr-review-v2",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Azure DevOps PR reviews in OpenCode V2 with quick and verified modes, comment previews, and explicit publishing",

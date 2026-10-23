@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-23
 
 - `afterReview` sets, per mode (`quick`, `review`, `deep`), what follows a
   COMPLETE review: `none` (default, as before), `preview` or `publish`. The
@@ -28,6 +28,8 @@
   the summary); the verification hint is advisory. When every finding is
   already discussed on the PR, nothing new is posted (`NOTHING_TO_POST`), so
   re-reviewing an unchanged PR does not add a summary each time.
+- The automatic-publication HTML checks read long tag-like text in linear
+  time, avoiding repeated scans that could delay the plugin on large comments.
 - `/pr-check` shows the `afterReview` of each mode and, for modes that publish
   automatically, who posts.
 - `/pr-setup` and the blocked review commands name the settings problem found

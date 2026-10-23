@@ -6,6 +6,13 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
 ## Implemented (stability revision)
 
+- **Optional automatic comments.** `afterReview` selects `none` (default),
+  `preview` or `publish` for each mode; a flag after the PR URL overrides it
+  for one review. A COMPLETE review hands off to a separate, cancellable
+  comment command. Automatic publication holds individual items with mentions,
+  images or active content for inspection, posts ordinary text and links, and
+  skips a summary when every finding is already discussed. Quick comments
+  retain their unverified disclosure. See [commenting](COMMENTING.md).
 - **Native installation and guided setup.** OpenCode's plugin manager loads
   the versioned Git package through `server.js`. `/pr-setup` validates one
   configured model and an existing private PAT file, then writes an external,
