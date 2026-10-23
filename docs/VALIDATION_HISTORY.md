@@ -23,6 +23,46 @@ is implied by the source audit or offline checks. Record any later host smoke
 result with its exact scope instead of promoting it to full service acceptance.
 
 
+## Open items as of 2026-10-23 (archived 2026-10-24)
+
+Until 2026-10-24 the current validation page listed the following items under
+"Not yet validated". It now keeps a shorter list of known limitations for
+users; the items are preserved here as written.
+
+- Automatic publication from the setting (`afterReview: publish`) with a
+  real model: the live publications above used the `--publish` flag, which
+  differs only in where the step comes from. The item checks did not trigger
+  in any live run, since real comment text had none of the held constructs;
+  they were validated with the fixture services and the saved live previews
+  only. A quick review's automatic publication has not run live. The
+  repeated-summary rule did trigger live (above).
+- Azure DevOps's own rendering and sanitizing of comments was not tested
+  against the content checks of automatic publication: the fuzzing rendered
+  with commonmark.js and markdown-it and read the HTML with parse5.
+- A defect whose evidence spans a test and unchanged code in different shards
+  is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
+  gpt-6-luna; other PRs are not yet measured.
+- Azure DevOps Server, and repository files that are not UTF-8 text.
+- `azure.caFile` with a real proxy: the corporate network above ran with
+  `verifyTls: false`; whether its proxy inspects TLS, and trusting its root CA
+  instead, were not checked. `azure.caFile` was validated with the fixture
+  proxy and CA above only. Proxies that require NTLM or Kerberos are not
+  supported directly.
+- The stage inactivity watchdog with a real provider: no live stall has
+  occurred since it was added. It was validated with the fixture provider's
+  stalled HTTP stream; a stalled OpenAI WebSocket stream was not produced on
+  purpose.
+- Streamed reasoning from a real reasoning model: the fixture streams answer
+  text only. A model that thinks without streaming anything looks silent to
+  the watchdog for that time.
+- Planning more than two pages at a time (not measured), and `/pr-stop` while
+  pages are planned side by side with a real provider (only the fixtures and
+  offline tests cancel running pages).
+- `/pr-quick` beyond these runs on three test PRs with one model: its
+  false-positive rate and misses on other PRs and models, a published quick
+  review of a multi-shard PR (only the 1-file PR's was posted), and combining
+  duplicates on a real multi-shard PR other than the test PR.
+
 ## Previous current validation — stability revision fd604a8 (archived 2026-10-10)
 
 This section is the validation page as it stood before AZPR replaced the Azure DevOps MCP server with its own REST client. It describes the MCP-based runtime calls and is kept unchanged below.

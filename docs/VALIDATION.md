@@ -7,6 +7,30 @@ passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
 [validation history](VALIDATION_HISTORY.md).
 
+## Summary
+
+- **Every change, in CI.** `npm run check` and the offline test suite, then
+  five runs on the real OpenCode 2.1.4 host with isolated profiles and fake
+  model and Azure DevOps services: fresh, replacement and native installation
+  (including an authenticating proxy and a custom CA certificate), a 120-file
+  review in shards with a context-overflow split and idempotent publication,
+  and a refused background summary followed by a permanent failure.
+- **Live, with real models on Azure DevOps Services.** Reviews, comment
+  previews and publication on three test PRs with 1, 35 and 316 changed
+  files. On OpenCode 2.1.4 with gpt-6-luna, all six quick and review runs
+  completed without a retry or a failed stage; both modes found all 24 seeded
+  policy defects of the 316-file PR and the 3 known defects of the 1-file PR.
+  Live automatic publication on the 35-file PR (OpenCode 2.1.2) posted and
+  read back its comments, and a second run on the unchanged PR wrote nothing.
+- **Every release.** Following the [releasing guide](RELEASING.md), the
+  candidate is installed from a clean source archive and from its public Git
+  commit before it is tagged, and the published npm package is installed from
+  the registry; its integrity must match the package built from the tag.
+
+These checks show that the workflow works and what it found on these test
+PRs. Findings vary between models and runs, so they are not a general
+accuracy score; see [known limitations](#known-limitations).
+
 ## 0.2.3 release acceptance (2026-10-24)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.4.
@@ -294,7 +318,7 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     and all but 0 to 6 of them render no active markup. Those few contain
     `<!X…>` or `<?…>`, which browsers turn into comments and no rule checks;
     the previous revision held them only because of code elsewhere in the
-    text. The same run found the gaps listed under Not yet validated.
+    text. The same run found the gaps closed below.
   - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
     saved from real reviews still have no held item. No live run: real
     comment text has not contained the held constructs, in code or not.
@@ -1876,38 +1900,27 @@ So host retries needed no change. The watchdog's default of 600 s is four
 times the longest quiet stretch observed; a stopped stage is retried like a
 transient failure, and its error names the last activity.
 
-## Not yet validated
+## Known limitations
 
-- Automatic publication from the setting (`afterReview: publish`) with a
-  real model: the live publications above used the `--publish` flag, which
-  differs only in where the step comes from. The item checks did not trigger
-  in any live run, since real comment text had none of the held constructs;
-  they were validated with the fixture services and the saved live previews
-  only. A quick review's automatic publication has not run live. The
-  repeated-summary rule did trigger live (above).
-- Azure DevOps's own rendering and sanitizing of comments was not tested
-  against the content checks of automatic publication: the fuzzing rendered
-  with commonmark.js and markdown-it and read the HTML with parse5.
-- A defect whose evidence spans a test and unchanged code in different shards
-  is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
-  gpt-6-luna; other PRs are not yet measured.
-- Azure DevOps Server, and repository files that are not UTF-8 text.
-- `azure.caFile` with a real proxy: the corporate network above ran with
-  `verifyTls: false`; whether its proxy inspects TLS, and trusting its root CA
-  instead, were not checked. `azure.caFile` was validated with the fixture
-  proxy and CA above only. Proxies that require NTLM or Kerberos are not
-  supported directly.
-- The stage inactivity watchdog with a real provider: no live stall has
-  occurred since it was added. It was validated with the fixture provider's
-  stalled HTTP stream; a stalled OpenAI WebSocket stream was not produced on
-  purpose.
-- Streamed reasoning from a real reasoning model: the fixture streams answer
-  text only. A model that thinks without streaming anything looks silent to
-  the watchdog for that time.
-- Planning more than two pages at a time (not measured), and `/pr-stop` while
-  pages are planned side by side with a real provider (only the fixtures and
-  offline tests cancel running pages).
-- `/pr-quick` beyond these runs on three test PRs with one model: its
-  false-positive rate and misses on other PRs and models, a published quick
-  review of a multi-shard PR (only the 1-file PR's was posted), and combining
-  duplicates on a real multi-shard PR other than the test PR.
+- **Tested environment.** OpenCode CLI 2.1.4 (V2 plugin API) on Ubuntu 22.04
+  under WSL2. Other OpenCode 2.x versions add a host notice to receipts and
+  are not validated; OpenCode 1.x is not supported. Other operating systems
+  are not validated yet.
+- **Azure DevOps Services only.** Azure DevOps Server (on-premises) is not
+  supported by the current URL handling.
+- **File encoding and size.** Files are read as UTF-8, so text in another
+  encoding, such as Big5 or Shift_JIS, reaches the reviewers with replacement
+  characters. Binary files and files over 10 MB are reported but not shown,
+  and content search covers a commit archive of at most
+  `azure.archiveMegabytes` (100 MB by default).
+- **Corporate proxies.** AZPR has run live through a company HTTP proxy with
+  `azure.verifyTls: false`. Trusting an inspecting proxy's root CA with
+  `azure.caFile` is verified with a test proxy only, and proxies that require
+  NTLM or Kerberos authentication are not supported directly.
+- **Quick reviews are not independently verified.** `/pr-quick` reports what
+  one reviewer per shard found and says so in its report and comments; use
+  `/pr-review` when findings need a second check.
+- **Findings depend on the model.** Results vary between models and between
+  runs of the same model. On the 35-file test PR, gpt-6.1-sol found a defect
+  whose evidence spans a test and unchanged code in another shard, which
+  gpt-6-luna missed; `/pr-deep` runs the same review with stronger models.
