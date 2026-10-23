@@ -10,7 +10,7 @@ test('original tool error summaries exclude inputs, result bodies and nested pro
   const error = Object.assign(new Error('Original execution failure'), { type: 'tool-error', status: 503,
     response: { body: 'PRIVATE_PROVIDER_BODY' }, headers: { authorization: 'PRIVATE_HEADER' } });
   assert.deepEqual(diagnosticToolError({ tool: 'arbitrary_operation', status: 'error', error,
-    input: { token: 'PRIVATE_INPUT' }, result: { output: 'PRIVATE_RESULT' } }), {
+    input: { token: '<PRIVATE_INPUT>' }, result: { output: 'PRIVATE_RESULT' } }), {
     tool: 'arbitrary_operation', source: 'execution',
     error: { name: 'Error', type: 'tool-error', message: 'Original execution failure', status: 503 },
   });
