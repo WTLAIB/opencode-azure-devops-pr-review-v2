@@ -138,13 +138,15 @@ export function automaticPublicationRepeats(plan, discussions) {
 // script. Ordinary links are posted. The checks are literal and prefer a false
 // alarm to a miss; AZPR's own marker is removed first. Script links and
 // mentions are also checked after decoding (see decodedText); images and HTML
-// only as written, since a decoded character never forms markup.
+// only as written, since a decoded character never forms markup. Literal code
+// renders as text, so only the mention check reads it (see withoutCode): Azure
+// DevOps may resolve a mention wherever it is written.
 const UNSEEN_TEXT = [
-  ['a script, data or local-file link', [/\b(?:javascript|vbscript):/i, /\bdata:[a-z]+\//i, /\bfile:\/\//i], true],
-  ['an @mention', [/@</], true],
-  ['an image', [/!\[/]],
+  ['a script, data or local-file link', [/\b(?:javascript|vbscript):/i, /\bdata:[a-z]+\//i, /\bfile:\/\//i], { decoded: true }],
+  ['an @mention', [/@</], { decoded: true, code: true }],
+  ['an image', [/!\[/], {}],
   ['HTML that embeds content or runs a script', [/<\/?(?:img|image|iframe|frame|frameset|object|embed|applet|video|audio|source|track|picture|svg|script|style|link|meta|base|portal)(?=[\s/>]|$)/im,
-    /<[a-z][a-z0-9-]*\s[^<>]*?\b(?:on[a-z]+|src|srcset|style|background|poster|xlink:href)\s*=/i, /<!--/]],
+    /<[a-z][a-z0-9-]*\s[^<>]*?\b(?:on[a-z]+|src|srcset|style|background|poster|xlink:href)\s*=/i, /<!--/], {}],
 ];
 const OWN_MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
 // The named character references that stand for ASCII punctuation, the only
@@ -172,11 +174,109 @@ function decodedText(text) {
     .replace(/&([A-Za-z][A-Za-z0-9]*);|&(lt|gt|amp|quot|LT|GT|AMP|QUOT)(?![A-Za-z0-9;])/g, (whole, name, legacy) => Object.hasOwn(PUNCTUATION_REFERENCES, name ?? legacy) ? PUNCTUATION_REFERENCES[name ?? legacy] : whole);
 }
 
+/**
+ * The text with its literal code blanked: the content lines of fenced code
+ * blocks and the code spans, which render as text. Recognition errs towards
+ * checking, since a wrong guess would hide markup that renders. A fence counts
+ * only in column 0 and outside a table; from the first line that may start an
+ * HTML block, or a fence that is indented or inside a quote or list, nothing
+ * more is blanked. Code spans follow codeSpans, paragraph by paragraph.
+ */
+function withoutCode(text) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n'), shown = [...lines];
+  let closer = null, table = false, paragraph = [];
+  const blankSpans = () => {
+    if (!paragraph.length) return;
+    const joined = paragraph.map(n => lines[n]).join('\n');
+    let blanked = '', at = 0;
+    for (const [start, end] of codeSpans(joined) ?? []) { blanked += `${joined.slice(at, start)} `; at = end; }
+    `${blanked}${joined.slice(at)}`.split('\n').forEach((line, index) => { shown[paragraph[index]] = line; });
+    paragraph = [];
+  };
+  for (const [n, line] of lines.entries()) {
+    if (closer) {
+      if (closer.test(line)) closer = null;
+      else shown[n] = '';
+      continue;
+    }
+    const open = /^(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
+    if (open && !table && !line.includes('|')) {
+      blankSpans();
+      closer = new RegExp(`^ {0,3}${open[1] ? '`' : '~'}{${(open[1] ?? open[2]).length},}[ \\t]*$`);
+    } else if (open || /^[\s>*+\-.)\d]*</.test(line) || /^[\s>*+\-.)\d]+(?:`{3}|~{3})/.test(line)) {
+      blankSpans();
+      break;
+    } else if (/^[ \t]*$/.test(line)) {
+      blankSpans();
+      table = false;
+    } else {
+      table ||= line.includes('|');
+      paragraph.push(n);
+    }
+  }
+  blankSpans();
+  return shown.join('\n');
+}
+
+/**
+ * The [start, end) offsets of one paragraph's code spans, or null when their
+ * pairing is uncertain: a backtick run without a partner on its line (it may
+ * pair across lines), a span with a pipe (a table splits its cells first), or a
+ * backtick after something that can swallow one: a link destination or label,
+ * an HTML tag with quotes or without an end, a comment, math, or a bare
+ * address that a renderer may turn into a link, backslash included.
+ */
+function codeSpans(paragraph) {
+  const spans = [], last = paragraph.lastIndexOf('`'), closers = new Map(), found = {};
+  // Running tallies, so that each look back or ahead below takes constant time.
+  const address = [false], quotes = [0], nesting = [0], pipes = [0];
+  for (let i = 0; i < paragraph.length; i++) {
+    const char = paragraph[i];
+    address.push(!/[\s<]/.test(char) && (address[i] || /[:.@]/.test(char)));
+    quotes.push(quotes[i] + /[`"']/.test(char));
+    nesting.push(nesting[i] + /[`"'(<\\]/.test(char));
+    pipes.push(pipes[i] + (char === '|'));
+  }
+  const ahead = (char, from) => {
+    if (!(found[char] >= from)) found[char] = paragraph.indexOf(char, from) === -1 ? Infinity : paragraph.indexOf(char, from);
+    return found[char];
+  };
+  for (let i = 0; i < paragraph.length; i++) {
+    const char = paragraph[i], next = paragraph[i + 1] ?? '', later = i < last;
+    // A renderer that links a bare address may take the backslash along, so it escapes nothing there.
+    if (char === '\\' && /[!-/:-@[-`{-~]/.test(next) && !address[i]) i++;
+    else if (char === '`') {
+      let run = 1;
+      while (paragraph[i + run] === '`') run++;
+      if (!closers.has(run)) closers.set(run, new RegExp(`(?<!\`)\`{${run}}(?!\`)`, 'g'));
+      const closer = closers.get(run);
+      closer.lastIndex = i + run;
+      const close = closer.exec(paragraph);
+      if (!close || close.index > ahead('\n', i) || pipes[close.index] > pipes[i + run] || address[i]) return null;
+      spans.push([i, close.index + run]);
+      i = close.index + run - 1;
+    } else if (!later) break;
+    else if (char === '<' && /\S/.test(next)) {
+      const end = ahead('>', i);
+      if (end === Infinity || /[!?]/.test(next) || quotes[end] > quotes[i]) return null;
+    } else if (char === ']' && /[([]/.test(next)) {
+      // A link that ends at the first closing bracket without quotes, escapes or nesting swallows no backtick.
+      const end = ahead(next === '(' ? ')' : ']', i + 2);
+      if (end === Infinity || nesting[end] > nesting[i + 2]) return null;
+    } else if (char === '$') return null;
+  }
+  return spans;
+}
+
 /** The saved items whose text automatic publication leaves to a person: { marker, reason } each. */
 export function automaticPublicationProblems(plan) {
   return publicationItems(plan).flatMap(item => {
-    const text = item.content.replace(OWN_MARKER, ''), decoded = decodedText(text);
-    const kinds = UNSEEN_TEXT.filter(([, patterns, decodes]) => patterns.some(pattern => pattern.test(text) || (decodes && pattern.test(decoded)))).map(([kind]) => kind);
+    const text = item.content.replace(OWN_MARKER, ''), shown = withoutCode(text);
+    const forms = { all: [text, decodedText(text)], shown: [shown, decodedText(shown)] };
+    const kinds = UNSEEN_TEXT.filter(([, patterns, { decoded, code }]) => {
+      const [plain, decodedForm] = code ? forms.all : forms.shown;
+      return patterns.some(pattern => pattern.test(plain) || (decoded && pattern.test(decodedForm)));
+    }).map(([kind]) => kind);
     if (!kinds.length) return [];
     const name = item.kind === 'summary' ? 'the PR summary' : `the comment for ${(item.findingIds ?? [item.findingId]).join(', ')} (${item.path}:${item.startLine})`;
     return [{ marker: item.marker, reason: `${name} contains ${kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds.at(-1)}` : kinds[0]}` }];

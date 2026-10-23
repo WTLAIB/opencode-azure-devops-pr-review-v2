@@ -72,7 +72,9 @@ Automatic publication posts the items no safeguard holds back
 `javascript:`, `vbscript:`, `data:` or `file://` link (both also checked after
 decoding backslash escapes and character references), an image, or HTML that
 embeds content or runs a script waits in the saved plan, and the receipt names
-it. A plan without inline comments whose findings the planner all skipped as
+it. Only mentions are checked inside literal code (`withoutCode` blanks fenced
+code and code spans where every CommonMark reading agrees, and leaves the rest
+of the text checked). A plan without inline comments whose findings the planner all skipped as
 `existing-thread` with threads read live before planning posts nothing
 (`NOTHING_TO_POST`; only a repeated summary would be posted). A comment run
 hands on nothing; non-COMPLETE reviews and an unloading plugin start nothing.

@@ -134,9 +134,9 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
   - A stop during report delivery and encoded links cannot be produced on
     demand with a real model; those cases are covered offline. The test
     comments were deleted afterwards.
-- **Live, with the per-item safeguards** (this revision), on the same PR with
-  those comments deleted and its record moved aside again, two
-  `/pr-review <URL> --publish` runs with gpt-6-luna:
+- **Live, with the per-item safeguards** (the revision before the literal-code
+  rule below), on the same PR with those comments deleted and its record
+  moved aside again, two `/pr-review <URL> --publish` runs with gpt-6-luna:
   - The first review was COMPLETE in 73 s with the millisecond-format seed
     confirmed. Its automatic publication posted the summary and one inline
     comment on `json_schema.py:874` in 9 s: VERIFIED=2, no item held, and an
@@ -150,6 +150,40 @@ problem messages were added on top of 0.1.0; review prompts were unchanged.
     at 2 live AZPR comments.
   - The real comment text again had none of the held constructs. The test
     comments were deleted afterwards.
+- **Literal code** (this revision, after an external review found that a
+  code example such as `` `<img src="avatar.png">` `` or a fenced `<script>`
+  example still held back its comment): the checks other than mentions now
+  skip fenced code and code spans where every reading of the Markdown agrees.
+  - `npm run check` and **388 offline tests** passed. The review's four
+    examples are posted; texts whose backticks or fences could be read
+    another way stay checked (an escaped backtick, a span across lines or a
+    heading, a link destination, attribute value, math or bare address that
+    takes a backtick, a backslash that a linked address takes along, a pipe
+    in a table cell, an HTML block, a fence in a list or indented, a table
+    header, a backtick in the info string, CRLF closers, UTF-16 offsets after
+    emoji), and mentions stay checked in code. Removing any one of those
+    rules, or blanking nothing, makes a test fail (18 mutations); the 13
+    mutations of the previous revision are still caught. A 176,000-character
+    summary is checked in 15 ms, and the check is linear (a 400,000-character
+    line of code spans: 150 ms).
+  - Differential fuzzing against commonmark.js 0.31.2 and markdown-it 14.1.0
+    (`html` and `linkify` on), outside the repository: 1,000,000 generated
+    texts, half random tokens and half templates that put a backtick-taking
+    construct before code with markup, blanked about 240,000 code spans and
+    124,000 fenced lines; on its source line none of them was raw HTML, a
+    link or image destination, or image text for either renderer. Copies
+    with one rule removed were caught each time (from 24 to 2,191 hits per
+    100,000 texts); two such cases found this way, a backslash or escaped
+    backtick taken into a linked address, are fixed and tested.
+  - Rendering both renderers' HTML with parse5 7.1.2 over 300,000 texts:
+    about 6,600 per 100,000 that the previous revision held are now posted,
+    and all but 0 to 6 of them render no active markup. Those few contain
+    `<!X…>` or `<?…>`, which browsers turn into comments and no rule checks;
+    the previous revision held them only because of code elsewhere in the
+    text. The same run found the gaps listed under Not yet validated.
+  - All four real-host fixtures passed on OpenCode 2.1.2. The 15 previews
+    saved from real reviews still have no held item. No live run: real
+    comment text has not contained the held constructs, in code or not.
 
 ## 0.1.0 release acceptance (2026-10-22)
 
@@ -1573,6 +1607,13 @@ transient failure, and its error names the last activity.
   they were validated with the fixture services and the saved live previews
   only. A quick review's automatic publication has not run live. The
   repeated-summary rule did trigger live (above).
+- The literal HTML checks have gaps that fuzzing found, older than the
+  literal-code rule: `<?…>` and `<!X…>` become hidden comments in a browser
+  but only `<!--` is checked; a `<` or `>` inside a quoted attribute value
+  hides a later `on…=` from the attribute check; and a tag name with a
+  character such as `:` inside an HTML block is not read as a tag. Azure
+  DevOps's own rendering and sanitizing of comments was not tested; the
+  fuzzing used commonmark.js and markdown-it.
 - A defect whose evidence spans a test and unchanged code in different shards
   is found by gpt-6.1-sol (2 of 2 runs on PR #4) and missed by gpt-5.6-luna and
   gpt-6-luna; other PRs are not yet measured.

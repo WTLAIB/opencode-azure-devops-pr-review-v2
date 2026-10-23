@@ -364,7 +364,7 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     ['Ping @<6D6A2A6A-0000-0000-0000-000000000000> about it.', 'an @mention'],
     ['Ask @&lt;6D6A2A6A-0000-0000-0000-000000000000&gt;.', 'an @mention'],
     ['![diagram](diagram.png)', 'an image'],
-    ['`if (![a].length)`', 'an image'], // The literal check prefers this false alarm.
+    ['if (![a].length)', 'an image'], // The literal check prefers this false alarm outside code.
     ['<img src=x onerror=alert(1)>', 'HTML that embeds content or runs a script'],
     ['<script>steal()</script>', 'HTML that embeds content or runs a script'],
     ['<div onclick="x()">text</div>', 'HTML that embeds content or runs a script'],
@@ -386,6 +386,51 @@ test('automatic publication posts ordinary links and markup in examples, and lea
   assert.deepEqual(automaticPublicationProblems(combined), [{ marker: combined.comments[0].marker, reason: 'the comment for F-1, F-2 (/src/a.ts:2) contains HTML that embeds content or runs a script' }]);
   const mixed = plan(['Plain text.', '![d](d.png)']);
   assert.deepEqual(automaticPublicationProblems(mixed).map(problem => problem.marker), [mixed.comments[1].marker], 'Only the item with the image is held.');
+});
+
+test('automatic publication posts literal code, and checks code it cannot tell apart from markup', () => {
+  const held = text => automaticPublicationProblems(assemblePlan(review([finding('F-1')]), [{ comments: [comment({ body: `🔴 high: Issue\n\n${text}` })], skipped: [] }]))
+    .map(problem => problem.reason.replace('the comment for F-1 (/src/a.ts:2) contains ', ''));
+  // Fenced code blocks and code spans render as text.
+  for (const text of [
+    'The avatar has no alternative text: `<img src="avatar.png">`. Add an alt attribute.',
+    'The old URL remains in this source example:\n\n```html\n<script src="old.js"></script>\n```',
+    'The documentation uses a broken relative path:\n\n```markdown\n![diagram](../missing.png)\n```',
+    'This span hides the failure message: `<span style="display:none">failure</span>`.',
+    'Without a blank line:\n```js\nel.innerHTML = "<img src=x onerror=f()>";\n```\nAfter the fence, `javascript:void(0)` and `data:text/html,x`.',
+    '~~~\n<iframe src="x"></iframe>\n~~~', '````\n```\n<img src=x>\n```\n````', 'Unclosed:\n\n```\n<script>x()</script>',
+    '```\ncode\n    ```\n<img src=x onerror=f()>', '``a ` <img src=x> ``', 'See [docs](https://learn.microsoft.com/x) and `<img src=x>`.',
+    '- item `<img src=x>`\n> quoted `<script>`\n# Heading `![a](b)`', '| a | b |\n|---|---|\n| `<img src=x>` | c |',
+    '\\\\`<img src=x>`', '```\r\n<img src=x>\r\n```\r\nafter',
+  ]) assert.deepEqual(held(text), [], text);
+  // Where the pairing of backticks or the end of a fence is not certain, the text stays checked.
+  for (const [text, kind] of [
+    ['\\`<img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // An escaped backtick opens nothing.
+    ['a `b\nc` <img src=x onerror=f()> `d`', 'HTML that embeds content or runs a script'], // The first span crosses lines,
+    ['x `<img src=x onerror=f()>\n# y` z', 'HTML that embeds content or runs a script'], // and a heading ends a paragraph.
+    ['a ` <img src=x onerror=f()>', 'HTML that embeds content or runs a script'],
+    ['[t](x`y) <img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // The destination swallows a backtick.
+    ['see <p title="`" onmouseover="f()" x="`">', 'HTML that embeds content or runs a script'], // So does an attribute value.
+    ['see <p title="`" onclick="f()"\nx="`">', 'HTML that embeds content or runs a script'],
+    ['https://a.example/`x <img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // A bare address may be linked first,
+    ['https://a.example/\\``<img src=x onerror=f()>`', 'HTML that embeds content or runs a script'], // with escapes and backticks,
+    ['https://a.example/\\<p title="`" onclick="f()" x="`">', 'HTML that embeds content or runs a script'], // so the backslash escapes nothing.
+    ['| 🔴🔴 | h |\n|---|---|\n| `|<img src=x onerror=f()>` |', 'HTML that embeds content or runs a script'], // Offsets count UTF-16 units.
+    ['$a`$ <img src=x onerror=f()> `', 'HTML that embeds content or runs a script'], // Math may take the first backtick.
+    ['| a | b |\n|---|---|\n| `x | <img src=x onerror=f()> | y` |', 'HTML that embeds content or runs a script'], // Cells split first.
+    ['<div>\n```\n<img src=x onerror=f()>\n```\n</div>', 'HTML that embeds content or runs a script'], // An HTML block holds the fence.
+    ['- item\n  ```\n<img src=x onerror=f()>\n  ```', 'HTML that embeds content or runs a script'], // The list item ends the fence.
+    [' ```\nok\n```\n<img src=x onerror=f()>\n```', 'HTML that embeds content or runs a script'],
+    ['```\ncode\n   ```\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'],
+    ['```a|b\n---|---\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // A table header, not a fence.
+    ['```x`y\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // A backtick in the info string: no fence.
+    ['| a | b |\n|---|---|\n```\n<img src=x onerror=f()>\n```', 'HTML that embeds content or runs a script'],
+    ['```\r\n<img src=x>\r\n```\r\n<img src=x onerror=f()>', 'HTML that embeds content or runs a script'], // The fence ends at a CRLF closer.
+    ['`@<6D6A2A6A-0000-0000-0000-000000000000>` and\n```\n@<6D6A2A6A-0000-0000-0000-000000000000>\n```', 'an @mention'],
+  ]) assert.deepEqual(held(text), [kind], text);
+  // The summary is read the same way.
+  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Escape `<script>` in templates.' }]);
+  assert.deepEqual(automaticPublicationProblems(noted), []);
 });
 
 test('automatic publication finds nothing new when every finding is already discussed on the PR', () => {

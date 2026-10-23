@@ -103,7 +103,9 @@ settings, backups and failure records. Never upload `.local/`.
   an image, HTML that embeds content or runs a script, or a `javascript:`,
   `vbscript:`, `data:` or `file://` link (mentions and script links also after
   decoding escapes and character references) waits for a person, and the
-  receipt names it; ordinary links are posted. A plan that would post only a
+  receipt names it; ordinary links are posted, and literal code is skipped
+  (except for mentions) only where every reading of the Markdown agrees. A
+  plan that would post only a
   repeated summary (every finding skipped as already discussed on the PR) is
   `NOTHING_TO_POST`. Its checks are deterministic and prefer a false alarm;
   never relax them to model judgment. Commands the user types keep their

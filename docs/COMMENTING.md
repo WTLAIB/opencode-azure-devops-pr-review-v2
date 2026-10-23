@@ -51,12 +51,27 @@ publication after a review:
    marker), or a `javascript:`, `vbscript:`, `data:` or `file://` link. Script
    links and mentions also count when written with backslash escapes or
    character references, such as `javascript\:` or `java&#115;cript:`, which
-   CommonMark decodes. These checks are literal and prefer a false alarm:
-   `![` inside code holds back too. Ordinary web and mail links (`https://`,
-   protocol-relative destinations, `mailto:`, email autolinks, reference
-   definitions) and markup that neither loads content nor runs a script, such
-   as `<input name="id">` in an example, generics such as `List<String>` or
-   decorators such as `@property`, are posted. The receipt says `Automatic
+   CommonMark decodes. These checks are literal and prefer a false alarm.
+   Ordinary web and mail links (`https://`, protocol-relative destinations,
+   `mailto:`, email autolinks, reference definitions) and markup that neither
+   loads content nor runs a script, such as `<input name="id">` in an
+   example, generics such as `List<String>` or decorators such as
+   `@property`, are posted.
+
+   Literal code renders as text, so the checks except mentions (which Azure
+   DevOps may resolve anywhere) skip the content of a fenced code block and
+   of a code span. They skip it only where the reading is certain: a fence
+   that starts in column 0 outside a table, before any line that could start
+   an HTML block and before any fence that is indented or inside a quote or
+   list; and a code span whose backticks pair on one line, with no pipe
+   inside and no link destination, HTML tag with quotes, math or bare address
+   before it in the paragraph that could take a backtick (a renderer that
+   links `https://…` may take a backslash or backtick along). Otherwise the
+   text is checked as written, so `![` in such code still holds back. Fuzzing
+   against commonmark.js and markdown-it found nothing skipped that renders
+   as markup (see [validation](VALIDATION.md)).
+
+   The receipt says `Automatic
    publication held back N item(s) for a person: …` with each item and why;
    when every item is held, nothing is posted and the status is `PREVIEW`
    (`held back every item`). A quick review's findings are posted with its

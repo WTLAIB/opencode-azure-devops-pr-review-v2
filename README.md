@@ -454,9 +454,14 @@ content or runs a script (such as `<img>`, `<iframe>`, `<script>`, an `on…=`,
 `vbscript:`, `data:` or `file://` link waits in the saved preview for a person;
 the other items are posted, and the receipt names each held item and why. The
 checks prefer a false alarm and also decode escapes and character references
-in script links and mentions. Ordinary web and mail links, and markup that
-neither loads content nor runs a script (such as `<input name="id">` in an
-example or `List<String>`), are posted. A quick review is posted when you chose
+in script links and mentions. Ordinary web and mail links, markup that neither
+loads content nor runs a script (such as `<input name="id">` or
+`List<String>`), and literal code (fenced code blocks and code spans, such as
+`` `<img src="a.png">` ``) are posted; only mentions are checked in code too,
+since Azure DevOps may resolve them anywhere. Where a renderer could read the
+code differently, for example a fence inside a list or after an HTML line, or
+a backtick that a link or tag could take, the text is checked as written. A
+quick review is posted when you chose
 it: its comments keep the disclosure `quick review, not independently
 verified`, and its summary names incomplete coverage; its verification hint
 is advisory (set `afterReview.quick` to `preview` to read the comments first).

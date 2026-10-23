@@ -18,7 +18,9 @@
   `javascript:`, `vbscript:`, `data:` or `file://` link (mentions and script
   links also when written with escapes or character references) waits in the
   saved preview for a person, and the receipt names it; the other items are
-  posted. Ordinary links and literal markup in examples are posted. A quick
+  posted. Ordinary links, markup in examples and literal code (fenced code
+  blocks and code spans, where the Markdown can be read only one way) are
+  posted; mentions are checked in code too. A quick
   review's comments are posted with their "not independently verified"
   disclosure, also a high-severity finding or incomplete coverage (named in
   the summary); the verification hint is advisory. When every finding is
