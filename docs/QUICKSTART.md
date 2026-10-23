@@ -24,15 +24,15 @@ Check the host version:
 opencode --version
 ```
 
-## 2. Install v0.2.2
+## 2. Install v0.2.3
 
-Already using an earlier version? Follow the [upgrade instructions](releases/v0.2.2.md#upgrading)
+Already using an earlier version? Follow the [upgrade instructions](releases/v0.2.3.md#upgrading)
 to preserve your current configuration and use one AZPR installation.
 
 In your terminal:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.2.2
+opencode plugin add opencode-azure-devops-pr-review@0.2.3
 ```
 
 Restart OpenCode and open an ordinary conversation. This is the host's native
@@ -40,7 +40,7 @@ package installation; no npm account or separate build is needed. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.2'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.3'`.
 Add only one of the two.
 
 For an existing source installation, keep using `install.sh --replace`, or
@@ -48,7 +48,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.2.2 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.2.tar.gz),
+[v0.2.3 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.3.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings; add `--replace` to the setup

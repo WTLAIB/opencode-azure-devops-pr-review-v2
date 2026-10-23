@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.3 — 2026-10-24
+
+- The tested host is OpenCode CLI 2.1.4. OpenCode 2.1.3 and later embed Bun
+  1.4.4, which reports a proxy that refuses the CONNECT tunnel as an
+  `ERR_PROXY_TUNNEL` error instead of returning the proxy's answer. AZPR maps
+  it to the earlier messages and retry rules: a missing proxy password is again
+  explained as HTTP 407 without retries, and a refused tunnel never leaves a
+  comment write uncertain.
+- Azure DevOps calls keep the configured `azure.callTimeoutSeconds`. The
+  runtime's fetch gave up on a silent request after about six minutes by
+  itself, so a longer setting ended early with a retried network error.
+- With OpenCode's opt-in `experimental.background_compaction`, a refused
+  background summary no longer turns a later failure into a context-overflow
+  split. A permanent error such as HTTP 401 stops the stage without new
+  sessions, and a failed follow-up keeps the answer it followed.
+- The README states that AZPR is an independent community project, not built
+  by or affiliated with the OpenCode team.
+- A fifth exact-host fixture covers background compaction followed by a
+  permanent failure; CI runs it.
+
 ## 0.2.2 — 2026-10-23
 
 - The README leads with reviewing Azure DevOps PRs from a URL without a local
