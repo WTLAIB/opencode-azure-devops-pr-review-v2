@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.2 — 2026-10-23
+
+- The README leads with reviewing Azure DevOps PRs from a URL without a local
+  checkout, then explains source lookup, model choices, verification, comment
+  control and corporate connection settings with their limits.
+- The README and quickstart use the same first-review workflow:
+  `/pr-review <PR URL> --preview`. Quick review remains an explicit lighter
+  alternative, with model-request and cost guidance.
+- Compatibility explicitly excludes OpenCode 1.x without implying a separate
+  maintained AZPR product line. Detailed references remain folded with visible
+  navigation targets, and the archive-limit link points to the relevant guide.
+- The Azure Code Search description correctly distinguishes indexed branches
+  from AZPR's searches at a selected commit.
+- The npm package description reflects the URL-based workflow, and the
+  `opencode-v2` keyword identifies its plugin API target.
+- No runtime, prompt, settings or installation behavior change.
+
 ## 0.2.1 — 2026-10-23
 
 - AZPR is published to the npm registry as `opencode-azure-devops-pr-review`:
