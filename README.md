@@ -1,15 +1,16 @@
-# OpenCode Azure DevOps PR Review — V2
+# Azure DevOps PR Review for OpenCode
 
 [![CI](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/workflows/ci.yml?query=branch%3Amain)
 [![npm](https://img.shields.io/npm/v/opencode-azure-devops-pr-review)](https://www.npmjs.com/package/opencode-azure-devops-pr-review)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Tested with OpenCode 2.1.2](https://img.shields.io/badge/OpenCode-2.1.2%20tested-blue)](docs/VALIDATION.md)
 
-Review Azure DevOps pull requests in OpenCode, with quick and independently
-verified review modes, comment previews, and explicit publishing.
+**Review Azure DevOps pull requests from a URL. No checkout required.**
 
-**Bring your configured OpenCode models. Read the review, preview the comments,
-and choose when to publish to Azure DevOps.** No MCP server is needed.
+Review across repositories in your configured Azure DevOps organization without
+managing a local clone of each project. AZPR uses your OpenCode models to inspect
+the changes, check findings, and prepare inline comments you can preview before
+publishing. No MCP server or CI pipeline setup is required.
 
 [Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
 [Team setup and data handling](docs/ENTERPRISE.md) ·
@@ -23,6 +24,65 @@ and choose when to publish to Azure DevOps.** No MCP server is needed.
 or read the [demo and recording details](docs/DEMO.md). Waiting time is shortened;
 the Azure portion shows an actual REST read-back in a terminal.*
 
+## Why AZPR?
+
+- **Follow the code beyond the diff.** Reviewers can look up definitions,
+  callers and tests using file reads and text search at the selected PR commit,
+  without depending on an Azure Code Search index.
+- **Give findings a separate check.** Functional and risk reviewers propose
+  findings; independent verifier sessions re-read the source and look for
+  counterevidence. Quick mode skips this second check when you want a lighter
+  pass.
+- **Choose where to spend model effort.** Assign different OpenCode models to
+  functional review, risk review and verification, or use one model for all
+  roles. Keep a stronger model profile for selected PRs with `/pr-deep`.
+- **Control what reaches the PR.** Preview the summary and inline comments,
+  then publish when ready. The runtime rechecks the PR head, skips comments
+  already published by AZPR and reads new comments back. Automatic publication
+  is available when you opt in.
+- **Configure the Azure connection for your network.** Set a forward proxy and
+  additional CA certificates for AZPR's Azure DevOps requests. Model-provider
+  connections remain configured in OpenCode.
+
+Content search downloads a bounded repository archive into memory; source
+context is sent through your selected model providers, and review records are
+saved locally. See [team setup and data handling](docs/ENTERPRISE.md) for archive
+limits, proxy authentication and retention.
+
+## Your first review
+
+1. Install the npm package using OpenCode's plugin manager:
+
+   ```sh
+   opencode plugin add opencode-azure-devops-pr-review@0.2.1
+   ```
+
+2. Follow the [quickstart](docs/QUICKSTART.md) to save your PAT in a private
+   file and run `/pr-setup` with your organization and one model. Restart the
+   OpenCode service to load the settings.
+3. In one OpenCode conversation, check access, then review and preview:
+
+   ```text
+   /pr-check https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
+   /pr-review https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123 --preview
+   ```
+
+Replace the sample URL with your PR. Wait for `/pr-check` to report `READY`
+before starting the review; it uses no model. The review runs functional and risk
+reviewers, then separate verification. If the completed review has findings to
+comment on, `--preview` prepares their comments in a separate, cancellable run.
+**Nothing is posted by these commands.** Previewing comments also uses a model.
+
+Read the report and preview, then publish from the same conversation:
+
+```text
+/pr-comment REVIEW_ID_FROM_RECEIPT --publish
+```
+
+Use the review ID from the completed receipt. The command posts the saved
+preview as the PAT owner. For a lighter first pass, use
+`/pr-quick <PR URL> --preview`; its findings are not independently verified.
+
 ## Choose a review
 
 | Command | Best starting point | What runs |
@@ -32,8 +92,12 @@ the Azure portion shows an actual REST read-back in a terminal.*
 | `/pr-deep` | Important or risky changes worth a stronger model | The same verified pipeline as `/pr-review`, run with the stronger models you set in `models.deep`; usually slower and costlier. |
 
 All three modes use the same Azure comment layout. Quick comments disclose their
-method. A separate verifier improves scrutiny; it does not guarantee that a
-finding is correct or that every defect was found.
+method. Separate verification adds scrutiny; it does not guarantee correct
+findings or complete defect coverage. Mixing models is a choice about capability
+and cost, not a proven accuracy improvement. See [model configuration](#configuration).
+
+<details>
+<summary>Sessions, model requests and cost</summary>
 
 For a small PR that fits in one shard and one comment-planning page, quick
 usually needs one review session plus one planning session; review needs two
@@ -43,37 +107,29 @@ and extra planning pages add work. Previewing comments also uses a model.
 See [measured runs and their limits](docs/VALIDATION.md) for cost and timing
 examples, rather than treating a session count as a price guarantee.
 
-## Your first review
+</details>
 
-Install the package using OpenCode's plugin manager:
+## Is this the right workflow?
 
-```sh
-opencode plugin add opencode-azure-devops-pr-review@0.2.1
-```
+AZPR fits reviewers who already use OpenCode, review Azure DevOps Services PRs
+on demand, and want to choose their models and inspect comments before posting.
+It combines source retrieval, review stages and publication checks in one plugin.
 
-Follow the [quickstart](docs/QUICKSTART.md) to put your PAT in a private file
-and run `/pr-setup` with your organization and one model. Restart OpenCode,
-then, in one conversation:
+If you need an unattended review on every PR event, look for a webhook or CI
+integration; AZPR runs when you invoke a command. If your work includes editing
+code or running the project's tests, use a local checkout for that work.
 
-```text
-/pr-check https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
-/pr-quick https://dev.azure.com/YOUR_ORG/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
-/pr-comment REVIEW_ID_FROM_RECEIPT
-```
-
-Run each command after the previous one finishes. `/pr-check` uses no model;
-`/pr-quick` reviews the PR; `/pr-comment` prepares a **preview**. Publication
-requires a separate `/pr-comment REVIEW_ID_FROM_RECEIPT --publish` command.
-Use the review ID from the completed receipt, not the literal placeholder.
-`/pr-quick <PR URL> --preview` prepares the preview right after a COMPLETE
-review; [automatic comments](#automatic-comments) can also publish, but only
-when you ask for it.
+The [validation record](docs/VALIDATION.md) includes real model/Azure runs, a
+316-file test PR, isolated OpenCode host checks, and 392 offline tests for
+runtime and packaging behavior. It also records missed defects and untested
+environments. The demo shows the workflow; these checks do not establish a
+general review-accuracy score.
 
 ## Compatibility
 
 | Component | Tested target |
 | --- | --- |
-| OpenCode | **V2 `@opencode/cli` 2.1.2**; V1 plugins use a different API. |
+| OpenCode | **OpenCode CLI 2.1.2** (`@opencode/cli`; V2 plugin API). |
 | Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
 | Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
 | Installation | OpenCode's plugin manager with the npm package or the versioned Git package, or the source installer with POSIX `sh` and Python 3; no plugin build step or npm dependencies. |
@@ -85,6 +141,9 @@ reviewing is enabled; the [quickstart](docs/QUICKSTART.md) configures one model
 for both quick and verified reviews.
 
 ## How reviews work
+
+<details>
+<summary>Review stages, recovery and saved results</summary>
 
 1. The runtime reads the PR deterministically from Azure DevOps: identity, the
    latest iteration's source commit and merge base, and the complete
@@ -132,6 +191,8 @@ survive an OpenCode restart.
 
 See [current validation](docs/VALIDATION.md) for what was tested and what was
 not; earlier runs are kept in [validation history](docs/VALIDATION_HISTORY.md).
+
+</details>
 
 ## Requirements and installation
 
@@ -188,6 +249,9 @@ review command flag.
 
 ### Source archive or checkout
 
+<details>
+<summary>Source installation, replacement and manual copying</summary>
+
 Download the [v0.2.1 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.1.tar.gz)
 and extract it, or check out tag `v0.2.1`. The installer needs POSIX `sh` and
 Python 3's standard library. From that source directory:
@@ -199,11 +263,11 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config
 The installer creates `plugins/azpr-v2/` with a generated ESM `package.json`
 and a `server.js` entry that re-exports `plugin.js`. It never edits the main
 OpenCode configuration, provider choices or MCP connections, and it refuses
-conflicting V1 files, reserved command names and unowned packages. Run
+conflicting legacy files, reserved command names and unowned packages. Run
 `/pr-setup ... --replace` to configure the generated starter settings, or edit
 them yourself before restarting OpenCode.
 
-To replace an existing V2 installation (current settings are kept, new defaults
+To replace an existing source installation (current settings are kept, new defaults
 are added, and a retired `mcp` section is moved into `azure`):
 
 ```sh
@@ -251,6 +315,8 @@ src/prompts/comment-plan.md
 
 README, `docs/`, the changelog, the settings schema and `uninstall.sh` are optional.
 Keep `LICENSE` with copied or redistributed packages.
+
+</details>
 
 ## Configuration
 
@@ -311,6 +377,9 @@ never blocks `/pr-review`. Comment planning uses the review's risk model
 A role's focus orders its attention and is not a filter: every reviewer files
 every concrete defect it finds, in any area, as a finding.
 
+<details>
+<summary>All settings and defaults</summary>
+
 | Setting | Default and meaning |
 | --- | --- |
 | `enabled` | `true`; `false` registers nothing. |
@@ -345,6 +414,8 @@ into `azure`). There is deliberately no per-stage step cap; see the
 [roadmap](docs/ROADMAP.md#deferred) for why. The inactivity watchdog
 (`workflow.stageIdleSeconds`) is not one: it stops only a stage that stopped
 working.
+
+</details>
 
 ### Azure DevOps access
 

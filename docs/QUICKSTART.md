@@ -5,9 +5,9 @@ Use a small, active Azure DevOps Services PR for the first run.
 
 ## 1. Check the prerequisites
 
-- OpenCode **V2** (`@opencode/cli`), tested with **2.1.2** on **Ubuntu
+- **OpenCode CLI 2.1.2** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
   22.04.5 LTS (WSL2)**. Other host versions and operating systems are not
-  validated; see [validation](VALIDATION.md). This is not a V1 plugin.
+  validated; see [validation](VALIDATION.md).
 - An authenticated OpenCode model with tool support. Copy its exact
   `provider/model` ID from your host's model selection or `opencode models`.
   AZPR uses your existing provider account.
