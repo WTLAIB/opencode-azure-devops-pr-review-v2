@@ -360,7 +360,7 @@ troubleshooting.
 | Command | Behavior |
 | --- | --- |
 | `/pr-setup [options]` | Show setup guidance or save an organization, one model and an existing PAT file. No model or Azure request. Restart the OpenCode service after saving. |
-| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (configured quick and deep models only as warnings, and whether `/pr-deep` is off or would repeat `/pr-review`), and `afterReview` (a warning when a mode publishes automatically); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
+| `/pr-check <PR URL> [context]` | Deterministic readiness check: PR metadata, changed files, a HEAD and BASE file read, discussions and model availability (configured quick and deep models only as warnings, and whether `/pr-deep` is off or would repeat `/pr-review`), and `afterReview` (the configured modes and posting identity, shown as information); warns when OpenCode has no permission hook to keep native read tools inside the project. No model is used. |
 | `/pr-review <PR URL> [flag] [context]` | Sharded functional and risk reviews, then sharded verification. |
 | `/pr-deep <PR URL> [flag] [context]` | The same review with the stronger models of `models.deep`; usually slower and costlier. |
 | `/pr-quick <PR URL> [flag] [context]` | One reviewer per shard for both focuses, no verification; findings are reported, not verified. |
