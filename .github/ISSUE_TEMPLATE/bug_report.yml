@@ -22,7 +22,7 @@ body:
         AZPR tag or commit:
         OpenCode version (opencode --version):
         Operating system, version and WSL status:
-        Installation method (installer / plugin add / other):
+        Installation method (npm package / Git package / source installer / other):
     validations:
       required: true
   - type: dropdown

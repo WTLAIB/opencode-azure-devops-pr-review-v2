@@ -14,13 +14,14 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   skips a summary when every finding is already discussed. Quick comments
   retain their unverified disclosure. See [commenting](COMMENTING.md).
 - **Native installation and guided setup.** OpenCode's plugin manager loads
-  the versioned Git package through `server.js`. `/pr-setup` validates one
+  the npm package or the versioned Git package through `server.js`. `/pr-setup` validates one
   configured model and an existing private PAT file, then writes an external,
   owner-only settings file. The source installer remains available; updating
   or removing the package does not remove external settings or review records.
-- **Public distribution and contribution.** Versioned release notes, a real
-  recorded review and publication, contribution and private vulnerability
-  reporting guides, and issue and pull-request templates support adoption.
+- **Public distribution and contribution.** An npm package, versioned release
+  notes, a real recorded review and publication, contribution and private
+  vulnerability reporting guides, and issue and pull-request templates support
+  adoption.
 - **Own Azure DevOps access.** AZPR calls the REST API (api-version 7.1, the
   latest released version) with the organization and PAT from its settings,
   or from an owner-only PAT file (`azure.patFile`) so `settings.json` holds no

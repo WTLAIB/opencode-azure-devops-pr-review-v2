@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 — 2026-10-23
+
+- AZPR is published to the npm registry as `opencode-azure-devops-pr-review`:
+  `opencode plugin add opencode-azure-devops-pr-review@0.2.1`. The versioned
+  Git package and the source archive remain available with the same runtime,
+  and npm and Git installations read the same external settings.
+- The README shows CI, npm, license and tested-host badges. Installation and
+  upgrade instructions cover the npm package, the Git package and moving from
+  Git to npm.
+- `tests/host-v2-smoke.mjs --native --package SPEC` runs the native fixture
+  against a published package after a release.
+- No runtime, prompt or settings change.
+
 ## 0.2.0 — 2026-10-23
 
 - `afterReview` sets, per mode (`quick`, `review`, `deep`), what follows a

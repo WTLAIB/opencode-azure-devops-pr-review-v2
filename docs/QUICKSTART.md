@@ -11,8 +11,9 @@ Use a small, active Azure DevOps Services PR for the first run.
 - An authenticated OpenCode model with tool support. Copy its exact
   `provider/model` ID from your host's model selection or `opencode models`.
   AZPR uses your existing provider account.
-- Git for native Git package installation. The alternative source installer
-  also needs POSIX `sh` and Python 3. AZPR has no build step or npm dependencies.
+- Access to the npm registry for the npm package, or Git for the Git package.
+  The alternative source installer needs POSIX `sh` and Python 3. AZPR has no
+  build step or npm dependencies.
 - An organization-scoped Azure DevOps PAT. The recommended scopes are **Code:
   Read** and **Pull Request Threads: Read & write**; see
   [access and validation limits](ENTERPRISE.md).
@@ -23,27 +24,31 @@ Check the host version:
 opencode --version
 ```
 
-## 2. Install v0.2.0
+## 2. Install v0.2.1
 
-Already using v0.1.0? Follow the [upgrade instructions](releases/v0.2.0.md#upgrading-from-010)
+Already using an earlier version? Follow the [upgrade instructions](releases/v0.2.1.md#upgrading)
 to preserve your current configuration and use one AZPR installation.
 
 In your terminal:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.0'
+opencode plugin add opencode-azure-devops-pr-review@0.2.1
 ```
 
 Restart OpenCode and open an ordinary conversation. This is the host's native
-Git package installation; no npm account or separate build is needed. The
+package installation; no npm account or separate build is needed. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
+To install the same release from Git instead of the npm registry, use
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.1'`.
+Add only one of the two.
+
 For an existing source installation, keep using `install.sh --replace`, or
-follow the migration notes in [installation](../README.md#native-git-package).
+follow the migration notes in [installation](../README.md#native-package-npm-or-git).
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.2.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.0.tar.gz),
+[v0.2.1 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.1.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings; add `--replace` to the setup
