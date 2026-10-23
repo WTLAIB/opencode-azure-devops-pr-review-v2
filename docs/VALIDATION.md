@@ -438,8 +438,9 @@ acceptance above for the subsequent native package and recorded live run.
 Ubuntu 22.04.5 LTS (WSL2, kernel 6.18), Node 22.23.3, OpenCode CLI 2.0.22,
 Azure DevOps Services REST api-version 7.1. Date: 2026-10-10. From
 2026-10-17 the tested host was OpenCode CLI 2.0.32
-([below](#opencode-2032-2026-10-17)); since 2026-10-22 it is 2.1.2
-([below](#opencode-212-the-tested-host-2026-10-22)).
+([below](#opencode-2032-2026-10-17)), from 2026-10-22 2.1.2
+([below](#opencode-212-2026-10-22)); since 2026-10-24 it is 2.1.4
+([below](#opencode-214-the-tested-host-2026-10-24)).
 
 ## Offline tests
 
@@ -578,6 +579,15 @@ provider's own text, classified as permanent, and, end to end, a 429 quota
 failure that starts no second session and says why in the receipt; and the
 tested host version. Removing the quota rule from a copy of the code made
 these tests fail.
+The move to OpenCode 2.1.4 (2026-10-24) adds tests for a proxy that refuses
+the CONNECT tunnel as Bun 1.4.4 reports it, a rejection with
+`ERR_PROXY_TUNNEL` and the proxy's status: 407, 403 and 502 keep the messages
+and retry rules of the answers Bun 1.4.2 returned, and a refused tunnel never
+makes a write uncertain. Removing the mapping, the not-sent code or the
+not-forwarded flag from a copy of the code made these tests fail. Every Azure
+DevOps request now also asks the runtime for no idle limit of its own
+(`timeout: false`), so `azure.callTimeoutSeconds` alone ends a silent call;
+removing the option made its test fail.
 
 ## REST API version check
 
@@ -631,10 +641,74 @@ rule so the offline runtime tests catch a regression.
 | Largest provider request | 31,136 characters (27,185 before the duplicate rules and the diff and search tools) |
 | REST calls | 74 |
 
-## OpenCode 2.1.2, the tested host (2026-10-22)
+## OpenCode 2.1.4, the tested host (2026-10-24)
 
-Since 2026-10-22 the tested host is OpenCode CLI 2.1.2, which the user's
-company runs (`TESTED_HOST_VERSION`; CI runs the exact-host fixtures with it).
+Since 2026-10-24 the tested host is OpenCode CLI 2.1.4 (`TESTED_HOST_VERSION`;
+CI runs the exact-host fixtures with it). 2.1.3 was not tested on its own.
+Reviewing the 137 commits from `v2.1.2` to `v2.1.4` of the OpenCode source and
+running the fixtures found one change AZPR had to absorb, in the proxy
+behaviour of the embedded runtime:
+
+| Area | 2.1.2 → 2.1.4 |
+| --- | --- |
+| Plugin context | Every method AZPR calls is unchanged; the plugin package changed only its types. |
+| Hooks AZPR uses | `prompt`, `context`, `model.request` (kinds `primary`, `compaction`, `generate` and `title`), `retry`, `permission.evaluate` and the tool hooks keep their shapes, as do the token counts on assistant messages. |
+| Host constants | The continuation text, the streamed event names and the permission defaults are unchanged. |
+| Runtime | The embedded Bun moved from 1.4.2 to 1.4.4. When a proxy refuses the CONNECT tunnel, for example with HTTP 407, `fetch` now rejects with `ERR_PROXY_TUNNEL` and the proxy's status instead of returning the proxy's answer, and it resets the proxy connection. AZPR maps the rejection to the same proxy messages and retry rules as before, and a refused tunnel never makes a write uncertain. A refused connection is now `ECONNREFUSED` rather than `ConnectionRefused`; AZPR already recognized both. |
+| Compaction | `experimental.background_compaction` (off by default) prepares summaries through the same `compaction` request, which AZPR refuses for private reviewers before anything is sent. More provider context-overflow errors now reach AZPR as compaction requests and therefore split the shard. |
+| Models | With a ChatGPT sign-in, the OpenAI context caps moved into a built-in plugin with the same input limits (272,000 tokens; 500,000 for gpt-6.1-sol). A session without its own model now uses its agent's model; AZPR always sets both. |
+| New tools | The experimental TUI terminal tools and client-hosted MCP tools are outside the private roles' allowlist, so reviewers neither see nor run them. |
+
+- Exact-host fixtures with 2.1.4 installed into a disposable prefix: with only
+  the tested version changed, the fresh and native runs failed in the proxy
+  step. The 407 check received `ERR_PROXY_TUNNEL`, AZPR retried it as a
+  network error, and the fixture proxy stopped on the reset connection; the
+  replacement and comment-scale runs passed. With the mapping and a fixture
+  proxy that tolerates a reset, all four passed: fresh, replacement, native
+  and comment scale.
+- A probe in each runtime (`BUN_BE_BUN=1 opencode`) showed the difference: for
+  407, 403 and 502 answers to CONNECT, Bun 1.4.2 resolves with that status and
+  Bun 1.4.4 rejects with `ERR_PROXY_TUNNEL` carrying it; a proxy that closes
+  without an answer gives ECONNRESET in both.
+- The same probe found that `fetch` in both runtimes ends a request that
+  receives nothing after about 370 seconds unless it passes `timeout: false`.
+  `azure.callTimeoutSeconds` accepts up to 1,800 seconds, so a longer setting
+  used to end at that point with a retried network error. AZPR now passes
+  `timeout: false`, and its own per-call timeout decides. In 2.1.4's runtime,
+  AZPR's client sent one comment write to a silent server with a 400-second
+  timeout: without the option it ended at 372 seconds with `network error (23)`,
+  with it through AZPR's per-call timeout (413 seconds by the wall clock).
+- Upgrade: `npm install -g @opencode/cli@2.1.4`; the background service,
+  still running 2.1.2, was then stopped and its database copied before 2.1.4
+  first opened it, and the service was started on 2.1.4. With this revision
+  `/pr-check` on the 1-file PR was READY without a host notice.
+
+Live on the upgraded background service with this revision (gpt-6-luna for
+quick and review, `workflow.parallelSessions` 8, each review followed by a
+comment preview; nothing was posted):
+
+| PR | Mode | Review | Sessions / requests | Input (cached) | Findings | Preview (inline) |
+| --- | --- | --- | --- | --- | --- | --- |
+| PR #2, 1 file | quick | COMPLETE, 48 s | 1 / 6 | 39 K (60 %) | the 3 known defects | 7 s (0; the PR's threads already discuss all 3) |
+| | review | COMPLETE, 75 s | 3 / 12 | 84 K (52 %) | the 3 known defects | 7 s (0; already discussed) |
+| PR #4, 35 files | quick | COMPLETE, 36 s | 2 / 7 | 167 K (52 %) | no candidate for either seeded regression | 3 s (0) |
+| | review | COMPLETE, 75 s | 5 / 15 | 309 K (55 %) | the seeded regression in the diff | 10 s (1) |
+| PR #3, 316 files | quick | COMPLETE, 136 s | 13 / 51 | 1.81 M (66 %) | all 24 seeded policy defects | 74 s (23) |
+| | review | COMPLETE, 297 s | 30 / 128, 1 correction | 4.45 M (72 %) | all 24 seeded policy defects, no other finding | 98 s (30) |
+
+All six reviews and previews completed with no AZPR retry, failed stage,
+inactivity stop, tool timeout, blocked tool, host retry, rejected model request
+or Azure DevOps retry; one reviewer once called a diff tool without its path
+and got the host's argument error. The results stay within gpt-6-luna's range
+on 2.1.2: which of the two seeded regressions in the 35-file PR a run finds
+still varies between runs. These live runs preceded the `timeout: false`
+change, which the fixtures and the probe above cover.
+
+## OpenCode 2.1.2 (2026-10-22)
+
+From 2026-10-22 to 2026-10-24 the tested host was OpenCode CLI 2.1.2, which
+the user's company ran then (`TESTED_HOST_VERSION`; CI ran the exact-host
+fixtures with it).
 2.1.0 and 2.1.1 were not tested. Reviewing the 146 commits from `v2.0.32` to
 `v2.1.2` of the OpenCode source found nothing AZPR depends on changed:
 

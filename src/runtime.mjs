@@ -1152,7 +1152,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Enforce the shell setting and the project boundary, regardless of
       // permission rules the host appends after this plugin. Outside the
       // project only AZPR's own private data is readable; the host's default
-      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.1.2 allow).
+      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.1.4 allow).
       // Private reviewers run unattended: a request that would wait for
       // approval is refused at once. Only shell keeps host approvals, and only
       // when the user allowed it (shell: "ask" or "inherit").

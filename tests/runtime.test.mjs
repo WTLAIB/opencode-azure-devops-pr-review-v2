@@ -78,7 +78,7 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: '2.1.2' },
+    app: { version: '2.1.4' },
     location: { directory },
     // Like a host catalog, each configured model once, however many roles name it.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
@@ -818,7 +818,7 @@ test('a host without the permission hook gets a /pr-check warning about the proj
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.1\.2, the tested version, has the hook\. \|/);
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.1\.4, the tested version, has the hook\. \|/);
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 

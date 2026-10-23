@@ -6,12 +6,13 @@ acceptance, Azure source validity or report quality.
 
 ## A startup slash command becomes an ordinary prompt
 
-On OpenCode 2.1.2, `opencode --prompt "/pr-review ..."` can submit before a
-native Git package's command catalog has loaded. The host then treats the text
-as an ordinary model prompt; AZPR has not received the command. This was observed
-in local native-package TUI acceptance failures and matches the host's
-[startup submission](https://github.com/anomalyco/opencode/blob/v2.1.2/packages/tui/src/routes/home.tsx#L62)
-and [command classification](https://github.com/anomalyco/opencode/blob/v2.1.2/packages/tui/src/component/prompt/index.tsx#L1153).
+On OpenCode 2.1.2 through 2.1.4, `opencode --prompt "/pr-review ..."` can
+submit before a native Git package's command catalog has loaded. The host then
+treats the text as an ordinary model prompt; AZPR has not received the command.
+This was observed in local native-package TUI acceptance failures on 2.1.2 and
+matches the host's
+[startup submission](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/tui/src/routes/home.tsx#L62)
+and [command classification](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/tui/src/component/prompt/index.tsx#L1153).
 
 Start the TUI normally and wait for `/pr-review` to appear in slash-command
 completion before submitting it. A command admitted by AZPR emits its own

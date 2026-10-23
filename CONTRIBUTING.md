@@ -29,7 +29,7 @@ can go straight to a pull request.
 ## Work locally
 
 Use Node.js 22.12 or later, POSIX `sh`, Python 3 and Git. The current host
-acceptance target is OpenCode V2 `@opencode/cli@2.1.2` on Ubuntu 22.04; other
+acceptance target is OpenCode V2 `@opencode/cli@2.1.4` on Ubuntu 22.04; other
 environments are not yet validated. The runtime has no npm dependencies or
 build step. From your checkout:
 
@@ -49,7 +49,7 @@ four host fixtures. Install the tested host into a disposable local directory
 without changing your everyday OpenCode installation:
 
 ```sh
-npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund @opencode/cli@2.1.2
+npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund @opencode/cli@2.1.4
 AZPR_TEST_HOST="$PWD/.local/contributor-host/node_modules/.bin/opencode"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --replace

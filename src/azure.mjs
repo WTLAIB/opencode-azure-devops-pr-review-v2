@@ -249,8 +249,10 @@ function retryAfterMs(header) {
   return Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_RETRY_AFTER_MS) : undefined;
 }
 
-// Fetch error codes: Bun (OpenCode's runtime) reports e.g. ConnectionRefused where Node reports ECONNREFUSED.
-const NOT_SENT_CODES = /^(?:ECONNREFUSED|ConnectionRefused|FailedToOpenSocket|ENOTFOUND|EAI_AGAIN)$/;
+// Fetch error codes: Bun 1.4.2 (OpenCode's runtime through 2.1.2) reports e.g. ConnectionRefused where Node and
+// Bun 1.4.4 report ECONNREFUSED.
+// ERR_PROXY_TUNNEL: the proxy refused the CONNECT tunnel, so nothing reached Azure DevOps.
+const NOT_SENT_CODES = /^(?:ECONNREFUSED|ConnectionRefused|FailedToOpenSocket|ENOTFOUND|EAI_AGAIN|ERR_PROXY_TUNNEL)$/;
 const UNREACHABLE_CODES = /^(?:ECONNREFUSED|ConnectionRefused|FailedToOpenSocket|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)$/;
 const CERTIFICATE_CODES = /^(?:UNABLE_TO_GET_ISSUER_CERT(?:_LOCALLY)?|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|CERT_[A-Z_]+|ERR_TLS_CERT_ALTNAME_INVALID)$/;
 // Azure DevOps marks every response it serves; a proxy's own answer does not carry this header.
@@ -296,15 +298,15 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
     signal.addEventListener('abort', stop, { once: true });
   });
 
-  /** An answer from a proxy or gateway instead of Azure DevOps. */
-  function intermediaryFailure(status, label, method) {
+  /** An answer from a proxy or gateway instead of Azure DevOps; `forwarded` is false when it refused the tunnel. */
+  function intermediaryFailure(status, label, method, forwarded = true) {
     if (status === 407) {
       return new AzureError(`A proxy refused ${label}: it requires authentication (HTTP 407).`, { kind: 'proxy', status,
         hint: 'Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.' });
     }
     // A gateway that already forwarded a write may have delivered it.
     return new AzureError(`A proxy or gateway answered ${label} with HTTP ${status} instead of Azure DevOps (no Azure DevOps response headers).`, {
-      kind: 'proxy', status, transient: status === 429 || status >= 500, uncertain: method !== 'GET' && status >= 500,
+      kind: 'proxy', status, transient: status === 429 || status >= 500, uncertain: forwarded && method !== 'GET' && status >= 500,
       hint: proxyName ? `Check that the proxy ${proxyName} (azure.proxy) allows dev.azure.com.`
         : 'Check the proxy or firewall between OpenCode and dev.azure.com; set azure.proxy if this network requires one.' });
   }
@@ -330,7 +332,10 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
     let response;
     try {
       response = await fetchImpl(url, {
-        method, redirect: 'manual', signal,
+        // Bun's fetch gives up on its own after five to six minutes without data (370 s in Bun 1.4.2 and
+        // 1.4.4); the queue's per-call timeout (azure.callTimeoutSeconds, up to 30 minutes) aborts through
+        // `signal` instead. Node's fetch ignores the option.
+        method, redirect: 'manual', signal, timeout: false,
         headers: { authorization, accept: accept === 'json' ? 'application/json' : 'application/octet-stream',
           ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -340,6 +345,10 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
       const code = error?.cause?.code ?? error?.code;
       const known = typeof code === 'string' ? code : '';
+      // Bun 1.4.4 (OpenCode 2.1.3 and later) rejects with the proxy's status when it refuses the
+      // CONNECT tunnel; Bun 1.4.2 returned that answer as a response.
+      const tunnelStatus = known === 'ERR_PROXY_TUNNEL' ? error?.status ?? error?.cause?.status : undefined;
+      if (Number.isInteger(tunnelStatus) && tunnelStatus >= 400) throw intermediaryFailure(tunnelStatus, label, method, false);
       // A rejected certificate fails the handshake before anything is sent; retrying cannot help.
       if (CERTIFICATE_CODES.test(known)) {
         throw new AzureError(`Azure DevOps ${label} failed: the server's TLS certificate was not accepted (${clean(known)}).`, { kind: 'tls', code: known, cause: error,

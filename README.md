@@ -3,7 +3,7 @@
 [![CI](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/actions/workflows/ci.yml?query=branch%3Amain)
 [![npm](https://img.shields.io/npm/v/opencode-azure-devops-pr-review)](https://www.npmjs.com/package/opencode-azure-devops-pr-review)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tested with OpenCode 2.1.2](https://img.shields.io/badge/OpenCode-2.1.2%20tested-blue)](docs/VALIDATION.md)
+[![Tested with OpenCode 2.1.4](https://img.shields.io/badge/OpenCode-2.1.4%20tested-blue)](docs/VALIDATION.md)
 
 **Review Azure DevOps pull requests from a URL. No checkout required.**
 
@@ -133,7 +133,7 @@ general review-accuracy score.
 
 | Component | Tested target |
 | --- | --- |
-| OpenCode | **OpenCode CLI 2.1.2** (`@opencode/cli`; V2 plugin API). OpenCode 1.x is not supported. |
+| OpenCode | **OpenCode CLI 2.1.4** (`@opencode/cli`; V2 plugin API). OpenCode 1.x is not supported. |
 | Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
 | Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
 | Installation | OpenCode's plugin manager with the npm package or the versioned Git package, or the source installer with POSIX `sh` and Python 3; no plugin build step or npm dependencies. |
@@ -155,7 +155,9 @@ for both quick and verified reviews.
    read-only tools at exact commits.
 2. Two full-scope reviewers (functional and risk) review the changed files in
    bounded **shards**. A shard that fills its model context is split in half
-   and run again instead of failing.
+   and run again instead of failing. Reviewer sessions never compact, so
+   OpenCode's opt-in `experimental.background_compaction` does not apply to
+   them: AZPR refuses its summary requests before anything is sent.
 3. A verifier independently re-checks every candidate finding against the
    source, sharded by finding. Answers that break the output contract get a
    short **correction turn** in the same session; whatever is still unusable is

@@ -237,7 +237,7 @@ test('proxy and TLS transport: CA certificates join the built-in roots; labels n
   assert.equal(proxyLabel('https://proxy.example.com'), 'https://proxy.example.com:443');
 });
 
-test('client sends every request with the proxy and TLS options', async () => {
+test('client sends every request with the proxy and TLS options and without the runtime idle timeout', async () => {
   const azure = fakeAzure();
   const transport = fetchTransport({ proxy: 'http://u:pw@127.0.0.1:3128', caCertificates: ['-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'] });
   const inits = [];
@@ -248,6 +248,8 @@ test('client sends every request with the proxy and TLS options', async () => {
   await c.createThread(r, snapshot, { kind: 'summary', content: 'x' });
   assert.ok(inits.length >= 6);
   assert.ok(inits.every(init => init.proxy === transport.proxy && init.tls === transport.tls));
+  // Bun would end a silent call after five to six minutes; azure.callTimeoutSeconds decides instead.
+  assert.ok(inits.every(init => init.timeout === false && init.signal instanceof AbortSignal));
 });
 
 test('proxy, TLS and connection failures are classified with what to change', async () => {
@@ -297,11 +299,27 @@ test('proxy, TLS and connection failures are classified with what to change', as
   await assert.rejects(gateway.c.threads(run(), snapshot), error => error.kind === 'proxy' && error.transient && /HTTP 502[\s\S]* after 3 attempts\./.test(error.message));
   assert.equal(gateway.calls(), 3);
   await assert.rejects(gateway.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.uncertain === true, 'A gateway may have forwarded the write.');
+  // Bun 1.4.4 rejects a refused CONNECT tunnel instead of returning the proxy's answer; the meaning is the same,
+  // except that a refused tunnel never forwarded a write.
+  const refusedTunnel = status => () => { throw Object.assign(new Error(`Proxy refused to open a tunnel: ${status}`), { code: 'ERR_PROXY_TUNNEL', status, statusText: '', headers: {} }); };
+  const tunnelAuth = failing(refusedTunnel(407), proxy);
+  await assert.rejects(tunnelAuth.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
+    error.message === 'A proxy refused PR threads: it requires authentication (HTTP 407). Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.');
+  assert.equal(tunnelAuth.calls(), 1);
+  const tunnelBlocked = failing(refusedTunnel(403), proxy);
+  await assert.rejects(tunnelBlocked.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
+    error.message === 'A proxy or gateway answered PR threads with HTTP 403 instead of Azure DevOps (no Azure DevOps response headers). Check that the proxy http://10.1.2.3:80 (azure.proxy) allows dev.azure.com.');
+  const tunnelGateway = failing(refusedTunnel(502), proxy);
+  await assert.rejects(tunnelGateway.c.threads(run(), snapshot), error => error.kind === 'proxy' && error.transient && /HTTP 502[\s\S]* after 3 attempts\./.test(error.message));
+  assert.equal(tunnelGateway.calls(), 3);
+  await assert.rejects(tunnelGateway.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.uncertain === false, 'A refused tunnel forwarded nothing.');
+  const tunnelUnknown = failing(() => { throw bun('ERR_PROXY_TUNNEL', 'Proxy refused to open a tunnel'); }, proxy);
+  await assert.rejects(tunnelUnknown.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.kind === 'network' && error.uncertain === false);
   const portal = failing(() => new Response('<html>Sign in to the proxy</html>', { status: 200, headers: { 'content-type': 'text/html' } }), proxy);
   await assert.rejects(portal.c.threads(run(), snapshot), error => error.kind === 'proxy' && /HTTP 200 instead of Azure DevOps/.test(error.message));
   // Azure DevOps' own answers keep their meaning.
   const azure403 = failing(() => new Response(JSON.stringify({ typeKey: 'UnauthorizedRequestException', message: 'TF401027' }), { status: 403, headers: { ...AZURE_HEADERS, 'content-type': 'application/json' } }), proxy);
   await assert.rejects(azure403.c.threads(run(), snapshot), error => error.kind === 'permission');
 
-  for (const probe of [tls, viaProxy, auth, blocked, gateway, portal]) assert.ok(!JSON.stringify(probe.records).includes('secret-word'), 'Proxy credentials never reach call records.');
+  for (const probe of [tls, viaProxy, auth, blocked, gateway, tunnelAuth, tunnelBlocked, tunnelGateway, tunnelUnknown, portal]) assert.ok(!JSON.stringify(probe.records).includes('secret-word'), 'Proxy credentials never reach call records.');
 });

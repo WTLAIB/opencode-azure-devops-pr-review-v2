@@ -32,18 +32,20 @@ export async function fakeProxy({ credentials } = {}) {
   });
   server.on('connect', (request, socket, head) => {
     track(socket);
+    let upstream;
+    // Bun 1.4.4 resets the connection after a refused tunnel; a client reset is not a fixture failure.
+    socket.on('error', () => upstream?.destroy());
     const header = request.headers['proxy-authorization'] ?? null;
     events.push({ type: 'connect', target: request.url, proxyAuthorization: header, authorization: request.headers.authorization ?? null });
     if (!allowed(header)) { socket.end(REQUIRED); return; }
     const split = request.url.lastIndexOf(':');
-    const upstream = track(net.connect(Number(request.url.slice(split + 1)), request.url.slice(0, split).replace(/^\[|\]$/g, ''), () => {
+    upstream = track(net.connect(Number(request.url.slice(split + 1)), request.url.slice(0, split).replace(/^\[|\]$/g, ''), () => {
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head?.length) upstream.write(head);
       upstream.pipe(socket);
       socket.pipe(upstream);
     }));
     upstream.on('error', () => socket.destroy());
-    socket.on('error', () => upstream.destroy());
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');

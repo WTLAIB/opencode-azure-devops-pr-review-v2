@@ -115,7 +115,11 @@ After preflight, hooks never re-read settings or catalogs.
    advice and limitations only.
 3. **Overflow** — private sessions may not compact. A compaction request (or a
    413) marks the stage as `overflow`; the runtime splits that shard in half
-   and runs both halves (labels `shard 1/5a`, `1/5b`).
+   and runs both halves (labels `shard 1/5a`, `1/5b`). OpenCode's opt-in
+   `experimental.background_compaction` (2.1.4) asks for a summary through the
+   same request before the context is full; it is refused before anything is
+   sent and the stage continues, but a later failure of that stage counts as
+   overflow.
 4. **Verification** — findings are grouped by file into shards of at most
    `workflow.shardFindings`; shards end only between files, so every finding on
    a file reaches the same verifier (a file is split only when it alone has
@@ -372,6 +376,6 @@ Without `permission.hook` the project boundary for native read tools is left to
 the host's own permission rules; `/pr-check` shows a WARNING row and reviews
 still run.
 Receipts note when the detected OpenCode version differs from the tested one
-(`TESTED_HOST_VERSION`, 2.1.2).
+(`TESTED_HOST_VERSION`, 2.1.4).
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.
