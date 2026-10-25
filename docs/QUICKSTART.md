@@ -179,8 +179,8 @@ Use finding IDs from your report to leave findings out or change their severity:
 /pr-comment 1a2b3c4d --exclude F-1 --severity F-2=low
 ```
 
-In this example, F-1 is excluded from the new preview and F-2 stays in the
-summary as a low-severity finding. The original review is preserved. A changed
+In this example, F-1 is excluded from the new preview; F-2 appears as low in the
+summary, with no new inline comment. The original review is preserved. A changed
 severity does not verify the finding again; exclude a finding when it is wrong.
 
 AZPR uses a model to plan the comments again without rerunning the review, so

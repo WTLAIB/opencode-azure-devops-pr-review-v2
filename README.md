@@ -7,9 +7,9 @@
 
 **Review Azure DevOps pull requests from a URL. No checkout required.**
 
-Review across repositories in your configured Azure DevOps organization using
-your OpenCode models to inspect changes and check findings. Preview the comments,
-choose which findings to publish, and adjust severity before posting.
+Review pull requests across your configured Azure DevOps organization with your
+own OpenCode models, without cloning each repository. Preview the comments,
+leave out findings or change their severity, and publish when you are ready.
 No MCP server or CI pipeline setup is required.
 
 AZPR is an independent community project. It is not built by or affiliated with
@@ -33,6 +33,9 @@ the Azure portion shows an actual REST read-back in a terminal.*
   you don't want to publish, and adjust severity. AZPR prepares a new preview
   without rerunning the review. Read it, then publish when ready. Your original
   review stays intact.
+- **Checks before and after posting.** AZPR rechecks the PR head, skips matching
+  comments it already posted, and reads new comments back. Automatic publication
+  is opt-in.
 - **Follow the code beyond the diff.** Reviewers can look up definitions,
   callers and tests using file reads and text search at the selected PR commit,
   without depending on an Azure Code Search index.
@@ -84,19 +87,20 @@ change its severity using IDs from your report, for example:
 /pr-comment REVIEW_ID_FROM_RECEIPT --exclude F-1 --severity F-2=low
 ```
 
-F-1 is excluded from the new preview; F-2 stays in the summary as a low-severity
-finding. Adjusting runs comment planning again with a model. Read the whole new
-preview, then publish from the same conversation:
+F-1 is excluded from the new preview; F-2 appears as low in the summary, with no
+new inline comment. Adjusting runs comment planning again with a model. Read the
+whole new preview, then publish from the same conversation:
 
 ```text
 /pr-comment REVIEW_ID_FROM_RECEIPT --publish
 ```
 
 Use the review ID from the completed receipt. The command posts the saved
-preview as the PAT owner and skips existing AZPR markers. For an adjusted review,
-the receipt reports differing earlier text kept on the PR. See
-[adjusting findings](#adjusting-findings-after-a-preview)
-for the complete-list replacement rules. For a lighter first pass, use
+preview as the PAT owner and skips matching comments AZPR already posted. It
+never edits them; for an adjusted review, the receipt identifies those whose
+text differs from the new preview. See
+[adjusting findings](#adjusting-findings-after-a-preview) for how repeating an
+option replaces its earlier list. For a lighter first pass, use
 `/pr-quick <PR URL> --preview`; its findings are not independently verified.
 
 ## Choose a review
