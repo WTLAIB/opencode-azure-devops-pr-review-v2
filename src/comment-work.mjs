@@ -395,8 +395,9 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
       const entry = ledger.get(item.marker);
       if (!['POSTED', 'UNCERTAIN', 'FAILED'].includes(entry.state)) continue;
       if (after.has(item.marker)) {
-        // The comment of an earlier attempt, which the first list did not show yet, keeps its own text.
-        const earlierText = textsAfter && (entry.earlierAttempt || entry.state === 'UNCERTAIN') && textsAfter.get(item.marker) !== item.content;
+        // A comment this run did not create (an earlier attempt's, or one the first list did not show yet,
+        // also after a refused write) keeps its own text.
+        const earlierText = textsAfter && (entry.state !== 'POSTED' || entry.earlierAttempt) && textsAfter.get(item.marker) !== item.content;
         Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker), ...(earlierText ? { earlierText: true } : {}) });
       }
       else if (entry.state === 'POSTED') entry.state = removedAfter.has(entry.threadId) ? 'DELETED' : 'UNVERIFIED';

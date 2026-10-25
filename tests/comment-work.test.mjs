@@ -767,3 +767,24 @@ test('an earlier comment that only the read-back lists is marked as keeping its 
   assert.ok(entries.every(entry => entry.state === 'VERIFIED' && entry.earlierAttempt));
   assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
 });
+
+test('without a local record, a refused write whose marker the read-back finds is compared too', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const first = publisher(azure);
+  assert.equal((await publishPlan({ run: first.run, review, azure: first.api, attempts: first.attempts })).status, 'POSTED');
+  const threads = azure.state.threads.length;
+  // Another machine: no publication record of its own. Its first thread list lags, and Azure DevOps refuses the writes.
+  const other = publisher(azure);
+  const changed = { ...review, publication: new Map(), plan: { ...review.plan,
+    summary: { ...review.plan.summary, content: review.plan.summary.content.replace('high: 2', 'high: 1 · medium: 1') },
+    comments: review.plan.comments.map((item, index) => index ? item : { ...item, content: item.content.replace('🔴 high:', '🟡 medium:') }) } };
+  let listings = 0;
+  azure.state.fail.threads = () => listings++ ? undefined : { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: [], count: 0 }) };
+  azure.state.fail.createThread = () => azureError(403, 'AccessDeniedException', 'Fixture writes denied.');
+  await publishPlan({ run: other.run, review: changed, azure: other.api, attempts: other.attempts, compare: true });
+  assert.equal(azure.state.threads.length, threads, 'Nothing was written.');
+  const entries = [...changed.publication.values()];
+  assert.ok(entries.every(entry => entry.state === 'VERIFIED'), 'The read-back finds every marker, as before.');
+  assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
+});
