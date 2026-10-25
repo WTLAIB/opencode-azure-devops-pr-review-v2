@@ -478,6 +478,8 @@ troubleshooting.
 | `/pr-stop [run-id]` | Cancel this conversation's active command. |
 | `/pr-comment [review-id]` | Preview comments for this conversation's latest completed review. |
 | `/pr-comment [review-id] --publish` | Post the saved preview (planning it first if needed). Safe to repeat. |
+| `/pr-comment [review-id] --show` | Show the saved preview again; no model or Azure DevOps request. |
+| `/pr-comment <review-id> --exclude <IDs>` / `--severity <ID=level,…>` / `--reset` | Leave findings out or change their severity after reading the preview, then preview again (see [adjusting findings](docs/COMMENTING.md#adjusting-findings-after-a-preview)). |
 
 Supported PR URLs are `https://dev.azure.com/<org>/<project>/_git/<repo>/pullrequest/<id>`
 and `https://<org>.visualstudio.com/[DefaultCollection/]<project>/_git/<repo>/pullrequest/<id>`.
@@ -531,6 +533,27 @@ quick review, not independently verified` (and, in the summary, incomplete
 coverage), and their inline comments need a location on a changed HEAD file.
 When two shards of a quick review report one defect, the planner may combine
 them into one comment under fixed rules (see [commenting](docs/COMMENTING.md)).
+
+### Adjusting findings after a preview
+
+When a preview contains a finding you disagree with, leave it out or change
+its severity, then read the new preview:
+
+```text
+/pr-comment <review-id> --exclude F-1
+/pr-comment <review-id> --severity F-2=low
+```
+
+The comments are planned again without the excluded findings and with the new
+severities, so their wording may change; the summary index follows them, and
+nothing on the PR mentions the adjustment. Excluding every finding posts
+nothing. `--reset` clears the adjustments, and `/pr-comment <review-id> --show`
+shows the saved preview without a model. An adjusted review is posted only
+from the preview planned after its latest adjustment; once its publication has
+started, it is neither adjusted nor planned again. Comments that an earlier
+publication put on the PR are never changed: they are skipped as always, and
+the receipt of an adjusted review names those whose text differs from the
+preview. See [adjusting findings](docs/COMMENTING.md#adjusting-findings-after-a-preview).
 
 ### Automatic comments
 

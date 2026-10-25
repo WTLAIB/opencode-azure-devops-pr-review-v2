@@ -691,6 +691,198 @@ test('comment commands only see reviews from their own conversation; report sess
   assert.match(await f.command('pr-comment', '', verifier.id), /\] PREVIEW/);
 });
 
+const previewIds = receipt => [...receipt.matchAll(/^### ([A-Z]-\d+) — /gm)].map(match => match[1]);
+const commentData = receipt => /<azpr_comment_data>\n([\s\S]*)\n<\/azpr_comment_data>/.exec(receipt)[1];
+const savedReview = async (f, id) => JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
+
+test('a person excludes a finding and changes a severity after the preview; --show repeats the saved preview without a model', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const preview = await f.command('pr-comment', '');
+  const [first, second] = previewIds(preview);
+  assert.ok(first && second);
+  // Without the new options nothing changes: no new planner field, no new saved field, no adjustment text.
+  assert.ok(f.sessionsFor('azpr-review-comment-plan').every(session => !Object.hasOwn(session.packet, 'adjustments')));
+  assert.equal(Object.hasOwn(await savedReview(f, review), 'adjustments'), false);
+  assert.doesNotMatch(preview, /Adjusted by a person/);
+  const prompts = f.prompts().length, calls = f.azure.state.calls.length;
+  const shown = await f.command('pr-comment', `${review} --show`);
+  assert.match(shown, new RegExp(`^\\[AZPR\\] Saved preview of review ${review}, planned \\S+; no model or Azure DevOps request was made\\.\\nNothing was posted\\.`));
+  assert.equal(commentData(shown), commentData(preview).split('\n\nNothing was posted.')[0]);
+  assert.equal(f.prompts().length, prompts);
+  assert.equal(f.azure.state.calls.length, calls);
+  // f1 reads as F-1; the excluded finding appears nowhere in what would be posted.
+  const excluded = await f.command('pr-comment', `${review} --exclude ${first.toLowerCase().replace('-', '')}`);
+  assert.match(excluded, /\] PREVIEW; source review=/);
+  assert.match(excluded, new RegExp(`Adjusted by a person: excluded ${first}\\. The comments were planned again, so their wording may differ`));
+  assert.match(excluded, /Inline comments prepared: 1/);
+  assert.match(excluded, new RegExp(`Excluded from publication: ${first}`));
+  const posted = commentData(excluded).slice(commentData(excluded).indexOf('## PR Review Summary'));
+  assert.ok(!posted.includes(first));
+  assert.ok(posted.includes(`### ${second} — `));
+  const planner = f.sessionsFor('azpr-review-comment-plan').at(-1).packet;
+  assert.deepEqual(planner.adjustments.excludedFindings, [first]);
+  assert.deepEqual(planner.findings.map(item => item.id), [second]);
+  assert.deepEqual((await savedReview(f, review)).adjustments.excluded, [first]);
+  // --severity replaces only its own list: the exclusion stays.
+  const lowered = await f.command('pr-comment', `${review} --severity ${second}=low`);
+  assert.match(lowered, new RegExp(`Adjusted by a person: ${second} severity high → low\\.`));
+  assert.match(lowered, /Inline comments prepared: 0/);
+  assert.match(lowered, /high: 0 · medium: 0 · low: 1/);
+  const result = await f.command('pr-comment', `${review} --publish`);
+  assert.match(result, /\] POSTED/);
+  assert.equal(f.azure.state.threads.length, 1, 'Only the summary is posted.');
+  const summary = f.azure.state.threads[0].comments[0].content;
+  assert.ok(!summary.includes(first));
+  assert.match(summary, /low: 1/);
+  assert.doesNotMatch(summary, /Adjusted by a person|Excluded from publication/);
+  // Once publication has started, adjustments are closed and the preview is not planned again; --show still works.
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${review} --exclude none` } }),
+    new RegExp(`Publication of review ${review}'s comments has started, so its findings can no longer be adjusted`));
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: review } }),
+    new RegExp(`Publication of review ${review}'s adjusted preview has started, so it is not planned again`));
+  assert.match(await f.command('pr-comment', `${review} --show`), /Publication of this preview has started/);
+  assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED/, 'Retrying the same preview is safe.');
+  assert.equal(f.azure.state.threads.length, 1);
+});
+
+test('excluding every finding leaves nothing to post, without a model or a summary; --exclude none restores them', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const ids = previewIds(await f.command('pr-comment', ''));
+  const prompts = f.prompts().length;
+  const none = await f.command('pr-comment', `${review} --exclude ${ids.join(',')}`);
+  assert.match(none, /\] NOTHING_TO_POST; source review=/);
+  assert.match(none, new RegExp(`A person excluded every finding of review ${review}, so nothing will be posted`));
+  assert.equal(f.prompts().length, prompts, 'No model was asked.');
+  assert.doesNotMatch(none, /No confirmed defects found/);
+  const publish = await f.command('pr-comment', `${review} --publish`);
+  assert.match(publish, /\] NOTHING_TO_POST/);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+  assert.match(await f.command('pr-comment', `${review} --show`), /A person excluded every finding, so nothing will be posted/);
+  const back = await f.command('pr-comment', `${review} --exclude none`);
+  assert.match(back, /\] PREVIEW/);
+  assert.match(back, new RegExp(`Adjusted by a person: restored ${ids[0]}; restored ${ids[1]}\\.`));
+  assert.match(back, /Inline comments prepared: 2/);
+  assert.doesNotMatch(back, /Excluded from publication/);
+});
+
+test('adjustments need a named review of this conversation and real finding IDs; they survive a restart, and --reset clears them', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const [first] = previewIds(await f.command('pr-comment', ''));
+  const refuse = (text, pattern, origin = 'ordinary') => assert.rejects(f.commands.get('pr-comment').execute({ sessionID: origin, prompt: { text } }), pattern);
+  await refuse(`--exclude ${first}`, /Name the review whose findings you adjust/);
+  await refuse(`${review} --exclude F-99`, new RegExp(`Nothing was changed: F-99 is not a finding of review ${review}\\. Findings of review ${review} you can adjust: `));
+  await refuse(`${review} --exclude ${first} --publish`, /Usage: \/pr-comment/);
+  await refuse(`${review} --severity ${first}=critical`, /Not a severity change/);
+  await refuse(`${review} --exclude ${first}`, /No completed review/, 'another-conversation');
+  assert.equal(Object.hasOwn(await savedReview(f, review), 'adjustments'), false, 'A refused request saves nothing.');
+  assert.match(await f.command('pr-comment', `${review} --exclude ${first}`), /\] PREVIEW/);
+  const prompts = f.prompts().length;
+  assert.match(await f.command('pr-comment', `${review} --exclude ${first}`), /already has these adjustments; nothing was planned/);
+  assert.equal(f.prompts().length, prompts);
+  // A restart keeps the adjustments and their preview.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure });
+  assert.match(await g.command('pr-comment', `${review} --show`), new RegExp(`Excluded from publication: ${first}`));
+  // A plain re-plan keeps them; --reset clears them.
+  const replanned = await g.command('pr-comment', review);
+  assert.match(replanned, /Inline comments prepared: 1/);
+  assert.match(replanned, new RegExp(`Excluded from publication: ${first}`));
+  assert.doesNotMatch(replanned, /Adjusted by a person:/, 'A plain re-plan changes no adjustment.');
+  const reset = await g.command('pr-comment', `${review} --reset`);
+  assert.match(reset, new RegExp(`Adjusted by a person: restored ${first}\\.`));
+  assert.match(reset, /Inline comments prepared: 2/);
+  assert.doesNotMatch(reset, /Excluded from publication/);
+  const saved = await savedReview(g, review);
+  assert.deepEqual([saved.adjustments.excluded, saved.adjustments.severity], [[], {}]);
+  assert.equal(saved.adjustments.changes.length, 2, 'Each change is recorded with its time.');
+});
+
+test('an adjusted review whose new preview failed is not planned and posted in one step', async t => {
+  let failPlanning = false;
+  const f = await fixture(t, { files: ['/src/Main.java'], answer: ({ role }) => failPlanning && ROLES[role].format === 'comment-plan' ? { $provider: 401 } : undefined });
+  const review = reviewId(await f.command());
+  const [first] = previewIds(await f.command('pr-comment', ''));
+  failPlanning = true;
+  const failed = await f.command('pr-comment', `${review} --exclude ${first}`);
+  assert.match(failed, /\] INCOMPLETE/);
+  assert.match(failed, new RegExp(`Adjusted by a person: excluded ${first}\\.\\n`));
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${review} --publish` } }),
+    new RegExp(`Review ${review} was adjusted and has no preview planned since`));
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+  failPlanning = false;
+  assert.match(await f.command('pr-comment', review), /\] PREVIEW/);
+  // --reset is an adjustment too: when its preview fails, the review is not planned and posted in one step either.
+  failPlanning = true;
+  assert.match(await f.command('pr-comment', `${review} --reset`), /\] INCOMPLETE/);
+  assert.deepEqual((await savedReview(f, review)).adjustments.excluded, []);
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${review} --publish` } }),
+    new RegExp(`Review ${review} was adjusted and has no preview planned since`));
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+  failPlanning = false;
+  assert.match(await f.command('pr-comment', review), /Inline comments prepared: 2/);
+  assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED/);
+  assert.equal(f.azure.state.threads.length, 3);
+  // Once its publication has started, an adjusted review is not planned again.
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: review } }),
+    new RegExp(`Publication of review ${review}'s adjusted preview has started, so it is not planned again`));
+});
+
+test('a saved adjustment never meets the preview planned before it, also when OpenCode stops while planning', async t => {
+  const entered = deferred(), release = deferred();
+  let hold = false;
+  const f = await fixture(t, { files: ['/src/Main.java'], async during({ role }) { if (hold && ROLES[role].format === 'comment-plan') { entered.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  const review = reviewId(await f.command());
+  const [first] = previewIds(await f.command('pr-comment', ''));
+  const final = (await savedReview(f, review)).final;
+  hold = true;
+  const commands = f.commands;
+  void commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${review} --exclude ${first}` } });
+  await entered.promise;
+  // While the new preview is being planned, the saved review has the adjustment and no preview at all.
+  const saved = await savedReview(f, review);
+  assert.deepEqual(saved.adjustments.excluded, [first]);
+  assert.equal(saved.plan, null);
+  assert.deepEqual(saved.final, final, 'The review itself is not changed.');
+  // A restart at this point: the adjusted review has no preview, so it cannot be posted unread.
+  await f.cleanup();
+  release.resolve();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure });
+  await assert.rejects(g.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${review} --publish` } }),
+    new RegExp(`Review ${review} was adjusted and has no preview planned since`));
+  assert.match(await g.command('pr-comment', `${review} --show`), /has no saved preview/);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+});
+
+test('an adjusted review publishes as any other; its receipt names what the PR keeps from earlier publications', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const earlier = reviewId(await f.command());
+  const plain = await f.command('pr-comment', `${earlier} --publish`);
+  assert.match(plain, /\] POSTED/);
+  assert.doesNotMatch(plain, /earlier text/, 'An unadjusted review reports as before.');
+  const writes = f.azure.callsTo('createThread').length;
+  // Another review of the same commit, with a changed severity: its comments land where the earlier ones are.
+  const review = reviewId(await f.command());
+  const [first, second] = previewIds(await f.command('pr-comment', review));
+  assert.match(await f.command('pr-comment', `${review} --severity ${first}=medium`), /\] PREVIEW/);
+  const posted = await f.command('pr-comment', `${review} --publish`);
+  assert.match(posted, /\] POSTED/);
+  assert.equal(f.azure.callsTo('createThread').length, writes, 'The earlier comments are skipped, not replaced.');
+  assert.match(posted, new RegExp(`Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: the PR summary \\(it may still list findings you excluded or show earlier severities\\); ${first} at /src/Main\\.java:1 \\(you changed its severity\\)\\. Edit them on the PR if they should change\\.`));
+  assert.doesNotMatch(posted, new RegExp(`${second} at /src/Main\\.java:1`), 'A comment whose text is the same is not named.');
+  assert.match(posted, /PR summary: ALREADY_PRESENT; thread=\d+; the PR keeps its earlier text/);
+  // A third review that excludes a finding: the PR still shows that finding's earlier comment and summary.
+  const third = reviewId(await f.command());
+  const [excluded] = previewIds(await f.command('pr-comment', third));
+  assert.match(await f.command('pr-comment', `${third} --exclude ${excluded}`), /\] PREVIEW/);
+  const without = await f.command('pr-comment', `${third} --publish`);
+  assert.match(without, /\] POSTED/);
+  assert.match(without, /The PR has 2 other AZPR comment\(s\) from earlier publications that are not part of this preview; AZPR does not change them, so a finding you excluded may still be visible there\./);
+});
+
 test('/pr-stop only cancels runs from the same conversation', async t => {
   const entered = deferred(), release = deferred();
   const f = await fixture(t, { async during({ role }) { if (ROLES[role].format === 'initial') { entered.resolve(); await release.promise; } } });

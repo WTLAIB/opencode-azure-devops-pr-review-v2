@@ -1,7 +1,7 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
-import { publishableFindings, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
+import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
-import { markersInThreads, deletedThreads } from './azure.mjs';
+import { markersInThreads, markerTexts, deletedThreads } from './azure.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -131,6 +131,8 @@ async function planningInput(review, store, findings, report, work, continuation
       description: await store.pack(description ?? '', 3000) },
     outputLanguage: review.outputLanguage,
     findings,
+    // Only when a person adjusted the findings after a preview; the input is otherwise unchanged.
+    ...(extras.adjustments ? { adjustments: extras.adjustments } : {}),
     // Runtime-read HEAD source around each finding; anchors can come straight from here.
     sourceExcerpts: await store.pack(sources, INLINE_BUDGET),
     // Every live thread on the PR, read by the runtime when planning started.
@@ -165,7 +167,9 @@ async function planningInput(review, store, findings, report, work, continuation
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
 export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, parallel = PLANNING_PARALLEL_PAGES } = {}) {
-  const all = publishableFindings(review);
+  // Adjusted by a person after a preview, if they did; otherwise the publishable findings unchanged.
+  const all = commentFindings(review);
+  const adjustments = adjustmentInput(review);
   // Only a quick review, which has no verifier, offers candidate duplicates to the planner.
   const { pages: groups, offered } = candidatePages(all, reviewVerification(review) === 'none' ? mergeCandidates(all) : []);
   const reports = textPages(review.final.report ?? '');
@@ -217,7 +221,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const payload = await planningInput(review, store, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, evidence: evidence() });
+        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, evidence: evidence(), adjustments });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
       const scoped = async answer => {
@@ -310,8 +314,12 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   comment was deleted on the PR is DELETED: settled, and never sent again.
  * - With `only` (a set of markers), handles just those items; the others stay
  *   in the saved plan for a later publication.
+ * - With `compare` (a review a person adjusted), an item already on the PR
+ *   with other text is still skipped, marked `earlierText`: the PR keeps that
+ *   earlier version, since nothing posted is ever changed. The result then
+ *   counts the other AZPR comments on the PR (`otherComments`).
  */
-export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only }) {
+export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only, compare = false }) {
   const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
   const ledger = review.publication ??= new Map();
   const current = await azure.versions(run, review.snapshot);
@@ -319,7 +327,9 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   if (current.head !== review.snapshot.head) {
     return { status: 'STALE', reason: `The PR source commit changed after the review (reviewed ${review.snapshot.head.slice(0, 12)}, current ${current.head.slice(0, 12)}). Run a new review before commenting.` };
   }
-  const present = markersInThreads(await azure.threads(run, review.snapshot));
+  const listed = await azure.threads(run, review.snapshot);
+  const present = markersInThreads(listed);
+  const texts = compare ? markerTexts(listed) : null;
   const at = () => new Date(now()).toISOString();
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
@@ -334,7 +344,10 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   let written = 0, halted = '';
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
-    if (present.has(item.marker)) { record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker) }); continue; }
+    if (present.has(item.marker)) {
+      record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(texts && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
+      continue;
+    }
     if (halted) { record(item, { state: 'FAILED', error: halted }); continue; }
     const earlier = attempts.get(item.marker);
     if (earlier?.state === 'CREATED') {
@@ -393,5 +406,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
-  return { status, readBack, ...(reason ? { reason } : {}), counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])) };
+  const planned = new Set(items.map(item => item.marker));
+  return { status, readBack, ...(reason ? { reason } : {}), counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
+    ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };
 }

@@ -3,11 +3,42 @@ import assert from 'node:assert/strict';
 import {
   parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
   escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt, quickRepairPrompt,
+  parseCommentRequest, normalizeFindingId,
 } from '../src/output.mjs';
 
 const finding = (id, extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.',
   location: 'head:/src/a.ts:12', severity: 'high', suggestion: 'Restore the guard.', ...extra });
 const initialAnswer = (findings, extra = {}) => JSON.stringify({ status: 'COMPLETE', coverage: { files: ['/src/a.ts'], gaps: [] }, additionalFiles: [], findings, report: 'Report', ...extra });
+
+test('/pr-comment arguments keep their meaning; adjustments name a review and read IDs as the runtime writes them', () => {
+  assert.deepEqual(parseCommentRequest(''), { publish: false, show: false });
+  assert.deepEqual(parseCommentRequest(undefined), { publish: false, show: false });
+  assert.deepEqual(parseCommentRequest('abcd1234'), { reviewId: 'abcd1234', publish: false, show: false });
+  assert.deepEqual(parseCommentRequest('--publish'), { publish: true, show: false });
+  assert.deepEqual(parseCommentRequest(' abcd1234   --publish '), { reviewId: 'abcd1234', publish: true, show: false });
+  assert.deepEqual(parseCommentRequest('--show'), { publish: false, show: true });
+  assert.deepEqual(parseCommentRequest('abcd1234 --exclude f1, r-2 --severity F-3=LOW,q1001=medium'),
+    { reviewId: 'abcd1234', publish: false, show: false, adjust: { exclude: ['F-1', 'R-2'], severity: { 'F-3': 'low', 'Q-1001': 'medium' } } });
+  assert.deepEqual(parseCommentRequest('abcd1234 --exclude=F-1,F-1').adjust, { exclude: ['F-1'] });
+  assert.deepEqual(parseCommentRequest('abcd1234 --exclude none --severity NONE').adjust, { exclude: [], severity: {} });
+  assert.deepEqual(parseCommentRequest('abcd1234 --reset').adjust, { reset: true });
+  for (const text of ['--publish abcd1234', 'abcd1234 --publish --show', 'abcd1234 --publish --publish', 'ABCD1234', 'abcd1234 F-1',
+    'abcd1234 --exclude F-1 --publish', 'abcd1234 --show --severity F-1=low', 'abcd1234 --reset --exclude F-1', 'abcd1234 --excludes F-1',
+    'abcd1234 --show=yes', 'abcd1234 --exclude F-1 --exclude F-2', '-p']) {
+    assert.throws(() => parseCommentRequest(text), /Usage: \/pr-comment/, text);
+  }
+  assert.throws(() => parseCommentRequest('--exclude F-1'), /Name the review whose findings you adjust/);
+  assert.throws(() => parseCommentRequest('abcd1234 --exclude'), /--exclude needs the finding IDs to exclude, or none/);
+  assert.throws(() => parseCommentRequest('abcd1234 --exclude='), /--exclude needs the finding IDs to exclude, or none/);
+  assert.throws(() => parseCommentRequest('abcd1234 --exclude F-1 bad!'), /Not a finding ID: bad!/);
+  assert.throws(() => parseCommentRequest('abcd1234 --severity'), /--severity needs ID=high/);
+  assert.throws(() => parseCommentRequest('abcd1234 --severity F-1=critical'), /Not a severity change: F-1=critical/);
+  assert.throws(() => parseCommentRequest('abcd1234 --severity F-1=low f1=high'), /--severity names F-1 twice/);
+  assert.equal(normalizeFindingId('q1001'), 'Q-1001');
+  assert.equal(normalizeFindingId(' v-2 '), 'V-2');
+  assert.equal(normalizeFindingId('F--1'), null);
+  assert.equal(normalizeFindingId('none'), null);
+});
 
 test('parseModelJSON accepts a whole object, one fence or one embedded object and keeps surrounding text', () => {
   assert.deepEqual(parseModelJSON('{"status":"COMPLETE"}', { keys: ['status'] }), { value: { status: 'COMPLETE' } });

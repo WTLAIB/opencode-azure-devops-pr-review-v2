@@ -220,6 +220,21 @@ export function markersInThreads(threads) {
   return found;
 }
 
+/** The text of the live comment that carries each marker, found as markersInThreads finds its thread. */
+export function markerTexts(threads) {
+  const found = new Map();
+  for (const thread of threads) {
+    if (thread?.isDeleted === true) continue;
+    for (const comment of Array.isArray(thread?.comments) ? thread.comments : []) {
+      if (comment?.isDeleted === true || typeof comment?.content !== 'string') continue;
+      for (const match of comment.content.matchAll(MARKER_PATTERN)) {
+        if (!found.has(match[0])) found.set(match[0], comment.content);
+      }
+    }
+  }
+  return found;
+}
+
 /**
  * IDs of threads whose first comment, the one AZPR posts when it creates a
  * thread, was deleted on the PR. Azure DevOps keeps listing such a thread

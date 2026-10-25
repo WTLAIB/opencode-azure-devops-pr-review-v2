@@ -667,3 +667,74 @@ export function parseReviewRequest(raw, { flags = true } = {}) {
   if (option && OPTION.test(userContext)) throw new Error(`[AZPR] Use at most one of ${FLAG_NAMES}, right after the PR URL, and start your context with a word.`);
   return { request: raw, prUrl: match[1], userContext, target, ...(option ? { flag: option[1], afterReview: REVIEW_FLAGS[option[1]] } : {}) };
 }
+
+/** A finding ID as the runtime writes it (F-1, Q-1001, V-2); f1 and F1 read as F-1. null otherwise. */
+export function normalizeFindingId(value) {
+  const match = /^([A-Za-z]+)-?(\d+)$/.exec(String(value ?? '').trim());
+  return match ? `${match[1].toUpperCase()}-${match[2]}` : null;
+}
+
+const COMMENT_USAGE = '[AZPR] Usage: /pr-comment [review-id] [--publish | --show], or /pr-comment <review-id> with --exclude <IDs|none> and/or --severity <ID=high|medium|low,…|none>, or --reset. Omit the ID for this conversation\'s latest completed review.';
+const COMMENT_OPTIONS = ['publish', 'show', 'exclude', 'severity', 'reset'];
+
+/**
+ * /pr-comment's arguments: an optional review ID, then at most one of
+ * --publish and --show, or adjustments of a named review's findings:
+ * --exclude and --severity (each at most once, each a complete list; `none`
+ * for an empty one) or --reset alone. List items are separated by commas or
+ * spaces. Anything else is refused.
+ */
+export function parseCommentRequest(raw) {
+  const args = String(raw ?? '').trim().split(/\s+/).filter(Boolean);
+  const reviewId = /^[a-f0-9]{8}$/.test(args[0] ?? '') ? args.shift() : undefined;
+  const values = new Map();
+  let open = null;
+  for (const token of args) {
+    const option = /^--([a-z]+)(?:=([\s\S]*))?$/.exec(token);
+    if (option) {
+      if (!COMMENT_OPTIONS.includes(option[1]) || values.has(option[1])) throw new Error(COMMENT_USAGE);
+      open = ['exclude', 'severity'].includes(option[1]) ? option[1] : null;
+      if (option[2] !== undefined && !open) throw new Error(COMMENT_USAGE);
+      values.set(option[1], option[2] === undefined ? [] : [option[2]]);
+      continue;
+    }
+    if (!open) throw new Error(COMMENT_USAGE);
+    values.get(open).push(token);
+  }
+  const named = [...values.keys()];
+  const request = { ...(reviewId ? { reviewId } : {}), publish: values.has('publish'), show: values.has('show') };
+  if (!named.some(name => ['exclude', 'severity', 'reset'].includes(name))) {
+    if (named.length > 1) throw new Error(COMMENT_USAGE);
+    return request;
+  }
+  if (named.some(name => ['publish', 'show'].includes(name)) || (values.has('reset') && named.length > 1)) throw new Error(COMMENT_USAGE);
+  if (!reviewId) throw new Error('[AZPR] Name the review whose findings you adjust: /pr-comment <review-id> --exclude … (the ID is in its receipt).');
+  const items = name => values.get(name).join(' ').split(/[\s,]+/).filter(Boolean);
+  const adjust = values.has('reset') ? { reset: true } : {};
+  if (values.has('exclude')) {
+    const listed = items('exclude');
+    if (!listed.length) throw new Error('[AZPR] --exclude needs the finding IDs to exclude, or none.');
+    if (listed.length === 1 && listed[0].toLowerCase() === 'none') adjust.exclude = [];
+    else {
+      const ids = listed.map(normalizeFindingId);
+      const bad = listed.filter((_, index) => !ids[index]);
+      if (bad.length) throw new Error(`[AZPR] Not a finding ID: ${bad.join(', ')}. Use the IDs of the review report, such as F-1 or R-2, or none.`);
+      adjust.exclude = [...new Set(ids)];
+    }
+  }
+  if (values.has('severity')) {
+    const listed = items('severity');
+    if (!listed.length) throw new Error('[AZPR] --severity needs ID=high, ID=medium or ID=low entries, or none.');
+    if (listed.length === 1 && listed[0].toLowerCase() === 'none') adjust.severity = {};
+    else {
+      adjust.severity = {};
+      for (const entry of listed) {
+        const match = /^([^=]+)=(high|medium|low)$/i.exec(entry), id = match && normalizeFindingId(match[1]);
+        if (!id) throw new Error(`[AZPR] Not a severity change: ${entry}. Write ID=high, ID=medium or ID=low, such as F-2=low.`);
+        if (Object.hasOwn(adjust.severity, id)) throw new Error(`[AZPR] --severity names ${id} twice.`);
+        adjust.severity[id] = match[2].toLowerCase();
+      }
+    }
+  }
+  return { ...request, adjust };
+}

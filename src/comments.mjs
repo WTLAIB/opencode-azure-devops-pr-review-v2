@@ -78,13 +78,121 @@ export function combinationProblems(members) {
   return { problems, lines };
 }
 
+// A finding ID as a text names it (F-1, Q-1001, V-2).
+const FINDING_ID = /(?<![A-Za-z0-9_-])[A-Za-z]+-\d+(?!\d)/g;
+
 /**
  * Other findings of this review that a skip reason names. The verifier already
  * merged duplicates, so another finding's comment never covers a finding.
  */
 function citedFindings(reason, own, findingIds) {
-  const named = String(reason).match(/(?<![A-Za-z0-9_-])[A-Za-z]+-\d+(?!\d)/g) ?? [];
+  const named = String(reason).match(FINDING_ID) ?? [];
   return [...new Set(named)].filter(id => id !== own && findingIds.has(id));
+}
+
+/**
+ * A person's adjustments of a review's findings after a preview, as saved in
+ * `review.adjustments`: findings `excluded` from publication and a changed
+ * `severity` per finding ID. A review saved without them has none.
+ */
+function adjustmentsOf(review) {
+  const saved = review?.adjustments;
+  const excluded = Array.isArray(saved?.excluded) ? saved.excluded : [];
+  const severity = isObject(saved?.severity) ? saved.severity : {};
+  return { excluded, severity, active: excluded.length > 0 || Object.keys(severity).length > 0 };
+}
+
+export const hasAdjustments = review => adjustmentsOf(review).active;
+
+/**
+ * Whether a person ever adjusted the review's findings, also when --reset
+ * cleared them since: such a review is posted only from a preview planned
+ * after its latest adjustment, exactly as that preview reads.
+ */
+export const everAdjusted = review => isObject(review?.adjustments);
+
+/**
+ * The findings comments are planned for: publishableFindings as a person
+ * adjusted them after a preview, without the excluded ones and with the
+ * changed severities. Without adjustments, exactly publishableFindings(review).
+ */
+export function commentFindings(review) {
+  const findings = publishableFindings(review);
+  const { excluded, severity, active } = adjustmentsOf(review);
+  if (!active) return findings;
+  const left = new Set(excluded);
+  return findings.filter(finding => !left.has(finding.id))
+    .map(finding => Object.hasOwn(severity, finding.id) ? { ...finding, severity: severity[finding.id] } : finding);
+}
+
+/** Whether a person excluded every finding the review could publish, so there is nothing to post. */
+export function everyFindingExcluded(review) {
+  return adjustmentsOf(review).excluded.length > 0 && publishableFindings(review).length > 0 && commentFindings(review).length === 0;
+}
+
+const ADJUSTMENT_RULE = 'A person read the comment preview and adjusted these findings. An excluded finding is not published: never name, describe or allude to it in a comment, the summary note or summaryDetails, also where the report or dispositions discuss it. A changed severity is final and `findings` already carries it: write and title each comment for that severity.';
+
+/** What the comment planner is told about a person's adjustments; undefined without them, so its input stays unchanged. */
+export function adjustmentInput(review) {
+  const { excluded, severity, active } = adjustmentsOf(review);
+  if (!active) return undefined;
+  const original = new Map(publishableFindings(review).map(finding => [finding.id, finding.severity]));
+  const changes = Object.entries(severity).map(([id, to]) => ({ id, from: original.get(id), to }));
+  return { ...(excluded.length ? { excludedFindings: excluded } : {}), ...(changes.length ? { severityChanges: changes } : {}), rule: ADJUSTMENT_RULE };
+}
+
+/** How a preview states a person's adjustments; '' without them. Nothing of this reaches the PR. */
+export function describeAdjustments(review) {
+  const { excluded, severity, active } = adjustmentsOf(review);
+  if (!active) return '';
+  const original = new Map(publishableFindings(review).map(finding => [finding.id, finding.severity]));
+  const rows = [...(excluded.length ? [`- Excluded from publication: ${excluded.join(', ')}`] : []),
+    ...Object.entries(severity).map(([id, to]) => `- ${id}: severity ${original.get(id)} → ${to}`)];
+  return `Adjusted by a person after the preview (not stated on the PR):\n${rows.join('\n')}`;
+}
+
+/**
+ * Apply a /pr-comment adjustment request to a review. `exclude` and `severity`
+ * each replace their whole list when given (empty: none); `reset` clears both.
+ * Every ID must name a finding this review can publish (a merged duplicate
+ * points to the finding it was merged into). The list a request names wins
+ * over the kept other one: excluding a finding drops its severity change, and
+ * a severity for an excluded finding restores it; naming one finding in both
+ * lists is refused. A severity equal to the review's is no change. Throws,
+ * changing nothing, on any problem. Returns the adjustments to save
+ * (`next`), what changes (`changes`, readable rows) and `unchanged`.
+ */
+export function resolveAdjustments(review, { exclude, severity, reset = false }) {
+  const findings = publishableFindings(review);
+  const byId = new Map(findings.map(finding => [finding.id, finding]));
+  const problems = [];
+  const check = id => {
+    if (byId.has(id)) return;
+    const row = (review.final?.dispositions ?? []).find(item => item.id === id);
+    problems.push(row?.status === 'MERGED' && row.mergedInto ? `${id} was merged into ${row.mergedInto}; adjust ${row.mergedInto} instead`
+      : row ? `${id} is ${row.status}, not a finding this review can publish` : `${id} is not a finding of review ${review.id}`);
+  };
+  for (const id of [...(exclude ?? []), ...Object.keys(severity ?? {})]) check(id);
+  for (const id of exclude ?? []) if (severity && Object.hasOwn(severity, id)) problems.push(`${id} cannot be excluded and given a severity at once`);
+  if (problems.length) throw new Error(`[AZPR] Nothing was changed: ${[...new Set(problems)].join('; ')}. Findings of review ${review.id} you can adjust: ${[...byId.keys()].join(', ') || 'none'}.`);
+  const current = adjustmentsOf(review);
+  let excluded = reset ? [] : exclude ?? current.excluded;
+  const changed = reset ? {} : { ...(severity ?? current.severity) };
+  if (exclude && !severity) for (const id of exclude) delete changed[id];
+  if (severity && !exclude) excluded = excluded.filter(id => !Object.hasOwn(severity, id));
+  for (const [id, level] of Object.entries(changed)) if (byId.get(id)?.severity === level) delete changed[id];
+  const order = id => findings.findIndex(finding => finding.id === id);
+  const next = { excluded: [...new Set(excluded)].sort((a, b) => order(a) - order(b)),
+    severity: Object.fromEntries(Object.entries(changed).sort(([a], [b]) => order(a) - order(b))) };
+  const before = new Set(current.excluded), after = new Set(next.excluded);
+  const level = (adjustments, id) => adjustments.severity[id] ?? byId.get(id)?.severity;
+  const changes = [
+    ...next.excluded.filter(id => !before.has(id)).map(id => `excluded ${id}`),
+    ...current.excluded.filter(id => !after.has(id)).map(id => `restored ${id}`),
+    ...[...new Set([...Object.keys(current.severity), ...Object.keys(next.severity)])].sort((a, b) => order(a) - order(b))
+      .filter(id => !after.has(id) && level(current, id) !== level(next, id)).map(id => `${id} severity ${level(current, id)} → ${level(next, id)}`),
+  ];
+  return { next, changes, unchanged: changes.length === 0 };
 }
 
 /** Why a planner may skip a finding: the policy's grounds, one cause each. */
@@ -114,6 +222,43 @@ function skipProblem(finding, skip, { sources, discussions, inlineEligible }) {
 
 export function publicationItems(plan) {
   return [...(plan?.summary ? [plan.summary] : []), ...(plan?.comments ?? [])];
+}
+
+/**
+ * Whether publication of the review's saved plan began: an item was sent, may
+ * have landed or was found on the PR. Items that only failed with a definite
+ * error, so that nothing was created, leave the plan open to adjustments.
+ */
+export function publicationStarted(review) {
+  const ledger = review?.publication instanceof Map ? [...review.publication.values()] : [];
+  return ledger.some(entry => entry?.state !== 'FAILED');
+}
+
+/**
+ * For a review a person adjusted: what the PR keeps from earlier publications
+ * after this one, since AZPR never changes a posted comment. Names the items
+ * of the preview the PR already had with other text (`earlierText` in the
+ * ledger), marks those the adjustments concern, and counts the other AZPR
+ * comments on the PR where an excluded finding may still show. '' when none.
+ */
+export function describeEarlierText(review, otherComments = 0) {
+  const { excluded, severity, active } = adjustmentsOf(review);
+  const kept = review?.publication instanceof Map ? [...review.publication.values()].filter(entry => entry?.earlierText) : [];
+  const rows = kept.map(entry => {
+    if (entry.kind === 'summary') return `the PR summary${active ? ' (it may still list findings you excluded or show earlier severities)' : ''}`;
+    const ids = entry.findingIds ?? [entry.findingId];
+    return `${ids.join(', ')} at ${entry.path}:${entry.startLine}${ids.some(id => Object.hasOwn(severity, id)) ? ' (you changed its severity)' : ''}`;
+  });
+  const lines = [];
+  if (rows.length) lines.push(`Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: ${rows.join('; ')}. Edit them on the PR if they should change.`);
+  if (excluded.length && otherComments > 0) lines.push(`The PR has ${otherComments} other AZPR comment(s) from earlier publications that are not part of this preview; AZPR does not change them, so a finding you excluded may still be visible there.`);
+  return lines.map(line => `${line}\n`).join('');
+}
+
+/** Findings a person excluded that a text names, read as `citedFindings` reads IDs. */
+function namedExcluded(text, excluded) {
+  if (!excluded.size || !text) return [];
+  return [...new Set(String(text).match(FINDING_ID) ?? [])].filter(id => excluded.has(id));
 }
 
 /**
@@ -454,6 +599,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     status = 'READY';
   }
   const eligible = new Map(assigned.map(finding => [finding.id, finding]));
+  // Findings a person excluded after a preview: no published text may name them.
+  const excluded = new Set(adjustmentsOf(review).excluded);
   const changed = new Set(review.snapshot.files.map(path => path.startsWith('/') ? path : '/' + path));
   // Quick findings were not independently verified: an inline comment needs a
   // checked location and an anchor found in source text the runtime read.
@@ -474,6 +621,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     if (!body) problems.push('body is empty');
     else if (body.length > INLINE_SOFT_LIMIT && !final) problems.push(`body is ${body.length} characters; keep it within ${INLINE_SOFT_LIMIT}`);
     else if (body.length > INLINE_HARD_LIMIT) problems.push(`body exceeds ${INLINE_HARD_LIMIT} characters`);
+    const named = namedExcluded(body, excluded);
+    if (named.length) problems.push(`body names ${named.join(', ')}, which a person excluded from publication; leave ${named.length === 1 ? 'it' : 'them'} out`);
     const path = nonempty(c.path) ? (c.path.startsWith('/') ? c.path : '/' + c.path) : '';
     if (!changed.has(path) || /[\r\n\0]/.test(path)) problems.push(`path ${JSON.stringify(c.path ?? '')} is not a changed file of this PR`);
     else if (lines && path !== lines.path) problems.push(`path must be ${lines.path}, where the combined findings are`);
@@ -601,10 +750,18 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   }
   if (status === 'INCOMPLETE') { corrections.push({ action: 'accept-incomplete-plan-page', reason: nonempty(value.reason) ? value.reason.trim() : '' }); status = 'READY'; }
   const note = nonempty(value.summary) ? value.summary : '';
-  const summary = note && allowSummary && note.length <= SUMMARY_NOTE_LIMIT && !/<!--|-->/.test(note) ? note.trim() : undefined;
+  let summary = note && allowSummary && note.length <= SUMMARY_NOTE_LIMIT && !/<!--|-->/.test(note) ? note.trim() : undefined;
   if (note && !allowSummary) corrections.push({ action: 'drop-unallowed-summary' });
   else if (note && !summary) corrections.push({ action: 'drop-invalid-summary-note' });
-  const summaryDetails = nonempty(value.summaryDetails) ? escapeComments(value.summaryDetails.trim()) : '';
+  let summaryDetails = nonempty(value.summaryDetails) ? escapeComments(value.summaryDetails.trim()) : '';
+  // A finding a person excluded appears nowhere in the summary either; after repairs the text that names it is dropped.
+  for (const [field, text] of [['summary', summary], ['summaryDetails', summaryDetails]]) {
+    const named = namedExcluded(text, excluded);
+    if (!named.length) continue;
+    if (!final) issues.push(`${field} names ${named.join(', ')}, which a person excluded from publication; leave ${named.length === 1 ? 'it' : 'them'} out.`);
+    else if (field === 'summary') { summary = undefined; corrections.push({ action: 'drop-summary-note-naming-excluded', findingIds: named }); }
+    else { summaryDetails = ''; corrections.push({ action: 'drop-summary-details-naming-excluded', findingIds: named }); }
+  }
   return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections };
 }
 
@@ -620,7 +777,7 @@ function summaryComment(review, note, details, inlineMarkers, groups = []) {
   const heading = chinese ? traditional ? '審查說明' : '审查说明' : 'Review notes';
   const notes = nonempty(note) ? `**${heading}**\n\n${note.trim()}` : '';
   // Only combinations the plan accepted share an index row.
-  const index = renderReviewSummary(publishableFindings(review), review.outputLanguage ?? 'en', notes, { verification: reviewVerification(review), groups });
+  const index = renderReviewSummary(commentFindings(review), review.outputLanguage ?? 'en', notes, { verification: reviewVerification(review), groups });
   // The summary's disclosure may add incomplete coverage of a quick review.
   const attribution = review.summaryAttribution ?? review.attribution;
   const disclosure = attribution ? `🤖 ${attribution}\n\n` : '';
