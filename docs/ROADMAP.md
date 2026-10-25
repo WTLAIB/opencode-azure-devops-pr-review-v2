@@ -6,6 +6,14 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
 ## Implemented (stability revision)
 
+- **Adjust findings before publishing.** After reading a preview, use
+  `/pr-comment <review-id> --exclude` or `--severity` to choose which findings
+  to publish and at what severity. The model plans a new preview while the
+  original review stays intact. Each list replaces the saved one; `--reset`
+  clears both, and `--show` displays the saved preview without a model or Azure
+  request. Adjusted reviews require a saved preview and cannot be adjusted or
+  planned again once publication starts. Earlier PR comments keep their text;
+  the receipt reports differences. See [commenting](COMMENTING.md#adjusting-findings-after-a-preview).
 - **Optional automatic comments.** `afterReview` selects `none` (default),
   `preview` or `publish` for each mode; a flag after the PR URL overrides it
   for one review. A COMPLETE review hands off to a separate, cancellable

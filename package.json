@@ -1,8 +1,8 @@
 {
   "name": "opencode-azure-devops-pr-review",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
-  "description": "Azure DevOps PR reviews from a URL in OpenCode, with no checkout, configurable models, separate verification, and comment previews",
+  "description": "Azure DevOps PR reviews from a URL in OpenCode, with no checkout, configurable models, separate verification, and comment previews you can adjust before posting",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "check": "node --check src/session.mjs && node --check src/runtime.mjs && node --check src/comment-data.mjs && node --check src/comment-work.mjs && node --check src/comments.mjs && node --check src/config.mjs && node --check src/output.mjs && node --check src/diagnostics.mjs && node --check src/attribution.mjs && node --check src/host.mjs && node --check src/tool-queue.mjs && node --check src/azure.mjs && node --check src/diff.mjs && node --check src/search.mjs && node --check src/review-tools.mjs && node --check src/review-work.mjs && node --check src/store.mjs && node --check src/plugin.js && node --check src/setup.mjs && node --check server.js && sh -n install.sh && sh -n uninstall.sh"
@@ -44,6 +44,7 @@
     "docs/",
     "AGENTS.md",
     "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
     "SECURITY.md"
   ],
   "publishConfig": {

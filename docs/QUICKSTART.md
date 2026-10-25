@@ -24,15 +24,15 @@ Check the host version:
 opencode --version
 ```
 
-## 2. Install v0.2.3
+## 2. Install v0.3.0
 
-Already using an earlier version? Follow the [upgrade instructions](releases/v0.2.3.md#upgrading)
+Already using an earlier version? Follow the [upgrade instructions](releases/v0.3.0.md#upgrading)
 to preserve your current configuration and use one AZPR installation.
 
 In your terminal:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.2.3
+opencode plugin add opencode-azure-devops-pr-review@0.3.0
 ```
 
 Restart OpenCode and open an ordinary conversation. This is the host's native
@@ -40,7 +40,7 @@ package installation; no npm account or separate build is needed. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.3'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0'`.
 Add only one of the two.
 
 For an existing source installation, keep using `install.sh --replace`, or
@@ -48,7 +48,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.2.3 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.3.tar.gz),
+[v0.3.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.3.0.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings; add `--replace` to the setup
@@ -171,6 +171,26 @@ and cost. Refreshing a preview with `/pr-comment <review-id>` runs planning
 again. Use the displayed `/pr-stop <run-id>` to cancel an active command; no
 cost cap is configured by default.
 
+## Optional: adjust findings before publishing
+
+Use finding IDs from your report to leave findings out or change their severity:
+
+```text
+/pr-comment 1a2b3c4d --exclude F-1 --severity F-2=low
+```
+
+In this example, F-1 is excluded from the new preview; F-2 appears as low in the
+summary, with no new inline comment. The original review is preserved. A changed
+severity does not verify the finding again; exclude a finding when it is wrong.
+
+AZPR uses a model to plan the comments again without rerunning the review, so
+read the whole new preview. Each option replaces its own saved list:
+`--exclude F-1` followed by `--exclude F-2` excludes only F-2; use
+`--exclude F-1,F-2` to keep both out. `--reset` clears both adjustment lists
+and plans again; `--show` displays the saved preview without a model or Azure
+request. See [adjusting findings](COMMENTING.md#adjusting-findings-after-a-preview)
+for the full rules.
+
 ## Optional: publish after inspecting the preview
 
 ```text
@@ -180,8 +200,14 @@ cost cap is configured by default.
 This explicit command posts the saved preview through your PAT after checking
 the PR is active and its source commit is unchanged. Existing markers are
 skipped. Check the publication receipt for failures or incomplete read-back.
-If no preview exists, this command plans before publishing; use
-`/pr-comment <review-id>` to prepare and inspect a preview first. See
+An adjusted review needs a saved preview planned after its latest adjustment,
+also after `--reset`; `--publish` refuses if that preview is missing. Once
+publication starts, its adjustments and preview are fixed, and `--publish`
+retries the saved content. Earlier comments on the PR are never edited; the
+receipt names those whose text differs from an adjusted preview.
+
+For a review that has never been adjusted, `--publish` plans first if no preview
+exists; use `/pr-comment <review-id>` to prepare and inspect a preview first. See
 [automatic comments](COMMENTING.md#automatic-comments-after-a-review) for
 `afterReview` and the flags that override it for one review.
 

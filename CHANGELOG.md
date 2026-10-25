@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 — 2026-10-26
+
+- Choose what reaches the PR after reading a preview:
+  `/pr-comment <review-id> --exclude F-1,F-2` leaves findings out, and
+  `--severity F-3=low` changes their publication severity. Each option replaces
+  its own saved list (`none` clears it); `--reset` clears both. The model plans
+  a new preview without rerunning the review, and the original findings and
+  report stay unchanged. A severity change does not verify a finding again.
+- `/pr-comment [review-id] --show` displays the saved preview without calling
+  a model or Azure DevOps. Excluding every finding plans and posts nothing.
+- Adjustments and the invalidation of the earlier preview are saved together.
+  A failed save reports failure and changes nothing; a new preview whose save
+  fails is dropped. A review adjusted once, including one reset since, can be
+  published only from a saved preview planned after its latest adjustment.
+  Once publication starts, adjustments and re-planning are refused.
+- The final preview is checked for excluded finding IDs, including summary
+  rows rendered from retained findings. An unresolved reference holds
+  publication. Existing PR comments are never edited; for an adjusted review,
+  the receipt names those whose text differs from the new preview, including
+  comments that appear only when AZPR reads the threads back.
+- The README leads with control over published comments and a real OpenCode
+  2.1.4 recording of adjusting findings and publishing; the first-review
+  example and quickstart cover adjustments, the new preview and publication.
+  The npm package, Git installation and source archive advance to 0.3.0. The
+  package description mentions adjusting previews, and the npm package now
+  includes the code of conduct that its README and contributing guide link to.
+- CI actions are pinned by commit and updated with Dependabot. Validation
+  starts with a summary and records the known limits of the review evidence.
+
 ## 0.2.3 — 2026-10-24
 
 - The tested host is OpenCode CLI 2.1.4. OpenCode 2.1.3 and later embed Bun

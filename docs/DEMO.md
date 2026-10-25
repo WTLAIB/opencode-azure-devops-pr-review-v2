@@ -1,6 +1,50 @@
 # See a review before installing
 
-## A real review, preview and publication
+## Adjust findings before publishing
+
+![Real OpenCode terminal recording: a preview with three verified findings, the command that excludes F-3 and lowers F-2 to low, the new preview, and publication read back from Azure DevOps.](assets/adjust-findings-teaser.gif)
+
+The 15-second teaser uses a **real OpenCode 2.1.4 session, real configured
+model calls and real Azure DevOps publication** on the same dedicated test PR
+as the earlier recording below: one `fulfillment.py` file with three
+deliberately seeded regressions. It demonstrates the workflow; it is not a
+benchmark of review accuracy or a promise about the time or cost of another PR.
+
+Recorded on **2026-10-26**, on Ubuntu 22.04 under WSL2, using
+`openai/gpt-6-luna` for the functional reviewer, risk reviewer, verifier and
+comment planner. The installed plugin matched all 27 runtime and prompt files
+in public Git commit [`dfba561`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/dfba561840c0d61be6f8fc2e921507da8bbcbb11)
+of the 0.3.0 release candidate. Model IDs identify the configured selection,
+not an independently attested provider backend.
+
+The recording follows one conversation:
+
+1. `/pr-review <test-pr-url> --preview` completes the review in 66 seconds. The
+   verifier confirms three medium findings and merges two duplicate candidates.
+   The automatic preview, 14 seconds later, prepares a summary and three inline
+   comments; nothing is posted.
+2. `/pr-comment 63f7d3d6 --exclude F-3 --severity F-2=low` plans a new preview
+   in 8 seconds. F-3 is left out, F-2 is listed as low in the summary with no
+   inline comment, and the preview names both adjustments.
+3. `/pr-comment 63f7d3d6 --publish` posts the summary and the F-1 comment; both
+   are read back from Azure DevOps as `VERIFIED`.
+4. Repeating the command reports `ALREADY_PRESENT=2`; nothing is posted twice.
+   The two demonstration comments are retained on the test PR.
+
+![Actual new preview after excluding F-3 and lowering F-2 to low: the adjustments, the summary counts and the index with F-1 as medium and F-2 as low.](assets/adjust-preview.png)
+
+![Actual publication receipt: F-2 is skipped as a low finding, and the summary and the F-1 comment are read back as VERIFIED.](assets/adjust-publication.png)
+
+These are faithful rendered frames from one terminal capture, **not Azure
+DevOps browser screenshots**. Commands were submitted through OpenCode's native
+command API to the session shown in the attached TUI, so they appear as AZPR
+notices and segment captions rather than as typed input. The TUI sidebar was
+hidden before the segments shown, and the bottom seven rows (the empty input
+box with the conversation's chat model, and the status/path bar) are cropped.
+Segments that showed the local debug directory were left out. The original
+private cast is unchanged.
+
+## Earlier recording: review, preview and publication
 
 [Watch the 73-second walkthrough (MP4)](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.2.0/azpr-live-demo.mp4)
 
