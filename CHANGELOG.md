@@ -17,12 +17,14 @@
   Once publication starts, adjustments and re-planning are refused.
 - The final preview is checked for excluded finding IDs, including summary
   rows rendered from retained findings. An unresolved reference holds
-  publication. Existing PR comments are never edited; the receipt names those
-  whose earlier text differs, including comments found only during read-back
-  after a refused write.
+  publication. Existing PR comments are never edited; for an adjusted review,
+  the receipt names those whose text differs from the new preview, including
+  comments that appear only when AZPR reads the threads back.
 - The README leads with control over published comments; the first-review
   example and quickstart cover adjustments, the new preview and publication.
-  The npm package, Git installation and source archive advance to 0.3.0.
+  The npm package, Git installation and source archive advance to 0.3.0. The
+  package description mentions adjusting previews, and the npm package now
+  includes the code of conduct that its README and contributing guide link to.
 - CI actions are pinned by commit and updated with Dependabot. Validation
   starts with a summary and records the known limits of the review evidence.
 

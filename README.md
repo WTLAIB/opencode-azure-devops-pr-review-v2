@@ -33,9 +33,8 @@ the Azure portion shows an actual REST read-back in a terminal.*
   you don't want to publish, and adjust severity. AZPR prepares a new preview
   without rerunning the review. Read it, then publish when ready. Your original
   review stays intact.
-- **Checks before and after posting.** AZPR rechecks the PR head, skips matching
-  comments it already posted, and reads new comments back. Automatic publication
-  is opt-in.
+- **Publish safely.** AZPR rechecks the PR head, skips matching comments it
+  already posted, and reads new comments back. Automatic publication is opt-in.
 - **Follow the code beyond the diff.** Reviewers can look up definitions,
   callers and tests using file reads and text search at the selected PR commit,
   without depending on an Azure Code Search index.
@@ -493,7 +492,7 @@ troubleshooting.
 | `/pr-quick <PR URL> [flag] [context]` | One reviewer per shard for both focuses, no verification; findings are reported, not verified. |
 | `/pr-stop [run-id]` | Cancel this conversation's active command. |
 | `/pr-comment [review-id]` | Preview comments for this conversation's latest completed review. |
-| `/pr-comment [review-id] --publish` | Post the saved preview (planning it first if needed). Safe to repeat. |
+| `/pr-comment [review-id] --publish` | Post the saved preview. A review that was never adjusted is planned first if needed; an adjusted one needs its new preview. Safe to repeat. |
 | `/pr-comment [review-id] --show` | Show the saved preview again; no model or Azure DevOps request. |
 | `/pr-comment <review-id> --exclude <IDs>` / `--severity <ID=level,…>` / `--reset` | Leave findings out or change their severity after reading the preview, then preview again (see [adjusting findings](docs/COMMENTING.md#adjusting-findings-after-a-preview)). |
 
@@ -556,16 +555,16 @@ When a preview contains a finding you disagree with, leave it out or change
 its severity, then read the new preview:
 
 ```text
-/pr-comment <review-id> --exclude F-1
-/pr-comment <review-id> --severity F-2=low
+/pr-comment <review-id> --exclude F-1 --severity F-2=low
 ```
 
-The comments are planned again without the excluded findings and with the new
-severities, so their wording may change; the summary index follows them, and
-nothing on the PR mentions the adjustment. Each option replaces its whole
-saved list: `--exclude F-1` and then `--exclude F-2` excludes only F-2. A
-changed severity changes how a finding is published, not the finding itself;
-when a finding is wrong, exclude it. Excluding every finding posts
+Each command plans the comments again with a model, so combine both options in
+one command when you use both. The comments are planned without the excluded
+findings and with the new severities, so their wording may change; the summary
+index follows them, and nothing on the PR mentions the adjustment. Each option
+replaces its whole saved list: `--exclude F-1` and then `--exclude F-2` excludes
+only F-2. A changed severity changes how a finding is published, not the finding
+itself; when a finding is wrong, exclude it. Excluding every finding posts
 nothing. `--reset` clears the adjustments, and `/pr-comment <review-id> --show`
 shows the saved preview without a model. An adjusted review is posted only
 from the preview planned after its latest adjustment; once its publication has

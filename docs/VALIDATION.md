@@ -37,8 +37,9 @@ accuracy score; see [known limitations](#known-limitations).
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
 CLI 2.1.4. The candidate contains the finding-adjustment workflow merged in
 PR #29, including the final fixes in `d4fd8dd`. Release preparation changes
-the package version and documentation; the runtime, prompts, settings and
-installers are unchanged from that reviewed revision.
+the package version, description and documentation and adds the code of
+conduct to the npm package; the runtime, prompts, settings and installers are
+unchanged from that reviewed revision.
 
 - `npm run check` and **417 offline tests** passed, including the adjustment
   save failure, the final summary's excluded-ID check, and an earlier comment
@@ -52,9 +53,9 @@ installers are unchanged from that reviewed revision.
   in flight; its largest provider request was 33,419 characters. The
   background-compaction fixture classified the failure as permanent and ran
   one functional session.
-- `npm pack --dry-run --json` lists **71 files**, including the entry, runtime,
-  prompts, configuration example and schema, license and 0.3.0 release notes.
-  Tests, private settings and `.local/` records are excluded.
+- `npm pack --dry-run --json` lists **72 files**, including the entry, runtime,
+  prompts, configuration example and schema, license, code of conduct and 0.3.0
+  release notes. Tests, private settings and `.local/` records are excluded.
 - These release fixtures make no paid-model request or real Azure publication.
   The live adjustment runs below used the earlier `cbbed6b` implementation;
   the subsequent persistence, read-back and final-summary fixes have offline
