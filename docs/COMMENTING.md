@@ -227,6 +227,85 @@ Every page is validated item by item:
 A low finding never becomes an inline comment, and the verified severity always
 wins over the planner's label.
 
+## Adjusting findings after a preview
+
+After reading a preview, a person can leave findings out of publication or
+change their severity, and plan the preview again:
+
+```text
+/pr-comment <review-id> --exclude F-1,R-2
+/pr-comment <review-id> --severity F-3=low,Q-1001=medium
+/pr-comment <review-id> --exclude F-1 --severity F-3=low
+/pr-comment <review-id> --reset
+/pr-comment [review-id] --show
+```
+
+- The review ID is required: every review has its own F-1. IDs are those of
+  the review report (`f1` reads as F-1). Only findings the review can publish
+  are accepted: confirmed and verifier-added ones of a review or deep review,
+  reported ones of a quick review. A merged duplicate names the finding it was
+  merged into; any other ID refuses the whole command and changes nothing.
+- Each list is complete and replaces the saved one (`none` empties it): after
+  `--exclude F-1`, a later `--exclude F-2` excludes only F-2 and restores F-1,
+  so name both (`--exclude F-1,F-2`) to keep both out; the receipt lists what
+  was excluded and restored. The other list is kept, except that excluding a
+  finding drops its severity change and a severity for an excluded finding
+  restores it. A finding named in both lists is refused, and a severity equal
+  to the review's is no change. `--reset` clears both.
+- A changed severity changes how a finding is published (its title, whether it
+  can get an inline comment, the summary counts); it does not verify the
+  finding again or change its evidence, trigger or impact. When the finding
+  itself is wrong, exclude it.
+- Each change plans the preview again with a model. The planner receives the
+  adjusted findings (without the excluded ones, with the new severities) and an
+  `adjustments` field that states them; the summary index and its counts
+  follow them. A finding set to low stays in the summary only, and a raised one
+  becomes eligible for an inline comment (it still needs a location that can
+  carry one and no live thread that covers it). The other comments are written
+  again, so their wording may change: read the whole preview before
+  publishing. The review itself, its findings and its report are not changed.
+- An excluded finding is never assigned to a page, so it gets no comment of its
+  own. Any published text that names the ID of an excluded finding (the body of
+  any inline comment, combined ones included, the summary note or
+  `summaryDetails`) gets a correction turn; after the last one the comment is
+  skipped (its finding stays in the summary index) and the note or details are
+  dropped. The assembled preview is checked as well: a summary row is the
+  review's own text for its finding, so when a kept finding's summary names an
+  excluded one, the preview says which row and publication is held until you
+  exclude that finding as well or restore the excluded one. A reference
+  without the ID cannot be detected; the preview shows it.
+- Excluding every finding plans nothing and posts nothing: the result is
+  `NOTHING_TO_POST`, not the summary of a review without defects.
+  `--exclude none` brings the findings back.
+- Adjustments are saved with the review, with the time of each change, survive
+  a restart and apply to a later `/pr-comment <review-id>` until `--reset`. The
+  preview and the receipt list them; nothing posted to the PR mentions them.
+- A review that was adjusted, also one reset since, is posted only from a
+  preview planned after its latest adjustment: every adjustment discards the
+  earlier preview in the same save, and `--publish` never plans and posts such
+  a review in one step (for example after a failed new preview, or a restart
+  while it was planned). An adjustment that cannot be saved changes nothing and
+  the receipt says so; a new preview that cannot be saved is dropped and has
+  to be planned again.
+- Once publication of an adjusted preview has started (an item was sent, may
+  have landed or was found on the PR), the review is neither adjusted nor
+  planned again: `--publish` retries the same preview and `--show` shows it;
+  run a new review to change what is posted.
+- Adjustments shape only what a publication adds; AZPR never changes or
+  replaces a posted comment. An item the PR already has (the same marker, from
+  an earlier publication; inline markers follow the anchored lines, not the
+  commit) is skipped as for any review and keeps its earlier text. For an
+  adjusted review the receipt names those items whose text differs from the
+  preview (also when a comment appears only as publication reads the threads
+  back), marks the summary and the comments whose severity you changed, and
+  counts the other AZPR comments on the PR, where a finding you excluded may
+  still be visible; edit them on the PR if they should change.
+- `--show` prints the saved preview, with its adjustments, without a model or
+  an Azure DevOps request.
+
+Without these options `/pr-comment` works as before: the planner's input and
+system prompt, the saved review and the receipts are unchanged.
+
 ## Publication
 
 Publication is deterministic runtime code using the Azure DevOps REST API

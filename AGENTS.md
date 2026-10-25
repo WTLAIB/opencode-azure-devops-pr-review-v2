@@ -115,6 +115,18 @@ settings, backups and failure records. Never upload `.local/`.
   behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them.
+- A person's adjustments (`/pr-comment <review-id> --exclude`, `--severity`,
+  `--reset`) change only the findings handed to comment planning, never the
+  review record or a prompt file; the planner input carries `adjustments` only
+  when some exist, so unadjusted reviews plan exactly as before. A review
+  adjusted once is posted only from a preview planned after its latest
+  adjustment (an adjustment drops the earlier preview in the same save) and is
+  neither adjusted nor planned again once its publication started. That save
+  and the new preview's save must succeed; never let a failed save report an
+  adjustment as applied. Text the runtime renders that names an excluded
+  finding holds publication. Items an earlier publication already put on the
+  PR are skipped as always; its receipt names those whose text differs, since
+  posted comments are never changed.
 - Comment planning pages run side by side, so nothing a page sees or produces
   may depend on which page finishes first: only the first page writes the
   summary note, each page keeps its own continuation state and evidence, and

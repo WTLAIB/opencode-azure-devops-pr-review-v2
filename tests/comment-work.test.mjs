@@ -673,3 +673,118 @@ test('candidate pages keep a group on one page and plan an oversized group separ
   assert.deepEqual(split.offered, [], 'A group that does not fit one page is not offered, and its evidence is not cut.');
   assert.deepEqual(ids(split.pages), [['Q-1'], ['Q-1001']]);
 });
+
+test('a person\'s adjustments reach the planner only when there are some; the planning input is otherwise unchanged', async t => {
+  const { review, store } = await setup(t, [finding('F-1'), finding('F-2'), finding('F-3', 'low')]);
+  const answer = async payload => JSON.stringify({ status: 'READY',
+    comments: payload.findings.filter(f => f.severity !== 'low').map(f => comment(f.id)),
+    skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low.' })),
+    ...(payload.commentWork.allowSummary ? { summary: 'Purpose.' } : {}) });
+  const plain = stages(answer);
+  const before = await prepareComments(review, store, plain.invoke);
+  assert.ok(plain.payloads.every(payload => !Object.hasOwn(payload, 'adjustments')), 'Without adjustments the input has no new field.');
+  // An emptied record, as --reset leaves it, plans exactly as none.
+  const emptied = stages(answer);
+  const again = await prepareComments({ ...review, adjustments: { excluded: [], severity: {}, changes: [] } }, store, emptied.invoke);
+  assert.deepEqual(emptied.payloads.map(payload => Object.keys(payload)), plain.payloads.map(payload => Object.keys(payload)));
+  assert.deepEqual(emptied.payloads.map(payload => payload.findings), plain.payloads.map(payload => payload.findings));
+  assert.deepEqual(again, before);
+  const adjusted = stages(answer);
+  const plan = await prepareComments({ ...review, adjustments: { excluded: ['F-1'], severity: { 'F-2': 'low', 'F-3': 'medium' } } }, store, adjusted.invoke);
+  const [payload] = adjusted.payloads;
+  assert.deepEqual(payload.findings.map(f => [f.id, f.severity]), [['F-2', 'low'], ['F-3', 'medium']]);
+  assert.deepEqual(payload.adjustments.excludedFindings, ['F-1']);
+  assert.deepEqual(payload.adjustments.severityChanges, [{ id: 'F-2', from: 'high', to: 'low' }, { id: 'F-3', from: 'low', to: 'medium' }]);
+  assert.deepEqual(plan.comments.map(c => [c.findingId, c.severity]), [['F-3', 'medium']], 'A raised low finding gets an inline comment; a lowered one stays in the summary.');
+  assert.match(plan.comments[0].content, /^🟡 medium: F-3 loses state/);
+  assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-2']);
+  assert.doesNotMatch(plan.summary.content, /F-1/);
+  assert.match(plan.summary.content, /high: 0 · medium: 1 · low: 1/);
+});
+
+test('an excluded quick finding is no merge candidate; the other one is planned on its own', async t => {
+  const a = quickFinding('Q-1', '1/2', 'head:/src/Main.java:2'), b = quickFinding('Q-1001', '2/2', 'head:/src/Main.java:2');
+  const { review, store } = await setup(t, []);
+  Object.assign(review, { verification: 'none', final: { ...review.final, dispositions: [a, b].map(f => ({ id: f.id, status: 'REPORTED', finding: f, shard: f.shard })) } });
+  const answer = async payload => JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [],
+    ...(payload.commentWork.allowSummary ? { summary: 'Purpose.' } : {}) });
+  const plain = stages(answer);
+  await prepareComments(review, store, plain.invoke);
+  assert.deepEqual(plain.payloads[0].mergeCandidates, [['Q-1', 'Q-1001']]);
+  const adjusted = stages(answer);
+  const plan = await prepareComments({ ...review, adjustments: { excluded: ['Q-1'], severity: {} } }, store, adjusted.invoke);
+  assert.equal(Object.hasOwn(adjusted.payloads[0], 'mergeCandidates'), false);
+  assert.deepEqual(adjusted.payloads[0].findings.map(f => f.id), ['Q-1001']);
+  // Without source the runtime read, the quick comment is skipped for its anchor; Q-1 is in neither list.
+  assert.deepEqual([...plan.comments, ...plan.skipped].map(item => item.findingId), ['Q-1001']);
+  assert.doesNotMatch(plan.summary.content, /Q-1\b/);
+});
+
+test('items the PR already has are skipped as always; with `compare` those with other text are marked and other comments counted', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'POSTED');
+  const writes = azure.callsTo('createThread').length;
+  // The same markers with other text, as after a person changed a severity in another review of this commit.
+  const changed = () => ({ ...review, publication: new Map(), plan: { ...review.plan,
+    summary: { ...review.plan.summary, content: review.plan.summary.content.replace('high: 2', 'high: 1 · medium: 1') },
+    comments: review.plan.comments.map((item, index) => index ? item : { ...item, content: item.content.replace('🔴 high:', '🟡 medium:') }) } });
+  const plain = changed();
+  const skipped = await publishPlan({ run, review: plain, azure: api, attempts });
+  assert.equal(skipped.status, 'POSTED');
+  assert.ok([...plain.publication.values()].every(entry => entry.state === 'ALREADY_PRESENT' && !Object.hasOwn(entry, 'earlierText')));
+  assert.equal(Object.hasOwn(skipped, 'otherComments'), false, 'Without `compare` the result is as before.');
+  const compared = changed();
+  const result = await publishPlan({ run, review: compared, azure: api, attempts, compare: true });
+  assert.equal(result.status, 'POSTED');
+  assert.equal(azure.callsTo('createThread').length, writes, 'Nothing is posted again or replaced.');
+  const entries = [...compared.publication.values()];
+  assert.ok(entries.every(entry => entry.state === 'ALREADY_PRESENT'));
+  assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
+  assert.equal(result.otherComments, 0);
+  // A plan without one of the comments leaves that comment on the PR, counted as another one.
+  const smaller = { ...review, publication: new Map(), plan: { ...review.plan, comments: review.plan.comments.slice(1) } };
+  assert.equal((await publishPlan({ run, review: smaller, azure: api, attempts, compare: true })).otherComments, 1);
+});
+
+test('an earlier comment that only the read-back lists is marked as keeping its earlier text', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'POSTED');
+  const writes = azure.callsTo('createThread').length;
+  // Another review of this commit with other text on the same lines; the first thread list lags behind.
+  const changed = { ...review, publication: new Map(), plan: { ...review.plan,
+    summary: { ...review.plan.summary, content: review.plan.summary.content.replace('high: 2', 'high: 1 · medium: 1') },
+    comments: review.plan.comments.map((item, index) => index ? item : { ...item, content: item.content.replace('🔴 high:', '🟡 medium:') }) } };
+  let listings = 0;
+  azure.state.fail.threads = () => listings++ ? undefined : { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: [], count: 0 }) };
+  const result = await publishPlan({ run, review: changed, azure: api, attempts, compare: true });
+  assert.equal(result.status, 'POSTED');
+  assert.equal(azure.callsTo('createThread').length, writes, 'The earlier creates are not sent again.');
+  const entries = [...changed.publication.values()];
+  assert.ok(entries.every(entry => entry.state === 'VERIFIED' && entry.earlierAttempt));
+  assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
+});
+
+test('without a local record, a refused write whose marker the read-back finds is compared too', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const first = publisher(azure);
+  assert.equal((await publishPlan({ run: first.run, review, azure: first.api, attempts: first.attempts })).status, 'POSTED');
+  const threads = azure.state.threads.length;
+  // Another machine: no publication record of its own. Its first thread list lags, and Azure DevOps refuses the writes.
+  const other = publisher(azure);
+  const changed = { ...review, publication: new Map(), plan: { ...review.plan,
+    summary: { ...review.plan.summary, content: review.plan.summary.content.replace('high: 2', 'high: 1 · medium: 1') },
+    comments: review.plan.comments.map((item, index) => index ? item : { ...item, content: item.content.replace('🔴 high:', '🟡 medium:') }) } };
+  let listings = 0;
+  azure.state.fail.threads = () => listings++ ? undefined : { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: [], count: 0 }) };
+  azure.state.fail.createThread = () => azureError(403, 'AccessDeniedException', 'Fixture writes denied.');
+  await publishPlan({ run: other.run, review: changed, azure: other.api, attempts: other.attempts, compare: true });
+  assert.equal(azure.state.threads.length, threads, 'Nothing was written.');
+  const entries = [...changed.publication.values()];
+  assert.ok(entries.every(entry => entry.state === 'VERIFIED'), 'The read-back finds every marker, as before.');
+  assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
+});

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
   publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
-  INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT,
+  INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
+  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
@@ -482,4 +483,146 @@ test('automatic publication finds nothing new when every finding is already disc
     ['threads that could not be read', plan([discussed('F-1')]), null],
     ['nothing skipped', plan([]), live],
   ]) assert.equal(automaticPublicationRepeats(value, threads), '', label);
+});
+
+const page = (extra = {}) => ({ status: 'READY', comments: [], skipped: [], summary: 'Purpose.', summaryDetails: '', ...extra });
+
+test('without adjustments the comment findings, planner input and summary are exactly those of the review', () => {
+  const r = review([finding('F-1'), finding('F-2', 'low')]);
+  assert.deepEqual(commentFindings(r), publishableFindings(r));
+  assert.equal(adjustmentInput(r), undefined);
+  assert.equal(describeAdjustments(r), '');
+  assert.equal(hasAdjustments(r), false);
+  assert.equal(everyFindingExcluded(r), false);
+  // An emptied record, as --reset leaves it, is the same as none.
+  const reset = { ...r, adjustments: { excluded: [], severity: {}, changes: [{ at: '2026-10-24T00:00:00.000Z', excluded: [], severity: {} }] } };
+  assert.deepEqual(commentFindings(reset), publishableFindings(r));
+  assert.equal(adjustmentInput(reset), undefined);
+  assert.equal(hasAdjustments(reset), false);
+  assert.deepEqual(assemblePlan(reset, [page()]), assemblePlan(r, [page()]));
+});
+
+test('adjusted findings: excluded ones are left out and a changed severity replaces the review\'s, also in the summary', () => {
+  const r = { ...review([finding('F-1'), finding('F-2'), finding('F-3', 'low')]), adjustments: { excluded: ['F-1'], severity: { 'F-2': 'low', 'F-3': 'medium' } } };
+  assert.equal(hasAdjustments(r), true);
+  assert.deepEqual(commentFindings(r).map(f => [f.id, f.severity]), [['F-2', 'low'], ['F-3', 'medium']]);
+  assert.equal(publishableFindings(r).find(f => f.id === 'F-2').severity, 'high', 'The review itself keeps its severities.');
+  const input = adjustmentInput(r);
+  assert.deepEqual(input.excludedFindings, ['F-1']);
+  assert.deepEqual(input.severityChanges, [{ id: 'F-2', from: 'high', to: 'low' }, { id: 'F-3', from: 'low', to: 'medium' }]);
+  assert.match(input.rule, /never name, describe or allude to it/);
+  const plan = assemblePlan(r, [page()]);
+  assert.doesNotMatch(plan.summary.content, /F-1/);
+  assert.match(plan.summary.content, /high: 0 · medium: 1 · low: 1/);
+  assert.match(describeAdjustments(r), /^Adjusted by a person after the preview \(not stated on the PR\):\n- Excluded from publication: F-1\n- F-2: severity high → low\n- F-3: severity low → medium$/);
+  assert.equal(everyFindingExcluded({ ...r, adjustments: { excluded: ['F-1', 'F-2', 'F-3'], severity: {} } }), true);
+  assert.equal(everyFindingExcluded({ ...review([]), adjustments: { excluded: ['F-1'], severity: {} } }), false, 'A review without findings is not an excluded one.');
+});
+
+test('published text that names an excluded finding gets a correction turn, then is dropped', () => {
+  const r = { ...review([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
+  const assigned = [finding('F-2')];
+  const text = answer([comment({ findingId: 'F-2', body: '🔴 high: Value is lost\n\nThe same cause as F-1.' })], [],
+    { summary: 'Fixes F-1 and F-2.', summaryDetails: '### Additional finding details\n\nF-1 matters too.' });
+  const first = evaluatePlanPage(text, { review: r, assigned });
+  assert.equal(first.issues.length, 3);
+  assert.ok(first.issues.some(issue => /^comment for F-2: body names F-1, which a person excluded from publication; leave it out\.$/.test(issue)));
+  assert.ok(first.issues.some(issue => /^summary names F-1, which a person excluded from publication/.test(issue)));
+  assert.ok(first.issues.some(issue => /^summaryDetails names F-1, which a person excluded from publication/.test(issue)));
+  const last = evaluatePlanPage(text, { review: r, assigned, final: true });
+  assert.deepEqual(last.issues, []);
+  assert.deepEqual(last.result.comments, []);
+  assert.match(last.result.skipped[0].reason, /body names F-1, which a person excluded from publication/);
+  assert.equal(last.result.summary, undefined);
+  assert.equal(last.result.summaryDetails, '');
+  assert.ok(last.corrections.some(c => c.action === 'drop-summary-note-naming-excluded'));
+  assert.ok(last.corrections.some(c => c.action === 'drop-summary-details-naming-excluded'));
+  // A comment for the excluded finding itself is not assigned, so it is dropped.
+  const stray = evaluatePlanPage(answer([comment(), comment({ findingId: 'F-2', body: '🔴 high: Value is lost' })]), { review: r, assigned, final: true });
+  assert.deepEqual(stray.result.comments.map(c => c.findingId), ['F-2']);
+  assert.ok(stray.corrections.some(c => c.action === 'drop-unassigned-comment'));
+  // Without adjustments the same text is accepted as before.
+  assert.deepEqual(evaluatePlanPage(text, { review: review([finding('F-1'), finding('F-2')]), assigned }).issues, []);
+});
+
+test('adjustment requests name publishable findings and replace whole lists', () => {
+  const base = review([finding('F-1'), finding('F-2'), finding('R-1', 'medium')]);
+  base.final.dispositions.push({ id: 'R-2', status: 'MERGED', mergedInto: 'F-1', reason: 'Same cause.' }, { id: 'F-9', status: 'REJECTED', reason: 'Not reachable.' });
+  assert.throws(() => resolveAdjustments(base, { exclude: ['F-7'] }),
+    /^Error: \[AZPR\] Nothing was changed: F-7 is not a finding of review abcdef12\. Findings of review abcdef12 you can adjust: F-1, F-2, R-1\.$/);
+  assert.throws(() => resolveAdjustments(base, { exclude: ['R-2'] }), /R-2 was merged into F-1; adjust F-1 instead/);
+  assert.throws(() => resolveAdjustments(base, { severity: { 'F-9': 'low' } }), /F-9 is REJECTED, not a finding this review can publish/);
+  assert.throws(() => resolveAdjustments(base, { exclude: ['F-1'], severity: { 'F-1': 'low' } }), /F-1 cannot be excluded and given a severity at once/);
+  const first = resolveAdjustments(base, { exclude: ['R-1', 'F-1'], severity: { 'F-2': 'medium' } });
+  assert.deepEqual(first.next, { excluded: ['F-1', 'R-1'], severity: { 'F-2': 'medium' } });
+  assert.deepEqual(first.changes, ['excluded F-1', 'excluded R-1', 'F-2 severity high → medium']);
+  const adjusted = { ...base, adjustments: first.next };
+  // A list the request names replaces the saved one; the other list is kept.
+  const restore = resolveAdjustments(adjusted, { exclude: ['F-1'] });
+  assert.deepEqual(restore.next, { excluded: ['F-1'], severity: { 'F-2': 'medium' } });
+  assert.deepEqual(restore.changes, ['restored R-1']);
+  // A severity for an excluded finding restores it; excluding a finding drops its severity change.
+  const restored = resolveAdjustments(adjusted, { severity: { 'F-1': 'low' } });
+  assert.deepEqual(restored.next, { excluded: ['R-1'], severity: { 'F-1': 'low' } });
+  assert.deepEqual(restored.changes, ['restored F-1', 'F-1 severity high → low', 'F-2 severity medium → high']);
+  assert.deepEqual(resolveAdjustments(adjusted, { exclude: ['F-2'] }).next, { excluded: ['F-2'], severity: {} });
+  // The review's own severity is no change, and a request that changes nothing says so.
+  assert.deepEqual(resolveAdjustments(base, { severity: { 'F-1': 'high' } }).next.severity, {});
+  assert.equal(resolveAdjustments(base, { severity: { 'F-1': 'high' } }).unchanged, true);
+  assert.equal(resolveAdjustments(adjusted, { exclude: ['F-1', 'R-1'], severity: { 'F-2': 'medium' } }).unchanged, true);
+  const reset = resolveAdjustments(adjusted, { reset: true });
+  assert.deepEqual(reset.next, { excluded: [], severity: {} });
+  assert.deepEqual(reset.changes, ['restored F-1', 'restored R-1', 'F-2 severity medium → high']);
+});
+
+test('publication has started once an item was sent, may have landed or was found on the PR', () => {
+  assert.equal(publicationStarted({}), false);
+  assert.equal(publicationStarted({ publication: new Map() }), false);
+  assert.equal(publicationStarted({ publication: new Map([['m1', { state: 'FAILED' }]]) }), false, 'Only definite failures: nothing was created.');
+  for (const state of ['SENDING', 'POSTED', 'UNCERTAIN', 'VERIFIED', 'UNVERIFIED', 'DELETED', 'ALREADY_PRESENT']) {
+    assert.equal(publicationStarted({ publication: new Map([['m1', { state: 'FAILED' }], ['m2', { state }]]) }), true, state);
+  }
+});
+
+test('adjustments never change the review: its final record and findings stay as the review left them', () => {
+  const r = { ...review([finding('F-1'), finding('F-2', 'low')]), adjustments: { excluded: ['F-1'], severity: { 'F-2': 'high' } } };
+  const before = structuredClone(r.final);
+  commentFindings(r);
+  adjustmentInput(r);
+  describeAdjustments(r);
+  resolveAdjustments(r, { exclude: ['F-2'] });
+  resolveAdjustments(r, { reset: true });
+  assemblePlan(r, [page()]);
+  evaluatePlanPage(answer([comment({ findingId: 'F-2' })]), { review: r, assigned: commentFindings(r), final: true });
+  assert.deepEqual(r.final, before);
+  assert.equal(commentFindings(r)[0].severity, 'high', 'The adjusted copy carries the new severity.');
+  assert.equal(r.final.dispositions[1].verifiedFinding.severity, 'low', 'The verified finding keeps its own.');
+  assert.deepEqual(r.adjustments, { excluded: ['F-1'], severity: { 'F-2': 'high' } }, 'Resolving a request saves nothing by itself.');
+});
+
+test('the receipt note about earlier publications is empty unless the PR keeps something', () => {
+  const r = review([finding('F-1')]);
+  assert.equal(describeEarlierText(r, 0), '');
+  const skipped = new Map([['m', { kind: 'inline', findingId: 'F-1', path: '/src/a.ts', startLine: 2, state: 'ALREADY_PRESENT' }]]);
+  assert.equal(describeEarlierText({ ...r, publication: skipped }, 3), '', 'The same text, and nothing excluded.');
+  const kept = new Map([['m', { kind: 'inline', findingIds: ['F-1', 'F-2'], path: '/src/a.ts', startLine: 2, state: 'ALREADY_PRESENT', earlierText: true }]]);
+  assert.equal(describeEarlierText({ ...r, adjustments: { excluded: [], severity: {} }, publication: kept }, 0),
+    'Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: F-1, F-2 at /src/a.ts:2. Edit them on the PR if they should change.\n');
+  assert.match(describeEarlierText({ ...r, adjustments: { excluded: ['F-1'], severity: {} }, publication: new Map() }, 2), /^The PR has 2 other AZPR comment\(s\) from earlier publications/);
+});
+
+test('posted text that names an excluded finding is found, also in the summary rows the runtime renders', () => {
+  const cross = review([finding('F-1'), finding('F-2', 'low', { summary: 'Retry failure continues after the F-1 guard is restored' })]);
+  const adjusted = { ...cross, adjustments: { excluded: ['F-1'], severity: {} } };
+  adjusted.plan = assemblePlan(adjusted, [page()]);
+  assert.deepEqual(excludedReferences(adjusted), ['the PR summary names F-1 (in the summary row of F-2)']);
+  // Without exclusions, or without a reference, nothing holds the preview.
+  assert.deepEqual(excludedReferences({ ...cross, plan: assemblePlan(cross, [page()]) }), []);
+  const clean = { ...review([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
+  clean.plan = assemblePlan(clean, [page()]);
+  assert.deepEqual(excludedReferences(clean), []);
+  // A comment's text is checked as well, as a last line behind the planner checks.
+  const comment = { kind: 'inline', findingId: 'F-2', path: '/src/a.ts', startLine: 2, marker: 'm', content: 'Same cause as F-1.' };
+  assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-1']);
+  assert.equal(cross.final.dispositions[1].verifiedFinding.summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
 });
