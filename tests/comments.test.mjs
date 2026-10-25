@@ -4,7 +4,7 @@ import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
   publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
-  everyFindingExcluded, publicationStarted, describeEarlierText,
+  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
@@ -609,4 +609,20 @@ test('the receipt note about earlier publications is empty unless the PR keeps s
   assert.equal(describeEarlierText({ ...r, adjustments: { excluded: [], severity: {} }, publication: kept }, 0),
     'Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: F-1, F-2 at /src/a.ts:2. Edit them on the PR if they should change.\n');
   assert.match(describeEarlierText({ ...r, adjustments: { excluded: ['F-1'], severity: {} }, publication: new Map() }, 2), /^The PR has 2 other AZPR comment\(s\) from earlier publications/);
+});
+
+test('posted text that names an excluded finding is found, also in the summary rows the runtime renders', () => {
+  const cross = review([finding('F-1'), finding('F-2', 'low', { summary: 'Retry failure continues after the F-1 guard is restored' })]);
+  const adjusted = { ...cross, adjustments: { excluded: ['F-1'], severity: {} } };
+  adjusted.plan = assemblePlan(adjusted, [page()]);
+  assert.deepEqual(excludedReferences(adjusted), ['the PR summary names F-1 (in the summary row of F-2)']);
+  // Without exclusions, or without a reference, nothing holds the preview.
+  assert.deepEqual(excludedReferences({ ...cross, plan: assemblePlan(cross, [page()]) }), []);
+  const clean = { ...review([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
+  clean.plan = assemblePlan(clean, [page()]);
+  assert.deepEqual(excludedReferences(clean), []);
+  // A comment's text is checked as well, as a last line behind the planner checks.
+  const comment = { kind: 'inline', findingId: 'F-2', path: '/src/a.ts', startLine: 2, marker: 'm', content: 'Same cause as F-1.' };
+  assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-1']);
+  assert.equal(cross.final.dispositions[1].verifiedFinding.summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
 });

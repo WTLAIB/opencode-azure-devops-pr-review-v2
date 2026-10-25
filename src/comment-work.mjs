@@ -390,10 +390,15 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   try {
     const listedAfter = await azure.threads(run, review.snapshot);
     const after = markersInThreads(listedAfter), removedAfter = deletedThreads(listedAfter);
+    const textsAfter = compare ? markerTexts(listedAfter) : null;
     for (const item of items) {
       const entry = ledger.get(item.marker);
       if (!['POSTED', 'UNCERTAIN', 'FAILED'].includes(entry.state)) continue;
-      if (after.has(item.marker)) Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker) });
+      if (after.has(item.marker)) {
+        // The comment of an earlier attempt, which the first list did not show yet, keeps its own text.
+        const earlierText = textsAfter && (entry.earlierAttempt || entry.state === 'UNCERTAIN') && textsAfter.get(item.marker) !== item.content;
+        Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker), ...(earlierText ? { earlierText: true } : {}) });
+      }
       else if (entry.state === 'POSTED') entry.state = removedAfter.has(entry.threadId) ? 'DELETED' : 'UNVERIFIED';
     }
   } catch (error) {

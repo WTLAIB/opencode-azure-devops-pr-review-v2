@@ -883,6 +883,82 @@ test('an adjusted review publishes as any other; its receipt names what the PR k
   assert.match(without, /The PR has 2 other AZPR comment\(s\) from earlier publications that are not part of this preview; AZPR does not change them, so a finding you excluded may still be visible there\./);
 });
 
+test('an adjustment that cannot be saved changes nothing and says so', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const [first] = previewIds(await f.command('pr-comment', ''));
+  const reviews = join(f.stateDirectory, 'reviews');
+  await chmod(reviews, 0o500);
+  t.after(() => chmod(reviews, 0o700).catch(() => {}));
+  const prompts = f.prompts().length;
+  const failed = await f.command('pr-comment', `${review} --exclude ${first}`);
+  assert.match(failed, /\] INCOMPLETE/);
+  assert.match(failed, new RegExp(`The adjustment of review ${review} could not be saved \\(.+\\); nothing was changed or planned\\.`));
+  assert.match(failed, /Nothing was changed\. Fix the cause, then run the adjustment again\./);
+  assert.doesNotMatch(failed, /Adjusted by a person:/);
+  assert.equal(f.prompts().length, prompts, 'Nothing was planned.');
+  // This process keeps the preview the person read, and so does the saved review.
+  assert.doesNotMatch(await f.command('pr-comment', `${review} --show`), /Adjusted by a person|Excluded from publication/);
+  await chmod(reviews, 0o700);
+  assert.equal(Object.hasOwn(await savedReview(f, review), 'adjustments'), false);
+  // A restart finds the same state: the preview the person read, without the adjustment.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure });
+  assert.doesNotMatch(await g.command('pr-comment', `${review} --show`), /Adjusted by a person|Excluded from publication/);
+  // Once the state can be written again, the same adjustment works.
+  assert.match(await g.command('pr-comment', `${review} --exclude ${first}`), /\] PREVIEW/);
+  assert.deepEqual((await savedReview(g, review)).adjustments.excluded, [first]);
+});
+
+test('a new preview of an adjusted review that cannot be saved is dropped, also in this process', async t => {
+  let lock = null;
+  const f = await fixture(t, { files: ['/src/Main.java'], async during({ role }) { if (lock && ROLES[role].format === 'comment-plan') { await chmod(lock, 0o500); lock = null; } } });
+  const review = reviewId(await f.command());
+  const [first] = previewIds(await f.command('pr-comment', ''));
+  const reviews = join(f.stateDirectory, 'reviews');
+  t.after(() => chmod(reviews, 0o700).catch(() => {}));
+  // The adjustment is saved before planning; the store becomes read-only while its preview is planned.
+  lock = reviews;
+  const failed = await f.command('pr-comment', `${review} --exclude ${first}`);
+  assert.match(failed, /\] INCOMPLETE/);
+  assert.match(failed, new RegExp(`The new preview of review ${review} could not be saved \\(.+\\); it was dropped, so nothing can be posted from it\\.`));
+  assert.match(failed, new RegExp(`The adjustments are saved\\. Fix the cause, then run /pr-comment ${review} to plan the preview again\\.`));
+  assert.match(await f.command('pr-comment', `${review} --show`), /has no saved preview/);
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${review} --publish` } }),
+    new RegExp(`Review ${review} was adjusted and has no preview planned since`));
+  await chmod(reviews, 0o700);
+  const saved = await savedReview(f, review);
+  assert.deepEqual([saved.adjustments.excluded, saved.plan], [[first], null], 'The saved state is the adjustment without a preview.');
+  assert.match(await f.command('pr-comment', review), /Inline comments prepared: 1/);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+});
+
+test('a summary row that names an excluded finding holds the adjusted preview until a person resolves it', async t => {
+  // The verifier's summary of the risk finding refers to the functional one.
+  const f = await fixture(t, { files: ['/src/Main.java'], answer({ role, packet }) {
+    if (ROLES[role].format !== 'final') return undefined;
+    return { status: 'COMPLETE', confirmed: packet.assignment.findings.map(item => ({ ...item, summary: item.id.startsWith('R-') ? `${item.summary}, as in F-1` : item.summary, reason: 'Verified from source.' })),
+      merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'FINAL_REPORT' };
+  } });
+  const review = reviewId(await f.command());
+  const [functional, risk] = previewIds(await f.command('pr-comment', ''));
+  assert.equal(functional, 'F-1');
+  const held = await f.command('pr-comment', `${review} --exclude F-1`);
+  assert.match(held, /\] PREVIEW/);
+  assert.match(held, new RegExp(`Nothing was posted\\. Publication is held because text it would post names a finding you excluded: the PR summary names F-1 \\(in the summary row of ${risk}\\)\\. Exclude those findings as well or restore the excluded ones, then read the new preview\\.`));
+  assert.doesNotMatch(held, /To post this exact preview/);
+  assert.match(await f.command('pr-comment', `${review} --show`), /Publication is held because text it would post names a finding you excluded/);
+  const refused = await f.command('pr-comment', `${review} --publish`);
+  assert.match(refused, /\] INCOMPLETE/);
+  assert.match(refused, /Reason: Publication is held: text it would post names a finding you excluded; nothing was posted\./);
+  assert.doesNotMatch(refused, /Fix the cause/);
+  assert.equal(f.azure.callsTo('createThread').length, 0);
+  // The review itself is unchanged, and restoring F-1 lifts the hold.
+  assert.match((await savedReview(f, review)).final.dispositions.find(row => row.id === risk).verifiedFinding.summary, /as in F-1$/);
+  assert.match(await f.command('pr-comment', `${review} --exclude none`), /To post this exact preview/);
+  assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED/);
+});
+
 test('/pr-stop only cancels runs from the same conversation', async t => {
   const entered = deferred(), release = deferred();
   const f = await fixture(t, { async during({ role }) { if (ROLES[role].format === 'initial') { entered.resolve(); await release.promise; } } });

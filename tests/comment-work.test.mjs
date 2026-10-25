@@ -747,3 +747,23 @@ test('items the PR already has are skipped as always; with `compare` those with 
   const smaller = { ...review, publication: new Map(), plan: { ...review.plan, comments: review.plan.comments.slice(1) } };
   assert.equal((await publishPlan({ run, review: smaller, azure: api, attempts, compare: true })).otherComments, 1);
 });
+
+test('an earlier comment that only the read-back lists is marked as keeping its earlier text', async t => {
+  const azure = fakeAzure();
+  const { review } = await plannedReview(t, azure);
+  const { api, run, attempts } = publisher(azure);
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'POSTED');
+  const writes = azure.callsTo('createThread').length;
+  // Another review of this commit with other text on the same lines; the first thread list lags behind.
+  const changed = { ...review, publication: new Map(), plan: { ...review.plan,
+    summary: { ...review.plan.summary, content: review.plan.summary.content.replace('high: 2', 'high: 1 · medium: 1') },
+    comments: review.plan.comments.map((item, index) => index ? item : { ...item, content: item.content.replace('🔴 high:', '🟡 medium:') }) } };
+  let listings = 0;
+  azure.state.fail.threads = () => listings++ ? undefined : { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: [], count: 0 }) };
+  const result = await publishPlan({ run, review: changed, azure: api, attempts, compare: true });
+  assert.equal(result.status, 'POSTED');
+  assert.equal(azure.callsTo('createThread').length, writes, 'The earlier creates are not sent again.');
+  const entries = [...changed.publication.values()];
+  assert.ok(entries.every(entry => entry.state === 'VERIFIED' && entry.earlierAttempt));
+  assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
+});

@@ -546,7 +546,10 @@ its severity, then read the new preview:
 
 The comments are planned again without the excluded findings and with the new
 severities, so their wording may change; the summary index follows them, and
-nothing on the PR mentions the adjustment. Excluding every finding posts
+nothing on the PR mentions the adjustment. Each option replaces its whole
+saved list: `--exclude F-1` and then `--exclude F-2` excludes only F-2. A
+changed severity changes how a finding is published, not the finding itself;
+when a finding is wrong, exclude it. Excluding every finding posts
 nothing. `--reset` clears the adjustments, and `/pr-comment <review-id> --show`
 shows the saved preview without a model. An adjusted review is posted only
 from the preview planned after its latest adjustment; once its publication has

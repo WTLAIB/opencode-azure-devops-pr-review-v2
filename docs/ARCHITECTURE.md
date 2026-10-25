@@ -259,7 +259,9 @@ object.
 `publishableFindings` supplies the findings: CONFIRMED ones and verifier
 additions for review and deep, REPORTED ones for a quick review. A saved
 review without a verification field is trusted only when its profile is review
-or deep. Planning (model) uses pages of at most four findings plus report segments
+or deep. `commentFindings` hands them to planning as a person adjusted them
+after a preview (see below); without adjustments they are exactly the
+publishable findings. Planning (model) uses pages of at most four findings plus report segments
 (on a large PR each page carries the changed files and dispositions of its own
 findings and references to the complete lists), with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
@@ -309,6 +311,29 @@ markers back (`VERIFIED`). Creation results are `POSTED`, `ALREADY_PRESENT`,
 `FAILED`, `UNCERTAIN` (resolved by read-back), `UNVERIFIED` or `DELETED` (a
 recorded thread whose comment someone deleted on the PR; it is not posted
 again). Re-running publication is safe.
+
+A person's adjustments (`/pr-comment <review-id> --exclude`, `--severity`,
+`--reset`) are stored apart from the review, as `review.adjustments`; the
+review record, its findings and its report never change. `commentFindings`
+leaves excluded findings out and applies changed severities, so the existing
+page checks decide titles and inline eligibility, and the planner input gains
+an `adjustments` field only while some are active. Two states matter:
+
+- **Active adjustments** shape planning and the summary index. Published text
+  must not name an excluded finding: the page checks repair or drop the
+  planner's own text, and `excludedReferences` checks the assembled preview,
+  including the summary rows rendered from the review's finding summaries,
+  and holds publication when one still names an excluded ID.
+- **Ever adjusted** (also after `--reset`) keeps the stricter publication
+  rules. An adjustment is saved together with dropping the earlier preview
+  before anything else, and a failed save changes nothing; the new preview is
+  saved strictly as well and dropped when that fails. Such a review is posted
+  only from a preview planned after its latest adjustment, never planned and
+  posted in one `--publish`, and once its publication has started it is
+  neither adjusted nor planned again. Its publication compares the text of
+  items already on the PR (from the first thread list and from the read-back)
+  and names in the receipt those that keep their earlier text; nothing posted
+  is changed.
 
 ## Authorization and isolation
 

@@ -121,9 +121,12 @@ settings, backups and failure records. Never upload `.local/`.
   when some exist, so unadjusted reviews plan exactly as before. A review
   adjusted once is posted only from a preview planned after its latest
   adjustment (an adjustment drops the earlier preview in the same save) and is
-  neither adjusted nor planned again once its publication started. Items an
-  earlier publication already put on the PR are skipped as always; its receipt
-  names those whose text differs, since posted comments are never changed.
+  neither adjusted nor planned again once its publication started. That save
+  and the new preview's save must succeed; never let a failed save report an
+  adjustment as applied. Text the runtime renders that names an excluded
+  finding holds publication. Items an earlier publication already put on the
+  PR are skipped as always; its receipt names those whose text differs, since
+  posted comments are never changed.
 - Comment planning pages run side by side, so nothing a page sees or produces
   may depend on which page finishes first: only the first page writes the
   summary note, each page keeps its own continuation state and evidence, and

@@ -245,11 +245,17 @@ change their severity, and plan the preview again:
   are accepted: confirmed and verifier-added ones of a review or deep review,
   reported ones of a quick review. A merged duplicate names the finding it was
   merged into; any other ID refuses the whole command and changes nothing.
-- Each list is complete and replaces the saved one (`none` empties it); the
-  other list is kept, except that excluding a finding drops its severity change
-  and a severity for an excluded finding restores it. A finding named in both
-  lists is refused, and a severity equal to the review's is no change.
-  `--reset` clears both.
+- Each list is complete and replaces the saved one (`none` empties it): after
+  `--exclude F-1`, a later `--exclude F-2` excludes only F-2 and restores F-1,
+  so name both (`--exclude F-1,F-2`) to keep both out; the receipt lists what
+  was excluded and restored. The other list is kept, except that excluding a
+  finding drops its severity change and a severity for an excluded finding
+  restores it. A finding named in both lists is refused, and a severity equal
+  to the review's is no change. `--reset` clears both.
+- A changed severity changes how a finding is published (its title, whether it
+  can get an inline comment, the summary counts); it does not verify the
+  finding again or change its evidence, trigger or impact. When the finding
+  itself is wrong, exclude it.
 - Each change plans the preview again with a model. The planner receives the
   adjusted findings (without the excluded ones, with the new severities) and an
   `adjustments` field that states them; the summary index and its counts
@@ -263,7 +269,11 @@ change their severity, and plan the preview again:
   any inline comment, combined ones included, the summary note or
   `summaryDetails`) gets a correction turn; after the last one the comment is
   skipped (its finding stays in the summary index) and the note or details are
-  dropped. A reference without the ID cannot be detected; the preview shows it.
+  dropped. The assembled preview is checked as well: a summary row is the
+  review's own text for its finding, so when a kept finding's summary names an
+  excluded one, the preview says which row and publication is held until you
+  exclude that finding as well or restore the excluded one. A reference
+  without the ID cannot be detected; the preview shows it.
 - Excluding every finding plans nothing and posts nothing: the result is
   `NOTHING_TO_POST`, not the summary of a review without defects.
   `--exclude none` brings the findings back.
@@ -274,7 +284,9 @@ change their severity, and plan the preview again:
   preview planned after its latest adjustment: every adjustment discards the
   earlier preview in the same save, and `--publish` never plans and posts such
   a review in one step (for example after a failed new preview, or a restart
-  while it was planned).
+  while it was planned). An adjustment that cannot be saved changes nothing and
+  the receipt says so; a new preview that cannot be saved is dropped and has
+  to be planned again.
 - Once publication of an adjusted preview has started (an item was sent, may
   have landed or was found on the PR), the review is neither adjusted nor
   planned again: `--publish` retries the same preview and `--show` shows it;
@@ -284,7 +296,8 @@ change their severity, and plan the preview again:
   an earlier publication; inline markers follow the anchored lines, not the
   commit) is skipped as for any review and keeps its earlier text. For an
   adjusted review the receipt names those items whose text differs from the
-  preview, marks the summary and the comments whose severity you changed, and
+  preview (also when a comment appears only as publication reads the threads
+  back), marks the summary and the comments whose severity you changed, and
   counts the other AZPR comments on the PR, where a finding you excluded may
   still be visible; edit them on the PR if they should change.
 - `--show` prints the saved preview, with its adjustments, without a model or

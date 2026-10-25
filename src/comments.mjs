@@ -255,6 +255,29 @@ export function describeEarlierText(review, otherComments = 0) {
   return lines.map(line => `${line}\n`).join('');
 }
 
+/**
+ * Where the text a saved preview would post still names a finding a person
+ * excluded. The planner's own text is checked page by page; this checks the
+ * items as they would be posted, including the summary rows the runtime
+ * renders from the review's own finding summaries, which no planner turn can
+ * change. Only IDs written as the runtime writes them are found. Returns
+ * readable rows; [] when nothing names an excluded finding.
+ */
+export function excludedReferences(review) {
+  const excluded = new Set(adjustmentsOf(review).excluded);
+  if (!excluded.size || !review?.plan) return [];
+  const rows = [];
+  for (const item of publicationItems(review.plan)) {
+    const names = namedExcluded(item.content, excluded);
+    if (!names.length) continue;
+    if (item.kind === 'summary') {
+      const sources = commentFindings(review).filter(finding => namedExcluded(finding.summary, excluded).length).map(finding => finding.id);
+      rows.push(`the PR summary names ${names.join(', ')}${sources.length ? ` (in the summary row of ${sources.join(', ')})` : ''}`);
+    } else rows.push(`the comment of ${(item.findingIds ?? [item.findingId]).join(', ')} at ${item.path}:${item.startLine} names ${names.join(', ')}`);
+  }
+  return rows;
+}
+
 /** Findings a person excluded that a text names, read as `citedFindings` reads IDs. */
 function namedExcluded(text, excluded) {
   if (!excluded.size || !text) return [];
