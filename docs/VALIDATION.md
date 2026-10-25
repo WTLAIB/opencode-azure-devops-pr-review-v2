@@ -31,6 +31,98 @@ These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
 
+## Adjusting findings after a preview (2026-10-25)
+
+Commit `cbbed6b` (branch `comment-adjustments`) was installed through
+OpenCode's plugin manager as `github:WTLAIB/opencode-azure-devops-pr-review-v2#cbbed6b…`
+on the OpenCode 2.1.4 service (its 29 installed files equal the commit), with
+gpt-6-luna for every review and quick role, gpt-6.1-sol for every deep role,
+output in zh-TW and `afterReview` none for every mode; the service was restored to the published 0.2.3 package
+afterwards. Every command ran in the conversation of its review unless noted.
+Before the runs that publish, the earlier AZPR comments of the 1-file PR were
+deleted and the local publication records of the 1-file and 316-file PRs were
+moved aside, so that comments on the same lines were posted again instead of
+being reported as `DELETED`.
+
+**Preview only, with the earlier comments still on the 1-file PR.** Its four
+AZPR threads made the planner skip all three findings as already discussed, so
+these previews had no inline comment.
+
+| Command | Planner input | Result | Planning |
+| --- | --- | --- | --- |
+| `/pr-review <URL>` | — | COMPLETE in 89 s: 6 candidates, 3 confirmed medium findings F-1, F-2, F-3 (the 3 known defects) | — |
+| `/pr-comment` | F-1, F-2, F-3; no `adjustments` field | Index medium 3; the review note named the snapshot, reservation and ordering contracts | 1 request, 9 s |
+| `/pr-comment <id> --show` | — | The saved preview; no model or Azure DevOps request | — |
+| `/pr-comment <id> --exclude f1` | F-2, F-3; `adjustments.excludedFindings` F-1 | Index medium 2; F-1 named nowhere, and the note no longer mentioned the snapshot contract | 1 request, 12 s |
+| `/pr-comment <id> --severity F-2=low,F-3=high` | F-2 low, F-3 high; F-1 still excluded; `severityChanges` | Index high 1, low 1; F-2 skipped as low severity | 1 request, 5 s |
+| The same adjustments again | — | "already has these adjustments; nothing was planned"; no model | — |
+| `/pr-comment <id> --reset` | F-1, F-2, F-3; no `adjustments` field | Index medium 3, as before the adjustments | 1 request, 8 s |
+
+**The 1-file PR without earlier comments** (three reviews, each COMPLETE in
+86–93 s):
+
+- Review A: excluding all three findings answered `NOTHING_TO_POST` in 3 s
+  without a model, and `--publish` posted nothing. `--exclude none` stopped
+  with `/pr-stop` while it was planned ended `CANCELLED` with the adjustment
+  saved and no preview: `--publish` was refused ("was adjusted and has no
+  preview planned since") and `--show` reported no saved preview. Setting all
+  three to low then planned a summary without inline comments, which was posted.
+- Review B, of the same commit: excluding one finding and setting the other two
+  to low gave a summary with the marker of review A's summary. Publication
+  skipped it as `ALREADY_PRESENT`, and the receipt said that the PR keeps its
+  earlier text, which may still list findings you excluded. Afterwards
+  `--exclude none` and a plain `/pr-comment <id>` were refused, `--show` said
+  that publication had started, and `--publish` again changed nothing.
+- Review C confirmed five medium findings, two pairs of them the same defects
+  from both reviewers (F-1 and R-1, F-2 and R-3). `--exclude R-1,R-3 --severity
+  R-2=high,F-2=low` planned 2 inline comments (R-2 high, F-1 medium) and a
+  summary with high 1, medium 1, low 1; all three were posted and read back,
+  and no posted text names R-1 or R-3. They were deleted again before the deep
+  run below.
+- `/pr-deep` COMPLETE in 116 s: 6 candidates, 3 confirmed medium findings
+  (the verifier merged the duplicates). `--exclude F-3 --severity F-1=high`,
+  planned by gpt-6.1-sol in 19 s (1 request, no correction turn), gave 2 inline
+  comments (F-1 high, F-2 medium) and a summary with high 1, medium 1; all
+  three were posted and read back with the gpt-6.1-sol disclosure, and no
+  posted text names F-3. Afterwards an adjustment was refused and `--publish`
+  again reported `ALREADY_PRESENT` for all three. These comments are kept on
+  the PR.
+
+**The 316-file PR** (no comments before):
+
+- `/pr-quick` COMPLETE in 186 s (48 findings reported), preview with 25 inline
+  comments, 13 of them combining findings of two shards. `--exclude Q-11001
+  --severity Q-12014=medium,Q-1013=low` (preview only, 102 s): Q-1001, combined
+  with Q-11001 before, got a comment of its own; Q-12014, raised from low, was
+  combined with Q-1022 on the same line; Q-1013 stayed in the summary only; the
+  disclosure still says the review was not independently verified, and the
+  preview names Q-11001 nowhere.
+- `/pr-review` COMPLETE in 333 s: 27 confirmed (37 merged), preview with 26
+  inline comments and 1 low finding in the summary. R-1009, R-1010 and R-1011
+  repeat F-1009, F-1010 and F-1011 from the other reviewer.
+- Refused without a change: the same command from another conversation ("No
+  completed review is available for this conversation"), `--exclude F-9999`
+  ("not a finding of review …", listing the IDs that can be adjusted) and
+  `--exclude R-1001` ("was merged into F-1001; adjust F-1001 instead").
+- `--exclude R-1009` with the OpenCode service restarted while it was planned:
+  the service reloaded in 7 s; `--show` reported no saved preview and
+  `--publish` was refused. A plain `/pr-comment <id>` then planned the preview
+  with R-1009 still excluded (85 s).
+- `--exclude R-1009,R-1010,R-1011 --severity F-1013=high,F-1016=low,F-1022=medium`
+  (63 s) planned 23 inline comments and a summary with high 5, medium 18, low 1:
+  F-1013 titled high, F-1022 (raised from low) with an inline comment, F-1016
+  in the summary only. All 24 items were posted and read back; the three
+  repeated defects have one comment each, and no posted text names R-1009,
+  R-1010 or R-1011. After publication, adjustments and a plain re-plan were
+  refused and `--publish` again reported `ALREADY_PRESENT` for all 24 items.
+  These comments are kept on the PR.
+
+No planning stage of these runs needed a correction turn, and the runtime's
+check for published text that names an excluded finding never had to act: the
+model left excluded findings out of its text. That check, and the receipt line
+that counts other AZPR comments of the PR, are covered by the offline tests
+only.
+
 ## 0.2.3 release acceptance (2026-10-24)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and OpenCode CLI 2.1.4.
