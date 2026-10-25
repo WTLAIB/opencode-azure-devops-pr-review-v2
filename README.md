@@ -20,12 +20,13 @@ the OpenCode team.
 [Validation and limitations](docs/VALIDATION.md) ·
 [Download v0.3.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.3.0)
 
-[![Real OpenCode review, comment preview and verified publication on a dedicated Azure test PR.](docs/assets/live-review-teaser.gif)](docs/DEMO.md)
+[![Real OpenCode run on a dedicated Azure DevOps test PR: a preview with three verified findings, one finding excluded and one lowered to low, the new preview, and publication read back from Azure DevOps.](docs/assets/adjust-findings-teaser.gif)](docs/DEMO.md)
 
-*A 12-second edit of a real OpenCode 2.1.2 run. Watch the
+*A 15-second edit of a real OpenCode 2.1.4 run: exclude one finding, lower
+another to low, read the new preview, then publish. Waiting time is shortened.
+Read the [demo and recording details](docs/DEMO.md), or watch the earlier
 [73-second walkthrough](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.2.0/azpr-live-demo.mp4)
-or read the [demo and recording details](docs/DEMO.md). Waiting time is shortened;
-the Azure portion shows an actual REST read-back in a terminal.*
+of a review, preview and publication.*
 
 ## Why AZPR?
 

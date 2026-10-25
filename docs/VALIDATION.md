@@ -37,9 +37,10 @@ accuracy score; see [known limitations](#known-limitations).
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
 CLI 2.1.4. The candidate contains the finding-adjustment workflow merged in
 PR #29, including the final fixes in `d4fd8dd`. Release preparation changes
-the package version, description and documentation and adds the code of
-conduct to the npm package; the runtime, prompts, settings and installers are
-unchanged from that reviewed revision.
+the package version, description, documentation and recording tool, and adds
+the code of conduct and a recorded demonstration to the npm package; the
+runtime, prompts, settings and installers are unchanged from that reviewed
+revision.
 
 - `npm run check` and **417 offline tests** passed, including the adjustment
   save failure, the final summary's excluded-ID check, and an earlier comment
@@ -53,13 +54,24 @@ unchanged from that reviewed revision.
   in flight; its largest provider request was 33,419 characters. The
   background-compaction fixture classified the failure as permanent and ran
   one functional session.
-- `npm pack --dry-run --json` lists **72 files**, including the entry, runtime,
-  prompts, configuration example and schema, license, code of conduct and 0.3.0
-  release notes. Tests, private settings and `.local/` records are excluded.
+- `npm pack --dry-run --json` lists **75 files**, including the entry, runtime,
+  prompts, configuration example and schema, license, code of conduct, 0.3.0
+  release notes and the new demonstration media. Tests, private settings and
+  `.local/` records are excluded.
 - These release fixtures make no paid-model request or real Azure publication.
   The live adjustment runs below used the earlier `cbbed6b` implementation;
   the subsequent persistence, read-back and final-summary fixes have offline
   regression tests. Host fixtures exercise the surrounding workflow.
+- A live run on the candidate's runtime was recorded for the
+  [demonstration](DEMO.md): OpenCode 2.1.4 with `openai/gpt-6-luna`, the plugin
+  installed from public Git commit `dfba561`, on the 1-file test PR. The review
+  completed in 66 seconds with three confirmed findings and two merged
+  duplicates, and its automatic preview took 14 seconds. `--exclude F-3
+  --severity F-2=low` planned a new preview in 8 seconds with one inline
+  comment and F-2 in the summary only. Publication posted the summary and that
+  comment, both read back as `VERIFIED`, and a repeated publication reported
+  `ALREADY_PRESENT=2`. This run took the normal adjustment and publication
+  path; the failure paths of the later fixes are covered by the offline tests.
 
 This is a pre-publication record. Public Git installation and clean-source
 archive acceptance are checked on the release candidate; registry integrity

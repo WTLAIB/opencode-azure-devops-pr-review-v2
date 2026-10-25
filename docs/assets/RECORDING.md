@@ -74,8 +74,15 @@ emoji-capable font with `--emoji-font /absolute/path/to/font.ttf`; fonts are not
 copied into the media or distributed with this project. Use `--crop-bottom 2`
 when the last two terminal rows contain only the local status/path bar and a
 blank margin. This crops the rendered viewport, adds a visible crop disclosure,
-and leaves the original cast untouched. Inspect the rows first; never crop a
-finding or result.
+and leaves the original cast untouched; the rendered image omits the cropped
+rows. Crop the empty input box too when it names a chat model that the AZPR run
+did not use. Inspect the rows first; never crop a finding or result.
+
+OpenCode 2.1.4's TUI shows a sidebar on wide terminals. Hide it before the
+segments you show by sending its toggle through the control file
+(`{"text":"\u0018"}`, then `{"text":"b"}`). Receipts name the private debug
+directory, which includes the local path; leave frames that show it out of the
+edit.
 
 Create an edit manifest describing the portions of the original recording to
 show. `start` and `end` are seconds in the cast. `seconds` is the output duration.

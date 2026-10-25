@@ -20,7 +20,8 @@
   publication. Existing PR comments are never edited; for an adjusted review,
   the receipt names those whose text differs from the new preview, including
   comments that appear only when AZPR reads the threads back.
-- The README leads with control over published comments; the first-review
+- The README leads with control over published comments and a real OpenCode
+  2.1.4 recording of adjusting findings and publishing; the first-review
   example and quickstart cover adjustments, the new preview and publication.
   The npm package, Git installation and source archive advance to 0.3.0. The
   package description mentions adjusting previews, and the npm package now
