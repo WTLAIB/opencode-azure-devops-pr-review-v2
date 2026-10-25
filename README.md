@@ -7,10 +7,10 @@
 
 **Review Azure DevOps pull requests from a URL. No checkout required.**
 
-Review across repositories in your configured Azure DevOps organization without
-managing a local clone of each project. AZPR uses your OpenCode models to inspect
-the changes, check findings, and prepare inline comments you can preview before
-publishing. No MCP server or CI pipeline setup is required.
+Review across repositories in your configured Azure DevOps organization using
+your OpenCode models to inspect changes and check findings. Preview the comments,
+choose which findings to publish, and adjust severity before posting.
+No MCP server or CI pipeline setup is required.
 
 AZPR is an independent community project. It is not built by or affiliated with
 the OpenCode team.
@@ -18,7 +18,7 @@ the OpenCode team.
 [Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
 [Team setup and data handling](docs/ENTERPRISE.md) ·
 [Validation and limitations](docs/VALIDATION.md) ·
-[Download v0.2.3](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.3)
+[Download v0.3.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.3.0)
 
 [![Real OpenCode review, comment preview and verified publication on a dedicated Azure test PR.](docs/assets/live-review-teaser.gif)](docs/DEMO.md)
 
@@ -29,6 +29,10 @@ the Azure portion shows an actual REST read-back in a terminal.*
 
 ## Why AZPR?
 
+- **You decide what gets posted.** Preview the AI's comments, exclude findings
+  you don't want to publish, and adjust severity. AZPR prepares a new preview
+  without rerunning the review. Read it, then publish when ready. Your original
+  review stays intact.
 - **Follow the code beyond the diff.** Reviewers can look up definitions,
   callers and tests using file reads and text search at the selected PR commit,
   without depending on an Azure Code Search index.
@@ -39,10 +43,6 @@ the Azure portion shows an actual REST read-back in a terminal.*
 - **Choose where to spend model effort.** Assign different OpenCode models to
   functional review, risk review and verification, or use one model for all
   roles. Keep a stronger model profile for selected PRs with `/pr-deep`.
-- **Control what reaches the PR.** Preview the summary and inline comments,
-  then publish when ready. The runtime rechecks the PR head, skips comments
-  already published by AZPR and reads new comments back. Automatic publication
-  is available when you opt in.
 - **Configure the Azure connection for your network.** Set a forward proxy and
   additional CA certificates for AZPR's Azure DevOps requests. Model-provider
   connections remain configured in OpenCode.
@@ -58,7 +58,7 @@ for proxy authentication and retention.
 1. Install the npm package using OpenCode's plugin manager:
 
    ```sh
-   opencode plugin add opencode-azure-devops-pr-review@0.2.3
+   opencode plugin add opencode-azure-devops-pr-review@0.3.0
    ```
 
 2. Follow the [quickstart](docs/QUICKSTART.md) to save your PAT in a private
@@ -77,14 +77,26 @@ reviewers, then separate verification. If the completed review has findings to
 comment on, `--preview` prepares their comments in a separate, cancellable run.
 **Nothing is posted by these commands.** Previewing comments also uses a model.
 
-Read the report and preview, then publish from the same conversation:
+Read the report and preview. Before publishing, you can exclude a finding or
+change its severity using IDs from your report, for example:
+
+```text
+/pr-comment REVIEW_ID_FROM_RECEIPT --exclude F-1 --severity F-2=low
+```
+
+F-1 is excluded from the new preview; F-2 stays in the summary as a low-severity
+finding. Adjusting runs comment planning again with a model. Read the whole new
+preview, then publish from the same conversation:
 
 ```text
 /pr-comment REVIEW_ID_FROM_RECEIPT --publish
 ```
 
 Use the review ID from the completed receipt. The command posts the saved
-preview as the PAT owner. For a lighter first pass, use
+preview as the PAT owner and skips existing AZPR markers. For an adjusted review,
+the receipt reports differing earlier text kept on the PR. See
+[adjusting findings](#adjusting-findings-after-a-preview)
+for the complete-list replacement rules. For a lighter first pass, use
 `/pr-quick <PR URL> --preview`; its findings are not independently verified.
 
 ## Choose a review
@@ -210,14 +222,14 @@ Azure DevOps REST API with the runtime's built-in `fetch`.
 Install the npm package with OpenCode's plugin manager:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.2.3
+opencode plugin add opencode-azure-devops-pr-review@0.3.0
 ```
 
 The same release is also a versioned Git package, which needs Git but not the
 npm registry:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.3'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0'
 ```
 
 Add only one of them. Restart OpenCode, then run `/pr-setup` for setup instructions. Native packages
@@ -228,7 +240,7 @@ To select another configuration file, use an absolute path in the host config:
 ```json
 {
   "plugins": [{
-    "package": "opencode-azure-devops-pr-review@0.2.3",
+    "package": "opencode-azure-devops-pr-review@0.3.0",
     "options": { "settingsFile": "/absolute/path/to/azpr/settings.json" }
   }]
 }
@@ -241,14 +253,14 @@ permissions, archive the old installation with its uninstaller, then add the
 package. Keep the PAT file and private state directory in place.
 
 To upgrade a native installation, change the version in its existing `plugins`
-entry, for example from `#v0.2.2` to `#v0.2.3` for the Git package. To move a
+entry, for example from `#v0.2.3` to `#v0.3.0` for the Git package. To move a
 Git installation to npm, replace that entry's Git specification with
-`opencode-azure-devops-pr-review@0.2.3`. Both use the same external settings.
+`opencode-azure-devops-pr-review@0.3.0`. Both use the same external settings.
 Preserve any `options.settingsFile` and other options; keep one AZPR entry.
 Restart the OpenCode service to load the new version. External settings, the
 PAT file and review records stay in place. Exact versions stay pinned, so
 `opencode plugin update` leaves them unchanged. See the
-[0.2.3 release notes](docs/releases/v0.2.3.md) for upgrade details and the
+[0.3.0 release notes](docs/releases/v0.3.0.md) for upgrade details and the
 [0.2.0 release notes](docs/releases/v0.2.0.md) for automatic comments, which
 remain disabled unless you configure `afterReview` or request them with a
 review command flag.
@@ -258,8 +270,8 @@ review command flag.
 <details>
 <summary>Source installation and replacement</summary>
 
-Download the [v0.2.3 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.2.3.tar.gz)
-and extract it, or check out tag `v0.2.3`. The installer needs POSIX `sh` and
+Download the [v0.3.0 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.3.0.tar.gz)
+and extract it, or check out tag `v0.3.0`. The installer needs POSIX `sh` and
 Python 3's standard library. From that source directory:
 
 ```sh
@@ -665,8 +677,8 @@ and a loopback fake Azure DevOps REST service in disposable directories under
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 For a native installation, remove the entry you added, for example
-`opencode plugin remove opencode-azure-devops-pr-review@0.2.3` or
-`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.2.3'`;
+`opencode plugin remove opencode-azure-devops-pr-review@0.3.0` or
+`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0'`;
 the external settings, PAT file and private review state remain available.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
@@ -679,7 +691,7 @@ or personal model selections.
 ## License and releases
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
-release scope, [v0.2.3](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.3)
+release scope, [v0.3.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.3.0)
 for downloads, the [npm package](https://www.npmjs.com/package/opencode-azure-devops-pr-review),
 [v0.2.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.0)
 for the recorded demonstration, and [releasing](docs/RELEASING.md) for the

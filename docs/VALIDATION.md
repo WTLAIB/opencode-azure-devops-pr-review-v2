@@ -1,7 +1,8 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation and the
-0.1.0, 0.2.0, 0.2.1, 0.2.2 and 0.2.3 distributions. Host integration, provider
+0.1.0, 0.2.0, 0.2.1, 0.2.2 and 0.2.3 distributions, and the 0.3.0 release
+candidate. Host integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
@@ -30,6 +31,40 @@ acceptance runs, including the MCP-based runs, are preserved in
 These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
+
+## 0.3.0 release candidate acceptance (2026-10-26)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.1.4. The candidate contains the finding-adjustment workflow merged in
+PR #29, including the final fixes in `d4fd8dd`. Release preparation changes
+the package version and documentation; the runtime, prompts, settings and
+installers are unchanged from that reviewed revision.
+
+- `npm run check` and **417 offline tests** passed, including the adjustment
+  save failure, the final summary's excluded-ID check, and an earlier comment
+  read back after a refused write without a local publication record.
+- All five real-host fixtures passed with isolated profiles and fake model
+  and Azure services: fresh source installation, replacement installation,
+  native packed package installation, comment scale and background compaction.
+  Fresh and native runs cover the authenticating proxy, custom CA, external
+  settings, restart and idempotent publication. The scale fixture reviewed
+  120 files with one overflow split and eight planning sessions, at most two
+  in flight; its largest provider request was 33,419 characters. The
+  background-compaction fixture classified the failure as permanent and ran
+  one functional session.
+- `npm pack --dry-run --json` lists **71 files**, including the entry, runtime,
+  prompts, configuration example and schema, license and 0.3.0 release notes.
+  Tests, private settings and `.local/` records are excluded.
+- These release fixtures make no paid-model request or real Azure publication.
+  The live adjustment runs below used the earlier `cbbed6b` implementation;
+  the subsequent persistence, read-back and final-summary fixes have offline
+  regression tests. Host fixtures exercise the surrounding workflow.
+
+This is a pre-publication record. Public Git installation and clean-source
+archive acceptance are checked on the release candidate; registry integrity
+and installation from npm are checked only after publication, following the
+[releasing guide](RELEASING.md). This record does not claim a published 0.3.0
+package has been tested.
 
 ## Adjusting findings after a preview (2026-10-25)
 
