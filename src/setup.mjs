@@ -9,13 +9,25 @@ import { COMMANDS, modelRef, privateAgent, validateSettings } from './config.mjs
 import { parseUniqueJSON } from './output.mjs';
 import { appendReport } from './session.mjs';
 import { listOf, recordOf, requireMethods } from './host.mjs';
+import { organizationName } from './azure.mjs';
 import { readPatFile, setupAzurePrReview } from './runtime.mjs';
 
 const SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const SETUP_DESCRIPTION = 'Configure AZPR with one model and an existing PAT file; no model or Azure calls';
-const USAGE = '/pr-setup --organization ORG --model PROVIDER/MODEL --pat-file "/absolute/path/to/pat"';
+const USAGE = '/pr-setup --organization ORG --model PROVIDER/MODEL [--pat-file "/absolute/path/to/pat"]';
+const RESTART = 'restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process)';
 const MAX_SETTINGS_BYTES = 1024 * 1024;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** AZPR's directory for user files: $XDG_CONFIG_HOME/azpr, otherwise ~/.config/azpr. */
+function userDirectory(environment) {
+  const root = environment.XDG_CONFIG_HOME || join(environment.HOME || homedir(), '.config');
+  if (!isAbsolute(root)) throw new Error('[AZPR] XDG_CONFIG_HOME must be an absolute path.');
+  return join(root, 'azpr');
+}
+
+/** The PAT file setup uses without --pat-file, where the quickstart creates it. */
+export const defaultPatFile = (environment = process.env) => join(userDirectory(environment), 'pat');
 
 /** Explicit path wins; source installations retain their adjacent settings. */
 export async function settingsFileFor(options = {}, sourceDirectory = SOURCE_DIRECTORY, environment = process.env) {
@@ -30,9 +42,7 @@ export async function settingsFileFor(options = {}, sourceDirectory = SOURCE_DIR
   }
   const legacy = join(sourceDirectory, 'settings.json');
   try { await lstat(legacy); return legacy; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const root = environment.XDG_CONFIG_HOME || join(environment.HOME || homedir(), '.config');
-  if (!isAbsolute(root)) throw new Error('[AZPR] XDG_CONFIG_HOME must be an absolute path.');
-  return join(root, 'azpr', 'settings.json');
+  return join(userDirectory(environment), 'settings.json');
 }
 
 /** Do not expose JSON parser excerpts: an existing profile can contain a PAT. */
@@ -72,8 +82,8 @@ export function parseSetupArguments(text) {
       result[flag] = tokens[++index];
     }
   }
-  if (['--organization', '--model', '--pat-file'].some(flag => !result[flag])) {
-    throw new Error('[AZPR] Supply --organization, --model and --pat-file together. Use /pr-setup --help.');
+  if (['--organization', '--model'].some(flag => !result[flag])) {
+    throw new Error('[AZPR] Supply --organization and --model (--pat-file is optional). Use /pr-setup --help.');
   }
   return result;
 }
@@ -108,8 +118,12 @@ async function readExisting(path) {
   } finally { await handle?.close(); }
 }
 
-/** Atomic, owner-only save; serialize setup calls and preserve unrelated values. */
-export async function saveSetup(context, path, arguments_) {
+/**
+ * Atomic, owner-only save; serialize setup calls and preserve unrelated values.
+ * Without --pat-file, a replacement keeps the PAT file already set and a first
+ * setup uses the default PAT file. Returns the saved organization and PAT file.
+ */
+export async function saveSetup(context, path, arguments_, environment = process.env) {
   const previous = await readExisting(path);
   if (previous !== null && !arguments_['--replace']) {
     throw new Error('[AZPR] Settings already exist. Add --replace to change organization, PAT file and all review/quick model slots while keeping other settings.');
@@ -120,16 +134,24 @@ export async function saveSetup(context, path, arguments_) {
     throw new Error('[AZPR] Repair models and azure objects in settings.json before setup; existing data was preserved.');
   }
   const model = arguments_['--model'];
-  const patFile = arguments_['--pat-file'];
+  const organization = organizationName(arguments_['--organization']);
+  const kept = typeof raw.azure?.patFile === 'string' && raw.azure.patFile ? raw.azure.patFile : '';
+  const patFile = arguments_['--pat-file'] ?? (kept || defaultPatFile(environment));
   if (typeof patFile !== 'string' || !isAbsolute(patFile) || resolve(patFile) === resolve(path)) {
     throw new Error('[AZPR] --pat-file must name an absolute path separate from settings.json.');
   }
   const next = { ...raw, models: { ...raw.models,
     review: { functional: model, risk: model, verifier: model }, quick: { reviewer: model } },
-    azure: { ...raw.azure, organization: arguments_['--organization'], pat: '', patFile } };
+    azure: { ...raw.azure, organization, pat: '', patFile } };
   validateSettings(next);
   await checkModel(context, model);
-  await readPatFile(patFile);
+  try { await readPatFile(patFile); }
+  catch (error) {
+    if (arguments_['--pat-file'] !== undefined) throw error;
+    // Name the file setup chose, so the reader knows where to put the PAT.
+    const problem = error.message.replace(/^\[AZPR\] azure\.patFile /, '');
+    throw new Error(`[AZPR] No --pat-file was given, and the ${kept ? 'PAT file in the current settings' : 'default PAT file'} ${patFile} ${problem} Create it as the quickstart shows, or name another file with --pat-file.`);
+  }
   const parent = dirname(path);
   await mkdir(parent, { recursive: true, mode: 0o700 });
   const parentInfo = await lstat(parent);
@@ -150,6 +172,7 @@ export async function saveSetup(context, path, arguments_) {
     await handle?.close();
     if (acquired) await unlink(lock);
   }
+  return { organization, patFile };
 }
 
 async function writeTemporary(path, text) {
@@ -157,16 +180,18 @@ async function writeTemporary(path, text) {
   try { await handle.writeFile(text); await handle.sync(); } finally { await handle.close(); }
 }
 
-async function guide(context, path, problem) {
-  let catalog = [];
+async function guide(context, path, problem, environment) {
+  let catalog = [], patFile;
   try { catalog = (listOf(await context.model.list()) ?? []).filter(item => item.enabled !== false && item.capabilities?.tools === true); } catch { /* Help remains usable before provider setup. */ }
+  try { patFile = defaultPatFile(environment); } catch { patFile = '$XDG_CONFIG_HOME/azpr/pat'; }
   const models = catalog.slice(0, 12).map(item => `${item.providerID}/${item.id}`);
   return `[AZPR] SETUP${problem ? ' REQUIRED' : ''}\nSettings: ${path}\n${problem ? `Problem when OpenCode loaded AZPR: ${problem}\n` : ''}\n` +
     `1. Connect your provider in OpenCode and choose one tool-capable model ID (${models.length ? models.join(', ') : 'run opencode models'}).\n` +
-    '2. Create an Azure DevOps PAT for one organization with Code (Read) and Pull Request Threads (Read & write). Keep it alone in an existing regular file owned by you, with mode 600; never paste it into this conversation.\n' +
+    `2. Create an Azure DevOps PAT for one organization with Code (Read) and Pull Request Threads (Read & write). Keep it alone in a regular file owned by you, with mode 600 (by default ${patFile}); never paste it into this conversation.\n` +
     `3. Run ${USAGE}\n\n` +
+    '--organization also takes a PR or organization URL. Without --pat-file, setup uses the default PAT file, or with --replace the PAT file already set. ' +
     'The selected model fills the three review roles and the quick reviewer. Deep remains unchanged (off for a new profile). Existing settings require --replace; other settings are kept. No model request or Azure request is made.\n' +
-    'After saving, restart OpenCode and run /pr-check <PR URL>. Settings changes do not affect reviews already running.';
+    `After saving, ${RESTART}, then run /pr-check <PR URL>. Settings changes do not affect reviews already running.`;
 }
 
 /**
@@ -192,7 +217,8 @@ async function settingsProblem(path) {
 
 /** Missing/invalid settings expose only setup and blocked command explanations, with the reason. */
 export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, testOptions = {}) {
-  const path = await settingsFileFor(context.options ?? {}, sourceDirectory);
+  const { environment = process.env, ...runtimeOptions } = testOptions;
+  const path = await settingsFileFor(context.options ?? {}, sourceDirectory, environment);
   const { problem, disabled } = await settingsProblem(path);
   const blocked = Boolean(problem);
   if (disabled) return async () => {};
@@ -210,12 +236,14 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
       let text;
       try {
         const arguments_ = parseSetupArguments(event.prompt.text ?? '');
-        if (arguments_ === null) text = await guide(context, path, problem);
+        if (arguments_ === null) text = await guide(context, path, problem, environment);
         else {
           if (pending) throw new Error('[AZPR] Another setup is active.');
           pending = true;
-          try { await saveSetup(context, path, arguments_); } finally { pending = false; }
-          text = `[AZPR] SETTINGS SAVED\nSettings: ${path}\nRestart OpenCode, then run /pr-check <PR URL>. No model or Azure request was made. Existing reviews keep their original settings.`;
+          let saved;
+          try { saved = await saveSetup(context, path, arguments_, environment); } finally { pending = false; }
+          text = `[AZPR] SETTINGS SAVED\nSettings: ${path}\nOrganization: ${saved.organization}; PAT file: ${saved.patFile}\n` +
+            `To load them, ${RESTART}, then run /pr-check <PR URL>. No model or Azure request was made. Existing reviews keep their original settings.`;
         }
       } catch (error) {
         // OS errors may include file contents only through custom providers; report codes, not arbitrary text.
@@ -225,11 +253,11 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
     } });
     if (blocked) for (const name of Object.keys(COMMANDS)) editor.add({ name, description: 'AZPR setup required; run /pr-setup', async execute(event) {
       await appendReport(context, { sessionID: event.sessionID,
-        text: `[AZPR] SETUP REQUIRED\nNo review or Azure request was started. Settings at ${path} could not be used when OpenCode loaded AZPR: ${problem} Run /pr-setup --help; repair an existing settings file if necessary, then restart OpenCode.` });
+        text: `[AZPR] SETUP REQUIRED\nNo review or Azure request was started. Settings at ${path} could not be used when OpenCode loaded AZPR: ${problem} Run /pr-setup --help; repair an existing settings file if necessary, then ${RESTART}.` });
     } });
   });
   let cleanup;
-  try { if (!blocked) cleanup = await setupAzurePrReview(context, sourceDirectory, { ...testOptions, settingsPath: path }); }
+  try { if (!blocked) cleanup = await setupAzurePrReview(context, sourceDirectory, { ...runtimeOptions, settingsPath: path }); }
   catch (error) { await registration.dispose(); throw error; }
   return async () => { await cleanup?.(); await registration.dispose(); };
 }

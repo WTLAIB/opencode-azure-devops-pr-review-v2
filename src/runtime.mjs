@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, MODES, ROLES, PROMPTS, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, commentSlot, patProblem } from './config.mjs';
+import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, commentSlot, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { TESTED_HOST_VERSION, fetchTransportSupported, hostCapabilities, listOf, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals } from './host.mjs';
+import { TESTED_HOST_VERSION, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -270,9 +270,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const signal = run.controller.signal;
     let now;
     try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { throw new Error('[AZPR] settings.json is not readable.'); }
-    if (now !== state.raw) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart OpenCode to use the new settings; running reviews are unaffected.');
+    if (now !== state.raw) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new settings; running reviews are unaffected.');
     if (settings.azure.patFile && await scoped(() => readPatFile(settings.azure.patFile), signal) !== pat) {
-      throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart OpenCode to use the new PAT; running reviews are unaffected.');
+      throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new PAT; running reviews are unaffected.');
     }
     await checkCommands(signal);
     await pinAgents(run.profile, signal);
@@ -728,6 +728,27 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const ownerOf = sessionID => [...completed.values()].find(review => review.reportSessions.has(sessionID))?.origin
     ?? [...runs.values()].find(run => run.stages.some(stage => stage.sessionID === sessionID))?.origin ?? sessionID;
 
+  // Which installation answers, and other AZPR entries the host configured but does not run (such as a second version).
+  async function installationCheck(run) {
+    if (!capabilities.pluginList) return { name: 'AZPR', ok: true, detail: 'This OpenCode does not list its plugins, so the running version is not shown.' };
+    let entries;
+    try {
+      entries = pluginEntries(await bounded(() => context.plugin.list(), run.controller.signal),
+        { id: PLUGIN_ID, ownPackage: target => packageNamed(target, PACKAGE_NAME, REPOSITORY) });
+    } catch (error) {
+      if (!run.active) throw error;
+      return { name: 'AZPR', ok: true, detail: `The plugin list could not be read (${errorText(error)}).` };
+    }
+    if (!entries) return { name: 'AZPR', ok: true, detail: 'OpenCode returned no plugin list, so the running version is not shown.' };
+    const running = entries.running ? `Running ${pluginSourceLabel(entries.running.source)}` : 'This installation is not listed as running';
+    if (!entries.others.length) return { name: 'AZPR', ok: true, detail: `${running}.` };
+    // The advice comes first: a long package specification may be cut off at the end of the row.
+    // Host errors can quote the entry's specification, so mask credentials before shortening them.
+    const others = entries.others.map(entry => `${pluginSourceLabel(entry.source)}${typeof entry.state?.error === 'string' ? ` (${withoutCredentials(entry.state.error).slice(0, 80)})` : ''}`);
+    return { name: 'AZPR', ok: true, warning: true,
+      detail: `Another AZPR entry is configured but not running; keep one (see Upgrading in the README). ${running}; not running: ${others.join('; ')}.` };
+  }
+
   async function runCheck(run, request) {
     const checks = [];
     for (const problem of run.readiness?.modelProblems ?? []) checks.push({ name: 'Model', ok: false, detail: problem });
@@ -744,6 +765,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     else if (modelSlots('deep').every(slot => settings.models.deep[slot] === settings.models.review[slot])) {
       checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models there for the PRs that need them.' });
     }
+    checks.push(await installationCheck(run));
     // What follows a COMPLETE review of each mode; automatic publication posts as the PAT owner.
     const publishing = MODES.filter(mode => settings.afterReview[mode] === 'publish').map(mode => `/pr-${mode}`);
     const listed = publishing.length > 1 ? `${publishing.slice(0, -1).join(', ')} or ${publishing.at(-1)}` : publishing[0];
@@ -797,7 +819,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (request.target.organization.toLowerCase() !== settings.azure.organization.toLowerCase()) {
       throw new Error(`[AZPR] The PR belongs to organization "${request.target.organization}", but azure.organization is "${settings.azure.organization}". Use a PAT and settings for that organization.`);
     }
-    if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] /pr-deep runs the review with the models of models.deep: set all three roles${settings.deepPartial ? ' (only some are set)' : ''}, preferably to models stronger than models.review, then restart OpenCode. No fallback to review models.`);
+    if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] /pr-deep runs the review with the models of models.deep: set all three roles${settings.deepPartial ? ' (only some are set)' : ''}, preferably to models stronger than models.review, then restart the OpenCode service (opencode service restart). No fallback to review models.`);
     if (mode === 'quick' && !settings.quickReady) throw new Error('[AZPR] Set models.quick.reviewer before /pr-quick. No fallback to other models.');
     // /pr-check checks the review profile's models.
     const profile = mode === 'check' ? 'review' : mode;

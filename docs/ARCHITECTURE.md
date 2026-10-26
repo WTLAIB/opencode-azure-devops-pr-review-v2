@@ -40,7 +40,10 @@ keep configuration outside the package cache, at an explicit absolute
 `options.settingsFile` or `${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`.
 Source installations retain their adjacent settings file. `/pr-setup` provides
 guidance before settings exist, validates one model and an existing private PAT
-file, and writes settings only on the explicit setup command. It makes no model
+file, and writes settings only on the explicit setup command. Without
+`--pat-file` it uses the PAT file already set (with `--replace`) or
+`${XDG_CONFIG_HOME:-~/.config}/azpr/pat`, and `--organization` also accepts a
+PR or organization URL. It makes no model
 or Azure request. Changes take effect after a restart; the loaded runtime and
 its active grants do not change in place. While settings are missing or
 unusable, the review commands answer `SETUP REQUIRED` and name the problem
@@ -401,7 +404,10 @@ Reviewers have no Azure DevOps write tool at all; only the runtime writes.
 (`permission.hook`, `tool.transform`) and holds the host continuation text.
 Without `permission.hook` the project boundary for native read tools is left to
 the host's own permission rules; `/pr-check` shows a WARNING row and reviews
-still run.
+still run. With `plugin.list`, `/pr-check` names the installation that runs
+and warns about any other AZPR entry the host configured but does not run,
+such as a second version that OpenCode 2.1.4 lists as a duplicate plugin ID;
+a host without it gets an information row.
 Receipts note when the detected OpenCode version differs from the tested one
 (`TESTED_HOST_VERSION`, 2.1.4).
 REST paths and the pinned api-version live only in `azure.mjs`; see

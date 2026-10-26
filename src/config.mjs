@@ -5,6 +5,11 @@ import { REVIEW_TOOL_NAMES } from './review-tools.mjs';
 export const MODES = Object.freeze(['review', 'deep', 'quick']);
 export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'review', 'pr-deep': 'deep', 'pr-quick': 'quick', 'pr-stop': 'stop', 'pr-comment': 'comment' });
 
+// How the host identifies this plugin and its published packages in its plugin list.
+export const PLUGIN_ID = 'azpr';
+export const PACKAGE_NAME = 'opencode-azure-devops-pr-review';
+export const REPOSITORY = 'WTLAIB/opencode-azure-devops-pr-review-v2';
+
 // Native tools no private role may use. Shell is governed by the `shell` setting.
 export const NATIVE_TOOL_PERMISSIONS = Object.freeze({
   execute: 'deny', edit: 'deny', write: 'deny', patch: 'deny', skill: 'deny', subagent: 'deny',

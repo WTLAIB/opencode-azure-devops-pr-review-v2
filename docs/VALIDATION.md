@@ -1,8 +1,8 @@
 # Validation
 
-This page records validation of the Azure DevOps REST implementation and the
-0.1.0, 0.2.0, 0.2.1, 0.2.2 and 0.2.3 distributions, and the 0.3.0 release
-candidate. Host integration, provider
+This page records validation of the Azure DevOps REST implementation, the
+0.1.0 through 0.3.0 distributions and the 0.3.1 release candidate. Host
+integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
 acceptance runs, including the MCP-based runs, are preserved in
@@ -31,6 +31,64 @@ acceptance runs, including the MCP-based runs, are preserved in
 These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
+
+## 0.3.1 release candidate acceptance (2026-10-27)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.1.4. The candidate contains the installation, setup and upgrade changes
+of PR #31 and the fixes from its review (commits `6e2c71e` and `4b3b6af`).
+Release preparation changes the package version, changelog, release notes,
+version pins and documentation; the runtime, prompts, settings and installers
+are those of the reviewed commits.
+
+- `npm run check` and **420 offline tests** passed, including the `/pr-check`
+  AZPR row, masked package specifications and the `/pr-setup` defaults.
+- All five real-host fixtures passed with isolated profiles and fake model and
+  Azure services: fresh source installation, replacement installation, native
+  packed package installation, comment scale and background compaction. The
+  native run also covers setup with the default PAT file and a PR URL, the
+  AZPR row and a second AZPR entry that stays unloaded. The scale fixture's
+  largest provider request was 33,419 characters, as for 0.3.0.
+- `npm pack --dry-run --json` lists **76 files**, adding the 0.3.1 release
+  notes. Tests, private settings and `.local/` records are excluded.
+- No paid-model request or real Azure publication was made: setup and the
+  AZPR row make neither, and reviews and publication are unchanged from 0.3.0.
+
+This is a pre-publication record. Public Git installation and clean-source
+archive acceptance are checked on the release candidate; registry integrity
+and installation from npm are checked only after publication, following the
+[releasing guide](RELEASING.md).
+
+## Installation, setup and upgrades on OpenCode 2.1.4 (2026-10-27)
+
+Environment: Ubuntu 22.04.5 under WSL2, OpenCode CLI 2.1.4 and the published
+packages 0.2.2, 0.2.3 and 0.3.0 from npm. Each probe used an isolated profile
+(its own `XDG_*` directories and `OPENCODE_CONFIG_DIR`) with `opencode serve`
+and OpenCode's file watcher on, as in a normal installation. Where a proxy was
+set, a loopback proxy recorded and refused every request. No model or Azure
+DevOps request was made.
+
+| Step | Observed |
+| --- | --- |
+| `opencode plugin add …@0.2.3` while the server runs | Installed in 1.2 s; the running server listed the seven commands 0.5 s later, without a restart. |
+| `opencode plugin add …@0.3.0` with 0.2.3 configured | A second entry: 0.2.3 kept running and 0.3.0 was listed as failed with `Duplicate plugin ID: azpr`. |
+| `opencode plugin remove …@0.2.3` | 0.3.0 was running 0.5 s later, without a restart. |
+| `/pr-setup` saved settings | The commands still answered `SETUP REQUIRED` until the plugin was loaded again. |
+| Changing the version in the `plugins` entry | The running server switched versions within 0.5 s. A long-running managed service on the same machine had likewise loaded each of three earlier entry changes before its planned restart. |
+| The same change to a version not yet installed, with the server behind the refusing proxy | The server downloaded it itself (`CONNECT registry.npmjs.org:443` through its proxy). AZPR's commands disappeared, and installing the package from the terminal did not bring them back until the server restarted. |
+| `plugin add` with `HTTPS_PROXY`, `npm_config_https_proxy` or `https-proxy` in `~/.npmrc` | Each sent `CONNECT registry.npmjs.org:443` to the proxy, and the refusal failed the command (HTTP 403). `plugin add` writes the configuration only after a successful download. |
+
+`tests/host-v2-smoke.mjs --native` now also checks on the exact host that
+`/pr-setup` takes the organization from a PR URL and uses the default PAT file
+without `--pat-file`, that `/pr-check` names the running package, and that a
+second AZPR entry stays unloaded (`Duplicate plugin ID: azpr`) while
+`/pr-check` warns about it. The fresh and replacement runs check that the row
+names a local source installation.
+
+Not covered: the terminal UI's command list after a reload, what a reload does
+to a command that is running, authenticating or NTLM proxies and company CAs
+for package downloads, Git-package downloads through a proxy, and proxy
+inheritance between Windows and WSL.
 
 ## 0.3.0 release candidate acceptance (2026-10-26)
 
@@ -77,7 +135,10 @@ This is a pre-publication record. Public Git installation and clean-source
 archive acceptance are checked on the release candidate; registry integrity
 and installation from npm are checked only after publication, following the
 [releasing guide](RELEASING.md). This record does not claim a published 0.3.0
-package has been tested.
+package has been tested. After publication on 2026-10-26, the registry
+package's integrity matched the package built from the tag, and installing
+`opencode-azure-devops-pr-review@0.3.0` and the `v0.3.0` Git tag passed
+`host-v2-smoke.mjs --native --package`.
 
 ## Adjusting findings after a preview (2026-10-25)
 

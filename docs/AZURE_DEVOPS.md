@@ -16,21 +16,22 @@ other component's configuration.
    Global PATs ("All accessible organizations") stop working on 2026-12-01; use
    an organization-scoped token. `Code: Read & write` also works but allows
    pushing code, which AZPR never needs.
-2. Put the PAT alone in a file only you can read, set the organization and
-   that file's absolute path in the installed `plugins/azpr-v2/settings.json`,
-   and restart OpenCode:
-
-   ```sh
-   umask 077 && mkdir -p ~/.config/azpr
-   read -rs -p 'Azure DevOps PAT: ' AZPR_PAT && printf '%s' "$AZPR_PAT" > ~/.config/azpr/pat; unset AZPR_PAT; echo
-   ```
+2. Put the PAT alone in a file only you can read, as the
+   [quickstart](QUICKSTART.md#2-save-the-pat-in-a-private-file-terminal) shows,
+   then run `/pr-setup --organization YOUR_ORGANIZATION --model PROVIDER/MODEL`
+   (add `--pat-file` for a file other than `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`).
+   To edit the settings by hand instead, use the file `/pr-setup` names: an
+   explicit `options.settingsFile`; `settings.json` next to a source
+   installation (`plugins/azpr-v2/settings.json`); otherwise
+   `${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`:
 
    ```json
    { "azure": { "organization": "YOUR_ORGANIZATION", "patFile": "/home/YOU/.config/azpr/pat" } }
    ```
 
    `"pat": "YOUR_PAT"` in place of `patFile` also works but keeps the secret in
-   `settings.json`; set one of the two, not both.
+   `settings.json`; set one of the two, not both. Restart the OpenCode service
+   (`opencode service restart`) after saving.
 
 3. Run `/pr-check <PR URL>`; it reads the PR, its changes, one HEAD and one BASE
    file and the discussions without any model request.
@@ -52,7 +53,7 @@ any request.
 When dev.azure.com is reachable only through a proxy, a direct connection fails
 and `/pr-check` reports `network error (ConnectionRefused)` (or a timeout, or
 `ENOTFOUND`) under PR metadata. Point AZPR at the proxy in `settings.json` and
-restart OpenCode:
+restart the OpenCode service:
 
 ```json
 { "azure": { "proxy": "http://proxy.example.com:8080" } }
@@ -80,14 +81,16 @@ restart OpenCode:
   intercept the connection can then read the PAT, so use it only when the CA
   certificate cannot be obtained. `/pr-check` shows a WARNING row while it is
   off.
-- Settings and the CA file are read when OpenCode loads AZPR; restart OpenCode
-  after changing either. `/pr-check` lists the proxy (without credentials) and
+- Settings and the CA file are read when OpenCode loads AZPR; restart the
+  OpenCode service after changing either. `/pr-check` lists the proxy
+  (without credentials) and
   the number of extra CA certificates.
 - Without `azure.proxy`, OpenCode's runtime (Bun) still honours `HTTPS_PROXY`
   and `NO_PROXY` in the OpenCode process environment, and `NODE_EXTRA_CA_CERTS`
   for extra CA certificates. Those apply to every connection OpenCode makes,
   including model providers; `azure.proxy` and `azure.caFile` limit the change
-  to AZPR.
+  to AZPR. See [company networks](ENTERPRISE.md#company-networks) for package
+  downloads and the service environment.
 - The three settings rely on the per-request proxy and TLS options of Bun's
   `fetch`. A runtime whose `fetch` would ignore them makes AZPR refuse to load
   instead of connecting directly.
@@ -200,7 +203,7 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 | `Azure DevOps refused … (HTTP 403 …)` | The PAT lacks a scope or the user lacks access to the project or repository. |
 | `azure.patFile could not be used (…)` | The file is missing, a symbolic link, not a regular file, owned by another user, accessible by group or others (`chmod 600` it) or larger than 4 KB. |
 | `azure.patFile must hold only the Azure DevOps PAT (…)` | The file is empty, holds more than one token or still a placeholder. |
-| `azure.patFile changed since OpenCode loaded it` | Restart OpenCode to use the new PAT; running commands keep the old one. |
+| `azure.patFile changed since OpenCode loaded it` | Restart the OpenCode service to use the new PAT; running commands keep the old one. |
 | `Azure DevOps could not find … (HTTP 404 TF…)` | Wrong project, repository, PR ID or path; Azure's error code is shown. |
 | `The PR belongs to organization "x", but azure.organization is "y"` | Configure the PAT and organization of that PR. |
 | `… did not finish within the per-call timeout` | Azure DevOps or the network did not answer; reads were retried. |

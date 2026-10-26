@@ -44,7 +44,51 @@ export function hostCapabilities(context) {
     toolTransform: fn('tool.transform'),
     sessionRemove: fn('session.remove'),
     eventSubscribe: fn('event.subscribe'),
+    pluginList: fn('plugin.list'),
   };
+}
+
+/** Whether a package specification names the npm package, or the Git repository (github:, git URLs, owner/repo). */
+export function packageNamed(target, name, repository) {
+  const spec = typeof target === 'string' ? target.trim() : '';
+  if (spec === name || spec.startsWith(`${name}@`)) return true;
+  const repo = repository.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[:/])${repo}(?:\\.git)?(?:[?#]|$)`).test(spec.toLowerCase());
+}
+
+/**
+ * This plugin's entries in the host's plugin list. OpenCode 2.1.4 lists
+ * { id?, source: { type: package|local|builtin|sdk, target?, version? },
+ * state: { status: active|failed, error? } } and keeps only the first entry
+ * of a plugin ID: a second one is listed as failed with "Duplicate plugin ID".
+ * `running` is the active entry with the plugin's ID; `others` are the other
+ * entries with that ID or naming one of its packages. null without a list.
+ */
+export function pluginEntries(value, { id, ownPackage }) {
+  const entries = listOf(value);
+  if (!entries) return null;
+  const ours = entries.filter(entry => isRecord(entry) && (entry.id === id || (entry.source?.type === 'package' && ownPackage(entry.source.target))));
+  const running = ours.find(entry => entry.id === id && entry.state?.status === 'active') ?? null;
+  return { running, others: ours.filter(entry => entry !== running) };
+}
+
+/**
+ * Text with each URL's user name, password and query string masked: a Git or
+ * tarball package specification, and host messages that quote one, can carry
+ * a token there.
+ */
+export function withoutCredentials(text) {
+  return String(text ?? '').replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#]*@)?([^\s?#]*)(\?[^\s#]*)?/gi,
+    (match, scheme, userinfo, rest, query) => `${scheme}${userinfo ? '***@' : ''}${rest}${query ? '?***' : ''}`);
+}
+
+/** A path- and credential-free label for a plugin list entry's source: its package specification and installed version or commit. */
+export function pluginSourceLabel(source) {
+  if (source?.type === 'local') return 'a local source installation';
+  if (source?.type !== 'package' || typeof source.target !== 'string') return 'an entry of unknown origin';
+  const version = typeof source.version === 'string' && source.version && !source.target.endsWith(`@${source.version}`) && !source.target.endsWith(`#${source.version}`)
+    ? /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(source.version) ? `commit ${source.version.slice(0, 7)}` : `version ${source.version}` : '';
+  return `${withoutCredentials(source.target)}${version ? ` (${version})` : ''}`;
 }
 
 /**

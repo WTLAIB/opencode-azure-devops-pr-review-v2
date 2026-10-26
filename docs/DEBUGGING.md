@@ -42,7 +42,7 @@ packages, or installed `plugins/azpr-v2/settings.json` for source installs):
 { "debug": { "enabled": true, "directory": "", "keepRuns": 20 }, "returnReport": "full" }
 ```
 
-Restart OpenCode after editing. An empty directory selects
+Restart the OpenCode service (`opencode service restart`) after editing. An empty directory selects
 `${XDG_STATE_HOME:-~/.local/state}/opencode/azpr-v2-debug/`; a relative path is
 resolved against the active project. Each run creates a unique owner-only
 directory named in the receipt. Debug data can contain source, PR details and
@@ -117,16 +117,16 @@ Common receipts:
 
 | Message | Next step |
 | --- | --- |
-| `Azure DevOps rejected the PAT for organization …` | Renew or correct the PAT in `azure.pat` or the file named by `azure.patFile` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart OpenCode. |
+| `Azure DevOps rejected the PAT for organization …` | Renew or correct the PAT in `azure.pat` or the file named by `azure.patFile` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart the OpenCode service. |
 | `The provider reports the usage quota as used up (provider.quota)` / `OpenCode reports the free model's usage limit as reached (provider.free-limit)` | The stage failed without a new-session retry, which would fail the same way. Choose another model in the settings, or wait until the provider's quota or the free limit resets. |
-| `azure.patFile could not be used …` / `azure.patFile changed since OpenCode loaded it` | Make it a regular file you own with only the PAT (`chmod 600`), or restart OpenCode after replacing it. |
+| `azure.patFile could not be used …` / `azure.patFile changed since OpenCode loaded it` | Make it a regular file you own with only the PAT (`chmod 600`), or restart the OpenCode service after replacing it. |
 | `Azure DevOps refused … (HTTP 403 …)` | Add the missing PAT scope or project/repository access. |
 | `network error (ConnectionRefused)` with a hint to set `azure.proxy` | dev.azure.com is reachable only through a proxy; set `azure.proxy` (see [proxies](AZURE_DEVOPS.md#proxies-and-tls-inspection)). |
 | `the server's TLS certificate was not accepted (…)` | The proxy inspects HTTPS; set `azure.caFile` to its root CA certificate. |
 | `A proxy refused … (HTTP 407)` / `A proxy or gateway answered …` | The proxy wants credentials in `azure.proxy`, or it blocks dev.azure.com. |
 | `azpr_read_file failed: …` in a stage's tool errors | The model asked for a missing path or invalid range; the review continues and reports the gap. |
 | `permission.rejected` … `cannot use paths outside the local OpenCode project` | A reviewer used a native tool on a repository path; it was refused instead of waiting for an approval and the model was pointed to the azpr tools. |
-| `settings.json changed since OpenCode loaded it` | Restart OpenCode. Running commands were unaffected. |
+| `settings.json changed since OpenCode loaded it` | Restart the OpenCode service. Running commands were unaffected. |
 | `Host configuration changed private agent …` | Another config or plugin changed an `azpr-*` agent; resolve it and reload. |
 | `No completed review is available for this conversation` | Run the comment command in the review's conversation, or run a new review. |
 | `PR source commit changed after the review` | The PR got new commits; run a new review before commenting. |
@@ -138,7 +138,9 @@ Common receipts:
 | `Automatic … skipped: another AZPR command is running in this conversation or on this PR` | Wait for that command, then run the `/pr-comment` command the notice names. |
 | `Automatic comments are off for this review (stopped: …)` on a COMPLETE receipt | `/pr-stop`, a timeout or an unload arrived while the finished review's report was delivered. The review is kept; no comment step started. Run `/pr-comment <id>` to preview it. |
 | `Unknown option after the PR URL` / `Use at most one of --preview, --publish or --no-comment` | Only these flags may follow the URL, at most one; start your context with a word. Nothing was started. |
-| `SETUP REQUIRED` … `could not be used when OpenCode loaded AZPR: …` | The reason names the problem (no file yet, an unreadable file, invalid JSON, a setting that fails validation or an unusable PAT file) without its value. Fix it, then restart OpenCode. |
+| `SETUP REQUIRED` … `could not be used when OpenCode loaded AZPR: …` | The reason names the problem (no file yet, an unreadable file, invalid JSON, a setting that fails validation or an unusable PAT file) without its value. Fix it, then restart the OpenCode service. |
+| `No --pat-file was given, and the default PAT file … could not be used` | `/pr-setup` looked for the PAT in `${XDG_CONFIG_HOME:-~/.config}/azpr/pat` (or, with `--replace`, the PAT file already set). Create it as the [quickstart](QUICKSTART.md#2-save-the-pat-in-a-private-file-terminal) shows, or name your file with `--pat-file`. Nothing was saved. |
+| `/pr-check` row `AZPR` WARNING: `Another AZPR entry is configured but not running` | Two `plugins` entries load AZPR, usually after `opencode plugin add` with a new version; OpenCode runs the first and lists the other as a duplicate. Remove the one you do not want (see [upgrading](../README.md#upgrading)). |
 | `This review's private data is no longer available` | The review was evicted or its data removed; run a new review. |
 | Skipped finding: `The comment planner repeated a checkpoint without progress` or `did not finish the page in 4 sessions` | The planner kept asking for more reading on that page; the finding has no inline comment but stays in the summary index, and the other comments were planned as usual. Inspect the page's planning stages; `/pr-comment <id>` (a preview) plans again. |
 | `Stage inactivity watchdog stopped this stage: no activity for … s after …` (`failure=idle`, plus an inactivity notice) | The model stream, a tool or OpenCode stopped responding for `workflow.stageIdleSeconds`; the stage ran again in a new session. Repeated stops after `model request N was sent` point at the provider. Raise the setting only if a model really needs longer for one answer (live stages so far stayed under 151 s without any event). |

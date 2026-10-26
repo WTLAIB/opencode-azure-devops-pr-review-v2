@@ -460,7 +460,7 @@ lost advice across stages, unjustified defect severity and filler topic sections
 
 A release report distinguishes offline checks, exact-host fixtures, live service
 behavior, factual/presentation quality and remote publication. Mark unexercised
-cases explicitly. See [comment acceptance](COMMENTING.md#acceptance-test-before-real-use),
+cases explicitly. See [comment acceptance](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/blob/c450fddef5c90d16dac03373052d89febdb8f2fd/docs/COMMENTING.md#acceptance-test-before-real-use),
 [project verification](VERIFICATION.md) and [debugging](DEBUGGING.md) for details.
 
 ## 2026-10-06 prompt-only BASE/HEAD direction acceptance
@@ -651,7 +651,7 @@ change that historical run, recreate its cache, or verify live publication.
 
 No additional live model review or publication tested these post-comparison
 changes. Cold MCP tool-registration timing remains unresolved; see
-[startup diagnostics](DEBUGGING.md#connected-mcp-before-tool-registration).
+[startup diagnostics](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/blob/c450fddef5c90d16dac03373052d89febdb8f2fd/docs/DEBUGGING.md#connected-mcp-before-tool-registration).
 
 ## 2026-10-05 remote-source guidance and provider diagnostics
 

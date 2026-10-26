@@ -84,6 +84,7 @@ async function fixture(t, opts = {}) {
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => value.slice(8).split('#')[0]))].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
+    ...(opts.plugins ? { plugin: { async list() { return typeof opts.plugins === 'function' ? opts.plugins() : { data: clone(opts.plugins) }; } } } : {}),
     ...(opts.events === false ? {} : { event: { subscribe() {
       const queue = [], waiting = [];
       const feed = event => { const next = waiting.shift(); if (next) next({ value: event, done: false }); else queue.push(event); };
@@ -1020,7 +1021,7 @@ test('a configured model variant is bound to its reviewer sessions; an unknown v
 test('deep mode requires all three deep models', async t => {
   const f = await fixture(t, { settings(s) { s.models.deep = { functional: 'fixture/deep-functional', risk: '', verifier: '' }; } });
   await assert.rejects(f.commands.get('pr-deep').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }),
-    /set all three roles \(only some are set\), preferably to models stronger than models\.review, then restart OpenCode\. No fallback/);
+    /set all three roles \(only some are set\), preferably to models stronger than models\.review, then restart the OpenCode service \(opencode service restart\)\. No fallback/);
   const g = await fixture(t);
   assert.match(await g.command('pr-deep'), /\] COMPLETE/);
   assert.ok(g.sessionsFor('azpr-deep-verifier').length);
@@ -1102,6 +1103,31 @@ test('azure.proxy, azure.caFile and azure.verifyTls reach every Azure DevOps req
   assert.doesNotMatch(await plain.command('pr-check'), /proxy|TLS verification|Project boundary/, 'Defaults add nothing.');
 });
 
+test('/pr-check names the running installation and warns about another AZPR entry that does not run', async t => {
+  const running = { id: 'azpr', source: { type: 'package', target: 'opencode-azure-devops-pr-review@0.3.0', version: '0.3.0' }, state: { status: 'active' }, features: { server: true } };
+  const builtin = { id: 'opencode.builtin', source: { type: 'builtin' }, state: { status: 'active' }, features: { server: true } };
+  const check = async plugins => (await fixture(t, plugins === undefined ? {} : { plugins })).command('pr-check');
+  assert.match(await check(), /\| AZPR \| ok \| This OpenCode does not list its plugins, so the running version is not shown\. \|/);
+  const single = await check([builtin, running]);
+  assert.match(single, /\] READY/);
+  assert.match(single, /\| AZPR \| ok \| Running opencode-azure-devops-pr-review@0\.3\.0\. \|/);
+  const duplicate = { id: 'azpr', source: { type: 'package', target: 'opencode-azure-devops-pr-review@0.3.1', version: '0.3.1' }, state: { status: 'failed', error: 'Duplicate plugin ID: azpr' }, features: { server: true } };
+  const twice = await check([builtin, running, duplicate]);
+  assert.match(twice, /\] READY/, 'A second entry is a warning, not a failure.');
+  assert.match(twice, /\| AZPR \| WARNING \| Another AZPR entry is configured but not running; keep one \(see Upgrading in the README\)\. Running opencode-azure-devops-pr-review@0\.3\.0; not running: opencode-azure-devops-pr-review@0\.3\.1 \(Duplicate plugin ID: azpr\)\. \|/);
+  const local = { id: 'azpr', source: { type: 'local', path: '/home/someone/.config/opencode/plugins/azpr-v2' }, state: { status: 'active' }, features: { server: true } };
+  const mixed = await check([local, { ...duplicate, source: running.source }]);
+  assert.match(mixed, /\| AZPR \| WARNING \| Another AZPR entry .* Running a local source installation; not running: opencode-azure-devops-pr-review@0\.3\.0 \(Duplicate plugin ID: azpr\)\. \|/);
+  assert.doesNotMatch(mixed, /someone/, 'No local path is shown.');
+  assert.match(await check(() => { throw new Error('plugin list unavailable'); }), /\] READY[\s\S]*\| AZPR \| ok \| The plugin list could not be read \(plugin list unavailable\)\. \|/);
+  // A Git specification with a token, quoted again by the host's load error, never reaches the conversation.
+  const tokened = { id: 'azpr', source: { type: 'package', target: 'git+https://oauth2:SENTINEL_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git#v0.3.0', version: '6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd' }, state: { status: 'active' }, features: { server: true } };
+  const unloaded = { source: { type: 'package', target: 'git+https://SECOND_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git?ref=QUERY_TOKEN#main' }, state: { status: 'failed', error: 'Plugin entrypoint not found: git+https://SECOND_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git?ref=QUERY_TOKEN#main' } };
+  const masked = await check([tokened, unloaded]);
+  assert.doesNotMatch(masked, /SENTINEL_TOKEN|SECOND_TOKEN|QUERY_TOKEN|oauth2/);
+  assert.match(masked, /\| AZPR \| WARNING \| Another AZPR entry .* Running git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git#v0\.3\.0 \(commit 6dcb4d2\); not running: git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git\?\*\*\*#main \(/, 'The row is cut at 300 characters after the advice and both masked labels.');
+});
+
 test('a host without the permission hook gets a /pr-check warning about the project boundary; reviews still run', async t => {
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
@@ -1155,7 +1181,7 @@ test('azure.patFile: the PAT comes from an owner-only file and is never shown; a
   release.resolve();
   assert.match(await running, /\] COMPLETE/);
   const blocked = await f.command('pr-review', f.azure.prUrl(), 'origin-b');
-  assert.match(blocked, /azure\.patFile changed since OpenCode loaded it\. Restart OpenCode to use the new PAT/);
+  assert.match(blocked, /azure\.patFile changed since OpenCode loaded it\. Restart the OpenCode service \(opencode service restart\) to use the new PAT/);
   assert.ok(!blocked.includes('rotated-fixture-pat'), 'The new PAT is not shown either.');
   // A file that became readable by others also blocks new runs.
   await writeFile(patFile, `${FAKE_PAT}\n`);

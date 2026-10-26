@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, writeFile, lstat, rm, symlink, readdir, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { settingsFileFor, parseSetupArguments, saveSetup, setupPlugin } from '../src/setup.mjs';
+import { defaultPatFile, settingsFileFor, parseSetupArguments, saveSetup, setupPlugin } from '../src/setup.mjs';
 import { COMMANDS } from '../src/config.mjs';
 import { FAKE_PAT, fakeAzure, toolRegistry } from './fake-azure.mjs';
 
@@ -52,7 +52,7 @@ async function fixture(t) {
   const args = parseSetupArguments(`--organization fixture --model fixture/model --pat-file "${pat}"`);
   const options = { stateDirectory: join(root, 'state'), fetch: azure.fetch };
   return { root, source, path, pat, context, commands, agents, reports, hooks, azure, args,
-    setup: () => setupPlugin(context, source, options),
+    setup: (extra = {}) => setupPlugin(context, source, { ...options, ...extra }),
     invoke: async (name, text = '') => {
       await commands.get(name).execute({ sessionID: 'origin', prompt: { text } });
       return reports.at(-1);
@@ -79,9 +79,47 @@ test('setup parser accepts quoted paths, help and explicit replace but no token 
   assert.deepEqual(parseSetupArguments('--organization example --model fixture/model#high --pat-file "/path with spaces/pat" --replace'), {
     '--organization': 'example', '--model': 'fixture/model#high', '--pat-file': '/path with spaces/pat', '--replace': true,
   });
-  for (const input of ['--pat do-not-display-secret', '--organization org --model fixture/model', '--model a/b --model c/d', '--pat-file "unfinished']) {
+  assert.deepEqual(parseSetupArguments('--organization https://dev.azure.com/org/project/_git/repo/pullrequest/1 --model fixture/model'), {
+    '--organization': 'https://dev.azure.com/org/project/_git/repo/pullrequest/1', '--model': 'fixture/model',
+  });
+  for (const input of ['--pat do-not-display-secret', '--organization org', '--model fixture/model --pat-file /pat', '--model a/b --model c/d', '--pat-file "unfinished']) {
     assert.throws(() => parseSetupArguments(input), error => !error.message.includes('do-not-display-secret'));
   }
+});
+
+test('without --pat-file setup uses the default PAT file, or keeps the one already set; --organization takes a URL', async t => {
+  const f = await fixture(t);
+  const environment = { HOME: join(f.root, 'home'), XDG_CONFIG_HOME: join(f.root, 'xdg') };
+  const defaultPat = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  assert.equal(defaultPatFile(environment), defaultPat);
+  assert.equal(defaultPatFile({ HOME: environment.HOME }), join(environment.HOME, '.config', 'azpr', 'pat'));
+  const minimal = { '--organization': 'fixture', '--model': 'fixture/model' };
+  await assert.rejects(saveSetup(f.context, f.path, minimal, environment),
+    error => error.message.startsWith(`[AZPR] No --pat-file was given, and the default PAT file ${defaultPat} could not be used (not found).`) && error.message.includes('quickstart'));
+  await assert.rejects(lstat(f.path), { code: 'ENOENT' });
+  await mkdir(join(environment.XDG_CONFIG_HOME, 'azpr'), { recursive: true, mode: 0o700 });
+  await writeFile(defaultPat, FAKE_PAT, { mode: 0o600 });
+  t.after(await f.setup({ environment }));
+  const receipt = await f.invoke('pr-setup', '--organization https://dev.azure.com/fixture/project/_git/repo/pullrequest/1 --model fixture/model');
+  assert.ok(receipt.startsWith(`[AZPR] SETTINGS SAVED\nSettings: ${f.path}\nOrganization: fixture; PAT file: ${defaultPat}\n` +
+    'To load them, restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process), then run /pr-check <PR URL>.'), receipt);
+  assert.match(await f.invoke('pr-setup', '--help'), new RegExp(`by default ${defaultPat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
+  const saved = async () => JSON.parse(await readFile(f.path, 'utf8')).azure;
+  assert.deepEqual(await saved(), { organization: 'fixture', pat: '', patFile: defaultPat });
+  await saveSetup(f.context, f.path, { ...minimal, '--organization': 'https://Fixture-2.visualstudio.com/DefaultCollection/project', '--pat-file': f.pat, '--replace': true }, environment);
+  assert.deepEqual(await saved(), { organization: 'fixture-2', pat: '', patFile: f.pat }, 'Host names are case-insensitive; URL parsing lowercases them.');
+  await saveSetup(f.context, f.path, { ...minimal, '--organization': 'https://dev.azure.com/changed/', '--replace': true }, environment);
+  assert.deepEqual(await saved(), { organization: 'changed', pat: '', patFile: f.pat }, 'A replacement keeps the PAT file already set.');
+  await chmod(f.pat, 0o644);
+  await assert.rejects(saveSetup(f.context, f.path, { ...minimal, '--replace': true }, environment),
+    new RegExp(`the PAT file in the current settings ${f.pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} could not be used \\(group or others may access it`));
+  await chmod(f.pat, 0o600);
+  const before = await readFile(f.path, 'utf8');
+  for (const organization of ['http://dev.azure.com/fixture', 'https://user:secret@dev.azure.com/fixture', 'https://example.com/fixture', 'https://dev.azure.com/', 'dev.azure.com/fixture']) {
+    await assert.rejects(saveSetup(f.context, f.path, { ...minimal, '--organization': organization, '--replace': true }, environment),
+      error => !error.message.includes('secret'), organization);
+  }
+  assert.equal(await readFile(f.path, 'utf8'), before, 'A refused organization changes nothing.');
 });
 
 test('missing settings expose setup and blocked commands, without agents, tools or network calls', async t => {

@@ -52,6 +52,21 @@ const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ').rep
 export const normalizePath = path => (path.startsWith('/') ? path : '/' + path);
 export const isCommitSha = sha;
 
+/** An organization name as given, or the organization of an HTTPS dev.azure.com/<org>/… or <org>.visualstudio.com URL. */
+export function organizationName(raw) {
+  if (typeof raw !== 'string' || !/^https?:\/\//i.test(raw.trim())) return raw;
+  let url;
+  try { url = new URL(raw.trim()); } catch { url = null; }
+  if (!url || url.protocol !== 'https:' || url.username || url.password || url.port) {
+    throw new Error('[AZPR] Use an organization name, or an HTTPS Azure DevOps URL without credentials or a custom port.');
+  }
+  if (url.hostname.toLowerCase() === 'dev.azure.com') {
+    try { return decodeURIComponent(url.pathname.split('/').filter(Boolean)[0] ?? ''); } catch { return ''; }
+  }
+  if (/^[a-z0-9-]+\.visualstudio\.com$/i.test(url.hostname)) return url.hostname.split('.')[0];
+  throw new Error('[AZPR] Only dev.azure.com and <organization>.visualstudio.com URLs name an organization.');
+}
+
 /**
  * Parse an Azure DevOps Services PR URL. Only cloud URLs are supported; the
  * REST client always talks to dev.azure.com/<organization>.
@@ -317,7 +332,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
   function intermediaryFailure(status, label, method, forwarded = true) {
     if (status === 407) {
       return new AzureError(`A proxy refused ${label}: it requires authentication (HTTP 407).`, { kind: 'proxy', status,
-        hint: 'Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.' });
+        hint: 'Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart the OpenCode service (opencode service restart).' });
     }
     // A gateway that already forwarded a write may have delivered it.
     return new AzureError(`A proxy or gateway answered ${label} with HTTP ${status} instead of Azure DevOps (no Azure DevOps response headers).`, {
@@ -332,7 +347,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
     const detail = clean(body?.message);
     const suffix = `${code ? ` ${code}` : ''}${detail ? `: ${detail}` : ''}`;
     if (status === 203 || status === 401 || (status >= 300 && status < 400)) {
-      return new AzureError(`Azure DevOps rejected the PAT for organization "${organization}" (HTTP ${status}). Check that the PAT (azure.pat, or the file named by azure.patFile) is valid, not expired and created for this organization, then restart OpenCode.`, { kind: 'auth', status });
+      return new AzureError(`Azure DevOps rejected the PAT for organization "${organization}" (HTTP ${status}). Check that the PAT (azure.pat, or the file named by azure.patFile) is valid, not expired and created for this organization, then restart the OpenCode service (opencode service restart).`, { kind: 'auth', status });
     }
     if (status === 403) return new AzureError(`Azure DevOps refused ${label} (HTTP 403${suffix}). The PAT needs Code (Read) and Pull Request Threads (Read & write) for this organization.`, { kind: 'permission', status, code });
     if (status === 404) return new AzureError(`Azure DevOps could not find ${label} (HTTP 404${suffix}).`, { kind: 'not-found', status, code });
@@ -367,7 +382,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       // A rejected certificate fails the handshake before anything is sent; retrying cannot help.
       if (CERTIFICATE_CODES.test(known)) {
         throw new AzureError(`Azure DevOps ${label} failed: the server's TLS certificate was not accepted (${clean(known)}).`, { kind: 'tls', code: known, cause: error,
-          hint: 'If a proxy inspects HTTPS, set azure.caFile to its root CA certificate (PEM) and restart OpenCode.' });
+          hint: 'If a proxy inspects HTTPS, set azure.caFile to its root CA certificate (PEM) and restart the OpenCode service (opencode service restart).' });
       }
       throw new AzureError(`Azure DevOps ${label} failed: network error${code ? ` (${clean(code)})` : ''}.`, { kind: 'network', transient: true, cause: error,
         uncertain: method !== 'GET' && !NOT_SENT_CODES.test(known),

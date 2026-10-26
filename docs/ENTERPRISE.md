@@ -45,10 +45,11 @@ diagnostic settings. With `azure.patFile`, `settings.json` holds no secret:
 AZPR opens the PAT file without following symbolic links and refuses it unless
 it is a regular file owned by the OpenCode user with no group or other access,
 and it reads the file at start and before each command, so a replaced PAT
-needs a restart. The installer and `/pr-setup` create `settings.json` with mode
-`600`; source replacement preserves it, and native package updates do not
-write to it. Keep it outside shared profiles and Git, and
-restart OpenCode after changing it. A file only its owner can read protects the
+needs a restart of the OpenCode service. The installer and `/pr-setup` create
+`settings.json` with mode `600`; source replacement preserves it, and native
+package updates do not write to it. Keep it outside shared profiles and Git,
+and restart the OpenCode service (`opencode service restart`) after changing
+it. A file only its owner can read protects the
 PAT from other accounts, not from programs that run as the same user (an
 agent's shell commands, for example), so keep the PAT's scopes minimal and its
 lifetime short, and keep it out of environment variables that child processes
@@ -186,7 +187,37 @@ leaves review state in place. To remove local copies, stop OpenCode and handle
 the installed settings/backups, state, diagnostics and OpenCode conversations
 according to your team's retention needs.
 
-## Corporate proxies and certificates
+## Company networks
+
+Three kinds of connection leave your machine, and each is configured where it
+is made. Set up the first before `opencode plugin add`:
+
+| Connection | Made by | Configure |
+| --- | --- | --- |
+| Package download for `opencode plugin add` | The `opencode` command in your terminal | `HTTPS_PROXY` (and `HTTP_PROXY`, `NO_PROXY`) in that terminal, or `https-proxy` in your user `~/.npmrc`. OpenCode does not read a project's `.npmrc` or, by default, npm's global configuration. |
+| Package download when a changed `plugins` entry or a start finds a version that is not installed yet | The OpenCode background service | The service's environment, set with `opencode service set env` |
+| Model providers | The OpenCode background service | The service's environment, as in OpenCode's [network guide](https://opencode.ai/v2/docs/network) |
+| Azure DevOps | AZPR, inside the OpenCode service | `azure.proxy` and `azure.caFile` below; with an empty `azure.proxy`, the service environment's proxy variables apply |
+
+- When a terminal sets a proxy, keep `localhost,127.0.0.1,::1` in its
+  `NO_PROXY`: the `opencode` command reaches the background service over the
+  loopback interface. Keep your organization's existing exceptions too.
+- A variable set with `opencode service set env` applies when the service
+  starts; setting one stops the running service, so start it again with
+  `opencode service start`. Exports in a terminal do not change a service that
+  is already running. Do not share the output of `opencode service get env`:
+  it shows the values, including proxy credentials.
+- For a company CA, OpenCode reads a PEM file named by `NODE_EXTRA_CA_CERTS`
+  (in the terminal, and in the service environment); see OpenCode's
+  [network guide](https://opencode.ai/v2/docs/network). `azure.caFile` applies
+  only to AZPR's Azure DevOps requests and cannot fix a package-download
+  certificate error.
+- Keep TLS verification on. A failed package download leaves nothing changed
+  when `opencode plugin add` makes it; when the service makes it, AZPR's
+  commands disappear until the package is available and the service restarts
+  (see [upgrading](../README.md#upgrading)).
+
+### Azure DevOps requests
 
 The following settings affect **AZPR's Azure DevOps requests only**. Configure
 model-provider connectivity separately in the OpenCode environment.
@@ -197,7 +228,7 @@ model-provider connectivity separately in the OpenCode environment.
 | `azure.caFile` | Absolute path to PEM CA certificates, added to the built-in trusted roots. Use this for your organization's TLS inspection CA. |
 | `azure.verifyTls` | Defaults to `true`. Disabling certificate verification exposes the PAT to intercepted connections and produces a `/pr-check` warning. |
 
-Restart OpenCode after changing transport settings or the CA file. These
+Restart the OpenCode service after changing transport settings or the CA file. These
 options depend on Bun's per-request transport support; an unsupported runtime
 refuses to load them. If `azure.proxy` is empty, process-wide proxy environment
 settings can still apply. A TLS-inspecting proxy can see the PAT and source
