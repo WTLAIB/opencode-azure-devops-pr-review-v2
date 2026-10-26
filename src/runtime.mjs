@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { TESTED_HOST_VERSION, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals } from './host.mjs';
+import { TESTED_HOST_VERSION, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -743,7 +743,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const running = entries.running ? `Running ${pluginSourceLabel(entries.running.source)}` : 'This installation is not listed as running';
     if (!entries.others.length) return { name: 'AZPR', ok: true, detail: `${running}.` };
     // The advice comes first: a long package specification may be cut off at the end of the row.
-    const others = entries.others.map(entry => `${pluginSourceLabel(entry.source)}${typeof entry.state?.error === 'string' ? ` (${entry.state.error.slice(0, 80)})` : ''}`);
+    // Host errors can quote the entry's specification, so mask credentials before shortening them.
+    const others = entries.others.map(entry => `${pluginSourceLabel(entry.source)}${typeof entry.state?.error === 'string' ? ` (${withoutCredentials(entry.state.error).slice(0, 80)})` : ''}`);
     return { name: 'AZPR', ok: true, warning: true,
       detail: `Another AZPR entry is configured but not running; keep one (see Upgrading in the README). ${running}; not running: ${others.join('; ')}.` };
   }

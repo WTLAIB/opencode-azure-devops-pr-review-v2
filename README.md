@@ -265,23 +265,25 @@ package. Keep the PAT file and private state directory in place.
 
 Keep one AZPR entry in the `plugins` list. **Running only `opencode plugin add`
 with a new version adds a second entry**: OpenCode keeps running the version
-listed first and reports the new one as `Duplicate plugin ID: azpr`, and
-`/pr-check` warns about it. Upgrade when no AZPR command is running, since
+listed first and reports the new one as `Duplicate plugin ID: azpr` (versions
+after 0.3.0 also warn about it in `/pr-check`). Upgrade when no AZPR command is
+running, since
 OpenCode 2.1.4 replaces the running plugin as soon as its entry changes.
 
-For an entry that `opencode plugin add` created, add the new version, then
-remove the previous one:
+For an entry that `opencode plugin add` created, add the new version and,
+only when that succeeds, remove the previous one:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.3.0
-opencode plugin remove opencode-azure-devops-pr-review@PREVIOUS_VERSION
+opencode plugin add opencode-azure-devops-pr-review@0.3.0 &&
+  opencode plugin remove opencode-azure-devops-pr-review@PREVIOUS_VERSION
 ```
 
 The first command downloads the new version in your terminal, with that
-terminal's proxy settings; if it fails, nothing changes. After the second,
-the running OpenCode service switches to the new version within a few
-seconds, with no restart. Use the same two commands with the `github:`
-specifications for the Git package, or to move between npm and Git.
+terminal's proxy settings. If it fails, `&&` skips the removal and nothing
+changes; do not remove the previous entry by itself after a failed download.
+Once the removal runs, the running OpenCode service switches to the new
+version within a few seconds, with no restart. Use the same commands with the
+`github:` specifications for the Git package, or to move between npm and Git.
 
 For an entry with options (an object with `package` and `options`), change
 only its `package` value and keep the options. The OpenCode service then
@@ -291,8 +293,10 @@ AZPR's commands disappear until the package is available and the service
 restarts.
 
 External settings, the PAT file and review records stay in place; a working
-configuration needs no new `/pr-setup`. `/pr-check` names the version that
-runs; if it still names the previous one, run `opencode service restart`.
+configuration needs no new `/pr-setup`. `opencode plugin list` should then
+show a single `azpr` row with the new version (versions after 0.3.0 also name
+it in `/pr-check`); if it still shows the previous one, run
+`opencode service restart`.
 Exact versions stay pinned, so `opencode plugin update` leaves them unchanged.
 See the [0.3.0 release notes](docs/releases/v0.3.0.md) for what changed and the
 [0.2.0 release notes](docs/releases/v0.2.0.md) for automatic comments, which
@@ -391,12 +395,12 @@ the same model for review and quick roles without calling a model or Azure:
 /pr-setup --organization YOUR_ORG --model YOUR_PROVIDER/YOUR_MODEL --pat-file "/absolute/path/to/pat"
 ```
 
-`--organization` also accepts a PR or organization URL. Without `--pat-file`,
-setup uses `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`, the file the
+An existing file requires `--replace`; unrelated advanced settings and deep
+models are preserved. Versions after 0.3.0 also accept a PR or organization
+URL for `--organization`, and without `--pat-file` use the PAT file already
+set (with `--replace`) or `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`, the file the
 [quickstart](docs/QUICKSTART.md#2-save-the-pat-in-a-private-file-terminal)
-creates. An existing file requires `--replace`, which keeps the PAT file
-already set unless you name another; unrelated advanced settings and deep
-models are preserved. Setup checks the model catalog and PAT file before
+creates. Setup checks the model catalog and PAT file before
 saving. It never accepts the PAT itself as a command argument. Restart the
 OpenCode service after saving, then run `/pr-check` to verify Azure read access.
 

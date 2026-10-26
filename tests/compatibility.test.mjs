@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, HOST_CONTINUATION_TEXT, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isHostContinuation, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -115,7 +115,7 @@ test('plugin list entries: the running entry, other entries of the plugin or its
   const own = target => packageNamed(target, PACKAGE_NAME, REPOSITORY);
   for (const target of ['opencode-azure-devops-pr-review', 'opencode-azure-devops-pr-review@0.3.0', 'opencode-azure-devops-pr-review@^0.3.0',
     'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0', 'git+https://github.com/wtlaib/opencode-azure-devops-pr-review-v2.git#6dcb4d2',
-    'WTLAIB/opencode-azure-devops-pr-review-v2']) assert.equal(own(target), true, target);
+    'WTLAIB/opencode-azure-devops-pr-review-v2', 'git+https://***@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git?ref=x#main']) assert.equal(own(target), true, target);
   for (const target of ['opencode-azure-devops-pr-review-v2@1.0.0', 'other-plugin@1.0.0', 'github:someone/opencode-azure-devops-pr-review-v2-fork#main', undefined]) {
     assert.equal(own(target), false, String(target));
   }
@@ -133,6 +133,17 @@ test('plugin list entries: the running entry, other entries of the plugin or its
   assert.equal(pluginSourceLabel({ type: 'local', path: '/home/someone/.config/opencode/plugins/azpr-v2' }), 'a local source installation');
   assert.equal(pluginSourceLabel({ type: 'package', target: 'git+file:///fixture/package#6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd', version: '6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd' }), 'git+file:///fixture/package#6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd');
   assert.equal(pluginSourceLabel({ type: 'sdk' }), 'an entry of unknown origin');
+  // Credentials and query strings in a URL never reach a label or a quoted host message.
+  for (const [text, masked] of [
+    ['git+https://oauth2:SECRET_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git#v0.3.0', 'git+https://***@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git#v0.3.0'],
+    ['https://SECRET_TOKEN@example.com/pkg.tgz?token=SECRET_QUERY#part', 'https://***@example.com/pkg.tgz?***#part'],
+    ['Plugin entrypoint not found: git+https://SECRET_TOKEN@github.com/a/b.git#main', 'Plugin entrypoint not found: git+https://***@github.com/a/b.git#main'],
+    ['ssh://git@github.com/a/b.git and https://example.com/x?y=1 z', 'ssh://***@github.com/a/b.git and https://example.com/x?*** z'],
+  ]) assert.equal(withoutCredentials(text), masked);
+  for (const text of ['opencode-azure-devops-pr-review@0.3.0', 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0',
+    'https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz', 'Duplicate plugin ID: azpr', 'Did you mean this?']) assert.equal(withoutCredentials(text), text);
+  assert.equal(pluginSourceLabel({ type: 'package', target: 'git+https://user:SECRET_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git#v0.3.0', version: '6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd' }),
+    'git+https://***@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git#v0.3.0 (commit 6dcb4d2)');
 });
 
 test('token usage reads each assistant message of a session context and totals the cached share', () => {

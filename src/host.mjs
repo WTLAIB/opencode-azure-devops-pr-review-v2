@@ -53,7 +53,7 @@ export function packageNamed(target, name, repository) {
   const spec = typeof target === 'string' ? target.trim() : '';
   if (spec === name || spec.startsWith(`${name}@`)) return true;
   const repo = repository.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|[:/])${repo}(?:\\.git)?(?:#|$)`).test(spec.toLowerCase());
+  return new RegExp(`(?:^|[:/])${repo}(?:\\.git)?(?:[?#]|$)`).test(spec.toLowerCase());
 }
 
 /**
@@ -72,13 +72,23 @@ export function pluginEntries(value, { id, ownPackage }) {
   return { running, others: ours.filter(entry => entry !== running) };
 }
 
-/** A path-free label for a plugin list entry's source: its package specification and installed version or commit. */
+/**
+ * Text with each URL's user name, password and query string masked: a Git or
+ * tarball package specification, and host messages that quote one, can carry
+ * a token there.
+ */
+export function withoutCredentials(text) {
+  return String(text ?? '').replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#]*@)?([^\s?#]*)(\?[^\s#]*)?/gi,
+    (match, scheme, userinfo, rest, query) => `${scheme}${userinfo ? '***@' : ''}${rest}${query ? '?***' : ''}`);
+}
+
+/** A path- and credential-free label for a plugin list entry's source: its package specification and installed version or commit. */
 export function pluginSourceLabel(source) {
   if (source?.type === 'local') return 'a local source installation';
   if (source?.type !== 'package' || typeof source.target !== 'string') return 'an entry of unknown origin';
   const version = typeof source.version === 'string' && source.version && !source.target.endsWith(`@${source.version}`) && !source.target.endsWith(`#${source.version}`)
     ? /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(source.version) ? `commit ${source.version.slice(0, 7)}` : `version ${source.version}` : '';
-  return `${source.target}${version ? ` (${version})` : ''}`;
+  return `${withoutCredentials(source.target)}${version ? ` (${version})` : ''}`;
 }
 
 /**

@@ -1120,6 +1120,12 @@ test('/pr-check names the running installation and warns about another AZPR entr
   assert.match(mixed, /\| AZPR \| WARNING \| Another AZPR entry .* Running a local source installation; not running: opencode-azure-devops-pr-review@0\.3\.0 \(Duplicate plugin ID: azpr\)\. \|/);
   assert.doesNotMatch(mixed, /someone/, 'No local path is shown.');
   assert.match(await check(() => { throw new Error('plugin list unavailable'); }), /\] READY[\s\S]*\| AZPR \| ok \| The plugin list could not be read \(plugin list unavailable\)\. \|/);
+  // A Git specification with a token, quoted again by the host's load error, never reaches the conversation.
+  const tokened = { id: 'azpr', source: { type: 'package', target: 'git+https://oauth2:SENTINEL_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git#v0.3.0', version: '6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd' }, state: { status: 'active' }, features: { server: true } };
+  const unloaded = { source: { type: 'package', target: 'git+https://SECOND_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git?ref=QUERY_TOKEN#main' }, state: { status: 'failed', error: 'Plugin entrypoint not found: git+https://SECOND_TOKEN@github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git?ref=QUERY_TOKEN#main' } };
+  const masked = await check([tokened, unloaded]);
+  assert.doesNotMatch(masked, /SENTINEL_TOKEN|SECOND_TOKEN|QUERY_TOKEN|oauth2/);
+  assert.match(masked, /\| AZPR \| WARNING \| Another AZPR entry .* Running git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git#v0\.3\.0 \(commit 6dcb4d2\); not running: git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git\?\*\*\*#main \(/, 'The row is cut at 300 characters after the advice and both masked labels.');
 });
 
 test('a host without the permission hook gets a /pr-check warning about the project boundary; reviews still run', async t => {
