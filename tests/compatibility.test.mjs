@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
-import { validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, listOf, recordOf, sessionProgress, tokenUsage, usageTotals, HOST_CONTINUATION_TEXT, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
+import { hostCapabilities, isHostContinuation, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, HOST_CONTINUATION_TEXT, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -99,11 +99,40 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(capabilities.eventSubscribe, false);
   assert.equal(hostCapabilities({ event: { subscribe() {} } }).eventSubscribe, true);
   assert.equal(hostCapabilities({}).version, 'unknown');
+  assert.equal(hostCapabilities({}).pluginList, false);
+  assert.equal(hostCapabilities({ plugin: { list() {} } }).pluginList, true);
   const errored = { type: 'assistant', error: { type: 'provider.api' }, retry: { attempt: 1 } };
   assert.equal(isHostContinuation({ type: 'synthetic', text: HOST_CONTINUATION_TEXT }), true);
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, errored), true);
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, { type: 'assistant' }), false);
   assert.equal(isHostContinuation({ type: 'user', text: HOST_CONTINUATION_TEXT }), false);
+});
+
+test('plugin list entries: the running entry, other entries of the plugin or its packages, and path-free labels', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(PACKAGE_NAME, pkg.name);
+  assert.equal(pkg.repository.url, `git+https://github.com/${REPOSITORY}.git`);
+  const own = target => packageNamed(target, PACKAGE_NAME, REPOSITORY);
+  for (const target of ['opencode-azure-devops-pr-review', 'opencode-azure-devops-pr-review@0.3.0', 'opencode-azure-devops-pr-review@^0.3.0',
+    'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0', 'git+https://github.com/wtlaib/opencode-azure-devops-pr-review-v2.git#6dcb4d2',
+    'WTLAIB/opencode-azure-devops-pr-review-v2']) assert.equal(own(target), true, target);
+  for (const target of ['opencode-azure-devops-pr-review-v2@1.0.0', 'other-plugin@1.0.0', 'github:someone/opencode-azure-devops-pr-review-v2-fork#main', undefined]) {
+    assert.equal(own(target), false, String(target));
+  }
+  const running = { id: 'azpr', source: { type: 'package', target: 'opencode-azure-devops-pr-review@0.3.0', version: '0.3.0' }, state: { status: 'active' }, features: { server: true } };
+  const duplicate = { id: 'azpr', source: { type: 'package', target: 'opencode-azure-devops-pr-review@0.3.1', version: '0.3.1' }, state: { status: 'failed', error: 'Duplicate plugin ID: azpr' } };
+  const unloaded = { source: { type: 'package', target: 'opencode-azure-devops-pr-review@9.9.9' }, state: { status: 'failed', error: 'Plugin failed to load' } };
+  const unrelated = [{ id: 'other', source: { type: 'builtin' }, state: { status: 'active' } }, { source: { type: 'package', target: 'other-plugin@1' }, state: { status: 'failed', error: 'x' } }];
+  assert.deepEqual(pluginEntries({ data: [...unrelated, running, duplicate, unloaded, 'not a record'] }, { id: 'azpr', ownPackage: own }), { running, others: [duplicate, unloaded] });
+  assert.deepEqual(pluginEntries([duplicate], { id: 'azpr', ownPackage: own }), { running: null, others: [duplicate] });
+  assert.equal(pluginEntries({}, { id: 'azpr', ownPackage: own }), null);
+  assert.equal(pluginSourceLabel(running.source), 'opencode-azure-devops-pr-review@0.3.0');
+  assert.equal(pluginSourceLabel({ type: 'package', target: 'opencode-azure-devops-pr-review', version: '0.3.0' }), 'opencode-azure-devops-pr-review (version 0.3.0)');
+  assert.equal(pluginSourceLabel({ type: 'package', target: 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0', version: '6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd' }),
+    'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0 (commit 6dcb4d2)');
+  assert.equal(pluginSourceLabel({ type: 'local', path: '/home/someone/.config/opencode/plugins/azpr-v2' }), 'a local source installation');
+  assert.equal(pluginSourceLabel({ type: 'package', target: 'git+file:///fixture/package#6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd', version: '6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd' }), 'git+file:///fixture/package#6dcb4d2b2bd4c4f01c0c515062f5b0fcc84eecfd');
+  assert.equal(pluginSourceLabel({ type: 'sdk' }), 'an entry of unknown origin');
 });
 
 test('token usage reads each assistant message of a session context and totals the cached share', () => {

@@ -267,7 +267,7 @@ test('proxy, TLS and connection failures are classified with what to change', as
   // Bun reports a rejected certificate on error.code; nothing was sent and retrying cannot help.
   const tls = failing(() => { throw bun('UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'unable to get local issuer certificate'); }, proxy);
   await assert.rejects(tls.c.threads(run(), snapshot), error => error.kind === 'tls' && !error.transient &&
-    error.message === "Azure DevOps PR threads failed: the server's TLS certificate was not accepted (UNABLE_TO_GET_ISSUER_CERT_LOCALLY). If a proxy inspects HTTPS, set azure.caFile to its root CA certificate (PEM) and restart OpenCode.");
+    error.message === "Azure DevOps PR threads failed: the server's TLS certificate was not accepted (UNABLE_TO_GET_ISSUER_CERT_LOCALLY). If a proxy inspects HTTPS, set azure.caFile to its root CA certificate (PEM) and restart the OpenCode service (opencode service restart).");
   assert.equal(tls.calls(), 1);
   await assert.rejects(tls.c.createThread(run(), snapshot, { kind: 'summary', content: 'x' }), error => error.kind === 'tls' && error.uncertain === false);
   const altName = failing(() => { throw bun('ERR_TLS_CERT_ALTNAME_INVALID', 'altname'); });
@@ -288,7 +288,7 @@ test('proxy, TLS and connection failures are classified with what to change', as
   // A proxy's own answers carry no Azure DevOps headers; they are not blamed on the PAT.
   const auth = failing(() => new Response(null, { status: 407, headers: { 'proxy-authenticate': 'Basic realm="corp"' } }), proxy);
   await assert.rejects(auth.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
-    error.message === 'A proxy refused PR threads: it requires authentication (HTTP 407). Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.');
+    error.message === 'A proxy refused PR threads: it requires authentication (HTTP 407). Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart the OpenCode service (opencode service restart).');
   assert.equal(auth.calls(), 1);
   const blocked = failing(() => new Response('<html>Blocked by policy</html>', { status: 403, headers: { 'content-type': 'text/html' } }), proxy);
   await assert.rejects(blocked.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
@@ -304,7 +304,7 @@ test('proxy, TLS and connection failures are classified with what to change', as
   const refusedTunnel = status => () => { throw Object.assign(new Error(`Proxy refused to open a tunnel: ${status}`), { code: 'ERR_PROXY_TUNNEL', status, statusText: '', headers: {} }); };
   const tunnelAuth = failing(refusedTunnel(407), proxy);
   await assert.rejects(tunnelAuth.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&
-    error.message === 'A proxy refused PR threads: it requires authentication (HTTP 407). Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart OpenCode.');
+    error.message === 'A proxy refused PR threads: it requires authentication (HTTP 407). Put the proxy user name and password in azure.proxy (http://user:password@host:port, percent-encoded) and restart the OpenCode service (opencode service restart).');
   assert.equal(tunnelAuth.calls(), 1);
   const tunnelBlocked = failing(refusedTunnel(403), proxy);
   await assert.rejects(tunnelBlocked.c.threads(run(), snapshot), error => error.kind === 'proxy' && !error.transient &&

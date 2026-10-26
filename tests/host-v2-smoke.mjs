@@ -304,11 +304,17 @@ try {
     assert.ok(!(await rawApi('/api/agent')).data.some(agent => agent.name.startsWith('azpr-')));
     assert.match(await invoke('pr-check', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123'), /SETUP REQUIRED/);
     assert.match(await invoke('pr-setup', '--help'), /--organization[\s\S]*--model[\s\S]*--pat-file/);
-    const patFile = join(fixture, 'private PAT');
+    // Without --pat-file, setup uses the default PAT file under XDG_CONFIG_HOME; --organization also takes a PR URL.
+    const patFile = join(fixture, 'xdg-config', 'azpr', 'pat');
+    const setupUrl = 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123';
+    assert.ok((await invoke('pr-setup', `--organization ${setupUrl} --model fixture/fixture`))
+      .startsWith(`[AZPR] No --pat-file was given, and the default PAT file ${patFile} could not be used (not found).`));
+    await mkdir(dirname(patFile), { recursive: true, mode: 0o700 });
     await writeFile(patFile, FAKE_PAT, { mode: 0o600 });
-    assert.match(await invoke('pr-setup', `--organization fixture --model fixture/missing --pat-file "${patFile}"`), /unavailable/);
+    assert.match(await invoke('pr-setup', '--organization fixture --model fixture/missing'), /unavailable/);
     await assert.rejects(stat(externalSettings), { code: 'ENOENT' });
-    assert.match(await invoke('pr-setup', `--organization fixture --model fixture/fixture --pat-file "${patFile}"`), /SETTINGS SAVED/);
+    const saved = await invoke('pr-setup', `--organization ${setupUrl} --model fixture/fixture`);
+    assert.ok(saved.startsWith(`[AZPR] SETTINGS SAVED\nSettings: ${externalSettings}\nOrganization: fixture; PAT file: ${patFile}\nTo load them, restart the OpenCode service (in a terminal: opencode service restart;`), saved);
     const initial = JSON.parse(await readFile(externalSettings, 'utf8'));
     assert.equal((await stat(externalSettings)).mode & 0o777, 0o600);
     assert.ok(Object.values(initial.models.review).every(model => model === 'fixture/fixture'));
@@ -336,7 +342,7 @@ try {
     await writeFile(join(directories.config, 'opencode.json'), JSON.stringify(config, null, 2));
     url = await startHost();
     await waitForCommands();
-    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews; setup validates model and private PAT file without network calls; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
+    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews; setup validates model and private PAT file without network calls, uses the default XDG PAT file and takes the organization from a PR URL; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
   }
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -388,7 +394,35 @@ try {
   const check = await latest(checkOrigin);
   assert.match(check, /\] READY/, check);
   assert.equal(requests.length, beforeCheck, '/pr-check must not call a model.');
-  results.check = 'READY without model requests';
+  assert.ok(check.includes(`| AZPR | ok | Running ${native ? nativePackage : 'a local source installation'}`), check);
+  results.check = 'READY without model requests; names the running installation';
+  if (native && !publishedPackage) {
+    // A second AZPR entry (the same package without its commit): OpenCode runs the first and lists the second as a duplicate.
+    const configPath = join(directories.config, 'opencode.json');
+    const original = await readFile(configPath, 'utf8');
+    const second = `git+file://${packageDirectory}`;
+    await writeFile(configPath, JSON.stringify({ ...JSON.parse(original), plugins: [...JSON.parse(original).plugins, second] }, null, 2));
+    await stopHost();
+    url = await startHost();
+    await waitForCommands();
+    let duplicate;
+    for (const end = Date.now() + 60000; !(duplicate = (await rawApi('/api/plugin')).data.find(plugin => plugin.source?.target === second))?.state?.error;) {
+      if (Date.now() > end) throw new Error(`Fixture second AZPR entry was not listed: ${JSON.stringify(duplicate)}`);
+      await new Promise(resolveWait => setTimeout(resolveWait, 250));
+    }
+    assert.equal(duplicate.state.status, 'failed');
+    assert.match(duplicate.state.error, /Duplicate plugin ID: azpr/);
+    const duplicateOrigin = await newOrigin('Duplicate entry');
+    await api(`/api/session/${duplicateOrigin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
+    const warned = await latest(duplicateOrigin);
+    assert.match(warned, /\] READY/, warned);
+    assert.ok(warned.includes(`| AZPR | WARNING | Another AZPR entry is configured but not running; keep one (see Upgrading in the README). Running ${nativePackage}; not running: git+file://`), warned);
+    await writeFile(configPath, original);
+    await stopHost();
+    url = await startHost();
+    await waitForCommands();
+    results.duplicateEntry = 'a second AZPR entry stays unloaded (Duplicate plugin ID) and /pr-check warns';
+  }
 
   // 2. Full review with sharded initials, a verifier repair turn and hidden shell.
   const reviewOrigin = await newOrigin('Review');
