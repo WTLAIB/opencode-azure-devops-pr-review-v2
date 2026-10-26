@@ -47,14 +47,15 @@ mkdir -p "$AZPR_USER_DIR"
 printf 'PAT file: %s\n' "$AZPR_USER_DIR/pat"
 ```
 
-Keep the printed path for step 4. If the file already exists, reuse your
-existing owner-only PAT file, or choose another unused path. Do not paste a
-PAT into a conversation or command argument.
+This is the default PAT file that `/pr-setup` uses. If the file already
+exists, reuse your existing owner-only PAT file, or choose another unused path
+and name it with `--pat-file` in step 4. Do not paste a PAT into a
+conversation or command argument.
 
 ## 3. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.3.0
+opencode plugin add opencode-azure-devops-pr-review@0.3.1
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -63,7 +64,7 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.0'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.1'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -72,25 +73,26 @@ installation, see [other installation methods](#other-installation-methods).
 Open OpenCode and start an ordinary conversation. If `/pr-setup` is not
 listed, run `opencode service restart` in your terminal and reopen OpenCode.
 
-Run `/pr-setup` alone to see the settings path and the available model IDs.
-Then replace all three placeholders in this command:
+Run `/pr-setup` alone to see the settings path, the default PAT file and the
+available model IDs. Then replace both placeholders in this command:
 
 ```text
-/pr-setup --organization YOUR_ORGANIZATION --model YOUR_PROVIDER/YOUR_MODEL --pat-file "/absolute/path/to/azpr/pat"
+/pr-setup --organization YOUR_ORGANIZATION --model YOUR_PROVIDER/YOUR_MODEL
 ```
 
-Use the organization name from `https://dev.azure.com/<organization>`, not the
-full URL, and the absolute PAT file path printed in step 2. The command checks
-the model catalog and the PAT file, then saves configuration with owner-only
-permissions. It makes no model request and does not contact Azure. Versions
-after 0.3.0 also accept your PR's URL for `--organization`, and use the PAT
-file from step 2 when `--pat-file` is omitted.
+Use the organization name from `https://dev.azure.com/<organization>`;
+`--organization` also accepts your PR's URL. Add
+`--pat-file "/absolute/path/to/pat"` when your PAT file is not the default one
+from step 2. The command checks the model catalog and the PAT file, then saves
+configuration with owner-only permissions. It makes no model request and does
+not contact Azure.
 
 One model selection configures the quick reviewer and all three review roles.
 `/pr-quick` still runs only its own reviewer; `/pr-review` uses separate reviewer
 and verifier sessions. Deep models remain unset until you choose stronger
 models for that mode. Setup preserves other settings when explicitly replacing
-an existing file with `--replace`.
+an existing file with `--replace`, and then keeps the PAT file already set
+unless you name another one.
 
 Native installations save settings outside the package cache at
 `${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`. Source installations keep
@@ -134,8 +136,8 @@ it neither runs a review nor tests model-provider authentication or Azure write
 permissions. Fix any `NOT_READY` result before continuing. A **Quick model
 WARNING** also needs fixing before `/pr-quick`, even if the overall result is
 `READY`; a **Deep model** WARNING likewise before `/pr-deep`. The **Deep models**
-row says whether `/pr-deep` is set up (see below). Versions after 0.3.0 also
-show an **AZPR** row that names the installation that answered.
+row says whether `/pr-deep` is set up (see below), and the **AZPR** row names
+the installation that answered.
 
 On a host without `permission.hook`, **Project boundary WARNING** means the
 host's own permission rules control where native read tools can read; reviews
@@ -229,7 +231,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.3.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.3.0.tar.gz),
+[v0.3.1 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.3.1.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings, so add `--replace` to the setup

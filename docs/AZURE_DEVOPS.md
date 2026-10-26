@@ -18,8 +18,8 @@ other component's configuration.
    pushing code, which AZPR never needs.
 2. Put the PAT alone in a file only you can read, as the
    [quickstart](QUICKSTART.md#2-save-the-pat-in-a-private-file-terminal) shows,
-   then run `/pr-setup --organization YOUR_ORGANIZATION --model PROVIDER/MODEL --pat-file "/absolute/path/to/pat"`
-   (versions after 0.3.0 can omit `--pat-file` for `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`).
+   then run `/pr-setup --organization YOUR_ORGANIZATION --model PROVIDER/MODEL`
+   (add `--pat-file` for a file other than `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`).
    To edit the settings by hand instead, use the file `/pr-setup` names: an
    explicit `options.settingsFile`; `settings.json` next to a source
    installation (`plugins/azpr-v2/settings.json`); otherwise

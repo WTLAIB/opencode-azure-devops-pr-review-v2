@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1 — 2026-10-27
+
+- Installation and upgrades are documented as they behave on OpenCode 2.1.4:
+  `opencode plugin add` loads the plugin into a running service without a
+  restart, and adding a second version leaves the first one running. The
+  README's new Upgrading section adds the new version and removes the
+  previous one only when the download succeeded. Saved settings still need a
+  restart, and every message that asks for one names `opencode service restart`.
+- `/pr-check` names the installation that answered and warns when another
+  AZPR entry is configured but not running, such as a second version that
+  OpenCode lists as a duplicate plugin ID. User names, passwords and query
+  strings in package specifications are masked.
+- `/pr-setup` takes the organization from a PR or organization URL and,
+  without `--pat-file`, uses `${XDG_CONFIG_HOME:-~/.config}/azpr/pat` (or, with
+  `--replace`, the PAT file already set); its receipt names both.
+- The quickstart runs the terminal steps first and needs one restart. The team
+  guide separates package downloads, model providers and Azure DevOps on
+  company networks, and the Azure DevOps guide names the actual settings
+  locations. Two links in the validation history now point at the version
+  that still had their sections.
+
 ## 0.3.0 — 2026-10-26
 
 - Choose what reaches the PR after reading a preview:
