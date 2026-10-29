@@ -10,18 +10,24 @@
 Use your own OpenCode models to review code, inspect the proposed comments,
 and choose what gets published. No MCP server or CI pipeline setup is required.
 
-[Get started](#your-first-review) · [15-second workflow](#workflow-in-15-seconds) ·
+AZPR is an independent community project. It is not built by or affiliated with
+the OpenCode team.
+
+[Get started](#your-first-review) · [15-second recording](#watch-the-workflow) ·
 [Full demo](docs/DEMO.md) · [Documentation](#documentation)
 
 ## See the review in Azure DevOps
 
-Findings include a source location, evidence and a suggested fix. Preview them
-in OpenCode before publishing inline comments and a PR summary.
+Findings include a source location, evidence and a suggested fix. Preview the
+planned comments in OpenCode, then publish them as inline comments and a PR
+summary.
 
 [![Actual Azure DevOps inline comment on fulfillment.py: the changed line replaces a deep copy with a shallow copy; the review explains the shared-state defect, cites evidence and suggests a fix.](docs/assets/azure-inline-review.png)](docs/assets/azure-inline-review.png)
 
-*Actual output from a dedicated test PR with seeded defects. Identifying UI is
-removed; code and review text are unchanged. Click the image to enlarge, or
+*Actual output on a dedicated test PR with seeded defects, from a different run
+than the recording below. The image joins cropped excerpts of the diff and the
+comment, with identifying UI removed; code and review text are unchanged. It
+shows the output format, not review accuracy. Click the image to enlarge, or
 [read the pictured comments and capture details](docs/DEMO.md#actual-azure-devops-comments).*
 
 <details>
@@ -29,9 +35,8 @@ removed; code and review text are unchanged. Click the image to enlarge, or
 
 [![Actual Azure DevOps PR summary: zero high, three medium and zero low findings, with a review note and a finding index pointing to fulfillment.py lines 24, 29 and 37.](docs/assets/azure-review-summary.png)](docs/assets/azure-review-summary.png)
 
-The summary keeps the full finding index in one place. These screenshots show
-a separate English-language run from the terminal recording below; they are a
-workflow demonstration, not a review-accuracy benchmark.
+The summary keeps the full finding index in one place. Like the image above, it
+is an actual capture excerpt with identifying UI removed and its text unchanged.
 
 </details>
 
@@ -60,6 +65,8 @@ before starting the review; it uses no model. The review runs functional and ris
 reviewers, then separate verification. If the completed review has findings to
 comment on, `--preview` prepares their comments in a separate, cancellable run.
 **Nothing is posted by these commands.** Previewing comments also uses a model.
+For a lighter first pass, use `/pr-quick <PR URL> --preview`; its findings are
+not independently verified.
 
 <details>
 <summary>Optional: adjust findings and publish after reading the preview</summary>
@@ -84,8 +91,7 @@ preview as the PAT owner and skips matching comments AZPR already posted. It
 never edits them; for an adjusted review, the receipt identifies those whose
 text differs from the new preview. See
 [adjusting findings](#adjusting-findings-after-a-preview) for how repeating an
-option replaces its earlier list. For a lighter first pass, use
-`/pr-quick <PR URL> --preview`; its findings are not independently verified.
+option replaces its earlier list.
 
 </details>
 
@@ -111,12 +117,12 @@ to your selected model providers, and review records are saved locally. See
 [team setup and data handling](docs/ENTERPRISE.md) and
 [content-search limits](docs/AZURE_DEVOPS.md#who-calls-what).
 
-## Workflow in 15 seconds
+## Watch the workflow
 
 [![Real OpenCode run: exclude one finding, lower another to low, inspect the new preview, then publish and read the comments back from Azure DevOps.](docs/assets/adjust-findings-teaser.gif)](docs/DEMO.md#adjust-findings-before-publishing)
 
-*A real OpenCode 2.1.4 session on a dedicated test PR. Waiting time is shortened;
-15 seconds is the edit length, not the review duration.
+*A 15-second edit of a real OpenCode 2.1.4 session on a dedicated test PR.
+Waiting time is shortened, so the length is not the review duration.
 [Recording details and longer walkthrough](docs/DEMO.md).*
 
 ## Choose a review
@@ -233,11 +239,12 @@ regressions that the everyday model missed, at many times its cost and time
 (see [deep versus review](docs/VALIDATION.md#deep-versus-review-2026-10-19)).
 `/pr-check` says when `/pr-deep` is off or its models repeat the review models.
 
-Readiness checks, reviews, comment planning and publication acknowledge
-`STARTED` and continue in the current OpenCode process; short `PROGRESS` notices
-and a final receipt return to the invoking conversation. Use the displayed
-`/pr-stop <run-id>` to cancel. Setup, help and `--show` respond directly without
-starting a background run.
+Readiness checks, reviews, comment planning, adjustments and publication
+acknowledge `STARTED` and continue in the current OpenCode process; short
+`PROGRESS` notices and a final receipt return to the invoking conversation. Use
+the displayed `/pr-stop <run-id>` to cancel. `/pr-setup` (including `--help`),
+`/pr-stop`, `/pr-comment --show`, an adjustment that changes nothing and a
+refused command answer directly, without a background run.
 Completed reviews, previews and publication ledgers are saved privately and
 survive an OpenCode restart.
 
@@ -587,12 +594,12 @@ A quick review states its status, coverage and verification separately; its
 receipt starts like `[AZPR 1a2b3c4d] COMPLETE; coverage incomplete;
 verification none (quick review)`. COMPLETE means at least one shard produced a
 usable result (a parsed answer is not enough) and no source-commit change was
-detected; its findings are REPORTED when they passed the runtime's checks (fields, a
-location that exists at that commit, a file the session read) and NEEDS_INFO
-otherwise, and only REPORTED ones can be commented on. Coverage says whether
-every changed file was reviewed, so zero findings never hide unreviewed files.
-A quick reviewer whose answer is PARTIAL and names unfinished work is asked
-once, in the same session, to continue (receipt `follow-up=completed`,
+detected; its findings are REPORTED when they passed the runtime's checks
+(fields, a location that exists at that commit, a file the session read) and
+NEEDS_INFO otherwise, and only REPORTED ones can be commented on. Coverage says
+whether every changed file was reviewed, so zero findings never hide unreviewed
+files. A quick reviewer whose answer is PARTIAL and names unfinished work is
+asked once, in the same session, to continue (receipt `follow-up=completed`,
 `still-partial`, `unusable` or `failed`); a follow-up that fails or gives no
 usable answer keeps the answer it followed. When the quick review found a
 high-severity issue or left coverage incomplete, the receipt suggests
@@ -601,7 +608,8 @@ publication follows (see [automatic comments](#automatic-comments)).
 
 A failed final version recheck adds a warning; it does not by itself prevent
 COMPLETE in any review mode. Read the receipt warnings. Publication separately
-rechecks that the PR is active and its source commit is unchanged before posting.
+rechecks that the PR is active and its source commit is unchanged before
+posting.
 
 ## Comments
 
@@ -634,17 +642,17 @@ combine both options in one command when you use both. Repeating the saved
 adjustments changes nothing and does not plan again. Comments are planned
 without the excluded findings and with the new severities, so their wording
 may change; the summary index follows them, and nothing on the PR mentions the
-adjustment. Each option
-replaces its whole saved list: `--exclude F-1` and then `--exclude F-2` excludes
-only F-2. A changed severity changes how a finding is published, not the finding
-itself; when a finding is wrong, exclude it. Excluding every finding posts
-nothing. `--reset` clears the adjustments, and `/pr-comment <review-id> --show`
-shows the saved preview without a model. An adjusted review is posted only
-from the preview planned after its latest adjustment; once its publication has
-started, it is neither adjusted nor planned again. Comments that an earlier
-publication put on the PR are never changed: they are skipped as always, and
-the receipt of an adjusted review names those whose text differs from the
-preview. See [adjusting findings](docs/COMMENTING.md#adjusting-findings-after-a-preview).
+adjustment. Each option replaces its whole saved list: `--exclude F-1` and then
+`--exclude F-2` excludes only F-2. A changed severity changes how a finding is
+published, not the finding itself; when a finding is wrong, exclude it.
+Excluding every finding posts nothing. `--reset` clears the adjustments, and
+`/pr-comment <review-id> --show` shows the saved preview without a model. An
+adjusted review is posted only from the preview planned after its latest
+adjustment; once its publication has started, it is neither adjusted nor
+planned again. Comments that an earlier publication put on the PR are never
+changed: they are skipped as always, and the receipt of an adjusted review
+names those whose text differs from the preview. See
+[adjusting findings](docs/COMMENTING.md#adjusting-findings-after-a-preview).
 
 ### Automatic comments
 
@@ -765,9 +773,6 @@ describe the current behavior. Never commit `.local/`, diagnostics, credentials
 or personal model selections.
 
 ## License and releases
-
-AZPR is an independent community project. It is not built by or affiliated with
-the OpenCode team.
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
 release scope, [v0.3.1](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.3.1)

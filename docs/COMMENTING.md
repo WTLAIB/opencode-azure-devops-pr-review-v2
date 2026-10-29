@@ -251,19 +251,22 @@ change their severity, and plan the preview again:
   was excluded and restored. The other list is kept, except that excluding a
   finding drops its severity change and a severity for an excluded finding
   restores it. A finding named in both lists is refused, and a severity equal
-  to the review's is no change. `--reset` clears both.
+  to the review's is no change. `--reset` clears both. A command that leaves
+  both saved lists as they are changes nothing: AZPR answers at once, plans
+  nothing and keeps the saved preview.
 - A changed severity changes how a finding is published (its title, whether it
   can get an inline comment, the summary counts); it does not verify the
   finding again or change its evidence, trigger or impact. When the finding
   itself is wrong, exclude it.
-- Each change plans the preview again with a model. The planner receives the
-  adjusted findings (without the excluded ones, with the new severities) and an
-  `adjustments` field that states them; the summary index and its counts
-  follow them. A finding set to low stays in the summary only, and a raised one
-  becomes eligible for an inline comment (it still needs a location that can
-  carry one and no live thread that covers it). The other comments are written
-  again, so their wording may change: read the whole preview before
-  publishing. The review itself, its findings and its report are not changed.
+- Each change plans the preview again with a model, unless it excludes every
+  finding (see below). The planner receives the adjusted findings (without the
+  excluded ones, with the new severities) and an `adjustments` field that
+  states them; the summary index and its counts follow them. A finding set to
+  low stays in the summary only, and a raised one becomes eligible for an
+  inline comment (it still needs a location that can carry one and no live
+  thread that covers it). The other comments are written again, so their
+  wording may change: read the whole preview before publishing. The review
+  itself, its findings and its report are not changed.
 - An excluded finding is never assigned to a page, so it gets no comment of its
   own. Any published text that names the ID of an excluded finding (the body of
   any inline comment, combined ones included, the summary note or

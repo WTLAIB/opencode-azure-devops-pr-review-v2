@@ -4,8 +4,8 @@
 
 These are **real Azure DevOps browser captures** of comments published by AZPR,
 from a dedicated test PR containing three deliberately seeded regressions in
-`fulfillment.py`. They show the final output of a separate English-language run,
-not the final state of the adjustment recording below.
+`fulfillment.py`. They show the final output of a separate run, not the final
+state of the adjustment recording below.
 
 ### Inline comment with code context
 
@@ -37,9 +37,13 @@ cost. See [validation and limitations](VALIDATION.md).
 <details>
 <summary>Read the pictured comments as text</summary>
 
-The text below preserves the published bodies; hidden publication markers are
-omitted. The inline comment is anchored at `fulfillment.py:29`.
+Each block is a published comment body exactly as posted, in Azure DevOps
+Markdown; hidden publication markers are omitted. In the summary table,
+`&#96;` is an escaped backtick, which Azure DevOps shows as `` ` ``.
 
+**Inline comment** at `fulfillment.py:29`:
+
+```markdown
 🟡 medium: Snapshot exposes mutable internal state
 
 **📝 Summary**
@@ -53,7 +57,11 @@ Return a deep copy of the snapshot contents. Test that edits to nested snapshot 
 
 ---
 AI-generated review; not human review or approval. Models: `openai/gpt-6-luna`
+```
 
+**PR summary**:
+
+```markdown
 🤖 AI-generated review; not human review or approval. Models: `openai/gpt-6-luna`
 
 ## PR Review Summary
@@ -69,6 +77,7 @@ high: 0 · medium: 3 · low: 0
 | 🟡 medium | F-1 — A batch with an invalid later item can decrement earlier stock before raising, violating the all-or-nothing reservation contract. | head:/fulfillment.py:24 |
 | 🟡 medium | F-2 — &#96;snapshot()&#96; exposes references to internal stock and reservation history, allowing callers to mutate live state through the returned snapshot. | head:/fulfillment.py:29 |
 | 🟡 medium | F-3 — Dispatch ordering compares local wall-clock fields instead of absolute instants, so offset-aware schedules can be returned in the wrong order. | head:/fulfillment.py:37 |
+```
 
 </details>
 
@@ -149,7 +158,8 @@ The recording follows one conversation:
    from Azure DevOps and reported as `VERIFIED`.
 5. Repeating the publication command reports `ALREADY_PRESENT=4`. A separate
    Azure REST read confirms the same four active threads, with no extra
-   comments. The successful demonstration comments were retained when this recording was made.
+   comments. The successful demonstration comments were retained when this
+   recording was made.
 
 Measured command durations were 64.95 seconds for review, 15.63 seconds for
 preview, 1.52 seconds for publication, and 0.51 seconds for repeated publication.
