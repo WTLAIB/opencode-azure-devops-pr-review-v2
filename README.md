@@ -233,9 +233,11 @@ regressions that the everyday model missed, at many times its cost and time
 (see [deep versus review](docs/VALIDATION.md#deep-versus-review-2026-10-19)).
 `/pr-check` says when `/pr-deep` is off or its models repeat the review models.
 
-Every command acknowledges `STARTED` immediately and continues in the current
-OpenCode process; short `PROGRESS` notices and a final receipt return to the
-invoking conversation. Use the displayed `/pr-stop <run-id>` to cancel.
+Readiness checks, reviews, comment planning and publication acknowledge
+`STARTED` and continue in the current OpenCode process; short `PROGRESS` notices
+and a final receipt return to the invoking conversation. Use the displayed
+`/pr-stop <run-id>` to cancel. Setup, help and `--show` respond directly without
+starting a background run.
 Completed reviews, previews and publication ledgers are saved privately and
 survive an OpenCode restart.
 
@@ -572,9 +574,9 @@ only. PR content, comments and tool responses are untrusted data.
 
 Status meanings:
 
-- **COMPLETE**: verification produced structured decisions and the PR source did
-  not change. Findings without a usable decision are listed as UNREVIEWED and
-  are never posted. Only COMPLETE reviews can be commented on.
+- **COMPLETE**: verification produced structured decisions and no source-commit
+  change was detected. Findings without a usable decision are listed as
+  UNREVIEWED and are never posted. Only COMPLETE reviews can be commented on.
 - **STALE**: the PR source commit changed during the review; run a new one.
 - **PARTIAL**: no verification session produced a structured result; initial
   observations are shown for reference only.
@@ -584,8 +586,8 @@ Status meanings:
 A quick review states its status, coverage and verification separately; its
 receipt starts like `[AZPR 1a2b3c4d] COMPLETE; coverage incomplete;
 verification none (quick review)`. COMPLETE means at least one shard produced a
-usable result (a parsed answer is not enough) and the source did not change;
-its findings are REPORTED when they passed the runtime's checks (fields, a
+usable result (a parsed answer is not enough) and no source-commit change was
+detected; its findings are REPORTED when they passed the runtime's checks (fields, a
 location that exists at that commit, a file the session read) and NEEDS_INFO
 otherwise, and only REPORTED ones can be commented on. Coverage says whether
 every changed file was reviewed, so zero findings never hide unreviewed files.
@@ -596,6 +598,10 @@ usable answer keeps the answer it followed. When the quick review found a
 high-severity issue or left coverage incomplete, the receipt suggests
 `/pr-review` before publishing; the hint is advisory, also when automatic
 publication follows (see [automatic comments](#automatic-comments)).
+
+A failed final version recheck adds a warning; it does not by itself prevent
+COMPLETE in any review mode. Read the receipt warnings. Publication separately
+rechecks that the PR is active and its source commit is unchanged before posting.
 
 ## Comments
 
@@ -623,10 +629,12 @@ its severity, then read the new preview:
 /pr-comment <review-id> --exclude F-1 --severity F-2=low
 ```
 
-Each command plans the comments again with a model, so combine both options in
-one command when you use both. The comments are planned without the excluded
-findings and with the new severities, so their wording may change; the summary
-index follows them, and nothing on the PR mentions the adjustment. Each option
+Changed adjustments trigger new model planning when findings remain, so
+combine both options in one command when you use both. Repeating the saved
+adjustments changes nothing and does not plan again. Comments are planned
+without the excluded findings and with the new severities, so their wording
+may change; the summary index follows them, and nothing on the PR mentions the
+adjustment. Each option
 replaces its whole saved list: `--exclude F-1` and then `--exclude F-2` excludes
 only F-2. A changed severity changes how a finding is published, not the finding
 itself; when a finding is wrong, exclude it. Excluding every finding posts

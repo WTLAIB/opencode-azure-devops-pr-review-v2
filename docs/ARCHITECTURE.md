@@ -348,7 +348,7 @@ private session gets a grant with the run, role, model and a pending prompt
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
   cannot be mentioned or delegated.
-- `context`: private requests keep only the role's allowlist — AZPR's five
+- `context`: private requests keep only the role's allowlist — AZPR's six
   tools, native read/glob/grep and shell when the `shell` setting allows it;
   every other tool (other MCP servers, edits, web, delegation, CodeMode) is
   removed. Ordinary sessions lose only AZPR's tools. Comment pages that read too
