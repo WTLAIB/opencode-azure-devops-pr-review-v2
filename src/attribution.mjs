@@ -279,8 +279,8 @@ export function renderReceipt(run, report, status, error, settings) {
     : run.mode === 'comment'
       ? ''
       : run.mode === 'quick'
-        ? '\nStatus: COMPLETE means at least one quick review session produced a usable result and the PR source did not change. Quick findings are not independently verified: the runtime checked only their form and source, and findings that failed those checks are NEEDS_INFO. Coverage says whether every changed file was reviewed. STALE means the source changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n'
-        : '\nStatus: COMPLETE means verification produced structured decisions and the PR source did not change; findings without a usable decision are listed as UNREVIEWED. STALE means the source changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
+        ? '\nStatus: COMPLETE means at least one quick review session produced a usable result and no source-commit change was detected. Quick findings are not independently verified: the runtime checked only their form and source, and findings that failed those checks are NEEDS_INFO. Coverage says whether every changed file was reviewed. STALE means the PR source commit changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n'
+        : '\nStatus: COMPLETE means verification produced structured decisions and no source-commit change was detected; findings without a usable decision are listed as UNREVIEWED. STALE means the PR source commit changed during the review. PARTIAL keeps unverified results. None of these approves the PR.\n';
   if (run.mode === 'quick' && status === 'COMPLETE' && run.quickSummary && (run.quickSummary.high > 0 || !run.quickSummary.coverage?.complete)) {
     const hint = [run.quickSummary.high > 0 ? `${run.quickSummary.high} high-severity finding(s)` : '', !run.quickSummary.coverage?.complete ? 'incomplete coverage' : ''].filter(Boolean).join(' and ');
     // Automatic publication follows the user's explicit choice; the hint stays advisory.

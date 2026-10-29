@@ -634,6 +634,18 @@ test('stale reviews are reported and cannot be commented on; a moved base stays 
   assert.match(await drift.command(), /\] COMPLETE/);
 });
 
+test('a failed final version recheck keeps the review COMPLETE with a warning', async t => {
+  // The receipt encloses the report, where the warning is listed.
+  const f = await fixture(t, { settings: s => { s.returnReport = 'full'; } });
+  // Only the final recheck fails: the PR read after the snapshot was taken.
+  f.azure.state.fail.pr = (call, state) => state.snapshotTaken ? azureError(404, 'GitPullRequestNotFoundException', 'TF401180: The requested pull request was not found.') : undefined;
+  const receipt = await f.command();
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE\n/);
+  assert.match(receipt, /The final version recheck failed \([^\n]*HTTP 404[^\n]*\); publication re-checks the source commit before posting\./);
+  assert.match(receipt, /Status: COMPLETE means verification produced structured decisions and no source-commit change was detected;/);
+  assert.match(receipt, /STALE means the PR source commit changed during the review\./);
+});
+
 test('publication sends nothing when the attempt record cannot be written', async t => {
   const f = await fixture(t, { files: ['/src/Main.java'] });
   const review = reviewId(await f.command());
@@ -1450,7 +1462,7 @@ test('/pr-quick runs one reviewer per shard without verification and comments in
   const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'], settings: s => { quickSettings(s); s.workflow.shardFiles = 1; } });
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none \(quick review\)\n/);
-  assert.match(receipt, /Status: COMPLETE means at least one quick review session produced a usable result/);
+  assert.match(receipt, /Status: COMPLETE means at least one quick review session produced a usable result and no source-commit change was detected\./);
   assert.match(receipt, /Verification hint: 2 high-severity finding\(s\)\. Before publishing, consider \/pr-review/);
   assert.match(receipt, /\/pr-comment [a-f0-9]{8} --publish/);
   assert.deepEqual([...new Set([...f.sessions.values()].map(session => session.agent))], ['azpr-quick-reviewer']);
