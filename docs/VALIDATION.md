@@ -1,7 +1,7 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.0 distributions and the 0.3.1 release candidate. Host
+0.1.0 through 0.3.1 distributions and the 0.3.2 release candidate. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -32,6 +32,42 @@ These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
 
+## 0.3.2 release candidate acceptance (2026-10-30)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.1.4. The candidate contains PR #32: the results-first README and demo
+(commits `2a48d5c` and `792836b`), their follow-up documentation (`2385e15`),
+the receipt's status sentence (`aa5cb36`) and the smaller npm package
+(`6de34ad`). Release preparation changes the package version, changelog,
+release notes, version pins and this record. Apart from that sentence, the
+runtime, prompts, settings and installers are those of 0.3.1.
+
+- `npm run check` and **421 offline tests** passed, including a final version
+  recheck that fails after the snapshot: the review stays COMPLETE and its
+  report lists the warning. A release test fixes the npm `files` list.
+- All five real-host fixtures passed with isolated profiles and fake model and
+  Azure services: fresh source installation, replacement installation, native
+  packed package installation, comment scale and background compaction. The
+  native run installed the 32-file package. The scale fixture's largest
+  provider request was 33,419 characters, as for 0.3.1.
+- `npm pack --dry-run --json` lists **32 files** (about 170 KB):
+  `package.json`, `server.js`, the 27 runtime and prompt files, the README,
+  the changelog and the license. Documentation, media, installers, the
+  settings example and schema and the repository guides are left out;
+  npmjs.com resolves the README's relative links and images against the
+  GitHub repository, as checked on the 0.3.1 package page.
+- No paid-model request or real Azure publication was made for the candidate.
+  The README and [demonstration](DEMO.md#actual-azure-devops-comments)
+  screenshots come from a live English run on 2026-10-29 with AZPR 0.3.1,
+  OpenCode 2.1.4 and `openai/gpt-6-luna` on the 1-file test PR: the review
+  confirmed three medium findings, and publication posted a summary and three
+  inline comments, all four read back as `VERIFIED`.
+
+This is a pre-publication record. Public Git installation and clean-source
+archive acceptance are checked on the release candidate; registry integrity
+and installation from npm are checked only after publication, following the
+[releasing guide](RELEASING.md).
+
 ## 0.3.1 release candidate acceptance (2026-10-27)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
@@ -57,7 +93,10 @@ are those of the reviewed commits.
 This is a pre-publication record. Public Git installation and clean-source
 archive acceptance are checked on the release candidate; registry integrity
 and installation from npm are checked only after publication, following the
-[releasing guide](RELEASING.md).
+[releasing guide](RELEASING.md). After publication on 2026-10-27, the registry
+package's integrity matched the package built from the tag, and installing
+`opencode-azure-devops-pr-review@0.3.1` and the `v0.3.1` Git tag passed
+`host-v2-smoke.mjs --native --package`.
 
 ## Installation, setup and upgrades on OpenCode 2.1.4 (2026-10-27)
 

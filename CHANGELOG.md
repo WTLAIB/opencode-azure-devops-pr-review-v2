@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.2 — 2026-10-30
+
+- The README starts with actual Azure DevOps output: an inline comment with its
+  code context and, in an expandable section, the complete PR summary from the
+  same review. The first-review steps come before the 15-second recording, and
+  a documentation table points to the guide for each task. The demo records how
+  the screenshots were captured and edited, and lists the pictured comment
+  bodies as text.
+- Receipts say that COMPLETE means no source-commit change was detected. A
+  final version recheck that fails adds a warning and leaves the review
+  COMPLETE; publication still rechecks the PR before posting.
+- The npm package contains only the runtime, README, changelog and license:
+  32 files and about 170 KB instead of 76 files and 1.35 MB. Documentation,
+  media, installers, the settings example and schema and the repository guides
+  remain in the repository and the source archive; npmjs.com shows the
+  README's links and images from GitHub.
+- The README and architecture guide list the commands that answer without a
+  background run, the README and commenting guide state that repeating the
+  saved adjustments plans nothing, and the architecture guide counts AZPR's
+  six tools.
+
 ## 0.3.1 — 2026-10-27
 
 - Installation and upgrades are documented as they behave on OpenCode 2.1.4:
