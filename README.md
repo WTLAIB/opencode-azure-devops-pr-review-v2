@@ -7,54 +7,33 @@
 
 **Review Azure DevOps pull requests from a URL. No checkout required.**
 
-Review pull requests across your configured Azure DevOps organization with your
-own OpenCode models, without cloning each repository. Preview the comments,
-leave out findings or change their severity, and publish when you are ready.
-No MCP server or CI pipeline setup is required.
+Use your own OpenCode models to review code, inspect the proposed comments,
+and choose what gets published. No MCP server or CI pipeline setup is required.
 
-AZPR is an independent community project. It is not built by or affiliated with
-the OpenCode team.
+[Get started](#your-first-review) · [15-second workflow](#workflow-in-15-seconds) ·
+[Full demo](docs/DEMO.md) · [Documentation](#documentation)
 
-[Get started](docs/QUICKSTART.md) · [See the demo](docs/DEMO.md) ·
-[Team setup and data handling](docs/ENTERPRISE.md) ·
-[Validation and limitations](docs/VALIDATION.md) ·
-[Download v0.3.1](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.3.1)
+## See the review in Azure DevOps
 
-[![Real OpenCode run on a dedicated Azure DevOps test PR: a preview with three verified findings, one finding excluded and one lowered to low, the new preview, and publication read back from Azure DevOps.](docs/assets/adjust-findings-teaser.gif)](docs/DEMO.md)
+Findings include a source location, evidence and a suggested fix. Preview them
+in OpenCode before publishing inline comments and a PR summary.
 
-*A 15-second edit of a real OpenCode 2.1.4 run: exclude one finding, lower
-another to low, read the new preview, then publish. Waiting time is shortened.
-Read the [demo and recording details](docs/DEMO.md), or watch the earlier
-[73-second walkthrough](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/download/v0.2.0/azpr-live-demo.mp4)
-of a review, preview and publication.*
+[![Actual Azure DevOps inline comment on fulfillment.py: the changed line replaces a deep copy with a shallow copy; the review explains the shared-state defect, cites evidence and suggests a fix.](docs/assets/azure-inline-review.png)](docs/assets/azure-inline-review.png)
 
-## Why AZPR?
+*Actual output from a dedicated test PR with seeded defects. Identifying UI is
+removed; code and review text are unchanged. Click the image to enlarge, or
+[read the pictured comments and capture details](docs/DEMO.md#actual-azure-devops-comments).*
 
-- **You decide what gets posted.** Preview the AI's comments, exclude findings
-  you don't want to publish, and adjust severity. AZPR prepares a new preview
-  without rerunning the review. Read it, then publish when ready. Your original
-  review stays intact.
-- **Publish safely.** AZPR rechecks the PR head, skips matching comments it
-  already posted, and reads new comments back. Automatic publication is opt-in.
-- **Follow the code beyond the diff.** Reviewers can look up definitions,
-  callers and tests using file reads and text search at the selected PR commit,
-  without depending on an Azure Code Search index.
-- **Give findings a separate check.** Functional and risk reviewers propose
-  findings; independent verifier sessions re-read the source and look for
-  counterevidence. Quick mode skips this second check when you want a lighter
-  pass.
-- **Choose where to spend model effort.** Assign different OpenCode models to
-  functional review, risk review and verification, or use one model for all
-  roles. Keep a stronger model profile for selected PRs with `/pr-deep`.
-- **Configure the Azure connection for your network.** Set a forward proxy and
-  additional CA certificates for AZPR's Azure DevOps requests. Model-provider
-  connections remain configured in OpenCode.
+<details>
+<summary>See the complete PR summary from the same review</summary>
 
-Content search downloads a bounded repository archive into memory; source
-context is sent through your selected model providers, and review records are
-saved locally. See [content-search limits](docs/AZURE_DEVOPS.md#who-calls-what)
-for archive and file-size bounds, and [team setup and data handling](docs/ENTERPRISE.md)
-for proxy authentication and retention.
+[![Actual Azure DevOps PR summary: zero high, three medium and zero low findings, with a review note and a finding index pointing to fulfillment.py lines 24, 29 and 37.](docs/assets/azure-review-summary.png)](docs/assets/azure-review-summary.png)
+
+The summary keeps the full finding index in one place. These screenshots show
+a separate English-language run from the terminal recording below; they are a
+workflow demonstration, not a review-accuracy benchmark.
+
+</details>
 
 ## Your first review
 
@@ -82,6 +61,9 @@ reviewers, then separate verification. If the completed review has findings to
 comment on, `--preview` prepares their comments in a separate, cancellable run.
 **Nothing is posted by these commands.** Previewing comments also uses a model.
 
+<details>
+<summary>Optional: adjust findings and publish after reading the preview</summary>
+
 Read the report and preview. Before publishing, you can exclude a finding or
 change its severity using IDs from your report, for example:
 
@@ -104,6 +86,38 @@ text differs from the new preview. See
 [adjusting findings](#adjusting-findings-after-a-preview) for how repeating an
 option replaces its earlier list. For a lighter first pass, use
 `/pr-quick <PR URL> --preview`; its findings are not independently verified.
+
+</details>
+
+## Why AZPR?
+
+- **Control what gets posted.** Read a preview, exclude findings or change
+  severity, then inspect the newly planned comments. The original review stays
+  intact. Publication rechecks the PR head, skips matching comments and reads
+  new comments back; automatic publication is opt-in.
+- **Read beyond the diff.** Reviewers can follow definitions, callers and
+  tests at the selected PR commit, without a local checkout or an Azure Code
+  Search index.
+- **Give findings a separate check.** Functional and risk reviewers propose
+  findings; verifier sessions re-read the source and look for counterevidence.
+  Quick mode skips that independent check for a lighter pass.
+- **Use the models you already have.** Assign models per role, use one model
+  for all roles, or configure stronger models for selected PRs with `/pr-deep`.
+
+For company networks, configure a proxy and additional CA certificates for
+AZPR's Azure requests; model-provider connections stay in OpenCode. Content
+search downloads a bounded repository archive into memory, source context goes
+to your selected model providers, and review records are saved locally. See
+[team setup and data handling](docs/ENTERPRISE.md) and
+[content-search limits](docs/AZURE_DEVOPS.md#who-calls-what).
+
+## Workflow in 15 seconds
+
+[![Real OpenCode run: exclude one finding, lower another to low, inspect the new preview, then publish and read the comments back from Azure DevOps.](docs/assets/adjust-findings-teaser.gif)](docs/DEMO.md#adjust-findings-before-publishing)
+
+*A real OpenCode 2.1.4 session on a dedicated test PR. Waiting time is shortened;
+15 seconds is the edit length, not the review duration.
+[Recording details and longer walkthrough](docs/DEMO.md).*
 
 ## Choose a review
 
@@ -161,6 +175,18 @@ The npm package, the Git package and the release source archive contain the
 same runtime. A fresh installation exposes `/pr-setup` before
 reviewing is enabled; the [quickstart](docs/QUICKSTART.md) configures one model
 for both quick and verified reviews.
+
+## Documentation
+
+| I want to… | Start here |
+| --- | --- |
+| Install AZPR and run a first review | [Step-by-step quickstart](docs/QUICKSTART.md) |
+| Upgrade an existing installation | [Upgrade instructions](#upgrading) |
+| Choose models, language or settings | [Configuration](#configuration) |
+| Adjust, preview or publish comments | [Commenting guide](docs/COMMENTING.md) |
+| Set up a company proxy or understand data handling | [Team setup](docs/ENTERPRISE.md) |
+| Understand what has been tested | [Validation and limitations](docs/VALIDATION.md) |
+| Troubleshoot or contribute | [Debugging](docs/DEBUGGING.md) · [Contributing](CONTRIBUTING.md) |
 
 ## How reviews work
 
@@ -731,6 +757,9 @@ describe the current behavior. Never commit `.local/`, diagnostics, credentials
 or personal model selections.
 
 ## License and releases
+
+AZPR is an independent community project. It is not built by or affiliated with
+the OpenCode team.
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
 release scope, [v0.3.1](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.3.1)

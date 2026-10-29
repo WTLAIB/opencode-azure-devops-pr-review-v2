@@ -1,5 +1,77 @@
 # See a review before installing
 
+## Actual Azure DevOps comments
+
+These are **real Azure DevOps browser captures** of comments published by AZPR,
+from a dedicated test PR containing three deliberately seeded regressions in
+`fulfillment.py`. They show the final output of a separate English-language run,
+not the final state of the adjustment recording below.
+
+### Inline comment with code context
+
+[![Actual inline comment: fulfillment.py changes a deep copy to a shallow copy, and AZPR explains the shared-state defect with evidence and a suggested fix.](assets/azure-inline-review.png)](assets/azure-inline-review.png)
+
+### Complete PR summary
+
+[![Actual PR summary: a review note, zero high, three medium and zero low findings, and all three findings with their source locations.](assets/azure-review-summary.png)](assets/azure-review-summary.png)
+
+The review and publication ran on **2026-10-29 (Asia/Taipei)** with **AZPR
+0.3.1**, **OpenCode CLI 2.1.4** and `openai/gpt-6-luna` for the review roles and
+comment planning. The runtime posted one summary and three inline comments and
+read all four back from Azure DevOps. Model IDs identify the configured
+selection, not an independently attested provider backend. The browser captures
+were taken on **2026-10-30**; no review or publication was rerun to create them.
+
+The images compose actual screenshot excerpts inside a presentation frame.
+Author rows, account and organization details, unrelated navigation and action
+buttons are omitted; the inline image joins the file/diff and comment excerpts.
+Titles, background and spacing are added outside those excerpts. The source
+code, line numbers, finding text, counts and AI/model disclosures are preserved
+at the captures' original pixel resolution. Raw captures and private evidence
+stay outside the public assets.
+
+This synthetic test demonstrates the workflow and output format. It is not a
+review-accuracy benchmark or a promise about another PR's findings, latency or
+cost. See [validation and limitations](VALIDATION.md).
+
+<details>
+<summary>Read the pictured comments as text</summary>
+
+The text below preserves the published bodies; hidden publication markers are
+omitted. The inline comment is anchored at `fulfillment.py:29`.
+
+🟡 medium: Snapshot exposes mutable internal state
+
+**📝 Summary**
+When a caller edits nested stock or batch data in the returned snapshot, those edits also change live reservation state; later reservations can likewise affect an earlier snapshot.
+
+**🔎 Evidence**
+`.copy()` copies only the outer dictionary, leaving `self._stock` and `self._batches` shared.
+
+**💡 Suggested fix**
+Return a deep copy of the snapshot contents. Test that edits to nested snapshot data do not change live state and that later reservations do not alter an earlier snapshot.
+
+---
+AI-generated review; not human review or approval. Models: `openai/gpt-6-luna`
+
+🤖 AI-generated review; not human review or approval. Models: `openai/gpt-6-luna`
+
+## PR Review Summary
+
+**Review notes**
+
+The fulfillment refactor changes reservation validation, snapshot copying, and dispatch sorting; restoring atomic updates, isolated snapshots, and absolute-instant ordering will preserve the documented contracts.
+
+high: 0 · medium: 3 · low: 0
+
+| Severity | Summary | Location |
+| --- | --- | --- |
+| 🟡 medium | F-1 — A batch with an invalid later item can decrement earlier stock before raising, violating the all-or-nothing reservation contract. | head:/fulfillment.py:24 |
+| 🟡 medium | F-2 — &#96;snapshot()&#96; exposes references to internal stock and reservation history, allowing callers to mutate live state through the returned snapshot. | head:/fulfillment.py:29 |
+| 🟡 medium | F-3 — Dispatch ordering compares local wall-clock fields instead of absolute instants, so offset-aware schedules can be returned in the wrong order. | head:/fulfillment.py:37 |
+
+</details>
+
 ## Adjust findings before publishing
 
 ![Real OpenCode terminal recording: a preview with three verified findings, the command that excludes F-3 and lowers F-2 to low, the new preview, and publication read back from Azure DevOps.](assets/adjust-findings-teaser.gif)
@@ -29,7 +101,7 @@ The recording follows one conversation:
 3. `/pr-comment 63f7d3d6 --publish` posts the summary and the F-1 comment; both
    are read back from Azure DevOps as `VERIFIED`.
 4. Repeating the command reports `ALREADY_PRESENT=2`; nothing is posted twice.
-   The two demonstration comments are retained on the test PR.
+   The two demonstration comments were retained when this recording was made.
 
 ![Actual new preview after excluding F-3 and lowering F-2 to low: the adjustments, the summary counts and the index with F-1 as medium and F-2 as low.](assets/adjust-preview.png)
 
@@ -77,7 +149,7 @@ The recording follows one conversation:
    from Azure DevOps and reported as `VERIFIED`.
 5. Repeating the publication command reports `ALREADY_PRESENT=4`. A separate
    Azure REST read confirms the same four active threads, with no extra
-   comments. The successful demonstration comments are retained.
+   comments. The successful demonstration comments were retained when this recording was made.
 
 Measured command durations were 64.95 seconds for review, 15.63 seconds for
 preview, 1.52 seconds for publication, and 0.51 seconds for repeated publication.
