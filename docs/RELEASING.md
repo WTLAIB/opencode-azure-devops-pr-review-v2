@@ -13,9 +13,12 @@ source tree and contain the same runtime.
    checks. Release validation includes fresh and replacement source installs,
    `host-v2-smoke.mjs --native`, `host-v2-comment-scale.mjs` and
    `host-v2-background-compaction.mjs` on the exact documented host. Keep simulated services and live model/Azure results distinct.
-3. Inspect `npm pack --dry-run --json`: the entry, runtime modules, prompts,
-   configuration example and license must be present; private settings, `.local/`,
-   credentials, diagnostics and temporary recordings must be absent. The native
+3. Inspect `npm pack --dry-run --json`: it holds only `package.json`, the
+   entry, the runtime modules and prompts under `src/`, the README, the
+   changelog and the license. Documentation pages, media, installers, the
+   settings example and schema, private settings, `.local/`, credentials,
+   diagnostics and recordings stay out; npmjs.com resolves the README's
+   relative links and images against the GitHub repository. The native
    fixture installs the packed files as a Git repository through the real plugin
    manager and tests setup plus both default and explicitly selected external
    settings.

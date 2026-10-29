@@ -52,11 +52,15 @@ validation error or an unusable PAT file), never a setting value; an unknown
 key is named only when it looks like a setting name.
 
 `ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
-`/pr-quick`, `/pr-stop` and `/pr-comment`. A command validates its arguments, registers a run
-with its origin lock (and a PR lock for comments), queues a `STARTED` notice and
-returns; the workflow continues in the background. The final receipt is queued
-to the invoking conversation with up to three attempts and is written to
-`receipts/` in the state directory if the conversation cannot be reached.
+`/pr-quick`, `/pr-stop` and `/pr-comment`. A command that starts a workflow (a
+check, a review, comment planning, an adjustment or a publication) validates its
+arguments, registers a run with its origin lock (and a PR lock for comments),
+queues a `STARTED` notice and returns; the workflow continues in the background.
+`/pr-stop`, `/pr-comment --show`, an adjustment that changes nothing and a
+refused command answer at once without a run, as does `/pr-setup`. The final
+receipt is queued to the invoking conversation with up to three attempts and is
+written to `receipts/` in the state directory if the conversation cannot be
+reached.
 `PROGRESS` notices report phases (snapshot, shard counts, verification,
 planning pages, posting). Notices never start a model response.
 
@@ -348,7 +352,7 @@ private session gets a grant with the run, role, model and a pending prompt
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
   cannot be mentioned or delegated.
-- `context`: private requests keep only the role's allowlist — AZPR's five
+- `context`: private requests keep only the role's allowlist — AZPR's six
   tools, native read/glob/grep and shell when the `shell` setting allows it;
   every other tool (other MCP servers, edits, web, delegation, CodeMode) is
   removed. Ordinary sessions lose only AZPR's tools. Comment pages that read too
