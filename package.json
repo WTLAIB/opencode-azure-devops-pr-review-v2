@@ -34,18 +34,9 @@
   "files": [
     "server.js",
     "src/",
-    "config/",
-    "scripts/merge-settings.py",
-    "install.sh",
-    "uninstall.sh",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE",
-    "docs/",
-    "AGENTS.md",
-    "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md",
-    "SECURITY.md"
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"

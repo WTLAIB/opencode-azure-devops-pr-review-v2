@@ -11,7 +11,8 @@ test('the npm package is publishable and carries the runtime entry', () => {
   assert.equal(pkg.publishConfig?.access, 'public');
   assert.equal(pkg.exports, './server.js');
   assert.equal(pkg.repository?.url, 'git+https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2.git');
-  for (const entry of ['server.js', 'src/', 'LICENSE']) assert.ok(pkg.files.includes(entry), entry);
+  // The runtime plus the README, changelog and license; npmjs.com resolves the README's links and images on GitHub.
+  assert.deepEqual(pkg.files, ['server.js', 'src/', 'README.md', 'CHANGELOG.md', 'LICENSE']);
   for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) assert.equal(pkg[field], undefined, field);
   for (const hook of ['preinstall', 'install', 'postinstall', 'prepare', 'prepack', 'postpack', 'prepublishOnly']) assert.equal(pkg.scripts?.[hook], undefined, hook);
 });
