@@ -176,9 +176,13 @@ test('provider failures expose status and observed tool turns while retaining pr
   }
 });
 
-test('a used-up quota or free-model limit is named and not retried, with or without an HTTP status', async () => {
+test('a used-up usage or spend limit is named and not retried, with or without an HTTP status', async () => {
   for (const [type, status, named] of [['provider.quota', 429, /usage quota as used up \(provider\.quota\)/], ['provider.free-limit', 429, /free model's usage limit as reached \(provider\.free-limit\)/],
-    ['provider.quota', undefined, /provider\.quota/], ['provider.free-limit', 'PRIVATE_STATUS', /provider\.free-limit/]]) {
+    ['provider.chatgpt-limit', 429, /ChatGPT reports the subscription usage limit as reached \(provider\.chatgpt-limit\)/],
+    ['provider.go-limit', 429, /OpenCode Go reports its usage limit as reached \(provider\.go-limit\)/],
+    ['provider.budget-limit', 429, /workspace usage limit as reached \(provider\.budget-limit\)/],
+    ['provider.model-budget-limit', 429, /this model's spend limit as reached \(provider\.model-budget-limit\)/],
+    ['provider.quota', undefined, /provider\.quota/], ['provider.free-limit', 'PRIVATE_STATUS', /provider\.free-limit/], ['provider.chatgpt-limit', undefined, /provider\.chatgpt-limit/]]) {
     const detail = { type, ...(status === undefined ? {} : { status }), message: 'PRIVATE_PROVIDER_DETAIL', response: { body: 'PRIVATE_REQUEST_BODY' } };
     const { context } = host({ get: async () => ({ id: sessionID, outcome: 'failed' }),
       context: async () => [{ id: 'msg_input', type: 'user', text: input }, assistant({ finish: 'error', error: detail }), { ...idle(), outcome: 'failed' }] });

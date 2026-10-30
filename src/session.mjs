@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, isHostContinuation, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -104,16 +104,10 @@ function responseError(message, response, execution) {
 }
 
 // Bounded host metadata only; provider bodies can contain private request data.
-// Provider errors that a new session cannot fix: the usage limit is used up.
-const EXHAUSTED = {
-  'provider.quota': 'The provider reports the usage quota as used up',
-  'provider.free-limit': "OpenCode reports the free model's usage limit as reached",
-};
-
 function providerFailure(final, assistants) {
   const error = final?.error;
   if (typeof error?.type !== 'string' || !error.type.startsWith('provider.')) return undefined;
-  const exhausted = Object.hasOwn(EXHAUSTED, error.type);
+  const exhausted = Object.hasOwn(USED_UP_LIMITS, error.type);
   const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : undefined;
   if (status === undefined && !exhausted) return undefined;
   return { ...(status === undefined ? {} : { status }), ...(exhausted ? { exhausted: error.type } : {}),
@@ -171,8 +165,8 @@ export function restartIndex(texts) {
  *   its own failure decides.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
  *   unexpected host messages.
- * - permanent: everything else (authentication, bad request, a used-up quota or
- *   free-model limit, whatever its HTTP status, cancellation).
+ * - permanent: everything else (authentication, bad request, a used-up usage or
+ *   spend limit, whatever its HTTP status, cancellation).
  */
 export function classifyFailure(error) {
   const execution = error?.execution;
@@ -235,13 +229,13 @@ export async function requestReview(context, { sessionID, text, role, model, met
       assistantResponses: assistants.length, lastFinish: finish,
       interrupted: session.outcome === 'interrupted' || terminal?.outcome === 'interrupted' || final?.error?.type === 'aborted' };
     // OpenCode opens a compaction's message before it asks for the summary, so a compaction it attempted in this
-    // turn, which AZPR refuses, shows here. A background summary (OpenCode 2.1.4) publishes nothing.
+    // turn, which AZPR refuses, shows here. A background summary (OpenCode 2.1.4 and later) publishes nothing.
     const compaction = turn.filter(message => message?.type === 'compaction').at(-1);
     if (compaction) execution.compaction = ['running', 'completed', 'failed'].includes(compaction.status) ? compaction.status : 'unknown';
     const provider = !execution.interrupted && providerFailure(final, assistants);
     if (provider) execution.provider = provider;
     const hint = provider?.exhausted
-      ? ` ${EXHAUSTED[provider.exhausted]} (${provider.exhausted}), so a new session would fail the same way and is not started. Choose another model in the settings or wait until the limit resets.`
+      ? ` ${USED_UP_LIMITS[provider.exhausted]} (${provider.exhausted}), so a new session would fail the same way and is not started. Choose another model in the settings or wait until the limit resets.`
       : [401, 403].includes(provider?.status) ? ' Check provider access and the role\'s tool permissions.' : '';
     const detail = provider
       ? `Model provider request failed (${provider.status ? `HTTP ${provider.status}; ` : ''}${provider.toolCallsObserved} tool calls observed).${hint} `

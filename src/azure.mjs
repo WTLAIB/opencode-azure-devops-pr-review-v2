@@ -105,14 +105,17 @@ export function targetKey(target) {
 
 /**
  * A REST base URL other than dev.azure.com is accepted only for loopback test
- * servers, so a mistaken override can never send the PAT to another host.
+ * servers, so a mistaken override can never send the PAT to another host. All
+ * of 127.0.0.0/8 is loopback: OpenCode 2.2.4 adds 127.0.0.1, localhost and ::1
+ * to NO_PROXY, and Bun then bypasses even an explicit proxy, so a proxied test
+ * server needs another loopback address.
  */
 export function restBaseUrl(override) {
   if (override === undefined || override === null || override === '') return DEFAULT_BASE_URL;
   let url;
   try { url = new URL(override); } catch { throw new Error('[AZPR] The Azure DevOps test base URL is not a valid URL.'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
-      !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+      !(url.hostname === 'localhost' || url.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(url.hostname))) {
     throw new Error('[AZPR] An Azure DevOps base URL override must be a loopback test server.');
   }
   return url.href.replace(/\/+$/, '');

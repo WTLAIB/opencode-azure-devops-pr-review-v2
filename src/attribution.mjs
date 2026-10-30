@@ -1,5 +1,4 @@
 import { ROLES } from './config.mjs';
-import { TESTED_HOST_VERSION } from './host.mjs';
 // Deterministic attribution from invoked reviewer stages, not model-authored claims.
 const vocabulary = {
   en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check', 'Quick review'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
@@ -273,7 +272,6 @@ export function renderReceipt(run, report, status, error, settings) {
     ? '\nIncomplete draft notice: the quick review did not complete; its observations are unconfirmed and not input for PR comments.\n'
     : '\nIncomplete draft notice: initial observations are unconfirmed because verification did not complete; they are not input for PR comments.\n';
   body += renderDiagnosticNotices(run);
-  if (run.compatibility && !run.compatibility.tested && run.compatibility.version !== 'unknown') body += `\nHost notice: OpenCode ${run.compatibility.version} differs from the tested ${TESTED_HOST_VERSION}; capabilities were detected at runtime.\n`;
   body += run.mode === 'check'
     ? '\nStatus: READY means AZPR can read the PR through the Azure DevOps REST API; it does not review or approve the PR.\n'
     : run.mode === 'comment'

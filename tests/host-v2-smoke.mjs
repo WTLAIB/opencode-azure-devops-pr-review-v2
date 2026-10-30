@@ -10,10 +10,11 @@ import { TESTED_HOST_VERSION } from '../src/host.mjs';
  * as opencode-azure-devops-pr-review@0.2.1, or a Git specification; needs the
  * network) to check a release after publication.
  * Isolated directories, a loopback deterministic provider, a loopback fake
- * Azure DevOps REST service (api-version 7.1, persistent thread state) and one
- * foreign stdio MCP server. Covers the deterministic source check, a full
- * review in which reviewers read through AZPR's tools while foreign tools stay
- * hidden, a verifier repair turn, comment preview and idempotent publication
+ * Azure DevOps REST service (api-version 7.1, persistent thread state), two
+ * foreign stdio MCP servers (one direct, one behind CodeMode) and an image
+ * model. Covers the deterministic source check, a full review in which
+ * reviewers read through AZPR's tools while foreign tools, CodeMode MCP tools
+ * and image generation stay hidden, a verifier repair turn, comment preview and idempotent publication
  * across a host restart, cancellation, a provider 503 that OpenCode retries in
  * the same session, and private auxiliary-request denial. Automatic comment
  * steps: a flag after the PR URL previews the comments of a COMPLETE review in
@@ -227,8 +228,12 @@ await writeFile(join(directories.config, 'plugins', 'network-guard.js'), `export
 await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   update: 'disable', snapshots: false, warming: false, model: 'fixture/fixture',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
-    models: Object.fromEntries(['fixture', 'functional', 'risk', 'verifier', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])) } },
-  mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false } } },
+    // An image model makes OpenCode 2.2.2 and later offer experimental_image_generate to every agent.
+    models: { ...Object.fromEntries(['fixture', 'functional', 'risk', 'verifier', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])),
+      image: { type: 'image', limit: { context: 100000, output: 4000 } } } } },
+  // With CodeMode execute denied, OpenCode 2.2.0 and later list a CodeMode MCP server's tools directly.
+  mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false },
+    'foreign-codemode': { type: 'local', command: [process.execPath, foreignPath], codemode: true } } },
 }, null, 2));
 
 // ------------------------------------------------------------------- host
@@ -346,7 +351,8 @@ try {
   }
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
-      if ((await api('/api/mcp')).data?.some(server => server.name === 'foreign' && server.status?.status === 'connected')) return;
+      const connected = new Set(((await api('/api/mcp')).data ?? []).filter(server => server.status?.status === 'connected').map(server => server.name));
+      if (connected.has('foreign') && connected.has('foreign-codemode')) return;
       await new Promise(resolveReady => setTimeout(resolveReady, 100));
     }
     throw new Error('Fixture MCP did not connect.');
@@ -440,7 +446,8 @@ try {
     assert.ok(!request.tools.includes('execute'), 'CodeMode execute is hidden.');
   }
   assert.ok(reviewRequests.every(request => ['azpr_read_diff', 'azpr_read_file', 'azpr_search_code', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
-  assert.ok(reviewRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools are hidden from private reviewers.');
+  assert.ok(reviewRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools, direct or CodeMode, are hidden from private reviewers.');
+  assert.ok(reviewRequests.every(request => !request.tools.includes('experimental_image_generate')), 'Image generation is hidden from private reviewers.');
   assert.ok(azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === 'b'.repeat(40)), 'A reviewer read HEAD through azpr_read_file.');
   assert.ok(reviewRequests.some(request => request.model === 'risk' && /^2 match\(es\) for "second line of" in 2 file\(s\)[\s\S]*\/src\/fixture\.js:2: second line of \/src\/fixture\.js/.test(request.lastTool)),
     'A reviewer searched file contents at HEAD through azpr_search_code.');
@@ -506,7 +513,8 @@ try {
   const quickRequests = requests.slice(beforeQuick);
   assert.ok(quickRequests.length >= 2 && quickRequests.every(request => request.model === 'quick'), 'Only the quick reviewer called a model.');
   assert.equal(new Set(quickRequests.map(request => request.sessionID)).size, 1, 'One quick session for the one shard.');
-  assert.ok(quickRequests.every(request => !request.tools.includes('shell') && !request.tools.some(name => /foreign|lookup/.test(name))), 'The quick reviewer sees only its tools.');
+  assert.ok(quickRequests.every(request => !request.tools.includes('shell') && !request.tools.some(name => /foreign|lookup/.test(name)) &&
+    !request.tools.includes('experimental_image_generate')), 'The quick reviewer sees only its tools.');
   const quickStages = await stageRecords(quickReceipt);
   assert.deepEqual(quickStages.map(stage => stage.role), ['azpr-quick-reviewer']);
   assert.ok(quickStages[0].sessionReads >= 1, 'The runtime recorded what the quick session read.');
@@ -666,8 +674,9 @@ try {
   const chatRequest = requests.slice(beforeChat).find(request => request.sessionID === chat);
   assert.ok(chatRequest, 'The ordinary chat reached the provider.');
   assert.ok(chatRequest.tools.some(name => /lookup/.test(name)), 'Ordinary sessions keep foreign MCP tools.');
+  assert.ok(chatRequest.tools.includes('experimental_image_generate'), 'Positive control: OpenCode offers image generation to ordinary sessions.');
   assert.ok(!chatRequest.tools.some(name => name.startsWith('azpr_')), 'Ordinary sessions never see AZPR tools.');
-  results.toolScopes = 'AZPR tools only in private sessions; foreign MCP tools only in ordinary sessions';
+  results.toolScopes = 'AZPR tools only in private sessions; foreign MCP tools (direct and CodeMode) and image generation only in ordinary sessions';
 
   // 6. Actual TUI: the invoking conversation stays the origin and can cancel.
   const tui = spawn('python3', [join(sourceRoot, 'tests', 'tui-background.py'), binary, url, directories.work, fixture],
@@ -715,6 +724,8 @@ try {
 
   // 7. A corporate network: Azure DevOps over HTTPS only through an authenticating
   // CONNECT proxy that re-signs TLS with its own CA (azure.proxy, azure.caFile, azure.verifyTls).
+  // OpenCode 2.2.4 puts 127.0.0.1, localhost and ::1 in NO_PROXY, and Bun then skips even an explicit proxy,
+  // so the proxied Azure DevOps fixture listens on 127.0.0.2.
   if (replacement) results.proxy = 'covered by the fresh run';
   else if (spawnSync('openssl', ['version']).status !== 0) results.proxy = 'SKIPPED: openssl is unavailable';
   else {
@@ -723,14 +734,14 @@ try {
     const openssl = args => { const result = spawnSync('openssl', args, { cwd: pki, encoding: 'utf8', timeout: 30000 }); assert.equal(result.status, 0, result.stderr); };
     openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj', '/CN=AZPR fixture proxy CA',
       '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
-    openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=127.0.0.1']);
-    await writeFile(join(pki, 'server.ext'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
+    openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=127.0.0.2']);
+    await writeFile(join(pki, 'server.ext'), 'subjectAltName=IP:127.0.0.2\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
     openssl(['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem', '-days', '2', '-extfile', 'server.ext']);
     const tlsServer = createTlsServer({ key: await readFile(join(pki, 'server.key')), cert: await readFile(join(pki, 'server.pem')) },
       (request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
-    tlsServer.listen(0, '127.0.0.1');
+    tlsServer.listen(0, '127.0.0.2');
     await once(tlsServer, 'listening');
-    const tunnelTarget = `127.0.0.1:${tlsServer.address().port}`;
+    const tunnelTarget = `127.0.0.2:${tlsServer.address().port}`;
     const proxy = await fakeProxy({ credentials: 'azpr:p@ss w0rd' });
     const withCredentials = new URL(proxy.url);
     withCredentials.username = 'azpr';

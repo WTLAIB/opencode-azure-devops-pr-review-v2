@@ -91,6 +91,10 @@ restart the OpenCode service:
   including model providers; `azure.proxy` and `azure.caFile` limit the change
   to AZPR. See [company networks](ENTERPRISE.md#company-networks) for package
   downloads and the service environment.
+- `NO_PROXY` applies to `azure.proxy` as well: Bun connects directly to a host
+  it lists. Keep `dev.azure.com` out of the service environment's `NO_PROXY`
+  when Azure DevOps must go through the proxy. OpenCode 2.2.4 merges
+  `NO_PROXY` and `no_proxy` and adds `127.0.0.1`, `localhost` and `::1`.
 - The three settings rely on the per-request proxy and TLS options of Bun's
   `fetch`. A runtime whose `fetch` would ignore them makes AZPR refuse to load
   instead of connecting directly.
@@ -213,5 +217,6 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 | `A proxy or gateway answered … instead of Azure DevOps` | A proxy or firewall answered (no Azure DevOps response headers), for example for a blocked destination; check its policy for dev.azure.com. |
 | `The PR has no source/base commit yet` | Azure DevOps has not finished evaluating the PR; retry shortly. |
 
-Exact-host fixtures set `AZPR_TEST_AZURE_BASE_URL` to a loopback fake service;
-any other host is refused, so the PAT can only reach `dev.azure.com`.
+Exact-host fixtures set `AZPR_TEST_AZURE_BASE_URL` to a loopback fake service
+(`localhost`, `::1` or an address in 127.0.0.0/8); any other host is refused,
+so the PAT can only reach `dev.azure.com`.

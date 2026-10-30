@@ -87,7 +87,8 @@ test('threads whose first comment was deleted on the PR are recognized by ID', (
 test('base URL overrides are accepted only for loopback test servers', () => {
   assert.equal(restBaseUrl(), 'https://dev.azure.com');
   assert.equal(restBaseUrl('http://127.0.0.1:4100/'), 'http://127.0.0.1:4100');
-  for (const bad of ['https://evil.example', 'http://10.0.0.1:80', 'http://user:p@127.0.0.1:1', 'ftp://127.0.0.1']) assert.throws(() => restBaseUrl(bad), /loopback test server/);
+  assert.equal(restBaseUrl('https://127.0.0.2:4100'), 'https://127.0.0.2:4100', 'All of 127.0.0.0/8 is loopback.');
+  for (const bad of ['https://evil.example', 'http://10.0.0.1:80', 'http://128.0.0.1:1', 'http://127.example:1', 'http://user:p@127.0.0.1:1', 'ftp://127.0.0.1']) assert.throws(() => restBaseUrl(bad), /loopback test server/);
 });
 
 test('client: pinned api-version and Basic PAT, paged change list, threads and exact thread bodies', async () => {

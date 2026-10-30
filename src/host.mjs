@@ -6,9 +6,9 @@
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
  */
-export const TESTED_HOST_VERSION = '2.1.4';
+export const TESTED_HOST_VERSION = '2.2.4';
 
-// Text OpenCode (2.0.32 through 2.1.4) queues after resuming an interrupted text stream.
+// Text OpenCode (2.0.32 through 2.2.4) queues after resuming an interrupted text stream.
 export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
 
 // Context message types that mean someone other than the admitted prompt
@@ -57,7 +57,7 @@ export function packageNamed(target, name, repository) {
 }
 
 /**
- * This plugin's entries in the host's plugin list. OpenCode 2.1.4 lists
+ * This plugin's entries in the host's plugin list. OpenCode 2.1.4 through 2.2.4 list
  * { id?, source: { type: package|local|builtin|sdk, target?, version? },
  * state: { status: active|failed, error? } } and keeps only the first entry
  * of a plugin ID: a second one is listed as failed with "Duplicate plugin ID".
@@ -93,7 +93,7 @@ export function pluginSourceLabel(source) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.1.2 and 2.1.4 emit one delta event per streamed chunk of answer text,
+ * 2.1.2 through 2.2.4 emit one delta event per streamed chunk of answer text,
  * reasoning or tool-call input; the projected session context shows the text
  * only once the step ends.
  */
@@ -107,6 +107,13 @@ const PROGRESS_EVENTS = new Map([
   ['session.step.ended', 'a model step ended'],
 ]);
 
+/**
+ * The event types to subscribe to. OpenCode 2.2.0 and later deliver only
+ * these (`event.subscribe({ types })`); earlier releases ignore the option and
+ * `sessionProgress` skips the rest.
+ */
+export const PROGRESS_EVENT_TYPES = Object.freeze([...PROGRESS_EVENTS.keys()]);
+
 /** The session and activity a progress event stands for, or null. */
 export function sessionProgress(event) {
   const activity = PROGRESS_EVENTS.get(event?.type);
@@ -115,7 +122,7 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4),
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4 through 2.2.4),
  * whose fetch accepts per-request `proxy` and `tls` options. Node's fetch
  * silently ignores both, so a configured proxy would be bypassed; callers
  * refuse instead.
@@ -143,6 +150,22 @@ export function usageTotals(requests) {
   const prompt = total.input + total.cacheRead + total.cacheWrite;
   return { ...total, cachedInputShare: prompt ? Number((total.cacheRead / prompt).toFixed(4)) : null };
 }
+
+/**
+ * Provider error types that mean a usage or spend limit is used up. Another
+ * attempt fails the same way, so AZPR refuses OpenCode's retries of them and
+ * starts no new session. OpenCode 2.2.0 added the spend limits and 2.2.3 the
+ * ChatGPT and OpenCode Go usage limits; before, a ChatGPT limit arrived as a
+ * rate limit.
+ */
+export const USED_UP_LIMITS = Object.freeze({
+  'provider.quota': 'The provider reports the usage quota as used up',
+  'provider.free-limit': "OpenCode reports the free model's usage limit as reached",
+  'provider.chatgpt-limit': 'ChatGPT reports the subscription usage limit as reached',
+  'provider.go-limit': 'OpenCode Go reports its usage limit as reached',
+  'provider.budget-limit': 'OpenCode reports the workspace usage limit as reached',
+  'provider.model-budget-limit': "OpenCode reports this model's spend limit as reached",
+});
 
 /** Throw one readable error naming every missing host method. */
 export function requireMethods(context, paths, purpose) {
