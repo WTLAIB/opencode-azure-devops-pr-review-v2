@@ -1,7 +1,7 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.1 distributions and the 0.3.2 release candidate. Host
+0.1.0 through 0.3.2 distributions and the 0.3.3 release candidate. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -11,9 +11,10 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  five runs on the real OpenCode 2.1.4 host with isolated profiles and fake
+  five runs on the real OpenCode 2.2.4 host with isolated profiles and fake
   model and Azure DevOps services: fresh, replacement and native installation
-  (including an authenticating proxy and a custom CA certificate), a 120-file
+  (including an authenticating proxy, a custom CA certificate, a foreign MCP
+  server behind CodeMode and an image model), a 120-file
   review in shards with a context-overflow split and idempotent publication,
   and a refused background summary followed by a permanent failure.
 - **Live, with real models on Azure DevOps Services.** Reviews, comment
@@ -31,6 +32,70 @@ acceptance runs, including the MCP-based runs, are preserved in
 These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
+
+## 0.3.3 release candidate acceptance (2026-10-31)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.2.4 installed into a disposable prefix. The candidate moves the tested
+host to OpenCode 2.2.4 and contains the changes listed in the
+[changelog](../CHANGELOG.md); prompts and settings are those of 0.3.2, and the
+installers differ only in the target host they print.
+
+- `npm run check` and **424 offline tests** passed, including the `/pr-check`
+  OpenCode row for the tested and for another version, a used-up ChatGPT
+  usage limit whose host retry is refused, the progress-only event
+  subscription and test-only base URLs anywhere in 127.0.0.0/8.
+- All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
+  and fake model and Azure services. The fresh run made 99 model and 180 Azure
+  DevOps requests, as on 2.1.4; it reached the proxied Azure DevOps fixture
+  on 127.0.0.2 through one `CONNECT` tunnel, and private reviewers saw neither
+  the tool of the foreign MCP server behind CodeMode nor image generation.
+  Replacement, native packed package installation, comment scale (largest
+  provider request 33,419 characters, as for 0.3.2) and background compaction
+  passed too. The changed smoke test also passed on OpenCode 2.1.4.
+- A clean archive of the candidate installed with `install.sh`: the 19 runtime
+  modules, 8 prompts and the license match, and `--replace` kept the settings
+  byte for byte with mode 600 and an unrelated file in place. The 189 local
+  Markdown links and images resolve, apart from an image path inside an inline
+  code example.
+- `npm pack --dry-run --json` lists **32 files** (about 174 KB), as for 0.3.2.
+- Live, review only: the candidate, installed as a local Git package in the
+  home OpenCode service (still OpenCode 2.1.4), ran with `openai/gpt-6-luna`
+  on the 1-file test PR. `/pr-check` was READY in 5 s with the OpenCode WARNING
+  row for 2.1.4 and without a host notice. `/pr-review` was COMPLETE in 86 s
+  with three sessions and no retry: it confirmed the PR's three known medium
+  defects (snapshot isolation, reservation atomicity and absolute-time
+  ordering), after one repair turn in which the verifier supplied two missing
+  decisions. No comment was published; the service then returned to 0.3.2.
+  A live run on OpenCode 2.2.4 follows once that host is installed.
+
+This is a pre-publication record. Public Git installation is checked once the
+candidate is pushed; registry integrity and installation from npm are checked
+only after publication, following the [releasing guide](RELEASING.md).
+
+## OpenCode 2.2.4 compared with 2.1.4 (2026-10-31)
+
+Environment: Ubuntu 22.04.5 under WSL2 and Node 22.23.3. OpenCode CLI 2.2.4
+(published 2026-10-30, 963 commits after 2.1.4) was installed into a
+disposable prefix next to the system's 2.1.4; both embed Bun 1.4.4 (revision
+`38afee6c`). Every run used isolated profiles and the fake model and Azure
+DevOps services; no real model or Azure request was made. The upstream source
+of both tags was compared for each host interface AZPR uses.
+
+| Check | Observed |
+| --- | --- |
+| Plugin API | Additive only: session instruction entries, `experimental.generate`, typed `event.subscribe({ types })`, the experimental `experimental.idle` session hook and artifact providers. The hooks, session methods, request kinds, continuation text, session events, message types, permission actions and plugin list AZPR uses are unchanged. |
+| Model requests | The comment-scale fixture, run on both hosts from the same unchanged 0.3.2 revision, sent 34 requests that were byte-identical once per-run values (paths, IDs, review ID, date) were normalised; all 15 counters matched (75 Azure calls, largest request 33,445 characters in that checkout). |
+| Full workflow | The fresh smoke fixture made 99 model and 180 Azure DevOps requests on both hosts; only retry and watchdog timings differed. |
+| Tool scopes | Private reviewers saw the six AZPR tools plus `read`, `glob` and `grep` on both hosts, also with a foreign MCP server behind CodeMode. With an image model configured, OpenCode 2.2.4 offered `experimental_image_generate` to an ordinary session but not to private reviewers. |
+| Plugin loading | `opencode plugin add …@0.3.1` while the server ran: the seven commands appeared 0.5 s later. Adding 0.3.2 and removing 0.3.1: 0.3.2 was the only active entry 0.5 s later, without a restart. |
+| Proxies | OpenCode 2.2.4 merges `NO_PROXY` and `no_proxy` and adds `127.0.0.1`, `localhost` and `::1`. Bun skips even an explicit `proxy` option for a listed host: 127.0.0.1 and localhost were fetched directly, 127.0.0.2 through the proxy. The smoke fixture's proxied Azure DevOps service therefore listens on 127.0.0.2, which the test-only base URL check now accepts with the rest of 127.0.0.0/8. |
+| Provider errors | OpenCode 2.2.0 added `provider.budget-limit` and `provider.model-budget-limit`; 2.2.3 reports a used-up ChatGPT usage limit as `provider.chatgpt-limit` (previously a rate limit) and the OpenCode Go limit as `provider.go-limit`. Retry hooks receive the error type. |
+| Database | Nine migrations between 2.1.4 and 2.2.4 create, drop and move tables; they cannot be undone, so the database is backed up before an upgrade. |
+| Terminal UI | `opencode --prompt "/pr-review …"` can still submit before the command catalog loads (see [debugging](DEBUGGING.md)). |
+
+Not covered: real providers and Azure DevOps on 2.2.4, a ChatGPT usage limit
+actually being reached, and Desktop features.
 
 ## 0.3.2 release candidate acceptance (2026-10-30)
 
@@ -66,7 +131,10 @@ runtime, prompts, settings and installers are those of 0.3.1.
 This is a pre-publication record. Public Git installation and clean-source
 archive acceptance are checked on the release candidate; registry integrity
 and installation from npm are checked only after publication, following the
-[releasing guide](RELEASING.md).
+[releasing guide](RELEASING.md). After publication on 2026-10-30, the registry
+package's integrity matched the package built from the tag, and installing
+`opencode-azure-devops-pr-review@0.3.2` and the `v0.3.2` Git tag passed
+`host-v2-smoke.mjs --native --package`.
 
 ## 0.3.1 release candidate acceptance (2026-10-27)
 
@@ -1132,6 +1200,7 @@ Measured on 2026-10-13 with the Bun runtime embedded in OpenCode 2.0.22 (Bun
 | `tls: { rejectUnauthorized: false }` | Skips verification, also through a proxy. |
 | Proxy refusals | A 407 or a refused `CONNECT` (403) comes back as a `Response` with that status, not as an exception; it carries the proxy's headers only. |
 | Errors | Thrown with `error.code`: `ConnectionRefused` (also for an unreachable proxy), `ENOTFOUND`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE` and other certificate codes. |
+| `NO_PROXY` with `proxy` (2026-10-31, Bun 1.4.4) | A host listed in `NO_PROXY` is fetched directly even when the `proxy` option is set. |
 | Environment | `HTTPS_PROXY` and `NO_PROXY` are honoured without the `proxy` option; `NODE_EXTRA_CA_CERTS` and `NODE_TLS_REJECT_UNAUTHORIZED=0` work process-wide. |
 | Azure DevOps answers | A 302 sign-in redirect and a 404 for an unknown organization both carried `X-TFS-ProcessId` (and `ActivityId`, `X-VSS-E2EID`); the fixture proxy's answers did not. |
 
@@ -2142,9 +2211,9 @@ transient failure, and its error names the last activity.
 
 ## Known limitations
 
-- **Tested environment.** OpenCode CLI 2.1.4 (V2 plugin API) on Ubuntu 22.04
-  under WSL2. Other OpenCode 2.x versions add a host notice to receipts and
-  are not validated; OpenCode 1.x is not supported. Other operating systems
+- **Tested environment.** OpenCode CLI 2.2.4 (V2 plugin API) on Ubuntu 22.04
+  under WSL2. Other OpenCode 2.x versions get an OpenCode WARNING row in
+  `/pr-check` and are not validated; OpenCode 1.x is not supported. Other operating systems
   are not validated yet.
 - **Azure DevOps Services only.** Azure DevOps Server (on-premises) is not
   supported by the current URL handling.

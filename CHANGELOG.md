@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.3 — 2026-10-31
+
+- AZPR is tested with OpenCode 2.2.4 instead of 2.1.4. The runtime needed no
+  change: on both hosts the same review sends byte-identical model requests.
+  Upgrading OpenCode migrates its database irreversibly; stop the service and
+  back up `opencode.db` first.
+- `/pr-check` names the OpenCode version in a row of its own and warns when it
+  is not the tested one; reviews still run. Receipts no longer end with a
+  host notice.
+- A used-up usage or spend limit stops the stage at once: AZPR refuses
+  OpenCode's retries and starts no new session, and the receipt names the
+  limit. This covers OpenCode 2.2.3's ChatGPT and OpenCode Go usage limits and
+  OpenCode's spend limits besides the provider quota and the free-model limit;
+  before, a used-up ChatGPT limit was retried as a rate limit.
+- AZPR subscribes only to the session events that show a review progressing;
+  OpenCode 2.2.0 and later deliver no others.
+- On OpenCode 2.2.4, `NO_PROXY` always lists `127.0.0.1`, `localhost` and
+  `::1`, and Bun honours `NO_PROXY` even for `azure.proxy`. Azure DevOps is
+  unaffected; the company-network guide now says to keep `dev.azure.com` out of
+  `NO_PROXY` when it must use the proxy. Test-only Azure DevOps base URLs may
+  use any 127.0.0.0/8 address, so the proxy scenario can still be tested.
+- The host smoke test adds a foreign MCP server behind CodeMode and an image
+  model, and checks that private reviewers see neither those tools nor image
+  generation while ordinary sessions keep them.
+
 ## 0.3.2 — 2026-10-30
 
 - The README starts with actual Azure DevOps output: an inline comment with its

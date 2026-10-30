@@ -6,7 +6,7 @@ MCP dependency. Start with the [quickstart](QUICKSTART.md), then use
 this page to understand access, data flow and local retention before reviewing
 your team's repositories.
 
-The tested environment is **OpenCode V2 `@opencode/cli` 2.1.4 on Ubuntu
+The tested environment is **OpenCode V2 `@opencode/cli` 2.2.4 on Ubuntu
 22.04**. Azure DevOps Server URLs are not supported. See
 [current validation](VALIDATION.md) for the distinction between isolated tests
 with fake services and runs against real Azure DevOps and model providers.
@@ -199,9 +199,10 @@ is made. Set up the first before `opencode plugin add`:
 | Model providers | The OpenCode background service | The service's environment, as in OpenCode's [network guide](https://opencode.ai/v2/docs/network) |
 | Azure DevOps | AZPR, inside the OpenCode service | `azure.proxy` and `azure.caFile` below; with an empty `azure.proxy`, the service environment's proxy variables apply |
 
-- When a terminal sets a proxy, keep `localhost,127.0.0.1,::1` in its
-  `NO_PROXY`: the `opencode` command reaches the background service over the
-  loopback interface. Keep your organization's existing exceptions too.
+- The `opencode` command reaches the background service over the loopback
+  interface. OpenCode 2.2.4 adds `127.0.0.1,localhost,::1` to `NO_PROXY`
+  itself, so a terminal proxy no longer catches that connection; keep your
+  organization's existing exceptions in `NO_PROXY`.
 - A variable set with `opencode service set env` applies when the service
   starts; setting one stops the running service, so start it again with
   `opencode service start`. Exports in a terminal do not change a service that
@@ -231,6 +232,8 @@ model-provider connectivity separately in the OpenCode environment.
 Restart the OpenCode service after changing transport settings or the CA file. These
 options depend on Bun's per-request transport support; an unsupported runtime
 refuses to load them. If `azure.proxy` is empty, process-wide proxy environment
-settings can still apply. A TLS-inspecting proxy can see the PAT and source
+settings can still apply. A host listed in the service environment's `NO_PROXY`
+bypasses `azure.proxy` too, because Bun applies `NO_PROXY` to an explicit proxy;
+keep `dev.azure.com` out of it when Azure DevOps must go through the proxy. A TLS-inspecting proxy can see the PAT and source
 traffic. See [proxies and TLS inspection](AZURE_DEVOPS.md#proxies-and-tls-inspection)
 for setup and connection troubleshooting.

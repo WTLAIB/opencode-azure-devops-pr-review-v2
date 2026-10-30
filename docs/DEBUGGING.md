@@ -6,13 +6,13 @@ acceptance, Azure source validity or report quality.
 
 ## A startup slash command becomes an ordinary prompt
 
-On OpenCode 2.1.2 through 2.1.4, `opencode --prompt "/pr-review ..."` can
+On OpenCode 2.1.2 through 2.2.4, `opencode --prompt "/pr-review ..."` can
 submit before a native Git package's command catalog has loaded. The host then
 treats the text as an ordinary model prompt; AZPR has not received the command.
 This was observed in local native-package TUI acceptance failures on 2.1.2 and
 matches the host's
-[startup submission](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/tui/src/routes/home.tsx#L62)
-and [command classification](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/tui/src/component/prompt/index.tsx#L1153).
+[startup submission](https://github.com/anomalyco/opencode/blob/v2.2.4/packages/tui/src/routes/home.tsx#L68)
+and [command classification](https://github.com/anomalyco/opencode/blob/v2.2.4/packages/tui/src/component/prompt/index.tsx#L1155).
 
 Start the TUI normally and wait for `/pr-review` to appear in slash-command
 completion before submitting it. A command admitted by AZPR emits its own
@@ -118,7 +118,7 @@ Common receipts:
 | Message | Next step |
 | --- | --- |
 | `Azure DevOps rejected the PAT for organization …` | Renew or correct the PAT in `azure.pat` or the file named by `azure.patFile` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart the OpenCode service. |
-| `The provider reports the usage quota as used up (provider.quota)` / `OpenCode reports the free model's usage limit as reached (provider.free-limit)` | The stage failed without a new-session retry, which would fail the same way. Choose another model in the settings, or wait until the provider's quota or the free limit resets. |
+| `The provider reports the usage quota as used up (provider.quota)` / `ChatGPT reports the subscription usage limit as reached (provider.chatgpt-limit)` and the other used-up usage or spend limits (`provider.free-limit`, `provider.go-limit`, `provider.budget-limit`, `provider.model-budget-limit`) | The stage failed without a retry, which would fail the same way; AZPR also refused OpenCode's own retries. Choose another model in the settings, or wait until the limit resets. |
 | `azure.patFile could not be used …` / `azure.patFile changed since OpenCode loaded it` | Make it a regular file you own with only the PAT (`chmod 600`), or restart the OpenCode service after replacing it. |
 | `Azure DevOps refused … (HTTP 403 …)` | Add the missing PAT scope or project/repository access. |
 | `network error (ConnectionRefused)` with a hint to set `azure.proxy` | dev.azure.com is reachable only through a proxy; set `azure.proxy` (see [proxies](AZURE_DEVOPS.md#proxies-and-tls-inspection)). |

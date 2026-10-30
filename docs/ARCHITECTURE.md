@@ -125,7 +125,7 @@ After preflight, hooks never re-read settings or catalogs.
    ends the turn; that message (or a 413) marks the stage as `overflow`, and the
    runtime splits that shard in half and runs both halves (labels
    `shard 1/5a`, `1/5b`). OpenCode's opt-in `experimental.background_compaction`
-   (2.1.4) asks for a summary through the same request before the context is
+   (2.1.4 and later) asks for a summary through the same request before the context is
    full and publishes nothing; it is refused before anything is sent and the
    turn goes on, so a later failure is classified by its own cause.
 4. **Verification** — findings are grouped by file into shards of at most
@@ -229,7 +229,11 @@ the stage once in a new session (`workflow.stageRetries`). Permanent failures
 and cancellations are not retried. Before that, OpenCode itself retries a
 failed provider request in the same session (backoff from 2 s, `Retry-After`
 up to 15 minutes); it prepares every resend again, so the resend passes the
-`context` and `model.request` hooks like any request.
+`context` and `model.request` hooks like any request. AZPR refuses those
+retries for a used-up usage or spend limit (`provider.quota`,
+`provider.free-limit`, `provider.chatgpt-limit`, `provider.go-limit`,
+`provider.budget-limit`, `provider.model-budget-limit`), which fails the
+stage as permanent and is named in the receipt.
 
 A **stage inactivity watchdog** (`workflow.stageIdleSeconds`, default 600, 0
 turns it off) covers a model stream, a tool or the host that stops responding.
@@ -239,8 +243,9 @@ activity (an announced retry wait is added to the window), and a running AZPR
 tool counts until it returns because its Azure calls have their own timeouts.
 Streamed output reaches no hook, so while a stage is watched AZPR follows
 OpenCode's session events (`event.subscribe`), which carry one event per
-streamed chunk of answer text, reasoning or tool-call input; a host without
-them leaves only the hooks. A stage with
+streamed chunk of answer text, reasoning or tool-call input. AZPR asks for
+those progress types only; OpenCode 2.2.0 and later deliver nothing else. A
+host without them leaves only the hooks. A stage with
 no activity for the whole window is stopped: its grant is revoked, its session
 interrupted, and it fails with `failure=idle` and an error that names the last
 activity, such as `Stage inactivity watchdog stopped this stage: no activity
@@ -360,7 +365,8 @@ private session gets a grant with the run, role, model and a pending prompt
 - `model.request`: only primary requests after an authorized context; compaction,
   generation and title requests are refused (a compaction the host attempts
   in the turn ends it as overflow).
-- `retry`: host retries continue only while the grant is active; the announced
+- `retry`: host retries continue only while the grant is active and never
+  for a used-up usage or spend limit; the announced
   wait does not count as inactivity. OpenCode prepares the resend again
   (`context`, then `model.request`), so it passes the primary-request check.
 - `permission` `evaluate`: enforces the `shell` setting for private roles,
@@ -410,9 +416,10 @@ Without `permission.hook` the project boundary for native read tools is left to
 the host's own permission rules; `/pr-check` shows a WARNING row and reviews
 still run. With `plugin.list`, `/pr-check` names the installation that runs
 and warns about any other AZPR entry the host configured but does not run,
-such as a second version that OpenCode 2.1.4 lists as a duplicate plugin ID;
+such as a second version that OpenCode 2.1.4 through 2.2.4 list as a duplicate plugin ID;
 a host without it gets an information row.
-Receipts note when the detected OpenCode version differs from the tested one
-(`TESTED_HOST_VERSION`, 2.1.4).
+`/pr-check` names the detected OpenCode version in a row of its own and warns
+when it is not the tested one (`TESTED_HOST_VERSION`, 2.2.4); reviews still
+run, and other receipts do not repeat it.
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.
