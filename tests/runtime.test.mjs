@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES } from '../src/config.mjs';
+import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
 import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
@@ -56,8 +57,9 @@ async function fixture(t, opts = {}) {
   const agents = new Map([['build', { id: 'build', permissions: [] }]]);
   const commands = new Map();
   const hooks = new Map(), sessions = new Map(), calls = [], notices = [], waiters = new Set();
-  // OpenCode's session event feed: tests publish events such as streamed text deltas.
-  const feeds = new Set();
+  // OpenCode's session event feed: tests publish events such as streamed text deltas. Like OpenCode 2.2.0 and
+  // later, a subscription that names types receives only those.
+  const feeds = new Set(), subscriptions = [];
   const publish = event => { for (const feed of feeds) feed(event); };
   let seq = 0;
   const emit = async (domain, name, event) => { for (const fn of hooks.get(`${domain}:${name}`) ?? []) await fn(event); return event; };
@@ -78,16 +80,17 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: '2.1.4' },
+    app: { version: opts.version ?? '2.2.4' },
     location: { directory },
     // Like a host catalog, each configured model once, however many roles name it.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
       .map(value => value.slice(8).split('#')[0]))].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
     ...(opts.plugins ? { plugin: { async list() { return typeof opts.plugins === 'function' ? opts.plugins() : { data: clone(opts.plugins) }; } } } : {}),
-    ...(opts.events === false ? {} : { event: { subscribe() {
+    ...(opts.events === false ? {} : { event: { subscribe(options) {
+      subscriptions.push(options);
       const queue = [], waiting = [];
-      const feed = event => { const next = waiting.shift(); if (next) next({ value: event, done: false }); else queue.push(event); };
+      const feed = event => { if (options?.types && !options.types.includes(event.type)) return; const next = waiting.shift(); if (next) next({ value: event, done: false }); else queue.push(event); };
       feeds.add(feed);
       const done = { value: undefined, done: true };
       return { [Symbol.asyncIterator]: () => ({
@@ -137,7 +140,7 @@ async function fixture(t, opts = {}) {
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-            // Like OpenCode 2.1.4: a compaction it attempts in the turn opens its message first, and AZPR's refusal
+            // Like OpenCode 2.1.4 through 2.2.4: a compaction it attempts in the turn opens its message first, and AZPR's refusal
             // ends the turn; a background summary publishes nothing, and its refusal stays in the background.
             const compact = async ({ background = false } = {}) => {
               const message = background ? undefined : { id: `compaction_${++seq}`, type: 'compaction', status: 'running' };
@@ -185,7 +188,7 @@ async function fixture(t, opts = {}) {
   const stateDirectory = join(directory, 'state');
   const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, stageIdleMs: opts.stageIdleMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
-  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, publish,
+  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, subscriptions, publish,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
     // Resolves with the first truthy result of `find(notices)`, checked on every new notice.
     waitFor: find => new Promise(resolve => {
@@ -336,6 +339,26 @@ test('a used-up quota is not retried in a new session although its status is 429
   assert.ok(!f.notices.some(n => /retrying in a new session/.test(n.text)));
 });
 
+test('a used-up ChatGPT usage limit: OpenCode\'s retry is refused, no new session starts and the receipt names the limit', async t => {
+  let retry;
+  const f = await fixture(t, {
+    async during({ session, role, turn, emit }) {
+      if (role !== 'azpr-review-risk' || turn) return;
+      // OpenCode 2.2.3 types the limit, which arrives as a 429, and proposes a retry after its retry-after.
+      retry = await emit('session', 'retry', { sessionID: session.id, agent: role, model: clone(session.model), attempt: 2,
+        error: { type: 'provider.chatgpt-limit', status: 429 }, decision: { retry: true, delay: 900000 } });
+    },
+    answer({ role }) { return role === 'azpr-review-risk' ? { $provider: 429, $providerType: 'provider.chatgpt-limit' } : undefined; },
+  });
+  const receipt = await f.command();
+  assert.deepEqual(retry.decision, { retry: false });
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 1);
+  assert.match(receipt, /azpr-review-risk: FAILED.*failure=permanent/);
+  assert.match(receipt, /ChatGPT reports the subscription usage limit as reached \(provider\.chatgpt-limit\), so a new session would fail the same way and is not started/);
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.deepEqual(risk.requestObservations.retries, [{ attempt: 2, proposed: true, allowed: false, usedUp: 'provider.chatgpt-limit' }]);
+});
+
 test('a permanent provider failure is not retried and the sibling review continues', async t => {
   const f = await fixture(t, { answer({ role }) { return role === 'azpr-review-risk' ? { $provider: 401 } : undefined; } });
   const receipt = await f.command();
@@ -426,6 +449,8 @@ test('streamed output is activity: an answer that keeps streaming past the windo
   assert.equal(f.sessionsFor('azpr-review-risk').length, 2);
   assert.match(receipt, /azpr-review-risk: FAILED; [^\n]*failure=idle; error=\[AZPR\] Stage inactivity watchdog stopped this stage: no activity for 0\.4 s after model output was streamed \(workflow\.stageIdleSeconds\)\./);
   assert.equal(f.feeds.size, 0, 'The event feed closes when no stage is watched.');
+  assert.ok(f.subscriptions.length > 0);
+  for (const options of f.subscriptions) assert.deepEqual(options, { types: [...PROGRESS_EVENT_TYPES] }, 'AZPR subscribes to progress events only.');
 });
 
 test('working stages are never stopped: every event restarts the window, a running AZPR tool and an announced host retry wait count', async t => {
@@ -488,7 +513,7 @@ test('a compaction the host attempts marks context overflow and the shard is spl
 });
 
 test('a refused background summary does not turn a later permanent failure into an overflow split', async t => {
-  // experimental.background_compaction (OpenCode 2.1.4) asks for a summary before the context is full; the turn goes on.
+  // experimental.background_compaction (OpenCode 2.1.4 and later) asks for a summary before the context is full; the turn goes on.
   const f = await fixture(t, { files: ['/a.ts', '/b.ts'], async during({ role, packet, compact }) {
     if (role === 'azpr-review-functional' && packet.assignment.files.length > 1) await compact({ background: true });
   }, answer({ role, packet }) {
@@ -1140,11 +1165,28 @@ test('/pr-check names the running installation and warns about another AZPR entr
   assert.match(masked, /\| AZPR \| WARNING \| Another AZPR entry .* Running git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git#v0\.3\.0 \(commit 6dcb4d2\); not running: git\+https:\/\/\*\*\*@github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2\.git\?\*\*\*#main \(/, 'The row is cut at 300 characters after the advice and both masked labels.');
 });
 
+test('/pr-check names the tested OpenCode version in its own row', async t => {
+  const f = await fixture(t);
+  const check = await f.command('pr-check');
+  assert.match(check, /\| OpenCode \| ok \| OpenCode 2\.2\.4, the tested version\. \|/);
+  assert.doesNotMatch(check, /Host notice/);
+});
+
+test('another OpenCode version is a /pr-check warning, not a failure; review receipts carry no host notice', async t => {
+  const f = await fixture(t, { version: '2.2.5' });
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/);
+  assert.match(check, /\| OpenCode \| WARNING \| OpenCode 2\.2\.5; AZPR is tested with 2\.2\.4\. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing\. \|/);
+  const review = await f.command('pr-review', f.azure.prUrl(), 'review');
+  assert.match(review, /\] COMPLETE/);
+  assert.doesNotMatch(check + review, /Host notice|differs from the tested/);
+});
+
 test('a host without the permission hook gets a /pr-check warning about the project boundary; reviews still run', async t => {
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.1\.4, the tested version, has the hook\. \|/);
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.2\.4, the tested version, has the hook\. \|/);
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 

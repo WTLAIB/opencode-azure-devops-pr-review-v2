@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { TESTED_HOST_VERSION, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication,
@@ -412,7 +412,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     eventFollowers++;
     if (eventFeed || disposed || !capabilities.eventSubscribe) return;
     let iterator;
-    try { iterator = context.event.subscribe()[Symbol.asyncIterator](); } catch { return; }
+    try { iterator = context.event.subscribe({ types: [...PROGRESS_EVENT_TYPES] })[Symbol.asyncIterator](); } catch { return; }
     eventFeed = iterator;
     void (async () => {
       try {
@@ -681,7 +681,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
     requireMethods(context, ['session.create', 'session.prompt', 'session.wait', 'session.context', 'session.interrupt', 'session.synthetic'], 'the review workflow');
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
-    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(), compatibility: capabilities,
+    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(),
       deadlineAt: settings.runTimeoutSeconds === null ? null : Date.now() + settings.runTimeoutSeconds * 1000 };
     runs.set(id, run);
     sourceRuns.set(run.origin, id);
@@ -765,6 +765,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     else if (modelSlots('deep').every(slot => settings.models.deep[slot] === settings.models.review[slot])) {
       checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models there for the PRs that need them.' });
     }
+    // One OpenCode release is validated; on others, reviews still run and what AZPR needs is detected at runtime.
+    const host = capabilities.version === 'unknown' ? 'OpenCode did not report its version' : `OpenCode ${capabilities.version}`;
+    checks.push(capabilities.tested ? { name: 'OpenCode', ok: true, detail: `${host}, the tested version.` }
+      : { name: 'OpenCode', ok: true, warning: true, detail: `${host}; AZPR is tested with ${TESTED_HOST_VERSION}. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing.` });
     checks.push(await installationCheck(run));
     // What follows a COMPLETE review of each mode; automatic publication posts as the PAT owner.
     const publishing = MODES.filter(mode => settings.afterReview[mode] === 'publish').map(mode => `/pr-${mode}`);
@@ -1223,7 +1227,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       try {
         const g = authorize(event.sessionID, event.agent, event.model);
         // Refused before anything is sent. Whether the stage overflowed is read from its failed turn: a
-        // compaction OpenCode attempts there ends it, a background summary (OpenCode 2.1.4) does not.
+        // compaction OpenCode attempts there ends it, a background summary (OpenCode 2.1.4 and later) does not.
         if (event.kind !== 'primary') {
           throw new Error(event.kind === 'compaction'
             ? '[AZPR] Private review compaction is not authorized; a reviewer whose context fills is split into smaller sessions instead.'
@@ -1243,12 +1247,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
       const g = grants.get(event.sessionID);
       const proposed = event.decision?.retry === true;
+      // A used-up usage or spend limit fails every attempt the same way; the failed turn names it.
+      const usedUp = Object.hasOwn(USED_UP_LIMITS, event.error?.type) ? event.error.type : null;
       let authorized = false;
-      try { if (g?.run.active) { authorize(event.sessionID, event.agent, event.model); authorized = true; } } catch { /* Revoked. */ }
+      try { if (g?.run.active && !usedUp) { authorize(event.sessionID, event.agent, event.model); authorized = true; } } catch { /* Revoked. */ }
       if (!authorized) event.decision = { retry: false };
       const attempt = Number.isInteger(event.attempt) ? event.attempt : null;
       const delayMs = Number.isFinite(event.decision?.delay) && event.decision.delay > 0 ? event.decision.delay : 0;
-      g?.retryEvents.push({ attempt, proposed, allowed: authorized && proposed, ...(delayMs ? { delayMs } : {}) });
+      g?.retryEvents.push({ attempt, proposed, allowed: authorized && proposed, ...(usedUp ? { usedUp } : {}), ...(delayMs ? { delayMs } : {}) });
       // OpenCode waits before it prepares the request again; that wait is not inactivity.
       if (authorized && proposed) touch(g, `the host scheduled a retry${attempt === null ? '' : ` (attempt ${attempt})`}`, delayMs);
     }));
@@ -1256,7 +1262,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Enforce the shell setting and the project boundary, regardless of
       // permission rules the host appends after this plugin. Outside the
       // project only AZPR's own private data is readable; the host's default
-      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.1.4 allow).
+      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.2.4 allow).
       // Private reviewers run unattended: a request that would wait for
       // approval is refused at once. Only shell keeps host approvals, and only
       // when the user allowed it (shell: "ask" or "inherit").

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isHostContinuation, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -90,10 +90,10 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(listOf({}), null);
   assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
-  const capabilities = hostCapabilities({ app: { version: '2.1.4' }, permission: { hook() {} }, tool: { transform() {} } });
+  const capabilities = hostCapabilities({ app: { version: '2.2.4' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
-  assert.equal(TESTED_HOST_VERSION, '2.1.4');
-  for (const version of ['2.0.32', '2.1.2', '2.1.3', '2.1.5']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
+  assert.equal(TESTED_HOST_VERSION, '2.2.4');
+  for (const version of ['2.0.32', '2.1.4', '2.2.3', '2.2.5']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);
@@ -176,4 +176,8 @@ test('session progress events: streamed text, reasoning and tool-call input, too
   for (const type of ['session.status', 'session.usage.updated', 'session.inbox.enqueued', 'session.synthetic', 'message.part.delta']) assert.equal(sessionProgress({ type, data }), null, type);
   assert.equal(sessionProgress({ type: 'session.text.delta', data: {} }), null);
   assert.equal(sessionProgress(undefined), null);
+  // The subscription asks for exactly these types; each one is progress.
+  assert.deepEqual(PROGRESS_EVENT_TYPES, ['text', 'reasoning', 'tool.input'].flatMap(kind => ['started', 'delta', 'ended'].map(phase => `session.${kind}.${phase}`))
+    .concat(['session.tool.progress', 'session.step.started', 'session.step.streamed', 'session.step.ended']));
+  for (const type of PROGRESS_EVENT_TYPES) assert.ok(sessionProgress({ type, data }), type);
 });
