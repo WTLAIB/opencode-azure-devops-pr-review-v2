@@ -176,21 +176,24 @@ test('agents: one per configured role; deep needs all three models', () => {
 test('prompts: review stays byte-identical and deep shares it; quick never claims verification', async () => {
   const { createHash } = await import('node:crypto');
   const sha = value => createHash('sha256').update(value).digest('hex');
-  // System prompts of the review roles as of origin/main 5f9b917, except the
-  // comment-plan prompts, which deliberately gained skip causes and page-scoped
-  // lists afterwards and lost `priorPages` when pages began to run side by side.
+  // System prompts of the review roles as of 0.3.4, whose shared finding rules
+  // deliberately gained concrete gaps, one finding per place that needs its own
+  // correction and identical copies in one reviewer's files as one place. The
+  // comment-plan prompts gained skip causes and page-scoped lists after
+  // origin/main 5f9b917 and lost `priorPages` when pages began to run side by
+  // side.
   // Changing a review prompt is a deliberate change: update these together with
   // the validation notes. Deep roles run the same prompts with other models.
   const golden = {
-    'deny/en/azpr-review-functional': '7cf42ea540fa186787b0a8805b63bca31b3222ea2e00095f15969a15e1fdd153',
-    'deny/en/azpr-review-risk': '8ca8ffcb26725ccd9cc58a4d215f1e340fa2e9373747b5fd1794ba8ec367c744',
-    'deny/en/azpr-review-verifier': 'e2b0ed1f40ffc46e5311b3f26c7b9a0a56d0607a516326d894f71da1ede6d36b',
-    'deny/en/azpr-review-dedupe': 'e79b2b24f9f370c63434342d2b827e877b1d6bbfb35802c7d80eebcb80913d0d',
+    'deny/en/azpr-review-functional': '49387ce563f8c49ead79c7e1025807da157b0bc91318b5f3fb94346b2872f2e6',
+    'deny/en/azpr-review-risk': 'b54e1c80216d1442684e9c562adc1183f3b79aee5ea8623162bbdf9d195e685e',
+    'deny/en/azpr-review-verifier': '294cffce3c35bf775e4300befb4110faa107d87974cdf087e1a544cd777c2e22',
+    'deny/en/azpr-review-dedupe': 'd7473266071dcf71be4995d8e8388bc968f60a2a13f27e44f60a101cb385b1a9',
     'deny/en/azpr-review-comment-plan': '506df14af887046901ec8ab10a027047385f307366e7a2a6379eb37e71513d71',
-    'ask/zh-TW/azpr-review-functional': '04ec17882223a5cbf69ae939e3940c29f3d49e14379464e3a7d9b2fbb97e6e9a',
-    'ask/zh-TW/azpr-review-risk': 'f92f208652f132d98d7f490a51fab622753b24286ce9d40393bffa44899be68c',
-    'ask/zh-TW/azpr-review-verifier': 'b4658b0d65804c760b41b3bb9dc4e5e2ccc2f8bd95dbd7daa6ca61cacb8e166a',
-    'ask/zh-TW/azpr-review-dedupe': 'acd089cdaf06bb1c1021c16a4e587f38b3ee5650016303c2734cada925695e15',
+    'ask/zh-TW/azpr-review-functional': '772be62d6b7d4760f6d3a1f064d54f4cd11fb7ff9f13fc76c1db211b42a67ec1',
+    'ask/zh-TW/azpr-review-risk': 'ef96c0384588e5d5c8a30cb042bc0922d5f453e0417b332978f5f0d158ce873b',
+    'ask/zh-TW/azpr-review-verifier': 'e06c4595df5549fc3d209c3260d18da74e0ea4809980fb455b12dfda694a8e24',
+    'ask/zh-TW/azpr-review-dedupe': '5530ad42de10c9bba4f9ec2c3cd486520eaedc6a47c20b0aac2d3c1ab3ce0c69',
     'ask/zh-TW/azpr-review-comment-plan': 'd58d632befcbbe664e00f7f253e892cad656683e6f97ec9a4ab7540c00929630',
   };
   const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv' }, quick: { reviewer: 'p/q' } };
