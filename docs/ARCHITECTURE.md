@@ -124,7 +124,10 @@ After preflight, hooks never re-read settings or catalogs.
    fail, documentation or configuration that now contradicts the code,
    duplicated or dead code the change adds) are findings too, usually low. A
    mistake repeated in places that each need their own fix is one finding per
-   place; identical copies of one file count as one place.
+   place. Identical copies of one file count as one place within one
+   reviewer's assigned files; shards are cut by path, so copies in different
+   shards can each produce a finding, and the cross-shard duplicate check
+   compares only findings in the same file.
 3. **Overflow** — private sessions may not compact. A compaction the host
    attempts in a reviewer's turn opens its message first and is refused, which
    ends the turn; that message (or a 413) marks the stage as `overflow`, and the

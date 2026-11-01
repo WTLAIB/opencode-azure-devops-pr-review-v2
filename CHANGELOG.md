@@ -14,8 +14,10 @@
   parallel routes or handlers that make the same wrong call, is one finding per
   place, each at its own lines with the sibling places in its evidence, and
   reviewers check their other assigned files for the same mistake. Identical
-  copies of one file count as one place, and one wrong piece of shared code
-  stays one finding at that code. `/pr-quick` follows the same rule.
+  copies of one file among one reviewer's assigned files count as one place;
+  copies that a large PR's shards give to different reviewers can each produce
+  a finding. One wrong piece of shared code stays one finding at that code.
+  `/pr-quick` follows the same rule.
 - In a self-judged before-and-after comparison on the public ReviewBench test
   set, `/pr-deep` with gpt-6.1-sol matched more of the high- and
   medium-severity reference issues, including high ones, with more findings,

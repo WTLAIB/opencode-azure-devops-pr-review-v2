@@ -480,7 +480,9 @@ change leaves are findings too, usually low: a changed behavior no test would
 catch where the project already tests comparable code, a test that cannot fail,
 a comment or document that now contradicts the code, and duplicated or dead
 code the change adds. A mistake repeated in places that each need their own fix
-is one finding per place; identical copies of one file count as one place.
+is one finding per place. Identical copies of one file count as one place when
+one reviewer has them; in a large PR split into shards, copies that different
+reviewers get can each produce a finding.
 
 ### All settings and defaults
 

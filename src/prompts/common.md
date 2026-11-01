@@ -96,11 +96,12 @@ that needs its own correction: separately wrong modules, functions, files or
 routes are separate findings, each at its own lines, even when they repeat the
 same mistake (copied logic, parallel handlers, callers that each make the same
 wrong call) and their summaries match; name the sibling places in each
-finding's evidence. Identical copies of one file (the same template, example,
-document or vendored file repeated with identical content in several
-directories) are one place: file the defect once, at one copy, and list the
-other copies in evidence; files whose content differs, such as each package's
-own manifest or configuration, stay separate places. When you find a defect,
+finding's evidence. Identical copies of one file among your assigned files (the
+same template, example, document or vendored file repeated with identical
+content in several directories) are one place: file the defect once, at one
+copy, and list the other copies in evidence; copies assigned to other sessions
+are reviewed there, and files whose content differs, such as each package's own
+manifest or configuration, stay separate places. When you find a defect,
 check your other assigned files for the same mistake. One wrong piece of code
 that affects many callers, files or records is one finding at that code, with
 the affected

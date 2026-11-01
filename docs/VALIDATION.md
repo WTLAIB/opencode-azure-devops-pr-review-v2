@@ -46,7 +46,7 @@ checklist; the runtime modules, settings and installers are those of 0.3.3.
 - All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
   and fake model and Azure services. The fresh run made 99 model and 180 Azure
   DevOps requests, as for 0.3.3. Replacement, native packed package
-  installation, comment scale (largest provider request 34,548 characters,
+  installation, comment scale (largest provider request 34,633 characters,
   33,419 for 0.3.3, from the longer shared instructions) and background
   compaction passed too.
 - A clean copy of the candidate tree installed with `install.sh`: the 19
@@ -54,17 +54,25 @@ checklist; the runtime modules, settings and installers are those of 0.3.3.
   settings byte for byte with mode 600 and an unrelated file in place. The 161
   local Markdown links and images outside code examples resolve.
 - `npm pack --dry-run --json` lists **32 files** (about 175 KB), as for 0.3.3.
-- The pushed release commit, installed from GitHub as a public Git package in
-  an isolated profile, passed the native smoke test with 99 model and 180 Azure
-  DevOps requests. Later commits on the branch change only documentation.
-- Live, review only (2026-11-02): the candidate, installed from its public Git
-  commit in the home OpenCode 2.2.4 service, ran with `openai/gpt-6-luna` on
-  the 1-file test PR. `/pr-check` was READY in 5 s. `/pr-review` was COMPLETE
+- The first pushed release commit (`5aea254`), installed from GitHub as a
+  public Git package in an isolated profile, passed the native smoke test with
+  99 model and 180 Azure DevOps requests. The final commit is checked the same
+  way before tagging.
+- Live, review only (2026-11-02): commit `5aea254`, installed from GitHub in the
+  home OpenCode 2.2.4 service, ran with `openai/gpt-6-luna` on the 1-file test
+  PR. `/pr-check` was READY in 5 s. `/pr-review` was COMPLETE
   in 92 s with three sessions and no retry: it confirmed the PR's three known
   medium defects (snapshot isolation, reservation atomicity and absolute-time
   ordering), merged the two other candidates into them and added no low
   finding, after one repair turn in which the verifier corrected its answer.
   No comment was published; the service then returned to 0.3.3.
+- Live, quick only (2026-11-02): after the identical-copies rule was limited to
+  one reviewer's assigned files, the candidate, installed in the same service
+  as a local Git package of the working tree, ran `/pr-quick` with
+  `openai/gpt-6-luna` on the 1-file test PR. It was COMPLETE in 36 s with one
+  session and complete coverage, and reported the same three known medium
+  defects and nothing else. No comment was published; the service then
+  returned to 0.3.3.
 
 This is a pre-publication record. Registry integrity and installation from npm
 are checked only after publication, following the
@@ -99,8 +107,10 @@ the change between the two instruction versions, not a leaderboard result.
   origin. 0.3.3 matched the high reference issue of only one route; 0.3.4
   reported each route and matched all of them. Before the identical-copies
   rule, a documentation example copied into many templates produced a finding
-  for each copy; with the rule the repeats mostly disappeared without losing
-  high matches.
+  for each copy; with the rule each initial-review shard reported it once, so
+  copies in different shards still kept a finding each, without losing high
+  matches. The rule therefore promises one finding per reviewer's assigned
+  files, not per PR.
 - With gpt-6-luna, `/pr-review` matched slightly more, within the variation
   between runs, and high matches stayed the same.
 - Limits: the comparison has few runs per configuration and runs of the same
