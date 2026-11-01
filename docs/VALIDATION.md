@@ -1,7 +1,7 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.2 distributions and the 0.3.3 release candidate. Host
+0.1.0 through 0.3.3 distributions and the 0.3.4 release candidate. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -32,6 +32,67 @@ acceptance runs, including the MCP-based runs, are preserved in
 These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
+
+## 0.3.4 release candidate acceptance (2026-11-01)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.2.4. The candidate changes the reviewer instructions shared by all review
+modes (`src/prompts/common.md`) and the matching line of the quick reviewer's
+checklist; the runtime modules, settings and installers are those of 0.3.3.
+
+- `npm run check` and **424 offline tests** passed. The locked prompt hashes
+  were updated for the functional, risk, verifier and dedupe prompts in both
+  checked shell and language variants; the comment-plan prompts are unchanged.
+- All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
+  and fake model and Azure services. The fresh run made 99 model and 180 Azure
+  DevOps requests, as for 0.3.3. Replacement, native packed package
+  installation, comment scale (largest provider request 34,548 characters,
+  33,419 for 0.3.3, from the longer shared instructions) and background
+  compaction passed too.
+- A clean copy of the candidate tree installed with `install.sh`: the 19
+  runtime modules, 8 prompts and the license match, and `--replace` kept the
+  settings byte for byte with mode 600 and an unrelated file in place. The 161
+  local Markdown links and images outside code examples resolve.
+- `npm pack --dry-run --json` lists **32 files** (about 175 KB), as for 0.3.3.
+- No live Azure DevOps run of the candidate has been made yet.
+
+### Reviewer instructions compared on the ReviewBench test set
+
+The new instructions were compared with 0.3.3 before release on the public
+[ReviewBench](https://github.com/review-bench/ReviewBench) test set. A local
+harness served each PR's public repository to an isolated OpenCode 2.2.4
+profile through a fixture of the Azure DevOps API built from its Git history,
+ran `/pr-deep` with `openai/gpt-6.1-sol` and `/pr-review` with
+`openai/gpt-6-luna` at their default reasoning effort, and converted the
+findings AZPR would comment on into ReviewBench's judging input. Before is the
+published 0.3.3 package, after is a package built from this change.
+
+The findings were scored with ReviewBench's matcher and classifier rubric by
+Claude Opus 5.5 subagents that saw the rubric, the PR and the findings, but not
+the reference labels or which candidates AZPR's verifier had rejected. This is
+not the benchmark's official judge, so the comparison shows the direction of
+the change between the two instruction versions, not a leaderboard result.
+
+- With gpt-6.1-sol, 0.3.4 matched more of the high- and medium-severity
+  reference issues than 0.3.3, including high ones, and clearly more in the
+  testing category. Most added findings are low: missing tests where the
+  project tests comparable code, stale comments and documents, and the same
+  mistake at each place that needs a fix. The share of all findings judged
+  valid stayed about the same, while a few more findings matched reference
+  issues labelled as false alarms. Reviews took somewhat longer and used
+  somewhat more tokens.
+- In one PR, several routes built an OAuth URL from the internal request
+  origin. 0.3.3 matched the high reference issue of only one route; 0.3.4
+  reported each route and matched all of them. Before the identical-copies
+  rule, a documentation example copied into many templates produced a finding
+  for each copy; with the rule the repeats mostly disappeared without losing
+  high matches.
+- With gpt-6-luna, `/pr-review` matched slightly more, within the variation
+  between runs, and high matches stayed the same.
+- Limits: the comparison has few runs per configuration and runs of the same
+  configuration vary noticeably; the test set holds few high reference issues.
+  `/pr-quick` was not measured, and the fixture API does not exercise comment
+  publication.
 
 ## 0.3.3 release candidate acceptance (2026-10-31)
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.4 — 2026-11-01
+
+- Reviewers file concrete gaps as findings, usually low: a changed or added
+  behavior that no test would catch where the project already tests comparable
+  code, a test that cannot fail or checks the wrong thing, a comment, document,
+  example, schema or configuration that now contradicts the code, and
+  duplicated, dead, misleading or inconsistent code the change introduces.
+  Design trade-offs and general advice without a specific defect or location
+  stay in the report and the summary's improvement suggestions. Low findings
+  stay in the summary index, as before.
+- A mistake repeated in places that each need their own correction, such as
+  parallel routes or handlers that make the same wrong call, is one finding per
+  place, each at its own lines with the sibling places in its evidence, and
+  reviewers check their other assigned files for the same mistake. Identical
+  copies of one file count as one place, and one wrong piece of shared code
+  stays one finding at that code. `/pr-quick` follows the same rule.
+- In a self-judged before-and-after comparison on the public ReviewBench test
+  set, `/pr-deep` with gpt-6.1-sol matched more of the high- and
+  medium-severity reference issues, including high ones, with more findings,
+  mostly low, and somewhat longer reviews; the share of findings judged valid
+  stayed about the same. `/pr-review` with gpt-6-luna matched slightly more,
+  within the variation between runs. The
+  [validation record](docs/VALIDATION.md) describes the method and its limits.
+
 ## 0.3.3 — 2026-10-31
 
 - AZPR is tested with OpenCode 2.2.4 instead of 2.1.4. The runtime needed no
