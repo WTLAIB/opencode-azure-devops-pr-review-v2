@@ -475,7 +475,12 @@ never blocks `/pr-review`. Comment planning uses the review's risk model
 | `quick.reviewer` | `/pr-quick` only: both focuses in one session per shard, its own source checks, and comment planning for quick reviews. Strong code comprehension, evidence judgment and reliable tool use. |
 
 A role's focus orders its attention and is not a filter: every reviewer files
-every concrete defect it finds, in any area, as a finding.
+every concrete defect it finds, in any area, as a finding. Concrete gaps the
+change leaves are findings too, usually low: a changed behavior no test would
+catch where the project already tests comparable code, a test that cannot fail,
+a comment or document that now contradicts the code, and duplicated or dead
+code the change adds. A mistake repeated in places that each need their own fix
+is one finding per place; identical copies of one file count as one place.
 
 ### All settings and defaults
 

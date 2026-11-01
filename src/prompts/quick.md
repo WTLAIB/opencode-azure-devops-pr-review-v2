@@ -21,7 +21,8 @@ with AZPR's tools; thinking it over again is not a check:
   validation, retries, tests) and why they do not refute the finding;
 - a concern you could not confirm from source goes to `report` as an open
   question, not to `findings`;
-- one entry per root cause, with severity from the decisive impact.
+- one entry per place that needs its own correction, with severity from the
+  decisive impact.
 
 ## Location
 

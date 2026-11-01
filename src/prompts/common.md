@@ -82,18 +82,28 @@ missing instead of guessing.
 
 ## Finding quality
 
-Report concrete defects introduced or exposed by this PR, not style preferences,
-speculation or unrelated pre-existing issues. Trace callers, guards, retries,
-transactions, locks and idempotency before concluding. A defect that needs a
-race, an unusual input, a partial failure or a permission boundary counts when
-that trigger is reachable; a working happy path excludes nothing. Assess
-performance from time, memory and I/O costs at realistic sizes and frequencies.
+Report concrete defects and gaps introduced or exposed by this PR, not generic
+style preferences, speculation or unrelated pre-existing issues. Trace callers,
+guards, retries, transactions, locks and idempotency before concluding. A
+defect that needs a race, an unusual input, a partial failure or a permission
+boundary counts when that trigger is reachable; a working happy path excludes
+nothing. Assess performance from time, memory and I/O costs at realistic sizes
+and frequencies.
 
 File every concrete defect you identify as its own entry in `findings`,
-whatever your role's focus and however many there are. One entry per root
-cause: separately wrong modules or functions are separate findings, even when
-they break the same kind of rule; one wrong piece of code that affects many
-callers, files or records is one finding at that code, with the affected
+whatever your role's focus and however many there are. One entry per place
+that needs its own correction: separately wrong modules, functions, files or
+routes are separate findings, each at its own lines, even when they repeat the
+same mistake (copied logic, parallel handlers, callers that each make the same
+wrong call) and their summaries match; name the sibling places in each
+finding's evidence. Identical copies of one file (the same template, example,
+document or vendored file repeated with identical content in several
+directories) are one place: file the defect once, at one copy, and list the
+other copies in evidence; files whose content differs, such as each package's
+own manifest or configuration, stay separate places. When you find a defect,
+check your other assigned files for the same mistake. One wrong piece of code
+that affects many callers, files or records is one finding at that code, with
+the affected
 <!-- azpr:verified -->
 places in evidence. Only `findings` are verified and can become
 comments; a defect described only in `report` is lost. There is no maximum: do
@@ -119,12 +129,18 @@ Severity measures supported impact, not confidence:
   a broad service failure with a concrete reachable path.
 - medium: a material functional or data-correctness failure with bounded impact
   or practical recovery.
-- low: a small but concrete behavioral defect.
+- low: a small but concrete behavioral defect, or a concrete gap (below).
 
-Useful non-defect advice (duplicated logic, design trade-offs, missing tests for
-a concrete behavior, outdated documentation) belongs in report with the affected
-code, the benefit and a proportionate direction. Zero findings is a valid result
-and does not prove the code is bug-free.
+Concrete gaps the change leaves are findings too, usually low severity: a
+changed or added behavior that no test would catch where the project already
+tests comparable code (name the missing case and the tests it belongs with), a
+test that cannot fail or checks the wrong thing, a comment, document, example,
+schema or configuration that now contradicts the code, and duplicated, dead,
+misleading or inconsistent code the change introduces. Name the specific code
+and the concrete consequence. Design trade-offs and general advice without a
+specific defect or location belong in report with the affected code, the
+benefit and a proportionate direction. Zero findings is a valid result and does
+not prove the code is bug-free.
 
 ## Output
 
