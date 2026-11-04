@@ -119,15 +119,19 @@ After preflight, hooks never re-read settings or catalogs.
    collide. Up to `workflow.parallelSessions` sessions run at once. Each
    reviewer files every concrete defect it finds as a finding: a role's focus
    orders its attention and is not a filter, and `report` carries exclusions,
-   advice and limitations only. Concrete gaps the change leaves (an untested
-   change where the project already tests comparable code, a test that cannot
-   fail, documentation or configuration that now contradicts the code,
-   duplicated or dead code the change adds) are findings too, usually low. A
-   mistake repeated in places that each need their own fix is one finding per
-   place. Identical copies of one file count as one place within one
-   reviewer's assigned files; shards are cut by path, so copies in different
-   shards can each produce a finding, and the cross-shard duplicate check
-   compares only findings in the same file.
+   advice and limitations only. Severity follows the harm the evidence shows
+   and how often realistic use reaches it: high must be fixed before merging,
+   medium should be fixed in this change and low can wait; a rare trigger
+   lowers the severity instead of keeping a defect out. Concrete gaps the
+   change leaves (an untested change where the project already tests
+   comparable code, a test that cannot fail, documentation or configuration
+   that now contradicts the code, duplicated or dead code the change adds) are
+   findings too, rated by their effect: a missing test is low unless the test
+   is what the change delivers. A mistake repeated in places that each need
+   their own fix is one finding per place. Identical copies of one file count
+   as one place within one reviewer's assigned files; shards are cut by path,
+   so copies in different shards can each produce a finding, and the
+   cross-shard duplicate check compares only findings in the same file.
 3. **Overflow** — private sessions may not compact. A compaction the host
    attempts in a reviewer's turn opens its message first and is refused, which
    ends the turn; that message (or a 413) marks the stage as `overflow`, and the
@@ -141,7 +145,9 @@ After preflight, hooks never re-read settings or catalogs.
    a file reaches the same verifier (a file is split only when it alone has
    more findings than a shard holds). Each verifier decides its assigned IDs and may
    merge into any original ID; merging is the only place duplicates are
-   resolved. A decision row is judged by its own fields (an explicit status,
+   resolved. A confirmation carries the verifier's own severity, set from the
+   harm and trigger it verified; the reviewer's severity is a claim like the
+   rest. A decision row is judged by its own fields (an explicit status,
    or a merge target on a row without a finding) even when it sits in another
    list. A confirmation that moves its finding to another file must say so
    with `movedFrom`; otherwise the verifier is asked to confirm or undo the

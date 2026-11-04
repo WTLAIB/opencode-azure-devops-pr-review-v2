@@ -471,18 +471,34 @@ never blocks `/pr-review`. Comment planning uses the review's risk model
 | --- | --- |
 | `functional` | Requirements, boundaries, state changes, API compatibility and regressions. Strong code comprehension in the project's language. |
 | `risk` | Failures, retries, concurrency, authorization and data consistency. Evidence-based reasoning across call paths and reliable tool use. Also plans comments. |
-| `verifier` | Independent source re-checks, counterevidence, duplicate merging (including the same-file duplicate check) and the final report. Strong evidence judgment and instruction following. |
+| `verifier` | Independent source re-checks, counterevidence, the final severity, duplicate merging (including the same-file duplicate check) and the final report. Strong evidence judgment and instruction following. |
 | `quick.reviewer` | `/pr-quick` only: both focuses in one session per shard, its own source checks, and comment planning for quick reviews. Strong code comprehension, evidence judgment and reliable tool use. |
 
 A role's focus orders its attention and is not a filter: every reviewer files
-every concrete defect it finds, in any area, as a finding. Concrete gaps the
-change leaves are findings too, usually low: a changed behavior no test would
-catch where the project already tests comparable code, a test that cannot fail,
-a comment or document that now contradicts the code, and duplicated or dead
-code the change adds. A mistake repeated in places that each need their own fix
-is one finding per place. Identical copies of one file count as one place when
-one reviewer has them; in a large PR split into shards, copies that different
-reviewers get can each produce a finding.
+every concrete defect it finds, in any area, as a finding. A finding's severity
+says how much it matters to fix it before the change merges, judged from the
+harm the evidence shows and how often realistic use reaches it, not from the
+reviewer's confidence, the size of the fix or the kind of issue:
+
+- **high** (must fix before merging): realistic use leaves a core function or
+  what the change is for not working, or causes serious harm such as a
+  security breach, lost or exposed data, or silently wrong results.
+- **medium** (should fix in this change): realistic use hits a failure that
+  people notice and recover from, or a rare trigger causes serious harm.
+- **low** (can wait): anything else, such as a recoverable failure that only a
+  rare trigger reaches, or an issue with no effect on behavior.
+
+A rare trigger lowers the severity; it does not keep a defect out of the
+findings. The verifier sets the final severity from its own checks; `/pr-quick`
+keeps the reviewer's. Concrete gaps the change leaves are findings too, rated
+by their effect: a changed behavior no test would catch where the project
+already tests comparable code, a test that cannot fail, a comment or document
+that now contradicts the code, and duplicated or dead code the change adds. A
+missing test is low unless the test is what the change delivers, and a
+document is rated by what following it does. A mistake repeated in places that
+each need their own fix is one finding per place. Identical copies of one file
+count as one place when one reviewer has them; in a large PR split into shards,
+copies that different reviewers get can each produce a finding.
 
 ### All settings and defaults
 

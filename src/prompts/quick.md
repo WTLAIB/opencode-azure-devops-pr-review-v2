@@ -9,7 +9,7 @@ the report and to comment planning as you write them. Review the files at
 - failure behavior: exceptions, timeouts, cancellation, resource release,
   partial success, retries, duplicate execution, concurrency, transactions,
   authorization and data consistency.
-The focuses order your attention; file every concrete defect you find.
+The focuses order your attention; they do not limit what you report.
 
 ## Check each finding yourself
 
@@ -22,7 +22,7 @@ with AZPR's tools; thinking it over again is not a check:
 - a concern you could not confirm from source goes to `report` as an open
   question, not to `findings`;
 - one entry per place that needs its own correction, with severity from the
-  decisive impact.
+  harm and trigger you checked (see Severity).
 
 ## Location
 
@@ -56,4 +56,4 @@ Return:
 ```
 
 Keep `report` for what you checked, exclusions, advice, open questions and
-limitations; a defect belongs in `findings`, never only in `report`.
+limitations.

@@ -176,25 +176,29 @@ test('agents: one per configured role; deep needs all three models', () => {
 test('prompts: review stays byte-identical and deep shares it; quick never claims verification', async () => {
   const { createHash } = await import('node:crypto');
   const sha = value => createHash('sha256').update(value).digest('hex');
-  // System prompts of the review roles as of 0.3.4, whose shared finding rules
+  // System prompts of the review roles after 0.3.4, whose shared finding rules
   // deliberately gained concrete gaps, one finding per place that needs its own
-  // correction and identical copies in one reviewer's files as one place. The
-  // comment-plan prompts gained skip causes and page-scoped lists after
+  // correction and identical copies in one reviewer's files as one place (0.3.4),
+  // then a severity scale that weighs the harm a finding's evidence shows against
+  // how often realistic use reaches it, taking the first level that fits, with the
+  // verifier setting severity from its own checks, and stated each shared rule
+  // once. The comment-plan prompts gained skip causes and page-scoped lists after
   // origin/main 5f9b917 and lost `priorPages` when pages began to run side by
-  // side.
+  // side. Every role's tool guidance leaves what each tool returns to the tool's
+  // own description.
   // Changing a review prompt is a deliberate change: update these together with
   // the validation notes. Deep roles run the same prompts with other models.
   const golden = {
-    'deny/en/azpr-review-functional': '49387ce563f8c49ead79c7e1025807da157b0bc91318b5f3fb94346b2872f2e6',
-    'deny/en/azpr-review-risk': 'b54e1c80216d1442684e9c562adc1183f3b79aee5ea8623162bbdf9d195e685e',
-    'deny/en/azpr-review-verifier': '294cffce3c35bf775e4300befb4110faa107d87974cdf087e1a544cd777c2e22',
-    'deny/en/azpr-review-dedupe': 'd7473266071dcf71be4995d8e8388bc968f60a2a13f27e44f60a101cb385b1a9',
-    'deny/en/azpr-review-comment-plan': '506df14af887046901ec8ab10a027047385f307366e7a2a6379eb37e71513d71',
-    'ask/zh-TW/azpr-review-functional': '772be62d6b7d4760f6d3a1f064d54f4cd11fb7ff9f13fc76c1db211b42a67ec1',
-    'ask/zh-TW/azpr-review-risk': 'ef96c0384588e5d5c8a30cb042bc0922d5f453e0417b332978f5f0d158ce873b',
-    'ask/zh-TW/azpr-review-verifier': 'e06c4595df5549fc3d209c3260d18da74e0ea4809980fb455b12dfda694a8e24',
-    'ask/zh-TW/azpr-review-dedupe': '5530ad42de10c9bba4f9ec2c3cd486520eaedc6a47c20b0aac2d3c1ab3ce0c69',
-    'ask/zh-TW/azpr-review-comment-plan': 'd58d632befcbbe664e00f7f253e892cad656683e6f97ec9a4ab7540c00929630',
+    'deny/en/azpr-review-functional': '73eb26c70a2b6adbf088c1f58a888d411303eb0c87e35eb10e55779ef64d6372',
+    'deny/en/azpr-review-risk': '1a115cf475d8859b736d0fcff40180353ea4c274b9caa5c6e89295f84c023cfa',
+    'deny/en/azpr-review-verifier': '5162a24d6cc77396aa10ab519042f35900e99d6a42197d00ae6e06fa0033d0ee',
+    'deny/en/azpr-review-dedupe': '2fdeff1817bd3e0d95f4e5dad7c614a2cc5d4be136d32b0e7a8a824559289e79',
+    'deny/en/azpr-review-comment-plan': '4459cd370adb32ee1b2d54168f2ed20d315c1944550f3d29bd389e09283286a5',
+    'ask/zh-TW/azpr-review-functional': '44853f108f86014b78fd757fb2e30c21cf3e490d46fda599fb7dbc21e1e6d02f',
+    'ask/zh-TW/azpr-review-risk': 'fbca7989bd1c0963f916fb7b99a7c14965f9abc54d623a7e1eb9a5ab8a785fe7',
+    'ask/zh-TW/azpr-review-verifier': 'cdfac1a25eddd16fa1308b73ff5f685f4c24c48f475929098a610fddb89c5321',
+    'ask/zh-TW/azpr-review-dedupe': '2abd8545632e6f5280d7f709742f255b8a166a6f78d40b4ceaf049451a447291',
+    'ask/zh-TW/azpr-review-comment-plan': '09fa9efd33f441743cb8fe0255f18cf02db3add68c532d4b129b64fa900d2ac1',
   };
   const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv' }, quick: { reviewer: 'p/q' } };
   for (const [shell, outputLanguage] of [['deny', 'en'], ['ask', 'zh-TW']]) {
@@ -264,7 +268,7 @@ test('prompts: one JSON transport, shared tool policy, shell guidance and langua
   const agents = buildAgents(validateSettings({ ...input(), outputLanguage: 'zh-TW' }), prompts);
   for (const [role, agent] of Object.entries(agents)) {
     assert.match(agent.system, /one valid JSON object/);
-    assert.match(agent.system, /azpr_read_file[\s\S]*azpr_list_files[\s\S]*azpr_pr_threads/);
+    assert.match(agent.system, /Read the PR repository with AZPR's tools \(azpr_\*\)/);
     assert.match(agent.system, /the runtime alone posts comments/);
     assert.match(agent.system, /never the PR repository/);
     assert.doesNotMatch(agent.system, /MCP|repo_file|repo_pull_request/);
@@ -280,8 +284,10 @@ test('prompts: one JSON transport, shared tool policy, shell guidance and langua
 });
 
 test('trimmed role instructions stay compact', () => {
+  // A guard against prompt growth, not a model limit: the shared severity scale
+  // (0.3.5) added about 2,300 characters to every review role.
   const agents = buildAgents(validateSettings(input()), prompts);
-  for (const [role, agent] of Object.entries(agents)) if (agent.system) assert.ok(agent.system.length < 14000, `${role}: ${agent.system.length}`);
+  for (const [role, agent] of Object.entries(agents)) if (agent.system) assert.ok(agent.system.length < 17000, `${role}: ${agent.system.length}`);
 });
 
 test('azure.patFile: an absolute path in place of azure.pat, never both; PAT problems never echo the value', () => {

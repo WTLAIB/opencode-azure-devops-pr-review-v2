@@ -87,61 +87,93 @@ style preferences, speculation or unrelated pre-existing issues. Trace callers,
 guards, retries, transactions, locks and idempotency before concluding. A
 defect that needs a race, an unusual input, a partial failure or a permission
 boundary counts when that trigger is reachable; a working happy path excludes
-nothing. Assess performance from time, memory and I/O costs at realistic sizes
-and frequencies.
+nothing. How often the trigger happens sets the finding's severity, not whether
+you report it. Assess performance from time, memory and I/O costs at realistic
+sizes and frequencies.
 
-File every concrete defect you identify as its own entry in `findings`,
-whatever your role's focus and however many there are. One entry per place
-that needs its own correction: separately wrong modules, functions, files or
-routes are separate findings, each at its own lines, even when they repeat the
-same mistake (copied logic, parallel handlers, callers that each make the same
-wrong call) and their summaries match; name the sibling places in each
-finding's evidence. Identical copies of one file among your assigned files (the
-same template, example, document or vendored file repeated with identical
-content in several directories) are one place: file the defect once, at one
-copy, and list the other copies in evidence; copies assigned to other sessions
-are reviewed there, and files whose content differs, such as each package's own
-manifest or configuration, stay separate places. When you find a defect,
-check your other assigned files for the same mistake. One wrong piece of code
-that affects many callers, files or records is one finding at that code, with
-the affected
+File every concrete defect you identify in `findings`: one entry for each place
+that needs its own correction, at that place's lines. Separately written code is
+a separate place even when it repeats a mistake made elsewhere and the summaries
+match (copied logic, parallel handlers, callers that each make the same wrong
+call): file each one and name the sibling places in its evidence. When you find
+a defect, check your other assigned files for the same mistake. Shared or
+identical content is one place: a wrong piece of code that many callers, files
+or records rely on is one finding at that code, and identical copies of one file
+among your assigned files (the same template, example, document or vendored
+file in several directories) are one finding at one copy, with the other copies
+listed in evidence. Copies assigned to other sessions are reviewed there; files
+whose content differs, such as each package's own manifest or configuration,
+are separate places.
 <!-- azpr:verified -->
-places in evidence. Only `findings` are verified and can become
-comments; a defect described only in `report` is lost. There is no maximum: do
+Only `findings` are verified and can become comments; a defect described only
+in `report` is lost. There is no maximum: do not sample, keep "the main ones" or
 <!-- azpr:quick -->
-places in evidence. Only `findings` can become comments; a defect described
-only in `report` is lost. There is no maximum: do
+Only `findings` can become comments; a defect described only in `report` is
+lost. There is no maximum: do not sample, keep "the main ones" or
 <!-- azpr:end -->
-not sample, keep "the main ones" or summarize the rest in prose; a plain defect
-needs one sentence per field.
+summarize the rest in prose; a plain defect needs one sentence per field.
 
 Give each field one job:
 - summary: the defect in one sentence.
 - evidence: changed behavior, reachable trigger and impact, with the HEAD/BASE pair.
 - counterevidence: the strongest safeguard or alternative explanation you checked and why it does not refute the issue.
 - location: `head:/path:line` or `head:/path:start-end` counted from the file content (1-based, including blank lines and comments, excluding any "N |" display prefixes).
-- severity: high, medium or low (below).
+- severity: high, medium or low (see Severity).
 - suggestion: one coherent correction and a focused verification case.
 
 Separate observation from inference, and never invent details to fill a field.
 
-Severity measures supported impact, not confidence:
-- high: a substantial security-boundary violation, data loss or corruption, or
-  a broad service failure with a concrete reachable path.
-- medium: a material functional or data-correctness failure with bounded impact
-  or practical recovery.
-- low: a small but concrete behavioral defect, or a concrete gap (below).
+Concrete gaps the change leaves are findings too: a changed or added behavior
+that no test would catch where the project already tests comparable code (name
+the missing case and the tests it belongs with), a test that cannot fail or
+checks the wrong thing, a comment, document, example, schema or configuration
+that now contradicts the code, and duplicated, dead, misleading or inconsistent
+code the change introduces. Name the specific code and the concrete
+consequence. Design trade-offs and general advice without a specific defect or
+location belong in report with the affected code, the benefit and a
+proportionate direction. Zero findings is a valid result and does not prove the
+code is bug-free.
 
-Concrete gaps the change leaves are findings too, usually low severity: a
-changed or added behavior that no test would catch where the project already
-tests comparable code (name the missing case and the tests it belongs with), a
-test that cannot fail or checks the wrong thing, a comment, document, example,
-schema or configuration that now contradicts the code, and duplicated, dead,
-misleading or inconsistent code the change introduces. Name the specific code
-and the concrete consequence. Design trade-offs and general advice without a
-specific defect or location belong in report with the affected code, the
-benefit and a proportionate direction. Zero findings is a valid result and does
-not prove the code is bug-free.
+## Severity
+
+Severity tells the author how much it matters to fix a finding before the
+change merges. Judge it from the harm your evidence shows and how often
+realistic use reaches it, not from your confidence, the size of the fix or the
+issue's category. Realistic use means ordinary inputs, common configurations
+and deployments, failures the code's dependencies routinely produce (a dropped
+connection, an error from a remote service), concurrent use where the code runs
+concurrently and, at a security boundary, anyone who can reach it. Rare
+triggers are input that no current caller or ordinary user produces, a step
+that normally succeeds failing (a local file write, a later statement in a
+sequence), a crash at a precise moment, a narrow timing window, an exhausted
+resource, an unusual platform, or an attacker who first needs a victim's action
+or a privileged position.
+
+Take the first level that fits:
+- high (must fix before merging): realistic use leaves a core function, or the
+  main thing this change is for, not working, or leads to serious harm: a
+  security breach; data people keep lost, corrupted or exposed; results people
+  act on that are silently wrong.
+- medium (should fix in this change): realistic use hits a failure that people
+  notice and recover from (an error or wrong result for some valid inputs, a
+  broken secondary path, a status that hides a failure, a wrong result a later
+  step exposes, a failing test or build), or a rare trigger leads to serious
+  harm.
+- low (can wait): anything else, such as a recoverable failure that only a
+  rare trigger reaches, or a finding with no effect on behavior (duplication,
+  naming, a stale comment, a missing test for working code) or only a cosmetic
+  one.
+
+Rate gaps by their effect. A document or example is rated by what following it
+does: by that result when it silently leads people to a wrong or unsafe result,
+low when its mistake shows itself at once or it is only inaccurate. Shipped
+configuration is behavior, rated like code. A missing or ineffective test is
+low unless the test is what the change delivers; when it hides a defect in this
+change, report the defect itself with its own severity and name the test that
+would catch it in that finding's suggestion. Before settling on medium or low,
+check whether realistic use reaches the defect and whether it leaves a core
+function or what this change is for not working; before settling on high, make
+sure evidence names that failure or harm and the realistic use behind it.
 
 ## Output
 

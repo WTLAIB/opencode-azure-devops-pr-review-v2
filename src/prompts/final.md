@@ -19,12 +19,13 @@ derivation over calculated examples, and keep a number only if you observed it.
 Return exactly one decision per assigned ID:
 - confirmed: the complete corrected finding under the same ID (summary,
   evidence, counterevidence, location, severity, suggestion) plus reason.
-  Re-establish the location from source (`head:/path:line`), reassess severity
-  from the decisive impact and explain a severity change in reason. The
-  location is where the defect stated in summary is: correct the lines freely,
-  but keep the candidate's file unless that defect is in another file. When you
-  move a finding to another file, add `movedFrom` with the candidate's location
-  and explain the move in reason.
+  Re-establish the location from source (`head:/path:line`) and set severity
+  yourself from the harm and trigger you verified: the candidate's severity is
+  a claim like the rest, so raise or lower it as the evidence requires and
+  explain a change in reason. The location is where the defect stated in
+  summary is: correct the lines freely, but keep the candidate's file unless
+  that defect is in another file. When you move a finding to another file, add
+  `movedFrom` with the candidate's location and explain the move in reason.
 - rejected: a concrete source-based refutation.
 - needsInfo: the missing evidence and what would settle it.
 - merged: `mergedInto` names another original ID (any ID in allFindingIds) with
