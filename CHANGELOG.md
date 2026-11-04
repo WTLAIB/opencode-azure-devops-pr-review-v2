@@ -1,6 +1,37 @@
 # Changelog
 
-## 0.3.4 — 2026-11-01
+## 0.3.5 — 2026-11-04
+
+- A finding's severity says how much it matters to fix it before the change
+  merges: high must be fixed before merging, medium should be fixed in this
+  change and low can wait. Reviewers judge it from the harm their evidence
+  shows and how often realistic use reaches it, not from their confidence, the
+  size of the fix or the kind of issue. High is for realistic use that leaves a
+  core function or what the change is for not working, or that causes a
+  security breach, lost, corrupted or exposed data, or silently wrong results.
+  A rare trigger lowers a finding's severity instead of keeping it out of the
+  findings.
+- Concrete gaps are rated by their effect instead of usually low: a document or
+  example by what following it does, shipped configuration like code, and a
+  missing or ineffective test low unless the test is what the change delivers.
+  A missing test that hides a defect in the change is reported as that defect,
+  with its own severity, and the test is named in its suggested fix.
+- The verifier sets each confirmed finding's severity from the harm and trigger
+  it verified and may raise or lower the reviewer's, giving the reason.
+  `/pr-quick` uses the same scale. Publication is unchanged: high and medium
+  findings get inline comments, and low ones stay in the summary index.
+- The reviewer instructions state each shared rule once, and the shared tool
+  guidance leaves what each tool returns to the tools' own descriptions.
+- In a self-judged comparison on the public ReviewBench test set, `/pr-deep`
+  with gpt-6.1-sol labeled many more of the issues the judges rated high as
+  high, with about the same share of its high labels rated high by the judges,
+  and labeled fewer findings that deserve an inline comment as low. What
+  reviews found and the share of findings judged valid stayed within the
+  variation between runs of the same instructions; `/pr-review` with
+  gpt-6-luna stayed within its larger variation. The
+  [validation record](docs/VALIDATION.md) describes the method and its limits.
+
+## 0.3.4 — 2026-11-02
 
 - Reviewers file concrete gaps as findings, usually low: a changed or added
   behavior that no test would catch where the project already tests comparable

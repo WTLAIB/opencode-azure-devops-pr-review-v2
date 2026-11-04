@@ -1,7 +1,7 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.3 distributions and the 0.3.4 release candidate. Host
+0.1.0 through 0.3.4 distributions and the 0.3.5 release candidate. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -32,6 +32,97 @@ acceptance runs, including the MCP-based runs, are preserved in
 These checks show that the workflow works and what it found on these test
 PRs. Findings vary between models and runs, so they are not a general
 accuracy score; see [known limitations](#known-limitations).
+
+## 0.3.5 release candidate acceptance (2026-11-04)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.2.4. The candidate changes only reviewer instructions: the severity scale
+and the rating of gaps in the shared instructions (`src/prompts/common.md`),
+how the verifier sets severity (`src/prompts/final.md`), the role prompts
+(`functional.md`, `risk.md`, `quick.md`), which no longer repeat shared rules,
+and the shared tool guidance in `src/config.mjs`, which leaves what each tool
+returns to the tools' own descriptions. The runtime logic, settings and
+installers are those of 0.3.4.
+
+- `npm run check` and **424 offline tests** passed. The locked prompt hashes
+  were updated for every review role, comment planning included, in both
+  checked shell and language variants; the comment-plan prompts changed only
+  in the shared tool guidance. With shell denied and English output, each
+  review role's system prompt is 970 to 1,380 characters longer than in
+  0.3.4, since the severity guidance adds more than the cleanup removes, and
+  each comment-plan prompt is 815 characters shorter.
+- All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
+  and fake model and Azure services. The fresh run made 99 model and 180 Azure
+  DevOps requests, replacement 83 and 150 and native packed package
+  installation 99 and 187, all as for 0.3.4. Comment scale (largest provider
+  request 36,027 characters, 34,633 for 0.3.4, from the longer review
+  instructions) and background compaction passed too.
+- A clean copy of the candidate tree installed with `install.sh`: the 19
+  runtime modules, 8 prompts and the license match, and `--replace` kept the
+  settings byte for byte with mode 600 and an unrelated file in place. The 186
+  local Markdown links, images and anchors outside code examples resolve.
+- `npm pack --dry-run --json` lists **32 files** (about 176 KB), as for 0.3.4.
+
+This is a pre-publication record. Public Git installation is checked once the
+candidate is pushed; registry integrity and installation from npm are checked
+only after publication, following the [releasing guide](RELEASING.md).
+
+### Severity compared on the ReviewBench test set
+
+The new instructions were compared with those of 0.3.4 before release, with
+the harness and judging described for
+[0.3.4](#reviewer-instructions-compared-on-the-reviewbench-test-set):
+`/pr-deep` with `openai/gpt-6.1-sol` and `/pr-review` with `openai/gpt-6-luna`
+on the public ReviewBench test set, in isolated OpenCode 2.2.4 profiles behind
+a fixture of the Azure DevOps API, scored with ReviewBench's matcher and
+classifier rubric by Claude Opus 5.5 subagents instead of the benchmark's
+official judge. Before is the run measured for 0.3.4. Each valid finding's
+severity was compared with the judged severity: that of the reference issue
+it matched or, for a valid finding outside the reference set, the
+classifier's. Three questions were asked: were issues judged high labeled
+high, were findings that deserve an inline comment (judged high or medium)
+labeled high or medium, and did what reviews found change.
+
+The instructions changed in two steps: the severity scale, then a cleanup that
+states each shared rule once and shortens the tool guidance. To tell a change
+from the variation between runs, the severity-scale instructions ran twice
+with each model, and swapping the two runs' results PR by PR gave the
+variation of each measure. The cleanup was accepted only if, with
+gpt-6.1-sol, none of five measures fixed in advance (recall of the reference
+issues, the share of findings judged valid, recall of high and medium
+reference issues, and agreement on the inline decision and on high labels)
+fell below the mean of those two runs by more than that variation allows.
+
+- With gpt-6.1-sol, many more of the issues the judges rated high were
+  labeled high, and fewer findings that deserve an inline comment were labeled
+  low; both differences exceed the variation between runs. The share of high
+  labels that the judges also rated high stayed about the same, so with more
+  high labels, more findings are labeled high that the judges rated medium or
+  lower.
+  Findings labeled medium that the judges rated low stayed about as frequent
+  as with 0.3.4, and agreement on the inline decision improved only within the
+  variation between runs.
+- What reviews found did not change beyond that variation: recall of the
+  reference issues, including the high and medium ones, and the share of
+  findings judged valid. Reviews used about as many tokens as with 0.3.4.
+- The cleanup passed its check: all five measures stayed within the variation
+  between runs, and reviews used slightly fewer tokens and no more source
+  reads.
+- With gpt-6-luna, which reports far fewer findings, every measure stayed
+  within the variation between runs, which is large for this model: two runs
+  of the same instructions differed widely in their agreement on high labels.
+  The one run of the final instructions had more findings judged invalid than
+  the earlier runs, still within that variation.
+- Limits: at most two runs per instruction version, and one each of 0.3.4 and
+  of the final instructions; severity is a judgment on which the reference
+  labels, the classifier and AZPR's reviewers can each reasonably differ; the
+  test set holds few high reference issues. In one PR, four menu and
+  key-binding handlers each start their own thread for repository operations
+  that should run one at a time; the final instructions reported each handler,
+  where earlier runs reported one finding. This follows the rule of one
+  finding per place that needs its own fix, but adds comments. `/pr-quick` and
+  comment planning were not measured, and the fixture API does not exercise
+  comment publication.
 
 ## 0.3.4 release candidate acceptance (2026-11-01)
 
@@ -2315,6 +2406,7 @@ transient failure, and its error names the last activity.
   one reviewer per shard found and says so in its report and comments; use
   `/pr-review` when findings need a second check.
 - **Findings depend on the model.** Results vary between models and between
-  runs of the same model. On the 35-file test PR, gpt-6.1-sol found a defect
+  runs of the same model, and so do severities: another run can label the same
+  issue differently. On the 35-file test PR, gpt-6.1-sol found a defect
   whose evidence spans a test and unchanged code in another shard, which
   gpt-6-luna missed; `/pr-deep` runs the same review with stronger models.
