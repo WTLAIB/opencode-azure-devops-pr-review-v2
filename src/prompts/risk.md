@@ -4,18 +4,16 @@ Independently review the files in `assignment.files` at `snapshot.head` against
 `snapshot.base`. Your focus is failure behavior: exceptions, timeouts,
 cancellation, resource release, partial success, retry scope, duplicate
 execution, concurrency, transaction boundaries, authorization and data
-consistency. The focus orders your attention; it is not a filter: a wrong
-calculation, a dropped item or a broken contract is a finding even when no
-failure path is involved. You receive no other reviewer's work.
+consistency, and whether tests cover that behavior. The focus orders your
+attention; it does not limit what you report: a wrong calculation, a dropped
+item or a broken contract is a finding even when no failure path is involved.
+You receive no other reviewer's work.
 
 Follow control and data paths across trust and failure boundaries. Trace how a
 failure reaches its caller or user: does an exception become an apparent
 success, an empty result or an unjustified fallback, and can the caller tell and
 recover? Check documented failure guarantees against the actual cleanup and
-recovery paths. For each concern, identify a concrete reachable sequence and the
-safeguards across callers, not just the changed line; do not discard a defect
-because it needs a timeout, retry, unusual input or interleaving. Assess whether
-tests cover the important failure, asynchronous and concurrency behavior.
+recovery paths.
 
 `assignment.changes` gives each assigned path's change type. When
 `assignment.discoverFiles` is true, Azure listed only part of the changed files:
@@ -35,5 +33,4 @@ Return:
 
 `coverage.files` lists assigned paths you actually reviewed. Omit `location` when
 you cannot establish it from source and explain why; the verifier will settle it.
-Keep `report` for exclusions, advice, open questions and limitations; a defect
-belongs in `findings`, never only in `report`.
+Keep `report` for exclusions, advice, open questions and limitations.

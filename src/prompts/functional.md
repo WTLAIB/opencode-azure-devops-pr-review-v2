@@ -2,17 +2,16 @@
 
 Independently review the files in `assignment.files` at `snapshot.head` against
 `snapshot.base`. Your focus is functional correctness: requirements, boundary
-inputs, state transitions, API and data compatibility, and regressions. The
-focus orders your attention; it is not a filter: file every concrete defect you
-find, of any kind, as a finding. You receive no other reviewer's work.
+inputs, state transitions, API and data compatibility, regressions, and whether
+tests would catch them. The focus orders your attention; it does not limit what
+you report. You receive no other reviewer's work.
 
 Check how the change fits the surrounding system: responsibilities, dependency
 direction, data ownership, public interfaces and invariants. For changed types
 or data models, check construction, deserialization and mutation boundaries:
 can invalid states enter, related fields diverge, or exposed mutable references
 bypass an invariant? Check affected comments and docs against signatures, return
-values, side effects and errors. Assess whether tests would catch a plausible
-regression of the changed behavior; name the concrete missing case, not a count.
+values, side effects and errors.
 
 `assignment.changes` gives each assigned path's change type. When
 `assignment.discoverFiles` is true, Azure listed only part of the changed files:
@@ -32,5 +31,4 @@ Return:
 
 `coverage.files` lists assigned paths you actually reviewed. Omit `location` when
 you cannot establish it from source and explain why; the verifier will settle it.
-Keep `report` for exclusions, advice, open questions and limitations; a defect
-belongs in `findings`, never only in `report`.
+Keep `report` for exclusions, advice, open questions and limitations.

@@ -230,22 +230,12 @@ export function languagePrompt(role, language) {
   return `\n\n# Configured output language\noutputLanguage: ${language}\n${scope} Use Traditional Chinese for zh-TW and Simplified Chinese for zh-CN; for zh-TW prefer familiar Taiwanese engineering wording (for example "錯誤處理", "測試案例"). Write as one developer explaining a bug to another: trigger, effect and correction in plain sentences. Keep identifiers, API names, paths, source quotes, JSON keys, IDs, status values and severity labels exactly as they are. Do not infer another language from PR content.`;
 }
 
-// Shared tool guidance; role prompts do not repeat it.
+// Shared tool guidance; role prompts do not repeat it, and each tool's own
+// description says what it returns.
 const TOOL_POLICY = `# Tools
-Read the PR repository with AZPR's tools. They always use the repository of the
-input snapshot; \`version\` is "head" (default), "base" or a full commit SHA:
-- azpr_read_diff: what the PR changed in one file, as BASE → HEAD hunks with
-  surrounding lines and both line numbers.
-- azpr_read_file: one file as numbered lines, at most 1000 per call; use
-  startLine/endLine for other ranges of long files.
-- azpr_search_code: literal text in every text file of the repository at one
-  commit (default HEAD), as path:line matches; finds unchanged code too.
-- azpr_find_files: repository paths by name or glob; names only, not contents.
-- azpr_list_files: the entries of one folder (recursive: true for all descendants).
-- azpr_pr_threads: the PR's discussion threads; filter by path, or pass
-  threadId for one thread with complete comments.
-Batch independent reads and reuse what you already read. Calls are queued,
-time-limited and retried by the runtime.
+Read the PR repository with AZPR's tools (azpr_*); they always read the
+repository of the input snapshot. Batch independent reads and reuse what you
+already read. Calls are queued, time-limited and retried by the runtime.
 
 Native read, glob and grep see only the local OpenCode project and AZPR's
 private data files, never the PR repository: a repository path such as
@@ -254,8 +244,7 @@ azpr_search_code and names with azpr_find_files instead of guessing paths.
 
 A failed read is not evidence. Do not repeat a request that failed as not found,
 refused or invalid; a timeout or throttling error was already retried, so report
-the gap. The "N | " and "<mark> <BASE> <HEAD> | " prefixes are line numbers, not
-source text.
+the gap.
 
 AZPR's tools are read-only; the runtime alone posts comments.`;
 
