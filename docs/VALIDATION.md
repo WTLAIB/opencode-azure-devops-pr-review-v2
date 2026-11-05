@@ -1,7 +1,8 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.4 distributions and the 0.3.5 release candidate. Host
+0.1.0 through 0.3.4 distributions, the 0.3.5 release candidate and a run of
+Martian's public code review benchmark. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -28,10 +29,177 @@ acceptance runs, including the MCP-based runs, are preserved in
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
   the registry; its integrity must match the package built from the tag.
+- **A public benchmark.** On the 50 real pull requests of Martian's
+  [Code Review Bench](#martian-code-review-bench-2026-11-05-and-06),
+  `/pr-deep` with Claude Opus 5.5 found 67.7% of the issues a reviewer should
+  catch and 74.2% of the High and Critical ones, scored with the benchmark's
+  own pipeline and judge. That recall is higher than any of the 21 tools on
+  the benchmark's dashboard; on its overall F2 score AZPR would place sixth.
 
-These checks show that the workflow works and what it found on these test
-PRs. Findings vary between models and runs, so they are not a general
-accuracy score; see [known limitations](#known-limitations).
+The test-PR runs show that the workflow works and what it found on those PRs;
+the benchmark measures how much of a published reference set it finds.
+Findings still vary between models and runs; see
+[known limitations](#known-limitations).
+
+## Martian Code Review Bench (2026-11-05 and 06)
+
+[Code Review Bench](https://github.com/withmartian/code-review-benchmark) is
+Martian's open benchmark for AI code review. Its offline set holds 50 real pull
+requests from cal.com, Discourse, Grafana, Keycloak and Sentry, each with
+golden comments: the issues a reviewer should catch, each with a severity and
+a category. Its [dashboard](https://codereview.withmartian.com) ranks tools by
+F2, which weighs recall above precision, on the 158 core golden comments
+(bugs, security, concurrency, data, API, performance, test gaps and
+documentation defects; style and speculative remarks are left out).
+
+AZPR is not on that dashboard. Its inclusion criteria count a tool's reviews on
+public GitHub pull requests, and AZPR reviews Azure DevOps pull requests.
+For tools that do not meet them, Martian invites running the public harness
+and publishing the results, which is what this section records. We ran the
+offline benchmark (repository commit e616e84 of 2026-08-30, the latest on
+2026-11-06) with AZPR 0.3.5 from npm on OpenCode 2.2.4. AZPR's prompts and
+code were not changed for it.
+
+- **Review.** The benchmark's PRs are GitHub pull requests, so each was served
+  at its base and head commits through a local implementation of the Azure
+  DevOps REST calls AZPR makes; the review stages, prompts and models are the
+  ones AZPR uses on Azure DevOps. Every PR ran `/pr-deep` with English output
+  and eight sessions in parallel (the default is four, which changes only
+  speed). The comments are AZPR's confirmed findings, the ones it would comment
+  on, each as one inline comment with its summary, evidence and suggested fix;
+  comment planning and publication were not run.
+- **Scoring.** The benchmark's pipeline extracts the issues in a tool's
+  comments, merges duplicates and has a judge model decide which issues match
+  which golden comments. Every extracted issue that matches no golden comment
+  counts against precision, whether or not it is a real problem.
+
+### Choosing models for `/pr-deep`
+
+The models matter more than any setting, so we compared model and
+reasoning-effort combinations on all 50 PRs to choose what to recommend for
+`/pr-deep`. Each combination ran once and was scored with the benchmark's
+pipeline and prompts, judged by Claude Opus 5.5 instead of the dashboard's
+judge (local scores). With 158 golden comments, one run's recall has a
+sampling error of about 3.7 points, so differences of a point or two are not
+meaningful.
+
+| Models: functional / risk / verifier (reasoning effort) | Comments | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Claude Opus 5.5 ×3 (medium) | 323 | 28.1 | 65.2 | **51.6** | 72.7 |
+| Claude Opus 5.5 ×3 (high) | 388 | 25.5 | 68.4 | 51.2 | 74.2 |
+| Claude Opus 5.5 ×3 (high / high / extra high) | 381 | 25.9 | 66.5 | 50.6 | 69.7 |
+| Claude Opus 5.5 ×3 (low) | 174 | 41.2 | 50.6 | 48.4 | 63.6 |
+| Claude Opus 5.5 ×3 (extra high) | 483 | 22.0 | 69.0 | 48.4 | 75.8 |
+| Claude Opus 5.5 / GPT-6 Astra / Claude Opus 5.5 (high) | 489 | 21.5 | 69.6 | 48.1 | 80.3 |
+| Claude Opus 5.5 ×3 (extra high / extra high / high) | 473 | 21.3 | 69.0 | 47.7 | 75.8 |
+| Claude Opus 5.5 / GPT-6 Astra / Claude Opus 5.5 (extra high / extra high / high) | 604 | 18.5 | 73.4 | 46.0 | 80.3 |
+| Claude Opus 5.5 / Claude Opus 5.5 / GPT-6 Astra (extra high / extra high / high) | 470 | 21.0 | 63.9 | 45.4 | 72.7 |
+| GPT-6.1 Sol ×3 (model default) | 334 | 24.9 | 52.5 | 43.0 | 62.1 |
+| GPT-6 Astra / GPT-6 Astra / Claude Opus 5.5 (extra high / extra high / high) | 561 | 17.5 | 62.0 | 41.1 | 72.7 |
+| GPT-6 Luna ×3 (model default), `/pr-review` | 91 | 46.8 | 27.8 | 30.3 | 42.4 |
+
+The model IDs were `claude-agent/opus` (OpenCode's claude-agent provider with
+Claude Code CLI 2.1.314, which ran Claude Opus 5.5), `openai/gpt-6-astra`,
+`openai/gpt-6.1-sol` and `openai/gpt-6-luna`; the reasoning effort is the
+model variant, such as `claude-agent/opus#medium`.
+
+- Medium and high effort scored best, within each other's sampling error.
+  Extra-high effort found about as much but also reported more marginal issues.
+  Low effort posted about half as many comments as medium and found about a
+  fifth fewer of the golden issues.
+- The verifier's effort made no measurable difference in two comparisons. In
+  these runs the verifier rejected only 1 to 5% of the findings and merged 30
+  to 40% into others as duplicates, so precision is set mainly by the
+  reviewers.
+- GPT-6 Astra as the second reviewer found the most High and Critical golden
+  issues (80.3%) but added more unmatched issues than matches; as the verifier,
+  or as both reviewers, it scored below Claude alone.
+- We recommend Claude Opus 5.5 at medium effort for all three deep roles: the
+  best score and, apart from low effort, the shortest run. The 50 PRs took 35
+  minutes, four at a time; the median PR took 153 seconds and the longest 301.
+
+### Scored by the dashboard's judge
+
+The recommended combination's comments were then scored with the benchmark's
+pipeline and the dashboard's default judge, Claude Opus 4.5
+(`claude-opus-4-5-20251101`, temperature 0 as the pipeline sets it), called
+through Anthropic's OpenAI-compatible endpoint instead of the pipeline's
+default, Martian's model router. No PR was reviewed again for this.
+
+| | Precision | Recall | F2 | High and Critical recall | Issues per PR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| AZPR 0.3.5 `/pr-deep`, Claude Opus 5.5 (medium) | 30.0 | 67.7 | 54.1 | 74.2 | 7.6 |
+
+On the dashboard's default view (core golden comments, the same judge), this
+is the highest recall of its 21 tools (next: copilot-v2 66.5, cubic-v2 65.8),
+the highest High and Critical recall, shared with qodo-extended-v2 and augment
+(74.2), and the sixth F2: after qodo-extended-v2 (65.1), cubic-v2 (64.9),
+augment (64.0), qodo-v2 (60.6) and copilot-v2 (58.0), and ahead of gemini-v2
+(52.8), gitlab (52.7) and coderabbit (51.1). With the strict profile (bugs,
+security, concurrency, data and API) recall is again the highest (68.3) and F2
+tenth (52.7); with all categories recall is second (65.9) and F2 sixth (54.0).
+Martian's published results also hold 28 tools and versions that the dashboard
+does not show; three of them, cubic-dev and two qodo variants, have a higher
+core recall (68.4 to 76.5) and F2 scores of 53.0 to 58.4.
+
+The local judge had scored the same comments 51.6 (precision 28.1, recall
+65.2). The two judges agreed on 101 of the 109 golden comments that either of
+them matched, so the local scores above are likely slightly below what the
+dashboard's judge would give.
+
+### What the unmatched comments are
+
+The golden comments average about three per PR. AZPR posted 6.5 comments per
+PR, and every issue in them that matches no golden comment lowers precision.
+To see what those issues are, we checked a random sample of 40 of the 264
+unmatched issues (local judge), stratified by repository, against the code at
+each PR's head:
+
+| Verdict | Issues |
+| --- | ---: |
+| A defect the PR introduces or exposes, worth raising | 18 |
+| Accurate, but of low value (naming, wording, a missing test with no known bug behind it) | 18 |
+| Depends on the author's intent | 1 |
+| Wrong or overstated | 3 |
+
+Examples of the 18: a Webex token refresh that validates the reply of the PR's
+new sync endpoint against the full provider schema, so the minimal reply that
+endpoint is meant to return is rejected; a cancellation of a recurring booking
+that deletes the series only through the organizer's credential, leaving the
+copies the PR adds for other hosts; and an unsubscribe link that changes state
+on GET, so reloading it lowers the notification level again. A reviewer
+decides in the comment preview what to post.
+
+### Golden comments that no combination matched
+
+Across the twelve runs, 129 of the 158 core golden comments were matched at
+least once (local judge). We read the code at the PR head for the other 29:
+
+- 8 are contradicted by the code, for example an import of a class described
+  as missing that the same PR defines, and orphaned rows that a cascading
+  delete removes.
+- 9 describe no practical effect, for example a nil request that an outer
+  layer already rejects.
+- 1 was raised in eight runs, but the local judge did not count it.
+- Of the other 11, the reviewers of at least one run had noted 10 in the
+  review report and explained why they did not file them. Most were defects in
+  code that the PR moved unchanged from elsewhere, which AZPR's instructions
+  leave out as pre-existing, or issues judged harmless or intended. Such notes
+  appear in AZPR's report, not in the PR comments the benchmark reads.
+
+### Limits
+
+- One run per combination; the dashboard's judge scored one run of one
+  combination.
+- Comment planning and publication were not exercised: each confirmed finding
+  counted as one inline comment, and the PRs were served by a local
+  implementation of AZPR's Azure DevOps calls, not by Azure DevOps Services.
+- With OpenCode 2.2.4's claude-agent provider, the Claude CLI process behind
+  each finished private session (about 200 MB) stayed alive for minutes after
+  the session was deleted. The low-effort run, which finishes PRs fastest, ran
+  out of memory on the 8 GB test machine and was completed in chunks, each
+  ending its OpenCode server to release the memory; its results were not
+  affected.
 
 ## 0.3.5 release candidate acceptance (2026-11-04)
 
@@ -2423,4 +2591,11 @@ transient failure, and its error names the last activity.
   runs of the same model, and so do severities: another run can label the same
   issue differently. On the 35-file test PR, gpt-6.1-sol found a defect
   whose evidence spans a test and unchanged code in another shard, which
-  gpt-6-luna missed; `/pr-deep` runs the same review with stronger models.
+  gpt-6-luna missed; `/pr-deep` runs the same review with stronger models. On
+  the 50 PRs of Martian's benchmark, recall ranged from 27.8% to 73.4% across
+  the [model combinations we compared](#choosing-models-for-pr-deep).
+- **Claude through the claude-agent provider.** With OpenCode 2.2.4, the
+  Claude CLI process behind each finished private session (about 200 MB)
+  stayed alive for minutes after the session ended, so many reviews in quick
+  succession can hold several gigabytes; restarting the OpenCode service
+  releases them.
