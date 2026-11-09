@@ -82,13 +82,14 @@ The runtime logic, settings and installers are those of 0.3.5.
 - Live, with a comment preview (2026-11-10): the candidate, installed from its
   public Git commit in the home OpenCode 2.2.4 service, ran with
   `openai/gpt-6-luna` on the 1-file test PR. `/pr-check` was READY in 5 s.
-  `/pr-review` was COMPLETE in 71 s with three sessions, no retry and no repair
-  turn: it confirmed the PR's three known medium defects (reservation
-  atomicity, snapshot isolation and absolute-time ordering), merged the three
-  other candidates into them and added no low finding. The comment preview,
-  planned with the same model, proposed the summary and no inline comment,
-  since existing threads on the PR already discuss all three findings. Nothing
-  was published; the service then returned to 0.3.5.
+  `/pr-review` was COMPLETE in 65 s with three sessions, no retry and no repair
+  turn, as before the summary change above: it confirmed the PR's three known
+  medium defects (reservation atomicity, snapshot isolation and absolute-time
+  ordering), merged the three other candidates into them and added no low
+  finding. The comment preview, planned with the same model, proposed the
+  summary and no inline comment, since existing threads on the PR already
+  discuss all three findings. Nothing was published; the service then
+  returned to 0.3.5.
 
 This is a pre-publication record. Registry integrity and installation from npm
 are checked only after publication, following the
