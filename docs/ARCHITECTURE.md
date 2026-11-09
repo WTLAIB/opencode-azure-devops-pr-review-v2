@@ -122,7 +122,12 @@ After preflight, hooks never re-read settings or catalogs.
    advice and limitations only. Severity follows the harm the evidence shows
    and how often realistic use reaches it: high must be fixed before merging,
    medium should be fixed in this change and low can wait; a rare trigger
-   lowers the severity instead of keeping a defect out. Concrete gaps the
+   lowers the severity instead of keeping a defect out. Lines the PR adds or
+   moves are in scope even when BASE had the same code (the finding says the PR
+   carries it over), and behavior that is wrong only if the author did not
+   mean it, with nothing showing whether they did, is a low finding whose
+   suggestion asks about the intent; neither a possible intention nor identical
+   BASE code is a reason to reject a finding in verification. Concrete gaps the
    change leaves (an untested change where the project already tests
    comparable code, a test that cannot fail, documentation or configuration
    that now contradicts the code, duplicated or dead code the change adds) are

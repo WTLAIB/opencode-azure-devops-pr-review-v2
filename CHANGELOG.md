@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.6 — 2026-11-10
+
+- Reviewers file a correctness or security defect on lines the PR adds or
+  moves even when the base commit had the same code elsewhere, such as a
+  function moved to a new file, and say in the finding that the PR carries it
+  over.
+- A possible intention no longer keeps a defect out of the findings. Behavior
+  that is wrong only if the author did not mean it, with nothing in the code,
+  tests, documentation or PR text showing whether they did, is a low finding
+  whose suggested fix asks the author to confirm or document the intent.
+  Neither a possible intention nor identical base code is a reason for the
+  verifier to reject a finding. Both reviewer rules apply in every review mode;
+  `/pr-quick` has no verifier.
+- Both changes were measured before and after with `/pr-deep` on Martian's
+  Code Review Bench, which the wording was written from, and on the
+  ReviewBench test set, which was not used to write it; see
+  [validation](docs/VALIDATION.md#defects-in-moved-code-and-unknown-intent-2026-11-09).
+
 ## 0.3.5 — 2026-11-04
 
 - A finding's severity says how much it matters to fix it before the change

@@ -1,8 +1,9 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.4 distributions, the 0.3.5 release candidate and a run of
-Martian's public code review benchmark. Host
+0.1.0 through 0.3.4 distributions, the 0.3.5 and 0.3.6 release candidates, a
+run of Martian's public code review benchmark and the instruction changes of
+0.3.6 measured on it and on ReviewBench. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -40,6 +41,206 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.3.6 release candidate acceptance (2026-11-10)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.2.4. The candidate changes only reviewer instructions: the shared ones
+(`src/prompts/common.md`) and the verifier's (`src/prompts/final.md`), as
+described and measured under
+[defects in moved code and unknown intent](#defects-in-moved-code-and-unknown-intent-2026-11-09).
+The runtime logic, settings and installers are those of 0.3.5.
+
+- `npm run check` and **424 offline tests** passed, with the locked prompt
+  hashes updated for the functional, risk, verifier and duplicate-check roles
+  in both checked variants; the comment-plan prompts are unchanged.
+- All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
+  and fake model and Azure services. The fresh run made 99 model and 180 Azure
+  DevOps requests, replacement 83 and 150 and native packed package
+  installation 99 and 187, all as for 0.3.5. Comment scale (largest provider
+  request 37,034 characters, 36,027 for 0.3.5, from the longer instructions)
+  and background compaction passed too.
+- A clean copy of the candidate tree installed with `install.sh`: the 19
+  runtime modules, 8 prompts and the license match, and `--replace` kept the
+  settings byte for byte with mode 600 and an unrelated file in place. The 206
+  local Markdown links, images and anchors outside code examples resolve.
+- `npm pack --dry-run --json` lists **32 files** (about 180 KB), as for 0.3.5.
+- The benchmark runs reviewed public pull requests through a local fixture of
+  the Azure DevOps API with real models; the candidate has not reviewed a live
+  Azure DevOps pull request.
+
+This is a pre-publication record. Installation from the public Git commit,
+registry integrity and installation from npm are checked after the release
+commit is pushed and published, following the [releasing guide](RELEASING.md).
+
+## Defects in moved code and unknown intent (2026-11-09)
+
+Two changes to the shared reviewer instructions, released in 0.3.6, follow the
+[Martian run](#martian-code-review-bench-2026-11-05-and-06): among the golden
+comments that no run posted were defects in code the PR moved unchanged, which
+the instructions left out as pre-existing, and findings rejected because the
+behavior might be intended.
+
+- Reviewers file a correctness or security defect on lines the PR adds or
+  moves even when the base commit had the same code elsewhere, and say that
+  the PR carries it over.
+- Behavior that is wrong only if the author did not mean it, with nothing in
+  the code, tests, documentation or PR text showing whether they did, is a low
+  finding whose suggested fix asks the author to confirm or document the
+  intent.
+- Neither identical base code nor a possible intention is a reason for the
+  verifier to reject a finding.
+
+The runtime changes are in `src/prompts/common.md` and `src/prompts/final.md`
+only. `npm run check` and the 424 offline tests passed, with the locked prompt hashes updated
+for the functional, risk, verifier and duplicate-check roles in both checked
+variants; the comment-plan prompts are unchanged. The four real-host fixtures
+passed on OpenCode 2.2.4: fresh installation with 99 model and 180 Azure
+DevOps requests and replacement with 83 and 150, as for 0.3.5; comment scale,
+whose largest provider request grew from 36,027 to 37,034 characters with the
+longer instructions; and background compaction.
+
+The wording was written after reading three of those golden comments: two
+defects in moved code and one finding rejected as possibly intended. Scores on
+Martian's benchmark can therefore overstate the effect, so the changes were
+also run on the [ReviewBench](https://github.com/review-bench/ReviewBench) test
+set, which was not used to write them. Every configuration below ran once, and
+the pass criteria were written down before the runs. Martian's benchmark was
+scored by Claude Opus 5.5 with its own judging prompts (local scores, as in
+[choosing models](#choosing-models-for-pr-deep)). On ReviewBench, the Claude
+Opus 5.5 runs were scored with ReviewBench's own judging pipeline and the model
+that judges its leaderboard, and every run was also scored by the local judge
+of the
+[0.3.4 comparison](#reviewer-instructions-compared-on-the-reviewbench-test-set).
+
+### Martian's benchmark, which the wording was written from
+
+`/pr-deep` with Claude Opus 5.5 at medium effort for all three roles, the
+recommended setup, on the 50 PRs (core golden comments, local judge):
+
+| Instructions | Comments | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.3.5 | 323 | 28.1 | 65.2 | 51.6 | 72.7 |
+| With the changes | 334 | 28.6 | 67.7 | 53.2 | 77.3 |
+
+The 0.3.5 row is the run in [choosing models](#choosing-models-for-pr-deep).
+F2 and precision were not to fall by more than 2.5 and 3 points, and comments
+were not to grow by more than 15%; all three held. At least two of the three
+golden comments the wording was written from were expected to be posted; one
+was. The function that computes a new value and returns the old one, which
+all twelve 0.3.5 runs had noted and none had filed, was filed and marked as
+carried over. This run's reviewers did not mention the other two at all, so
+the new rules never came into play for them. Nine findings asked the author to
+confirm an intent; in those we checked, behavior changed without a stated
+reason.
+
+### ReviewBench, which was not used to write it
+
+The harness is that of the
+[0.3.4 comparison](#reviewer-instructions-compared-on-the-reviewbench-test-set):
+`/pr-deep` on the 25 PRs of the public test set behind a fixture of the Azure
+DevOps API. Four measures were fixed in advance: recall of the reference
+issues, the share of findings judged valid, recall of the high and medium
+reference issues, and agreement with the judge on which findings deserve an
+inline comment (F1). None was to fall by more than twice the variation between
+two runs of the same instructions, found by swapping their results PR by PR;
+that variation comes from two runs with GPT-6.1 Sol scored by the local judge.
+
+With Claude Opus 5.5 at medium effort for all three roles, the setup measured
+on Martian's benchmark, 0.3.5 and the version with the changes each ran once.
+Their findings were scored with ReviewBench's judging pipeline
+(`npm run judge` at its commit 228f2a8) and Claude Sonnet 5, the model that
+judges its leaderboard. We ran the pipeline ourselves, so these are not
+leaderboard results.
+
+| Claude Opus 5.5, ReviewBench's judge | Findings | Reference recall | Judged valid | High and medium recall | Inline decision (F1) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.3.5 | 252 | 35.5 | 95.6 | 55.3 | 70.0 |
+| With the changes | 283 | 39.5 | 96.5 | 55.3 | 65.5 |
+| Largest allowed fall | | 2.8 | 2.0 | 3.6 | 5.8 |
+
+All four measures held. The run with the changes matched 139 reference issues
+against 125: 45 low ones against 31, while the high and medium ones stayed at
+94 (21 high against 23). Inline decisions fell by 4.5 points: 96 of the 190
+findings the judge rated medium or high were labeled low, against 74 of 164.
+Eight of those 96 ask the author to confirm an intent, which the changes rate
+low. The reviewers asked the author to confirm an intent in 14 findings,
+against 2 in the 0.3.5 run, and the judge rated 13 of the 14 valid.
+
+### ReviewBench scored by the local judge
+
+The same runs, and a pair with GPT-6.1 Sol, the model of the earlier
+ReviewBench comparisons, were also scored by the local judge: Claude Opus 5.5
+subagents applying ReviewBench's matcher and classifier rubric.
+
+| GPT-6.1 Sol, local judge | Findings | Reference recall | Judged valid | High and medium recall | Inline decision (F1) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.3.5 | 299 | 32.1 | 96.0 | 50.6 | 82.0 |
+| With the changes | 324 | 32.7 | 96.3 | 51.2 | 82.2 |
+
+| Claude Opus 5.5, local judge | Findings | Reference recall | Judged valid | High and medium recall | Inline decision (F1) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.3.5 | 252 | 40.1 | 96.0 | 58.8 | 74.7 |
+| With the changes | 283 | 40.1 | 93.6 | 56.5 | 75.5 |
+
+With GPT-6.1 Sol all four measures rose slightly, and the run used about as
+many tokens as earlier runs with that model. With Claude Opus 5.5 three held,
+but the share of findings judged valid fell by 2.4 points, more than the 2.0
+allowed: 18 findings were invalid against 10. Five of those 18 report problems
+that the 0.3.5 run also reported and the judge also rated invalid. Of the
+other 13, two ask the author to confirm an intent that a doc comment or a
+commit message in the PR already stated, and two report blank site titles, a
+problem the 0.3.5 run also reported but the judge then rated valid. The rest
+are of kinds both runs had: findings that match issues the reference set
+itself lists as invalid, and others the judge rated invalid; the 0.3.5 run had
+five such findings that this run did not. ReviewBench's judge rated those two
+intent questions and the two blank-title findings valid.
+
+The two judges moved in opposite directions on the share of valid findings
+and on inline decisions: the difference between judges is as large as the
+effect of the changes.
+
+- 0.3.5's verifier rejected 9 findings, 6 of which the local judge rated
+  valid, including two it rejected as an intended, documented fallback. With
+  the changes the verifier rejected 3, none of them valid, and that run filed
+  one of the two fallback problems, which matched a reference issue.
+- Both Claude Opus 5.5 runs used about as many tokens.
+
+### Limits
+
+- One run per configuration. On Martian's benchmark one run's recall varies
+  by about 3.7 points. The allowed falls on ReviewBench come from two runs
+  with GPT-6.1 Sol scored by the local judge; how much Claude Opus 5.5, or
+  ReviewBench's judge, varies between runs was not measured.
+- On Martian's benchmark the scores are local; the dashboard's judge scored
+  0.3.5, not the changes. On ReviewBench, the leaderboard's judge scored only
+  the Claude Opus 5.5 runs. Its bundled model list did not include Claude
+  Sonnet 5 yet, so a model setting was added as ReviewBench's documentation
+  describes, with adaptive thinking, the only thinking mode Sonnet 5 accepts.
+  The pipeline ran outside this repository, because the judge's agent library
+  adds AGENTS.md files from its working directory's parents to the judge's
+  instructions. Scoring both runs cost about US$35.
+- ReviewBench's test set holds 36 high reference issues. The Sol run with the
+  changes matched 16 of them, against 20 for 0.3.5 and 18 and 19 for two runs
+  of earlier instructions. Of the five that 0.3.5 matched and it did not,
+  three, covering two defects that span two files, were reported in the other
+  file, which ReviewBench's per-file matching cannot count. One was noted only
+  in a part of the finding that does not reach the comment, and one was not
+  noticed, as in one of the earlier runs. It also matched one that 0.3.5 had
+  missed.
+- `/pr-quick` follows the new reviewer rules too but was not measured, and
+  comment planning and publication were not exercised.
+
+### A second initial-review round, measured and removed
+
+A second round was built and measured with the changes: each shard was
+reviewed again in a new session that saw the findings already filed on its
+files and was asked only for defects they miss. On Martian's benchmark with
+the setup above it raised recall from 67.7 to 74.1 and High and Critical
+recall from 77.3 to 80.3, but precision fell from 28.6 to 23.4 and F2 from
+53.2 to 51.6, comments grew by 38% and the tokens about doubled. Its criteria
+asked for no fall in F2 and at most twice the tokens, so it was removed (see
+the [roadmap](ROADMAP.md#a-second-initial-review-round)).
 
 ## Martian Code Review Bench (2026-11-05 and 06)
 
