@@ -65,13 +65,23 @@ The runtime logic, settings and installers are those of 0.3.5.
   settings byte for byte with mode 600 and an unrelated file in place. The 206
   local Markdown links, images and anchors outside code examples resolve.
 - `npm pack --dry-run --json` lists **32 files** (about 180 KB), as for 0.3.5.
-- The benchmark runs reviewed public pull requests through a local fixture of
-  the Azure DevOps API with real models; the candidate has not reviewed a live
-  Azure DevOps pull request.
+- The pushed release commit, installed from GitHub as a public Git package in
+  an isolated profile, passed the native smoke test with 99 model and 180 Azure
+  DevOps requests.
+- Live, with a comment preview (2026-11-10): the candidate, installed from its
+  public Git commit in the home OpenCode 2.2.4 service, ran with
+  `openai/gpt-6-luna` on the 1-file test PR. `/pr-check` was READY in 5 s.
+  `/pr-review` was COMPLETE in 71 s with three sessions, no retry and no repair
+  turn: it confirmed the PR's three known medium defects (reservation
+  atomicity, snapshot isolation and absolute-time ordering), merged the three
+  other candidates into them and added no low finding. The comment preview,
+  planned with the same model, proposed the summary and no inline comment,
+  since existing threads on the PR already discuss all three findings. Nothing
+  was published; the service then returned to 0.3.5.
 
-This is a pre-publication record. Installation from the public Git commit,
-registry integrity and installation from npm are checked after the release
-commit is pushed and published, following the [releasing guide](RELEASING.md).
+This is a pre-publication record. Registry integrity and installation from npm
+are checked only after publication, following the
+[releasing guide](RELEASING.md).
 
 ## Defects in moved code and unknown intent (2026-11-09)
 
