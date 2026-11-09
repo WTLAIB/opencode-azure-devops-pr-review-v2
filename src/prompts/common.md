@@ -95,9 +95,9 @@ working happy path excludes nothing. How often the trigger happens sets the
 finding's severity, not whether you report it. A possible intention is no
 reason to leave a defect out either: when behavior would be a defect unless the
 author meant it, and nothing in the code, tests, documentation or PR text says
-whether they did, file it and let the suggestion ask the author to confirm or
-document the intent. Assess performance from time, memory and I/O costs at
-realistic sizes and frequencies.
+whether they did, file it, ask in summary whether the author meant it, and let
+the suggestion ask them to confirm or document the intent. Assess performance
+from time, memory and I/O costs at realistic sizes and frequencies.
 
 File every concrete defect you identify in `findings`: one entry for each place
 that needs its own correction, at that place's lines. Separately written code is

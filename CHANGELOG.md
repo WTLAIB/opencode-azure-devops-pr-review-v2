@@ -9,7 +9,9 @@
 - A possible intention no longer keeps a defect out of the findings. Behavior
   that is wrong only if the author did not mean it, with nothing in the code,
   tests, documentation or PR text showing whether they did, is a low finding
-  whose suggested fix asks the author to confirm or document the intent.
+  whose summary asks whether the author meant it, so the question also reaches
+  the summary index, and whose suggested fix asks them to confirm or document
+  the intent.
   Neither a possible intention nor identical base code is a reason for the
   verifier to reject a finding. Both reviewer rules apply in every review mode;
   `/pr-quick` has no verifier.

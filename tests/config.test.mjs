@@ -192,15 +192,15 @@ test('prompts: review stays byte-identical and deep shares it; quick never claim
   // Changing a review prompt is a deliberate change: update these together with
   // the validation notes. Deep roles run the same prompts with other models.
   const golden = {
-    'deny/en/azpr-review-functional': 'a51ceb20113503d5bea678de86f879d1e8ad8ddb6754d15254520bcaef43048c',
-    'deny/en/azpr-review-risk': '7dd18a601a065b79084e876fcdc25d61d2d098eabaf4a2514a80cd2102688262',
-    'deny/en/azpr-review-verifier': 'a326b0728be45e7782df56c4d7f816ef0fe301c598dc4b87a78c55be7a42ed15',
-    'deny/en/azpr-review-dedupe': '36b6062f75ea20d85618c45a69b322ebd59900474b98e319e70d67c75063d419',
+    'deny/en/azpr-review-functional': '6739dea69f50a7f90b88e88c65c354d2c6478a0adcb32594fd84e0d2c81a1d66',
+    'deny/en/azpr-review-risk': 'b4b68d7ce0799e7b628ed1a2ef94152e10a370ff6b37407e2eb42f975175ceb2',
+    'deny/en/azpr-review-verifier': 'f49339ebc5c797687791594ffaf0e90461b1aa20d3aa309309f4458d83efec60',
+    'deny/en/azpr-review-dedupe': '9cc8df0c8077d1476dddc2968d70561308c3a4537f18a8344e04fc10ea4205c7',
     'deny/en/azpr-review-comment-plan': '4459cd370adb32ee1b2d54168f2ed20d315c1944550f3d29bd389e09283286a5',
-    'ask/zh-TW/azpr-review-functional': 'fcbd3240829244a47ca7d76d9a6507e0c5be07f97bd8803a52a43773d7f55323',
-    'ask/zh-TW/azpr-review-risk': '7b3ea1b5076ffbdbb8ff21289f9f63618d51cf22039c1a683fd9f52d57d397b6',
-    'ask/zh-TW/azpr-review-verifier': '8fd7725547758a244c31b403d317582446569a07b99c8f43524d09d504f34542',
-    'ask/zh-TW/azpr-review-dedupe': '7ffee93564a96a9dd1f6306ad72312ac2a2a9d2b8c6770aee63ea96541340666',
+    'ask/zh-TW/azpr-review-functional': 'ea5bb59b24effcf1deb9360ae1d58925a3399d9c50dc911ccb044a78c0374241',
+    'ask/zh-TW/azpr-review-risk': '6f69034f8745e3e42a4d23fbe4cad73df98f83562304859f4d72ae9725bd096d',
+    'ask/zh-TW/azpr-review-verifier': 'cdc82979aa8140d4131e873a9b603fa10735471a7627d69ce6f06fd6a9b32985',
+    'ask/zh-TW/azpr-review-dedupe': '245a785bf3492efed8bc66e6255567e8211f364fe2470ebcd66aab15994a6930',
     'ask/zh-TW/azpr-review-comment-plan': '09fa9efd33f441743cb8fe0255f18cf02db3add68c532d4b129b64fa900d2ac1',
   };
   const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv' }, quick: { reviewer: 'p/q' } };

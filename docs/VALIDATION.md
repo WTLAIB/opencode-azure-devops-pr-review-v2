@@ -58,12 +58,23 @@ The runtime logic, settings and installers are those of 0.3.5.
   and fake model and Azure services. The fresh run made 99 model and 180 Azure
   DevOps requests, replacement 83 and 150 and native packed package
   installation 99 and 187, all as for 0.3.5. Comment scale (largest provider
-  request 37,034 characters, 36,027 for 0.3.5, from the longer instructions)
+  request 37,119 characters, 36,027 for 0.3.5, from the longer instructions)
   and background compaction passed too.
 - A clean copy of the candidate tree installed with `install.sh`: the 19
   runtime modules, 8 prompts and the license match, and `--replace` kept the
-  settings byte for byte with mode 600 and an unrelated file in place. The 206
+  settings byte for byte with mode 600 and an unrelated file in place. The 207
   local Markdown links, images and anchors outside code examples resolve.
+- A review of the candidate found that a question about intent could be lost
+  in publication: a low finding gets no inline comment, the summary index
+  shows only each finding's summary, and the comment planner's further details
+  are optional. Reviewers and the verifier now ask the question in the summary
+  itself. With `/pr-deep` and Claude Opus 5.5 on five ReviewBench PRs where
+  the earlier runs had asked about intent, all 13 findings that asked the
+  author about intent did so in their summary (for example, "Is replacing the
+  existing note intended?"); in the Claude Opus 5.5 run measured below, none
+  of the 12 such findings did. With Claude Opus 5.5 as the `/pr-quick`
+  reviewer on the same PRs, and with GPT-6 Luna in both modes, no finding
+  asked about intent, so those summaries were not exercised.
 - `npm pack --dry-run --json` lists **32 files** (about 180 KB), as for 0.3.5.
 - The pushed release commit, installed from GitHub as a public Git package in
   an isolated profile, passed the native smoke test with 99 model and 180 Azure
@@ -96,10 +107,15 @@ behavior might be intended.
   the PR carries it over.
 - Behavior that is wrong only if the author did not mean it, with nothing in
   the code, tests, documentation or PR text showing whether they did, is a low
-  finding whose suggested fix asks the author to confirm or document the
-  intent.
+  finding whose summary asks whether the author meant it and whose suggested
+  fix asks them to confirm or document the intent.
 - Neither identical base code nor a possible intention is a reason for the
   verifier to reject a finding.
+
+The question in the summary was added after the measurements below, when a
+review of the release candidate found that it could otherwise be lost from
+the summary index; see the
+[0.3.6 acceptance](#036-release-candidate-acceptance-2026-11-10).
 
 The runtime changes are in `src/prompts/common.md` and `src/prompts/final.md`
 only. `npm run check` and the 424 offline tests passed, with the locked prompt hashes updated
@@ -107,7 +123,7 @@ for the functional, risk, verifier and duplicate-check roles in both checked
 variants; the comment-plan prompts are unchanged. The four real-host fixtures
 passed on OpenCode 2.2.4: fresh installation with 99 model and 180 Azure
 DevOps requests and replacement with 83 and 150, as for 0.3.5; comment scale,
-whose largest provider request grew from 36,027 to 37,034 characters with the
+whose largest provider request grew from 36,027 to 37,119 characters with the
 longer instructions; and background compaction.
 
 The wording was written after reading three of those golden comments: two

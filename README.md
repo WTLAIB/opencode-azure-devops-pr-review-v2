@@ -595,8 +595,8 @@ findings. Neither does the code's history: a defect on lines the PR adds or
 moves is a finding even when the same code existed before (a function moved to
 a new file), marked as carried over. Nor does a possible intention: behavior
 that is wrong only if the author did not mean it, with nothing showing whether
-they did, is a low finding whose suggestion asks the author to confirm or
-document the intent.
+they did, is a low finding whose summary asks whether the author meant it and
+whose suggestion asks them to confirm or document the intent.
 The verifier sets the final severity from its own checks; `/pr-quick`
 keeps the reviewer's. Concrete gaps the change leaves are findings too, rated
 by their effect: a changed behavior no test would catch where the project
