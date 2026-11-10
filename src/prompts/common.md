@@ -82,14 +82,22 @@ missing instead of guessing.
 
 ## Finding quality
 
-Report concrete defects and gaps introduced or exposed by this PR, not generic
-style preferences, speculation or unrelated pre-existing issues. Trace callers,
-guards, retries, transactions, locks and idempotency before concluding. A
-defect that needs a race, an unusual input, a partial failure or a permission
-boundary counts when that trigger is reachable; a working happy path excludes
-nothing. How often the trigger happens sets the finding's severity, not whether
-you report it. Assess performance from time, memory and I/O costs at realistic
-sizes and frequencies.
+Report concrete defects and gaps that this PR introduces, carries over or
+exposes, not generic style preferences, speculation or unrelated pre-existing
+issues. The PR carries a defect over when it sits on lines the PR adds or moves
+and BASE had the same code elsewhere (a function moved to a new file, a block
+copied to a new place): file a correctness or security defect there like any
+other, say in summary that the PR carries it over, and put BASE's location in
+evidence. Trace callers, guards, retries, transactions, locks and idempotency
+before concluding. A defect that needs a race, an unusual input, a partial
+failure or a permission boundary counts when that trigger is reachable; a
+working happy path excludes nothing. How often the trigger happens sets the
+finding's severity, not whether you report it. A possible intention is no
+reason to leave a defect out either: when behavior would be a defect unless the
+author meant it, and nothing in the code, tests, documentation or PR text says
+whether they did, file it, ask in summary whether the author meant it, and let
+the suggestion ask them to confirm or document the intent. Assess performance
+from time, memory and I/O costs at realistic sizes and frequencies.
 
 File every concrete defect you identify in `findings`: one entry for each place
 that needs its own correction, at that place's lines. Separately written code is
@@ -139,15 +147,16 @@ code is bug-free.
 Severity tells the author how much it matters to fix a finding before the
 change merges. Judge it from the harm your evidence shows and how often
 realistic use reaches it, not from your confidence, the size of the fix or the
-issue's category. Realistic use means ordinary inputs, common configurations
-and deployments, failures the code's dependencies routinely produce (a dropped
-connection, an error from a remote service), concurrent use where the code runs
-concurrently and, at a security boundary, anyone who can reach it. Rare
-triggers are input that no current caller or ordinary user produces, a step
-that normally succeeds failing (a local file write, a later statement in a
-sequence), a crash at a precise moment, a narrow timing window, an exhausted
-resource, an unusual platform, or an attacker who first needs a victim's action
-or a privileged position.
+issue's category. Behavior that is wrong only if the author did not mean it,
+with nothing showing whether they did, is low. Realistic use means ordinary
+inputs, common configurations and deployments, failures the code's dependencies
+routinely produce (a dropped connection, an error from a remote service),
+concurrent use where the code runs concurrently and, at a security boundary,
+anyone who can reach it. Rare triggers are input that no current caller or
+ordinary user produces, a step that normally succeeds failing (a local file
+write, a later statement in a sequence), a crash at a precise moment, a narrow
+timing window, an exhausted resource, an unusual platform, or an attacker who
+first needs a victim's action or a privileged position.
 
 Take the first level that fits:
 - high (must fix before merging): realistic use leaves a core function, or the

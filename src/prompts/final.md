@@ -26,7 +26,11 @@ Return exactly one decision per assigned ID:
   summary is: correct the lines freely, but keep the candidate's file unless
   that defect is in another file. When you move a finding to another file, add
   `movedFrom` with the candidate's location and explain the move in reason.
-- rejected: a concrete source-based refutation.
+- rejected: a concrete source-based refutation. Neither a possible intention nor
+  BASE having the same code where this PR adds or moves the lines refutes a
+  defect. When only the author's intent would settle a verified behavior,
+  confirm it with a summary that asks whether the author meant it and a
+  suggestion that asks them to confirm or document the intent.
 - needsInfo: the missing evidence and what would settle it.
 - merged: `mergedInto` names another original ID (any ID in allFindingIds) with
   the same root cause and correction. Do not merge into itself, form cycles or

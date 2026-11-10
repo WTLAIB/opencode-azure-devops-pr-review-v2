@@ -64,6 +64,13 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   a move to another file must be declared and the report shows the initial
   location, and the comment planner may not skip a finding because another
   finding of the review is commented.
+- **Defects in moved code and unknown intent.** A correctness or security
+  defect on lines the PR adds or moves is filed even when the base commit had
+  the same code, and the finding says the PR carries it over. Behavior that is
+  wrong only if the author did not mean it, with nothing showing whether they
+  did, is a low finding that asks the author. Neither is a reason for the
+  verifier to reject a finding. Measured on two benchmarks; see
+  [validation](VALIDATION.md#defects-in-moved-code-and-unknown-intent-2026-11-09).
 - **Stage retries.** Transient failures retry once in a new session
   (`workflow.stageRetries`); stream continuations work for every provider, and
   OpenCode's own retries of a failed provider request pass AZPR's hooks.
@@ -117,26 +124,18 @@ A run of Martian's Code Review Bench, in which every expected issue that no
 run matched and a sample of the unmatched findings were checked against the
 code (see [validation](VALIDATION.md#martian-code-review-bench-2026-11-05-and-06)),
 points to these changes. Each needs a before-and-after measurement on more
-than that benchmark before it ships.
+than that benchmark before it ships. The first two it pointed to, defects in
+moved code and rejections for a possible intention, are implemented.
 
-1. **Defects in moved code.** When a PR moves existing code, reviewers leave
-   its defects out as pre-existing, although the PR adds those lines: in one
-   PR all twelve runs saw a function that computes a new value and returns
-   the old one, and none posted it. Concrete correctness and security defects
-   on added or moved lines should be filed and marked as carried over.
-2. **Rejections need counterevidence.** A rejection must be a concrete
-   source-based refutation, yet verifiers rejected findings because the
-   behavior might be intended. Unknown intent should become NEEDS_INFO, or a
-   low finding whose comment asks.
-3. **Concrete issues judged harmless.** Reviewers noted violations of a
+1. **Concrete issues judged harmless.** Reviewers noted violations of a
    documented contract and output encoded for the wrong context in their
    reports without filing them. Measure whether filing such issues as low
    findings helps more than the extra comments cost.
-4. **Missing-test findings.** Among the sampled findings the benchmark does not
+2. **Missing-test findings.** Among the sampled findings the benchmark does not
    list, missing tests with no known defect behind them were the largest
    low-value group. Measure filing them only when a concrete defect would go
    unnoticed.
-5. **Root cause first in comments.** A comment that leads with the symptom at
+3. **Root cause first in comments.** A comment that leads with the symptom at
    a caller can read as a different issue from one that names the defective
    code; comments should lead with the root cause and its location.
 
@@ -202,6 +201,18 @@ added if organizations restrict PAT creation.
 
 The REST calls work with Azure DevOps Server 2022.1 or later (api-version 7.1),
 but PR URLs and the base URL are limited to Azure DevOps Services.
+
+### A second initial-review round
+
+A round that reviews each shard again in a new session, given the findings
+already filed on its files and asked only for defects they miss, was built and
+measured together with the changes for moved code and unknown intent. With
+Claude Opus 5.5 at medium effort on Martian's benchmark it found more of the
+golden issues, but its extra findings lowered precision more, so F2 fell; it
+posted 38% more comments and about doubled the tokens. It was removed. It
+helped GPT-6 Luna in `/pr-review` more, so it may return as an option for
+weaker models if a measurement on more than one benchmark supports it; see
+[validation](VALIDATION.md#a-second-initial-review-round-measured-and-removed).
 
 ## Remaining validation work
 
