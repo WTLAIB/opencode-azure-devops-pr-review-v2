@@ -206,12 +206,13 @@ ourselves, so this is not a leaderboard result.
 | :--- | ---: | ---: | ---: | ---: |
 | 0.3.5 | 35.5% | 95.6% | 55.3% | 70.0 |
 | 0.3.6 | 39.5% | 96.5% | 55.3% | 65.5 |
+| 0.3.7 | 37.5% | 97.4% | 54.7% | 83.0 |
 
-None of the four measures fell by more than the run-to-run variation allowed
-for in advance. The last one is agreement with the judge on which findings
-deserve an inline comment; it fell because more findings the judge rated
-medium or high were labeled low, 8 of them questions about intent, which the
-new rule rates low. Our local judge scored these runs and a pair with GPT-6.1
+For 0.3.6, none of the four measures fell by more than the run-to-run
+variation allowed for in advance. The last one is agreement with the judge on
+which findings deserve an inline comment; it fell because more findings the
+judge rated medium or high were labeled low, 8 of them questions about intent,
+which that release's rule rates low. Our local judge scored these runs and a pair with GPT-6.1
 Sol. With Sol all four measures rose slightly; with Claude Opus 5.5 it rated
 2.4 points fewer of 0.3.6's findings valid, more than allowed. The criteria,
 both judges' results and the limits are in the
@@ -219,7 +220,12 @@ both judges' results and the limits are in the
 
 0.3.7 changes how severity is set for that reason: a change that breaks what
 worked before is at least medium, and the verifier sets each level without
-seeing the reviewer's label. The runs behind it are under
+seeing the reviewer's label. It reviewed the same pull requests once, with the
+same setup, and was scored the same way. Agreement on inline comments rose
+from 65.5 to 83.0: 27% of the findings the judge rated medium or high were
+labeled low, against 51% for 0.3.6. Recall fell by 2.0 points and the high and
+medium issues found by 0.6, both within the variation allowed for 0.3.6. The
+runs and their limits are under
 [severity from verified harm](docs/VALIDATION.md#severity-from-verified-harm-2026-11-11-and-12).
 
 ## Watch the workflow

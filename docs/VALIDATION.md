@@ -94,6 +94,14 @@ keeps its flow.
   model, proposed the summary and no inline comment, since existing threads
   on the PR already discuss all three findings. Nothing was published; the
   service then returned to 0.3.6.
+- After these checks, ReviewBench's judge
+  [scored the Claude Opus 5.5 run](#scored-by-reviewbenchs-judge-2026-11-12),
+  and the README, the release notes and this record were updated with its
+  scores; `src/` did not change. The updated tree passed `npm run check`, the
+  432 offline tests, the link check (217 links) and the five real-host
+  fixtures again.
+  The `v0.3.7` tag, first created before this update, was moved to the commit
+  that includes it before the npm package was published.
 
 This is a pre-publication record. Registry integrity and installation from npm
 are checked only after publication, following the
@@ -130,10 +138,11 @@ subset named, behind the Azure DevOps fixture of the
 [0.3.4 comparison](#reviewer-instructions-compared-on-the-reviewbench-test-set),
 in an isolated profile; nothing was published. What a run was to show, and its
 thresholds, were written down before it started, and every configuration ran
-once unless stated. ReviewBench's judge did not score these runs. They show
-whether reviews complete, how many findings they report and how the findings
-are labeled; one comparison uses the levels the judge gave to the findings of
-the 0.3.6 measurement.
+once unless stated. ReviewBench's judge scored the Claude Opus 5.5 run, after
+the comparisons of the next section had been made; its
+[scores](#scored-by-reviewbenchs-judge-2026-11-12) follow them. The other runs
+show whether reviews complete, how many findings they report and how the
+findings are labeled.
 
 ### Claude Opus 5.5 with the release's instructions
 
@@ -191,6 +200,34 @@ medium in this run: a README whose manual installation steps the PR breaks,
 and a Docker example whose `seed` command fails. The 0.3.6 measurement had
 labeled the Docker example low.
 
+### Scored by ReviewBench's judge (2026-11-12)
+
+After the release candidate had passed its acceptance, ReviewBench's judging
+pipeline (`scripts/eval/eval.ts` at its commit 228f2a8) scored the Claude Opus
+5.5 run with Claude Sonnet 5, the model that judges its leaderboard, with the
+settings of the
+[0.3.6 measurement](#reviewbench-which-was-not-used-to-write-it): the same
+golden set, matcher prompt and classifier prompt. We ran the pipeline
+ourselves, once, so these are not leaderboard results. The four measures and
+the largest falls allowed are those fixed for that measurement:
+
+| Claude Opus 5.5, ReviewBench's judge | Findings | Reference recall | Judged valid | High and medium recall | Inline decision (F1) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.3.6 measurement | 283 | 39.5 | 96.5 | 55.3 | 65.5 |
+| 0.3.7, the verifier's level (no rater) | 269 | 37.5 | 97.4 | 54.7 | 83.0 |
+| 0.3.7, with the rating | 269 | 37.5 | 97.4 | 54.7 | 84.8 |
+| Largest allowed fall | | 2.8 | 2.0 | 3.6 | 5.8 |
+
+All four held. The run matched 132 of the 352 reference issues against 139,
+and 93 of the 170 high and medium ones against 94. The judge rated 262 of the
+269 findings valid; the seven others match reference issues that the reference
+set itself lists as invalid. Of the 175 findings the judge rated medium or
+high, 48 were labeled low (27.4%), against 96 of 190 (50.5%); the paired
+comparison above, made before the judge ran, had put that share at 29.4% and
+the F1 at 81.2. With the rating, 38 of the 175 were labeled low and F1 was 1.8
+points higher, again below the 5 points set for recommending a rater of the
+reviewers' own model. Scoring cost about US$16.
+
 ### GPT-6 Luna with the release's instructions
 
 `/pr-review` with GPT-6 Luna for all three roles and no rater, the default,
@@ -244,16 +281,18 @@ scored these levels.
 
 ### Limits of the severity runs
 
-- ReviewBench's judge scored none of the 0.3.7 runs, so this record gives no
-  recall and no share of valid findings for the release. Before release, a
-  local judge (Claude Opus 5.5 subagents applying ReviewBench's rubric, as in
-  the 0.3.6 record) scored the Claude Opus 5.5 run against thresholds fixed in
-  advance for both, and they held. Its numbers are not recorded here: in the
-  0.3.6 record the two judges differed by as much as the effect measured.
-- The comparison with the judge's levels covers the 204 of 269 findings that
-  could be paired with a judged finding of the earlier run, uses the levels
-  of that run's findings and depends on our pairing. Each configuration ran
-  once, apart from the two GPT-6 Luna runs.
+- ReviewBench's judge scored only the Claude Opus 5.5 run, once. How much its
+  scores vary between runs was not measured; the allowed falls are those of
+  the 0.3.6 measurement, which come from two GPT-6.1 Sol runs scored by the
+  local judge. Before that, a local judge (Claude Opus 5.5 subagents applying
+  ReviewBench's rubric, as in the 0.3.6 record) had scored the same run
+  against thresholds fixed in advance for recall and the share of valid
+  findings, and they held. Its numbers are not recorded here: in the 0.3.6
+  record the two judges differed by as much as the effect measured.
+- The paired comparison covers the 204 of 269 findings that could be paired
+  with a judged finding of the earlier run, uses the levels of that run's
+  findings and depends on our pairing. Each configuration ran once, apart
+  from the two GPT-6 Luna runs.
 - GPT-6.1 Sol ran the release's instructions on two PRs only; its 25-PR run
   used an earlier build.
 - In the Claude Opus 5.5 run, some findings still asked the author about an
