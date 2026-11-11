@@ -61,6 +61,8 @@ const packageDirectory = join(fixture, 'package');
 let nativePackage = publishedPackage;
 const settings = JSON.parse(await readFile(join(sourceRoot, 'config', 'settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
+// The severity rating gets its own model here, so its requests can be told from the verifier's.
+settings.models.review.rater = 'fixture/rater';
 settings.models.quick = { reviewer: 'fixture/quick' };
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 // The smallest inactivity window, so the stalled-stream step takes about a
@@ -111,6 +113,7 @@ const provider = createServer(async (request, response) => {
   const parsed = JSON.parse(body);
   const sessionID = request.headers['x-opencode-session-id'];
   requests.push({ path: request.url, model: parsed.model, sessionID, tools: (parsed.tools ?? []).map(tool => tool.function?.name), last: textOf(lastUser(parsed.messages)).slice(0, 200),
+    first: textOf(firstUser(parsed.messages)).slice(0, 20000),
     toolResults: parsed.messages?.filter(message => message.role === 'tool').length ?? 0,
     lastTool: textOf(parsed.messages?.findLast(message => message.role === 'tool')?.content).slice(0, 600) });
   let payload;
@@ -173,11 +176,15 @@ const provider = createServer(async (request, response) => {
     else if (payload.userContext?.includes('follow-up') && parsed.model === 'quick' && !repair) final = JSON.stringify({ status: 'PARTIAL', coverage: { files, gaps: ['呼叫端尚未查核。'] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '提早停止。' });
     else if (payload.userContext?.includes('follow-up-unusable') && parsed.model === 'quick') final = '還在查核呼叫端。';
     else final = JSON.stringify({ status: 'COMPLETE', coverage: { files, gaps: [] }, additionalFiles: [], findings: [finding(payload.assignment.firstFindingId, files[0])], report: '初審完成。' });
+  } else if (payload?.assignment?.kind === 'rating') {
+    // The rating session has only the finding text: it answers with a level for every finding.
+    final = JSON.stringify({ status: 'COMPLETE', ratings: payload.assignment.findingIds.map(id => ({ id, severity: 'high', reason: '一般使用就會遺失狀態。' })), report: '' });
   } else if (payload?.assignment?.findingIds) {
+    // Candidates arrive without the reviewer's severity; the verifier sets one.
     const findings = payload.assignment.findings;
     final = repair
       ? JSON.stringify({ dispositions: findings.slice(1).map(item => ({ id: item.id, status: 'MERGED', mergedInto: findings[0].id, reason: '相同根因。' })) })
-      : JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...findings[0], reason: '已回查原始碼。' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: '驗證完成。' });
+      : JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...findings[0], severity: 'medium', reason: '已回查原始碼。' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: '驗證完成。' });
   } else if (payload?.commentWork?.kind === 'plan' && commentDiscussed && Array.isArray(payload.existingDiscussions)) {
     // Every finding is already discussed by AZPR's own comment on the PR.
     const threadId = payload.existingDiscussions.find(thread => thread.azpr && thread.path)?.threadId;
@@ -229,7 +236,7 @@ await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   update: 'disable', snapshots: false, warming: false, model: 'fixture/fixture',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
     // An image model makes OpenCode 2.2.2 and later offer experimental_image_generate to every agent.
-    models: { ...Object.fromEntries(['fixture', 'functional', 'risk', 'verifier', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])),
+    models: { ...Object.fromEntries(['fixture', 'functional', 'risk', 'verifier', 'rater', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])),
       image: { type: 'image', limit: { context: 100000, output: 4000 } } } } },
   // With CodeMode execute denied, OpenCode 2.2.0 and later list a CodeMode MCP server's tools directly.
   mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false },
@@ -361,7 +368,7 @@ try {
   const commands = await api('/api/command');
   for (const name of ['pr-check', 'pr-review', 'pr-stop', 'pr-deep', 'pr-quick', 'pr-comment']) assert.ok(commands.data.some(command => command.name === name), name);
   const agents = await api('/api/agent');
-  for (const role of ['functional', 'risk', 'verifier', 'dedupe', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), role);
+  for (const role of ['functional', 'risk', 'verifier', 'dedupe', 'rating', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-review-${role}`), role);
   for (const role of ['reviewer', 'comment-plan']) assert.ok(agents.data.some(agent => agent.name === `azpr-quick-${role}`), `quick ${role}`);
   const newOrigin = async title => (await api('/api/session', { title, location: { directory: directories.work } })).data.id;
   const latest = async origin => (await api(`/api/session/${origin}/inbox`)).data.at(-1)?.payload?.text ?? '';
@@ -457,7 +464,14 @@ try {
   assert.match(afterGrep(2), /outside the local OpenCode project|Search path does not exist: \/scale_lab/, 'A native grep on a repository path gets an answer instead of waiting for approval.');
   assert.match(afterGrep(3), /outside the local OpenCode project/, 'A native grep outside the project is refused with guidance instead of waiting for approval.');
   assert.equal((await api('/api/permission/request')).data?.length ?? 0, 0, 'No private session waits for an approval.');
+  // The severity rating: one session on its own model, with no tool at all, after the verifier that saw no reviewer severity.
+  const ratingRequests = requests.slice(beforeCheck).filter(request => request.model === 'rater');
+  assert.equal(ratingRequests.length, 1, 'One rating request for the confirmed finding.');
+  assert.deepEqual(ratingRequests[0].tools, [], 'The rating session is offered no tool.');
+  assert.ok(!/"severity"/.test(ratingRequests[0].first) && /"kind":"rating"/.test(ratingRequests[0].first), 'The rating input carries finding text without a level.');
+  assert.match(receipt, /azpr-review-rating: COMPLETE; session=\S+; model=fixture\/rater/);
   const verifierRequests = reviewRequests.filter(request => request.model === 'verifier');
+  assert.ok(verifierRequests.every(request => !/"severity"/.test(request.first)), 'Candidates reach the verifier without the reviewer\'s severity.');
   assert.equal(new Set(verifierRequests.map(request => request.sessionID)).size, 1, 'The repair turn stays in the verifier session.');
   assert.ok(verifierRequests.some(request => request.last.startsWith('AZPR runtime')), 'The verifier received a correction request.');
   assert.ok(azure.callsTo('changes').length >= 1, 'The runtime reads the change list itself.');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   BLOCKED_NATIVE_TOOLS, NATIVE_TOOL_PERMISSIONS, PROMPTS, ROLES, allowedTools, buildAgents,
-  nativeToolPermissions, patProblem, validateSettings,
+  nativeToolPermissions, patProblem, validateSettings, stageModel, configuredOptionalSlots,
 } from '../src/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
@@ -15,6 +15,8 @@ const input = () => ({ ...structuredClone(example), models: {
   review: { functional: 'provider/family/functional', risk: 'provider/risk', verifier: 'provider/verifier' },
   deep: { functional: '', risk: '', verifier: '' },
 }, azure: { ...example.azure, organization: 'org', pat: PAT } });
+// The severity rating exists only where a rater model is set.
+const withRater = () => { const settings = input(); settings.models.review.rater = 'provider/rater'; return settings; };
 
 test('settings reject removed transports and unknown keys', () => {
   for (const key of ['structuredOutput', 'steps', 'maxStageCharacters', 'comments', 'auxiliaryModels', 'outputRetries', 'verification', 'shellToolPermission']) {
@@ -136,6 +138,8 @@ test('agents: one per configured role; deep needs all three models', () => {
   const settings = validateSettings(input());
   const agents = buildAgents(settings, prompts);
   assert.deepEqual(Object.keys(agents).sort(), ['azpr-review-comment-plan', 'azpr-review-dedupe', 'azpr-review-functional', 'azpr-review-risk', 'azpr-review-verifier']);
+  // The rating role is registered only where models.<mode>.rater names a model.
+  assert.deepEqual(Object.keys(buildAgents(validateSettings(withRater()), prompts)).sort(), ['azpr-review-comment-plan', 'azpr-review-dedupe', 'azpr-review-functional', 'azpr-review-rating', 'azpr-review-risk', 'azpr-review-verifier']);
   for (const [id, agent] of Object.entries(agents)) {
     assert.equal(agent.id, id);
     assert.equal(agent.mode, 'primary');
@@ -163,7 +167,11 @@ test('agents: one per configured role; deep needs all three models', () => {
   assert.equal(Object.keys(buildAgents(validateSettings(full), prompts)).some(role => role.startsWith('azpr-quick-')), false, 'Quick roles need models.quick.reviewer.');
   full.models.quick = { reviewer: 'other/quick#high' };
   const fullAgents = buildAgents(validateSettings(full), prompts);
-  assert.equal(Object.keys(fullAgents).length, Object.keys(ROLES).length);
+  assert.equal(Object.keys(fullAgents).length, Object.keys(ROLES).length - 2, 'Every role except the two ratings, which need a rater.');
+  const rated = structuredClone(full);
+  rated.models.review.rater = 'other/rater';
+  rated.models.deep.rater = 'other/deep-rater';
+  assert.equal(Object.keys(buildAgents(validateSettings(rated), prompts)).length, Object.keys(ROLES).length);
   // One quick reviewer per shard and a planner on the same model; no verifier or duplicate check.
   assert.deepEqual(Object.keys(fullAgents).filter(role => role.startsWith('azpr-quick-')).sort(), ['azpr-quick-comment-plan', 'azpr-quick-reviewer']);
   for (const role of ['azpr-quick-reviewer', 'azpr-quick-comment-plan']) assert.deepEqual(fullAgents[role].model, { providerID: 'other', id: 'quick', variant: 'high' }, role);
@@ -185,27 +193,40 @@ test('prompts: review stays byte-identical and deep shares it; quick never claim
   // once (0.3.5); then defects on lines a PR adds or moves count even when BASE
   // had the same code, and a possible intention neither keeps a defect out nor
   // refutes it: behavior that is wrong only if unintended is low and its
-  // suggestion asks the author. The comment-plan prompts gained skip causes and
+  // suggestion asks the author; then (0.3.7) a change that breaks what worked in
+  // BASE is at least medium and an easy fix or an unconfirmed effect does not
+  // lower a level, the verifier receives candidates without the reviewer's
+  // severity, a finding states one defect, a merge keeps no text of the merged
+  // finding, documented steps that worked in BASE and fail in HEAD are a
+  // regression, a reviewer looks for stated intent before asking about it, and
+  // NEEDS_INFO is for behavior that could not be established, not for intent.
+  // The rating role (0.3.7) exists only where a rater model is set and has no
+  // tools: its prompt is its own text and the Severity section, so the settings
+  // below name a rater. The comment-plan prompts gained skip causes and
   // page-scoped lists after origin/main 5f9b917 and lost `priorPages` when pages
   // began to run side by side. Every role's tool guidance leaves what each tool
   // returns to the tool's own description.
   // Changing a review prompt is a deliberate change: update these together with
   // the validation notes. Deep roles run the same prompts with other models.
   const golden = {
-    'deny/en/azpr-review-functional': '6739dea69f50a7f90b88e88c65c354d2c6478a0adcb32594fd84e0d2c81a1d66',
-    'deny/en/azpr-review-risk': 'b4b68d7ce0799e7b628ed1a2ef94152e10a370ff6b37407e2eb42f975175ceb2',
-    'deny/en/azpr-review-verifier': 'f49339ebc5c797687791594ffaf0e90461b1aa20d3aa309309f4458d83efec60',
-    'deny/en/azpr-review-dedupe': '9cc8df0c8077d1476dddc2968d70561308c3a4537f18a8344e04fc10ea4205c7',
+    'deny/en/azpr-review-functional': '8098a60db7177ff416df8b752dffca1cd2e1d4bdb415bac84cdd35868fe9068c',
+    'deny/en/azpr-review-risk': '4510845cb06ccca89871321e475fca93ecb71979e472eecea720d09b4a40e83f',
+    'deny/en/azpr-review-verifier': '1e5886b0b7de5b0f8c056a5fb61bfcc6fc8f4356cc90c579b95b874595d53971',
+    'deny/en/azpr-review-dedupe': '95bd1d48ff6fcc4802576854e591909d5bbf0101079a8ea11cacb45115069303',
+    'deny/en/azpr-review-rating': 'ce9b0cc6de07e877f224bfb0c658c941e062145d0c6d60c9eeb0c8ab5f36d899',
     'deny/en/azpr-review-comment-plan': '4459cd370adb32ee1b2d54168f2ed20d315c1944550f3d29bd389e09283286a5',
-    'ask/zh-TW/azpr-review-functional': 'ea5bb59b24effcf1deb9360ae1d58925a3399d9c50dc911ccb044a78c0374241',
-    'ask/zh-TW/azpr-review-risk': '6f69034f8745e3e42a4d23fbe4cad73df98f83562304859f4d72ae9725bd096d',
-    'ask/zh-TW/azpr-review-verifier': 'cdc82979aa8140d4131e873a9b603fa10735471a7627d69ce6f06fd6a9b32985',
-    'ask/zh-TW/azpr-review-dedupe': '245a785bf3492efed8bc66e6255567e8211f364fe2470ebcd66aab15994a6930',
+    'ask/zh-TW/azpr-review-functional': 'c5e8f32697d3ebe9028926f55fe6ec60b5b389374721f3a472a7823345c1427a',
+    'ask/zh-TW/azpr-review-risk': '1947a4209eacbfb628deec3aa07dac0d1d98412b13bab9b4027e664e83140cbf',
+    'ask/zh-TW/azpr-review-verifier': 'c6ee1fba842a998d830502c3bab85e316307adc45e947c8ba1b71c5540a0f739',
+    'ask/zh-TW/azpr-review-dedupe': 'f4ee9194952f7a6ffa752c5f54eac6012d5c380fe91d6223c64f4a3dd9632afc',
+    'ask/zh-TW/azpr-review-rating': '520ba5dbabde44dab1d37f7936a03f7c1b9b00b87ff9c7f443e940b95e55a62e',
     'ask/zh-TW/azpr-review-comment-plan': '09fa9efd33f441743cb8fe0255f18cf02db3add68c532d4b129b64fa900d2ac1',
   };
-  const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv' }, quick: { reviewer: 'p/q' } };
+  const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v', rater: 'p/x' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv', rater: 'p/dx' }, quick: { reviewer: 'p/q' } };
   for (const [shell, outputLanguage] of [['deny', 'en'], ['ask', 'zh-TW']]) {
     const agents = buildAgents(validateSettings({ version: 2, models, azure: { organization: 'org', pat: 'x'.repeat(52) }, shell, outputLanguage }), prompts);
+    assert.deepEqual(Object.keys(agents).filter(role => role.startsWith('azpr-review-')).map(role => `${shell}/${outputLanguage}/${role}`).sort(),
+      Object.keys(golden).filter(key => key.startsWith(`${shell}/${outputLanguage}/`)).sort(), 'Every review role is hash-locked, the rating included.');
     for (const [role, agent] of Object.entries(agents)) {
       if (role.startsWith('azpr-quick-')) {
         // The quick prompts say that nothing was verified; they never say that something was.
@@ -237,6 +258,51 @@ test('prompts: review stays byte-identical and deep shares it; quick never claim
   assert.match(quick['azpr-review-functional'].system, /other changed files are context only/);
 });
 
+test('models.<mode>.rater: an optional model that turns the severity rating on; empty means no rating', () => {
+  const base = validateSettings(input());
+  assert.equal(base.models.review.rater, '');
+  assert.deepEqual(configuredOptionalSlots(base, 'review'), []);
+  assert.equal(stageModel(base, 'azpr-review-rating'), '', 'No rater: the stage is off, with no fallback to the verifier\'s model.');
+  assert.equal(stageModel(base, 'azpr-review-verifier'), 'provider/verifier');
+  assert.equal(stageModel(base, 'azpr-review-comment-plan'), 'provider/risk');
+  assert.equal(Object.hasOwn(buildAgents(base, prompts), 'azpr-review-rating'), false, 'No rating role is registered without a rater.');
+  const chosen = input();
+  chosen.models.review.rater = 'strong/rater#high';
+  const settings = validateSettings(chosen);
+  assert.deepEqual(configuredOptionalSlots(settings, 'review'), ['rater']);
+  assert.deepEqual(configuredOptionalSlots(settings, 'quick'), []);
+  const agents = buildAgents(settings, prompts);
+  assert.deepEqual(agents['azpr-review-rating'].model, { providerID: 'strong', id: 'rater', variant: 'high' });
+  assert.deepEqual(agents['azpr-review-verifier'].model, { providerID: 'provider', id: 'verifier' }, 'Only the rating uses the rater.');
+  // The rater does not count toward the three roles that turn deep mode on, and deep works without one.
+  const raterOnly = input();
+  raterOnly.models.deep = { rater: 'strong/rater' };
+  assert.deepEqual([validateSettings(raterOnly).deepReady, validateSettings(raterOnly).deepPartial], [false, false]);
+  const deep = input();
+  deep.models.deep = { functional: 'other/deep-f', risk: 'other/deep-r', verifier: 'other/deep-v' };
+  const deepSettings = validateSettings(deep);
+  assert.equal(deepSettings.deepReady, true);
+  assert.equal(stageModel(deepSettings, 'azpr-deep-rating'), '', 'Deep rates only with its own rater, never a review model.');
+  assert.equal(Object.hasOwn(buildAgents(deepSettings, prompts), 'azpr-deep-rating'), false);
+  // A review rater does not turn the deep rating on, and the other way round.
+  const reviewRated = structuredClone(deep);
+  reviewRated.models.review.rater = 'strong/rater';
+  const reviewRatedAgents = buildAgents(validateSettings(reviewRated), prompts);
+  assert.deepEqual([Object.hasOwn(reviewRatedAgents, 'azpr-review-rating'), Object.hasOwn(reviewRatedAgents, 'azpr-deep-rating')], [true, false]);
+  deep.models.deep.rater = 'strong/rater';
+  assert.equal(stageModel(validateSettings(deep), 'azpr-deep-rating'), 'strong/rater');
+  assert.deepEqual(buildAgents(validateSettings(deep), prompts)['azpr-deep-rating'].model, { providerID: 'strong', id: 'rater' });
+  assert.throws(() => validateSettings({ ...input(), models: { ...input().models, review: { ...input().models.review, rater: 'YOUR_PROVIDER/YOUR_MODEL' } } }), /models\.review\.rater: select an actual provider\/model ID/);
+  assert.throws(() => validateSettings({ ...input(), models: { ...input().models, review: { ...input().models.review, rater: 7 } } }), /models\.review\.rater/);
+  assert.throws(() => validateSettings({ ...input(), models: { ...input().models, quick: { reviewer: 'p/q', rater: 'p/r' } } }), /Unknown setting models\.quick\.rater/);
+  for (const mode of ['review', 'deep']) {
+    assert.ok(Object.hasOwn(schema.properties.models.properties[mode].properties, 'rater'), mode);
+    assert.equal(example.models[mode].rater, '', `${mode}: the example leaves the rating off`);
+  }
+  assert.equal(schema.properties.models.properties.review.required.includes('rater'), false);
+  assert.equal(Object.hasOwn(schema.properties.models.properties.quick.properties, 'rater'), false);
+});
+
 test('prompt variants keep shared lines and refuse malformed blocks', async () => {
   const { selectVariant } = await import('../src/config.mjs');
   const text = 'a\n<!-- azpr:verified -->\nv1\n<!-- azpr:quick -->\nq1\n<!-- azpr:end -->\nb\n';
@@ -260,25 +326,41 @@ test('tools: an explicit allowlist of AZPR and read tools; denied natives and sh
   assert.ok(allowedTools('azpr-deep-comment-plan', 'ask').includes('shell'));
   assert.deepEqual(allowedTools('build', 'inherit'), [], 'Ordinary agents are not governed by AZPR.');
   for (const name of [...BLOCKED_NATIVE_TOOLS, 'ado_repo_file', 'repo_pull_request_thread_write']) assert.equal(allowedTools('azpr-review-risk', 'inherit').includes(name), false, name);
-  const agents = buildAgents(validateSettings({ ...input(), shell: 'ask' }), prompts);
+  // The rating role reads only the finding text in its input: no tool at all, whatever the shell setting.
+  for (const shell of ['deny', 'ask', 'inherit']) {
+    assert.deepEqual(allowedTools('azpr-review-rating', shell), [], shell);
+    assert.equal(nativeToolPermissions('azpr-deep-rating', shell).shell, 'deny', shell);
+  }
+  const agents = buildAgents(validateSettings({ ...withRater(), shell: 'ask' }), prompts);
+  assert.ok(Object.hasOwn(agents, 'azpr-review-rating'));
   for (const [role, agent] of Object.entries(agents)) {
     assert.equal(agent.permissions.some(rule => rule.action === '*' || rule.effect === 'allow'), false, role);
-    assert.deepEqual(agent.permissions.find(rule => rule.action === 'shell'), { action: 'shell', resource: '*', effect: 'ask' });
+    assert.deepEqual(agent.permissions.find(rule => rule.action === 'shell'), { action: 'shell', resource: '*', effect: ROLES[role].tools === false ? 'deny' : 'ask' });
   }
 });
 
 test('prompts: one JSON transport, shared tool policy, shell guidance and language routing', () => {
-  const agents = buildAgents(validateSettings({ ...input(), outputLanguage: 'zh-TW' }), prompts);
+  const agents = buildAgents(validateSettings({ ...withRater(), outputLanguage: 'zh-TW' }), prompts);
+  assert.ok(Object.hasOwn(agents, 'azpr-review-rating'));
   for (const [role, agent] of Object.entries(agents)) {
     assert.match(agent.system, /one valid JSON object/);
+    assert.doesNotMatch(agent.system, /MCP|repo_file|repo_pull_request/);
+    assert.match(agent.system, /outputLanguage: zh-TW/);
+    assert.doesNotMatch(agent.system, /currentHead|currentBase|StructuredOutput/);
+    if (ROLES[role].tools === false) {
+      // A role without tools gets its own text and the severity rules: nothing about tools, reading source or filing findings.
+      assert.match(agent.system, /^# Role: severity rating\n/, role);
+      assert.match(agent.system, /\n## Severity\n[\s\S]*Take the first level that fits:[\s\S]*\n# Configured output language\n/, role);
+      assert.doesNotMatch(agent.system, /azpr_|# Tools|# Local commands|Reading source|File every concrete defect/, role);
+      assert.doesNotMatch(agent.system, /\n## Output\n|Return the useful review/, `${role}: the Severity section alone, not the sections after it`);
+      continue;
+    }
     assert.match(agent.system, /Read the PR repository with AZPR's tools \(azpr_\*\)/);
     assert.match(agent.system, /the runtime alone posts comments/);
     assert.match(agent.system, /never the PR repository/);
-    assert.doesNotMatch(agent.system, /MCP|repo_file|repo_pull_request/);
     assert.match(agent.system, /Shell is unavailable in this session/);
-    assert.match(agent.system, /outputLanguage: zh-TW/);
-    assert.doesNotMatch(agent.system, /currentHead|currentBase|StructuredOutput/);
   }
+  assert.throws(() => buildAgents(validateSettings(withRater()), { ...prompts, common: prompts.common.replace('## Severity', '## Levels') }), /common\.md has no "## Severity" section/);
   assert.match(agents['azpr-review-verifier'].system, /counterevidence/);
   assert.match(agents['azpr-review-comment-plan'].system, /azprData/);
   const shellAllowed = buildAgents(validateSettings({ ...input(), shell: 'inherit' }), prompts);
@@ -288,9 +370,11 @@ test('prompts: one JSON transport, shared tool policy, shell guidance and langua
 
 test('trimmed role instructions stay compact', () => {
   // A guard against prompt growth, not a model limit: the shared severity scale
-  // (0.3.5) added about 2,300 characters to every review role.
-  const agents = buildAgents(validateSettings(input()), prompts);
-  for (const [role, agent] of Object.entries(agents)) if (agent.system) assert.ok(agent.system.length < 17000, `${role}: ${agent.system.length}`);
+  // (0.3.5) added about 2,300 characters to every review role; 0.3.7 added about
+  // 1,100 to the shared rules and 300 to the verifier's.
+  const agents = buildAgents(validateSettings(withRater()), prompts);
+  for (const [role, agent] of Object.entries(agents)) if (agent.system) assert.ok(agent.system.length < 18500, `${role}: ${agent.system.length}`);
+  assert.ok(agents['azpr-review-rating'].system.length < 6000, 'The rating role carries only its own text and the severity rules.');
 });
 
 test('azure.patFile: an absolute path in place of azure.pat, never both; PAT problems never echo the value', () => {

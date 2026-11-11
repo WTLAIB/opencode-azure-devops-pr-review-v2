@@ -38,12 +38,17 @@ test('runPool keeps order and bounds parallelism', async () => {
   assert.equal(peak, 2);
 });
 
-async function context(t, { files, workflow = {}, behave }) {
+// The severity rating runs only where a test names a `rater` model. It answers by itself unless the test
+// passes `rate`: every finding stays medium, as the fixtures file it.
+const ratings = (payload, severity = 'medium') => JSON.stringify({ status: 'COMPLETE', report: '',
+  ratings: payload.assignment.findingIds.map(id => ({ id, severity, reason: 'Fixture rating.' })) });
+
+async function context(t, { files, workflow = {}, behave, rater = '', rate = async ({ payload }) => ratings(payload) }) {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-review-work-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const azure = fakeAzure({ files });
   const client = createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 3, timeoutMs: 1000 }), fetch: azure.fetch, retryDelayMs: 1 });
-  const settings = validateSettings({ version: 2, models: { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' } }, workflow, azure: { organization: 'org', pat: FAKE_PAT } });
+  const settings = validateSettings({ version: 2, models: { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v', ...(rater ? { rater } : {}) } }, workflow, azure: { organization: 'org', pat: FAKE_PAT } });
   const store = await createCommentData({ root: directory });
   const calls = [], notices = [];
   const run = { id: 'run12345', profile: 'review', active: true, controller: new AbortController(), stages: [] };
@@ -51,7 +56,7 @@ async function context(t, { files, workflow = {}, behave }) {
     calls.push({ role, payload, label: options.label });
     let evaluation, text;
     for (let turn = 0; ; turn++) {
-      text = await behave({ role, payload, turn, calls });
+      text = await (ROLES[role].format === 'rating' ? rate : behave)({ role, payload, turn, calls });
       evaluation = await handler.evaluate(text, evaluation?.result);
       if (!evaluation.issues?.length || turn >= settings.workflow.repairAttempts) break;
     }
@@ -196,8 +201,8 @@ const crossShard = (dedupe, { moveInto = '/src/a.ts' } = {}) => async ({ role, p
   if (format === 'initial') return initial(payload, role.endsWith('-risk') ? [finding('R-1', '/tests/a.test.ts')] : [finding('F-1', '/src/a.ts')]);
   if (format === 'final') {
     const [own] = payload.assignment.findings;
-    if (own.id !== 'R-1') return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...own, reason: 'Verified.' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r1' });
-    return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...own, location: `head:${moveInto}:3`, movedFrom: own.location, reason: 'The defect is in a.ts.' }],
+    if (own.id !== 'R-1') return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...own, severity: 'medium', reason: 'Verified.' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r1' });
+    return JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...own, severity: 'medium', location: `head:${moveInto}:3`, movedFrom: own.location, reason: 'The defect is in a.ts.' }],
       merged: [], rejected: [], needsInfo: [], newFindings: [{ ...finding('V-1001', moveInto), location: `head:${moveInto}:9` }], report: 'r2' });
   }
   return dedupe(payload);
@@ -239,7 +244,7 @@ test('a failed duplicate check keeps every finding; findings one verifier saw to
   assert.ok(kept.reviewWarnings.some(message => /duplicate check of \/src\/a\.ts failed \(dedupe crashed\); its 3 findings stay confirmed/.test(message)));
   // With room for both findings in one verification shard, the same verifier already compared them.
   const together = await context(t, { files: ['/src/a.ts', '/tests/a.test.ts'], workflow: { shardFindings: 15 }, behave: async ({ role, payload }) => {
-    if (ROLES[role].format === 'final') return JSON.stringify({ status: 'COMPLETE', confirmed: payload.assignment.findings.map(x => ({ ...x, location: 'head:/src/a.ts:3', movedFrom: x.location, reason: 'ok' })),
+    if (ROLES[role].format === 'final') return JSON.stringify({ status: 'COMPLETE', confirmed: payload.assignment.findings.map(x => ({ ...x, severity: 'medium', location: 'head:/src/a.ts:3', movedFrom: x.location, reason: 'ok' })),
       merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' });
     return crossShard(() => { throw new Error('must not run'); })({ role, payload });
   } });
@@ -247,6 +252,96 @@ test('a failed duplicate check keeps every finding; findings one verifier saw to
   assert.equal(together.calls.filter(call => call.role === 'azpr-review-dedupe').length, 0);
   assert.equal(same.shards.duplicateChecks, 0);
   assert.deepEqual(same.dispositions.map(d => d.status), ['CONFIRMED', 'CONFIRMED']);
+});
+
+// Reviewers file their findings as low; the verifier confirms them as medium and adds V-1. A rater is configured.
+const rated = rate => ({ files: ['/src/a.ts', '/src/b.ts'], rater: 'p/x', rate, behave: async ({ role, payload }) => {
+  if (ROLES[role].format === 'initial') return initial(payload, role.endsWith('-functional') ? [{ ...finding('F-1', '/src/a.ts'), severity: 'low' }, { ...finding('F-2', '/src/b.ts'), severity: 'low' }] : []);
+  return JSON.stringify({ status: 'COMPLETE', confirmed: payload.assignment.findings.map(x => ({ ...x, severity: 'medium', reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [],
+    newFindings: [{ ...finding('V-1', '/src/b.ts'), location: 'head:/src/b.ts:9' }], report: 'r' });
+} });
+
+test('without a rater no severity rating runs: the verifier gets no reviewer severity and its own level is final', async t => {
+  const f = await context(t, { ...rated(async () => { throw new Error('must not run'); }), rater: '' });
+  const final = await runReview(f.ctx, f.run, f.request);
+  const [verifier] = f.calls.filter(call => call.role === 'azpr-review-verifier');
+  assert.deepEqual(verifier.payload.assignment.findings.map(x => [x.id, Object.hasOwn(x, 'severity')]), [['F-1', false], ['F-2', false]],
+    'Candidates reach the verifier without the reviewer\'s severity, with or without a rater.');
+  assert.equal(f.calls.filter(call => call.role === 'azpr-review-rating').length, 0);
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.verifiedFinding.severity}`), ['F-1:medium', 'F-2:medium']);
+  assert.deepEqual(final.newFindings.map(x => `${x.id}:${x.severity}`), ['V-1:medium']);
+  assert.equal(final.shards.ratings, 0);
+  assert.equal(final.status, 'COMPLETE');
+  assert.equal(f.notices.some(message => /Severity rating/.test(message)), false);
+  assert.deepEqual(final.reviewWarnings.filter(warning => /rating/i.test(warning)), []);
+});
+
+test('severity rating with a rater: a session that sees neither the reviewer\'s nor the verifier\'s level sets the final one', async t => {
+  const f = await context(t, rated(async ({ payload }) => JSON.stringify({ status: 'COMPLETE', report: '', ratings: [
+    { id: 'F-1', severity: 'high', reason: 'A core path fails.' }, { id: 'F-2', severity: 'low', reason: 'Cosmetic.' }, { id: 'V-1', severity: 'high', reason: 'Stored data is lost.' }] })));
+  const final = await runReview(f.ctx, f.run, f.request);
+  const [verifier] = f.calls.filter(call => call.role === 'azpr-review-verifier');
+  assert.deepEqual(verifier.payload.assignment.findings.map(x => [x.id, Object.hasOwn(x, 'severity'), Boolean(x.evidence)]), [['F-1', false, true], ['F-2', false, true]],
+    'Candidates reach the verifier without the reviewer\'s severity.');
+  const raters = f.calls.filter(call => call.role === 'azpr-review-rating');
+  assert.equal(raters.length, 1);
+  const { payload } = raters[0];
+  // The rater gets the finding text and what the change is for: no PR identity, commit, file list or tool data.
+  assert.deepEqual(Object.keys(payload).sort(), ['assignment', 'change', 'outputLanguage']);
+  assert.deepEqual(payload.change, { title: 'Fixture PR', description: 'Fixture description' });
+  assert.equal(payload.assignment.kind, 'rating');
+  assert.deepEqual(payload.assignment.findingIds, ['F-1', 'F-2', 'V-1']);
+  for (const x of payload.assignment.findings) {
+    assert.equal(Object.hasOwn(x, 'severity'), false, `${x.id} arrives without the verifier's severity`);
+    assert.ok(x.summary && x.evidence && x.counterevidence && x.suggestion && x.location, x.id);
+  }
+  assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}:${d.verifiedFinding.severity}`), ['F-1:CONFIRMED:high', 'F-2:CONFIRMED:low']);
+  assert.deepEqual(final.newFindings.map(x => `${x.id}:${x.severity}`), ['V-1:high']);
+  assert.equal(final.shards.ratings, 1);
+  assert.equal(final.status, 'COMPLETE');
+  assert.ok(f.notices.some(message => /Severity rating: 3 finding\(s\) in 1 session\(s\)/.test(message)));
+  assert.deepEqual(final.reviewWarnings.filter(warning => /rating/i.test(warning)), []);
+});
+
+test('severity rating degrades per finding: an unrated finding and a failed session keep the verifier\'s severity', async t => {
+  // F-2 and V-1 are left out, also after the correction turns of the same session.
+  const partial = await context(t, rated(async ({ payload }) => JSON.stringify({ status: 'COMPLETE', report: '', ratings: [{ id: 'F-1', severity: 'high', reason: 'A core path fails.' }, { id: 'F-9', severity: 'low', reason: 'Not assigned.' }] })));
+  const kept = await runReview(partial.ctx, partial.run, partial.request);
+  assert.deepEqual(kept.dispositions.map(d => `${d.id}:${d.verifiedFinding.severity}`), ['F-1:high', 'F-2:medium']);
+  assert.deepEqual(kept.newFindings.map(x => `${x.id}:${x.severity}`), ['V-1:medium']);
+  assert.ok(kept.reviewWarnings.some(warning => /^Severity rating: 2 finding\(s\) got no usable rating and keep the verifier's severity\.$/.test(warning)), JSON.stringify(kept.reviewWarnings));
+  assert.equal(partial.calls.filter(call => call.role === 'azpr-review-rating').length, 1, 'Corrections stay in the rating session.');
+  assert.equal(kept.status, 'COMPLETE');
+  // A rating session that fails changes nothing and is named.
+  const failed = await context(t, rated(async () => { throw new Error('rater down'); }));
+  const same = await runReview(failed.ctx, failed.run, failed.request);
+  assert.deepEqual([...same.dispositions.map(d => d.verifiedFinding.severity), ...same.newFindings.map(x => x.severity)], ['medium', 'medium', 'medium']);
+  assert.ok(same.reviewWarnings.some(warning => /^The severity rating failed \(rater down\); its 3 finding\(s\) keep the verifier's severity\.$/.test(warning)), JSON.stringify(same.reviewWarnings));
+  assert.equal(same.status, 'COMPLETE');
+  // An answer that is not JSON at all: the same outcome, with the reason.
+  const prose = await context(t, rated(async () => 'All of them are medium.'));
+  const unrated = await runReview(prose.ctx, prose.run, prose.request);
+  assert.deepEqual(unrated.dispositions.map(d => d.verifiedFinding.severity), ['medium', 'medium']);
+  assert.ok(unrated.reviewWarnings.some(warning => /^Severity rating: The severity rating gave no usable answer; the verifier's severities are kept\.$/.test(warning)), JSON.stringify(unrated.reviewWarnings));
+  // Nothing confirmed, nothing to rate.
+  const none = await context(t, { files: ['/a.ts'], rater: 'p/x', rate: async () => { throw new Error('must not run'); }, behave: async ({ role, payload }) =>
+    ROLES[role].format === 'initial' ? initial(payload, [finding(`${ROLES[role].prefix}-1`)]) : verdicts(payload) });
+  const rejected = await runReview(none.ctx, none.run, none.request);
+  assert.equal(none.calls.filter(call => call.role === 'azpr-review-rating').length, 0);
+  assert.equal(rejected.shards.ratings, 0);
+});
+
+test('severity rating: more than 25 findings are rated in several sessions, each answering for its own', async t => {
+  const count = 30;
+  const f = await context(t, { files: ['/src/a.ts'], rater: 'p/x', workflow: { shardFindings: 50 }, behave: async ({ role, payload }) => {
+    if (ROLES[role].format === 'initial') return initial(payload, role.endsWith('-functional') ? Array.from({ length: count }, (_, i) => ({ ...finding(`F-${i + 1}`, '/src/a.ts'), location: `head:/src/a.ts:${i + 1}`, summary: `Defect ${i + 1}` })) : []);
+    return JSON.stringify({ status: 'COMPLETE', confirmed: payload.assignment.findings.map(x => ({ ...x, severity: 'medium', reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' });
+  }, rate: async ({ payload }) => ratings(payload, payload.assignment.findingIds.length === 25 ? 'high' : 'low') });
+  const final = await runReview(f.ctx, f.run, f.request);
+  const raters = f.calls.filter(call => call.role === 'azpr-review-rating');
+  assert.deepEqual(raters.map(call => [call.label, call.payload.assignment.findingIds.length]), [['1/2', 25], ['2/2', 5]]);
+  assert.deepEqual(final.dispositions.map(d => d.verifiedFinding.severity), [...Array(25).fill('high'), ...Array(5).fill('low')]);
+  assert.equal(final.shards.ratings, 2);
 });
 
 test('an incomplete Azure file list asks reviewers to discover paths and records them', async t => {

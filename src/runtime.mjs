@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, commentSlot, patProblem } from './config.mjs';
+import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, configuredOptionalSlots, stageModel, commentSlot, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -234,7 +234,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return g;
   }
 
-  function modelProblems(modelRows, profile, slots) {
+  function modelProblems(modelRows, profile, slots, { tools = true } = {}) {
     const problems = [];
     for (const slot of slots) {
       const selected = settings.models[profile][slot], { providerID, id, variant } = modelRef(selected);
@@ -242,7 +242,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const variants = (Array.isArray(matches[0]?.variants) ? matches[0].variants : []).map(item => item?.id).filter(text);
       if (matches.length !== 1) problems.push(`The selected ${profile}.${slot} model (${selected}) is unavailable in the host catalog.`);
       else if (variant !== undefined && variant !== 'default' && !variants.includes(variant)) problems.push(`The selected ${profile}.${slot} model has no variant ${variant}${variants.length ? `; it offers ${variants.join(', ')}` : ''}.`);
-      else if (matches[0].capabilities?.tools !== true) problems.push(`The selected ${profile}.${slot} model does not advertise tool support.`);
+      else if (tools && matches[0].capabilities?.tools !== true) problems.push(`The selected ${profile}.${slot} model does not advertise tool support.`);
     }
     return problems;
   }
@@ -256,12 +256,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     requireMethods(context, ['model.list'], 'readiness checks');
     const modelRows = listOf(await bounded(() => context.model.list(), run.controller.signal));
     if (!modelRows) throw new Error('[AZPR] Invalid model catalog.');
-    const slots = run.mode === 'comment' ? [commentSlot(run.profile)] : modelSlots(run.profile);
-    const problems = modelProblems(modelRows, run.profile, slots);
-    const optional = mode => run.mode === 'check' && settings[`${mode}Ready`]
-      ? { checkedModelSlots: modelSlots(mode), modelProblems: modelProblems(modelRows, mode, modelSlots(mode)) } : undefined;
+    // An optional slot is checked only where it is set; the rater runs without tools.
+    const checked = mode => {
+      const extra = configuredOptionalSlots(settings, mode);
+      return { checkedModelSlots: [...modelSlots(mode), ...extra],
+        modelProblems: [...modelProblems(modelRows, mode, modelSlots(mode)), ...modelProblems(modelRows, mode, extra, { tools: false })] };
+    };
+    const own = run.mode === 'comment'
+      ? { checkedModelSlots: [commentSlot(run.profile)], modelProblems: modelProblems(modelRows, run.profile, [commentSlot(run.profile)]) }
+      : checked(run.profile);
+    const problems = own.modelProblems;
+    const optional = mode => run.mode === 'check' && settings[`${mode}Ready`] ? checked(mode) : undefined;
     const deep = optional('deep'), quick = optional('quick');
-    run.readiness = { profile: run.profile, checkedModelSlots: slots, modelProblems: problems, ...(deep ? { deep } : {}), ...(quick ? { quick } : {}),
+    run.readiness = { profile: run.profile, ...own, ...(deep ? { deep } : {}), ...(quick ? { quick } : {}),
       azure: { organization: settings.azure.organization, apiVersion: API_VERSION, ...network } };
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
   }
@@ -498,7 +505,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await checkRole(role, signal);
     const spec = ROLES[role];
     if (spec.mode !== run.profile) throw new Error('[AZPR] Reviewer profile mismatch before invocation.');
-    const idModel = settings.models[spec.mode][spec.slot];
+    const idModel = stageModel(settings, role);
     const title = `[AZPR ${run.id}] ${spec.label}${label ? ` ${label}` : ''}${attempt > 1 ? ` (attempt ${attempt})` : ''}`;
     const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), signal }), signal);
     if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');

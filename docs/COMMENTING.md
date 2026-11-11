@@ -11,7 +11,7 @@ plans the comments, then the runtime posts the saved plan itself.
 ```
 
 Only reviews started in the same conversation are accepted; commands from one
-of the review's own sessions (for example the verifier session that shows the
+of the review's own sessions (for example the last one, which shows the
 report) route to that conversation. Reviews are persisted, so this also works
 after an OpenCode restart. A preview is refreshed on every `/pr-comment`
 without `--publish`; `--publish` reuses an existing preview exactly.

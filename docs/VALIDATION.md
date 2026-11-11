@@ -1,9 +1,10 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.4 distributions, the 0.3.5 and 0.3.6 release candidates, a
-run of Martian's public code review benchmark and the instruction changes of
-0.3.6 measured on it and on ReviewBench. Host
+0.1.0 through 0.3.4 distributions, the 0.3.5, 0.3.6 and 0.3.7 release
+candidates, a run of Martian's public code review benchmark, the instruction
+changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
+of 0.3.7 run on ReviewBench's test set. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -41,6 +42,224 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.3.7 release candidate acceptance (2026-11-12)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.2.4. The candidate changes the reviewer and verifier instructions, hands
+candidates to the verifier without the reviewer's severity and adds an
+optional severity rating, as described and run under
+[severity from verified harm](#severity-from-verified-harm-2026-11-11-and-12).
+Without a rater a review runs the same stages as in 0.3.6, and `/pr-quick`
+keeps its flow.
+
+- `npm run check` and **432 offline tests** passed (424 for 0.3.6). The locked
+  prompt hashes changed for the functional, risk, verifier and duplicate-check
+  roles in both checked variants, and the rating role has its own; the
+  comment-plan prompts are unchanged.
+- All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
+  and fake model and Azure services. The smoke fixture names a rater with a
+  model of its own. Its fresh run made 107 model and 180 Azure DevOps requests
+  (99 and 180 for 0.3.6; the eight additional model requests are the
+  rating's), replacement 89 and 150 (83 and 150; six for the rating) and
+  native packed package installation 107 and 187. The rating session was
+  offered no tool and received the confirmed finding without a severity. The
+  comment-scale fixture names no rater: no rating session ran and no rating
+  role was registered (largest provider request 38,252 characters, 37,119 for
+  0.3.6, from the longer instructions). Background compaction passed too.
+- A clean copy of the candidate tree installed with `install.sh`: the 19
+  runtime modules, 9 prompts and the license match, and `--replace` kept the
+  settings byte for byte with mode 600 and an unrelated file in place. For
+  settings written by an earlier version, the offline tests check that
+  `--replace` adds the empty `rater` entries and keeps every other value. The
+  214 local Markdown links, images and anchors outside code examples
+  resolve.
+- `npm pack --dry-run --json` lists **33 files** (about 184 KB): the 32 of
+  0.3.6 and `src/prompts/rating.md`.
+- A review of the pull request found that the README still gave the session
+  count of a build in which the rating ran by default; it now says three
+  sessions, or four with a rating model.
+- The pushed release commit, installed from GitHub as a public Git package in
+  an isolated profile, passed the native smoke test with 107 model and 180
+  Azure DevOps requests. Its Git archive, extracted into a clean directory,
+  passed the installation, link and package checks above again.
+- Live, with a comment preview (2026-11-12): the candidate, installed from its
+  public Git commit in the home OpenCode 2.2.4 service, ran with
+  `openai/gpt-6-luna` on the 1-file test PR, with settings written by 0.3.6
+  that name no rater. `/pr-check` was READY in 5 s. `/pr-review` was COMPLETE
+  in 70 s with three sessions, no rating session, no retry and no repair
+  turn: it confirmed the PR's three known medium defects (reservation
+  atomicity, snapshot isolation and absolute-time ordering) and merged the
+  three other candidates into them. The comment preview, planned with the same
+  model, proposed the summary and no inline comment, since existing threads
+  on the PR already discuss all three findings. Nothing was published; the
+  service then returned to 0.3.6.
+
+This is a pre-publication record. Registry integrity and installation from npm
+are checked only after publication, following the
+[releasing guide](RELEASING.md).
+
+## Severity from verified harm (2026-11-11 and 12)
+
+Severity decides where a finding appears: high and medium findings get an
+inline comment, low findings only a line in the summary. In the
+[0.3.6 measurement](#reviewbench-which-was-not-used-to-write-it), `/pr-deep`
+with Claude Opus 5.5 labeled low 96 of the 190 findings that ReviewBench's
+judge rated medium or high. 0.3.7 changes how the level is set and tightens a
+few rules about what a finding states:
+
+- A change that breaks something the base commit handled is at least medium,
+  however rarely it is used, and documented steps that worked before the
+  change and fail after it count as such a regression. An easy fix and an
+  effect the reviewer could not confirm no longer lower a level.
+- The verifier receives candidates without the reviewer's severity and sets
+  the level from the harm and trigger it verified.
+- An optional severity rating (`models.<mode>.rater`): after verification, a
+  session without tools sets each confirmed finding's final level from the
+  finding's text and the PR's title and description. It runs only where a
+  rater is named.
+- A finding states one defect, and a merge in verification keeps a defect that
+  only the merged finding named. Before asking the author about intent, a
+  reviewer looks for a statement of it; before answering, a reviewer makes the
+  read that would settle a suspicion. NEEDS_INFO is for behavior the verifier
+  could not establish, not for intent.
+
+Every run below used the 25 pull requests of the public
+[ReviewBench](https://github.com/review-bench/ReviewBench) test set, or the
+subset named, behind the Azure DevOps fixture of the
+[0.3.4 comparison](#reviewer-instructions-compared-on-the-reviewbench-test-set),
+in an isolated profile; nothing was published. What a run was to show, and its
+thresholds, were written down before it started, and every configuration ran
+once unless stated. ReviewBench's judge did not score these runs. They show
+whether reviews complete, how many findings they report and how the findings
+are labeled; one comparison uses the levels the judge gave to the findings of
+the 0.3.6 measurement.
+
+### Claude Opus 5.5 with the release's instructions
+
+`/pr-deep` with Claude Opus 5.5 at medium effort for all three roles, the
+setup of the 0.3.6 measurement, ran with the runtime and instructions of the
+release: `src/` is the same in the measured commit and in the release.
+`models.deep.rater` named the same model, so one run gives every finding two
+levels: the verifier's, which is the result when no rater is set, and the
+rating's.
+
+All 25 reviews were COMPLETE, with no failed or retried stage. Of 434
+candidates the verifier confirmed 270, merged 154 into other findings,
+rejected 7 and answered NEEDS_INFO for 3; of the 453 candidates of the 0.3.6
+measurement it confirmed 291, merged 158, rejected 3 and answered NEEDS_INFO
+for 1. In ReviewBench's format, which needs a line number, the run has 269
+findings:
+
+| Claude Opus 5.5, `/pr-deep` | Findings | High | Medium | Low | Inline comment |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.3.6 measurement | 283 | 19 | 83 | 181 | 36% |
+| 0.3.7, the verifier's level (no rater) | 269 | 18 | 117 | 134 | 50% |
+| 0.3.7, with the rating | 269 | 36 | 117 | 116 | 57% |
+
+**Against the levels of ReviewBench's judge.** ReviewBench's pipeline and
+Claude Sonnet 5 had judged every finding of the 0.3.6 measurement. Each
+finding of the new run was paired with at most one finding of that run on the
+same PR by the overlap of their wording (shared words over all words): in the
+same file, on lines within five of each other, with an overlap of at least
+12%; in the same file with at least 25%; or anywhere with at least 40%. The
+most similar pairs were formed first. The pairing is ours and automatic, not
+a judge's. 204 findings of the new run are paired with
+a finding the judge had rated valid, and take its judged level (35 high, 118
+medium and 51 low):
+
+| On those 204 findings | Judged medium or high, labeled low | Inline decision: precision | Recall | F1 |
+| --- | ---: | ---: | ---: | ---: |
+| 0.3.6 measurement | 67 of 153 (43.8%) | 98.9 | 56.2 | 71.7 |
+| 0.3.7, the verifier's level | 45 of 153 (29.4%) | 95.6 | 70.6 | 81.2 |
+| 0.3.7, with the rating | 39 of 153 (25.5%) | 93.4 | 74.5 | 82.9 |
+
+Written down beforehand: the share labeled low was to fall by at least 8
+points, and F1 was not to fall. The share fell by 14.4 points and F1 rose by
+9.5.
+
+**The rating.** Its 27 sessions made no tool call and needed no correction
+turn; together they took 6.7 minutes, 3.2% of the run's session time. The
+rating changed 46 of the 270 levels: 23 from low to medium, 18 from medium to
+high and 5 from medium to low. Against the judged levels it added 1.7 points
+of F1. The bar set beforehand for recommending a rater of the reviewers' own
+model was 5 points, so the documentation recommends a rater only when it is
+stronger than the reviewers' model.
+
+**Documented steps.** Two findings of the kind the regression rule names were
+medium in this run: a README whose manual installation steps the PR breaks,
+and a Docker example whose `seed` command fails. The 0.3.6 measurement had
+labeled the Docker example low.
+
+### GPT-6 Luna with the release's instructions
+
+`/pr-review` with GPT-6 Luna for all three roles and no rater, the default,
+ran twice on the 25 PRs: all 50 reviews were COMPLETE with no failed or
+retried stage, and no rating session ran. The runs reported 67 findings (2
+high, 51 medium and 14 low) and 57 (0, 47 and 10). Single runs of 0.3.6 and of
+its measured instructions had reported 82 and 66. With `models.review.rater`
+set to the same model, three PRs were COMPLETE; each of the three rating
+sessions made one request and no tool call.
+
+### GPT-6.1 Sol
+
+- An earlier build of this change ran `/pr-deep` on the 25 PRs with GPT-6.1
+  Sol for all three roles and as the rater: all COMPLETE, 333 findings (324
+  in the 0.3.6 measurement). The verifier's levels were 41 high, 171 medium
+  and 121 low (54, 134 and 136 in the 0.3.6 measurement) and the rating's 65,
+  148 and 120; the two agreed on the inline decision for 318 of the 333
+  findings. A model rating its own review changed little about which findings
+  get a comment, which is why the rating is off unless a rater is named. That
+  build still had the two verifier sentences listed under
+  [measured and left out](#severity-changes-measured-and-left-out), and not
+  yet the sentences about documented steps and NEEDS_INFO.
+- Without those two verifier sentences, five of the PRs: all COMPLETE, 69
+  findings.
+- With the release's instructions, two of the PRs: both COMPLETE, 25
+  findings. The finding about the README's installation steps was medium, and
+  the verifier confirmed, as a question to the author, a candidate it had
+  answered NEEDS_INFO in earlier runs of that PR.
+
+### A stronger rater
+
+On an experimental build of this change, GPT-6 Luna reviewed the 25 PRs, and
+both Luna and GPT-6.1 Sol then rated its 78 findings. Luna's verifier had set
+no finding high, 66 medium and 12 low. Luna's own rating gave 2, 59 and 17;
+Sol's gave 11, 51 and 16 and differed from the verifier in 17 findings: 11
+from medium to high, 5 from medium to low and 1 from low to medium. No judge
+scored these levels.
+
+### Severity changes measured and left out
+
+- Two verifier sentences: one to reject a claim that the verifier's own check
+  refutes, and one to reject a question about intent that the code, tests or
+  documents already answer. With GPT-6.1 Sol the first had nothing to act on
+  and the second was used on findings that were valid; with GPT-6 Luna both
+  made the verifier file findings it had found support for under rejected.
+- Running the rating by default on the verifier's model, for the reasons
+  above; with GPT-6 Luna rating its own review, some regressions also went
+  from medium to low.
+- A reviewer sentence saying that minor issues and edge cases are findings
+  too: it added findings without evidence that the additions were valid.
+
+### Limits of the severity runs
+
+- ReviewBench's judge scored none of the 0.3.7 runs, so this record gives no
+  recall and no share of valid findings for the release. Before release, a
+  local judge (Claude Opus 5.5 subagents applying ReviewBench's rubric, as in
+  the 0.3.6 record) scored the Claude Opus 5.5 run against thresholds fixed in
+  advance for both, and they held. Its numbers are not recorded here: in the
+  0.3.6 record the two judges differed by as much as the effect measured.
+- The comparison with the judge's levels covers the 204 of 269 findings that
+  could be paired with a judged finding of the earlier run, uses the levels
+  of that run's findings and depends on our pairing. Each configuration ran
+  once, apart from the two GPT-6 Luna runs.
+- GPT-6.1 Sol ran the release's instructions on two PRs only; its 25-PR run
+  used an earlier build.
+- In the Claude Opus 5.5 run, some findings still asked the author about an
+  intent that a test, a document or the change description already states.
+- `/pr-quick` follows the new reviewer rules too but was not run, and comment
+  planning and publication were not exercised in these runs.
 
 ## 0.3.6 release candidate acceptance (2026-11-10)
 

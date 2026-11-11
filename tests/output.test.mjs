@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
   escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt, quickRepairPrompt,
+  evaluateRatings, ratingRepairPrompt,
   parseCommentRequest, normalizeFindingId,
 } from '../src/output.mjs';
 
@@ -266,6 +267,35 @@ test('evaluateDuplicates only merges within the checked file and never loses a f
   assert.equal(prose.result.structured, false);
   assert.deepEqual(prose.result.merges, []);
   assert.match(prose.issues[0], /could not be used/);
+});
+
+test('evaluateRatings only sets levels: a finding without a usable rating keeps the verifier\'s severity', () => {
+  const ids = ['F-1', 'R-2', 'V-1'];
+  const clean = evaluateRatings(JSON.stringify({ status: 'COMPLETE', report: 'r', ratings: [
+    { id: 'F-1', severity: 'HIGH', reason: 'Data people keep is lost in ordinary use.' }, { id: 'R-2', severity: 'low', reason: 'A rare trigger, and the failure is recoverable.' },
+    { id: 'V-1', severity: 'medium', reason: 'A call that BASE handled now fails.' }] }), { ids });
+  assert.deepEqual(clean.issues, []);
+  assert.equal(clean.result.structured, true);
+  assert.deepEqual(clean.result.ratings.map(row => `${row.id}:${row.severity}`), ['F-1:high', 'R-2:low', 'V-1:medium']);
+  assert.deepEqual(clean.result.warnings, []);
+  // Invalid rows are reported and left out, and every finding without a usable rating is named.
+  const partial = evaluateRatings(JSON.stringify({ status: 'COMPLETE', report: '', ratings: [
+    { id: 'F-1', severity: 'critical', reason: 'a' }, { id: 'X-9', severity: 'low', reason: 'b' }, { id: 'R-2', severity: 'low', reason: 'c' }, { id: 'R-2', severity: 'high', reason: 'd' }] }), { ids });
+  assert.deepEqual(partial.result.ratings.map(row => `${row.id}:${row.severity}`), ['R-2:low']);
+  assert.ok(partial.issues.some(issue => /ratings\[0\]: severity must be high, medium or low/.test(issue)));
+  assert.ok(partial.issues.some(issue => /ratings\[1\]: id "X-9" is not an assigned finding/.test(issue)));
+  assert.ok(partial.issues.some(issue => /ratings\[3\]: R-2 is rated more than once/.test(issue)));
+  assert.ok(partial.issues.some(issue => /No usable rating for F-1, V-1\./.test(issue)));
+  assert.ok(partial.result.warnings.some(warning => /2 finding\(s\) got no usable rating and keep the verifier's severity/.test(warning)));
+  assert.match(ratingRepairPrompt(partial.issues), /exactly one rating \(high, medium or low\) for every ID in assignment\.findingIds/);
+  assert.ok(evaluateRatings('{"status":"COMPLETE","ratings":"none","report":""}', { ids }).issues.some(issue => /"ratings" must be an array/.test(issue)));
+  // No usable JSON: a correction turn, and no level changes on its own.
+  const prose = evaluateRatings('F-1 is high; the others are low.', { ids });
+  assert.equal(prose.result.structured, false);
+  assert.deepEqual(prose.result.ratings, []);
+  assert.match(prose.issues[0], /could not be used/);
+  assert.match(prose.result.warnings[0], /the verifier's severities are kept/);
+  assert.equal(ratingRepairPrompt(prose.issues, { parseOnly: true }), parseRepairPrompt(prose.issues));
 });
 
 test('evaluateFinal keeps an unstructured verifier answer visible and asks for the full object', () => {

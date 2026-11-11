@@ -19,7 +19,7 @@ const requiredFiles = [
   'install.sh', 'LICENSE', 'scripts/merge-settings.py', 'config/settings.example.json',
   ...['plugin.js', 'setup.mjs', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs',
     'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'diff.mjs', 'search.mjs', 'review-tools.mjs', 'review-work.mjs', 'store.mjs'].map(name => 'src/' + name),
-  ...['common', 'functional', 'risk', 'final', 'dedupe', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
+  ...['common', 'functional', 'risk', 'final', 'dedupe', 'rating', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
 test.after(() => {
@@ -67,7 +67,12 @@ async function installedAgents(s) {
   const settings = validateSettings(JSON.parse(readFileSync(join(s.root, destination, 'settings.json'), 'utf8')));
   const prompts = Object.fromEntries(names.map(name => [name, readFileSync(join(s.root, destination, 'prompts', name + '.md'), 'utf8')]));
   const agents = buildAgents(settings, prompts);
+  // Review, deep and quick roles; the two rating roles need a rater, which these settings leave empty.
   assert.equal(Object.keys(agents).length, 10);
+  // The installed rating prompt compiles once a rater is named.
+  const rated = structuredClone(settings);
+  rated.models.review.rater = 'team/rater';
+  assert.deepEqual(buildAgents(rated, prompts)['azpr-review-rating'].model, { providerID: 'team', id: 'rater' });
   return agents;
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr + (result.error ?? '')); }
@@ -167,8 +172,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('31-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 31);
+test('32-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 32);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
@@ -304,17 +309,18 @@ test('current partial settings merge only missing defaults and preserve existing
   original(s); clean(s);
 });
 
-test('replacement adds an empty quick reviewer to settings without one and keeps every other value', () => {
+test('replacement adds an empty quick reviewer and an empty rater to settings without them and keeps every other value', () => {
   const s = setup(); ok(install(s));
   const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));
   delete settings.models.quick;
   settings.models.review = { functional: 'team/f', risk: 'team/r', verifier: 'team/v' };
   writeFileSync(file, JSON.stringify(settings));
   const result = install(s, ['--replace']); ok(result);
-  assert.match(result.stdout, /Settings defaults added: models\.quick/);
+  assert.match(result.stdout, /Settings defaults added: models\.review\.rater, models\.quick/);
   const merged = JSON.parse(readFileSync(file, 'utf8'));
   assert.deepEqual(merged.models.quick, { reviewer: '' }, '/pr-quick stays off until a model is chosen.');
-  assert.deepEqual(merged.models.review, settings.models.review);
+  // An empty rater leaves the severity rating off; the chosen models are untouched.
+  assert.deepEqual(merged.models.review, { ...settings.models.review, rater: '' });
   // A configured quick reviewer is kept as it is.
   merged.models.quick.reviewer = 'team/quick';
   writeFileSync(file, JSON.stringify(merged));

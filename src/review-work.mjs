@@ -5,8 +5,8 @@
  * review has one reviewer per shard and no verification: the runtime checks
  * only the form and source of its findings, never whether they are right.
  */
-import { ROLES, initialRoles, roleFor } from './config.mjs';
-import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, quickRepairPrompt, quickFollowUpPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
+import { ROLES, initialRoles, roleFor, stageModel } from './config.mjs';
+import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, evaluateRatings, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, ratingRepairPrompt, quickRepairPrompt, quickFollowUpPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
 
 export { locationPath };
 const ID_SPAN = 1000;
@@ -166,6 +166,70 @@ async function finalRecheck(ctx, run, snapshot, warnings) {
   return { freshness, stale };
 }
 
+/** Findings one severity-rating session receives. */
+const RATING_BATCH = 25;
+const RATING_DESCRIPTION_CHARACTERS = 4000;
+
+/**
+ * Severity rating, only where models.<mode>.rater names a model; without one
+ * the verifier's severity is final. After verification and merging, a session
+ * without tools rates the surviving findings from their text alone, without
+ * the level the verifier gave them. It is meant for a model stronger than the
+ * reviewers': measured runs showed a gain there and none when a model rated
+ * its own review. A finding the rating does not cover, and every finding of a
+ * failed batch, keeps the verifier's severity. Returns the number of sessions.
+ */
+async function rateSeverities(ctx, run, { snapshot, dispositions, newFindings, warnings }) {
+  const { runStage, progress, settings } = ctx;
+  const rater = roleFor(run.profile, 'rating');
+  if (!stageModel(settings, rater)) return 0;
+  const rated = [
+    ...dispositions.filter(d => d.status === 'CONFIRMED' && d.verifiedFinding).map(d => ({ id: d.id, get: () => d.verifiedFinding, set: value => { d.verifiedFinding = value; } })),
+    ...newFindings.map((finding, index) => ({ id: finding.id, get: () => newFindings[index], set: value => { newFindings[index] = value; } })),
+  ];
+  if (!rated.length) return 0;
+  const batches = [];
+  for (let at = 0; at < rated.length; at += RATING_BATCH) batches.push(rated.slice(at, at + RATING_BATCH));
+  progress(run, `Severity rating: ${rated.length} finding(s) in ${batches.length} session(s).`);
+  const description = text(snapshot.description) ? snapshot.description : '';
+  const change = { title: snapshot.title ?? '', description: description.length > RATING_DESCRIPTION_CHARACTERS
+    ? `${description.slice(0, RATING_DESCRIPTION_CHARACTERS)} […]` : description };
+  const outcomes = await runPool(batches.map((items, index) => ({ items, index, count: batches.length })), settings.workflow.parallelSessions, async task => {
+    const ids = task.items.map(item => item.id);
+    const payload = {
+      outputLanguage: settings.outputLanguage, change,
+      assignment: { kind: 'rating', findingIds: ids,
+        findings: task.items.map(item => { const { severity: _verified, ...finding } = item.get(); return { ...finding, id: item.id }; }) },
+    };
+    try {
+      const result = await runStage(run, rater, payload, {
+        evaluate(answer) {
+          const { result, issues } = evaluateRatings(answer, { ids });
+          return { result, issues, repairPrompt: issues.length ? ratingRepairPrompt(issues, { parseOnly: !result.structured && syntaxProblem(issues) }) : undefined };
+        },
+      }, { label: task.count > 1 ? `${task.index + 1}/${task.count}` : '' });
+      return { ...task, result };
+    } catch (error) {
+      if (!run.active) throw error;
+      return { ...task, error };
+    }
+  });
+  if (!run.active) throw new Error(run.reason || 'Review stopped.');
+  for (const { items, result, error } of outcomes) {
+    if (!result) {
+      warnings.push(`The severity rating failed (${error?.message ?? 'unknown error'}); its ${items.length} finding(s) keep the verifier's severity.`);
+      continue;
+    }
+    const byId = new Map(result.ratings.map(row => [row.id, row]));
+    for (const item of items) {
+      const row = byId.get(item.id);
+      if (row) item.set({ ...item.get(), severity: row.severity });
+    }
+    warnings.push(...result.warnings.map(message => `Severity rating: ${message}`));
+  }
+  return batches.length;
+}
+
 /**
  * @param {object} ctx { azure, runStage, progress, settings, dataFor }
  * @param {object} run
@@ -226,10 +290,12 @@ export async function runReview(ctx, run, request) {
   let nextNewBase = groups.length * ID_SPAN;
   // Like initial shards, a verifier assignment that overflows the context is
   // split (between files where possible) and only an indivisible one fails.
+  // Candidates go to the verifier without the reviewer's severity, so it sets
+  // the level from what it verified instead of keeping a label.
   async function verifyTask(task) {
     const payload = {
       prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
-      assignment: { shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, findingIds: task.assigned.map(f => f.id), findings: task.assigned,
+      assignment: { shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, findingIds: task.assigned.map(f => f.id), findings: task.assigned.map(({ severity: _claimed, ...candidate }) => candidate),
         allFindingIds: await store.pack(allIds, 4000), firstNewFindingId: `V-${task.idBase + 1}` },
       initialReports: packedReports, discoveredFiles: [...discovered],
     };
@@ -344,6 +410,8 @@ export async function runReview(ctx, run, request) {
   const dangling = settleMergeTargets(dispositions, { unknownIsDangling: true, confirmedIds: new Set(newFindings.map(finding => finding.id)) });
   if (dangling.length) warnings.push(`Merged into findings that were not confirmed and shown as UNREVIEWED: ${dangling.map(row => `${row.id} → ${row.target} (${row.status})`).join(', ')}.`);
 
+  const ratings = await rateSeverities(ctx, run, { snapshot, dispositions, newFindings, warnings });
+
   const { freshness, stale } = await finalRecheck(ctx, run, snapshot, warnings);
   const status = stale ? 'STALE' : verified ? 'COMPLETE' : 'PARTIAL';
   return {
@@ -353,7 +421,7 @@ export async function runReview(ctx, run, request) {
     coverage, discoveredFiles: [...discovered], initialReports,
     initialObservations: status === 'COMPLETE' ? [] : findings,
     unstructuredInitials: status === 'COMPLETE' ? [] : initialReports.filter(item => !item.structured).map(item => item.report),
-    shards: { initial: shards.length, verification: groups.length, duplicateChecks: sameFile.length },
+    shards: { initial: shards.length, verification: groups.length, duplicateChecks: sameFile.length, ratings },
   };
 }
 

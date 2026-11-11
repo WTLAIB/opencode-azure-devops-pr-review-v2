@@ -19,24 +19,28 @@ derivation over calculated examples, and keep a number only if you observed it.
 Return exactly one decision per assigned ID:
 - confirmed: the complete corrected finding under the same ID (summary,
   evidence, counterevidence, location, severity, suggestion) plus reason.
-  Re-establish the location from source (`head:/path:line`) and set severity
-  yourself from the harm and trigger you verified: the candidate's severity is
-  a claim like the rest, so raise or lower it as the evidence requires and
-  explain a change in reason. The location is where the defect stated in
-  summary is: correct the lines freely, but keep the candidate's file unless
-  that defect is in another file. When you move a finding to another file, add
+  Re-establish the location from source (`head:/path:line`). Candidates arrive
+  without a severity: set it yourself from the harm and trigger you verified
+  (see Severity). The location is where the defect stated in summary is:
+  correct the lines freely, but keep the candidate's file unless that defect is
+  in another file. When you move a finding to another file, add
   `movedFrom` with the candidate's location and explain the move in reason.
 - rejected: a concrete source-based refutation. Neither a possible intention nor
   BASE having the same code where this PR adds or moves the lines refutes a
   defect. When only the author's intent would settle a verified behavior,
   confirm it with a summary that asks whether the author meant it and a
   suggestion that asks them to confirm or document the intent.
-- needsInfo: the missing evidence and what would settle it.
+- needsInfo: the missing evidence and what would settle it. It is for behavior
+  you could not establish, not for intent: when the behavior is verified and
+  only the author, or a specification outside the repository, can say whether
+  it is meant, confirm it and ask in summary.
 - merged: `mergedInto` names another original ID (any ID in allFindingIds) with
   the same root cause and correction. Do not merge into itself, form cycles or
   merge into a finding you reject: decide such a pair on its own evidence.
   Findings that need different corrections stay separate, each at its own
-  location, even when they share a cause.
+  location, even when they share a cause. A merged finding's own text is
+  dropped, so merge only a finding whose defect the kept one states: when it
+  names a defect the kept finding does not, confirm it under its own ID.
 
 A merge or a decision explained only in prose does not count; every assigned ID
 needs its own row. New, independently verified issues that no candidate covers

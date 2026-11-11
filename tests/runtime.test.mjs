@@ -30,10 +30,12 @@ function defaultAnswer({ role, packet }) {
       findings: files.length ? [finding(packet.assignment.firstFindingId, files[0])] : [] };
   }
   if (spec.format === 'final') {
-    return { status: 'COMPLETE', confirmed: packet.assignment.findings.map(f => ({ ...f, reason: 'Verified from source.' })),
+    // Candidates arrive without the reviewer's severity; the verifier sets one.
+    return { status: 'COMPLETE', confirmed: packet.assignment.findings.map(f => ({ ...f, severity: 'high', reason: 'Verified from source.' })),
       merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'FINAL_REPORT' };
   }
   if (spec.format === 'dedupe') return { status: 'COMPLETE', merged: [], report: '' };
+  if (spec.format === 'rating') return { status: 'COMPLETE', ratings: packet.assignment.findingIds.map(id => ({ id, severity: 'high', reason: 'Fixture rating.' })), report: '' };
   const eligible = packet.findings.filter(f => f.severity !== 'low');
   return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}),
     comments: eligible.map(f => ({ findingId: f.id, severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.id} loses state\n\nTrigger, impact and correction.` })),
@@ -233,6 +235,8 @@ test('a review returns STARTED, progress notices and one COMPLETE receipt, and p
   assert.deepEqual(saved, [`${reviewId(receipt)}.json`]);
   const verifier = f.sessionsFor('azpr-review-verifier')[0];
   assert.ok(f.notices.some(n => n.sessionID === verifier.id && /FINAL_REPORT/.test(n.text)), 'The report is queued to the verifier session.');
+  assert.equal(f.sessionsFor('azpr-review-rating').length, 0, 'No severity rating runs without models.review.rater.');
+  assert.doesNotMatch(receipt, /azpr-review-rating/);
   const initial = [...f.sessions.values()].find(session => session.packet?.assignment?.files);
   assert.deepEqual(initial.packet.snapshot.commits, [{ id: 'b'.repeat(12), message: 'Fixture change' }], 'Reviewers see the PR commit messages.');
 });
@@ -242,7 +246,7 @@ test('debug records keep each stage\'s per-request token usage and the run\'s ca
     tokens: ({ turn }) => ({ input: 1000, output: 10, reasoning: 2, cache: { read: turn ? 900 : 0, write: 0 } }),
     answer({ role, packet, turn }) {
       if (ROLES[role].format !== 'final') return undefined;
-      if (turn === 0) return { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' };
+      if (turn === 0) return { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], severity: 'high', reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' };
       return { dispositions: packet.assignment.findings.slice(1).map(item => ({ id: item.id, status: 'MERGED', mergedInto: packet.assignment.findings[0].id, reason: 'Same cause.' })) };
     } });
   const receipt = await f.command();
@@ -304,10 +308,67 @@ test('a file split across verification shards gets a private duplicate-check sta
   assert.ok(f.notices.some(n => /PROGRESS — Duplicate check: 1 file/.test(n.text)));
 });
 
+test('with models.review.rater the severity rating is a private session without tools, the last one, and its level is the one reported', async t => {
+  let nativeRead, azureRead;
+  const f = await fixture(t, { settings: settings => { settings.shell = 'inherit'; settings.models.review.rater = 'fixture/review-rater'; },
+    async during({ session, role, invoke }) {
+      if (role !== 'azpr-review-rating') return;
+      nativeRead = await invoke(session, 'read', { filePath: 'notes.md' }).then(() => 'ran', error => error.message);
+      azureRead = await invoke(session, 'azpr_read_file', { path: '/src/Main.java' }).then(() => 'ran', error => error.message);
+    },
+    answer: ({ role, packet }) => ROLES[role].format !== 'rating' ? undefined
+      : { status: 'COMPLETE', ratings: packet.assignment.findingIds.map(id => ({ id, severity: 'low', reason: 'Fixture: only a cosmetic effect.' })), report: '' } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.match(receipt, /azpr-review-rating: COMPLETE; session=ses_\d+; model=fixture\/review-rater/);
+  const [rater] = f.sessionsFor('azpr-review-rating');
+  assert.match(receipt, new RegExp(`Report delivery: report queued to session=${rater.id}`), 'The report goes to the last review session, here the rating.');
+  // With shell inherited the reviewers may see it; the rating session sees and runs nothing.
+  assert.ok(f.sessionsFor('azpr-review-functional')[0].visibleTools.includes('shell'));
+  assert.deepEqual(rater.visibleTools, []);
+  assert.match(nativeRead, /read is not available to this private reviewer/);
+  assert.match(azureRead, /azpr_read_file is not available to this private reviewer/);
+  assert.deepEqual(rater.model, { providerID: 'fixture', id: 'review-rater', variant: 'default' });
+  assert.match(rater.title, /^\[AZPR [a-f0-9]{8}\] Severity rating$/);
+  // Its input is the finding text and what the change is for: no PR identity, commit or file list, and no earlier level.
+  assert.deepEqual(Object.keys(rater.packet).sort(), ['assignment', 'change', 'outputLanguage']);
+  assert.equal(rater.packet.assignment.kind, 'rating');
+  assert.ok(rater.packet.assignment.findings.length > 0 && rater.packet.assignment.findings.every(item => !Object.hasOwn(item, 'severity')));
+  assert.ok(f.sessionsFor('azpr-review-verifier')[0].packet.assignment.findings.every(item => !Object.hasOwn(item, 'severity')), 'The verifier gets candidates without the reviewer\'s severity.');
+  const report = f.notices.find(n => n.sessionID === rater.id && /^# AZPR/.test(n.text)).text;
+  // The fixture's reviewers and verifier say high; the report shows the rating.
+  assert.match(report, /### F-1 — Fixture defect F-1 \(low\)/);
+  assert.doesNotMatch(report, /\(high\)/);
+  assert.match(report, /\| Severity rating \| `fixture\/review-rater` \| 1 \| — \|/);
+  assert.ok(f.notices.some(n => /PROGRESS — Severity rating: \d+ finding\(s\) in 1 session\(s\)/.test(n.text)));
+});
+
+test('models.review.rater gives the severity rating its own model, checked before the review starts; it needs no tool support', async t => {
+  const f = await fixture(t, { settings: settings => { settings.models.review.rater = 'fixture/strong-rater#high'; } });
+  const list = f.context.model.list;
+  // The rater runs without tools, so a model that offers none is accepted for it.
+  f.context.model.list = async () => ({ data: (await list()).data.map(model => model.id === 'strong-rater' ? { ...model, capabilities: { tools: false } } : model) });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/);
+  assert.deepEqual(f.sessionsFor('azpr-review-rating')[0].model, { providerID: 'fixture', id: 'strong-rater', variant: 'high' });
+  assert.deepEqual(f.sessionsFor('azpr-review-verifier')[0].model, { providerID: 'fixture', id: 'review-verifier', variant: 'default' }, 'Verification keeps its own model.');
+  const rater = f.sessionsFor('azpr-review-rating')[0];
+  const report = f.notices.find(n => n.sessionID === rater.id && /^# AZPR/.test(n.text)).text;
+  assert.match(report, /\| Severity rating \| `fixture\/strong-rater#high` \| 1 \| — \|/);
+  assert.match(await f.command('pr-check'), /\] READY/);
+  // A rater that the host does not offer stops the review before any session starts, like any other role's model.
+  f.context.model.list = async () => ({ data: (await list()).data.filter(model => model.id !== 'strong-rater') });
+  const sessions = f.sessions.size;
+  const refused = await f.command();
+  assert.match(refused, /\] INCOMPLETE[\s\S]*The selected review\.rater model \(fixture\/strong-rater#high\) is unavailable in the host catalog\. No fallback was selected\./);
+  assert.equal(f.sessions.size, sessions, 'No private session was created.');
+  assert.match(await f.command('pr-check'), /\] NOT_READY[\s\S]*\| Model \| [A-Z_]+ \| The selected review\.rater model \(fixture\/strong-rater#high\) is unavailable in the host catalog\./);
+});
+
 test('a verifier that misses a decision is asked to correct it in the same session', async t => {
   const f = await fixture(t, { answer({ role, packet, turn }) {
     if (ROLES[role].format !== 'final') return undefined;
-    if (turn === 0) return { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' };
+    if (turn === 0) return { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], severity: 'high', reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' };
     return { dispositions: packet.assignment.findings.slice(1).map(f => ({ id: f.id, status: 'MERGED', mergedInto: packet.assignment.findings[0].id, reason: 'Same cause.' })) };
   } });
   const receipt = await f.command();
@@ -975,7 +1036,7 @@ test('a summary row that names an excluded finding holds the adjusted preview un
   // The verifier's summary of the risk finding refers to the functional one.
   const f = await fixture(t, { files: ['/src/Main.java'], answer({ role, packet }) {
     if (ROLES[role].format !== 'final') return undefined;
-    return { status: 'COMPLETE', confirmed: packet.assignment.findings.map(item => ({ ...item, summary: item.id.startsWith('R-') ? `${item.summary}, as in F-1` : item.summary, reason: 'Verified from source.' })),
+    return { status: 'COMPLETE', confirmed: packet.assignment.findings.map(item => ({ ...item, severity: 'high', summary: item.id.startsWith('R-') ? `${item.summary}, as in F-1` : item.summary, reason: 'Verified from source.' })),
       merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'FINAL_REPORT' };
   } });
   const review = reviewId(await f.command());
@@ -1679,7 +1740,7 @@ test('a failed follow-up keeps the earlier answer; an overflow still splits the 
 
 test('quick then review on the same head: only complete markers are already present', async t => {
   // One finding on the same anchor and the same comment set: nothing new is posted.
-  const merging = ({ role, packet }) => role !== 'azpr-review-verifier' ? undefined : { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], reason: 'ok' }],
+  const merging = ({ role, packet }) => role !== 'azpr-review-verifier' ? undefined : { status: 'COMPLETE', confirmed: [{ ...packet.assignment.findings[0], severity: 'high', reason: 'ok' }],
     merged: packet.assignment.findings.slice(1).map(x => ({ id: x.id, mergedInto: packet.assignment.findings[0].id, reason: 'Same defect.' })), rejected: [], needsInfo: [], newFindings: [], report: 'r' };
   const f = await fixture(t, { settings: quickSettings, answer: merging });
   await f.command('pr-quick');

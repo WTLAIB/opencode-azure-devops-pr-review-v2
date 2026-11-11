@@ -122,17 +122,25 @@ After preflight, hooks never re-read settings or catalogs.
    advice and limitations only. Severity follows the harm the evidence shows
    and how often realistic use reaches it: high must be fixed before merging,
    medium should be fixed in this change and low can wait; a rare trigger
-   lowers the severity instead of keeping a defect out. Lines the PR adds or
+   lowers the severity instead of keeping a defect out, but a change that
+   breaks something BASE handled is at least medium, and neither an easy fix
+   nor an effect the reviewer could not confirm lowers a level. Lines the PR adds or
    moves are in scope even when BASE had the same code (the finding says the PR
    carries it over), and behavior that is wrong only if the author did not mean
    it, with nothing showing whether they did, is a low finding whose summary
    and suggestion ask about the intent; neither a possible intention nor
-   identical BASE code is a reason to reject a finding in verification.
+   identical BASE code is a reason to reject a finding in verification. A
+   reviewer looks for a statement of the intent (tests, nearby comments and
+   documents, the PR description, commit messages) before asking about it. A
+   finding states one defect: a second one the reviewer notices is filed on its
+   own.
    Concrete gaps the change leaves (an untested change where the project
    already tests comparable code, a test that cannot fail, documentation or
    configuration that now contradicts the code, duplicated or dead code the
    change adds) are findings too, rated by their effect: a missing test is low
-   unless the test is what the change delivers. A mistake repeated in places
+   unless the test is what the change delivers, and documented steps that
+   worked in BASE and fail in HEAD are a regression (medium) even though the
+   failure shows itself at once. A mistake repeated in places
    that each need their own fix is one finding per place. Identical copies of
    one file count as one place within one reviewer's assigned files; shards are
    cut by path, so copies in different shards can each produce a finding, and
@@ -150,9 +158,14 @@ After preflight, hooks never re-read settings or catalogs.
    a file reaches the same verifier (a file is split only when it alone has
    more findings than a shard holds). Each verifier decides its assigned IDs and may
    merge into any original ID; merging is the only place duplicates are
-   resolved. A confirmation carries the verifier's own severity, set from the
-   harm and trigger it verified; the reviewer's severity is a claim like the
-   rest. A decision row is judged by its own fields (an explicit status,
+   resolved, and a merge keeps nothing of the merged finding's text, so a
+   finding that names a defect the kept one does not state is confirmed on its
+   own. Candidates reach the verifier without the reviewer's severity; a
+   confirmation carries the verifier's own, set from the harm and trigger it
+   verified. NEEDS_INFO is for behavior the verifier could not establish; when
+   the behavior is verified and only the author or a specification outside the
+   repository can say whether it is meant, the finding is confirmed as a
+   question. A decision row is judged by its own fields (an explicit status,
    or a merge target on a row without a finding) even when it sits in another
    list. A confirmation that moves its finding to another file must say so
    with `movedFrom`; otherwise the verifier is asked to confirm or undo the
@@ -175,7 +188,21 @@ After preflight, hooks never re-read settings or catalogs.
    root cause and same correction). Invalid merges get a correction turn and are
    otherwise ignored; chains end at the finding that stays; a failed check keeps
    every finding and adds a warning. Usually no file qualifies and nothing runs.
-6. **Recheck** — a fresh PR and iteration read compares versions. A changed
+6. **Severity rating** (optional) — runs only where `models.<mode>.rater`
+   names a model; otherwise the verifier's severity is final and no `rating`
+   role is registered. `rating` sessions (25 findings each) set the final
+   severity of every finding that is still confirmed, verifier-added ones
+   included. The role has no tools and its system prompt is its own text and
+   the Severity rules; its input is the finding text without any earlier level,
+   plus the PR title and description, with no PR identity, commit or file list.
+   It is meant for a rater stronger than the reviewers' model: in live runs a
+   stronger rater separated levels that a weaker verifier left together, while
+   a model rating its own review changed little and made the high label less
+   stable, which is why the stage is off by default. An unusable answer gets a
+   correction turn; a finding without a usable rating, and every finding of a
+   failed session, keeps the verifier's severity with a warning. Nothing runs
+   when nothing is confirmed.
+7. **Recheck** — a fresh PR and iteration read compares versions. A changed
    head is STALE; a changed base only adds a warning. A failed recheck is a
    warning because publication rechecks the head anyway.
 
@@ -187,7 +214,7 @@ reviewers read, so `/pr-comment` works after a restart in the same conversation.
 `/pr-quick` uses the same snapshot, file shards, overflow splitting, stage
 retries, watchdog and final version recheck, with one role,
 `azpr-quick-reviewer`, per shard (IDs `Q-1`, `Q-1001`, …) and no verifier,
-duplicate check or summary session. The reviewer covers the functional and
+duplicate check, severity rating or summary session. The reviewer covers the functional and
 the risk focus and checks each finding against source it read in its own
 session. A defect its files lead it to in another changed file is filed at
 that file's defective lines (never at a line that only uses the code), so two
@@ -368,7 +395,8 @@ an `adjustments` field only while some are active. Two states matter:
 
 ## Authorization and isolation
 
-Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`, and
+Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`,
+`azpr-<mode>-rating` where a rater is configured, and
 `azpr-quick-reviewer|comment-plan`) are hidden
 primary agents with explicit models (and variants, when configured). Every
 private session gets a grant with the run, role, model and a pending prompt
@@ -379,7 +407,8 @@ private session gets a grant with the run, role, model and a pending prompt
 - `context`: private requests keep only the role's allowlist — AZPR's six
   tools, native read/glob/grep and shell when the `shell` setting allows it;
   every other tool (other MCP servers, edits, web, delegation, CodeMode) is
-  removed. Ordinary sessions lose only AZPR's tools. Comment pages that read too
+  removed. The `rating` role's allowlist is empty: it sees and runs no tool,
+  whatever the `shell` setting. Ordinary sessions lose only AZPR's tools. Comment pages that read too
   much get their tools removed to force a checkpoint.
 - `model.request`: only primary requests after an authorized context; compaction,
   generation and title requests are refused (a compaction the host attempts

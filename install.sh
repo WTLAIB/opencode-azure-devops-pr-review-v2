@@ -35,7 +35,7 @@ while [ "$#" -gt 0 ]; do
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
 runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs diff.mjs search.mjs review-tools.mjs review-work.mjs store.mjs setup.mjs plugin.js'
-prompt_names='common functional risk final dedupe quick comment-policy comment-plan'
+prompt_names='common functional risk final dedupe rating quick comment-policy comment-plan'
 command_names='pr-setup pr-check pr-review pr-deep pr-quick pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
 for file in LICENSE scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done

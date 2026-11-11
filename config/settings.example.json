@@ -5,12 +5,14 @@
     "review": {
       "functional": "REPLACE_PROVIDER/REPLACE_FUNCTIONAL",
       "risk": "REPLACE_PROVIDER/REPLACE_RISK",
-      "verifier": "REPLACE_PROVIDER/REPLACE_VERIFIER"
+      "verifier": "REPLACE_PROVIDER/REPLACE_VERIFIER",
+      "rater": ""
     },
     "deep": {
       "functional": "",
       "risk": "",
-      "verifier": ""
+      "verifier": "",
+      "rater": ""
     },
     "quick": {
       "reviewer": ""

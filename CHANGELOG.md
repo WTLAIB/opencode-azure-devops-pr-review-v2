@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.7 — 2026-11-12
+
+- A change that breaks something that worked before is at least medium: an
+  input, configuration or call that the base commit handled and that now fails
+  or gives a wrong result, however rarely it is used. Documented steps that
+  worked before the change and fail after it count as such a regression, even
+  though the failure shows at once, and a question about intent is medium
+  instead of low when the behavior stops something that worked. An easy fix
+  and an effect the reviewer could not confirm are no longer reasons for a
+  lower severity.
+- The verifier no longer sees the reviewer's severity: candidates reach it
+  without one, and it sets each finding's level from what it verified.
+- New optional setting `models.review.rater` / `models.deep.rater`: a model
+  for a **severity rating**. After verification, a session without tools reads
+  the confirmed findings as they will be reported, 25 at a time, and sets each
+  one's final severity; a finding it does not rate keeps the verifier's. Left
+  out or empty, no rating runs and the verifier's severity is final. It is
+  meant for a rater stronger than the reviewers' model.
+- A finding states one defect. A second defect a reviewer notices on the way
+  becomes its own finding instead of a clause in another one's evidence, and a
+  merge in verification no longer drops a defect that only the merged finding
+  named.
+- Before asking whether the author meant a behavior, a reviewer looks for a
+  statement of that intent in the tests, the comments and documents beside the
+  code, the PR description and the commit messages.
+- Before answering, a reviewer makes the read that would settle a suspicion.
+- NEEDS_INFO is for behavior the verifier could not establish. A verified
+  behavior that only the author, or a specification outside the repository, can
+  call intended is confirmed as a question to the author instead.
+- The reviewer rules above apply in every review mode. `/pr-quick` keeps its
+  flow: no verifier, no rating, and the reviewer's severity.
+- A source installation copies one more file, `src/prompts/rating.md` (32
+  files). Upgrading with `install.sh --replace` adds the empty `rater` settings
+  and changes nothing else in `settings.json`.
+- The changes were run with `/pr-deep` and `/pr-review` on the ReviewBench test
+  set before release; see
+  [validation](docs/VALIDATION.md#severity-from-verified-harm-2026-11-11-and-12).
+
 ## 0.3.6 — 2026-11-10
 
 - Reviewers file a correctness or security defect on lines the PR adds or
