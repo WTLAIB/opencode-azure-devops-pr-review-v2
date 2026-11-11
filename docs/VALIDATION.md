@@ -79,6 +79,21 @@ keeps its flow.
 - A review of the pull request found that the README still gave the session
   count of a build in which the rating ran by default; it now says three
   sessions, or four with a rating model.
+- The pushed release commit, installed from GitHub as a public Git package in
+  an isolated profile, passed the native smoke test with 107 model and 180
+  Azure DevOps requests. Its Git archive, extracted into a clean directory,
+  passed the installation, link and package checks above again.
+- Live, with a comment preview (2026-11-12): the candidate, installed from its
+  public Git commit in the home OpenCode 2.2.4 service, ran with
+  `openai/gpt-6-luna` on the 1-file test PR, with settings written by 0.3.6
+  that name no rater. `/pr-check` was READY in 5 s. `/pr-review` was COMPLETE
+  in 70 s with three sessions, no rating session, no retry and no repair
+  turn: it confirmed the PR's three known medium defects (reservation
+  atomicity, snapshot isolation and absolute-time ordering) and merged the
+  three other candidates into them. The comment preview, planned with the same
+  model, proposed the summary and no inline comment, since existing threads
+  on the PR already discuss all three findings. Nothing was published; the
+  service then returned to 0.3.6.
 
 This is a pre-publication record. Registry integrity and installation from npm
 are checked only after publication, following the
