@@ -27,6 +27,8 @@ const dirs = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'hom
 await Promise.all(Object.values(dirs).map(path => mkdir(path, { recursive: true })));
 const files = Array.from({ length: 120 }, (_, i) => `/src/module-${String(Math.floor(i / 10)).padStart(2, '0')}/file-${String(i).padStart(3, '0')}.ts`);
 const requests = [];
+// A finding's level follows its place in its reviewer's list (every third one is low); the ID keeps that place.
+const levelOf = id => (Number(id.split('-')[1]) - 1) % 1000 % 3 === 2 ? 'low' : 'high';
 let child, logs = '', overflowShards = 0;
 // Planning requests in flight: the first page waits for a second one, so two lanes must overlap.
 let planning = 0, planningMost = 0, planningGate = null;
@@ -59,8 +61,9 @@ const provider = createServer(async (request, response) => {
       final = { status: 'COMPLETE', merged: [{ id: moved.id, mergedInto: kept.id, reason: 'Same guard lost in the same file.' }], report: '' };
     } else if (payload?.assignment?.findingIds) {
       // The second verifier moves its first high finding into a file the first verifier owns.
-      const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => f.severity === 'high') : undefined;
-      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
+      // Candidates arrive without the reviewer's severity; the verifier sets the level again.
+      const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => levelOf(f.id) === 'high') : undefined;
+      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, severity: levelOf(f.id), ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
     } else if (payload?.commentWork?.kind === 'plan') {
       planningMost = Math.max(planningMost, ++planning);
       if (!planningGate) {
@@ -125,6 +128,10 @@ try {
   assert.ok(stages('risk').every(stage => stage.status === 'FAILED' || stage.completedTools === 1), 'Each risk reviewer read its first file as a diff.');
   assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
   assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
+  // These settings name no rater: no severity rating runs, no rating role is registered and the verifiers' levels are final.
+  assert.deepEqual(stages('rating'), [], 'No severity rating without models.review.rater.');
+  assert.doesNotMatch(receipt, /azpr-review-rating/);
+  assert.equal((await api('/api/agent')).data.some(agent => agent.name === 'azpr-review-rating'), false, 'The rating role is not registered without a rater.');
   const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];
   assert.equal(merged.length, 1, 'The moved duplicate is merged into the finding that stays.');
   const coverage = functional.filter(stage => stage.status !== 'FAILED').reduce((n, stage) => n + stage.result.coverage.files.length, 0);
@@ -141,7 +148,7 @@ try {
   assert.match(await latest(), /ALREADY_PRESENT/);
   assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
   console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, plannerSessions: planner.length, planningInFlightMax: planningMost, threads: state.threads.length, providerRequests: requests.length,
+    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, plannerSessions: planner.length, planningInFlightMax: planningMost, threads: state.threads.length, providerRequests: requests.length,
     maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }

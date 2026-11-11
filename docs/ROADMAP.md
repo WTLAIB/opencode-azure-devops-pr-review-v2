@@ -117,6 +117,15 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   affects the caller's conversation.
 - **Maintainability.** Prompts are about a third of their former size, runtime is
   split into focused modules, host specifics live in `host.mjs`.
+- **Severity from what was verified.** The verifier receives candidates
+  without the reviewer's severity and sets the level itself. An optional
+  severity rating without tools (`models.<mode>.rater`) can set each confirmed
+  finding's final level from its text on a stronger model; it is off unless a
+  rater is named. A change that breaks what worked before is at least
+  medium, documented steps that stop working included. A finding states one
+  defect, a merge keeps no defect only the merged finding named, a reviewer
+  looks for stated intent before asking about it, and a verified behavior only
+  the author can call intended is confirmed as a question, not NEEDS_INFO.
 
 ## Planned
 

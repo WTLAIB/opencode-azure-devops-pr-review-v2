@@ -58,6 +58,10 @@
             "verifier": {
               "type": "string",
               "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization."
+            },
+            "rater": {
+              "type": "string",
+              "description": "Optional provider/model ID that turns on the severity rating: after verification, a session without tools rates the confirmed findings from their text alone, and its level is final. Empty or missing: no rating runs and the verifier's severity is final. Meant for a model stronger than the reviewers'; the step is small and needs no tool support."
             }
           }
         },
@@ -77,6 +81,10 @@
             "verifier": {
               "type": "string",
               "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization. May be empty; deep runs only when all three IDs are configured."
+            },
+            "rater": {
+              "type": "string",
+              "description": "Optional provider/model ID that turns on the severity rating of /pr-deep. Empty or missing: no rating runs. It does not count toward the three roles that turn deep mode on."
             }
           }
         },

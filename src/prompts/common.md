@@ -89,15 +89,19 @@ and BASE had the same code elsewhere (a function moved to a new file, a block
 copied to a new place): file a correctness or security defect there like any
 other, say in summary that the PR carries it over, and put BASE's location in
 evidence. Trace callers, guards, retries, transactions, locks and idempotency
-before concluding. A defect that needs a race, an unusual input, a partial
+before concluding, and when one more read would settle a suspicion, make it
+before you answer. A defect that needs a race, an unusual input, a partial
 failure or a permission boundary counts when that trigger is reachable; a
 working happy path excludes nothing. How often the trigger happens sets the
 finding's severity, not whether you report it. A possible intention is no
 reason to leave a defect out either: when behavior would be a defect unless the
 author meant it, and nothing in the code, tests, documentation or PR text says
 whether they did, file it, ask in summary whether the author meant it, and let
-the suggestion ask them to confirm or document the intent. Assess performance
-from time, memory and I/O costs at realistic sizes and frequencies.
+the suggestion ask them to confirm or document the intent. Look for that
+statement before you ask: the tests that cover the behavior and their names,
+the comments and documents beside it, the PR description and the commit
+messages. Assess performance from time, memory and I/O costs at realistic sizes
+and frequencies.
 
 File every concrete defect you identify in `findings`: one entry for each place
 that needs its own correction, at that place's lines. Separately written code is
@@ -123,7 +127,7 @@ summarize the rest in prose; a plain defect needs one sentence per field.
 
 Give each field one job:
 - summary: the defect in one sentence.
-- evidence: changed behavior, reachable trigger and impact, with the HEAD/BASE pair.
+- evidence: changed behavior, reachable trigger and impact of that one defect, with the HEAD/BASE pair. A second defect you notice on the way is its own finding, not a clause here.
 - counterevidence: the strongest safeguard or alternative explanation you checked and why it does not refute the issue.
 - location: `head:/path:line` or `head:/path:start-end` counted from the file content (1-based, including blank lines and comments, excluding any "N |" display prefixes).
 - severity: high, medium or low (see Severity).
@@ -137,7 +141,8 @@ the missing case and the tests it belongs with), a test that cannot fail or
 checks the wrong thing, a comment, document, example, schema or configuration
 that now contradicts the code, and duplicated, dead, misleading or inconsistent
 code the change introduces. Name the specific code and the concrete
-consequence. Design trade-offs and general advice without a specific defect or
+consequence; state a wrong test as what it wrongly accepts, not as missing
+coverage. Design trade-offs and general advice without a specific defect or
 location belong in report with the affected code, the benefit and a
 proportionate direction. Zero findings is a valid result and does not prove the
 code is bug-free.
@@ -148,7 +153,8 @@ Severity tells the author how much it matters to fix a finding before the
 change merges. Judge it from the harm your evidence shows and how often
 realistic use reaches it, not from your confidence, the size of the fix or the
 issue's category. Behavior that is wrong only if the author did not mean it,
-with nothing showing whether they did, is low. Realistic use means ordinary
+with nothing showing whether they did, is low, unless it stops something that
+worked in BASE from working (then medium). Realistic use means ordinary
 inputs, common configurations and deployments, failures the code's dependencies
 routinely produce (a dropped connection, an error from a remote service),
 concurrent use where the code runs concurrently and, at a security boundary,
@@ -166,8 +172,10 @@ Take the first level that fits:
 - medium (should fix in this change): realistic use hits a failure that people
   notice and recover from (an error or wrong result for some valid inputs, a
   broken secondary path, a status that hides a failure, a wrong result a later
-  step exposes, a failing test or build), or a rare trigger leads to serious
-  harm.
+  step exposes, a failing test or build), a rare trigger leads to serious
+  harm, or the change breaks something that worked: an input, configuration or
+  call that BASE handled now fails or gives a wrong result in HEAD, however
+  rarely it is used.
 - low (can wait): anything else, such as a recoverable failure that only a
   rare trigger reaches, or a finding with no effect on behavior (duplication,
   naming, a stale comment, a missing test for working code) or only a cosmetic
@@ -175,14 +183,21 @@ Take the first level that fits:
 
 Rate gaps by their effect. A document or example is rated by what following it
 does: by that result when it silently leads people to a wrong or unsafe result,
-low when its mistake shows itself at once or it is only inaccurate. Shipped
-configuration is behavior, rated like code. A missing or ineffective test is
+low when its mistake shows itself at once or it is only inaccurate. Documented
+steps that worked in BASE and fail in HEAD are a regression all the same:
+medium, even when the failure shows itself at once. Shipped configuration is
+behavior, rated like code. A missing or ineffective test is
 low unless the test is what the change delivers; when it hides a defect in this
 change, report the defect itself with its own severity and name the test that
 would catch it in that finding's suggestion. Before settling on medium or low,
 check whether realistic use reaches the defect and whether it leaves a core
-function or what this change is for not working; before settling on high, make
-sure evidence names that failure or harm and the realistic use behind it.
+function or what this change is for not working. Before settling on low, also
+check whether the harm would be serious if the rare trigger occurred and
+whether BASE handled the case that now fails: either makes it medium. An easy
+fix and an effect you could not confirm are not reasons for a lower level; say
+in evidence what you could not confirm and rate what the evidence shows. Before
+settling on high, make sure evidence names that failure or harm and the
+realistic use behind it.
 
 ## Output
 

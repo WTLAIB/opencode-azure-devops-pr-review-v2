@@ -69,6 +69,11 @@ not control their retention or training policies.
 | AZPR → selected models through OpenCode | PR context, assigned paths, commit messages for reviewers, supplementary text after the PR URL, tool results, findings and verification reports. Planning also receives source excerpts and existing-discussion digests, including author names and comment excerpts. |
 | AZPR runtime → Azure DevOps | Saved summary and inline comment text, including AI/model disclosure and anchors, only during publication you asked for: `/pr-comment --publish`, or automatic publication after a COMPLETE review when `afterReview` or the review command's `--publish` flag says so. |
 
+The severity rating runs only when `models.<mode>.rater` names a model. It
+receives only the confirmed findings' text and the PR title and description; it
+has no tools, so it reads nothing else. A finding's text quotes the source it
+is about.
+
 Reviewers can follow definitions, callers and tests outside the changed files.
 Content search downloads a repository archive into runtime memory, searches it
 locally, and returns bounded matches to the model; it does not upload the zip as

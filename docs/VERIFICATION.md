@@ -11,6 +11,10 @@ does not need a checkout or Git history, and reviews never clone or fetch.
 | `ask` | Shell is offered; every command needs your approval in OpenCode. A background review waits while an approval is pending, up to `workflow.stageIdleSeconds` (the stage is then stopped as inactive, `failure=idle`, and retried). |
 | `inherit` | Host permission rules decide, as for any agent. |
 
+The optional severity-rating role (`models.<mode>.rater`) is the exception: it
+reads only the finding text in its input and has no tools at all, shell
+included, whatever this setting is.
+
 The default protects you from prompt injection: reviewers read untrusted PR
 content, and an injected instruction must not be able to run commands on your
 machine.

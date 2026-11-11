@@ -28,7 +28,8 @@ settings, backups and failure records. Never upload `.local/`.
   connection; never show proxy credentials.
 - Models read the repository only through the read-only tools in
   `review-tools.mjs`, registered with `codemode: false`; private roles see an
-  explicit tool allowlist and ordinary sessions never see AZPR's tools.
+  explicit tool allowlist (empty for the `rating` role) and ordinary sessions
+  never see AZPR's tools.
 - Models review, verify and plan comment text. They never echo identity or SHAs
   and never write to Azure DevOps.
 
@@ -47,6 +48,22 @@ settings, backups and failure records. Never upload `.local/`.
 - Only records identical in every field are merged as duplicates; findings on
   the same lines stay separate. A parsed answer without a usable review never
   makes a commentable COMPLETE, and zero findings never hide unreviewed files.
+
+**The verifier sets severity; a rating is optional.**
+- The verifier receives candidates without the reviewer's severity and sets the
+  level from what it verified. That level is final unless `models.<mode>.rater`
+  names a model. `/pr-quick` keeps the reviewer's severity.
+- With a rater, the `rating` stage sets the final severity of every confirmed
+  finding from its text alone, with no tools and no earlier level. Without one
+  the stage does not run and its role is not registered. It is off by default
+  because live runs showed a gain only when the rater was stronger than the
+  reviewers' model and none when a model rated its own review; make it a
+  default only with a measured benefit.
+- The rating only sets levels: a finding without a usable rating, and every
+  finding of a failed rating session, keeps the verifier's severity with a
+  warning. It never drops, adds or rewrites a finding.
+- Its input is finding text plus the PR title and description: no PR identity,
+  commits, file list or tool data.
 
 **Deep reviews differ only in their models.**
 - `/pr-deep` runs the review's stages and system prompts with the models of

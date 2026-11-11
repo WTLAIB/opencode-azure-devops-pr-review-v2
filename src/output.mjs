@@ -600,6 +600,46 @@ export function evaluateDuplicates(answerText, { ids }) {
     ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
 }
 
+/**
+ * Accept one severity rating. The answer only sets levels: a finding it does
+ * not rate, or rates with something else than high, medium or low, keeps the
+ * verifier's severity, so an invalid row is reported for a correction turn and
+ * otherwise ignored.
+ * @param {string} answerText
+ * @param {{ids: string[]}} options the findings to rate
+ */
+export function evaluateRatings(answerText, { ids }) {
+  const warnings = new Set();
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'ratings', 'report'] });
+  if (!parsed.value) {
+    return { issues: [`Your answer could not be used: ${parsed.problem}.`],
+      result: { status: 'COMPLETE', structured: false, ratings: [], report: '', warnings: ['The severity rating gave no usable answer; the verifier\'s severities are kept.'] } };
+  }
+  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
+  const source = aliasFields(parsed.value, ['status', 'ratings', 'report'], warnings);
+  const assigned = new Set(ids), issues = [], byId = new Map();
+  if (!Array.isArray(source.ratings)) issues.push('"ratings" must be an array with one entry per assigned finding.');
+  for (const [index, item] of rows(source.ratings, warnings, 'ratings').entries()) {
+    const row = aliasFields(isObject(item) ? item : {}, ['id', 'severity', 'reason'], warnings);
+    const id = asText(row.id).trim(), severity = asText(row.severity).trim().toLowerCase(), problems = [];
+    if (!assigned.has(id)) problems.push(`id ${JSON.stringify(id)} is not an assigned finding`);
+    if (!SEVERITIES.includes(severity)) problems.push('severity must be high, medium or low');
+    if (byId.has(id)) problems.push(`${id} is rated more than once`);
+    if (problems.length) { issues.push(`ratings[${index}]: ${problems.join('; ')}.`); continue; }
+    byId.set(id, { id, severity, reason: asText(row.reason).trim() });
+  }
+  const missing = ids.filter(id => !byId.has(id));
+  if (missing.length) issues.push(`No usable rating for ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? ', ...' : ''}.`);
+  const kept = missing.length ? [`${missing.length} finding(s) got no usable rating and keep the verifier's severity.`] : [];
+  return { issues, result: { status: 'COMPLETE', structured: true, ratings: [...byId.values()], report: asText(source.report).trim(), warnings: [...warnings, ...kept],
+    ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
+}
+
+export function ratingRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  return `AZPR runtime: your severity rating needs correction.\n${listIssues(issues)}\n\nReturn the complete JSON object again (status, ratings, report) with exactly one rating (high, medium or low) for every ID in assignment.findingIds.`;
+}
+
 export function duplicateRepairPrompt(issues, { parseOnly = false } = {}) {
   if (parseOnly) return parseRepairPrompt(issues);
   return `AZPR runtime: your duplicate check needs correction.\n${listIssues(issues)}\n\nReturn the complete JSON object again (status, merged, report). Merge an assigned finding only into another assigned finding that stays, and only when both state the same root cause and need the same correction.`;
