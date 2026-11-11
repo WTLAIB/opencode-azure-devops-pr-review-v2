@@ -35,7 +35,8 @@
   files). Upgrading with `install.sh --replace` adds the empty `rater` settings
   and changes nothing else in `settings.json`.
 - The changes were run with `/pr-deep` and `/pr-review` on the ReviewBench test
-  set before release; see
+  set before release, and ReviewBench's judging pipeline scored the Claude
+  Opus 5.5 run; see
   [validation](docs/VALIDATION.md#severity-from-verified-harm-2026-11-11-and-12).
 
 ## 0.3.6 — 2026-11-10
