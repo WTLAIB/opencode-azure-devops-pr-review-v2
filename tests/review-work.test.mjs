@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runReview, shardFiles, shardFindings, locationPath, runPool } from '../src/review-work.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
+import { runReviewTool } from '../src/review-tools.mjs';
 import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
 import { ROLES } from '../src/config.mjs';
@@ -571,4 +572,29 @@ test('only a usable PARTIAL quick answer that names unfinished work asks for one
   const noFiles = await evaluateQuick(answer('PARTIAL', { files: [], gaps: ['Nothing was read.'] }), context);
   assert.deepEqual([noFiles.usable, noFiles.followUp], [false, undefined], 'No reviewed file and no accepted finding is not a usable answer.');
   assert.equal(quickUsable({ structured: true, envelope: { findings: false, coverage: true }, coverage: { files: ['/a.ts'], gaps: [] }, findings: [] }, ['/a.ts']), false);
+});
+
+test('a review whose content search was refused lists that among its limitations, in both flows', async t => {
+  // The reviewer's own search call is refused, as for a repository over azure.archiveMegabytes.
+  const refuse = run => runReviewTool('azpr_search_code', { query: 'caller' }, { azure: { archive: async () => ({ tooLarge: true, size: 104857601 }) }, run, snapshot: run.snapshot });
+  const expected = /^Content search \(azpr_search_code\) was unavailable: the repository archive is larger than the azure\.archiveMegabytes setting allows\. Sessions could find and read files but not search file contents, so callers and other uses of the changed code may not have been checked\. azure\.archiveMegabytes is 100; it accepts up to 1024\.$/;
+  const f = await context(t, { files: ['/src/a.ts'], behave: async ({ role, payload }) => {
+    if (ROLES[role].format !== 'initial') return verdicts(payload);
+    assert.match((await refuse(f.run)).text, /^Content search is unavailable for this repository/);
+    return initial(payload, [finding(`${ROLES[role].prefix}-1`)]);
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.equal(final.status, 'COMPLETE', 'A missing search limits the review; it does not fail it.');
+  assert.equal(final.reviewWarnings.filter(message => expected.test(message)).length, 1, JSON.stringify(final.reviewWarnings));
+  const q = await quickContext(t, { files: ['/src/a.ts'], behave: async ({ payload, read }) => {
+    await refuse(q.run);
+    read('/src/a.ts');
+    return quickAnswer(payload, [quickFinding('Q-1', 'head:/src/a.ts:1')]);
+  } });
+  const quick = await runReview(q.ctx, q.run, q.request);
+  assert.equal(quick.status, 'COMPLETE');
+  assert.equal(quick.reviewWarnings.filter(message => expected.test(message)).length, 1, JSON.stringify(quick.reviewWarnings));
+  // A review whose searches ran says nothing.
+  const plain = await context(t, { files: ['/src/a.ts'], behave: async ({ role, payload }) => ROLES[role].format === 'initial' ? initial(payload, []) : verdicts(payload) });
+  assert.deepEqual((await runReview(plain.ctx, plain.run, plain.request)).reviewWarnings, []);
 });

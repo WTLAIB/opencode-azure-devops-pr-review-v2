@@ -4,7 +4,7 @@ import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
   publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
-  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences,
+  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
@@ -625,4 +625,27 @@ test('posted text that names an excluded finding is found, also in the summary r
   const comment = { kind: 'inline', findingId: 'F-2', path: '/src/a.ts', startLine: 2, marker: 'm', content: 'Same cause as F-1.' };
   assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-1']);
   assert.equal(cross.final.dispositions[1].verifiedFinding.summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
+});
+
+test('next steps after a preview need no review ID, use the finding IDs of the review and keep what is already adjusted', () => {
+  const commands = text => text.split('\n').slice(1, -1).map(line => line.trim().split(/\s{2,}/)[0]);
+  const three = review([finding('F-1'), finding('R-2', 'medium'), finding('F-3', 'low')]);
+  const plain = previewNextSteps(three);
+  assert.match(plain, /^Next \(no review ID is needed while abcdef12 is this conversation's current review\):\n/);
+  assert.match(plain, /\nEach --exclude or --severity list replaces the saved one\. For another review add its ID; \/pr-comment --list shows them\.$/);
+  assert.deepEqual(commands(plain), ['/pr-comment --publish', '/pr-comment --exclude F-1,R-2', '/pr-comment --severity F-1=low', '/pr-comment --show']);
+  // An example list keeps what is saved: running it must not undo an earlier adjustment.
+  const adjusted = { ...three, adjustments: { excluded: ['F-1'], severity: { 'R-2': 'low' } } };
+  assert.deepEqual(commands(previewNextSteps(adjusted)), ['/pr-comment --publish', '/pr-comment --exclude F-1,R-2', '/pr-comment --severity R-2=low,F-3=medium', '/pr-comment --reset', '/pr-comment --show']);
+  assert.match(previewNextSteps(adjusted), /leave R-2 out as well, then read the new preview/);
+  assert.match(previewNextSteps(adjusted), /publish F-3 as medium, then read the new preview/, 'A low finding is offered the next level up.');
+  // Every remaining finding already has a changed level: the example changes the first again and keeps the other.
+  const both = { ...review([finding('F-1'), finding('R-2')]), adjustments: { excluded: [], severity: { 'F-1': 'low', 'R-2': 'medium' } } };
+  assert.ok(commands(previewNextSteps(both)).includes('/pr-comment --severity R-2=medium,F-1=medium'));
+  // A held preview is not offered for publication; nothing left to post offers only the way back.
+  assert.equal(commands(previewNextSteps(three, { held: true })).includes('/pr-comment --publish'), false);
+  const none = { ...review([finding('F-1')]), adjustments: { excluded: ['F-1'], severity: {} } };
+  assert.deepEqual(commands(previewNextSteps(none)), ['/pr-comment --reset', '/pr-comment --show']);
+  // A review without findings previews a summary only.
+  assert.deepEqual(commands(previewNextSteps(review([]))), ['/pr-comment --publish', '/pr-comment --show']);
 });

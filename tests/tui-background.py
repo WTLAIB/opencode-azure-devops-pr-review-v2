@@ -65,7 +65,8 @@ for existing in [False, True]:
             if not menu_requested and b'ctrl+p' in captured and b'commands' in captured:
                 os.write(fd, b'\x15/pr-rev')
                 menu_requested = True
-            if menu_requested and command_typed_at is None and b'independent verification' in captured:
+            # The start of /pr-review's description, which the command list shows whatever its width.
+            if menu_requested and command_typed_at is None and b'Verified Azure DevOps PR review' in captured:
                 os.write(fd, b'\x15' + (prompt + ' ').encode())
                 command_typed_at = time.monotonic()
             if command_typed_at is not None and not command_submitted and time.monotonic() - command_typed_at > 1:

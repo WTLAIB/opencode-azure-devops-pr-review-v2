@@ -380,7 +380,7 @@ for (const rel of ['azpr/settings.json', 'plugins/azpr/settings.json', 'plugins/
 }
 
 
-test('replacement adds afterReview with every mode none and keeps a chosen comment step', () => {
+test('replacement adds afterReview with the default preview and keeps a chosen comment step', () => {
   const s = setup(); ok(install(s));
   const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));
   delete settings.afterReview;
@@ -388,13 +388,13 @@ test('replacement adds afterReview with every mode none and keeps a chosen comme
   const result = install(s, ['--replace']); ok(result);
   assert.match(result.stdout, /Settings defaults added: afterReview\n/);
   const merged = JSON.parse(readFileSync(file, 'utf8'));
-  assert.deepEqual(merged.afterReview, { quick: 'none', review: 'none', deep: 'none' }, 'Nothing follows a review until it is chosen.');
+  assert.deepEqual(merged.afterReview, { quick: 'preview', review: 'preview', deep: 'preview' }, 'A settings file without the setting gets the default: a preview, which posts nothing.');
   // A partial choice keeps its value and gains only the missing modes.
   merged.afterReview = { review: 'publish' };
   writeFileSync(file, JSON.stringify(merged));
   const again = install(s, ['--replace']); ok(again);
   assert.match(again.stdout, /Settings defaults added: afterReview\.quick, afterReview\.deep/);
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).afterReview, { review: 'publish', quick: 'none', deep: 'none' });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).afterReview, { review: 'publish', quick: 'preview', deep: 'preview' });
   original(s); clean(s);
 });
 

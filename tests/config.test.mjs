@@ -30,15 +30,16 @@ test('settings reject removed transports and unknown keys', () => {
   assert.throws(() => validateSettings({ ...input(), workflow: { shards: 2 } }), /Unknown setting workflow\.shards/);
 });
 
-test('afterReview: none for every mode by default, preview or publish per mode; errors name the setting, never its value', () => {
-  assert.deepEqual(example.afterReview, { quick: 'none', review: 'none', deep: 'none' });
+test('afterReview: a preview for every mode by default, none or publish per mode; errors name the setting, never its value', () => {
+  assert.deepEqual(example.afterReview, { quick: 'preview', review: 'preview', deep: 'preview' });
   assert.deepEqual(Object.keys(schema.properties.afterReview.properties).sort(), ['deep', 'quick', 'review']);
   for (const mode of ['quick', 'review', 'deep']) assert.deepEqual(schema.properties.afterReview.properties[mode].enum, ['none', 'preview', 'publish']);
   const raw = input();
   delete raw.afterReview;
-  assert.deepEqual(validateSettings(raw).afterReview, { quick: 'none', review: 'none', deep: 'none' });
+  assert.deepEqual(validateSettings(raw).afterReview, { quick: 'preview', review: 'preview', deep: 'preview' }, 'Without the setting a review is followed by a preview, which posts nothing.');
+  for (const mode of ['quick', 'review', 'deep']) assert.equal(schema.properties.afterReview.properties[mode].default, 'preview');
   assert.deepEqual(validateSettings(input()).afterReview, validateSettings(raw).afterReview, 'The example matches the defaults.');
-  assert.deepEqual(validateSettings({ ...input(), afterReview: { review: 'publish' } }).afterReview, { quick: 'none', review: 'publish', deep: 'none' }, 'A missing mode is none.');
+  assert.deepEqual(validateSettings({ ...input(), afterReview: { review: 'publish' } }).afterReview, { quick: 'preview', review: 'publish', deep: 'preview' }, 'A missing mode takes the default; publication is never a default.');
   assert.deepEqual(validateSettings({ ...input(), afterReview: { quick: 'preview', review: 'none', deep: 'publish' } }).afterReview, { quick: 'preview', review: 'none', deep: 'publish' });
   for (const value of ['Publish', 'post', '', true, null, 1, 'secret-value-123']) {
     assert.throws(() => validateSettings({ ...input(), afterReview: { review: value } }),
@@ -68,8 +69,8 @@ test('defaults: no whole-run timeout, shell denied, bounded Azure DevOps calls a
   assert.equal(settings.progressNotices, true);
   assert.equal(settings.deletePrivateSessions, true);
   assert.deepEqual(settings.debug, { enabled: false, directory: '', keepRuns: 20 });
-  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, patFile: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
-  assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 });
+  assert.deepEqual(settings.azure, { organization: 'org', pat: PAT, patFile: '', concurrency: 6, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
+  assert.deepEqual(settings.workflow, { shardFiles: 25, shardFindings: 15, parallelSessions: 8, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 });
   assert.deepEqual(validateSettings(input()).azure, settings.azure, 'The example matches the defaults.');
   assert.deepEqual(validateSettings(input()).workflow, settings.workflow);
   for (const value of [10, 7200, null]) assert.equal(validateSettings({ ...input(), runTimeoutSeconds: value }).runTimeoutSeconds, value);

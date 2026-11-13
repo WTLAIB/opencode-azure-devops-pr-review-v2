@@ -66,14 +66,15 @@ export function readZip(bytes, limits = SEARCH_LIMITS) {
 
 /**
  * The searchable repository at one commit, read once per run. A repository
- * that cannot be searched (too large, ZIP64) is cached as unavailable.
+ * that cannot be searched (too large, ZIP64) is cached as unavailable;
+ * `tooLarge` marks the case a larger azure.archiveMegabytes would lift.
  */
 export function repositoryArchive(run, azure, snapshot, version) {
   const cache = run.archives ??= new Map();
   if (!cache.has(version)) {
     const pending = (async () => {
       const result = await azure.archive(run, snapshot, version);
-      if (result.tooLarge) return { unavailable: `the repository archive is larger than the azure.archiveMegabytes setting allows (${result.size} bytes)` };
+      if (result.tooLarge) return { tooLarge: true, unavailable: `the repository archive is larger than the azure.archiveMegabytes setting allows (${result.size} bytes)` };
       try { return readZip(result.bytes); }
       catch (error) { if (error instanceof ArchiveError) return { unavailable: error.message }; throw error; }
     })();

@@ -6,6 +6,7 @@
  * only the form and source of its findings, never whether they are right.
  */
 import { ROLES, initialRoles, roleFor, stageModel } from './config.mjs';
+import { searchLimitation } from './attribution.mjs';
 import { breakMergeCycles, settleMergeTargets, evaluateInitial, evaluateFinal, evaluateDuplicates, evaluateRatings, initialRepairPrompt, finalRepairPrompt, duplicateRepairPrompt, ratingRepairPrompt, quickRepairPrompt, quickFollowUpPrompt, syntaxProblem, locationPath, FINDING_FIELDS } from './output.mjs';
 
 export { locationPath };
@@ -412,6 +413,8 @@ export async function runReview(ctx, run, request) {
 
   const ratings = await rateSeverities(ctx, run, { snapshot, dispositions, newFindings, warnings });
 
+  const search = searchLimitation(run, settings);
+  if (search) warnings.push(search);
   const { freshness, stale } = await finalRecheck(ctx, run, snapshot, warnings);
   const status = stale ? 'STALE' : verified ? 'COMPLETE' : 'PARTIAL';
   return {
@@ -597,6 +600,8 @@ export async function runQuickReview(ctx, run, request) {
     duplicates++;
   }
   if (duplicates) warnings.push(`Removed ${duplicates} exact duplicate finding(s); findings that differ in any field are kept.`);
+  const search = searchLimitation(run, settings);
+  if (search) warnings.push(search);
   if (discovered.size) warnings.push(`The quick reviewer reported ${discovered.size} changed path(s) missing from Azure's list: ${[...discovered].slice(0, 20).join(', ')}${discovered.size > 20 ? ', ...' : ''}`);
   const unreviewedFiles = snapshot.files.filter(path => !covered.has(path)).length;
   const reasons = [...(failedShards ? ['shard-failed'] : []), ...(snapshot.filesComplete ? [] : ['partial-file-list']), ...(reviewerGaps ? ['reviewer-gaps'] : [])];

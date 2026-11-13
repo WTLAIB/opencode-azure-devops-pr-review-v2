@@ -14,9 +14,9 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   request. Adjusted reviews require a saved preview and cannot be adjusted or
   planned again once publication starts. Earlier PR comments keep their text;
   the receipt reports differences. See [commenting](COMMENTING.md#adjusting-findings-after-a-preview).
-- **Optional automatic comments.** `afterReview` selects `none` (default),
-  `preview` or `publish` for each mode; a flag after the PR URL overrides it
-  for one review. A COMPLETE review hands off to a separate, cancellable
+- **A preview after each review; publication on request.** `afterReview`
+  selects `preview` (default), `none` or `publish` for each mode; a flag after
+  the PR URL overrides it for one review. A COMPLETE review hands off to a separate, cancellable
   comment command. Automatic publication holds individual items with mentions,
   images or active content for inspection, posts ordinary text and links, and
   skips a summary when every finding is already discussed. Quick comments
@@ -46,6 +46,18 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   search by name, folder listings and PR threads. They also see the PR's commit
   messages. Private sessions see only an allowlist of tools, and ordinary
   sessions never see AZPR's tools.
+- **Commands that need no review ID.** Every `/pr-comment` command, adjustments
+  included, acts on the conversation's current review when no ID is given:
+  the one completed or used there last. The start notice and the receipt name
+  the review and its PR, a preview ends with the commands for the next step,
+  `/pr-comment --list` shows the saved reviews, and every command answers
+  `--help`. Command descriptions say what a command is for in the part
+  OpenCode's one-line command list still shows.
+- **A review without content search says so.** When the repository archive is
+  over `azure.archiveMegabytes`, or is one AZPR cannot read, the report's
+  limitations and the receipt state that sessions could not search file
+  contents, with the setting's value where a larger one would help. Before,
+  only the models were told.
 - **Only source changes are stale.** A moved base is a warning; a changed head
   is STALE. Publication rechecks the head before writing.
 - **Sharded reviews.** Initial reviews run per file shard with disjoint finding-ID
@@ -126,27 +138,25 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   defect, a merge keeps no defect only the merged finding named, a reviewer
   looks for stated intent before asking about it, and a verified behavior only
   the author can call intended is confirmed as a question, not NEEDS_INFO.
+- **A confirmation states its correction.** A verifier that confirms a
+  finding with a suggestion such as "N/A" or "No correction needed." is asked
+  in the same session which it means; left unresolved, the finding is
+  NEEDS_INFO and gets no comment. Such confirmations came from GPT-6 Luna
+  verifiers whose own reason refuted the finding.
 
 ## Planned
+
+Nothing is scheduled at the moment. A change to what reviewers file or how
+findings are verified is listed here once a measurement on more than one
+benchmark supports it.
 
 A run of Martian's Code Review Bench, in which every expected issue that no
 run matched and a sample of the unmatched findings were checked against the
 code (see [validation](VALIDATION.md#martian-code-review-bench-2026-11-05-and-06)),
-points to these changes. Each needs a before-and-after measurement on more
-than that benchmark before it ships. The first two it pointed to, defects in
-moved code and rejections for a possible intention, are implemented.
-
-1. **Concrete issues judged harmless.** Reviewers noted violations of a
-   documented contract and output encoded for the wrong context in their
-   reports without filing them. Measure whether filing such issues as low
-   findings helps more than the extra comments cost.
-2. **Missing-test findings.** Among the sampled findings the benchmark does not
-   list, missing tests with no known defect behind them were the largest
-   low-value group. Measure filing them only when a concrete defect would go
-   unnoticed.
-3. **Root cause first in comments.** A comment that leads with the symptom at
-   a caller can read as a different issue from one that names the defective
-   code; comments should lead with the root cause and its location.
+pointed to five changes. Two are implemented: defects in moved code and
+rejections for a possible intention. The other three were examined for 0.3.7
+and are not planned; see
+[Deferred](#three-changes-the-martian-benchmark-run-pointed-to).
 
 ## Deferred
 
@@ -181,7 +191,8 @@ Revisit when there is evidence from real runs, for example:
 
 Content search downloads the repository zip of the exact commit, up to
 `azure.archiveMegabytes` (at most 1024). A repository with committed binaries
-can be larger; it is reviewed without content search. Raising the maximum alone
+can be larger; it is reviewed without content search, which the report and
+the receipt state. Raising the maximum alone
 is not enough (measured on 2026-10-14):
 
 - Azure DevOps sends the zip without a length, and the entries' local headers
@@ -223,6 +234,32 @@ helped GPT-6 Luna in `/pr-review` more, so it may return as an option for
 weaker models if a measurement on more than one benchmark supports it; see
 [validation](VALIDATION.md#a-second-initial-review-round-measured-and-removed).
 
+### Three changes the Martian benchmark run pointed to
+
+These stood under Planned until the work on 0.3.7 examined them (see
+[validation](VALIDATION.md#severity-from-verified-harm-2026-11-11-and-12)).
+
+- **Filing concrete issues that reviewers judged harmless.** Reviewers note
+  some issues in their reports without filing them. A reviewer sentence that
+  made minor issues and edge cases findings was measured and left out: it added
+  findings without evidence that the additions were valid. What 0.3.7 kept is
+  narrower: before answering, a reviewer makes the read that would settle a
+  suspicion.
+- **Fewer missing-test findings.** The two benchmarks disagree about them:
+  Martian's counts a comment that matches none of its expected issues as a
+  false positive, while ReviewBench's judge rated 97.4% of the findings of
+  0.3.7's `/pr-deep` run valid. In AZPR a missing test for working code is a
+  low finding, which appears in the summary and never as an inline comment,
+  so withholding such findings would serve one benchmark's precision more
+  than a reader. 0.3.7 kept one rule: a wrong test is stated as what it
+  wrongly accepts, not as missing coverage.
+- **Root cause first in comments.** Comparing AZPR's comments with other
+  tools' comments on the same expected issues did not show the opening
+  sentence as what kept a comment from matching. AZPR's comments were longer
+  and often carried a second claim, which the benchmark counts as one more
+  unmatched issue; 0.3.7's rule that a finding states one defect addresses
+  that instead.
+
 ## Remaining validation work
 
 1. Publication on other repositories and organizations. On the 316-file test
@@ -235,8 +272,12 @@ weaker models if a measurement on more than one benchmark supports it; see
    `workflow` defaults from those numbers. On the 316-file PR,
    `parallelSessions` 8 with `azure.concurrency` 6 cut the review from 719 s
    (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
-   made the REST queue the bottleneck. The defaults stay 4 / 3 until other
-   providers and organizations have been measured; raise both together.
+   made the REST queue the bottleneck. The defaults are 8 / 6 since then, on
+   that one measurement: other providers, API keys with low rate limits and
+   other organizations have not been measured, and with OpenCode's
+   claude-agent provider each session keeps a process of about 200 MB for
+   minutes after it ends, so a large PR needs memory for them. Lower
+   `parallelSessions` there; change both values together.
    Comment planning runs two pages at a time, which cut a nine-page plan from
    140–175 s to 71–90 s; more lanes were not measured.
 3. Reduce input tokens further. Reading diffs with folded repeats cut the

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
   escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt, quickRepairPrompt,
-  evaluateRatings, ratingRepairPrompt,
+  evaluateRatings, ratingRepairPrompt, givesNoCorrection,
   parseCommentRequest, normalizeFindingId,
 } from '../src/output.mjs';
 
@@ -11,7 +11,7 @@ const finding = (id, extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'H
   location: 'head:/src/a.ts:12', severity: 'high', suggestion: 'Restore the guard.', ...extra });
 const initialAnswer = (findings, extra = {}) => JSON.stringify({ status: 'COMPLETE', coverage: { files: ['/src/a.ts'], gaps: [] }, additionalFiles: [], findings, report: 'Report', ...extra });
 
-test('/pr-comment arguments keep their meaning; adjustments name a review and read IDs as the runtime writes them', () => {
+test('/pr-comment arguments keep their meaning; the review ID is optional everywhere and finding IDs read as the runtime writes them', () => {
   assert.deepEqual(parseCommentRequest(''), { publish: false, show: false });
   assert.deepEqual(parseCommentRequest(undefined), { publish: false, show: false });
   assert.deepEqual(parseCommentRequest('abcd1234'), { reviewId: 'abcd1234', publish: false, show: false });
@@ -28,7 +28,14 @@ test('/pr-comment arguments keep their meaning; adjustments name a review and re
     'abcd1234 --show=yes', 'abcd1234 --exclude F-1 --exclude F-2', '-p']) {
     assert.throws(() => parseCommentRequest(text), /Usage: \/pr-comment/, text);
   }
-  assert.throws(() => parseCommentRequest('--exclude F-1'), /Name the review whose findings you adjust/);
+  // Adjustments need no review ID either: the runtime picks the conversation's current review, as for --publish.
+  assert.deepEqual(parseCommentRequest('--exclude F-1,R-2'), { publish: false, show: false, adjust: { exclude: ['F-1', 'R-2'] } });
+  assert.deepEqual(parseCommentRequest('--severity f3=low --exclude f1'), { publish: false, show: false, adjust: { exclude: ['F-1'], severity: { 'F-3': 'low' } } });
+  assert.deepEqual(parseCommentRequest('--reset'), { publish: false, show: false, adjust: { reset: true } });
+  // --list stands alone and names no review.
+  assert.deepEqual(parseCommentRequest(' --list '), { list: true });
+  for (const text of ['abcd1234 --list', '--list --show', '--list --publish', '--list F-1', '--list=all', '--exclude F-1 --list']) assert.throws(() => parseCommentRequest(text), /Usage: \/pr-comment/, text);
+  assert.throws(() => parseCommentRequest('--bogus'), /Without an ID the command acts on this conversation's current review\. \/pr-comment --help has examples\./);
   assert.throws(() => parseCommentRequest('abcd1234 --exclude'), /--exclude needs the finding IDs to exclude, or none/);
   assert.throws(() => parseCommentRequest('abcd1234 --exclude='), /--exclude needs the finding IDs to exclude, or none/);
   assert.throws(() => parseCommentRequest('abcd1234 --exclude F-1 bad!'), /Not a finding ID: bad!/);
@@ -145,6 +152,35 @@ test('evaluateFinal degrades per item after repairs: UNREVIEWED and NEEDS_INFO, 
   assert.equal(result.newFindings.length, 0);
   assert.equal(result.incompleteNewFindings.length, 1);
   assert.ok(result.warnings.some(w => /UNREVIEWED/.test(w)));
+});
+
+test('evaluateFinal: a confirmation whose suggestion gives no correction is sent back, then is not eligible for comments', () => {
+  // The three confirmations of this kind in the stored live runs, all from gpt-6-luna: the reason refutes the claim.
+  for (const placeholder of ['N/A', 'Not applicable.', 'No correction needed.']) assert.ok(givesNoCorrection(placeholder), placeholder);
+  for (const placeholder of ['n/a', 'N.A.', '(none)', 'None.', '—', 'No change is required.', 'No changes are necessary', 'No fix needed', '不適用', '無', '不需要修正。', '无需修改'])
+    assert.ok(givesNoCorrection(placeholder), placeholder);
+  // Only the whole field counts: a correction that mentions such words is a correction.
+  for (const real of ['Restore the guard.', 'No change is needed in the parser; fix the caller to pass the length.', 'Return None when the list is empty.', 'Remove the N/A branch.', 'Use `n / a`.', '-'.repeat(61), ''])
+    assert.equal(Boolean(givesNoCorrection(real)), false, real);
+  const originals = [finding('F-1'), finding('F-2')];
+  const refuted = { ...finding('F-1', { suggestion: 'N/A' }), reason: 'Rejected because the callback installed at lines 638-647 contradicts the claim.' };
+  const first = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [refuted, { ...finding('F-2'), reason: 'Checked.' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals });
+  assert.deepEqual(first.issues, ['F-1: confirmed, but its suggestion gives no correction ("N/A"). If the defect stands, state the correction; if your check refutes the claim, list F-1 under rejected with the refutation.']);
+  assert.deepEqual(first.repairIds, ['F-1'], 'Only that finding is asked about again.');
+  // The verifier decides which it meant; the runtime does not.
+  const rejected = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'F-1', status: 'REJECTED', reason: 'The callback at lines 638-647 enqueues the query.' }] }), { originals, previous: first.result, supplement: true });
+  assert.deepEqual(rejected.issues, []);
+  assert.deepEqual(rejected.result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:REJECTED', 'F-2:CONFIRMED']);
+  const corrected = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1', { suggestion: 'Enqueue the query before returning the promise.' }), status: 'CONFIRMED', reason: 'The promise path skips the queue.' }] }),
+    { originals, previous: first.result, supplement: true });
+  assert.deepEqual(corrected.issues, []);
+  assert.equal(corrected.result.dispositions[0].verifiedFinding.suggestion, 'Enqueue the query before returning the promise.');
+  // Left as it is after the correction turns, it stays in the report and out of the comments.
+  const left = first.result.dispositions[0];
+  assert.equal(left.status, 'NEEDS_INFO');
+  assert.match(left.reason, /^Rejected because .* \[Runtime: the confirmation lacks a correction in suggestion, so it is not eligible for comments\.\]$/);
+  assert.equal(left.partialFinding.suggestion, 'N/A');
+  assert.equal(first.result.dispositions[1].status, 'CONFIRMED', 'The other finding is kept.');
 });
 
 test('evaluateFinal rejects invalid merges and cycles per item', () => {

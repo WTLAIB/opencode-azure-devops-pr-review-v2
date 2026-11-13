@@ -152,6 +152,32 @@ export function describeAdjustments(review) {
 }
 
 /**
+ * After a preview: the commands a person is likely to want next, written
+ * without the review ID and with this review's own finding IDs. Each
+ * adjustment list replaces the saved one, so an example keeps what is saved
+ * and adds to it. `held` leaves out publication (the preview says why).
+ */
+export function previewNextSteps(review, { held = false } = {}) {
+  const { excluded, severity, active } = adjustmentsOf(review);
+  const remaining = commentFindings(review);
+  const rows = [];
+  if (!held && !everyFindingExcluded(review)) rows.push(['/pr-comment --publish', 'post this preview as the PAT owner (safe to repeat)']);
+  if (remaining.length) {
+    const more = remaining.slice(0, excluded.length ? 1 : 2).map(finding => finding.id);
+    rows.push([`/pr-comment --exclude ${[...excluded, ...more].join(',')}`, `leave ${more.join(' and ')} out${excluded.length ? ' as well' : ''}, then read the new preview`]);
+    const target = remaining.find(finding => !Object.hasOwn(severity, finding.id)) ?? remaining[0];
+    const level = target.severity === 'low' ? 'medium' : 'low';
+    const kept = Object.entries(severity).filter(([id]) => id !== target.id).map(([id, to]) => `${id}=${to}`);
+    rows.push([`/pr-comment --severity ${[...kept, `${target.id}=${level}`].join(',')}`, `publish ${target.id} as ${level}, then read the new preview`]);
+  }
+  if (active) rows.push(['/pr-comment --reset', 'undo your adjustments, then read the new preview']);
+  rows.push(['/pr-comment --show', 'show this preview again (no model)']);
+  const width = Math.max(...rows.map(([command]) => command.length));
+  return `Next (no review ID is needed while ${review.id} is this conversation's current review):\n${rows.map(([command, effect]) => `  ${command.padEnd(width)}  ${effect}`).join('\n')}\n` +
+    `Each --exclude or --severity list replaces the saved one. For another review add its ID; /pr-comment --list shows them.`;
+}
+
+/**
  * Apply a /pr-comment adjustment request to a review. `exclude` and `severity`
  * each replace their whole list when given (empty: none); `reset` clears both.
  * Every ID must name a finding this review can publish (a merged duplicate

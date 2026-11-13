@@ -107,10 +107,13 @@ export const allowedTools = (role, shell = 'deny') => Object.hasOwn(ROLES, role)
 // The comment step that follows a COMPLETE review of each mode (afterReview).
 export const AFTER_REVIEW = Object.freeze(['none', 'preview', 'publish']);
 
+// The largest azure.archiveMegabytes: the repository zip for content search is held in memory.
+export const MAX_ARCHIVE_MEGABYTES = 1024;
+
 const DEFAULTS = Object.freeze({
-  afterReview: Object.freeze({ quick: 'none', review: 'none', deep: 'none' }),
-  azure: Object.freeze({ organization: '', pat: '', patFile: '', concurrency: 3, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
-  workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 }),
+  afterReview: Object.freeze({ quick: 'preview', review: 'preview', deep: 'preview' }),
+  azure: Object.freeze({ organization: '', pat: '', patFile: '', concurrency: 6, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
+  workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 8, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 }),
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -215,7 +218,7 @@ export function validateSettings(raw) {
   }
   integer(azure.concurrency, 'azure.concurrency', 1, 8);
   integer(azure.callTimeoutSeconds, 'azure.callTimeoutSeconds', 10, 1800);
-  integer(azure.archiveMegabytes, 'azure.archiveMegabytes', 1, 1024);
+  integer(azure.archiveMegabytes, 'azure.archiveMegabytes', 1, MAX_ARCHIVE_MEGABYTES);
   proxyUrl(azure.proxy);
   if (typeof azure.caFile !== 'string' || (azure.caFile !== '' && (!isAbsolute(azure.caFile) || /[\0\r\n]/.test(azure.caFile)))) {
     throw new Error('azure.caFile must be empty or the absolute path of a PEM file with CA certificates.');

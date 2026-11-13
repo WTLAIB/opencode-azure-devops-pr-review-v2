@@ -22,7 +22,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
 | `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_search_code`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
 | `src/diff.mjs` | Line diffs (Myers) with both line numbers, more context before a change than after, the enclosing block's start, and folding of repeated changes. |
-| `src/search.mjs` | Content search: reads the repository zip of one commit once per run (stored or deflated entries; bounded inflation; ZIP64 and encrypted archives refused), keeps its text files in memory and finds literal text, bounded per file and in total. |
+| `src/search.mjs` | Content search: reads the repository zip of one commit once per run (stored or deflated entries; bounded inflation; ZIP64 and encrypted archives refused), keeps its text files in memory and finds literal text, bounded per file and in total. An archive it cannot search is remembered for the run, which states the limit in the review's warnings and the receipt. |
 | `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck; the quick review and its location and source checks. |
 | `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
 | `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
@@ -56,8 +56,11 @@ key is named only when it looks like a setting name.
 check, a review, comment planning, an adjustment or a publication) validates its
 arguments, registers a run with its origin lock (and a PR lock for comments),
 queues a `STARTED` notice and returns; the workflow continues in the background.
-`/pr-stop`, `/pr-comment --show`, an adjustment that changes nothing and a
-refused command answer at once without a run, as does `/pr-setup`. The final
+`/pr-stop`, `/pr-comment --show`, `/pr-comment --list`, `--help` of any
+command, an adjustment that changes nothing and a refused command answer at
+once without a run, as does `/pr-setup`. OpenCode's command list shows one
+line of a command's description and cuts the rest, so each description starts
+with what the command is for and the options are in `--help`. The final
 receipt is queued to the invoking conversation with up to three attempts and is
 written to `receipts/` in the state directory if the conversation cannot be
 reached.
@@ -65,7 +68,8 @@ reached.
 planning pages, posting). Notices never start a model response.
 
 A review command takes at most one flag right after the PR URL (`--preview`,
-`--publish`, `--no-comment`); it sets `afterReview` for that run, and other
+`--publish`, `--no-comment`); it sets `afterReview` for that run (the setting
+is `preview` for every mode unless the settings say otherwise), and other
 option-like text there is refused before any request. When the resulting step
 is `preview` or `publish`, a COMPLETE review hands on after its receipt is
 queued: without publishable findings one notice says so and nothing is planned;
@@ -170,7 +174,10 @@ After preflight, hooks never re-read settings or catalogs.
    list. A confirmation that moves its finding to another file must say so
    with `movedFrom`; otherwise the verifier is asked to confirm or undo the
    move, and an unconfirmed move is kept with a warning. The report shows a
-   moved finding's initial location. Missing or invalid decisions trigger a
+   moved finding's initial location. A confirmation whose suggestion is only
+   a placeholder ("N/A", "No correction needed.") contradicts itself: the
+   verifier is asked to state the correction or reject the finding, and one
+   left as it is becomes NEEDS_INFO. Missing or invalid decisions trigger a
    repair turn asking only for those IDs; leftovers become UNREVIEWED (or
    NEEDS_INFO for incomplete confirmations). A merge whose chain ends at a
    finding the same answer rejected or marked NEEDS_INFO gets a repair turn
@@ -370,7 +377,15 @@ markers back (`VERIFIED`). Creation results are `POSTED`, `ALREADY_PRESENT`,
 recorded thread whose comment someone deleted on the PR; it is not posted
 again). Re-running publication is safe.
 
-A person's adjustments (`/pr-comment <review-id> --exclude`, `--severity`,
+A `/pr-comment` command without a review ID acts on the conversation's
+current review: in one of a review's own sessions that review, otherwise the
+conversation's review with the latest `completedAt` or `usedAt` (set whenever
+a comment command acts on a review, and saved with it). Its `STARTED` notice
+and receipt name the review and its PR, and the receipt of a preview ends
+with the next commands, built from that review's findings and saved
+adjustments so that an example list never undoes an earlier one.
+
+A person's adjustments (`/pr-comment [review-id] --exclude`, `--severity`,
 `--reset`) are stored apart from the review, as `review.adjustments`; the
 review record, its findings and its report never change. `commentFindings`
 leaves excluded findings out and applies changed severities, so the existing
