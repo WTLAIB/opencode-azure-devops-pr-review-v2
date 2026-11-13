@@ -69,6 +69,14 @@ locked prompt hashes did not change.
   files as 0.3.7.
 - The 223 local Markdown links, images and anchors outside code examples
   resolve.
+- The Git archive of the release commit, extracted into a clean directory,
+  installed with `install.sh`: the 19 runtime modules, 9 prompts and the
+  license match, and `--replace` kept the settings byte for byte with mode
+  600 and an unrelated file in place. The link and package checks above
+  passed on that archive too.
+- The pushed release commit, installed from GitHub as a public Git package in
+  an isolated profile, passed the native smoke test with 107 model and 180
+  Azure DevOps requests.
 - No live review with a real model ran on this candidate, and nothing was
   posted to Azure DevOps.
 
