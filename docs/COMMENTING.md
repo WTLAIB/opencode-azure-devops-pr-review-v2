@@ -15,10 +15,13 @@ plans the comments, then the runtime posts the saved plan itself.
 No command needs a review ID. Without one it acts on the conversation's
 **current review**: the one that was completed or used by a `/pr-comment`
 command there last, which is the one you looked at last. Naming a review by
-its ID makes it the current one, and the last use is saved with the review,
-so this holds after a restart. In one of a review's own sessions (for example
-the last one, which shows the report) a command without an ID means that
-review. So that a command without an ID can be checked at a glance, the
+its ID makes it the current one, also with `--show` or with adjustments that
+change nothing, and a comment run makes its review the current one when its
+receipt arrives, the automatic preview after a review included. The choice is
+saved with the review when it is made, so it holds after a restart; if it
+cannot be saved, the answer says so. In one of a review's own sessions (for
+example the last one, which shows the report) a command without an ID means
+that review. So that a command without an ID can be checked at a glance, the
 `STARTED` notice and the receipt of every comment run name the review and its
 PR (`Acted on review 1a2b3c4d (/pr-review) of PR #123 in
 project/repository`), and a preview ends with the commands for the next step,

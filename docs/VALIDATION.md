@@ -52,7 +52,7 @@ under [commands without review IDs](#commands-without-review-ids-a-preview-by-de
 The prompts under `src/prompts` are those of 0.3.7, byte for byte, so the
 locked prompt hashes did not change.
 
-- `npm run check` and **441 offline tests** passed (432 for 0.3.7).
+- `npm run check` and **444 offline tests** passed (432 for 0.3.7).
 - All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
   and fake model and Azure services, with the request counts of 0.3.7: fresh
   107 model and 180 Azure DevOps requests, replacement 89 and 150, native
@@ -65,18 +65,33 @@ locked prompt hashes did not change.
   typed. On the first run the three smoke fixtures failed at that step, which
   still waited for the earlier description; they passed once it waited for the
   new one.
-- `npm pack --dry-run --json` lists **33 files** (about 191 KB), the same
+- `npm pack --dry-run --json` lists **33 files** (about 192 KB), the same
   files as 0.3.7.
 - The 223 local Markdown links, images and anchors outside code examples
   resolve.
-- The Git archive of the release commit, extracted into a clean directory,
-  installed with `install.sh`: the 19 runtime modules, 9 prompts and the
-  license match, and `--replace` kept the settings byte for byte with mode
-  600 and an unrelated file in place. The link and package checks above
+- The Git archive of the first release commit, extracted into a clean
+  directory, installed with `install.sh`: the 19 runtime modules, 9 prompts
+  and the license match, and `--replace` kept the settings byte for byte with
+  mode 600 and an unrelated file in place. The link and package checks above
   passed on that archive too.
-- The pushed release commit, installed from GitHub as a public Git package in
-  an isolated profile, passed the native smoke test with 107 model and 180
-  Azure DevOps requests.
+- That commit, pushed and installed from GitHub as a public Git package in an
+  isolated profile, passed the native smoke test with 107 model and 180 Azure
+  DevOps requests.
+- A review of the pull request then found that looking at a saved preview
+  with `--show`, or repeating a review's adjustments, made that review the
+  current one in the running process only. Reproduced offline with two PRs
+  behind the fake service: after a restart, `/pr-comment --publish` without
+  an ID acted on the conversation's other review and posted to its PR. The
+  choice is now saved when it is made; a comment run makes its review the
+  current one when it ends, which the automatic preview did not do although
+  its receipt says no ID is needed; and the times that order reviews come
+  from a counter that never repeats or runs backwards. Three offline tests
+  cover two PRs with a restart before a publication without an ID, an
+  automatic preview that ends after another review was looked at, and a
+  saved review whose time of use lies ahead of the clock. The corrected tree
+  passed `npm run check`, the 444 offline tests and the five real-host
+  fixtures again, with the same request counts; the two installation checks
+  above were made before the correction.
 - No live review with a real model ran on this candidate, and nothing was
   posted to Azure DevOps.
 
@@ -108,7 +123,8 @@ What supports them:
 - **Offline tests** drive the runtime with a fake host and a fake Azure DevOps
   service: two reviews in one conversation, where commands without an ID
   follow the review used last, also from a review's own session and after a
-  restart; the receipt lines and next steps, including examples that keep
+  restart, with two PRs and a publication without an ID after the restart; the
+  receipt lines and next steps, including examples that keep
   saved adjustments; `--list` and `--help` without a model or Azure DevOps
   request; a review followed by a preview where the settings do not name
   `afterReview`, and `--no-comment`; and a review of a repository whose

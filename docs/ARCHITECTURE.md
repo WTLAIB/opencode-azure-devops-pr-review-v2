@@ -379,8 +379,15 @@ again). Re-running publication is safe.
 
 A `/pr-comment` command without a review ID acts on the conversation's
 current review: in one of a review's own sessions that review, otherwise the
-conversation's review with the latest `completedAt` or `usedAt` (set whenever
-a comment command acts on a review, and saved with it). Its `STARTED` notice
+conversation's review with the latest `completedAt` or `usedAt`. `usedAt` is
+set when a comment command selects a review, also one that answers at once
+(`--show`, unchanged adjustments) or is refused, and again when a comment run
+ends, so the review whose receipt arrived last is the current one. A
+selection is saved with the review record at once; that save never overlaps a
+comment run on the same review, which waits for it and otherwise carries the
+selection in its own saves. Both times come from one counter that never
+repeats or runs backwards, also against the times of saved reviews, so a
+clock set back cannot change which review is current. Its `STARTED` notice
 and receipt name the review and its PR, and the receipt of a preview ends
 with the next commands, built from that review's findings and saved
 adjustments so that an example list never undoes an earlier one.

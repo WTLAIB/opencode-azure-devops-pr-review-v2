@@ -115,7 +115,11 @@ settings, backups and failure records. Never upload `.local/`.
   session of that review). A `/pr-comment` command without a review ID acts on
   the conversation's current review (completed or used there last; in a
   review's own session, that review), and its STARTED notice and receipt name
-  the review and its PR, so a wrong pick shows before and after it acts.
+  the review and its PR, so a wrong pick shows before and after it acts. Save
+  the choice when it is made, also for a command that answers at once
+  (`--show`, unchanged adjustments): a choice kept only in memory lets a
+  command after a restart publish to another PR. A command that starts a run
+  registers the run before its first await, so it never waits for that save.
 
 **Publication is idempotent.**
 - Recheck the PR (active, unchanged head) before writing; skip existing markers;
