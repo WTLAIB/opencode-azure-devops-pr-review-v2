@@ -95,6 +95,8 @@ const settings = JSON.parse(await readFile(join(root, 'config/settings.example.j
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
 settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 settings.workflow = { ...settings.workflow, shardFiles: 24, shardFindings: 15, parallelSessions: 4 };
+// These steps drive each comment step themselves; the default (a preview after every review) is covered by the runtime tests.
+settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
 settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });

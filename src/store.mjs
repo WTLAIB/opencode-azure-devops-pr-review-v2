@@ -38,6 +38,33 @@ export function deserializeReview(value) {
   return { ...value, reportSessions: new Set(value.reportSessions ?? []), publication: new Map(value.publication ?? []) };
 }
 
+/**
+ * Writes of saved reviews, one at a time per review and in the order asked,
+ * so two writes of one record never overlap and an earlier write never lands
+ * after a later one. `write(id, action)` queues an action (a save or a
+ * removal) and returns its result; a failed action does not stop the next.
+ * `latest(id, save)` asks for a save that reads the review only when it
+ * starts: a request joins such a save while it waits in the queue, and once it
+ * has started, so has already read the review, the next request gets a save of
+ * its own after it. Either way a request is carried by a save that starts
+ * after it, and the record ends with the latest state asked for.
+ */
+export function createReviewWrites() {
+  const tails = new Map(), waiting = new Map();
+  function write(id, action) {
+    const result = (tails.get(id) ?? Promise.resolve()).then(action);
+    const settled = result.then(() => {}, () => {});
+    tails.set(id, settled);
+    void settled.then(() => { if (tails.get(id) === settled) tails.delete(id); });
+    return result;
+  }
+  function latest(id, save) {
+    if (!waiting.has(id)) waiting.set(id, write(id, () => { waiting.delete(id); return save(); }));
+    return waiting.get(id);
+  }
+  return { write, latest };
+}
+
 async function writeAtomic(path, content) {
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(temporary, content, { mode: 0o600 });

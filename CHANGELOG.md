@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.4.0 — 2026-11-14
+
+Two defaults change. They apply where a settings file does not name the
+setting, as in the file `/pr-setup` writes; a file that names it, as one
+installed with `install.sh` does, keeps its values.
+
+- A comment preview now follows every COMPLETE review: `afterReview` is
+  `preview` for each mode (it was `none`). The preview is planned with a model
+  and posts nothing. Add `--no-comment` after the PR URL for a review without
+  one, or set `afterReview` to `none`. Publication is still never a default.
+- `workflow.parallelSessions` is 8 (was 4) and `azure.concurrency` is 6 (was
+  3). They matter for a PR of more than one shard. Lower `parallelSessions`
+  when your provider limits the request rate, or with OpenCode's claude-agent
+  provider on a machine with little memory.
+
+Commands:
+
+- No `/pr-comment` command needs a review ID any more: `--exclude`,
+  `--severity` and `--reset` act on the conversation's current review, as
+  `--publish` and `--show` already did. The current review is the one that was
+  completed or used there last, so naming a review by its ID once makes it the
+  current one; in one of a review's own sessions it is that review.
+- The start notice and the receipt of every comment run name the review and
+  its PR, for example `Acted on review 1a2b3c4d (/pr-review) of PR #123 in
+  project/repository`.
+- A preview's receipt ends with the commands for the next step, without the
+  review ID and with that review's finding IDs. Each adjustment list replaces
+  the saved one, so an example keeps the adjustments already saved.
+- New `/pr-comment --list`: the reviews saved for the conversation, with their
+  IDs, PRs and state. No model or Azure DevOps request.
+- Every command answers `--help` (or `-h`) with its usage and examples,
+  without a model or Azure DevOps request.
+- Command descriptions start with what the command is for and point to
+  `--help`: OpenCode's command list shows one line of a description and cuts
+  what does not fit.
+- A review's receipt lists the comment commands without the ID first and keeps
+  the ID form for acting on that review later.
+
+Reports:
+
+- A review that ran without content search says so. When the repository
+  archive is larger than `azure.archiveMegabytes` allows, or is one AZPR cannot
+  read (ZIP64, encrypted, damaged), `azpr_search_code` answers that search is
+  unavailable; until now only the models saw that. The report's limitations
+  and the receipt (`Content search notice`) state that sessions could find and
+  read files but not search their contents, and name the setting's value where
+  a larger one would help. The debug record's `result.json` lists the reasons
+  under `searchUnavailable`.
+- A verifier that confirms a finding whose suggestion is only a placeholder
+  ("N/A", "No correction needed.") is asked in the same session to state the
+  correction or to reject the finding. Left as it is after the correction
+  turns, the finding is NEEDS_INFO: it stays in the report and gets no comment.
+
+Documentation:
+
+- The README's examples show several finding IDs in one list
+  (`--exclude F-1,R-2`), and the `afterReview` row of the settings table has
+  one value per line.
+- The roadmap no longer lists three changes as planned that the work on 0.3.7
+  examined and dropped, and says why. The README states what a smaller model
+  in `models.review` costs in issues found.
+- The instructions for reviewers and verifiers are unchanged, and an
+  installation has the same set of files as 0.3.7. See
+  [validation](docs/VALIDATION.md#040-release-candidate-acceptance-2026-11-14).
+
 ## 0.3.7 — 2026-11-12
 
 - A change that breaks something that worked before is at least medium: an

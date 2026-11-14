@@ -55,7 +55,7 @@ conversation or command argument.
 ## 3. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.3.7
+opencode plugin add opencode-azure-devops-pr-review@0.4.0
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -64,7 +64,7 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.3.7'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.0'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -148,18 +148,22 @@ access check, not a security audit or an approval of the PR.
 ## 7. Run a review and preview its comments (OpenCode)
 
 ```text
-/pr-review https://dev.azure.com/YOUR_ORGANIZATION/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123 --preview
+/pr-review https://dev.azure.com/YOUR_ORGANIZATION/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
 ```
 
 This starts functional and risk reviewers, followed by separate verification.
 The starter setup uses the same model in separate sessions; you can assign
-models per role later. For a lighter pass, use `/pr-quick <PR URL> --preview`
+models per role later. For a lighter pass, use `/pr-quick <PR URL>`
 instead: it runs one reviewer per shard without independent verification.
+`/pr-review --help` (and every other command with `--help`) shows the options
+without running a model.
 
 Follow the progress notices and wait for the review receipt. If the COMPLETE
-review has findings to comment on, `--preview` starts a separate comment run
-that saves a preview; wait for its receipt too. **Neither command posts to
-Azure**, even if your settings normally enable automatic publication. A review
+review has findings to comment on, a separate comment run follows and saves a
+preview; wait for its receipt too. **Neither run posts to Azure** with the
+settings of this guide: a preview is what `afterReview` does by default. If
+you have set `afterReview` to `publish`, add `--preview` after the URL to get
+a preview only, or `--no-comment` for a review without one. A review
 with no findings to comment on produces a notice without running a planner.
 A review that is `PARTIAL` or `STALE` cannot be commented on; resolve the cause
 and run a new review.
@@ -167,28 +171,34 @@ and run a new review.
 Inspect the report, proposed summary, inline comments and skipped findings.
 Check coverage and limitations: COMPLETE does not mean every file was reviewed
 or every finding confirmed. Quick findings are `REPORTED`, with `verification
-none`. Keep the review's eight-character ID for publication in the **same
-conversation** (`1a2b3c4d` below is an example).
+none`. The commands below are typed in the **same conversation** and need no
+review ID: they act on its current review, the one completed or used there
+last, and each receipt names that review and its PR. The preview ends with
+the commands for the next step.
 
 For a small PR, `/pr-review` commonly uses two reviewer sessions, a verifier
 session and a comment-planning session; `/pr-quick` commonly uses one review
 session plus comment planning. **A session is not a single model request**:
 tool reads, corrections, retries, more shards or planning pages add requests
-and cost. Refreshing a preview with `/pr-comment <review-id>` runs planning
+and cost. Refreshing a preview with `/pr-comment` runs planning
 again. Use the displayed `/pr-stop <run-id>` to cancel an active command; no
 cost cap is configured by default.
 
 ## Optional: adjust findings before publishing
 
-Use finding IDs from your report to leave findings out or change their severity:
+Use the finding IDs of the preview and the report to leave findings out or
+change their severity. Several IDs go in one list, separated by commas:
 
 ```text
-/pr-comment 1a2b3c4d --exclude F-1 --severity F-2=low
+/pr-comment --exclude F-1,R-2                     leave F-1 and R-2 out
+/pr-comment --severity F-3=low,R-4=medium         publish F-3 as low and R-4 as medium
+/pr-comment --exclude F-1,R-2 --severity F-3=low  both in one command
 ```
 
-In this example, F-1 is excluded from the new preview; F-2 appears as low in the
-summary, with no new inline comment. The original review is preserved. A changed
-severity does not verify the finding again; exclude a finding when it is wrong.
+With the last line, F-1 and R-2 are excluded from the new preview and F-3
+appears as low in the summary, with no inline comment. The original review is
+preserved. A changed severity does not verify the finding again; exclude a
+finding when it is wrong.
 
 AZPR uses a model to plan the comments again without rerunning the review, so
 read the whole new preview. Each option replaces its own saved list:
@@ -201,8 +211,12 @@ for the full rules.
 ## Optional: publish after inspecting the preview
 
 ```text
-/pr-comment 1a2b3c4d --publish
+/pr-comment --publish
 ```
+
+To act on an older review of the conversation, put its eight-character ID
+first, as in `/pr-comment 1a2b3c4d --publish`; `/pr-comment --list` shows the
+saved reviews with their IDs and PRs.
 
 This explicit command posts the saved preview through your PAT after checking
 the PR is active and its source commit is unchanged. Existing markers are
@@ -214,7 +228,7 @@ retries the saved content. Earlier comments on the PR are never edited; the
 receipt names those whose text differs from an adjusted preview.
 
 For a review that has never been adjusted, `--publish` plans first if no preview
-exists; use `/pr-comment <review-id>` to prepare and inspect a preview first. See
+exists; use `/pr-comment` to prepare and inspect a preview first. See
 [automatic comments](COMMENTING.md#automatic-comments-after-a-review) for
 `afterReview` and the flags that override it for one review.
 
@@ -232,7 +246,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.3.7 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.3.7.tar.gz),
+[v0.4.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.0.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings, so add `--replace` to the setup

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createReviewStore, serializeReview, deserializeReview, stateRoot } from '../src/store.mjs';
+import { createReviewStore, createReviewWrites, serializeReview, deserializeReview, stateRoot } from '../src/store.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
 
 async function root(t) {
@@ -131,4 +131,64 @@ test('comment data reopens after a restart and still verifies hashes', async t =
   await writeFile(reference.file, 'tampered');
   await assert.rejects(reopened.read(reference), /changed/);
   await assert.rejects(reopened.read({ ...reference, file: '/etc/passwd' }), /Unknown private comment data reference/);
+});
+
+// A save the test finishes by hand, recording what it read when it started.
+function gate(log, name, read = () => name) {
+  let finish, fail;
+  const done = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+  return { action: () => { log.push(`start ${name}: ${read()}`); return done.then(value => { log.push(`end ${name}`); return value; }); }, finish, fail };
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('writes of one review run one at a time and in order; another review does not wait', async () => {
+  const writes = createReviewWrites(), log = [];
+  const first = gate(log, 'a1'), second = gate(log, 'a2'), other = gate(log, 'b1');
+  const results = [writes.write('a', first.action), writes.write('a', second.action), writes.write('b', other.action)];
+  await settle();
+  assert.deepEqual(log, ['start a1: a1', 'start b1: b1'], 'The second write of a waits; b runs beside it.');
+  second.finish(); await settle();
+  assert.deepEqual(log, ['start a1: a1', 'start b1: b1'], 'Finishing out of order changes nothing: a2 has not started.');
+  first.finish('one'); other.finish(); await settle();
+  assert.deepEqual(log, ['start a1: a1', 'start b1: b1', 'end a1', 'end b1', 'start a2: a2', 'end a2']);
+  assert.deepEqual(await Promise.all(results), ['one', undefined, undefined]);
+});
+
+test('a failed write rejects only its own request, and the next write of the review still runs', async () => {
+  const writes = createReviewWrites(), log = [];
+  const failing = gate(log, 'a1'), next = gate(log, 'a2');
+  const failed = writes.write('a', failing.action), later = writes.write('a', next.action);
+  failing.fail(new Error('disk full')); await settle();
+  await assert.rejects(failed, /disk full/);
+  next.finish('kept');
+  assert.equal(await later, 'kept');
+});
+
+test('the latest state is written: a request joins a save that has not started, and one made during a save gets a save after it', async () => {
+  const writes = createReviewWrites(), log = [];
+  let state = 'A1';
+  const saves = [];
+  // Each save reads the state when it starts, as a save of a review record does.
+  const save = () => { const g = gate(log, `save${saves.length + 1}`, () => state); saves.push(g); return g.action(); };
+  // A write already under way, such as the record of a review that has just completed.
+  const busy = gate(log, 'busy');
+  const before = writes.write('a', busy.action);
+  // Two choices while the save they need has not started: one save carries both.
+  const first = writes.latest('a', save);
+  state = 'A2';
+  assert.equal(writes.latest('a', save), first, 'A request joins the save that waits in the queue.');
+  busy.finish(); await settle();
+  assert.deepEqual(log, ['start busy: busy', 'end busy', 'start save1: A2'], 'The joined save read the state when it started.');
+  // A choice made while that save writes: it read the state already, so the new choice gets a save of its own after it.
+  state = 'A3';
+  const second = writes.latest('a', save);
+  assert.notEqual(second, first);
+  await settle();
+  assert.equal(saves.length, 1, 'The new save waits for the one under way.');
+  saves[0].finish(); await settle();
+  assert.deepEqual(log.slice(3), ['end save1', 'start save2: A3']);
+  saves[1].finish();
+  await Promise.all([before, first, second]);
+  assert.equal(log.at(-1), 'end save2');
+  assert.match(log.filter(entry => entry.startsWith('start save')).at(-1), /A3$/, 'The last save wrote the last state.');
 });

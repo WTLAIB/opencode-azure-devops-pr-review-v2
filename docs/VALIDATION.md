@@ -43,6 +43,150 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.4.0 release candidate acceptance (2026-11-14)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.2.4. The candidate changes command texts, which review a `/pr-comment`
+command without an ID acts on, two defaults and two reports, as described
+under [commands without review IDs](#commands-without-review-ids-a-preview-by-default-and-two-report-checks-2026-11-13-and-14).
+The prompts under `src/prompts` are those of 0.3.7, byte for byte, so the
+locked prompt hashes did not change.
+
+- `npm run check` and **449 offline tests** passed (432 for 0.3.7).
+- All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
+  and fake model and Azure services, with the request counts of 0.3.7: fresh
+  107 model and 180 Azure DevOps requests, replacement 89 and 150, native
+  packed package installation 107 and 187, the comment-scale fixture 34 and 75
+  (largest provider request 38,252 characters) and background compaction 7
+  model requests. The fixtures set `afterReview` to `none` and start each
+  comment step themselves; the default preview is covered by the offline
+  tests. In the smoke fixture the OpenCode TUI, 160 columns wide, lists
+  `/pr-review` with the start of its new description before the command is
+  typed. On the first run the three smoke fixtures failed at that step, which
+  still waited for the earlier description; they passed once it waited for the
+  new one.
+- `npm pack --dry-run --json` lists **33 files** (about 193 KB), the same
+  files as 0.3.7.
+- The 223 local Markdown links, images and anchors outside code examples
+  resolve.
+- The Git archive of the first release commit, extracted into a clean
+  directory, installed with `install.sh`: the 19 runtime modules, 9 prompts
+  and the license match, and `--replace` kept the settings byte for byte with
+  mode 600 and an unrelated file in place. The link and package checks above
+  passed on that archive too.
+- That commit, pushed and installed from GitHub as a public Git package in an
+  isolated profile, passed the native smoke test with 107 model and 180 Azure
+  DevOps requests.
+- A review of the pull request then found that looking at a saved preview
+  with `--show`, or repeating a review's adjustments, made that review the
+  current one in the running process only. Reproduced offline with two PRs
+  behind the fake service: after a restart, `/pr-comment --publish` without
+  an ID acted on the conversation's other review and posted to its PR. The
+  choice is now saved when it is made; a comment run makes its review the
+  current one when it ends, which the automatic preview did not do although
+  its receipt says no ID is needed; and the times that order reviews come
+  from a counter that never repeats or runs backwards. Three offline tests
+  cover two PRs with a restart before a publication without an ID, an
+  automatic preview that ends after another review was looked at, and a
+  saved review whose time of use lies ahead of the clock. The corrected tree
+  passed `npm run check`, the 444 offline tests and the five real-host
+  fixtures again, with the same request counts. Both installation checks
+  above were repeated on the corrected commit and passed: its Git archive in
+  a clean directory, with the link and package checks, and the commit
+  installed from GitHub as a public Git package, again with 107 model and 180
+  Azure DevOps requests.
+- A second review found the same loss when commands overlap: a choice made
+  while the save of an earlier choice of that review was under way shared
+  that save, which had read the review before, so the record kept the earlier
+  choice. Reproduced offline: `--show` of A, B and A again, without waiting;
+  after a restart B was current and `/pr-comment --publish` posted to B's PR.
+  Every write of a review's record now goes through one queue per review, and
+  a selection is saved by a write that reads the review when it starts: a
+  choice made while a save writes gets a save of its own after it. The removal
+  of an evicted review uses the same queue, so a save under way cannot bring
+  its file back. Five offline tests were added: the overlap with and without
+  the first save already writing, which both failed on the earlier commit
+  (the second takes the path where a choice arrives during a save, checked
+  with a temporary log), a command refused because another one is running
+  that still saves its choice, and three tests of the queue with saves the
+  test finishes by hand. The corrected tree passed `npm run check`, the 449
+  offline tests and the five real-host fixtures with the same request counts.
+  Both installation checks were repeated on that commit and passed: its Git
+  archive in a clean directory, with the link and package checks, and the
+  commit installed from GitHub as a public Git package, with 107 model and
+  180 Azure DevOps requests.
+- No live review with a real model ran on this candidate, and nothing was
+  posted to Azure DevOps.
+
+This is a pre-publication record. Registry integrity and installation from npm
+are checked only after publication, following the
+[releasing guide](RELEASING.md).
+
+## Commands without review IDs, a preview by default and two report checks (2026-11-13 and 14)
+
+0.4.0 changes how commands are typed and what two reports say; it does not
+change what reviewers and verifiers are told.
+
+- A `/pr-comment` command without a review ID, adjustments included, acts on
+  the conversation's current review: the one completed or used there last, or
+  in one of a review's own sessions that review. The start notice and the
+  receipt of a comment run name the review and its PR by number and
+  repository; the PR's title, which is text from the PR, stays inside the
+  report's data block. A preview's receipt ends with the next commands.
+- `/pr-comment --list` and `--help` of every command answer without a run.
+- `afterReview` defaults to `preview` for every mode, `workflow.parallelSessions`
+  to 8 and `azure.concurrency` to 6.
+- A review whose content search was refused states that among its limitations
+  and in its receipt.
+- A verifier's confirmation whose suggestion is only a placeholder gets a
+  correction turn and is NEEDS_INFO if it stays that way.
+
+What supports them:
+
+- **Offline tests** drive the runtime with a fake host and a fake Azure DevOps
+  service: two reviews in one conversation, where commands without an ID
+  follow the review used last, also from a review's own session and after a
+  restart, with two PRs and a publication without an ID after the restart, also
+  when the commands overlap; the receipt lines and next steps, including examples that keep
+  saved adjustments; `--list` and `--help` without a model or Azure DevOps
+  request; a review followed by a preview where the settings do not name
+  `afterReview`, and `--no-comment`; and a review of a repository whose
+  archive exceeds a 1 MB limit, with the notice in the receipt, the saved
+  review and the debug record.
+- **The placeholder check, replayed on stored results.** We ran the check over
+  the verifier results of our stored benchmark runs (the ReviewBench test set
+  and Martian's benchmark, with 0.3.4 to 0.3.7 and experimental builds):
+  15,376 confirmations, 6,136 by Claude Opus 5.5, 5,921 by GPT-6.1 Sol, 2,752
+  by GPT-6 Luna and 567 by other models. It sent back 3, all from GPT-6 Luna:
+  their suggestions were "N/A", "Not applicable." and "No correction needed.",
+  and in each the verifier's own reason refuted the finding. Two of the three
+  were medium and would have received an inline comment. No other confirmation
+  matched, so the check added no correction turn to a GPT-6.1 Sol or Claude
+  Opus 5.5 review.
+- **Parallelism** rests on the earlier
+  [parallelism runs](#live-runs-parallelism-and-the-corrections-review-only):
+  one 316-file PR, one provider and one organization. Nothing new was
+  measured.
+
+Limits:
+
+- No live model run used this build. The comment commands, the default
+  preview and both report checks were exercised with fake models only, and the
+  content-search notice was not seen against Azure DevOps Services.
+- The placeholder check reads a few fixed spellings in English and Chinese and
+  only a verifier's confirmations. In the same stored runs, 21 of 3,936
+  findings filed by GPT-6 Luna reviewers carried such a suggestion (none of
+  about 17,800 from GPT-6.1 Sol and Claude Opus 5.5); verifiers rejected 19 of
+  them. `/pr-quick` has no verifier and is not covered: too few quick results
+  are stored to measure it.
+- The real-host fixtures do not run the default preview, and the TUI step
+  shows only `/pr-review`'s description at one terminal width. In a screenshot
+  of a narrower terminal the list showed 58 characters of a description; the
+  new descriptions say what a command is for within 52.
+- Which review is current depends on the order of commands in a conversation;
+  a command copied from an older receipt without an ID acts on the current
+  review, which is why receipts keep the form with the ID.
+
 ## 0.3.7 release candidate acceptance (2026-11-12)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode

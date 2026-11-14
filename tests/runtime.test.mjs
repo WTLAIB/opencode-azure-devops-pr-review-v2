@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
 import { closeSync, constants as fsConstants, openSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +52,8 @@ async function fixture(t, opts = {}) {
   settings.debug = { enabled: true, directory: 'debug' };
   settings.workflow = { shardFiles: 25, shardFindings: 15, parallelSessions: 4, repairAttempts: 2, stageRetries: 1 };
   settings.azure = { organization: 'org', pat: FAKE_PAT, concurrency: 3, callTimeoutSeconds: 120 };
+  // Nothing follows a review here unless a test asks for it; the default (a preview) has its own tests.
+  settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
   opts.settings?.(settings);
   await writeFile(join(directory, 'settings.json'), JSON.stringify(settings));
   const azure = opts.azure ?? fakeAzure({ files: opts.files });
@@ -239,6 +242,32 @@ test('a review returns STARTED, progress notices and one COMPLETE receipt, and p
   assert.doesNotMatch(receipt, /azpr-review-rating/);
   const initial = [...f.sessions.values()].find(session => session.packet?.assignment?.files);
   assert.deepEqual(initial.packet.snapshot.commits, [{ id: 'b'.repeat(12), message: 'Fixture change' }], 'Reviewers see the PR commit messages.');
+});
+
+test('a repository too large for content search is reviewed, and the report, receipt and debug record say what was missing', async t => {
+  // 1.5 MB that deflate cannot shrink below the 1 MB limit of this fixture.
+  const azure = fakeAzure({ files: ['/src/Main.java'], sources: { '/assets/blob.txt': randomBytes(1500000).toString('base64') } });
+  const answers = [];
+  const f = await fixture(t, { azure, settings: settings => { settings.azure.archiveMegabytes = 1; },
+    async during({ session, role, turn, invoke }) {
+      if (turn === 0 && role === 'azpr-review-risk') answers.push((await invoke(session, 'azpr_search_code', { query: 'callers of main' })).output);
+    } });
+  const receipt = await f.command();
+  assert.match(answers[0], /^Content search is unavailable for this repository: the repository archive is larger than the azure\.archiveMegabytes setting allows \(\d+ bytes\)\./);
+  assert.match(receipt, /\] COMPLETE\n/, 'The review itself is not failed.');
+  const line = 'Content search (azpr_search_code) was unavailable: the repository archive is larger than the azure.archiveMegabytes setting allows. Sessions could find and read files but not search file contents, so callers and other uses of the changed code may not have been checked. azure.archiveMegabytes is 1; it accepts up to 1024.';
+  assert.ok(receipt.includes(`\nContent search notice: ${line}\n`), receipt);
+  const saved = await savedReview(f, reviewId(receipt));
+  assert.deepEqual(saved.final.reviewWarnings, [line], 'The report lists it among the review\'s limitations.');
+  const debug = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8'));
+  assert.deepEqual(debug.searchUnavailable, ['the repository archive is larger than the azure.archiveMegabytes setting allows']);
+  // A review whose searches ran says nothing.
+  const g = await fixture(t, { files: ['/src/Main.java'], async during({ session, role, turn, invoke }) {
+    if (turn === 0 && role === 'azpr-review-risk') await invoke(session, 'azpr_search_code', { query: 'callers of main' });
+  } });
+  const plain = await g.command();
+  assert.doesNotMatch(plain, /Content search/);
+  assert.equal(Object.hasOwn(JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(plain)[1], 'result.json'), 'utf8')), 'searchUnavailable'), false);
 });
 
 test('debug records keep each stage\'s per-request token usage and the run\'s cached share', async t => {
@@ -866,12 +895,14 @@ test('excluding every finding leaves nothing to post, without a model or a summa
   assert.doesNotMatch(back, /Excluded from publication/);
 });
 
-test('adjustments need a named review of this conversation and real finding IDs; they survive a restart, and --reset clears them', async t => {
+test('adjustments need a review of this conversation and real finding IDs; they survive a restart, and --reset clears them', async t => {
   const f = await fixture(t, { files: ['/src/Main.java'] });
   const review = reviewId(await f.command());
   const [first] = previewIds(await f.command('pr-comment', ''));
   const refuse = (text, pattern, origin = 'ordinary') => assert.rejects(f.commands.get('pr-comment').execute({ sessionID: origin, prompt: { text } }), pattern);
-  await refuse(`--exclude ${first}`, /Name the review whose findings you adjust/);
+  // Without a review ID an adjustment acts on the conversation's current review, and a refusal names it.
+  await refuse('--exclude F-99', new RegExp(`Nothing was changed: F-99 is not a finding of review ${review}\\.`));
+  await refuse(`--exclude ${first}`, /No completed review/, 'another-conversation');
   await refuse(`${review} --exclude F-99`, new RegExp(`Nothing was changed: F-99 is not a finding of review ${review}\\. Findings of review ${review} you can adjust: `));
   await refuse(`${review} --exclude ${first} --publish`, /Usage: \/pr-comment/);
   await refuse(`${review} --severity ${first}=critical`, /Not a severity change/);
@@ -897,6 +928,199 @@ test('adjustments need a named review of this conversation and real finding IDs;
   const saved = await savedReview(g, review);
   assert.deepEqual([saved.adjustments.excluded, saved.adjustments.severity], [[], {}]);
   assert.equal(saved.adjustments.changes.length, 2, 'Each change is recorded with its time.');
+});
+
+test('a comment command without an ID acts on the review this conversation used last, says which PR that is and what to type next', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const older = reviewId(await f.command()), newer = reviewId(await f.command());
+  const acted = id => new RegExp(`^\\[AZPR [a-f0-9]{8}\\] [A-Z_]+; source review=${id}\\nActed on review ${id} \\(/pr-review\\) of PR #123 in proj/repo\\.\\n`);
+  // The review completed last is the current one.
+  const before = f.notices.length;
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, acted(newer));
+  assert.match(f.notices.slice(before).find(n => /\] STARTED \/pr-comment/.test(n.text)).text,
+    new RegExp(`STARTED /pr-comment\\. Work continues [^\\n]*conversation\\. It acts on review ${newer} \\(/pr-review\\) of PR #123 in proj/repo\\. Stop with /pr-stop`), 'The start notice names the review before anything is planned or posted.');
+  // The preview ends with the commands a person wants next, without the ID and with this review's finding IDs.
+  const [first, second] = previewIds(preview);
+  const next = text => /<\/azpr_comment_data>\n(Next [\s\S]*)\nAll grants are revoked\./.exec(text)?.[1];
+  // The commands are padded to the longest one, here the --severity example.
+  const row = (command, effect) => `  ${command.padEnd(`/pr-comment --severity ${first}=low`.length)}  ${effect}`;
+  assert.equal(next(preview), [
+    `Next (no review ID is needed while ${newer} is this conversation's current review):`,
+    row('/pr-comment --publish', 'post this preview as the PAT owner (safe to repeat)'),
+    row(`/pr-comment --exclude ${first},${second}`, `leave ${first} and ${second} out, then read the new preview`),
+    row(`/pr-comment --severity ${first}=low`, `publish ${first} as low, then read the new preview`),
+    row('/pr-comment --show', 'show this preview again (no model)'),
+    'Each --exclude or --severity list replaces the saved one. For another review add its ID; /pr-comment --list shows them.'].join('\n'));
+  // A review named by its ID becomes the current one: the next commands need no ID.
+  assert.match(await f.command('pr-comment', `${older} --show`), new RegExp(`Review ${older} has no saved preview`));
+  const adjusted = await f.command('pr-comment', `--exclude ${first}`);
+  assert.match(adjusted, acted(older));
+  assert.match(adjusted, new RegExp(`Adjusted by a person: excluded ${first}`));
+  // Each list replaces the saved one, so the examples keep what is saved and add to it.
+  for (const line of [row(`/pr-comment --exclude ${first},${second}`, `leave ${second} out as well, then read the new preview`),
+    row(`/pr-comment --severity ${second}=low`, `publish ${second} as low, then read the new preview`),
+    row('/pr-comment --reset', 'undo your adjustments, then read the new preview'), row('/pr-comment --publish', 'post this preview as the PAT owner (safe to repeat)')])
+    assert.ok(next(adjusted).includes(`\n${line}\n`), `${line}\n${next(adjusted)}`);
+  assert.equal(Object.hasOwn(await savedReview(f, newer), 'adjustments'), false, 'The other review is untouched.');
+  // --list shows what is saved, newest use first, without a model or Azure DevOps request.
+  const prompts = f.prompts().length, calls = f.azure.state.calls.length;
+  const list = await f.command('pr-comment', '--list');
+  assert.match(list, new RegExp(`^\\[AZPR\\] Reviews saved for this conversation \\(2\\); no model or Azure DevOps request was made\\.\\n` +
+    `- review ${older} \\(/pr-review\\) of PR #123 in proj/repo; completed [^;]+; preview saved, adjusted; current\\n` +
+    `- review ${newer} \\(/pr-review\\) of PR #123 in proj/repo; completed [^;]+; preview saved\\n` +
+    `A command without an ID acts on the current review \\(${older}\\); put an ID first to act on another one, for example /pr-comment ${newer} --show\\.$`));
+  assert.equal(f.prompts().length, prompts);
+  assert.equal(f.azure.state.calls.length, calls);
+  assert.match(await f.command('pr-comment', '--list', 'another-conversation'), /^\[AZPR\] No completed review is saved for this conversation\./);
+  // In one of a review's own sessions a command without an ID means that review, whatever is current elsewhere.
+  const ownSession = f.sessionsFor('azpr-review-verifier').find(session => (f.notices.find(n => n.sessionID === session.id)?.text ?? '').includes(newer)) ?? f.sessionsFor('azpr-review-verifier').at(-1);
+  await f.commands.get('pr-comment').execute({ sessionID: ownSession.id, prompt: { text: '--show' } });
+  assert.match(f.notices.filter(n => n.sessionID === ownSession.id).at(-1).text, new RegExp(`^\\[AZPR\\] Saved preview of review ${newer}`));
+  // That used the newer review, so it is the conversation's current one now; naming the older one again changes that back.
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${newer} [^\\n]*; current\\n`));
+  assert.match(await f.command('pr-comment', `${older} --show`), new RegExp(`^\\[AZPR\\] Saved preview of review ${older}`));
+  // The current review survives a restart: the last use is saved with the review.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure });
+  assert.match(await g.command('pr-comment', '--show'), new RegExp(`^\\[AZPR\\] Saved preview of review ${older}`));
+  // Publishing needs no ID either and posts the current review's adjusted preview.
+  const posted = await g.command('pr-comment', '--publish');
+  assert.match(posted, new RegExp(`^\\[AZPR [a-f0-9]{8}\\] POSTED; source review=${older}\\nActed on review ${older} `));
+  assert.doesNotMatch(posted, /\nNext \(/, 'Only a preview ends with next steps.');
+});
+
+// One fake Azure DevOps service that answers for whichever PR a request names, so one conversation can
+// review two PRs; `posted` says which PRs received comments.
+function twoPullRequests() {
+  const azure = fakeAzure({ files: ['/src/Main.java'] });
+  azure.state.fail.pr = (call, state) => { state.prId = Number(/pullRequests\/(\d+)/i.exec(call.path)[1]); };
+  const url = id => azure.prUrl().replace(/\d+$/, String(id));
+  const posted = () => azure.callsTo('createThread').map(call => Number(/pullRequests\/(\d+)/i.exec(call.path)[1]));
+  return { azure, url, posted };
+}
+
+test('the review a person looked at last stays the current one across a restart: --show and an unchanged adjustment save the choice', async t => {
+  for (const look of ['--show', '--exclude none']) {
+    const { azure, url, posted } = twoPullRequests();
+    const f = await fixture(t, { azure });
+    const older = reviewId(await f.command('pr-review', url(123)));
+    assert.match(await f.command('pr-comment', ''), new RegExp(`\\] PREVIEW; source review=${older}\\nActed on review ${older} \\(/pr-review\\) of PR #123 in proj/repo\\.`));
+    const newer = reviewId(await f.command('pr-review', url(456)));
+    assert.match(await f.command('pr-comment', ''), new RegExp(`\\] PREVIEW; source review=${newer}\\nActed on review ${newer} \\(/pr-review\\) of PR #456 in proj/repo\\.`));
+    // Looking at the older review's preview, or repeating its adjustments, starts no run and plans nothing ...
+    const prompts = f.prompts().length;
+    const answer = await f.command('pr-comment', `${older} ${look}`);
+    assert.match(answer, look === '--show' ? new RegExp(`^\\[AZPR\\] Saved preview of review ${older}`) : new RegExp(`^\\[AZPR\\] Review ${older} already has these adjustments; nothing was planned\\.`), look);
+    assert.equal(f.prompts().length, prompts, look);
+    // ... and still makes it the current review, on disk too.
+    assert.ok((await savedReview(f, older)).usedAt > (await savedReview(f, newer)).usedAt, `${look}: the choice is saved with the review, later than the other review's last use.`);
+    assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${older} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`), look);
+    await f.cleanup();
+    const g = await fixture(t, { directory: f.directory, azure });
+    assert.match(await g.command('pr-comment', '--list'), new RegExp(`- review ${older} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`), `${look}: after a restart`);
+    // A publication without an ID after the restart goes to the PR that was looked at, never to the other one.
+    const publication = await g.command('pr-comment', '--publish');
+    assert.match(publication, new RegExp(`^\\[AZPR [a-f0-9]{8}\\] POSTED; source review=${older}\\nActed on review ${older} \\(/pr-review\\) of PR #123 in proj/repo\\.`), look);
+    assert.ok(posted().length > 0 && posted().every(pr => pr === 123), `${look}: comments went to PR ${[...new Set(posted())].join(', ')}`);
+  }
+});
+
+test('choices that overlap a save are all written: A, B, A without waiting leaves A current after a restart', async t => {
+  // Without a pause all three choices come before the first save starts; with one, the first save of
+  // A is writing (it read the review already) when the second choice of A arrives. Microtasks run in
+  // the pause, file writes cannot finish in it.
+  for (const pause of [false, true]) {
+    const { azure, url, posted } = twoPullRequests();
+    const f = await fixture(t, { azure });
+    const a = reviewId(await f.command('pr-review', url(123)));
+    assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+    const b = reviewId(await f.command('pr-review', url(456)));
+    assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+    // Three --show commands one after another, none waiting for the one before.
+    const show = id => f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${id} --show` }, delivery: 'steer' });
+    const shown = [show(a)];
+    if (pause) for (let tick = 0; tick < 5; tick++) await Promise.resolve();
+    shown.push(show(b), show(a));
+    await Promise.all(shown);
+    const label = pause ? 'while the first save writes' : 'before the first save starts';
+    assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${a} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`), label);
+    assert.ok((await savedReview(f, a)).usedAt > (await savedReview(f, b)).usedAt, `${label}: the record of A carries its last choice.`);
+    await f.cleanup();
+    const g = await fixture(t, { directory: f.directory, azure });
+    assert.match(await g.command('pr-comment', '--list'), new RegExp(`- review ${a} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`), `${label}: after a restart`);
+    assert.match(await g.command('pr-comment', '--publish'), new RegExp(`\\] POSTED; source review=${a}\\nActed on review ${a} \\(/pr-review\\) of PR #123 in proj/repo\\.`), label);
+    assert.ok(posted().length > 0 && posted().every(pr => pr === 123), `${label}: comments went to PR ${[...new Set(posted())].join(', ')}`);
+  }
+});
+
+test('a comment command refused because another command is running still saves its choice of review', async t => {
+  const { azure, url } = twoPullRequests();
+  let hold, release;
+  const f = await fixture(t, { azure, async during({ role }) { if (/comment-plan$/.test(role) && hold) await hold; } });
+  const a = reviewId(await f.command('pr-review', url(123)));
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  const b = reviewId(await f.command('pr-review', url(456)));
+  // A preview of B is being planned, so the conversation is busy.
+  hold = new Promise(resolve => { release = resolve; });
+  const planned = f.command('pr-comment', b);
+  await f.waitFor(notices => notices.some(n => new RegExp(`\\] STARTED /pr-comment\\. [^\\n]*It acts on review ${b} `).test(n.text)));
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${a} --publish` }, delivery: 'steer' }), /already running/);
+  // The person named A: it is the current review, in this process and on disk, although nothing ran.
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${a} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`));
+  assert.ok((await savedReview(f, a)).usedAt > (await savedReview(f, b)).completedAt, 'The choice of A is saved.');
+  assert.equal(f.azure.callsTo('createThread').length, 0, 'Nothing was posted.');
+  release();
+  assert.match(await planned, new RegExp(`\\] PREVIEW; source review=${b}\\n`));
+  // The preview of B arrived last, so B is current now.
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${b} \\(/pr-review\\) of PR #456 [^\\n]*; current\\n`));
+});
+
+test('the review whose preview arrives last is the current one, as its next steps say, also for an automatic preview', async t => {
+  const { azure, url, posted } = twoPullRequests();
+  let hold, release;
+  const f = await fixture(t, { azure, async during({ role }) { if (/comment-plan$/.test(role) && hold) await hold; } });
+  const older = reviewId(await f.command('pr-review', url(123)));
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  // The second review's automatic preview is still being planned when the person looks at the first one.
+  hold = new Promise(resolve => { release = resolve; });
+  const receipt = await f.command('pr-review', `${url(456)} --preview`);
+  const newer = reviewId(receipt);
+  await f.waitFor(notices => notices.some(n => /\] STARTED \/pr-comment \(automatic preview/.test(n.text)));
+  assert.match(await f.command('pr-comment', `${older} --show`), new RegExp(`^\\[AZPR\\] Saved preview of review ${older}`));
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${older} [^\\n]*; current\\n`));
+  release();
+  const step = await commentStep(f, receipt);
+  // Its receipt says no ID is needed while that review is the current one, so it is.
+  assert.match(step.receipt, new RegExp(`\\nNext \\(no review ID is needed while ${newer} is this conversation's current review\\):\\n`));
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${newer} \\(/pr-review\\) of PR #456 [^\\n]*; current\\n`));
+  assert.match((await savedReview(f, newer)).usedAt, /^\d{4}-/);
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure });
+  assert.match(await g.command('pr-comment', '--publish'), new RegExp(`\\] POSTED; source review=${newer}\\nActed on review ${newer} \\(/pr-review\\) of PR #456 in proj/repo\\.`));
+  assert.ok(posted().length > 0 && posted().every(pr => pr === 456), `comments went to PR ${[...new Set(posted())].join(', ')}`);
+});
+
+test('the times that order reviews never run backwards: a review completed now outranks one saved with a later clock', async t => {
+  const { azure, url } = twoPullRequests();
+  const f = await fixture(t, { azure });
+  const earlier = reviewId(await f.command('pr-review', url(123)));
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  await f.cleanup();
+  // The saved review was used when the machine's clock was a day ahead of where it is now.
+  const file = join(f.stateDirectory, 'reviews', `${earlier}.json`), envelope = JSON.parse(await readFile(file, 'utf8'));
+  const ahead = new Date(Date.now() + 86400000).toISOString();
+  const body = JSON.stringify({ ...JSON.parse(envelope.body), usedAt: ahead });
+  await writeFile(file, JSON.stringify({ ...envelope, sha256: createHash('sha256').update(body).digest('hex'), body }));
+  const g = await fixture(t, { directory: f.directory, azure });
+  assert.match(await g.command('pr-comment', '--list'), new RegExp(`- review ${earlier} [^\\n]*; current\\n`), 'The edited record was loaded.');
+  // A review completed after that is still the later one, and so is a later use of the first.
+  const later = reviewId(await g.command('pr-review', url(456)));
+  assert.ok((await savedReview(g, later)).completedAt > ahead);
+  assert.match(await g.command('pr-comment', '--list'), new RegExp(`- review ${later} \\(/pr-review\\) of PR #456 [^\\n]*; current\\n`));
+  assert.match(await g.command('pr-comment', `${earlier} --show`), new RegExp(`^\\[AZPR\\] Saved preview of review ${earlier}`));
+  assert.ok((await savedReview(g, earlier)).usedAt > (await savedReview(g, later)).completedAt);
+  assert.match(await g.command('pr-comment', '--list'), new RegExp(`- review ${earlier} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`));
 });
 
 test('an adjusted review whose new preview failed is not planned and posted in one step', async t => {
@@ -997,8 +1221,12 @@ test('an adjustment that cannot be saved changes nothing and says so', async t =
   assert.doesNotMatch(failed, /Adjusted by a person:/);
   assert.equal(f.prompts().length, prompts, 'Nothing was planned.');
   // This process keeps the preview the person read, and so does the saved review.
-  assert.doesNotMatch(await f.command('pr-comment', `${review} --show`), /Adjusted by a person|Excluded from publication/);
+  const unsaved = await f.command('pr-comment', `${review} --show`);
+  assert.doesNotMatch(unsaved, /Adjusted by a person|Excluded from publication/);
+  // Looking at a review makes it the current one; when that cannot be saved either, the answer says so.
+  assert.match(unsaved, /\nThis review is the current one for now, but that choice could not be saved: after an OpenCode restart, name the review ID\.$/);
   await chmod(reviews, 0o700);
+  assert.doesNotMatch(await f.command('pr-comment', `${review} --show`), /could not be saved/);
   assert.equal(Object.hasOwn(await savedReview(f, review), 'adjustments'), false);
   // A restart finds the same state: the preview the person read, without the adjustment.
   await f.cleanup();
@@ -1155,13 +1383,48 @@ async function checkWith(t, settings) {
 test('command descriptions say what each command is for', async t => {
   const f = await fixture(t);
   const descriptions = Object.fromEntries([...f.commands].map(([name, command]) => [name, command.description]));
-  assert.match(descriptions['pr-check'], /readiness check; no model runs/);
-  assert.match(descriptions['pr-review'], /review with independent verification/);
-  assert.match(descriptions['pr-deep'], /review with the stronger models of models\.deep/);
+  // OpenCode's command list shows one line and cuts it (58 characters in a user's screenshot), so what
+  // a command is for and that --help has the rest must fit in less.
+  const lead = {
+    'pr-check': 'Azure DevOps PR access check, no model; --help',
+    'pr-review': 'Verified Azure DevOps PR review; --help for options',
+    'pr-deep': 'Azure DevOps PR review, stronger models; --help',
+    'pr-quick': 'Quick Azure DevOps PR review, not verified; --help',
+    'pr-stop': "Cancel this conversation's AZPR command; --help",
+    'pr-comment': 'Preview, adjust or publish review comments; --help',
+  };
+  for (const [name, text] of Object.entries(lead)) {
+    assert.ok(descriptions[name].startsWith(text), name);
+    assert.ok(text.length <= 52, `${name}: ${text.length} characters`);
+  }
+  assert.match(descriptions['pr-deep'], /models of models\.deep/);
   assert.match(descriptions['pr-quick'], /not independently verified/);
-  assert.match(descriptions['pr-stop'], /^Cancel this conversation's AZPR command/);
-  assert.match(descriptions['pr-comment'], /--publish posts comments/);
+  assert.match(descriptions['pr-comment'], /--publish posts \(safe to repeat\)/);
   for (const name of ['pr-check', 'pr-review', 'pr-deep', 'pr-quick', 'pr-stop']) assert.match(descriptions[name], /\(explicit invocation only\)$/, name);
+});
+
+test('--help answers every command at once with its usage; no run, model or Azure DevOps request', async t => {
+  const f = await fixture(t);
+  const calls = f.azure.state.calls.length;
+  const help = async (name, argument = '--help') => { await f.commands.get(name).execute({ sessionID: 'ordinary', prompt: { text: argument } }); return f.notices.at(-1).text; };
+  for (const name of ['pr-review', 'pr-deep', 'pr-quick']) {
+    const text = await help(name);
+    assert.match(text, new RegExp(`^\\[AZPR\\] /${name} <Azure DevOps PR URL> \\[--preview \\| --publish \\| --no-comment\\] \\[context\\]\\n`), name);
+    assert.match(text, new RegExp(`/${name} <URL> --no-comment  review only`));
+    assert.match(text, /No model or Azure DevOps request was made for this help\.$/);
+  }
+  // The help says what follows a review with the settings as they are.
+  assert.match(await help('pr-review'), /review, then what afterReview\.review says \(now: none\)/);
+  assert.match(await help('pr-quick', ' -h '), /not independently verified/);
+  assert.match(await help('pr-check'), /^\[AZPR\] \/pr-check <Azure DevOps PR URL>\n\nChecks that AZPR can read the PR/);
+  assert.match(await help('pr-stop'), /^\[AZPR\] \/pr-stop \[run-id\]/);
+  const comment = await help('pr-comment');
+  for (const line of ['/pr-comment --exclude F-1,R-2 ', '/pr-comment --severity F-3=low,R-4=medium ', '/pr-comment --exclude F-1 --severity F-3=low ', '/pr-comment --publish ', '/pr-comment --list ', '/pr-comment 1a2b3c4d --publish '])
+    assert.ok(comment.includes(`\n  ${line}`), line);
+  assert.match(comment, /Without a review ID the command acts on this conversation's current review/);
+  assert.ok(f.notices.every(notice => !/\] STARTED /.test(notice.text)), 'No run starts.');
+  assert.equal(f.prompts().length, 0);
+  assert.equal(f.azure.state.calls.length, calls);
 });
 
 test('/pr-check is deterministic and needs no model session', async t => {
@@ -1876,7 +2139,7 @@ test('--preview after the PR URL previews the comments of a COMPLETE review in a
   const step = await commentStep(f, receipt);
   assert.notEqual(step.run, review, 'The comment step is a run of its own.');
   assert.match(step.started, new RegExp(`STARTED /pr-comment \\(automatic preview after review ${review} completed; --preview\\)\\. Work continues .* Stop with /pr-stop ${step.run}\\.$`));
-  assert.match(step.receipt, new RegExp(`^\\[AZPR ${step.run}\\] PREVIEW; source review=${review}\\nStarted automatically after review ${review} completed \\(--preview\\)\\.\\n`));
+  assert.match(step.receipt, new RegExp(`^\\[AZPR ${step.run}\\] PREVIEW; source review=${review}\\nActed on [^\\n]+\\nStarted automatically after review ${review} completed \\(--preview\\)\\.\\n`));
   assert.match(step.receipt, /Inline comments prepared: 2/);
   assert.doesNotMatch(step.receipt, /held back/);
   assert.equal(f.azure.callsTo('createThread').length, 0, 'Nothing was posted.');
@@ -1889,6 +2152,28 @@ test('--preview after the PR URL previews the comments of a COMPLETE review in a
   assert.equal(f.azure.state.threads.length, 3);
 });
 
+test('by default a COMPLETE review is followed by a comment preview, which posts nothing; --no-comment reviews only', async t => {
+  // Settings that do not name afterReview, as /pr-setup writes them.
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { delete s.afterReview; } });
+  assert.match(await f.command('pr-check'), /\| Automatic comments \| ok \| afterReview: review preview, deep preview, quick preview\. A flag right after the PR URL/);
+  const receipt = await f.command();
+  const review = reviewId(receipt);
+  assert.match(f.notices.find(n => n.text.startsWith(`[AZPR ${review}] STARTED`)).text, /After a COMPLETE review it previews the comments automatically \(afterReview\.review: preview\); nothing is posted\./);
+  assert.match(receipt, /## PR comments\n\n\*\*Automatic preview\*\* \(`afterReview\.review: preview`\)/);
+  const step = await commentStep(f, receipt);
+  assert.match(step.receipt, new RegExp(`\\] PREVIEW; source review=${review}\\nActed on [^\\n]+\\nStarted automatically after review ${review} completed \\(afterReview\\.review: preview\\)\\.\\n`));
+  assert.match(step.receipt, /\nNext \(no review ID is needed while/);
+  assert.equal(f.azure.callsTo('createThread').length, 0, 'A preview posts nothing.');
+  // The preview is the saved one: publishing it needs neither an ID nor another planning run.
+  const prompts = f.prompts().length;
+  assert.match(await f.command('pr-comment', '--publish'), new RegExp(`\\] POSTED; source review=${review}\\n`));
+  assert.equal(f.prompts().length, prompts);
+  // --no-comment keeps a review a review.
+  const g = await fixture(t, { files: ['/src/Main.java'], settings: s => { delete s.afterReview; } });
+  assert.match(await g.command('pr-review', `${g.azure.prUrl()} --no-comment`), /Automatic comments are off for this review \(`--no-comment`\)/);
+  await noCommentStep(g);
+});
+
 test('afterReview publish posts after a COMPLETE review and reads the comments back; a flag overrides the setting for one run', async t => {
   const f = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
   const receipt = await f.command();
@@ -1898,7 +2183,7 @@ test('afterReview publish posts after a COMPLETE review and reads the comments b
   assert.match(receipt, /\*\*Automatic publication\*\* \(`afterReview\.review: publish`\)/);
   const step = await commentStep(f, receipt);
   assert.match(step.started, /STARTED \/pr-comment \(automatic publication after review [a-f0-9]{8} completed; afterReview\.review: publish\)/);
-  assert.match(step.receipt, /\] POSTED; source review=[a-f0-9]{8}\nStarted automatically after review [a-f0-9]{8} completed \(afterReview\.review: publish\)\.\n/);
+  assert.match(step.receipt, /\] POSTED; source review=[a-f0-9]{8}\nActed on [^\n]+\nStarted automatically after review [a-f0-9]{8} completed \(afterReview\.review: publish\)\.\n/);
   assert.match(step.receipt, /Publication \(VERIFIED=3\)/);
   assert.equal(f.azure.state.threads.length, 3);
   assert.match(await f.command('pr-comment', `${review} --publish`), /ALREADY_PRESENT/, 'Publishing again is safe.');
@@ -1909,7 +2194,7 @@ test('afterReview publish posts after a COMPLETE review and reads the comments b
   await noCommentStep(f, 'other');
   const g = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
   const preview = await commentStep(g, await g.command('pr-review', `${g.azure.prUrl()} --preview`));
-  assert.match(preview.receipt, /\] PREVIEW; source review=[a-f0-9]{8}\nStarted automatically after review [a-f0-9]{8} completed \(--preview\)\.\n/);
+  assert.match(preview.receipt, /\] PREVIEW; source review=[a-f0-9]{8}\nActed on [^\n]+\nStarted automatically after review [a-f0-9]{8} completed \(--preview\)\.\n/);
   assert.equal(g.azure.callsTo('createThread').length, 0);
   // A setting of none gives the receipt no automatic line and nothing follows.
   const h = await fixture(t);
@@ -1993,7 +2278,7 @@ test('automatic publication posts ordinary links and holds back only the comment
     const f = await fixture(t, { answer: body(text, 'F-1') });
     const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
     const step = await commentStep(f, receipt);
-    assert.match(step.receipt, new RegExp(`\\] POSTED; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back 1 item\\(s\\) for a person: the comment for F-1 \\(/src/Main\\.java:1\\) contains ${kind}\\. They are not published; after reading the preview, post them with /pr-comment ${reviewId(receipt)} --publish\\n`), text);
+    assert.match(step.receipt, new RegExp(`\\] POSTED; source review=${reviewId(receipt)}\\nActed on [^\\n]+\\nStarted automatically [^\\n]+\\nAutomatic publication held back 1 item\\(s\\) for a person: the comment for F-1 \\(/src/Main\\.java:1\\) contains ${kind}\\. They are not published; after reading the preview, post them with /pr-comment ${reviewId(receipt)} --publish\\n`), text);
     assert.equal(f.azure.state.threads.length, 2, `${text}: the summary and R-1 are posted, F-1 waits.`);
     const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(step.receipt)[1], 'result.json'), 'utf8'));
     assert.equal(result.automatic.heldBack.length, 1);
@@ -2006,7 +2291,7 @@ test('automatic publication posts ordinary links and holds back only the comment
   // When every item is held, nothing is posted.
   const g = await fixture(t, { answer: body('![x](y.png)') });
   const all = await g.command('pr-review', `${g.azure.prUrl()} --publish`);
-  assert.match((await commentStep(g, all)).receipt, new RegExp(`\\] PREVIEW; source review=${reviewId(all)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back every item: the PR summary contains an image; the comment for F-1 \\(/src/Main\\.java:1\\) contains an image; the comment for R-1 \\(/src/Main\\.java:1\\) contains an image\\. Nothing was posted; after reading the preview, post it with /pr-comment ${reviewId(all)} --publish\\n`));
+  assert.match((await commentStep(g, all)).receipt, new RegExp(`\\] PREVIEW; source review=${reviewId(all)}\\nActed on [^\\n]+\\nStarted automatically [^\\n]+\\nAutomatic publication held back every item: the PR summary contains an image; the comment for F-1 \\(/src/Main\\.java:1\\) contains an image; the comment for R-1 \\(/src/Main\\.java:1\\) contains an image\\. Nothing was posted; after reading the preview, post it with /pr-comment ${reviewId(all)} --publish\\n`));
   assert.equal(g.azure.callsTo('createThread').length, 0);
 });
 
@@ -2020,7 +2305,7 @@ test('automatic publication that finds the PR changed posts nothing and does not
   } });
   const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
   const step = await commentStep(f, receipt);
-  assert.match(step.receipt, new RegExp(`\\] STALE; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication held back 1 item\\(s\\) for a person: the comment for F-1 \\(/src/Main\\.java:1\\) contains an image\\. They are not published\\.\\nReason: The PR source commit changed after the review`));
+  assert.match(step.receipt, new RegExp(`\\] STALE; source review=${reviewId(receipt)}\\nActed on [^\\n]+\\nStarted automatically [^\\n]+\\nAutomatic publication held back 1 item\\(s\\) for a person: the comment for F-1 \\(/src/Main\\.java:1\\) contains an image\\. They are not published\\.\\nReason: The PR source commit changed after the review`));
   assert.equal(f.azure.callsTo('createThread').length, 0);
 });
 
@@ -2036,7 +2321,7 @@ test('a repeated automatic publication of an unchanged PR has nothing new to pos
   discussed = f.azure.state.threads.find(thread => thread.threadContext).id;
   const receipt = await f.command('pr-review', `${f.azure.prUrl()} --publish`);
   const again = await commentStep(f, receipt);
-  assert.match(again.receipt, new RegExp(`\\] NOTHING_TO_POST; source review=${reviewId(receipt)}\\nStarted automatically [^\\n]+\\nAutomatic publication found nothing new to post: every finding is already discussed on the PR \\(thread ${discussed}\\)\\. The plan is saved\\.\\n`));
+  assert.match(again.receipt, new RegExp(`\\] NOTHING_TO_POST; source review=${reviewId(receipt)}\\nActed on [^\\n]+\\nStarted automatically [^\\n]+\\nAutomatic publication found nothing new to post: every finding is already discussed on the PR \\(thread ${discussed}\\)\\. The plan is saved\\.\\n`));
   assert.doesNotMatch(again.receipt, /post it with \/pr-comment/, 'Nothing new needs a follow-up command.');
   assert.equal(f.azure.state.threads.length, 3, 'No second summary was posted.');
   // The person who reads the preview decides: a typed --publish posts the summary.
@@ -2102,7 +2387,7 @@ test('/pr-stop cancels an automatic comment step like any run; no preview is kep
 test('flags belong to the review commands: /pr-check refuses them and unknown options start nothing', async t => {
   const f = await fixture(t, { settings: s => { s.afterReview = { quick: 'preview', review: 'publish' }; } });
   const check = await f.command('pr-check');
-  assert.match(check, /\| Automatic comments \| ok \| afterReview: review publish, deep none, quick preview\. After a COMPLETE \/pr-review, AZPR posts its comments as the PAT owner; a comment a safeguard holds back waits for a person\. A flag right after the PR URL \(--preview, --publish, --no-comment\) sets it for one run\. \|/);
+  assert.match(check, /\| Automatic comments \| ok \| afterReview: review publish, deep preview, quick preview\. After a COMPLETE \/pr-review, AZPR posts its comments as the PAT owner; a comment a safeguard holds back waits for a person\. A flag right after the PR URL \(--preview, --publish, --no-comment\) sets it for one run\. \|/);
   assert.match(check, /\] READY/);
   const g = await fixture(t);
   assert.match(await g.command('pr-check'), /\| Automatic comments \| ok \| afterReview: review none, deep none, quick none \(no automatic comments\)\. A flag right after the PR URL/);

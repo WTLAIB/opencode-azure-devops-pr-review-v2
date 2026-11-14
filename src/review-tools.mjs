@@ -423,7 +423,12 @@ async function reviewTool(name, input, { azure, run, snapshot }) {
     const include = scopeFilter(args.path);
     const { sha, label } = resolveVersion(args.version, snapshot);
     const archive = await repositoryArchive(run, azure, snapshot, sha);
-    if (archive.unavailable) return { text: `Content search is unavailable for this repository: ${archive.unavailable}. Find files with azpr_find_files and read them with azpr_read_file.` };
+    if (archive.unavailable) {
+      // A limit of the whole run that only the model is told here: the runtime states it in the report and receipt.
+      // The byte count is what was read before stopping, not the archive's size, so it is left out there.
+      (run.searchUnavailable ??= new Map()).set(archive.tooLarge ? 'the repository archive is larger than the azure.archiveMegabytes setting allows' : archive.unavailable, archive.tooLarge === true);
+      return { text: `Content search is unavailable for this repository: ${archive.unavailable}. Find files with azpr_find_files and read them with azpr_read_file.` };
+    }
     return { text: renderSearch(searchArchive(archive, { query, caseSensitive: args.caseSensitive === true, wholeWord: args.wholeWord === true, include }), { query, label, version: sha, archive }) };
   }
   if (name === REVIEW_TOOLS.findFiles) {

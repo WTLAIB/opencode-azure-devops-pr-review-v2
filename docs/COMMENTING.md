@@ -4,21 +4,39 @@
 plans the comments, then the runtime posts the saved plan itself.
 
 ```text
-/pr-comment                     preview the latest review of this conversation
-/pr-comment <review-id>         preview a specific review
+/pr-comment                     preview the current review of this conversation
 /pr-comment --publish           post the saved preview (plan first if none)
+/pr-comment --list              the reviews saved for this conversation, with their IDs
+/pr-comment <review-id>         preview a specific review
 /pr-comment <review-id> --publish
+/pr-comment --help              every option, with examples
 ```
 
+No command needs a review ID. Without one it acts on the conversation's
+**current review**: the one that was completed or used by a `/pr-comment`
+command there last, which is the one you looked at last. Naming a review by
+its ID makes it the current one, also with `--show` or with adjustments that
+change nothing, and a comment run makes its review the current one when its
+receipt arrives, the automatic preview after a review included. The choice is
+saved with the review when it is made, also when commands overlap, so it holds
+after a restart; if it cannot be saved, the answer says so. In one of a review's own sessions (for
+example the last one, which shows the report) a command without an ID means
+that review. So that a command without an ID can be checked at a glance, the
+`STARTED` notice and the receipt of every comment run name the review and its
+PR (`Acted on review 1a2b3c4d (/pr-review) of PR #123 in
+project/repository`), and a preview ends with the commands for the next step,
+written with that review's finding IDs. `--list` and `--help` use no model
+and make no Azure DevOps request.
+
 Only reviews started in the same conversation are accepted; commands from one
-of the review's own sessions (for example the last one, which shows the
-report) route to that conversation. Reviews are persisted, so this also works
-after an OpenCode restart. A preview is refreshed on every `/pr-comment`
-without `--publish`; `--publish` reuses an existing preview exactly.
+of the review's own sessions route to that conversation. Reviews are
+persisted, so this also works after an OpenCode restart. A preview is
+refreshed on every `/pr-comment` without `--publish`; `--publish` reuses an
+existing preview exactly.
 
 ## Automatic comments after a review
 
-`afterReview` (per mode: `none`, the default, `preview` or `publish`) or a
+`afterReview` (per mode: `preview`, the default, `none` or `publish`) or a
 flag right after the PR URL of a review command (`--preview`, `--publish`,
 `--no-comment`, which wins for that run) starts the same planning and
 publication after a review:
@@ -233,15 +251,19 @@ After reading a preview, a person can leave findings out of publication or
 change their severity, and plan the preview again:
 
 ```text
-/pr-comment <review-id> --exclude F-1,R-2
-/pr-comment <review-id> --severity F-3=low,Q-1001=medium
-/pr-comment <review-id> --exclude F-1 --severity F-3=low
-/pr-comment <review-id> --reset
-/pr-comment [review-id] --show
+/pr-comment --exclude F-1,R-2                     leave F-1 and R-2 out
+/pr-comment --severity F-3=low,Q-1001=medium      publish F-3 as low and Q-1001 as medium
+/pr-comment --exclude F-1,R-2 --severity F-3=low  both in one command
+/pr-comment --reset                               undo every adjustment
+/pr-comment --show                                the saved preview again, without a model
+/pr-comment <review-id> --exclude F-1             the same for a review named by its ID
 ```
 
-- The review ID is required: every review has its own F-1. IDs are those of
-  the review report (`f1` reads as F-1). Only findings the review can publish
+- The review ID is optional, as for every `/pr-comment` command: without one
+  the adjustment applies to the conversation's current review, and the
+  receipt names it. Every review has its own F-1, so a finding ID that the
+  current review does not have refuses the command and names that review.
+  IDs are those of the review report and the preview (`f1` reads as F-1). Only findings the review can publish
   are accepted: confirmed and verifier-added ones of a review or deep review,
   reported ones of a quick review. A merged duplicate names the finding it was
   merged into; any other ID refuses the whole command and changes nothing.
@@ -281,7 +303,7 @@ change their severity, and plan the preview again:
   `NOTHING_TO_POST`, not the summary of a review without defects.
   `--exclude none` brings the findings back.
 - Adjustments are saved with the review, with the time of each change, survive
-  a restart and apply to a later `/pr-comment <review-id>` until `--reset`. The
+  a restart and apply to a later `/pr-comment` until `--reset`. The
   preview and the receipt list them; nothing posted to the PR mentions them.
 - A review that was adjusted, also one reset since, is posted only from a
   preview planned after its latest adjustment: every adjustment discards the

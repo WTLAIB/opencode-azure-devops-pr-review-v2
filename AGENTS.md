@@ -100,7 +100,8 @@ settings, backups and failure records. Never upload `.local/`.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
-  STARTED notice and a receipt. Every private prompt is the
+  STARTED notice and a receipt. `afterReview` defaults to `preview`, which
+  posts nothing; publication is never a default. Every private prompt is the
   exact runtime-pending text with a fresh nonce; private agents cannot be
   mentioned, delegated, compacted or used for auxiliary requests.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
@@ -111,7 +112,17 @@ settings, backups and failure records. Never upload `.local/`.
   patch, delegation, web, question, session/model control and CodeMode execute
   stay denied. Allowed shell has real host authority; never call it a sandbox.
 - `/pr-comment` and `/pr-stop` act only within the caller's conversation (or a
-  session of that review).
+  session of that review). A `/pr-comment` command without a review ID acts on
+  the conversation's current review (completed or used there last; in a
+  review's own session, that review), and its STARTED notice and receipt name
+  the review and its PR, so a wrong pick shows before and after it acts. Save
+  the choice when it is made, also for a command that answers at once
+  (`--show`, unchanged adjustments): a choice kept only in memory lets a
+  command after a restart publish to another PR. Every write of a review's
+  record goes through its queue in `store.mjs`, and a save reads the review
+  when it starts, so overlapping commands never leave an older choice on disk.
+  A command that starts a run registers the run before its first await, so it
+  never waits for that save.
 
 **Publication is idempotent.**
 - Recheck the PR (active, unchanged head) before writing; skip existing markers;
@@ -132,7 +143,7 @@ settings, backups and failure records. Never upload `.local/`.
   behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them.
-- A person's adjustments (`/pr-comment <review-id> --exclude`, `--severity`,
+- A person's adjustments (`/pr-comment [review-id] --exclude`, `--severity`,
   `--reset`) change only the findings handed to comment planning, never the
   review record or a prompt file; the planner input carries `adjustments` only
   when some exist, so unadjusted reviews plan exactly as before. A review

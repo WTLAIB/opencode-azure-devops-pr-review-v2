@@ -31,15 +31,15 @@
   "progressNotices": true,
   "deletePrivateSessions": true,
   "afterReview": {
-    "quick": "none",
-    "review": "none",
-    "deep": "none"
+    "quick": "preview",
+    "review": "preview",
+    "deep": "preview"
   },
   "azure": {
     "organization": "",
     "pat": "",
     "patFile": "",
-    "concurrency": 3,
+    "concurrency": 6,
     "callTimeoutSeconds": 120,
     "archiveMegabytes": 100,
     "proxy": "",
@@ -49,7 +49,7 @@
   "workflow": {
     "shardFiles": 25,
     "shardFindings": 15,
-    "parallelSessions": 4,
+    "parallelSessions": 8,
     "repairAttempts": 2,
     "stageRetries": 1,
     "stageIdleSeconds": 600

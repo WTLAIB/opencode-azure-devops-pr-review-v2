@@ -70,6 +70,8 @@ settings.debug = { enabled: true, directory: join(fixture, 'debug') };
 // AZPR_TUI_HOLD_SECONDS under 60).
 settings.workflow = { ...settings.workflow, stageIdleSeconds: 60 };
 settings.outputLanguage = 'zh-TW';
+// These steps drive each comment step themselves; the default (a preview after every review) is covered by the runtime tests.
+settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
 settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings, null, 2));
 const install = args => {
@@ -571,14 +573,14 @@ try {
   const autoReview = /\[AZPR ([a-f0-9]{8})\]/.exec(autoReceipt)[1];
   const autoPreview = await commentStep(autoOrigin, autoReceipt);
   assert.match(autoPreview.started ?? '', new RegExp(`STARTED /pr-comment \\(automatic preview after review ${autoReview} completed; --preview\\)`), JSON.stringify(autoPreview));
-  assert.match(autoPreview.receipt, new RegExp(`\\] PREVIEW; source review=${autoReview}\\nStarted automatically after review ${autoReview} completed \\(--preview\\)\\.\\n`), autoPreview.receipt);
+  assert.match(autoPreview.receipt, new RegExp(`\\] PREVIEW; source review=${autoReview}\\nActed on [^\\n]+\\nStarted automatically after review ${autoReview} completed \\(--preview\\)\\.\\n`), autoPreview.receipt);
   const quickPublishOrigin = await newOrigin('Automatic quick publication');
   await api(`/api/session/${quickPublishOrigin}/command`, { name: 'pr-quick', text: `${prUrl} --publish`, delivery: 'steer' });
   const quickPublishReceipt = await reviewReceipt(quickPublishOrigin, 'pr-quick');
   assert.match(quickPublishReceipt, /Verification hint: 1 high-severity finding\(s\)\. These findings are not independently verified; the automatic publication posts them with that disclosure/, quickPublishReceipt);
   const quickPublished = await commentStep(quickPublishOrigin, quickPublishReceipt);
   // Its markers are those of section 3: the summary is present and the deleted comment stays deleted.
-  assert.match(quickPublished.receipt ?? '', /\] POSTED; [^\n]+\nStarted automatically [^\n]+\(--publish\)\.\n(?!Automatic publication held back)/, JSON.stringify(quickPublished));
+  assert.match(quickPublished.receipt ?? '', /\] POSTED; [^\n]+\nActed on [^\n]+\nStarted automatically [^\n]+\(--publish\)\.\n(?!Automatic publication held back)/, JSON.stringify(quickPublished));
   assert.equal(azure.callsTo('createThread').length, writesBeforeAuto);
   commentImage = true;
   const imageOrigin = await newOrigin('Automatic publication with an image');
@@ -586,7 +588,7 @@ try {
   const imageReceipt = await reviewReceipt(imageOrigin, 'pr-review');
   const imaged = await commentStep(imageOrigin, imageReceipt);
   commentImage = false;
-  assert.match(imaged.receipt ?? '', /\] POSTED; [^\n]+\nStarted automatically [^\n]+\nAutomatic publication held back 1 item\(s\) for a person: the comment for F-1 \(\/src\/fixture\.js:2\) contains an image\. They are not published; after reading the preview, post them with \/pr-comment [a-f0-9]{8} --publish\n/, JSON.stringify(imaged));
+  assert.match(imaged.receipt ?? '', /\] POSTED; [^\n]+\nActed on [^\n]+\nStarted automatically [^\n]+\nAutomatic publication held back 1 item\(s\) for a person: the comment for F-1 \(\/src\/fixture\.js:2\) contains an image\. They are not published; after reading the preview, post them with \/pr-comment [a-f0-9]{8} --publish\n/, JSON.stringify(imaged));
   assert.match(imaged.receipt, /Publication \(VERIFIED=1\)/, imaged.receipt);
   assert.equal(azure.callsTo('createThread').length, writesBeforeAuto + 1, 'Only the summary was posted automatically.');
   const imageReview = /\[AZPR ([a-f0-9]{8})\]/.exec(imageReceipt)[1];
@@ -716,7 +718,7 @@ try {
   const settingReceipt = await reviewReceipt(settingOrigin, 'pr-review');
   assert.match(settingReceipt, /\*\*自動發布\*\*（`afterReview\.review: publish`）/, settingReceipt);
   const settingPublished = await commentStep(settingOrigin, settingReceipt);
-  assert.match(settingPublished.receipt ?? '', /\] POSTED; source review=[a-f0-9]{8}\nStarted automatically after review [a-f0-9]{8} completed \(afterReview\.review: publish\)\.\n/, JSON.stringify(settingPublished));
+  assert.match(settingPublished.receipt ?? '', /\] POSTED; source review=[a-f0-9]{8}\nActed on [^\n]+\nStarted automatically after review [a-f0-9]{8} completed \(afterReview\.review: publish\)\.\n/, JSON.stringify(settingPublished));
   assert.match(settingPublished.receipt, /Publication \(VERIFIED=2\)/, settingPublished.receipt);
   const settingThreads = await threads();
   assert.equal(settingThreads.length, 2, 'One summary and one inline comment.');
@@ -729,7 +731,7 @@ try {
   await api(`/api/session/${repeatOrigin}/command`, { name: 'pr-review', text: prUrl, delivery: 'steer' });
   const repeated = await commentStep(repeatOrigin, await reviewReceipt(repeatOrigin, 'pr-review'));
   commentDiscussed = false;
-  assert.match(repeated.receipt ?? '', /\] NOTHING_TO_POST; source review=[a-f0-9]{8}\nStarted automatically [^\n]+\nAutomatic publication found nothing new to post: every finding is already discussed on the PR \(thread \d+\)\. The plan is saved\.\n/, JSON.stringify(repeated));
+  assert.match(repeated.receipt ?? '', /\] NOTHING_TO_POST; source review=[a-f0-9]{8}\nActed on [^\n]+\nStarted automatically [^\n]+\nAutomatic publication found nothing new to post: every finding is already discussed on the PR \(thread \d+\)\. The plan is saved\.\n/, JSON.stringify(repeated));
   assert.equal((await threads()).length, 2, 'No second summary.');
   assert.equal(azure.callsTo('createThread').length - writesBeforeSetting, 2);
   // Restore the settings; the next restart loads them.

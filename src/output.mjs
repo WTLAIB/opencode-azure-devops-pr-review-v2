@@ -219,6 +219,16 @@ function normalizeFinding(value, warnings) {
   return row;
 }
 
+/**
+ * A suggestion that is only a placeholder ("N/A", "No correction needed.", "-"). A
+ * confirmation states its correction, so one with such a suggestion contradicts
+ * itself. This is a check of form on a few fixed spellings: the runtime does not
+ * judge whether the defect is real, it asks the verifier which of the two it means.
+ */
+const NO_CORRECTION = /^[\s\p{P}\p{S}]*(?:n[\s.\/]*a|none|nothing|not applicable|no (?:changes?|corrections?|fix(?:es)?|action)(?: (?:is|are))? (?:needed|required|necessary)|無|无|不適用|不适用|(?:不需要|無需|无需|不需)(?:修正|修改))?[\s\p{P}\p{S}]*$/iu;
+// Placeholders are short; the bound also keeps the match linear on long text.
+export const givesNoCorrection = suggestion => text(suggestion) && suggestion.trim().length <= 60 && NO_CORRECTION.test(suggestion.trim());
+
 /** Problems that make a finding unusable, phrased for a repair request. */
 function findingProblems(row, { requireLocation }) {
   const missing = FINDING_FIELDS.filter(key => key !== 'id' && (key !== 'location' || requireLocation) && !text(row[key]));
@@ -407,6 +417,10 @@ export function evaluateFinal(answerText, { originals, allIds = originals.map(f 
       row.verifiedFinding.id = id;
       const problems = findingProblems(row.verifiedFinding, { requireLocation: true });
       if (problems.length) { issues.push(`${id}: the confirmed finding is ${problems.join('; ')}.`); repairIds.add(id); invalid.confirm.add(id); continue; }
+      if (givesNoCorrection(row.verifiedFinding.suggestion)) {
+        issues.push(`${id}: confirmed, but its suggestion gives no correction (${JSON.stringify(row.verifiedFinding.suggestion.slice(0, 40))}). If the defect stands, state the correction; if your check refutes the claim, list ${id} under rejected with the refutation.`);
+        repairIds.add(id); invalid.confirm.add(id); continue;
+      }
       const move = fileMove(candidates.get(id), row);
       if (move) moves.set(id, move);
       if (move && !move.acknowledged) {
@@ -525,6 +539,7 @@ function finishFinal(state, originals, invalid = { confirm: new Set(), merge: ne
     }
     if (row.status === 'CONFIRMED' && invalid.confirm.has(original.id)) {
       const absent = FINDING_FIELDS.filter(key => !text(row.verifiedFinding?.[key]));
+      if (!absent.length && givesNoCorrection(row.verifiedFinding?.suggestion)) absent.push('a correction in suggestion');
       dispositions.push({ id: original.id, status: 'NEEDS_INFO', reason: `${asText(row.reason)} [Runtime: the confirmation lacks ${absent.join(', ') || 'valid fields'}, so it is not eligible for comments.]`.trim(),
         partialFinding: row.verifiedFinding });
       continue;
@@ -714,15 +729,16 @@ export function normalizeFindingId(value) {
   return match ? `${match[1].toUpperCase()}-${match[2]}` : null;
 }
 
-const COMMENT_USAGE = '[AZPR] Usage: /pr-comment [review-id] [--publish | --show], or /pr-comment <review-id> with --exclude <IDs|none> and/or --severity <ID=high|medium|low,…|none>, or --reset. Omit the ID for this conversation\'s latest completed review.';
-const COMMENT_OPTIONS = ['publish', 'show', 'exclude', 'severity', 'reset'];
+const COMMENT_USAGE = '[AZPR] Usage: /pr-comment [review-id] [--publish | --show], or with --exclude <IDs|none> and/or --severity <ID=high|medium|low,…|none>, or --reset; /pr-comment --list shows the saved reviews. Without an ID the command acts on this conversation\'s current review. /pr-comment --help has examples.';
+const COMMENT_OPTIONS = ['publish', 'show', 'list', 'exclude', 'severity', 'reset'];
 
 /**
  * /pr-comment's arguments: an optional review ID, then at most one of
- * --publish and --show, or adjustments of a named review's findings:
+ * --publish and --show, or adjustments of the review's findings:
  * --exclude and --severity (each at most once, each a complete list; `none`
  * for an empty one) or --reset alone. List items are separated by commas or
- * spaces. Anything else is refused.
+ * spaces. --list stands alone and names no review. Anything else is refused.
+ * Without an ID the runtime picks the conversation's current review.
  */
 export function parseCommentRequest(raw) {
   const args = String(raw ?? '').trim().split(/\s+/).filter(Boolean);
@@ -743,12 +759,15 @@ export function parseCommentRequest(raw) {
   }
   const named = [...values.keys()];
   const request = { ...(reviewId ? { reviewId } : {}), publish: values.has('publish'), show: values.has('show') };
+  if (values.has('list')) {
+    if (named.length > 1 || reviewId) throw new Error(COMMENT_USAGE);
+    return { list: true };
+  }
   if (!named.some(name => ['exclude', 'severity', 'reset'].includes(name))) {
     if (named.length > 1) throw new Error(COMMENT_USAGE);
     return request;
   }
   if (named.some(name => ['publish', 'show'].includes(name)) || (values.has('reset') && named.length > 1)) throw new Error(COMMENT_USAGE);
-  if (!reviewId) throw new Error('[AZPR] Name the review whose findings you adjust: /pr-comment <review-id> --exclude … (the ID is in its receipt).');
   const items = name => values.get(name).join(' ').split(/[\s,]+/).filter(Boolean);
   const adjust = values.has('reset') ? { reset: true } : {};
   if (values.has('exclude')) {

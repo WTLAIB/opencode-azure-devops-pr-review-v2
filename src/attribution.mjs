@@ -1,4 +1,4 @@
-import { ROLES } from './config.mjs';
+import { ROLES, MAX_ARCHIVE_MEGABYTES } from './config.mjs';
 // Deterministic attribution from invoked reviewer stages, not model-authored claims.
 const vocabulary = {
   en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check', 'Quick review', 'Severity rating'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
@@ -39,11 +39,30 @@ export function renderCommentActions(id, language, after) {
       `**自動發布**（${source}）：AZPR 接著以另一道指令規劃留言，並以 PAT 擁有者的身分發布，另送收據。含 @提及、圖片、嵌入內容、隱藏文字或指令碼連結的留言會留在預覽等人確認，其他照常發布；每個發現在 PR 上都已有討論時，不會再發布。沒有可留言的發現時不會留言。`,
       `**自动发布**（${source}）：AZPR 接着以另一条命令规划留言，并以 PAT 拥有者的身份发布，另送回执。含 @提及、图片、嵌入内容、隐藏文字或脚本链接的留言会留在预览等人确认，其他照常发布；每个发现在 PR 上都已有讨论时，不会再发布。没有可留言的发现时不会留言。`)
       : after ? pick(language, `Automatic comments are off for this review (${source}).`, `這份審查不自動留言（${source}）。`, `这份审查不自动留言（${source}）。`) : '';
-  const [heading, publish, preview, omit, retention] = pick(language,
-    ['PR comments', 'Prepare and publish comments', 'Preview comments only', 'You can omit the ID: `/pr-comment --publish` selects the latest completed review in the original conversation, or this review in its report session.', 'Reviews and previews are saved privately (latest 20) and survive an OpenCode restart. Publishing skips comments that already exist on the PR, so it is safe to run again.'],
-    ['PR 留言', '直接準備並發布留言', '只看留言預覽', '也可省略 ID：`/pr-comment --publish` 會選原對話最近完成的 review；在本報告對話中會選本份報告。', 'Review 與預覽私下保存（最近 20 份），重啟 OpenCode 後仍可使用。發布時會跳過 PR 上已存在的留言，可以安全地重跑。'],
-    ['PR 留言', '直接准备并发布留言', '只看留言预览', '也可省略 ID：`/pr-comment --publish` 会选原对话最近完成的 review；在本报告对话中会选本份报告。', 'Review 与预览私下保存（最近 20 份），重启 OpenCode 后仍可使用。发布时会跳过 PR 上已存在的留言，可以安全地重跑。']);
-  return `## ${heading}\n\n${automatic ? `${automatic}\n\n` : ''}${publish}:\n\n\`\`\`text\n/pr-comment ${id} --publish\n\`\`\`\n\n${preview}: \`/pr-comment ${id}\`\n\n${omit}\n\n${retention}`;
+  // The short commands come first: a person should not have to find or type the review ID. The
+  // ID form stays, since a short command copied from an old receipt acts on the current review.
+  const [heading, preview, adjust, publish, current, retention] = pick(language,
+    ['PR comments', 'Preview the comments (a model runs; nothing is posted)', 'Leave findings out or change a level, with the IDs of the report, then read the new preview', 'Post the saved preview as the PAT owner',
+      `These commands need no review ID: they act on this conversation's current review, which is this one until another review completes or is used here. To act on this review later, add its ID, for example \`/pr-comment ${id} --publish\`; \`/pr-comment --list\` shows the saved reviews and \`/pr-comment --help\` every option.`,
+      'Reviews and previews are saved privately (latest 20) and survive an OpenCode restart. Publishing skips comments that already exist on the PR, so it is safe to run again.'],
+    ['PR 留言', '預覽留言（會用到模型，不會發布）', '排除發現或改嚴重度（用報告裡的 ID），再看新的預覽', '以 PAT 擁有者的身分發布已保存的預覽',
+      `這些指令不需要 review ID：會作用在這個對話目前的 review，也就是這一份，直到這裡有另一份 review 完成或被使用。之後要指定這一份時加上 ID，例如 \`/pr-comment ${id} --publish\`；\`/pr-comment --list\` 列出保存的 review，\`/pr-comment --help\` 列出所有選項。`,
+      'Review 與預覽私下保存（最近 20 份），重啟 OpenCode 後仍可使用。發布時會跳過 PR 上已存在的留言，可以安全地重跑。'],
+    ['PR 留言', '预览留言（会用到模型，不会发布）', '排除发现或改严重度（用报告里的 ID），再看新的预览', '以 PAT 拥有者的身份发布已保存的预览',
+      `这些命令不需要 review ID：会作用在这个对话当前的 review，也就是这一份，直到这里有另一份 review 完成或被使用。之后要指定这一份时加上 ID，例如 \`/pr-comment ${id} --publish\`；\`/pr-comment --list\` 列出保存的 review，\`/pr-comment --help\` 列出所有选项。`,
+      'Review 与预览私下保存（最近 20 份），重启 OpenCode 后仍可使用。发布时会跳过 PR 上已存在的留言，可以安全地重跑。']);
+  return `## ${heading}\n\n${automatic ? `${automatic}\n\n` : ''}- ${preview}: \`/pr-comment\`\n- ${adjust}: \`/pr-comment --exclude F-1,R-2\`, \`/pr-comment --severity F-3=low\`\n- ${publish}: \`/pr-comment --publish\`\n\n${current}\n\n${retention}`;
+}
+
+/**
+ * Which review a comment command acted on, so a command without an ID is
+ * checked at a glance: the PR by its number and repository, which come from
+ * the URL the person typed. The PR's title is text from the PR and stays
+ * inside the report's data block, never in a notice line.
+ */
+export function describeReview(review) {
+  const snapshot = review?.snapshot ?? {};
+  return `review ${review.id} (/pr-${review.profile}) of PR #${snapshot.prId ?? '?'}${snapshot.project && snapshot.repository ? ` in ${snapshot.project}/${snapshot.repository}` : ''}`;
 }
 
 /** Models per role, aggregated over shards and retries. */
@@ -271,7 +290,7 @@ export function renderReceipt(run, report, status, error, settings) {
   if (run.draft) body += run.mode === 'quick'
     ? '\nIncomplete draft notice: the quick review did not complete; its observations are unconfirmed and not input for PR comments.\n'
     : '\nIncomplete draft notice: initial observations are unconfirmed because verification did not complete; they are not input for PR comments.\n';
-  body += renderDiagnosticNotices(run);
+  body += renderDiagnosticNotices(run, settings);
   body += run.mode === 'check'
     ? '\nStatus: READY means AZPR can read the PR through the Azure DevOps REST API; it does not review or approve the PR.\n'
     : run.mode === 'comment'
@@ -300,7 +319,23 @@ export function renderReceipt(run, report, status, error, settings) {
   return body;
 }
 
-export function renderDiagnosticNotices(run) {
+/**
+ * Content search that could not run limits the whole review, and the tool told
+ * only the models. The runtime states it in the report and the receipt, so it
+ * does not depend on a model mentioning it. Empty when every search ran.
+ */
+export function searchLimitation(run, settings) {
+  const refused = run?.searchUnavailable;
+  if (!refused?.size) return '';
+  const megabytes = settings?.azure?.archiveMegabytes;
+  // Only an archive over the limit is something the setting changes.
+  const setting = ![...refused.values()].some(Boolean) || !megabytes ? ''
+    : megabytes < MAX_ARCHIVE_MEGABYTES ? ` azure.archiveMegabytes is ${megabytes}; it accepts up to ${MAX_ARCHIVE_MEGABYTES}.`
+      : ` azure.archiveMegabytes is at its maximum of ${MAX_ARCHIVE_MEGABYTES}.`;
+  return `Content search (azpr_search_code) was unavailable: ${[...refused.keys()].join('; ')}. Sessions could find and read files but not search file contents, so callers and other uses of the changed code may not have been checked.${setting}`;
+}
+
+export function renderDiagnosticNotices(run, settings) {
   const notices = [];
   const sum = key => run.stages.reduce((n, s) => n + (s[key] ?? 0), 0);
   const blocked = sum('blockedNativeToolCalls'), failures = sum('toolFailures'), timeouts = sum('toolTimeouts');
@@ -309,6 +344,8 @@ export function renderDiagnosticNotices(run) {
   if (timeouts) notices.push(`\nTool timeout notice: ${timeouts} Azure DevOps read(s) exceeded the per-call timeout after retries and were abandoned.\n`);
   const idle = run.stages.filter(stage => stage.failureClass === 'idle');
   if (idle.length) notices.push(`\nInactivity notice: the stage inactivity watchdog stopped ${idle.length} stage(s) (failure=idle) after ${idle[0].idleStop?.idleSeconds ?? 'workflow.stageIdleSeconds'} s without activity: ${idle.map(stage => `${stage.role}${stage.label ? ` [${stage.label}]` : ''} after ${stage.idleStop?.lastActivity ?? 'an unknown activity'}`).join('; ')}. The model stream, a tool or OpenCode stopped responding; a stopped stage runs again in a new session while workflow.stageRetries allows.\n`);
+  const search = searchLimitation(run, settings);
+  if (search) notices.push(`\nContent search notice: ${search}\n`);
   if (run.abortUnconfirmed) notices.push('\nCancellation warning: OpenCode did not confirm session settlement. Requests already sent may still be running or billed.\n');
   if (run.debug?.directory) notices.push(`\nPrivate debug directory: ${run.debug.directory}\n`);
   for (const warning of run.debug?.warnings ?? []) notices.push(`Debug warning: ${warning}\n`);

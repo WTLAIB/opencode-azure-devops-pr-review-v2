@@ -112,9 +112,10 @@ as well as the findings. Use `/pr-review` or `/pr-deep` when you want separate
 functional and risk reviewers followed by verification; `/pr-deep` runs the
 same review with the stronger models you set in `models.deep`, so its cost
 depends on those models. None of these commands
-posts to Azure DevOps by default. `afterReview` (per mode) or a flag after the
-PR URL can follow a COMPLETE review with a preview (`preview`, `--preview`) or
-with publication (`publish`, `--publish`); see
+posts to Azure DevOps by default: a COMPLETE review is followed by a comment
+preview, which uses a model and posts nothing. `afterReview` (per mode) or a
+flag after the PR URL changes that to nothing (`none`, `--no-comment`) or to
+publication (`publish`, `--publish`); see
 [automatic comments](COMMENTING.md#automatic-comments-after-a-review).
 
 **Preview uses a model.** `/pr-comment` reads live discussions and plans the
@@ -125,9 +126,12 @@ or spending limit. There is no built-in monetary cap; `runTimeoutSeconds` is
 `null` by default, and `/pr-stop <run-id>` cancels a run. See
 [debugging](DEBUGGING.md#diagnosis-order) for provider-reported token usage.
 
-After inspecting a preview, explicitly publish the named review:
+After inspecting a preview, explicitly publish it. The command acts on the
+conversation's current review, and its start notice and receipt name the
+review and its PR; a review ID before the option names another one:
 
 ```text
+/pr-comment --publish
 /pr-comment <review-id> --publish
 ```
 
@@ -144,7 +148,7 @@ a URL). Literal code is skipped where its reading is certain,
 except for mentions. Held items wait in the saved preview for a person; the
 others, ordinary web links included, are posted. A quick review's comments
 carry the disclosure that they were not independently verified; teams that
-want a person to read them first set `afterReview.quick` to `preview`.
+want a person to read them first leave `afterReview.quick` at `preview`.
 Automatic publication posts nothing for a review without findings to comment
 on, or when every finding is already discussed on the PR. `/pr-check` lists
 the `afterReview` setting of each mode and who posts. An automatic preview

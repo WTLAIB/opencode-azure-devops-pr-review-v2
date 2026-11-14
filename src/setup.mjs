@@ -13,7 +13,8 @@ import { organizationName } from './azure.mjs';
 import { readPatFile, setupAzurePrReview } from './runtime.mjs';
 
 const SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
-const SETUP_DESCRIPTION = 'Configure AZPR with one model and an existing PAT file; no model or Azure calls';
+// OpenCode's command list shows one line and cuts it: the first 50 characters say what this is for.
+const SETUP_DESCRIPTION = 'Set up AZPR: organization, model, PAT file; --help. Uses one model and an existing PAT file; no model or Azure calls';
 const USAGE = '/pr-setup --organization ORG --model PROVIDER/MODEL [--pat-file "/absolute/path/to/pat"]';
 const RESTART = 'restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process)';
 const MAX_SETTINGS_BYTES = 1024 * 1024;
