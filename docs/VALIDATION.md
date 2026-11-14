@@ -90,8 +90,11 @@ locked prompt hashes did not change.
   automatic preview that ends after another review was looked at, and a
   saved review whose time of use lies ahead of the clock. The corrected tree
   passed `npm run check`, the 444 offline tests and the five real-host
-  fixtures again, with the same request counts; the two installation checks
-  above were made before the correction.
+  fixtures again, with the same request counts. Both installation checks
+  above were repeated on the corrected commit and passed: its Git archive in
+  a clean directory, with the link and package checks, and the commit
+  installed from GitHub as a public Git package, again with 107 model and 180
+  Azure DevOps requests.
 - No live review with a real model ran on this candidate, and nothing was
   posted to Azure DevOps.
 
