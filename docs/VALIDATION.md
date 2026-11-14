@@ -111,6 +111,10 @@ locked prompt hashes did not change.
   that still saves its choice, and three tests of the queue with saves the
   test finishes by hand. The corrected tree passed `npm run check`, the 449
   offline tests and the five real-host fixtures with the same request counts.
+  Both installation checks were repeated on that commit and passed: its Git
+  archive in a clean directory, with the link and package checks, and the
+  commit installed from GitHub as a public Git package, with 107 model and
+  180 Azure DevOps requests.
 - No live review with a real model ran on this candidate, and nothing was
   posted to Azure DevOps.
 
