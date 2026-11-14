@@ -26,7 +26,7 @@ import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
-import { createReviewStore, stateRoot, REVIEW_LIMIT } from './store.mjs';
+import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
 import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
@@ -170,8 +170,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   // one issued in this process or saved by an earlier one.
   let lastStamp = 0;
   const stamp = () => { lastStamp = Math.max(Date.now(), lastStamp + 1); return new Date(lastStamp).toISOString(); };
+  // Every write of a review's record goes through `writes`, one at a time per review (see
+  // createReviewWrites). `savedUse` is the use time each saved record carries, as far as this
+  // process knows: a choice of the current review is written until its record carries it.
+  const writes = createReviewWrites(), savedUse = new Map();
   for (const review of await store.load().catch(() => [])) {
     completed.set(review.id, review);
+    savedUse.set(review.id, review.usedAt);
     for (const time of [review.completedAt, review.usedAt]) if (Number.isFinite(Date.parse(time))) lastStamp = Math.max(lastStamp, Date.parse(time));
   }
   void store.sweep().catch(() => {});
@@ -375,13 +380,22 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await removeSessions(sessions.filter(id => !kept.includes(id)));
     if (kept.length) await removeSessions(await store.keepSessions(run.id, kept).catch(() => []));
   }
+  // One write of a review's record, queued behind the writes of that review before it. `value` is
+  // the review or a copy with changes not yet applied to it, and is read when the write starts.
+  function writeReview(review, value = () => review) {
+    return writes.write(review.id, async () => {
+      const record = value(), used = record.usedAt;
+      await store.save(record);
+      savedUse.set(review.id, used);
+    });
+  }
   async function persistReview(review) {
-    try { await store.save(review); } catch { review.persistFailed = true; }
+    try { await writeReview(review); } catch { review.persistFailed = true; }
   }
   // A review a person adjusted is posted only from a saved preview: one that cannot be saved is
   // dropped, also in this process, so that a restart never finds another state than this one.
   async function savePreview(review) {
-    try { await store.save(review); }
+    try { await writeReview(review); }
     catch (error) {
       review.plan = null;
       throw new Error(`[AZPR] The new preview of review ${review.id} could not be saved (${errorText(error)}); it was dropped, so nothing can be posted from it.`);
@@ -395,7 +409,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if ([...runs.values()].some(active => active.review === old)) continue;
       completed.delete(old.id);
       if (old.dataDirectory) openStores.delete(old.dataDirectory);
-      await store.remove(old).catch(() => {});
+      // Behind any write of the record still under way, so none can bring the file back.
+      await writes.write(old.id, () => store.remove(old)).catch(() => {});
       old.data = undefined;
     }
     await store.enforceLimit().catch(() => {});
@@ -971,27 +986,36 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       `A command without an ID acts on the current review (${current.id}); put an ID first to act on another one, for example /pr-comment ${mine.at(-1).id} --show.`;
   }
 
-  // Comment commands in flight on a review, and saves of a review's selection in flight. A selection
-  // is saved with the whole review record, so the two never overlap: a comment run waits for the save
-  // before its own first one, and while a command is in flight its saves carry the selection.
-  const commenting = new Map(), selectionSaves = new Map();
+  // Comment runs in flight per review. While one is, the run alone writes the review's record (its
+  // last write carries the latest choice); a choice made after that write is written when it ends.
+  const commenting = new Map();
+  /**
+   * Write the review's latest choice. The save reads the review when it
+   * starts, so a choice made before then is carried by it, and a choice made
+   * while it writes gets a save of its own after it: the record always ends
+   * with the last choice. Resolves false when that choice could not be saved;
+   * never rejects.
+   */
+  function saveSelection(review) {
+    return writes.latest(review.id, async () => {
+      if (commenting.get(review.id) || completed.get(review.id) !== review || savedUse.get(review.id) === review.usedAt) return;
+      const used = review.usedAt;
+      await store.save(review);
+      savedUse.set(review.id, used);
+    }).then(() => true, () => false);
+  }
   /**
    * A comment command acted on this review: it is the conversation's current
-   * review from now on, and the choice is saved at once, so that after a
-   * restart a command without an ID still acts on the review a person looked
-   * at last and not on another PR's. The choice is made before this returns;
-   * the promise says whether it was saved (false: it holds in this process
-   * only). It never rejects, and a command that starts a run does not wait
-   * for it: a run must be registered before the command's first await.
+   * review from now on, and the choice is saved, so that after a restart a
+   * command without an ID still acts on the review a person looked at last
+   * and not on another PR's. The choice is made before this returns; the
+   * promise says whether it was saved (false: it holds in this process only).
+   * A command that starts a run does not wait for it: a run must be
+   * registered before the command's first await.
    */
   function markUsed(review) {
     review.usedAt = stamp();
-    if (completed.get(review.id) !== review || commenting.get(review.id)) return Promise.resolve(true);
-    if (!selectionSaves.has(review.id)) {
-      const save = store.save(review).then(() => true, () => false).finally(() => selectionSaves.delete(review.id));
-      selectionSaves.set(review.id, save);
-    }
-    return selectionSaves.get(review.id);
+    return saveSelection(review);
   }
   const UNSAVED_CHOICE = '\nThis review is the current one for now, but that choice could not be saved: after an OpenCode restart, name the review ID.';
 
@@ -1037,12 +1061,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * discussed, and the receipt says which items wait for a person and why.
    */
   async function commentOn(review, options, output, dispatch) {
-    // In flight until its last save of the review: a selection made meanwhile is left to that save.
+    // In flight until its last write of the record, which carries the choices made meanwhile.
     commenting.set(review.id, (commenting.get(review.id) ?? 0) + 1);
     try { return await commentRun(review, options, output, dispatch); }
     finally {
       const others = commenting.get(review.id) - 1;
       if (others) commenting.set(review.id, others); else commenting.delete(review.id);
+      // A choice made after that write, or a run refused before writing, is written now.
+      if (!others) await saveSelection(review);
     }
   }
   async function commentRun(review, { publish, notifySession, auto, adjust }, output, dispatch) {
@@ -1056,8 +1082,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       profile: review.profile, review, lockKey: targetKey(review.target), startNote: ` It acts on ${describeReview(review)}.`,
       ...(auto ? { auto, startLabel: step } : adjust ? { startLabel: `(adjusting the findings of review ${review.id})` } : {}) }, async run => {
       run.snapshot = review.snapshot;
-      // A selection's save writes the same record; let it finish before this run saves anything.
-      await selectionSaves.get(review.id);
       if (adjust) {
         // Under the comment lock: a publication that began since the request closes the adjustments.
         if (publicationStarted(review)) throw new Error(adjustmentsClosed(review));
@@ -1065,7 +1089,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         const adjustments = { ...resolved.next, changes: [...(review.adjustments?.changes ?? []), { at: new Date().toISOString(), ...resolved.next }] };
         // Saved first and together: new adjustments never meet the preview planned before them, even
         // after a restart, and an adjustment that cannot be saved changes nothing, also in this process.
-        try { await store.save({ ...review, adjustments, plan: null }); }
+        try { await writeReview(review, () => ({ ...review, adjustments, plan: null })); }
         catch (error) { throw new Error(`[AZPR] The adjustment of review ${review.id} could not be saved (${errorText(error)}); nothing was changed or planned.`); }
         Object.assign(review, { adjustments, plan: null });
         changed = resolved.changes;

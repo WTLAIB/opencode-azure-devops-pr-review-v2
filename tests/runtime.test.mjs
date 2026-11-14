@@ -1026,6 +1026,56 @@ test('the review a person looked at last stays the current one across a restart:
   }
 });
 
+test('choices that overlap a save are all written: A, B, A without waiting leaves A current after a restart', async t => {
+  // Without a pause all three choices come before the first save starts; with one, the first save of
+  // A is writing (it read the review already) when the second choice of A arrives. Microtasks run in
+  // the pause, file writes cannot finish in it.
+  for (const pause of [false, true]) {
+    const { azure, url, posted } = twoPullRequests();
+    const f = await fixture(t, { azure });
+    const a = reviewId(await f.command('pr-review', url(123)));
+    assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+    const b = reviewId(await f.command('pr-review', url(456)));
+    assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+    // Three --show commands one after another, none waiting for the one before.
+    const show = id => f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${id} --show` }, delivery: 'steer' });
+    const shown = [show(a)];
+    if (pause) for (let tick = 0; tick < 5; tick++) await Promise.resolve();
+    shown.push(show(b), show(a));
+    await Promise.all(shown);
+    const label = pause ? 'while the first save writes' : 'before the first save starts';
+    assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${a} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`), label);
+    assert.ok((await savedReview(f, a)).usedAt > (await savedReview(f, b)).usedAt, `${label}: the record of A carries its last choice.`);
+    await f.cleanup();
+    const g = await fixture(t, { directory: f.directory, azure });
+    assert.match(await g.command('pr-comment', '--list'), new RegExp(`- review ${a} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`), `${label}: after a restart`);
+    assert.match(await g.command('pr-comment', '--publish'), new RegExp(`\\] POSTED; source review=${a}\\nActed on review ${a} \\(/pr-review\\) of PR #123 in proj/repo\\.`), label);
+    assert.ok(posted().length > 0 && posted().every(pr => pr === 123), `${label}: comments went to PR ${[...new Set(posted())].join(', ')}`);
+  }
+});
+
+test('a comment command refused because another command is running still saves its choice of review', async t => {
+  const { azure, url } = twoPullRequests();
+  let hold, release;
+  const f = await fixture(t, { azure, async during({ role }) { if (/comment-plan$/.test(role) && hold) await hold; } });
+  const a = reviewId(await f.command('pr-review', url(123)));
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  const b = reviewId(await f.command('pr-review', url(456)));
+  // A preview of B is being planned, so the conversation is busy.
+  hold = new Promise(resolve => { release = resolve; });
+  const planned = f.command('pr-comment', b);
+  await f.waitFor(notices => notices.some(n => new RegExp(`\\] STARTED /pr-comment\\. [^\\n]*It acts on review ${b} `).test(n.text)));
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${a} --publish` }, delivery: 'steer' }), /already running/);
+  // The person named A: it is the current review, in this process and on disk, although nothing ran.
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${a} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`));
+  assert.ok((await savedReview(f, a)).usedAt > (await savedReview(f, b)).completedAt, 'The choice of A is saved.');
+  assert.equal(f.azure.callsTo('createThread').length, 0, 'Nothing was posted.');
+  release();
+  assert.match(await planned, new RegExp(`\\] PREVIEW; source review=${b}\\n`));
+  // The preview of B arrived last, so B is current now.
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${b} \\(/pr-review\\) of PR #456 [^\\n]*; current\\n`));
+});
+
 test('the review whose preview arrives last is the current one, as its next steps say, also for an automatic preview', async t => {
   const { azure, url, posted } = twoPullRequests();
   let hold, release;

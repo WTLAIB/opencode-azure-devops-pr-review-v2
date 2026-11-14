@@ -28,7 +28,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
-| `src/store.mjs` | Persistent reviews, data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit). |
+| `src/store.mjs` | Persistent reviews, data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit); the per-review queue that keeps writes of one record from overlapping. |
 | `src/attribution.mjs` | Deterministic reports, provenance, receipts and ledgers. |
 | `src/diagnostics.mjs` | Optional private diagnostic files (bounded by `debug.keepRuns`) and stage timing. |
 | `src/prompts/` | Shared review rules, role prompts and comment policy. |
@@ -382,10 +382,17 @@ current review: in one of a review's own sessions that review, otherwise the
 conversation's review with the latest `completedAt` or `usedAt`. `usedAt` is
 set when a comment command selects a review, also one that answers at once
 (`--show`, unchanged adjustments) or is refused, and again when a comment run
-ends, so the review whose receipt arrived last is the current one. A
-selection is saved with the review record at once; that save never overlaps a
-comment run on the same review, which waits for it and otherwise carries the
-selection in its own saves. Both times come from one counter that never
+ends, so the review whose receipt arrived last is the current one. Every
+write of a review's record, and its removal on eviction, goes through one
+queue per review (`createReviewWrites`), so two writes of a record never
+overlap and an earlier one never lands after a later one. A selection is
+saved by a write that reads the review when it starts: a choice made before it
+starts is carried by it, and a choice made while it writes gets a write of its
+own after it, so the record ends with the last choice even when commands
+overlap. While a comment run is in flight on the review, the run alone writes
+its record and its last write carries the latest choice; a choice made after
+that write, or by a command refused before the run wrote anything, is written
+when the run ends. Both times come from one counter that never
 repeats or runs backwards, also against the times of saved reviews, so a
 clock set back cannot change which review is current. Its `STARTED` notice
 and receipt name the review and its PR, and the receipt of a preview ends

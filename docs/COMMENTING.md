@@ -18,8 +18,8 @@ command there last, which is the one you looked at last. Naming a review by
 its ID makes it the current one, also with `--show` or with adjustments that
 change nothing, and a comment run makes its review the current one when its
 receipt arrives, the automatic preview after a review included. The choice is
-saved with the review when it is made, so it holds after a restart; if it
-cannot be saved, the answer says so. In one of a review's own sessions (for
+saved with the review when it is made, also when commands overlap, so it holds
+after a restart; if it cannot be saved, the answer says so. In one of a review's own sessions (for
 example the last one, which shows the report) a command without an ID means
 that review. So that a command without an ID can be checked at a glance, the
 `STARTED` notice and the receipt of every comment run name the review and its

@@ -52,7 +52,7 @@ under [commands without review IDs](#commands-without-review-ids-a-preview-by-de
 The prompts under `src/prompts` are those of 0.3.7, byte for byte, so the
 locked prompt hashes did not change.
 
-- `npm run check` and **444 offline tests** passed (432 for 0.3.7).
+- `npm run check` and **449 offline tests** passed (432 for 0.3.7).
 - All five real-host fixtures passed on OpenCode 2.2.4 with isolated profiles
   and fake model and Azure services, with the request counts of 0.3.7: fresh
   107 model and 180 Azure DevOps requests, replacement 89 and 150, native
@@ -65,7 +65,7 @@ locked prompt hashes did not change.
   typed. On the first run the three smoke fixtures failed at that step, which
   still waited for the earlier description; they passed once it waited for the
   new one.
-- `npm pack --dry-run --json` lists **33 files** (about 192 KB), the same
+- `npm pack --dry-run --json` lists **33 files** (about 193 KB), the same
   files as 0.3.7.
 - The 223 local Markdown links, images and anchors outside code examples
   resolve.
@@ -95,6 +95,22 @@ locked prompt hashes did not change.
   a clean directory, with the link and package checks, and the commit
   installed from GitHub as a public Git package, again with 107 model and 180
   Azure DevOps requests.
+- A second review found the same loss when commands overlap: a choice made
+  while the save of an earlier choice of that review was under way shared
+  that save, which had read the review before, so the record kept the earlier
+  choice. Reproduced offline: `--show` of A, B and A again, without waiting;
+  after a restart B was current and `/pr-comment --publish` posted to B's PR.
+  Every write of a review's record now goes through one queue per review, and
+  a selection is saved by a write that reads the review when it starts: a
+  choice made while a save writes gets a save of its own after it. The removal
+  of an evicted review uses the same queue, so a save under way cannot bring
+  its file back. Five offline tests were added: the overlap with and without
+  the first save already writing, which both failed on the earlier commit
+  (the second takes the path where a choice arrives during a save, checked
+  with a temporary log), a command refused because another one is running
+  that still saves its choice, and three tests of the queue with saves the
+  test finishes by hand. The corrected tree passed `npm run check`, the 449
+  offline tests and the five real-host fixtures with the same request counts.
 - No live review with a real model ran on this candidate, and nothing was
   posted to Azure DevOps.
 
@@ -126,8 +142,8 @@ What supports them:
 - **Offline tests** drive the runtime with a fake host and a fake Azure DevOps
   service: two reviews in one conversation, where commands without an ID
   follow the review used last, also from a review's own session and after a
-  restart, with two PRs and a publication without an ID after the restart; the
-  receipt lines and next steps, including examples that keep
+  restart, with two PRs and a publication without an ID after the restart, also
+  when the commands overlap; the receipt lines and next steps, including examples that keep
   saved adjustments; `--list` and `--help` without a model or Azure DevOps
   request; a review followed by a preview where the settings do not name
   `afterReview`, and `--no-comment`; and a review of a repository whose

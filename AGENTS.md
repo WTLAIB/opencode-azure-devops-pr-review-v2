@@ -118,8 +118,11 @@ settings, backups and failure records. Never upload `.local/`.
   the review and its PR, so a wrong pick shows before and after it acts. Save
   the choice when it is made, also for a command that answers at once
   (`--show`, unchanged adjustments): a choice kept only in memory lets a
-  command after a restart publish to another PR. A command that starts a run
-  registers the run before its first await, so it never waits for that save.
+  command after a restart publish to another PR. Every write of a review's
+  record goes through its queue in `store.mjs`, and a save reads the review
+  when it starts, so overlapping commands never leave an older choice on disk.
+  A command that starts a run registers the run before its first await, so it
+  never waits for that save.
 
 **Publication is idempotent.**
 - Recheck the PR (active, unchanged head) before writing; skip existing markers;
