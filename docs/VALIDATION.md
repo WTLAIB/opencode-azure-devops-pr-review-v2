@@ -87,7 +87,7 @@ locked prompt hashes did not change.
   `stream-continuations=1`).
 - `npm pack --dry-run --json` lists **33 files** (about 202 KB), the same
   files as 0.4.0.
-- The 229 local Markdown links, images and anchors outside code examples
+- The 230 local Markdown links, images and anchors outside code examples
   resolve.
 - Seven reviews of the pull request by a second model followed, each of the
   tree as corrected after the one before. The first six reported 17 defects,
