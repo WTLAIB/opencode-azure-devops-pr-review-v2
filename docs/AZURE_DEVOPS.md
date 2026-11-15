@@ -93,7 +93,7 @@ restart the OpenCode service:
   downloads and the service environment.
 - `NO_PROXY` applies to `azure.proxy` as well: Bun connects directly to a host
   it lists. Keep `dev.azure.com` out of the service environment's `NO_PROXY`
-  when Azure DevOps must go through the proxy. OpenCode 2.2.4 merges
+  when Azure DevOps must go through the proxy. OpenCode 2.3.0 merges
   `NO_PROXY` and `no_proxy` and adds `127.0.0.1`, `localhost` and `::1`.
 - The three settings rely on the per-request proxy and TLS options of Bun's
   `fetch`. A runtime whose `fetch` would ignore them makes AZPR refuse to load

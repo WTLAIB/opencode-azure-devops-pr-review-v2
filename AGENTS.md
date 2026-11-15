@@ -1,7 +1,7 @@
 # AI development guide
 
 This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.2.4`), the Azure DevOps Services REST API (api-version 7.1)
+`@opencode/cli@2.3.0`), the Azure DevOps Services REST API (api-version 7.1)
 and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
@@ -84,11 +84,19 @@ settings, backups and failure records. Never upload `.local/`.
   followed.
 - Transient execution failures retry once in a new session; overflow splits the
   shard. Permanent failures and cancellations are not retried.
+- An interrupted stream that OpenCode recovered by itself costs no new session:
+  a step it retried (OpenCode 2.3.0) or a continuation it queued (earlier
+  hosts). Accept an errored assistant message only with the host's retry mark
+  and a complete, successful final answer on the granted agent and model; a
+  retried step's answer is the final message alone.
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
 - All AZPR Azure DevOps traffic shares the queue in `tool-queue.mjs` (concurrency and
   per-call timeout). Release slots in `finally`; never depend on a hook running.
+- A tool call the host stops ends at once (read the call's `signal` once).
+  Abort only the request that call alone waits for; a read the run's sessions
+  share (a file, a recursive listing, the repository archive) goes on.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
   compact, and a compaction the host attempts in a reviewer's turn means "split
   this shard". A refused background summary (`experimental.background_compaction`)
@@ -97,6 +105,12 @@ settings, backups and failure records. Never upload `.local/`.
   see the roadmap's Deferred section before adding either.
 
 **Authorization.**
+- Private sessions are sessions of their own, never children of the
+  conversation: OpenCode 2.3.0 and later hand a child's answers to its parent
+  and wake the parent's own model. Create them at the conversation's location
+  with `metadata.azpr`, and tie them to the conversation through AZPR's own
+  records (run stages, a saved review's sessions), never the host's session
+  tree.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -163,6 +177,11 @@ settings, backups and failure records. Never upload `.local/`.
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory
   (owner-only permissions, newest 20). Clean only stale, unreferenced data.
+- OpenCode lists every private session like a conversation. When a run ends,
+  delete its sessions except the one holding the report or draft (a comment
+  run keeps none; all stay while debugging or after an unconfirmed abort).
+  Save a review with every session before deleting any, and keep on record a
+  session whose deletion failed: what is kept goes with its review.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 

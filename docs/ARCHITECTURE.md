@@ -2,7 +2,7 @@
 
 AZPR is an OpenCode V2 plugin distributed as an npm package, a native Git
 package or a source archive. Model work runs in private,
-role-bound child sessions; deterministic facts and every Azure DevOps write are
+role-bound sessions of their own; deterministic facts and every Azure DevOps write are
 runtime code that calls the Azure DevOps Services REST API (api-version 7.1)
 with the organization and PAT from AZPR's own settings (or the owner-only file
 named by `azure.patFile`). Reviewers read the
@@ -17,7 +17,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/runtime.mjs` | Registration, hooks, grants, workflows, stage attempts (repair turns and retries), notices, cancellation and lifecycle. |
 | `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
 | `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies, prompt variants per mode and agent compilation. |
-| `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations, failure classification, interrupt and synthetic notices. |
+| `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations and retried steps, failure classification, interrupt and synthetic notices. |
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
 | `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_search_code`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
@@ -28,7 +28,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
-| `src/store.mjs` | Persistent reviews, data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit); the per-review queue that keeps writes of one record from overlapping. |
+| `src/store.mjs` | Persistent reviews (each with the reviewer sessions it still keeps), data cleanup, fallback receipt files and the reviewer sessions kept from unfinished runs (released for deletion beyond the review limit); the per-review queue that keeps writes of one record from overlapping. |
 | `src/attribution.mjs` | Deterministic reports, provenance, receipts and ledgers. |
 | `src/diagnostics.mjs` | Optional private diagnostic files (bounded by `debug.keepRuns`) and stage timing. |
 | `src/prompts/` | Shared review rules, role prompts and comment policy. |
@@ -308,11 +308,21 @@ restarts the window, so this is not the whole-run timeout or step cap the
 [roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is never
 stopped. The longest quiet stretch in 1,097 normal live stages was 151 s.
 
-Host stream continuations are accepted for any provider: an errored text-only
-assistant message that the host marked for retry, followed by the host's
-continuation notice and a successful final text, is joined literally. When the
-model starts its answer over instead of continuing (a later fragment opens like
-the first), only the restarted text is used.
+An interrupted model stream that OpenCode recovers by itself costs no new
+session, whatever the provider. OpenCode 2.3.0 retries the interrupted step:
+the errored assistant message stays, marked for retry, and the retried step
+answers in the next assistant message. The retry is sent with what the step
+had finished (its tool calls that ran and what came before them) and without
+the output the interruption cut off, so AZPR takes the final message alone
+as the answer and joins nothing of the errored one to it; the receipt counts
+these as `step-retries`. OpenCode through 2.2.x resumed with a continuation
+notice instead: an errored text-only assistant message that the host marked
+for retry, followed by that notice and a successful final text, is joined
+literally (`stream-continuations`), and when the model starts its answer over
+instead of continuing (a later fragment opens like the first), only the
+restarted text is used. Either way an errored message is excused only when the
+host marked it for retry and the turn still ends with a complete, successful
+final answer on the granted agent and model.
 
 Before asking for a correction, a narrow local repair escapes unescaped double
 quotes inside closed single-line `code` spans. Corrections for syntax errors ask
@@ -429,7 +439,29 @@ Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`,
 `azpr-quick-reviewer|comment-plan`) are hidden
 primary agents with explicit models (and variants, when configured). Every
 private session gets a grant with the run, role, model and a pending prompt
-(text + nonce); a request on another model or variant is refused. Hooks enforce it:
+(text + nonce); a request on another model or variant is refused, also when
+the host itself resolved the configured entry to another model, as a routing
+entry such as GitHub Copilot's Auto does.
+
+A private session is a session of its own, never a child of the conversation.
+OpenCode 2.3.0 and later hand every answer of a child session to its parent as
+a `<subagent>` message and wake the parent's own model with it, so a review
+would make the conversation's model, with that agent's tools, respond to raw
+reviewer output and to AZPR's notices. Each session is created without a
+parent at the conversation's location (read from the conversation's session;
+without one the host places it where this plugin instance runs), and its
+`metadata.azpr` names the run, the role, the conversation and, for a comment
+run, the review it acts on, so tools that list sessions can tell AZPR's
+sessions from conversations without reading titles. What ties a private
+session to its conversation is AZPR's own record: the run's stages while it
+runs, then the sessions the saved review keeps. OpenCode lists a session
+without a parent like a conversation, and its plugin API cannot archive one
+(`session.update` accepts `archived` and ignores it), so when a run ends AZPR
+deletes its sessions except the one that holds the report or draft; see
+[retention](../README.md#retention-and-privacy). A session whose deletion fails
+stays on record and is deleted with the review or the kept sessions.
+
+Hooks enforce the grant:
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
   cannot be mentioned or delegated.
@@ -464,7 +496,13 @@ AZPR registers its tools with `codemode: false` (OpenCode offers only such
 tools directly). A tool runs only for an active grant and always on the run's
 snapshot repository; it returns numbered, bounded text and, for file reads,
 saves the full observed source for comment anchor checks. Failures come back as
-visible tool errors so the model can report the gap.
+visible tool errors so the model can report the gap. A tool reads its call's
+`signal` once: OpenCode aborts it when it interrupts the call and, from 2.3.0
+on, when a person stops a call whose tool read it. The call then ends at once
+and the Azure DevOps request only it waits for (a folder listing of one level,
+the PR's threads) is aborted, while a read the run's sessions share (a file, a
+recursive listing, the repository archive) goes on for the others and stays in
+the run's cache.
 
 Every Azure DevOps call — runtime or tool — goes through one queue
 (`azure.concurrency`) with a per-call timeout that aborts the HTTP request.
@@ -493,10 +531,10 @@ Without `permission.hook` the project boundary for native read tools is left to
 the host's own permission rules; `/pr-check` shows a WARNING row and reviews
 still run. With `plugin.list`, `/pr-check` names the installation that runs
 and warns about any other AZPR entry the host configured but does not run,
-such as a second version that OpenCode 2.1.4 through 2.2.4 list as a duplicate plugin ID;
+such as a second version that OpenCode 2.1.4 through 2.3.0 list as a duplicate plugin ID;
 a host without it gets an information row.
 `/pr-check` names the detected OpenCode version in a row of its own and warns
-when it is not the tested one (`TESTED_HOST_VERSION`, 2.2.4); reviews still
+when it is not the tested one (`TESTED_HOST_VERSION`, 2.3.0); reviews still
 run, and other receipts do not repeat it.
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.

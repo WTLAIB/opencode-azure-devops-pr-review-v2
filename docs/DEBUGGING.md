@@ -6,13 +6,13 @@ acceptance, Azure source validity or report quality.
 
 ## A startup slash command becomes an ordinary prompt
 
-On OpenCode 2.1.2 through 2.2.4, `opencode --prompt "/pr-review ..."` can
+On OpenCode 2.1.2 through 2.3.0, `opencode --prompt "/pr-review ..."` can
 submit before a native Git package's command catalog has loaded. The host then
 treats the text as an ordinary model prompt; AZPR has not received the command.
 This was observed in local native-package TUI acceptance failures on 2.1.2 and
 matches the host's
-[startup submission](https://github.com/anomalyco/opencode/blob/v2.2.4/packages/tui/src/routes/home.tsx#L68)
-and [command classification](https://github.com/anomalyco/opencode/blob/v2.2.4/packages/tui/src/component/prompt/index.tsx#L1155).
+[startup submission](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/tui/src/routes/home.tsx#L68)
+and [command classification](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/tui/src/component/prompt/index.tsx#L1150).
 
 Start the TUI normally and wait for `/pr-review` to appear in slash-command
 completion before submitting it. A command admitted by AZPR emits its own
@@ -51,8 +51,11 @@ AZPR deletes its older run directories beyond `debug.keepRuns` (default 20;
 `0` keeps all); a run still active in the same OpenCode process and anything
 AZPR did not create are left alone. With debug enabled, private data of failed
 runs is kept for inspection (stale scratch data is still removed after 24
-hours), and every private session of a review that did not complete is kept
-within the same limit of 20 runs.
+hours), and every private session of a run is kept: those of a completed
+review and of its comment runs until the review is evicted, those of a review
+that did not complete within the same limit of 20 runs. OpenCode lists each
+of them next to your conversations (`[AZPR <id>] …`); without debug only the
+session holding the report or draft stays.
 
 | File | What it records |
 | --- | --- |
@@ -88,8 +91,13 @@ in parallel.
    - `cancelled` came from `/pr-stop`, a timeout or unload.
    `requestObservations.retries` lists OpenCode's own retries of a provider
    request (attempt, whether AZPR allowed it, the announced delay).
-   Receipt counters `stream-continuations` and `continuation-restarts` show
-   interrupted provider streams and answers the model started over.
+   Receipt counters show interrupted provider streams that OpenCode recovered
+   in the same session: `step-retries` (OpenCode 2.3.0 retried the step),
+   `stream-continuations` and `continuation-restarts` (earlier hosts asked the
+   model to continue, and the model started its answer over). A request to a
+   provider host that cannot be reached is retried by OpenCode 2.3.0 for up to
+   an hour, each retry listed under `requestObservations.retries`; the stage
+   waits meanwhile, and `/pr-stop` ends it.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a

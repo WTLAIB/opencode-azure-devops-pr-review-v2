@@ -6,7 +6,7 @@ MCP dependency. Start with the [quickstart](QUICKSTART.md), then use
 this page to understand access, data flow and local retention before reviewing
 your team's repositories.
 
-The tested environment is **OpenCode V2 `@opencode/cli` 2.2.4 on Ubuntu
+The tested environment is **OpenCode V2 `@opencode/cli` 2.3.0 on Ubuntu
 22.04**. Azure DevOps Server URLs are not supported. See
 [current validation](VALIDATION.md) for the distinction between isolated tests
 with fake services and runs against real Azure DevOps and model providers.
@@ -177,12 +177,16 @@ indefinitely. Unreferenced scratch data becomes eligible for cleanup after
 records under `attempts/` are separate; entries older than 90 days are ignored
 when accessed and removed when that PR's record is next rewritten.
 
-With `deletePrivateSessions: true` (default), AZPR requests deletion of its
-private review sessions when their completed review is evicted. An unfinished
-review normally keeps only its report/draft session, within a separate limit
-of 20 runs; diagnostics or an unconfirmed cancellation can retain all of that
-run's sessions. Deletion depends on host support and is best effort. Setting
-this option to `false` keeps the sessions. Your own conversations are never
+AZPR's private review sessions are sessions of their own, listed by OpenCode
+next to a person's conversations and titled `[AZPR <id>] …`. With
+`deletePrivateSessions: true` (default), AZPR requests deletion of a run's
+sessions when the run ends, except the one that holds the review's report or
+draft; a comment run keeps none. The kept session is deleted when its
+completed review is evicted, or, for an unfinished review, within a separate
+limit of 20 runs. Diagnostics or an unconfirmed cancellation retain all of a
+run's sessions until then. Deletion depends on host support and is best
+effort: a session whose deletion failed stays on record and is requested
+again with the review. Setting this option to `false` keeps the sessions. Your own conversations are never
 deleted by AZPR, and deleting local records does not delete provider records
 or published Azure comments.
 
@@ -209,7 +213,7 @@ is made. Set up the first before `opencode plugin add`:
 | Azure DevOps | AZPR, inside the OpenCode service | `azure.proxy` and `azure.caFile` below; with an empty `azure.proxy`, the service environment's proxy variables apply |
 
 - The `opencode` command reaches the background service over the loopback
-  interface. OpenCode 2.2.4 adds `127.0.0.1,localhost,::1` to `NO_PROXY`
+  interface. OpenCode 2.3.0 adds `127.0.0.1,localhost,::1` to `NO_PROXY`
   itself, so a terminal proxy no longer catches that connection; keep your
   organization's existing exceptions in `NO_PROXY`.
 - A variable set with `opencode service set env` applies when the service
