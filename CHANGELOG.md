@@ -41,7 +41,11 @@ Private sessions in the session list:
   is evicted, so each review adds all of its sessions to the list. Turn debug
   off for everyday use; `deletePrivateSessions: false` keeps everything too.
 - A session whose deletion failed or timed out stays on record and is deleted
-  again with its review; such a session used to be forgotten.
+  again with its review; such a session used to be forgotten. A session
+  OpenCode creates only after its stage was cancelled is deleted when it
+  arrives.
+- A new review cannot be started from a saved review's own session, also after
+  an OpenCode restart; until now only the running process refused that.
 - Each private session carries `metadata.azpr` with its run, role and
   conversation (and, for a comment run, the review), so tools that list
   sessions can tell AZPR's sessions from conversations without reading titles.

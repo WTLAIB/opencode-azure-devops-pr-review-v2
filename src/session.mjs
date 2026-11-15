@@ -84,24 +84,32 @@ async function conversationLocation(api, origin, signal) {
  * conversation's location. It is deliberately not a child of the conversation:
  * OpenCode 2.3.0 and later hand every answer of a child session to its parent
  * and wake the parent's own model with it. `metadata` marks the session as
- * AZPR's for tools that list sessions.
+ * AZPR's for tools that list sessions. A cancellation can overtake the host:
+ * the session may still be created after this call gave up, and nothing else
+ * would know it. `onLate` then receives it, when it is the session this call
+ * asked for, so that the caller can delete it.
  */
-export async function createReviewSession(context, { origin, title, role, model, permissions, metadata, signal }) {
+export async function createReviewSession(context, { origin, title, role, model, permissions, metadata, signal, onLate }) {
   const api = sessionApi(context, ['create', 'get']);
   if (!textValue(origin) || !textValue(role) || !textValue(title)) throw new Error('[AZPR] Incomplete review session identity.');
   const selectedModel = modelRef(model);
   const location = await conversationLocation(api, origin, signal);
-  const made = await cancellable(() => api.create({
-    title, agent: role, model: selectedModel,
-    ...(location === undefined ? {} : { location }),
-    ...(metadata === undefined ? {} : { metadata }),
-    ...(permissions === undefined ? {} : { permissions }),
-  }), signal);
-  if (!record(made) || !textValue(made.id) || made.id === origin || (made.parentID ?? null) !== null ||
-      made.agent !== role || !sameModel(made.model, selectedModel) ||
-      (location !== undefined && record(made.location) && made.location.directory !== location.directory)) {
-    throw new Error('[AZPR] OpenCode V2 did not create the requested independent reviewer session.');
+  const requested = made => record(made) && textValue(made.id) && made.id !== origin && (made.parentID ?? null) === null &&
+    made.agent === role && sameModel(made.model, selectedModel) &&
+    (location === undefined || !record(made.location) || made.location.directory === location.directory);
+  let creating, made;
+  try {
+    made = await cancellable(() => (creating = Promise.resolve(api.create({
+      title, agent: role, model: selectedModel,
+      ...(location === undefined ? {} : { location }),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(permissions === undefined ? {} : { permissions }),
+    }))), signal);
+  } catch (error) {
+    if (onLate) creating?.then(late => { if (requested(late)) onLate(late); }).catch(() => {});
+    throw error;
   }
+  if (!requested(made)) throw new Error('[AZPR] OpenCode V2 did not create the requested independent reviewer session.');
   return made;
 }
 

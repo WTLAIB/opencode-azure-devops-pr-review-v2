@@ -119,6 +119,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const sourceRuns = new Map();     // origin session -> active run ID
   const completed = new Map();      // review ID -> completed review (persisted)
   const commentLocks = new Set();   // PR targets with an active comment command
+  const closing = new Set();        // private sessions being deleted: a command typed in one is refused
+  const settling = new Set();       // reviews whose run is sorting out its sessions: not evicted meanwhile
+  // Sessions a running command still needs: its conversation, the session its notices go to and its stages' sessions.
+  const sessionsInUse = () => new Set([...runs.values()].flatMap(run => [run.origin, run.notifySession, ...run.stages.map(stage => stage.sessionID)]));
   const openStores = new Map();     // data directory -> store promise
   const jobs = new Set();
   const registrations = [];
@@ -351,20 +355,20 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     owner.data = undefined;
   }
   /**
-   * Delete AZPR's own reviewer sessions (never one an active run uses), a few
-   * at a time so a host that stalls on deletion delays the receipt by one
-   * timeout per batch, not per session. Returns the sessions that are still
-   * there: those an active run uses and those whose deletion failed or timed
-   * out, for a caller that can try again later.
+   * Delete AZPR's own reviewer sessions, a few at a time so a host that stalls
+   * on deletion delays the receipt by one timeout per batch, not per session.
+   * A session a running command needs is left alone, checked when its turn
+   * comes. Returns the sessions that are still there: those, and the ones
+   * whose deletion failed or timed out, for a caller that can try again later.
    */
   async function removeSessions(sessionIDs) {
     const requested = [...new Set(sessionIDs ?? [])];
     if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return requested;
-    const active = new Set([...runs.values()].flatMap(run => run.stages.map(stage => stage.sessionID)));
-    const pending = requested.filter(sessionID => !active.has(sessionID)), left = requested.filter(sessionID => active.has(sessionID));
+    const pending = [...requested], left = [];
     const worker = async () => {
       while (pending.length) {
         const sessionID = pending.shift();
+        if (sessionsInUse().has(sessionID)) { left.push(sessionID); continue; }
         await deadline(() => context.session.remove({ sessionID }), options.removeTimeoutMs ?? 5000).catch(() => { left.push(sessionID); });
       }
     };
@@ -372,48 +376,78 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return left;
   }
   /**
-   * The sessions of a run that ended. OpenCode lists every private session like
-   * a conversation of its own, so only the one in `keep` (the session holding
-   * the run's report or draft) stays and the others are deleted at once; all
-   * are kept while debugging or when an abort was not confirmed. Returns the
-   * sessions that remain, including any that could not be deleted.
+   * The sessions of a run that ended, and those to delete now. OpenCode lists
+   * every private session like a conversation of its own, so only `keep` (the
+   * session holding the run's report or draft) stays; all stay while debugging,
+   * after an unconfirmed abort, or where sessions are not deleted at all.
    */
-  async function releaseSessions(run, keep) {
+  function endedSessions(run, keep) {
     const sessions = [...new Set(run.stages.map(stage => stage.sessionID).filter(Boolean))];
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove || settings.debug.enabled || run.abortUnconfirmed) return sessions;
-    const obsolete = sessions.filter(id => id !== keep);
-    const left = await removeSessions(obsolete);
-    run.sessionsRemoved = obsolete.length - left.length;
-    return sessions.filter(id => id === keep || left.includes(id));
-  }
-  /** A review run that saved no review: the sessions it leaves follow the review limit. */
-  async function releaseUnfinished(run) {
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
-    const kept = await releaseSessions(run, run.reportStage?.sessionID);
-    if (kept.length) await removeSessions(await store.keepSessions(run.id, kept).catch(() => []));
+    const prune = settings.deletePrivateSessions && capabilities.sessionRemove && !settings.debug.enabled && !run.abortUnconfirmed;
+    return { sessions, obsolete: prune ? sessions.filter(id => id !== keep) : [] };
   }
   /**
-   * A run of a saved review ended: the review keeps what the run leaves (`keep`
-   * is the session holding the review's report; a comment run keeps none, since
-   * its receipt carries its result) until the review itself is removed.
+   * Delete a run's obsolete sessions. From here on a command typed in one of
+   * them is refused; one that started there earlier keeps its session.
+   * Returns the sessions that could not be deleted.
    */
-  async function releaseFinished(run, review, keep) {
-    const before = [...review.reportSessions].sort().join('\n');
-    const kept = new Set(await releaseSessions(run, keep));
-    for (const stage of run.stages) if (stage.sessionID) review.reportSessions[kept.has(stage.sessionID) ? 'add' : 'delete'](stage.sessionID);
-    return [...review.reportSessions].sort().join('\n') !== before;
+  async function deleteObsolete(run, obsolete) {
+    for (const id of obsolete) closing.add(id);
+    try {
+      const left = await removeSessions(obsolete);
+      run.sessionsRemoved = obsolete.length - left.length;
+      return left;
+    } finally { for (const id of obsolete) closing.delete(id); }
+  }
+  /**
+   * A review run that saved no review. Its sessions go on record before any is
+   * deleted, so that a process ending during the cleanup forgets none of them;
+   * the record then holds what is left, and follows the review limit.
+   */
+  async function releaseUnfinished(run) {
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
+    const { sessions, obsolete } = endedSessions(run, run.reportStage?.sessionID);
+    if (!sessions.length) return;
+    const released = await store.keepSessions(run.id, sessions).catch(() => []);
+    if (obsolete.length) {
+      const left = await deleteObsolete(run, obsolete);
+      if (run.sessionsRemoved) released.push(...await store.keepSessions(run.id, sessions.filter(id => !obsolete.includes(id) || left.includes(id))).catch(() => []));
+    }
+    await removeSessions(released);
+  }
+  /**
+   * A run of a saved review ended. The review's record takes every session of
+   * the run and is saved before any is deleted, so that a process ending during
+   * the cleanup forgets none of them (`recorded`: that save has happened). Then
+   * only `keep` stays, the session holding the review's report, with those that
+   * could not be deleted; a comment run keeps none, since its receipt carries
+   * its result. A save that fails does not stop the cleanup: sessions left
+   * without a record would be forgotten just the same. Returns whether the
+   * record changed after that save.
+   */
+  async function releaseFinished(run, review, keep, { recorded = false } = {}) {
+    const { sessions, obsolete } = endedSessions(run, keep);
+    for (const id of sessions) review.reportSessions.add(id);
+    if (!obsolete.length) return false;
+    if (!recorded) await persistReview(review);
+    const left = new Set(await deleteObsolete(run, obsolete));
+    for (const id of obsolete) if (!left.has(id)) review.reportSessions.delete(id);
+    return run.sessionsRemoved > 0;
   }
   // One write of a review's record, queued behind the writes of that review before it. `value` is
   // the review or a copy with changes not yet applied to it, and is read when the write starts.
   function writeReview(review, value = () => review) {
     return writes.write(review.id, async () => {
+      // An evicted review is gone: a save queued behind its removal must not bring its record back.
+      if (completed.get(review.id) !== review) throw new Error('The review is no longer kept.');
       const record = value(), used = record.usedAt;
       await store.save(record);
       savedUse.set(review.id, used);
     });
   }
+  /** Save the review; false when it could not be saved. */
   async function persistReview(review) {
-    try { await writeReview(review); } catch { review.persistFailed = true; }
+    try { await writeReview(review); return true; } catch { review.persistFailed = true; return false; }
   }
   // A review a person adjusted is posted only from a saved preview: one that cannot be saved is
   // dropped, also in this process, so that a restart never finds another state than this one.
@@ -424,19 +458,32 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       throw new Error(`[AZPR] The new preview of review ${review.id} could not be saved (${errorText(error)}); it was dropped, so nothing can be posted from it.`);
     }
   }
-  async function rememberReview(review) {
-    completed.set(review.id, review);
-    await persistReview(review);
+  // A review a command is working on is not evicted: its run, a comment run's last steps or the cleanup of its
+  // sessions. Nor is one whose session a running command needs, since evicting it would delete that session.
+  const reviewInUse = id => {
+    if (settling.has(id) || commenting.has(id) || [...runs.values()].some(active => active.review?.id === id)) return true;
+    const sessions = completed.get(id)?.reportSessions, needed = sessionsInUse();
+    return Boolean(sessions) && [...sessions].some(sessionID => needed.has(sessionID));
+  };
+  /** Evict the oldest reviews beyond the limit, in this process and on disk, except those in use. */
+  async function evictReviews() {
     const ordered = [...completed.values()].sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)));
     for (const old of ordered.slice(0, Math.max(0, ordered.length - REVIEW_LIMIT))) {
-      if ([...runs.values()].some(active => active.review === old)) continue;
+      if (reviewInUse(old.id)) continue;
       completed.delete(old.id);
       if (old.dataDirectory) openStores.delete(old.dataDirectory);
       // Behind any write of the record still under way, so none can bring the file back.
       await writes.write(old.id, () => store.remove(old)).catch(() => {});
       old.data = undefined;
     }
-    await store.enforceLimit().catch(() => {});
+    await store.enforceLimit(reviewInUse).catch(() => {});
+  }
+  /** Keep a completed review; false when its record could not be saved. */
+  async function rememberReview(review) {
+    completed.set(review.id, review);
+    const saved = await persistReview(review);
+    await evictReviews();
+    return saved;
   }
 
   // ----------------------------------------------------- cancellation
@@ -585,7 +632,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const title = `[AZPR ${run.id}] ${spec.label}${label ? ` ${label}` : ''}${attempt > 1 ? ` (attempt ${attempt})` : ''}`;
     // Marks the session as AZPR's: its run, role and conversation, and for a comment run the review it acts on.
     const metadata = { azpr: { run: run.id, role, conversation: run.origin, ...(run.review ? { review: run.review.id } : {}) } };
-    const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), metadata, signal }), signal);
+    const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), metadata, signal,
+      // Created after its stage was cancelled: no stage knows this session, so it is deleted here.
+      onLate: late => { seenSessions.add(late.id); void removeSessions([late.id]); } }), signal);
     if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');
     seenSessions.add(made.id);
     watch.waiting = false;
@@ -902,7 +951,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
 
   async function executeReview(mode, input, output, dispatch) {
-    if (seenSessions.has(input.sessionID)) throw new Error('[AZPR] Start a new review from your ordinary development session, not a reviewer session.');
+    // Also after a restart, when this process no longer knows the sessions it created: a saved review names its own.
+    if (seenSessions.has(input.sessionID) || [...completed.values()].some(review => review.reportSessions.has(input.sessionID))) {
+      throw new Error('[AZPR] Start a new review from your ordinary development session, not a reviewer session.');
+    }
     if (!text(input.sessionID) || !text(input.arguments) || input.arguments.length > 16000) {
       throw new Error(`[AZPR] Usage: /${input.command} <Azure PR URL>${mode === 'check' ? '' : ' [--preview|--publish|--no-comment]'} [your context]`);
     }
@@ -947,9 +999,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       return { status: final.status, report: rendered, review: completedReview };
     }, dispatch);
     if (status === 'COMPLETE' && review) {
-      // Saved with every session first: none is forgotten if this process ends before the others are deleted.
-      await rememberReview(review);
-      if (await releaseFinished(run, review, run.reportStage?.sessionID)) await persistReview(review);
+      // Not evicted while its sessions are sorted out: the save that follows would bring its record back.
+      settling.add(review.id);
+      try {
+        const recorded = await rememberReview(review);
+        if (await releaseFinished(run, review, run.reportStage?.sessionID, { recorded })) await persistReview(review);
+      } finally { settling.delete(review.id); }
+      // What could not be evicted while this review was in use is evicted now.
+      if (completed.size > REVIEW_LIMIT) await evictReviews();
     } else await releaseUnfinished(run);
     // A review stopped while its report was delivered stays COMPLETE, but its comment step is off,
     // also in the report the receipt encloses, which was rendered before the stop.
@@ -1227,6 +1284,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function execute(input, output, dispatch) {
     const mode = COMMANDS[input.command];
     if (!mode) return;
+    if (closing.has(input.sessionID)) {
+      throw new Error('[AZPR] This reviewer session is being deleted now that its run has ended. Type the command in the conversation the review was started in, or in the session that holds its report.');
+    }
     if (HELP_ARGUMENT.test(String(input.arguments ?? '').trim())) {
       output.text = `${COMMAND_HELP[input.command]()}\nNo model or Azure DevOps request was made for this help.`;
       return;
@@ -1325,17 +1385,21 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.watch.toolsRunning--;
       touch(g, `tool ${name} ended`);
     }
-    // Only contents this call showed at the reviewed commits count as this session's reads.
-    for (const read of outcome.reads ?? []) if (read.version === snapshot.head || read.version === snapshot.base) g.reads.add(`${read.version}\n${read.path}`);
+    let observation;
     if (outcome.observation && ['initial', 'final'].includes(ROLES[g.role].format)) {
-      // Keep observed source text with its request for anchor checks in comment planning.
+      // Keep observed source text with its request for anchor checks in comment planning. A stopped call does not
+      // wait for that save, which finishes by itself.
       try {
-        const observation = await captureObservation(await dataFor(g.run), name, { path: outcome.observation.path, version: outcome.observation.version }, outcome.observation.text);
-        g.run.toolText.set(observation.key, observation);
+        observation = await scoped(async () => captureObservation(await dataFor(g.run), name, { path: outcome.observation.path, version: outcome.observation.version }, outcome.observation.text), stop);
       } catch {
-        g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.');
+        if (!stop?.aborted) g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.');
       }
     }
+    // A call the host stopped ends here: it showed the session nothing, so nothing is credited to it.
+    if (stop?.aborted) throw abortError(stop);
+    if (observation) g.run.toolText.set(observation.key, observation);
+    // Only contents this call showed at the reviewed commits count as this session's reads.
+    for (const read of outcome.reads ?? []) if (read.version === snapshot.head || read.version === snapshot.base) g.reads.add(`${read.version}\n${read.path}`);
     return { output: outcome.text, content: [{ type: 'text', text: outcome.text }] };
   }
 

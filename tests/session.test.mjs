@@ -92,6 +92,50 @@ test('V2 creation is cancelled while the conversation is read, before a session 
   assert.deepEqual(calls.map(call => call.name), ['get']);
 });
 
+test('a session the host creates after the call was cancelled is handed to the caller, which deletes it', async () => {
+  const creation = (answer = value => ({ id: sessionID, ...value })) => {
+    const controller = new AbortController(), late = [];
+    let finish, fail;
+    const { context, calls } = host({ create: value => new Promise((resolve, reject) => { finish = () => resolve(answer(value)); fail = reject; }) });
+    const pending = createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model, signal: controller.signal,
+      onLate: session => late.push(session.id) });
+    const asked = async () => { while (!calls.some(call => call.name === 'create')) await new Promise(resolve => setImmediate(resolve)); };
+    const settled = () => new Promise(resolve => setTimeout(resolve, 5));
+    return { controller, late, pending, asked, settled, finish: () => finish(), fail: error => fail(error) };
+  };
+  const cancelled = creation();
+  await cancelled.asked();
+  cancelled.controller.abort(new Error('manual cancellation'));
+  await assert.rejects(cancelled.pending, /manual cancellation/);
+  assert.deepEqual(cancelled.late, [], 'Nothing exists yet.');
+  cancelled.finish();
+  await cancelled.settled();
+  assert.deepEqual(cancelled.late, [sessionID], 'The session created afterwards is handed over.');
+  // Only the session this call asked for: never one with another identity, and nothing after a failed creation.
+  for (const answer of [value => ({ id: 'ses_origin', ...value }), value => ({ id: sessionID, ...value, agent: 'build' }), value => ({ id: sessionID, ...value, parentID: 'ses_origin' }), () => null]) {
+    const other = creation(answer);
+    await other.asked();
+    other.controller.abort(new Error('manual cancellation'));
+    await assert.rejects(other.pending, /manual cancellation/);
+    other.finish();
+    await other.settled();
+    assert.deepEqual(other.late, []);
+  }
+  const failed = creation();
+  await failed.asked();
+  failed.controller.abort(new Error('manual cancellation'));
+  await assert.rejects(failed.pending, /manual cancellation/);
+  failed.fail(new Error('host could not create it'));
+  await failed.settled();
+  assert.deepEqual(failed.late, []);
+  // A creation that finishes in time is returned, not handed over.
+  const timely = creation();
+  await timely.asked();
+  timely.finish();
+  assert.equal((await timely.pending).id, sessionID);
+  assert.deepEqual(timely.late, []);
+});
+
 test('V2 creation accepts the host-normalized default model variant', async () => {
   const { context } = host({ create: async value => ({ ...value, id: sessionID, model: { ...value.model, variant: 'default' } }) });
   const made = await createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model });

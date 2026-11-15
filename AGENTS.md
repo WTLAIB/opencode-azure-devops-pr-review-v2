@@ -180,8 +180,14 @@ settings, backups and failure records. Never upload `.local/`.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
-  Save a review with every session before deleting any, and keep on record a
-  session whose deletion failed: what is kept goes with its review.
+  Put every session of the run on record (the review's, or the run's own for
+  an unfinished review) before deleting any, and keep on record a session that
+  could not be deleted: what is kept goes with its review. A session OpenCode
+  creates after its stage was cancelled is deleted too.
+- Never delete a session a running command needs (its conversation, the
+  session its notices go to, a stage's session), refuse a command typed in a
+  session that is being deleted, and never evict a review while a command
+  works on it; a save of an evicted review must not bring its record back.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 

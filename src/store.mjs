@@ -113,10 +113,13 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
       const body = JSON.stringify(serializeReview(review));
       await writeAtomic(join(dirs.reviews, `${review.id}.json`), JSON.stringify({ format: FORMAT, sha256: checksum(body), body }));
     },
-    /** Remove the oldest reviews on disk beyond the limit; returns evicted IDs. */
-    async enforceLimit() {
+    /**
+     * Remove the oldest reviews on disk beyond the limit; returns evicted IDs.
+     * `inUse(id)` names reviews a command is working on, which stay.
+     */
+    async enforceLimit(inUse = () => false) {
       const reviews = await listReviews();
-      const evicted = reviews.slice(0, Math.max(0, reviews.length - limit));
+      const evicted = reviews.slice(0, Math.max(0, reviews.length - limit)).filter(review => !inUse(review.id));
       for (const review of evicted) await removeReview(review);
       return evicted.map(review => review.id);
     },
@@ -148,11 +151,17 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
     },
     /**
      * Remember reviewer sessions kept from a run that left no saved review.
-     * The newest `limit` runs keep theirs; returns the session IDs of older
-     * runs, whose records are removed, for the caller to delete.
+     * A run has one record: a later call replaces the run's earlier one, and
+     * an empty list removes it. The newest `limit` runs keep theirs; returns
+     * the session IDs of older runs, whose records are removed, for the caller
+     * to delete.
      */
     async keepSessions(runId, sessionIDs) {
-      await writeAtomic(join(dirs.sessions, `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${runId}.json`), JSON.stringify(sessionIDs));
+      const own = (await readdir(dirs.sessions)).filter(name => name.endsWith(`-${runId}.json`)).sort();
+      const record = own.at(-1) ?? `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${runId}.json`;
+      for (const other of own.slice(0, -1)) await rm(join(dirs.sessions, other), { force: true });
+      if (sessionIDs.length) await writeAtomic(join(dirs.sessions, record), JSON.stringify(sessionIDs));
+      else await rm(join(dirs.sessions, record), { force: true });
       const files = (await readdir(dirs.sessions)).filter(name => name.endsWith('.json')).sort();
       const released = [];
       for (const old of files.slice(0, Math.max(0, files.length - limit))) {

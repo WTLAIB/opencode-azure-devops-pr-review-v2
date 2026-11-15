@@ -77,6 +77,22 @@ test('sessions kept from unfinished runs are bounded; older runs release theirs'
   assert.equal((await readdir(store.dirs.sessions)).length, 2);
 });
 
+test('a run has one record of kept sessions: a later list replaces it and an empty one removes it', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
+  const records = async () => Promise.all((await readdir(store.dirs.sessions)).sort().map(async name => JSON.parse(await readFile(join(store.dirs.sessions, name), 'utf8'))));
+  // Every session of the run before its cleanup, then what the cleanup left.
+  assert.deepEqual(await store.keepSessions('run00001', ['ses_1', 'ses_2', 'ses_3']), []);
+  assert.deepEqual(await store.keepSessions('run00002', ['ses_4']), []);
+  assert.deepEqual(await store.keepSessions('run00001', ['ses_3']), []);
+  assert.deepEqual(await records(), [['ses_3'], ['ses_4']], 'Still two records, the first with its later list and in its place.');
+  // The replaced record does not count twice against the limit, and nothing it dropped is released later.
+  assert.deepEqual(await store.keepSessions('run00003', ['ses_5']), ['ses_3']);
+  assert.deepEqual(await store.keepSessions('run00002', []), []);
+  assert.deepEqual(await records(), [['ses_5']]);
+});
+
 test('publication attempts are shared per PR, re-read before writes and expire after 90 days', async t => {
   const directory = await root(t);
   let clock = Date.parse('2026-01-01T00:00:00Z');

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
+import fsPromises, { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { closeSync, constants as fsConstants, openSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -123,6 +124,7 @@ async function fixture(t, opts = {}) {
       hook: hook('session'),
       async create(input) {
         calls.push({ kind: 'create', agent: input.agent, title: input.title });
+        await opts.creating?.(input);
         const id = `ses_${++seq}`;
         // Like OpenCode: a session without a parent is created at the location it is given, or at the plugin's.
         const placed = { ...clone(input), ...(input.parentID === undefined ? { location: clone(input.location ?? { directory }) } : {}) };
@@ -1923,6 +1925,204 @@ test('a tool call the host stops ends at once: the request only it waits for is 
   const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
   assert.equal(risk.toolTimeouts, 0);
   assert.equal(risk.sessionReads, 2, 'Only reads whose content the session saw count: the assigned file and the shared one, once.');
+});
+
+test('a session OpenCode creates after its stage was stopped is deleted, since no stage knows it', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], async creating() { entered.resolve(); await release.promise; } });
+  t.after(() => release.resolve());
+  const running = f.command();
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /cancellation requested/);
+  assert.match(await running, /\] CANCELLED/);
+  assert.equal(f.sessions.size, 0, 'No session exists when the run ends.');
+  // The host finishes creating both initial sessions only now.
+  release.resolve();
+  const removed = () => f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
+  for (let waited = 0; removed().length < 2; waited += 2) { assert.ok(waited < 5000, 'The late sessions were not deleted.'); await sleep(2); }
+  assert.equal(f.sessions.size, 0, 'Both late sessions are gone, also while debugging: nothing ran in them.');
+  assert.equal(new Set(removed()).size, 2);
+  // A later prompt in such a session is refused like any private session's.
+  await assert.rejects(f.emit('session', 'prompt', { sessionID: removed()[0], prompt: { text: 'anything' } }), /Only the exact plugin-started reviewer input is authorized/);
+});
+
+const oldReviews = async (directory, count) => {
+  const store = await createReviewStore({ root: join(directory, 'state') });
+  for (let i = 0; i < count; i++) {
+    await store.save({ id: i.toString(16).padStart(8, '0'), origin: 'elsewhere', completedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+      reportSessions: new Set([`ses_old_${i}`]), publication: new Map(), final: { dispositions: [] } });
+  }
+};
+
+test('a command that started in a session before its deletion keeps that session; one typed while it is deleted is refused', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  const planning = deferred(), deleting = deferred(), stalled = deferred();
+  let started;
+  const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async during({ role }) { if (role === 'azpr-review-comment-plan') await planning.promise; },
+    async remove(sessionID) {
+      // The oldest saved review is evicted while the new one is saved. The new review's sessions all still exist, and
+      // a person types /pr-comment in the functional reviewer's.
+      if (sessionID === 'ses_old_0') {
+        started = f.sessionsFor('azpr-review-functional')[0].id;
+        await f.commands.get('pr-comment').execute({ sessionID: started, prompt: { text: '' }, delivery: 'steer' });
+      }
+      // The risk reviewer's deletion stalls, so a command can be typed there while it is under way.
+      if (f.sessions.get(sessionID)?.agent === 'azpr-review-risk') { deleting.resolve(sessionID); await stalled.promise; }
+    } });
+  t.after(() => { planning.resolve(); stalled.resolve(); });
+  const reviewing = f.command();
+  const risk = await within(deleting.promise);
+  assert.ok(risk, 'The cleanup reached the risk reviewer session.');
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: risk, prompt: { text: '' }, delivery: 'steer' }),
+    /This reviewer session is being deleted now that its run has ended\. Type the command in the conversation/);
+  stalled.resolve();
+  const receipt = await reviewing;
+  assert.match(receipt, /\] COMPLETE\n/);
+  const review = reviewId(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  assert.ok(f.sessions.has(started), 'The session a running command answers in was not deleted.');
+  assert.ok(!f.sessions.has(risk));
+  assert.ok(receipt.includes('\nSession notice: 1 reviewer session(s) of this run were deleted'), receipt);
+  assert.deepEqual((await savedReview(f, review)).reportSessions.sort(), [report, started].sort(), 'It stays on the review\'s record and goes with the review.');
+  // The command's receipt arrives where it was typed, and its own planner session is deleted.
+  planning.resolve();
+  const preview = await within(f.waitFor(notices => notices.find(n => n.sessionID === started && /\] PREVIEW; source review=/.test(n.text))));
+  assert.match(preview.text, new RegExp(`\\] PREVIEW; source review=${review}\\n`));
+  for (let waited = 0; f.sessions.size > 2; waited += 2) { assert.ok(waited < 5000, 'The planner session was not deleted.'); await sleep(2); }
+  assert.deepEqual([...f.sessions.keys()].sort(), [report, started].sort());
+});
+
+test('a review is not evicted while its sessions are deleted, and no later save brings an evicted record back', async t => {
+  const stalled = deferred(), deleting = deferred();
+  let stuck;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) { deleting.resolve(); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const first = f.command('pr-review', f.azure.prUrl(), 'origin-0');
+  await within(deleting.promise);
+  const report = f.sessionsFor('azpr-review-verifier')[0].id;
+  // Twenty newer reviews complete in other conversations while the first one's cleanup waits for the host.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] COMPLETE\n/);
+  const oldest = (await savedReviews(f)).sort((a, b) => a.completedAt.localeCompare(b.completedAt))[0];
+  assert.equal(oldest.origin, 'origin-0', 'The first review is still saved, one over the limit.');
+  assert.equal((await savedReviews(f)).length, 21);
+  assert.ok(f.sessions.has(report), 'Its report session was not deleted under it.');
+  stalled.resolve();
+  const receipt = await first;
+  assert.match(receipt, /\] COMPLETE\n/);
+  // Its turn comes once its cleanup has ended: it is the oldest of 21.
+  const saved = await savedReviews(f);
+  assert.equal(saved.length, 20);
+  assert.ok(!saved.some(review => review.id === reviewId(receipt)), 'No save after the eviction brought the record back.');
+  assert.ok(!f.sessions.has(report), 'The evicted review took its report session with it.');
+});
+
+test('a review whose session a running command answers in is not evicted under it', async t => {
+  const planning = deferred(), entered = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    async during({ role }) { if (role === 'azpr-review-comment-plan') { entered.resolve(); await planning.promise; } } });
+  t.after(() => planning.resolve());
+  const reportOf = receipt => /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  const older = await f.command(), newer = await f.command();
+  const olderReport = reportOf(older);
+  // In the older review's report session a person asks for the newer review's comments: the answer goes there.
+  await f.commands.get('pr-comment').execute({ sessionID: olderReport, prompt: { text: reviewId(newer) }, delivery: 'steer' });
+  await within(entered.promise);
+  // Twenty more reviews complete elsewhere while that command plans: both reviews are over the limit now.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] COMPLETE\n/);
+  assert.ok(f.sessions.has(olderReport), 'The session the command answers in still exists.');
+  const kept = (await savedReviews(f)).map(review => review.id);
+  assert.ok(kept.includes(reviewId(older)) && kept.includes(reviewId(newer)), 'Neither the review that owns it nor the one being commented on was evicted.');
+  planning.resolve();
+  const preview = await within(f.waitFor(notices => notices.find(n => n.sessionID === olderReport && /\] PREVIEW; source review=/.test(n.text))));
+  assert.match(preview.text, new RegExp(`\\] PREVIEW; source review=${reviewId(newer)}\\n`));
+  // The next completed review evicts what waited.
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] COMPLETE\n/);
+  const after = (await savedReviews(f)).map(review => review.id);
+  assert.equal(after.length, 20);
+  assert.ok(!after.includes(reviewId(older)) && !after.includes(reviewId(newer)));
+  assert.ok(!f.sessions.has(olderReport), 'The evicted review took its report session with it.');
+});
+
+test('a run\'s sessions are on record before any is deleted, for a comment run and for an unfinished review', async t => {
+  // A comment run: while its planner session's deletion waits for the host, the saved review names that session.
+  const stalled = deferred(), deleting = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { if (f.sessions.get(sessionID)?.agent === 'azpr-review-comment-plan') { deleting.resolve(sessionID); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const receipt = await f.command();
+  const review = reviewId(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  const previewing = f.command('pr-comment', '');
+  const planner = await within(deleting.promise);
+  assert.deepEqual((await savedReview(f, review)).reportSessions.sort(), [planner, report].sort(), 'A process that ended now would still know the planner session.');
+  stalled.resolve();
+  assert.match(await previewing, /\] PREVIEW; source review=/);
+  assert.deepEqual((await savedReview(f, review)).reportSessions, [report]);
+
+  // An unfinished review: the record of its sessions holds all of them during the cleanup, then only the draft's.
+  const waiting = deferred(), reached = deferred();
+  let stuck;
+  const g = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; },
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) { reached.resolve(); await waiting.promise; } } });
+  t.after(() => waiting.resolve());
+  const records = async () => Promise.all((await readdir(join(g.stateDirectory, 'sessions'))).map(async name => JSON.parse(await readFile(join(g.stateDirectory, 'sessions', name), 'utf8'))));
+  const partial = g.command();
+  await within(reached.promise);
+  const during = await records();
+  assert.equal(during.length, 1);
+  assert.equal(during[0].length, 3, 'Every session of the run is on record while the cleanup is under way.');
+  assert.ok(during[0].includes(stuck) && g.sessions.has(stuck));
+  waiting.resolve();
+  assert.match(await partial, /\] PARTIAL/);
+  const draft = g.sessionsFor('azpr-review-verifier').at(-1).id;
+  assert.deepEqual(await records(), [[draft]], 'One record for the run, with what the cleanup left.');
+});
+
+test('a tool call stopped while its observation is saved ends at once and is credited with no read', async t => {
+  const original = fsPromises.writeFile, entered = deferred(), gate = deferred(), outcomes = {};
+  const restore = () => { fsPromises.writeFile = original; syncBuiltinESMExports(); };
+  t.after(() => { restore(); gate.resolve(); });
+  const f = await fixture(t, { azure: fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Other.java': 'other code\n' } }),
+    async during({ session, role, turn, invoke }) {
+      if (turn !== 0 || role !== 'azpr-review-risk') return;
+      // The tool's own work is done when the text it showed is saved for comment planning; that save stalls.
+      fsPromises.writeFile = async (file, data, ...rest) => { if (data === 'other code\n') { entered.resolve(); await gate.promise; } return original(file, data, ...rest); };
+      syncBuiltinESMExports();
+      const controller = new AbortController();
+      const pending = invoke(session, 'azpr_read_file', { path: '/src/Other.java' }, { signal: controller.signal }).then(() => 'returned', error => error);
+      outcomes.saving = await within(entered.promise.then(() => true), 2000);
+      controller.abort(new Error('Fixture: the host stopped the call'));
+      outcomes.stopped = await within(pending, 1000);
+      restore();
+      gate.resolve();
+    } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  assert.equal(outcomes.saving, true, 'The call was stopped while its observation was being saved.');
+  assert.match(outcomes.stopped?.message ?? String(outcomes.stopped), /the host stopped the call/, 'It ended without waiting for the save.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(risk.sessionReads, 1, 'Only the assigned file: the stopped call showed the session nothing.');
+  assert.doesNotMatch(receipt, /observation could not be saved/);
+});
+
+test('a review cannot be started from a saved review\'s own session, also after a restart', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; } });
+  const receipt = await f.command();
+  const report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  const start = (fixtureInstance, name) => fixtureInstance.commands.get(name).execute({ sessionID: report, prompt: { text: f.azure.prUrl() }, delivery: 'steer' });
+  await assert.rejects(start(f, 'pr-review'), /Start a new review from your ordinary development session, not a reviewer session/);
+  // A new plugin instance no longer knows which sessions the earlier one created; the saved review still names its own.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; } });
+  for (const name of ['pr-review', 'pr-quick', 'pr-check']) {
+    await assert.rejects(start(g, name), /Start a new review from your ordinary development session, not a reviewer session/, name);
+  }
+  assert.equal(g.calls.filter(call => call.kind === 'create').length, 0);
+  // Its comment commands still work there.
+  assert.match(await g.command('pr-comment', '--list', report), /Reviews saved for this conversation \(1\)/);
 });
 
 test('private sessions of an unfinished review are deleted except the one holding the draft', async t => {
