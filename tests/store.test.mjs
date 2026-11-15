@@ -67,14 +67,134 @@ test('evicted reviews are reported once for session cleanup', async t => {
   assert.equal(removed.length, 1);
 });
 
-test('sessions kept from unfinished runs are bounded; older runs release theirs', async t => {
+test('records of kept sessions beyond the limit are named, oldest first, and stay until their sessions are gone', async t => {
   const directory = await root(t);
   let clock = Date.parse('2026-01-01T00:00:00Z');
   const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
-  assert.deepEqual(await store.keepSessions('run00001', ['ses_1']), []);
-  assert.deepEqual(await store.keepSessions('run00002', ['ses_2', 'ses_3']), []);
-  assert.deepEqual(await store.keepSessions('run00003', ['ses_4']), ['ses_1']);
+  await store.keepSessions('run00001', ['ses_1']);
+  await store.keepSessions('run00002', ['ses_2', 'ses_3']);
+  assert.deepEqual(await store.expiredSessions(), []);
+  await store.keepSessions('run00003', ['ses_4']);
+  await store.keepSessions('run00004', ['ses_5']);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'run00001', sessionIDs: ['ses_1'], kept: true }, { runId: 'run00002', sessionIDs: ['ses_2', 'ses_3'], kept: true }]);
+  assert.equal((await readdir(store.dirs.sessions)).length, 4, 'Naming a record does not remove it.');
+  // The caller deleted ses_1 and ses_2; ses_3 could not be deleted and stays on its record, in its place.
+  await store.keepSessions('run00001', []);
+  await store.keepSessions('run00002', ['ses_3']);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'run00002', sessionIDs: ['ses_3'], kept: true }], 'The next pass tries the survivor again.');
+  await store.keepSessions('run00002', []);
+  assert.deepEqual(await store.expiredSessions(), []);
   assert.equal((await readdir(store.dirs.sessions)).length, 2);
+  // An unreadable record names nothing and is removed.
+  await writeFile(join(store.dirs.sessions, '2025-01-01T00-00-00-000Z-damaged0.json'), '{not json');
+  assert.deepEqual(await store.expiredSessions(), []);
+  assert.equal((await readdir(store.dirs.sessions)).length, 2);
+});
+
+test('a run has one record of kept sessions: a later list replaces it and an empty one removes it', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
+  const records = async () => Promise.all((await readdir(store.dirs.sessions)).sort().map(async name => JSON.parse(await readFile(join(store.dirs.sessions, name), 'utf8'))));
+  // Every session of the run before its cleanup, then what the cleanup left.
+  await store.keepSessions('run00001', ['ses_1', 'ses_2', 'ses_3']);
+  await store.keepSessions('run00002', ['ses_4']);
+  await store.keepSessions('run00001', ['ses_3']);
+  assert.deepEqual(await records(), [['ses_3'], ['ses_4']], 'Still two records, the first with its later list and in its place.');
+  // The replaced record does not count twice against the limit.
+  await store.keepSessions('run00003', ['ses_5']);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'run00001', sessionIDs: ['ses_3'], kept: true }]);
+  await store.keepSessions('run00002', []);
+  assert.deepEqual(await records(), [['ses_3'], ['ses_5']]);
+  assert.deepEqual(await store.expiredSessions(), []);
+});
+
+test('sessions that could not be deleted are due at every pass and do not count against the limit', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
+  await store.keepSessions('aaaaaaaa', ['ses_draft_a']);
+  await store.keepSessions('bbbbbbbb', ['ses_draft_b']);
+  await store.retrySessions('aaaaaaaa', ['ses_stuck']);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck'], kept: false }], 'Due although only two runs keep sessions.');
+  assert.deepEqual(await store.expiredSessions(() => true), [], 'While the run\'s command has not ended, its own cleanup deals with them.');
+  // A third run pushes the oldest kept record beyond the limit. The run has one entry for both of its records:
+  // the caller records what is left of all of them once, so neither list replaces the other.
+  await store.keepSessions('cccccccc', ['ses_draft_c']);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck', 'ses_draft_a'], kept: true }]);
+  assert.deepEqual(await store.expiredSessions(id => id === 'aaaaaaaa'), [], 'Neither of its records is due while the run\'s command has not ended.');
+  assert.deepEqual(await store.expiredSessions(id => id === 'bbbbbbbb'), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck', 'ses_draft_a'], kept: true }]);
+  const recorded = await store.recordedSessions();
+  assert.deepEqual({ kept: recorded.kept.sort(), due: recorded.due }, { kept: ['ses_draft_a', 'ses_draft_b', 'ses_draft_c'], due: ['ses_stuck'] });
+  // Replaced in place, and removed by an empty list, without touching the run's kept record.
+  await store.retrySessions('aaaaaaaa', ['ses_stuck', 'ses_other']);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck', 'ses_other', 'ses_draft_a'], kept: true }]);
+  await store.retrySessions('aaaaaaaa', []);
+  assert.deepEqual(await store.expiredSessions(), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_draft_a'], kept: true }]);
+  assert.equal((await readdir(store.dirs.sessions)).length, 3, 'Naming the records removed none.');
+});
+
+test('the session records name every session they hold, those kept on purpose apart from those still to be deleted', async t => {
+  const directory = await root(t);
+  const store = await createReviewStore({ root: directory });
+  assert.deepEqual(await store.recordedSessions(), { kept: [], due: [] });
+  await store.keepSessions('run00001', ['ses_1', 'ses_2']);
+  await store.keepSessions('run00002', ['ses_3']);
+  await store.retrySessions('run00002', ['ses_4']);
+  await store.retrySessions('00000000', ['ses_5']);
+  await writeFile(join(store.dirs.sessions, 'damaged.json'), '{not json');
+  const recorded = await store.recordedSessions();
+  assert.deepEqual({ kept: recorded.kept.sort(), due: recorded.due.sort() }, { kept: ['ses_1', 'ses_2', 'ses_3'], due: ['ses_4', 'ses_5'] }, 'An unreadable record names nothing.');
+});
+
+test('a review\'s sessions are dealt with while its record is still there, and the review stays when they could not be', async t => {
+  const directory = await root(t);
+  const present = [];
+  let settled = false;
+  const store = await createReviewStore({ root: directory, limit: 1, onRemove: async old => {
+    // The record is what names the sessions: a process that ended now would find the review again.
+    present.push((await readdir(join(directory, 'reviews'))).includes(`${old.id}.json`));
+    return settled;
+  } });
+  const data = await createCommentData({ root: store.dirs.data });
+  const oldest = review('aaaaaaaa', '2026-01-01T00:00:00Z', { dataDirectory: data.directory });
+  await store.save(oldest);
+  await store.save(review('bbbbbbbb', '2026-01-02T00:00:00Z'));
+  assert.deepEqual(await store.enforceLimit(), [], 'Sessions that are still there could not be recorded elsewhere: the review stays.');
+  assert.equal(await store.remove(oldest), false);
+  assert.deepEqual((await readdir(join(directory, 'reviews'))).sort(), ['aaaaaaaa.json', 'bbbbbbbb.json']);
+  assert.ok((await stat(data.directory)).isDirectory(), 'Its data stays with it.');
+  // A new process finds it over the limit again, and removes it once its sessions are dealt with.
+  settled = true;
+  assert.deepEqual((await store.load()).map(saved => saved.id), ['bbbbbbbb']);
+  assert.deepEqual(present, [true, true, true]);
+  assert.deepEqual(await readdir(join(directory, 'reviews')), ['bbbbbbbb.json']);
+  await assert.rejects(stat(data.directory));
+});
+
+test('the record of a run whose command has not ended is not named as expired, whatever its age', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
+  const waiting = new Set(['run00001']), inUse = id => waiting.has(id);
+  await store.keepSessions('run00001', ['ses_1', 'ses_2']);
+  await store.keepSessions('run00002', ['ses_3']);
+  await store.keepSessions('run00003', ['ses_4']);
+  assert.deepEqual(await store.expiredSessions(inUse), [], 'The oldest record is in use; nothing else is over the limit yet.');
+  await store.keepSessions('run00004', ['ses_5']);
+  assert.deepEqual(await store.expiredSessions(inUse), [{ runId: 'run00002', sessionIDs: ['ses_3'], kept: true }]);
+  waiting.clear();
+  assert.deepEqual((await store.expiredSessions(inUse)).map(record => record.runId), ['run00001', 'run00002']);
+});
+
+test('sessions whose deletion was never answered are saved with the review, and only when there are any', () => {
+  const review = { id: 'aaaaaaaa', origin: 'ordinary', reportSessions: new Set(['ses_report']), publication: new Map() };
+  assert.equal(Object.hasOwn(serializeReview(review), 'closingSessions'), false);
+  assert.equal(Object.hasOwn(deserializeReview(serializeReview(review)), 'closingSessions'), false);
+  assert.equal(Object.hasOwn(serializeReview({ ...review, closingSessions: new Set() }), 'closingSessions'), false);
+  const restored = deserializeReview(JSON.parse(JSON.stringify(serializeReview({ ...review, closingSessions: new Set(['ses_gone']) }))));
+  assert.deepEqual([...restored.closingSessions], ['ses_gone']);
+  assert.deepEqual([...restored.reportSessions], ['ses_report']);
 });
 
 test('publication attempts are shared per PR, re-read before writes and expire after 90 days', async t => {

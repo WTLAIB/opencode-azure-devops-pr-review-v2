@@ -76,7 +76,8 @@ for existing in [False, True]:
                 continue
             next_poll = time.monotonic() + 0.25
             if not origin:
-                candidates = [item for item in api('/api/session')['data'] if item['id'] not in before and not item.get('parentID')]
+                # AZPR's private sessions are sessions of their own too; their metadata tells them from the conversation.
+                candidates = [item for item in api('/api/session')['data'] if item['id'] not in before and not item.get('parentID') and not (item.get('metadata') or {}).get('azpr')]
                 if len(candidates) == 1:
                     origin = candidates[0]['id']
             if not origin:

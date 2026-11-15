@@ -179,7 +179,7 @@
     "deletePrivateSessions": {
       "type": "boolean",
       "default": true,
-      "description": "Delete AZPR's private reviewer sessions when they are no longer needed: a completed review's sessions when the review is evicted (the newest 20 are kept, as /pr-comment needs them), and the sessions of an unfinished review at once except the one holding its report or draft (all of them while debug is enabled); those kept sessions follow the same 20-run limit. false keeps every session."
+      "description": "Delete AZPR's private reviewer sessions when a command ends, except the one holding the review's report or draft (a comment run keeps none; all are kept while debug is enabled). The kept session is deleted when its review is evicted (the newest 20 reviews are kept), or for an unfinished review within the same 20-run limit. false keeps every session."
     },
     "afterReview": {
       "type": "object",

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isHostContinuation, isSessionNotFound, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -84,16 +84,26 @@ test('Azure DevOps REST paths and the api-version live only in azure.mjs; no MCP
   }
 });
 
+test('a rejected session call that names a missing session is told from other failures', () => {
+  // The shape OpenCode 2.2.4 and 2.3.0 reject with: an Error whose _tag and name are the tag, with the session ID.
+  assert.equal(isSessionNotFound(Object.assign(new Error(''), { _tag: 'Session.NotFoundError', name: 'Session.NotFoundError', sessionID: 'ses_gone' })), true);
+  assert.equal(isSessionNotFound({ _tag: 'Session.NotFoundError' }), true);
+  assert.equal(isSessionNotFound(Object.assign(new Error('x'), { name: 'Session.NotFoundError' })), true);
+  for (const other of [new Error('Timed out.'), { _tag: 'Session.MessageNotFoundError' }, { _tag: 'Session.AgentNotFoundError' }, { name: 'NotFoundError' }, 'Session.NotFoundError', null, undefined]) {
+    assert.equal(isSessionNotFound(other), false, String(other?._tag ?? other?.name ?? other));
+  }
+});
+
 test('host helpers normalize response shapes and detect capabilities', () => {
   assert.deepEqual(listOf({ data: [1] }), [1]);
   assert.deepEqual(listOf([2]), [2]);
   assert.equal(listOf({}), null);
   assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
-  const capabilities = hostCapabilities({ app: { version: '2.2.4' }, permission: { hook() {} }, tool: { transform() {} } });
+  const capabilities = hostCapabilities({ app: { version: '2.3.0' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
-  assert.equal(TESTED_HOST_VERSION, '2.2.4');
-  for (const version of ['2.0.32', '2.1.4', '2.2.3', '2.2.5']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
+  assert.equal(TESTED_HOST_VERSION, '2.3.0');
+  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.1']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);

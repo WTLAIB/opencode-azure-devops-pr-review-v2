@@ -1,8 +1,9 @@
 # Validation
 
 This page records validation of the Azure DevOps REST implementation, the
-0.1.0 through 0.3.4 distributions, the 0.3.5, 0.3.6 and 0.3.7 release
-candidates, a run of Martian's public code review benchmark, the instruction
+0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
+0.4.1, the move to OpenCode 2.3.0, a run of Martian's public code review
+benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
 of 0.3.7 run on ReviewBench's test set. Host
 integration, provider
@@ -14,7 +15,7 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  five runs on the real OpenCode 2.2.4 host with isolated profiles and fake
+  five runs on the real OpenCode 2.3.0 host with isolated profiles and fake
   model and Azure DevOps services: fresh, replacement and native installation
   (including an authenticating proxy, a custom CA certificate, a foreign MCP
   server behind CodeMode and an image model), a 120-file
@@ -42,6 +43,143 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.1 release candidate acceptance (2026-11-16)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+CLI 2.3.0, installed into a disposable prefix next to the system's 2.2.4. The
+candidate moves the tested host to OpenCode 2.3.0. It changes how private
+sessions are created and which of them are kept, how a model stream that
+OpenCode recovered by itself is read, and how a stopped tool call ends, as
+described under
+[OpenCode 2.3.0 compared with 2.2.4](#opencode-230-compared-with-224-2026-11-15-and-16).
+The prompts under `src/prompts` are those of 0.4.0, byte for byte, so the
+locked prompt hashes did not change.
+
+- `npm run check` and **489 offline tests** passed (449 for 0.4.0). Of the 40
+  new tests, 13 cover the changes themselves: a session of its own at the
+  conversation's location, with AZPR's metadata and no parent, and what
+  creation refuses; a cancellation while the conversation is read; a
+  completed review that keeps only the session holding its report, while its
+  other sessions and those of a comment run are deleted, and debugging, which
+  keeps them all; a deletion that fails and stays on record, for a completed
+  and for an unfinished review; a step the host retried, alone, after tool
+  calls, twice in a row and next to a continuation, and 18 altered turns it
+  must not excuse; the `step-retries` counter; and a stopped tool call whose
+  own request is aborted while a read the run shares goes on. The other 27
+  were added with the corrections described below.
+- All five real-host fixtures passed on OpenCode 2.3.0 with isolated profiles
+  and fake model and Azure services: fresh 110 model and 187 Azure DevOps
+  requests, replacement 92 and 157, native packed package installation 110
+  and 194, the comment-scale fixture 34 and 75 (largest provider request
+  38,240 characters) and background compaction 8 model requests. These are
+  the counts of 0.4.0 plus the new stream-cut step (3 model and 7 Azure
+  DevOps requests) and one more read in the background fixture. In the smoke
+  fixture the conversation's model received no request while the review ran,
+  each of the review's four private sessions had no parent, the
+  conversation's location and AZPR's metadata, a quick answer that broke off
+  mid-stream was retried by OpenCode in the same session (3 requests,
+  `step-retries=1`), and the TUI step told its conversation from the private
+  sessions by that metadata.
+- The same tree passed all five fixtures on OpenCode 2.2.4 with the same
+  request counts, in a copy whose tested-version constant was 2.2.4 and whose
+  stream-cut step expected what that host does (a continuation notice,
+  `stream-continuations=1`).
+- `npm pack --dry-run --json` lists **33 files** (about 202 KB), the same
+  files as 0.4.0.
+- The 230 local Markdown links, images and anchors outside code examples
+  resolve.
+- Seven reviews of the pull request by a second model followed, each of the
+  tree as corrected after the one before. The first six reported 17 defects,
+  and three more of the same kind were found while correcting them; the
+  seventh found nothing to change. One defect was in the stopped tool call:
+  a call stopped while the text it had read was being saved for comment
+  planning waited for that save and was credited with the read. One was a
+  sentence in the README and the changelog. The others were in the cleanup
+  of private sessions, which is new in this release. They needed a command
+  typed in a reviewer session while its run ended, an OpenCode that is slow
+  or fails to delete a session, or a process that ends during a cleanup:
+  - A session that a running command still answered in was deleted.
+  - A review, or an unfinished run's record of its sessions, was evicted
+    while its cleanup, its receipt or the comment step after it still needed
+    it, and a later save could bring an evicted review's record back.
+  - Sessions were deleted before a record named them, or a record was removed
+    before its sessions were gone, so a process that ended in between forgot
+    them. A session that could not be deleted was not tried again, or was
+    recorded as one its run keeps.
+  - A deletion OpenCode had not answered in time counted as settled, so the
+    session took commands again, also after a plugin reload.
+  - A review could be started from a private session once the review that
+    kept it was evicted.
+  - Two were introduced by corrections. A comment run whose planning had
+    failed erased the preview that a later command saved while the first
+    run's sessions were being deleted. Its correction then let a run choose
+    its review as the conversation's current one before that wait, so that
+    its receipt could arrive last while a command without an ID acted on
+    another review and its PR.
+
+  The cleanup as it is now is described under
+  [authorization and isolation](ARCHITECTURE.md#authorization-and-isolation).
+  The 27 offline tests added for these cases include a restart during a
+  cleanup, deletions that OpenCode refuses, never answers or answers with
+  `Session.NotFoundError`, 20 later runs while a cleanup waits, and commands
+  typed while sessions are being deleted. On a copy of the tree each
+  correction was removed in turn and a test failed, except for safeguards
+  that another check also covers.
+- The final tree passed `npm run check`, the 489 offline tests and the five
+  real-host fixtures again, on OpenCode 2.3.0 and, in the copy described
+  above, on 2.2.4, with the request counts above.
+- The Git archive of the final code commit, extracted into a clean directory,
+  installed with `install.sh`: the 19 runtime modules, 9 prompts and the
+  license match, and `--replace` kept the settings byte for byte with mode
+  600 and an unrelated file in place. The link and package checks above
+  passed on that archive too.
+- That commit, installed from GitHub as a public Git package in an isolated
+  profile on OpenCode 2.3.0, passed the native smoke test with 110 model and
+  187 Azure DevOps requests.
+- No live review with a real model ran on this candidate, on either host, and
+  nothing was posted to Azure DevOps. The effect of sessions of their own on
+  a provider's prompt cache is therefore not measured.
+
+This is a pre-publication record. Registry integrity and installation from npm
+are checked only after publication, following the
+[releasing guide](RELEASING.md).
+
+## OpenCode 2.3.0 compared with 2.2.4 (2026-11-15 and 16)
+
+Environment: Ubuntu 22.04.5 under WSL2 and Node 22.23.3. OpenCode CLI 2.3.0
+(published 2026-11-13, 908 commits after 2.2.4) was installed into a
+disposable prefix next to the system's 2.2.4; both embed Bun 1.4.4. Every run
+used isolated profiles and the fake model and Azure DevOps services; no real
+model or Azure request was made. The upstream source of both tags was read
+for each host interface AZPR uses. "0.4.0" below is the released tree and
+"the candidate" is 0.4.1.
+
+| Check | Observed |
+| --- | --- |
+| Sessions with a parent | OpenCode 2.3.0 hands every answer of a session that has a parent to the parent as a `<subagent>` message and wakes the parent's own model; 2.2.4 does not. 0.4.0, whose private sessions are children of the conversation, on 2.3.0 with a 2-file review: 12 model requests, 7 of them by the conversation's own model (agent `build`, offered 12 tools, among them edit, shell and write), which received three `<subagent>` messages with reviewer and verifier output and answered each AZPR notice. With the 120-file fixture, one run made 64 model requests instead of 34 (the number varies with timing), the largest 66,776 characters instead of 38,266. The candidate on 2.3.0: 5 requests, none by the conversation, and its five notices stayed in the conversation's inbox. |
+| Model requests | The comment-scale fixture's 34 requests are byte-identical between 0.4.0 (children) and the candidate (sessions of their own) on OpenCode 2.2.4, once per-run values (paths, IDs, dates) are normalised. Between 2.2.4 and 2.3.0 the candidate's system prompts and AZPR tool definitions are identical; every request differs only in the host's own `read` tool definition, which is 12 characters shorter on 2.3.0. |
+| Interrupted stream | OpenCode 2.3.0 no longer queues a continuation notice after a stream breaks off. It retries the step: the errored assistant message stays, marked for retry, and the next assistant message is the retried step, sent with the step's tool calls that ran and without the text that was cut off. 0.4.0 on 2.3.0, a quick review whose answer broke off once: both sessions FAILED as transient and the review was INCOMPLETE. The candidate: COMPLETE in the same session with 3 requests, `step-retries=1` on 2.3.0 and `stream-continuations=1` on 2.2.4. |
+| Session placement | A session created without a parent takes the location it is given, otherwise the plugin instance's. The candidate passes the conversation's location; the created sessions reported the conversation's directory on both hosts. |
+| Session list and archive | OpenCode lists sessions without a parent that are not archived. On 2.3.0 a plugin's `session.update({ archived: true })` is accepted and has no effect (the HTTP API does archive), so AZPR deletes instead. Session metadata set at creation is returned by the session API on both hosts. |
+| Missing sessions | A probe plugin created a session, deleted it, deleted it again and read it. On both hosts the second deletion and the read, like the read of an ID that never existed, were rejected with an error whose `_tag` and `name` are `Session.NotFoundError`. The candidate takes only that answer, or a confirmed deletion, as a session that is gone. |
+| Background summary | 2.2.4 starts one at 85% of the compaction ceiling; 2.3.0 starts one within 60,000 tokens of the ceiling, at most half the room the session began with, so a single response never reaches it. The fixture's functional reviewer now reads two files and reports the large context with its second response; the refused summary and the permanent failure that follows are as before on both hosts. |
+| Full workflow | The fresh smoke fixture made 110 model and 187 Azure DevOps requests on both hosts, replacement 92 and 157, native 110 and 194; the inactivity watchdog stopped a stalled stream after 60.0 s on both, and a provider 503 was retried in the same session. |
+| Tool scopes | Private reviewers saw the six AZPR tools plus `read`, `glob` and `grep` on both hosts, also with a foreign MCP server behind CodeMode and an image model configured. |
+| Stopping a tool call | On both hosts a tool's `signal` aborts when its call is interrupted. On 2.3.0 a tool that read the signal is also told when a person stops the call, and is interrupted if it has not settled 5 seconds later (source). The candidate reads the signal once per call; this path is covered by an offline test, not by a host fixture. |
+| Unreachable provider | With a provider host name that does not resolve, 2.2.4 gave up after 10 retries in each session (89 s and 82 s), and the review was INCOMPLETE after 172 s and two sessions. 2.3.0 retries such failures on a budget of its own, with gaps up to 30 s for up to an hour (source): after 161 s the first session was still retrying (9 retries, all allowed by AZPR), and `/pr-stop` ended the review as CANCELLED. |
+| Cache warming | With warming every 3 seconds for 20 seconds configured, no provider request followed the two of a quick review of the candidate on 2.3.0. |
+| Routing models | 2.2.7 added GitHub Copilot's Auto, which resolves a session's model through the `experimental.model.resolve` hook; the session hooks then receive the routed model (source only, not run with a Copilot account). AZPR refuses a request on another model than the configured one, so such an entry cannot be an AZPR model. |
+| Plugin loading | On 2.3.0, `opencode plugin add …@0.3.7` while the server ran: the seven commands appeared 0.5 s later. Adding 0.4.0 and removing 0.3.7: 0.4.0 was the only active entry 0.5 s later, without a restart. A server started with `OPENCODE_DISABLE_FILEWATCHER`, as the fixtures' servers are, did not pick up the change. |
+| Plugin API | Otherwise additive in the parts AZPR uses: a `fork` session hook, the experimental `experimental.model.resolve` hook, freeform tools, the cooperative stop above, and a `session.step.first-token` event. The hooks, session methods, request kinds, message types, permission actions and plugin list AZPR uses are unchanged. |
+| Proxies | 2.3.0 still adds `127.0.0.1`, `localhost` and `::1` to `NO_PROXY`; the smoke fixture reached its proxied Azure DevOps service on 127.0.0.2 through one `CONNECT` tunnel. |
+| Database | No migration was added between 2.2.4 and 2.3.0 (the same 59 migration files). |
+| Terminal UI | `opencode --prompt "/pr-review …"` can still submit before the command catalog loads (the same source path; see [debugging](DEBUGGING.md)). The fixture's interactive submission and `/pr-stop` in new and existing conversations passed. |
+
+Not covered: real providers and Azure DevOps on 2.3.0, a provider's prompt
+cache with sessions of their own, a person stopping a private session's tool
+call in the TUI, GitHub Copilot's Auto with a real account, and Desktop
+features.
 
 ## 0.4.0 release candidate acceptance (2026-11-14)
 
@@ -3199,10 +3337,22 @@ transient failure, and its error names the last activity.
 
 ## Known limitations
 
-- **Tested environment.** OpenCode CLI 2.2.4 (V2 plugin API) on Ubuntu 22.04
+- **Tested environment.** OpenCode CLI 2.3.0 (V2 plugin API) on Ubuntu 22.04
   under WSL2. Other OpenCode 2.x versions get an OpenCode WARNING row in
-  `/pr-check` and are not validated; OpenCode 1.x is not supported. Other operating systems
+  `/pr-check` and are not validated, apart from the host fixtures of 0.4.1,
+  which also passed on 2.2.4; OpenCode 1.x is not supported. Other operating systems
   are not validated yet.
+- **OpenCode 2.3.0 with real models.** The move to 2.3.0 was validated with
+  fake model and Azure DevOps services only. No review with a real provider
+  has run on OpenCode 2.3.0 or on 0.4.1 yet, so the effect of sessions of
+  their own on a provider's prompt cache is not measured.
+- **Private sessions in the session list.** OpenCode lists AZPR's private
+  sessions next to conversations, and its plugin API cannot archive them.
+  AZPR deletes all but the report session when a run ends; with debug enabled
+  every session stays until its review is evicted. A review interrupted by an
+  OpenCode restart leaves its sessions behind: AZPR had not recorded them yet
+  and does not delete them later. Their titles (`[AZPR <id>] …`) and
+  `metadata.azpr` identify them.
 - **Azure DevOps Services only.** Azure DevOps Server (on-premises) is not
   supported by the current URL handling.
 - **File encoding and size.** Files are read as UTF-8, so text in another

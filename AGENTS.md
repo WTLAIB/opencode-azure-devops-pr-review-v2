@@ -1,7 +1,7 @@
 # AI development guide
 
 This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.2.4`), the Azure DevOps Services REST API (api-version 7.1)
+`@opencode/cli@2.3.0`), the Azure DevOps Services REST API (api-version 7.1)
 and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
@@ -84,11 +84,19 @@ settings, backups and failure records. Never upload `.local/`.
   followed.
 - Transient execution failures retry once in a new session; overflow splits the
   shard. Permanent failures and cancellations are not retried.
+- An interrupted stream that OpenCode recovered by itself costs no new session:
+  a step it retried (OpenCode 2.3.0) or a continuation it queued (earlier
+  hosts). Accept an errored assistant message only with the host's retry mark
+  and a complete, successful final answer on the granted agent and model; a
+  retried step's answer is the final message alone.
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
 - All AZPR Azure DevOps traffic shares the queue in `tool-queue.mjs` (concurrency and
   per-call timeout). Release slots in `finally`; never depend on a hook running.
+- A tool call the host stops ends at once (read the call's `signal` once).
+  Abort only the request that call alone waits for; a read the run's sessions
+  share (a file, a recursive listing, the repository archive) goes on.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
   compact, and a compaction the host attempts in a reviewer's turn means "split
   this shard". A refused background summary (`experimental.background_compaction`)
@@ -97,6 +105,12 @@ settings, backups and failure records. Never upload `.local/`.
   see the roadmap's Deferred section before adding either.
 
 **Authorization.**
+- Private sessions are sessions of their own, never children of the
+  conversation: OpenCode 2.3.0 and later hand a child's answers to its parent
+  and wake the parent's own model. Create them at the conversation's location
+  with `metadata.azpr`, and tie them to the conversation through AZPR's own
+  records (run stages, a saved review's sessions), never the host's session
+  tree.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -118,11 +132,15 @@ settings, backups and failure records. Never upload `.local/`.
   the review and its PR, so a wrong pick shows before and after it acts. Save
   the choice when it is made, also for a command that answers at once
   (`--show`, unchanged adjustments): a choice kept only in memory lets a
-  command after a restart publish to another PR. Every write of a review's
-  record goes through its queue in `store.mjs`, and a save reads the review
-  when it starts, so overlapping commands never leave an older choice on disk.
-  A command that starts a run registers the run before its first await, so it
-  never waits for that save.
+  command after a restart publish to another PR. A run that ends makes its
+  review the current one next to its receipt, after the cleanup of its
+  sessions: a choice made before a wait can be overtaken by a command typed
+  meanwhile, and the receipt that arrives last then names another review
+  than commands act on. Every write of a review's record goes through its
+  queue in `store.mjs`, and a save reads the review when it starts, so
+  overlapping commands never leave an older choice on disk. A command that
+  starts a run registers the run before its first await, so it never waits
+  for that save.
 
 **Publication is idempotent.**
 - Recheck the PR (active, unchanged head) before writing; skip existing markers;
@@ -163,6 +181,35 @@ settings, backups and failure records. Never upload `.local/`.
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory
   (owner-only permissions, newest 20). Clean only stale, unreferenced data.
+- OpenCode lists every private session like a conversation. When a run ends,
+  delete its sessions except the one holding the report or draft (a comment
+  run keeps none; all stay while debugging or after an unconfirmed abort).
+  Choose the sessions to delete the moment the run ends, before any await:
+  from then on a command typed in one is refused. Put every session on record
+  before deleting it, those to delete apart from those kept (the review's
+  record with `closingSessions`; for an unfinished review the run's own
+  record and a retry record; a retry record for a session OpenCode creates
+  after its stage was cancelled), and remove a review's record only after
+  its sessions were dealt with, so that a process ending during a cleanup
+  forgets none and the next one knows which are still to go.
+- A session leaves the records only when it is gone: a confirmed deletion, or
+  OpenCode's `Session.NotFoundError`. What is still to be deleted outside a
+  saved review is on a retry record, apart from the sessions a run keeps on
+  purpose; it takes no commands, also after a restart, and a background pass
+  tries it again after every run and at load, leaving a run whose command
+  has not ended to its own cleanup. Deal with a run's records together, so
+  that neither list replaces the other, and never make a receipt wait for a
+  pass.
+- Never delete a session a command needs: the one it answers in, until its
+  last notice is out, and its run's conversation and stage sessions. A session
+  that is still there after the cleanup is its review's own again. A deletion
+  OpenCode never answered may still be carried out: that session stays among
+  `closingSessions` for good, closed to commands also after a restart, and
+  goes with its review.
+- Never evict a review, or an unfinished run's record of kept sessions, before
+  the command working on it has ended: its run, a comment run's last steps,
+  and after a review its cleanup, its receipt and the start of the comment
+  step it hands on. A save of an evicted review must not bring its record back.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 

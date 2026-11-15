@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.4.1 — 2026-11-16
+
+AZPR is tested with OpenCode 2.3.0 instead of 2.2.4, and two things that went
+wrong on 2.3.0 are fixed. The same release also passed its host fixtures on
+OpenCode 2.2.4, where `/pr-check` shows the OpenCode WARNING row. The
+reviewer and verifier instructions are those of 0.4.0, and no setting is new.
+
+OpenCode 2.3.0:
+
+- A review no longer wakes your conversation's own model. OpenCode 2.3.0
+  hands every answer of a child session to its parent and lets the parent's
+  model respond to it. AZPR's private sessions were children of the
+  conversation, so on 2.3.0 that model, with its edit and shell tools,
+  received the reviewers' raw output and AZPR's notices and answered each
+  one: 7 of the 12 model requests of a 2-file review in the test fixture.
+  Private sessions are now sessions of their own, created where the
+  conversation is. What the reviewers, the verifier and the comment planner
+  are sent did not change.
+- A model stream that breaks off mid-answer no longer fails the stage.
+  OpenCode 2.3.0 retries the interrupted step by itself instead of asking the
+  model to continue. AZPR did not recognise that and ran the stage again in a
+  new session, and a second interruption failed it. It now takes the retried
+  step's answer; the receipt counts such steps as `step-retries`.
+- The inactivity watchdog, the retry of a provider 503, the refused background
+  summary and the context-overflow split work on 2.3.0 as before.
+
+Private sessions in the session list:
+
+- OpenCode lists a session without a parent like a conversation, so AZPR's
+  private sessions now appear next to your conversations, titled
+  `[AZPR <id>] …`; a plugin cannot archive them. When a review ends, AZPR
+  therefore deletes its sessions at once, except the one that holds the report
+  or draft, which the receipt names. A comment run keeps none: its receipt
+  carries the preview or the publication result. Until now a completed review
+  kept all of its sessions until it was evicted. The kept session is deleted
+  with its review, as before (the newest 20 are kept).
+- A review's receipt says how many sessions were deleted (`Session notice`).
+- While `debug.enabled` is on, every session is still kept until the review
+  is evicted, so each review adds all of its sessions to the list. Turn debug
+  off for everyday use; `deletePrivateSessions: false` keeps everything too.
+- A review that an OpenCode restart interrupts leaves its sessions in the
+  list: AZPR had not recorded them yet. Delete those yourself.
+- A session whose deletion failed or timed out stays on record: it is
+  deleted with its review, or, when no review keeps it, tried again after
+  every later run and closed to AZPR commands meanwhile. Such a session used
+  to be forgotten. A command typed in a session that is being deleted is
+  refused. A session OpenCode creates only after its stage was cancelled is
+  deleted when it arrives.
+- A new review cannot be started from a saved review's own session, also after
+  an OpenCode restart; until now only the running process refused that.
+- Each private session carries `metadata.azpr` with its run, role and
+  conversation (and, for a comment run, the review), so tools that list
+  sessions can tell AZPR's sessions from conversations without reading titles.
+
+Tools:
+
+- A reviewer's tool call that OpenCode stops ends at once instead of when its
+  Azure DevOps request returns. The request only that call waits for (a folder
+  listing of one level, the PR's threads) is aborted; a file, a recursive
+  listing or the repository archive, which the run's other sessions may be
+  waiting for too, is still read to the end and kept for them.
+
+Documentation:
+
+- A model entry that lets the provider choose the model for each session,
+  such as GitHub Copilot's Auto in OpenCode 2.2.7 and later, cannot be an AZPR
+  model: AZPR refuses a request on another model than the configured one, and
+  `/pr-check` does not detect such an entry.
+- While a provider's host cannot be reached, OpenCode 2.3.0 retries the
+  request for up to an hour. AZPR allows those retries, so a review waits
+  instead of failing; `/pr-stop` ends it.
+
 ## 0.4.0 — 2026-11-14
 
 Two defaults change. They apply where a settings file does not name the

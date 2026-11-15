@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
+import fsPromises, { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir, symlink } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { closeSync, constants as fsConstants, openSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -74,18 +75,19 @@ async function fixture(t, opts = {}) {
     return { dispose() { hooks.set(key, (hooks.get(key) ?? []).filter(item => item !== fn)); } };
   };
   const nativeTools = { shell: async () => ({ output: 'shell ran' }), read: async () => ({ output: 'read ran' }) };
-  const invoke = async (session, tool, input = {}) => {
+  // `execution` adds to the context the tool receives (OpenCode's ToolContext), such as `signal`; getters stay getters.
+  const invoke = async (session, tool, input = {}, execution = {}) => {
     const event = { sessionID: session.id, agent: session.agent, messageID: 'msg_tool', id: `call_${++seq}`, tool, input };
     await emit('tool', 'execute.before', event);
     const executor = registry.tool(tool)?.execute ?? nativeTools[tool];
     let result, error;
-    try { result = await executor(input, event); } catch (caught) { error = caught; }
+    try { result = await executor(input, Object.defineProperties({ ...event }, Object.getOwnPropertyDescriptors(execution))); } catch (caught) { error = caught; }
     await emit('tool', 'execute.after', { ...event, ...(error ? { status: 'error', error } : { status: 'completed', result }) });
     if (error) throw error;
     return event.result ?? result;
   };
   const context = {
-    app: { version: opts.version ?? '2.2.4' },
+    app: { version: opts.version ?? '2.3.0' },
     location: { directory },
     // Like a host catalog, each configured model once, however many roles name it.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
@@ -122,13 +124,21 @@ async function fixture(t, opts = {}) {
       hook: hook('session'),
       async create(input) {
         calls.push({ kind: 'create', agent: input.agent, title: input.title });
+        await opts.creating?.(input);
         const id = `ses_${++seq}`;
-        const session = { ...clone(input), id, history: [], turns: 0, outcome: 'succeeded' };
+        // Like OpenCode: a session without a parent is created at the location it is given, or at the plugin's.
+        const placed = { ...clone(input), ...(input.parentID === undefined ? { location: clone(input.location ?? { directory }) } : {}) };
+        const session = { ...placed, id, history: [], turns: 0, outcome: 'succeeded' };
         if (session.model) session.model.variant ??= 'default';
         sessions.set(id, session);
-        return { ...clone(input), id, ...(session.model ? { model: clone(session.model) } : {}) };
+        return { ...clone(placed), id, ...(session.model ? { model: clone(session.model) } : {}) };
       },
-      async get({ sessionID }) { const { history, running, packet, ...info } = sessions.get(sessionID); return clone(info); },
+      // A conversation is not one of the fixture's sessions; like every session it has a location.
+      async get({ sessionID }) {
+        if (!sessions.has(sessionID)) return opts.conversation ? opts.conversation(sessionID) : { id: sessionID, location: { directory } };
+        const { history, running, packet, ...info } = sessions.get(sessionID);
+        return clone(info);
+      },
       async prompt(input) {
         const session = sessions.get(input.sessionID), role = session.agent;
         calls.push({ kind: 'prompt', sessionID: session.id, role, text: input.text });
@@ -145,7 +155,7 @@ async function fixture(t, opts = {}) {
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-            // Like OpenCode 2.1.4 through 2.2.4: a compaction it attempts in the turn opens its message first, and AZPR's refusal
+            // Like OpenCode 2.1.4 through 2.3.0: a compaction it attempts in the turn opens its message first, and AZPR's refusal
             // ends the turn; a background summary publishes nothing, and its refusal stays in the background.
             const compact = async ({ background = false } = {}) => {
               const message = background ? undefined : { id: `compaction_${++seq}`, type: 'compaction', status: 'running' };
@@ -157,8 +167,15 @@ async function fixture(t, opts = {}) {
             if (turn === 0 && ROLES[role].format === 'initial' && packet.assignment.files.length) {
               await invoke(session, 'azpr_read_file', { path: packet.assignment.files[0], version: 'head' });
             }
-            const result = await opts.answer?.({ role, packet, turn, text: input.text, session }) ?? defaultAnswer({ role, packet });
+            let result = await opts.answer?.({ role, packet, turn, text: input.text, session }) ?? defaultAnswer({ role, packet });
             const model = clone(session.model);
+            // Like OpenCode 2.3.0: a step whose stream broke stays as an errored message marked for retry, and the
+            // retried step answers in a new assistant message.
+            for (let cut = 0; cut < (result?.$retried ?? 0); cut++) {
+              session.history.push({ id: `cut_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
+                error: { type: 'provider.transport', message: 'fixture connection lost' }, retry: { attempt: cut + 2, at: 3 }, content: [{ type: 'text', text: '{"status":"COM' }] });
+            }
+            if (result?.$retried) result = result.answer ?? defaultAnswer({ role, packet });
             if (result?.$provider) {
               session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
                 error: { type: result.$providerType ?? 'provider.api', status: result.$provider, message: 'fixture' }, content: [] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
@@ -1492,7 +1509,7 @@ test('/pr-check names the running installation and warns about another AZPR entr
 test('/pr-check names the tested OpenCode version in its own row', async t => {
   const f = await fixture(t);
   const check = await f.command('pr-check');
-  assert.match(check, /\| OpenCode \| ok \| OpenCode 2\.2\.4, the tested version\. \|/);
+  assert.match(check, /\| OpenCode \| ok \| OpenCode 2\.3\.0, the tested version\. \|/);
   assert.doesNotMatch(check, /Host notice/);
 });
 
@@ -1500,7 +1517,7 @@ test('another OpenCode version is a /pr-check warning, not a failure; review rec
   const f = await fixture(t, { version: '2.2.5' });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/);
-  assert.match(check, /\| OpenCode \| WARNING \| OpenCode 2\.2\.5; AZPR is tested with 2\.2\.4\. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing\. \|/);
+  assert.match(check, /\| OpenCode \| WARNING \| OpenCode 2\.2\.5; AZPR is tested with 2\.3\.0\. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing\. \|/);
   const review = await f.command('pr-review', f.azure.prUrl(), 'review');
   assert.match(review, /\] COMPLETE/);
   assert.doesNotMatch(check + review, /Host notice|differs from the tested/);
@@ -1510,7 +1527,7 @@ test('a host without the permission hook gets a /pr-check warning about the proj
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.2\.4, the tested version, has the hook\. \|/);
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.3\.0, the tested version, has the hook\. \|/);
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 
@@ -1762,7 +1779,791 @@ test('AZPR tools read ranges, list folders and threads for private reviewers onl
   await assert.rejects(f.registry.tool('azpr_read_file').execute({ path: '/src/Main.java' }, { sessionID: 'ordinary', agent: 'build' }), /only to an active AZPR reviewer session/);
 });
 
-test('private sessions of an unfinished review are deleted except the one holding the draft; completed ones stay', async t => {
+test('private sessions are sessions of their own at the conversation\'s location, marked with their run, role and conversation', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], conversation: id => ({ id, location: { directory: '/work/project', workspaceID: 'wrk_1' } }) });
+  const review = reviewId(await f.command());
+  const reviewers = [...f.sessions.values()];
+  assert.deepEqual(reviewers.map(session => session.agent).sort(), ['azpr-review-functional', 'azpr-review-risk', 'azpr-review-verifier']);
+  for (const session of reviewers) {
+    assert.equal(Object.hasOwn(session, 'parentID'), false, 'Never a child: OpenCode 2.3.0 hands a child\'s answers to its parent.');
+    assert.deepEqual(session.location, { directory: '/work/project', workspaceID: 'wrk_1' });
+    assert.deepEqual(session.metadata, { azpr: { run: review, role: session.agent, conversation: 'ordinary' } });
+    assert.match(session.title, new RegExp(`^\\[AZPR ${review}\\] `));
+  }
+  // A comment run's sessions also name the review they act on.
+  const preview = await f.command('pr-comment', '');
+  const [planner] = f.sessionsFor('azpr-review-comment-plan');
+  assert.deepEqual(planner.metadata, { azpr: { run: reviewId(preview), role: 'azpr-review-comment-plan', conversation: 'ordinary', review } });
+  assert.notEqual(reviewId(preview), review);
+  assert.deepEqual(planner.location, { directory: '/work/project', workspaceID: 'wrk_1' });
+});
+
+test('a completed review keeps only the session holding its report; its other sessions and those of its comment runs are deleted at once', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'], settings: s => { s.debug.enabled = false; } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  const review = reviewId(receipt);
+  const report = /\nReport delivery: report queued to session=(\S+)\.\n/.exec(receipt)[1];
+  const created = () => f.calls.filter(call => call.kind === 'create').length, removed = () => f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
+  assert.equal(created(), 3);
+  assert.deepEqual([...f.sessions.keys()], [report], 'Only the session holding the report is left.');
+  assert.equal(f.sessions.get(report).agent, 'azpr-review-verifier');
+  assert.ok(f.notices.some(n => n.sessionID === report && new RegExp(`# AZPR ${review} — COMPLETE`).test(n.text)), 'The report stays readable.');
+  assert.ok(receipt.includes('\nSession notice: 2 reviewer session(s) of this run were deleted when it ended; only a session that holds the report or draft is kept (deletePrivateSessions). debug.enabled keeps them all.\n'), receipt);
+  assert.deepEqual((await savedReview(f, review)).reportSessions, [report]);
+  // The report session still means its review, and a comment run leaves no session of its own.
+  const preview = await f.command('pr-comment', '', report);
+  assert.match(preview, new RegExp(`\\] PREVIEW; source review=${review}\\n`));
+  assert.equal(created(), 4, 'One planning session ran.');
+  assert.equal(removed().length, 3);
+  assert.deepEqual([...f.sessions.keys()], [report]);
+  assert.deepEqual((await savedReview(f, review)).reportSessions, [report]);
+  assert.doesNotMatch(preview, /Session notice/, 'A comment receipt names no session.');
+  // Nothing is removed twice, and the kept session goes with the review.
+  assert.equal(new Set(removed()).size, removed().length);
+});
+
+test('while debugging every session of a review and of its comment runs is kept with the review', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const receipt = await f.command();
+  const review = reviewId(receipt);
+  await f.command('pr-comment', '');
+  assert.equal(f.calls.filter(call => call.kind === 'remove').length, 0);
+  assert.doesNotMatch(receipt, /Session notice/);
+  assert.equal(f.sessions.size, 4);
+  assert.deepEqual((await savedReview(f, review)).reportSessions.sort(), [...f.sessions.keys()].sort(), 'Kept sessions are deleted when the review is.');
+});
+
+test('a session whose deletion fails stays on record and is deleted later with the review or the kept sessions', async t => {
+  let stuck;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) throw new Error('Fixture deletion failed'); } });
+  const receipt = await f.command();
+  const review = reviewId(receipt);
+  const report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  assert.ok(stuck && stuck !== report);
+  assert.deepEqual((await savedReview(f, review)).reportSessions.sort(), [report, stuck].sort(), 'The review still names the session it could not delete.');
+  assert.equal(Object.hasOwn(await savedReview(f, review), 'closingSessions'), false, 'OpenCode answered: nothing is outstanding.');
+  assert.match(receipt, /\nSession notice: 1 reviewer session\(s\) of this run were deleted/, 'Only deletions that succeeded are counted.');
+  // It is still there, so it is one of the review's own sessions and takes commands.
+  assert.match(await f.command('pr-comment', '--list', stuck), /Reviews saved for this conversation \(1\)/);
+});
+
+// Resolves once `settled` holds: the pass over sessions that are due to go runs in the background.
+const eventually = async (settled, message = 'The background pass did not get there.') => {
+  for (let waited = 0; !(await settled()); waited += 5) { assert.ok(waited < 5000, message); await sleep(5); }
+};
+// The records of sessions under the state directory: those a run keeps on purpose, and those still to be deleted.
+const sessionRecords = async f => {
+  const kept = [], retried = [], names = [];
+  for (const name of (await readdir(join(f.stateDirectory, 'sessions'))).filter(file => file.endsWith('.json')).sort()) {
+    // A record that a pass removes while this reads is no record any more.
+    let sessionIDs;
+    try { sessionIDs = JSON.parse(await readFile(join(f.stateDirectory, 'sessions', name), 'utf8')); } catch { continue; }
+    names.push(name);
+    (/-retry[^-]*\.json$/.test(name) ? retried : kept).push(sessionIDs);
+  }
+  return { kept, retried, names };
+};
+
+test('an unfinished review records a session it could not delete as still to be deleted, apart from the one holding its draft', async t => {
+  let stuck, refusing = true;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { stuck ??= sessionID; if (refusing && sessionID === stuck) throw new Error('Fixture deletion failed'); },
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
+  assert.match(await f.command(), /\] PARTIAL/);
+  const draft = f.sessionsFor('azpr-review-verifier').at(-1);
+  assert.deepEqual(await sessionRecords(f).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft.id]], retried: [[stuck]] });
+  assert.ok(f.sessions.has(stuck));
+  // It is tried again with the next run, however few records there are; the draft stays.
+  refusing = false;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'second'), /\] PARTIAL/);
+  await eventually(() => !f.sessions.has(stuck), 'The session was not tried again.');
+  assert.ok(f.sessions.has(draft.id));
+  await eventually(async () => !(await sessionRecords(f)).retried.length);
+  const after = await sessionRecords(f);
+  assert.deepEqual(after.retried, []);
+  assert.equal(after.kept.length, 2);
+});
+
+test('a deletion OpenCode refuses because the session is gone already needs no further attempt', async t => {
+  const notFound = () => Object.assign(new Error(''), { _tag: 'Session.NotFoundError', name: 'Session.NotFoundError', sessionID: 'ses_old_0' });
+  // What OpenCode answers when the evicted review's session is deleted, and when it is read afterwards.
+  for (const [label, removal, reading, recorded] of [
+    ['OpenCode says the session does not exist', notFound, null, []],
+    ['the deletion fails otherwise and the session cannot be found', () => new Error('Fixture deletion failed'), notFound, []],
+    ['the deletion fails and the session is still there', () => new Error('Fixture deletion failed'), null, [['ses_old_0']]],
+    ['the deletion fails and the session cannot be read either', () => new Error('Fixture deletion failed'), () => new Error('Fixture read failed'), [['ses_old_0']]],
+  ]) {
+    const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    await oldReviews(directory, 20);
+    const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+      conversation(id) { if (id === 'ses_old_0' && reading) throw reading(); return { id, location: { directory } }; },
+      remove(sessionID) { if (sessionID === 'ses_old_0') throw removal(); } });
+    assert.match(await f.command(), /\] COMPLETE\n/, label);
+    assert.deepEqual((await sessionRecords(f)).retried, recorded, `${label}: ${recorded.length ? 'it stays on record and is tried again' : 'nothing is recorded for a session that is gone'}.`);
+  }
+});
+
+test('a step OpenCode retried after an interrupted stream is counted on its stage; the stage is not repeated', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], answer({ role }) { return role === 'azpr-review-risk' ? { $retried: 2 } : undefined; } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  assert.match(receipt, /\n- azpr-review-risk: COMPLETE; session=\S+; model=\S+; step-retries=2\n/);
+  assert.doesNotMatch(receipt, /Retry notice|stream-continuations/);
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 1, 'No new session: the host already retried the step.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(risk.hostStepRetries, 2);
+  assert.equal(risk.attempt, 1);
+  const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
+  const response = JSON.parse(await readFile(join(debug, (await readdir(debug)).find(name => /azpr-review-risk\.response\.json$/.test(name))), 'utf8'));
+  assert.equal(response.retriedSteps, 2);
+  assert.doesNotMatch(response.text, /^\{"status":"COM\{/, 'The interrupted text is not part of the answer.');
+});
+
+test('a tool call the host stops ends at once: the request only it waits for is aborted, a read the run shares goes on', async t => {
+  const azure = fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Shared.java': 'shared code\n' } });
+  // Every Azure DevOps request with the signal it was sent with.
+  const requests = [], send = azure.fetch;
+  azure.fetch = (url, init = {}) => { requests.push({ url: String(url), signal: init.signal }); return send(url, init); };
+  const requestOf = match => requests.findLast(request => match(new URL(request.url)));
+  // Resolves once the request is on its way, however long the machine takes to send it.
+  const sent = async match => { for (let waited = 0; !requestOf(match); waited += 2) { assert.ok(waited < 5000, 'The request was never sent.'); await sleep(2); } return requestOf(match); };
+  const threadsRequest = url => url.pathname.endsWith('/threads'), sharedRequest = url => url.searchParams.get('path') === '/src/Shared.java';
+  const release = deferred(), outcomes = {};
+  let signalReads = 0;
+  const f = await fixture(t, { azure, async during({ session, role, turn, invoke }) {
+    if (turn !== 0 || role !== 'azpr-review-risk') return;
+    const stoppable = () => { const controller = new AbortController(); return { controller, execution: { get signal() { signalReads++; return controller.signal; } } }; };
+    // 1. A read of the PR threads belongs to this call alone.
+    azure.state.fail.threads = () => new Promise(() => {});
+    const threads = stoppable();
+    const pendingThreads = invoke(session, 'azpr_pr_threads', {}, threads.execution).then(() => 'returned', error => error);
+    const ownRequest = await sent(threadsRequest);
+    assert.equal(ownRequest.signal.aborted, false);
+    threads.controller.abort(new Error('Fixture: the host stopped the call'));
+    outcomes.threads = await within(pendingThreads, 1000);
+    outcomes.threadsRequestAborted = ownRequest.signal.aborted;
+    delete azure.state.fail.threads;
+    // 2. A file read is shared by the run's sessions: the stopped call ends, the request goes on.
+    azure.state.fail.items = call => call.query.path === '/src/Shared.java' ? release.promise.then(() => undefined) : undefined;
+    const shared = stoppable();
+    const pendingRead = invoke(session, 'azpr_read_file', { path: '/src/Shared.java' }, shared.execution).then(() => 'returned', error => error);
+    const sharedRead = await sent(sharedRequest);
+    shared.controller.abort(new Error('Fixture: the host stopped the call'));
+    outcomes.read = await within(pendingRead, 1000);
+    outcomes.readRequestAborted = sharedRead.signal.aborted;
+    const again = invoke(session, 'azpr_read_file', { path: '/src/Shared.java' });
+    release.resolve();
+    outcomes.again = (await again).output;
+    outcomes.sharedRequests = requests.filter(request => sharedRequest(new URL(request.url))).length;
+    // 3. A context without a usable signal (an older host) changes nothing.
+    outcomes.plain = (await invoke(session, 'azpr_read_file', { path: '/src/Shared.java' }, { signal: { aborted: true } })).output;
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/, 'A stopped tool call does not end the run.');
+  assert.match(outcomes.threads.message, /the host stopped the call/);
+  assert.equal(outcomes.threadsRequestAborted, true, 'Its own Azure DevOps request was aborted.');
+  assert.match(outcomes.read.message, /the host stopped the call/);
+  assert.equal(outcomes.readRequestAborted, false, 'The read other sessions may be waiting for went on.');
+  assert.match(outcomes.again, /shared code/);
+  assert.equal(outcomes.sharedRequests, 1, 'The later call got the same read.');
+  assert.match(outcomes.plain, /shared code/);
+  assert.equal(signalReads, 2, 'The signal is read once per call, which is what tells OpenCode 2.3.0 that the tool stops by itself.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(risk.toolTimeouts, 0);
+  assert.equal(risk.sessionReads, 2, 'Only reads whose content the session saw count: the assigned file and the shared one, once.');
+});
+
+test('a session OpenCode creates after its stage was stopped is deleted, since no stage knows it', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], async creating() { entered.resolve(); await release.promise; } });
+  t.after(() => release.resolve());
+  const running = f.command();
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /cancellation requested/);
+  assert.match(await running, /\] CANCELLED/);
+  assert.equal(f.sessions.size, 0, 'No session exists when the run ends.');
+  // The host finishes creating both initial sessions only now.
+  release.resolve();
+  const removed = () => f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
+  for (let waited = 0; removed().length < 2; waited += 2) { assert.ok(waited < 5000, 'The late sessions were not deleted.'); await sleep(2); }
+  assert.equal(f.sessions.size, 0, 'Both late sessions are gone, also while debugging: nothing ran in them.');
+  assert.equal(new Set(removed()).size, 2);
+  // A later prompt in such a session is refused like any private session's.
+  await assert.rejects(f.emit('session', 'prompt', { sessionID: removed()[0], prompt: { text: 'anything' } }), /Only the exact plugin-started reviewer input is authorized/);
+});
+
+const oldReviews = async (directory, count) => {
+  const store = await createReviewStore({ root: join(directory, 'state') });
+  for (let i = 0; i < count; i++) {
+    await store.save({ id: i.toString(16).padStart(8, '0'), origin: 'elsewhere', completedAt: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+      reportSessions: new Set([`ses_old_${i}`]), publication: new Map(), final: { dispositions: [] } });
+  }
+};
+
+test('once a run has ended, a command typed in a session it is deleting is refused, while it is saved and while the host deletes', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  const deleting = deferred(), stalled = deferred(), outcomes = {};
+  const typed = (instance, sessionID) => instance.commands.get('pr-comment').execute({ sessionID, prompt: { text: '' }, delivery: 'steer' });
+  const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) {
+      // The oldest saved review is evicted while the new one is saved: the new review's sessions all still exist.
+      if (sessionID === 'ses_old_0') {
+        outcomes.functional = f.sessionsFor('azpr-review-functional')[0].id;
+        outcomes.whileSaved = await typed(f, outcomes.functional).then(() => 'started', error => error.message);
+        outcomes.recordWhileSaved = (await savedReviews(f)).find(review => review.origin === 'ordinary');
+      }
+      // The risk reviewer's deletion stalls, so a command can be typed there while it is under way.
+      if (f.sessions.get(sessionID)?.agent === 'azpr-review-risk') { deleting.resolve(sessionID); await stalled.promise; }
+    } });
+  t.after(() => stalled.resolve());
+  const reviewing = f.command();
+  const risk = await within(deleting.promise);
+  assert.ok(risk, 'The cleanup reached the risk reviewer session.');
+  await assert.rejects(typed(f, risk), /This reviewer session is being deleted: its run has ended, or its review is no longer kept\. Type the command in the conversation/);
+  stalled.resolve();
+  const receipt = await reviewing;
+  assert.match(receipt, /\] COMPLETE\n/);
+  const report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  assert.match(outcomes.whileSaved, /This reviewer session is being deleted: its run has ended/, 'Refused from the moment the run ended, before anything was saved or deleted.');
+  // The record saved before the deletions names both sessions apart: a process ending then would not take them for the review's own.
+  assert.deepEqual(outcomes.recordWhileSaved.reportSessions, [report]);
+  assert.deepEqual(outcomes.recordWhileSaved.closingSessions.sort(), [outcomes.functional, risk].sort());
+  const saved = await savedReview(f, reviewId(receipt));
+  assert.deepEqual(saved.reportSessions, [report]);
+  assert.equal(Object.hasOwn(saved, 'closingSessions'), false, 'OpenCode confirmed both deletions.');
+  assert.deepEqual([...f.sessions.keys()], [report]);
+  assert.ok(receipt.includes('\nSession notice: 2 reviewer session(s) of this run were deleted'), receipt);
+});
+
+test('a review is not evicted until its command has ended: the cleanup, the receipt and the comment step it hands on', async t => {
+  const stalled = deferred(), deleting = deferred();
+  let stuck;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) { deleting.resolve(); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const first = f.command('pr-review', `${f.azure.prUrl()} --preview`, 'origin-0');
+  await within(deleting.promise);
+  const report = f.sessionsFor('azpr-review-verifier')[0].id;
+  // Twenty newer reviews complete in other conversations while the first one's cleanup waits for the host.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] COMPLETE\n/);
+  const oldest = (await savedReviews(f)).sort((a, b) => a.completedAt.localeCompare(b.completedAt))[0];
+  assert.equal(oldest.origin, 'origin-0', 'The first review is still saved, one over the limit.');
+  assert.equal((await savedReviews(f)).length, 21);
+  assert.ok(f.sessions.has(report), 'Its report session was not deleted under it.');
+  stalled.resolve();
+  const receipt = await first;
+  assert.match(receipt, /\] COMPLETE\n/);
+  const review = reviewId(receipt);
+  // The comment step the review hands on still finds the review, its data and its report session.
+  const preview = await within(f.waitFor(notices => notices.find(n => n.sessionID === 'origin-0' && /^\[AZPR [a-f0-9]{8}\] [A-Z_]+; source review=/.test(n.text))));
+  assert.match(preview.text, new RegExp(`\\] PREVIEW; source review=${review}\\n`), preview.text);
+  assert.ok(f.sessions.has(report), 'The receipt names a session that exists.');
+  assert.equal((await savedReviews(f)).filter(saved => saved.id === review).length, 1);
+  assert.equal((await savedReviews(f)).length, 21, 'No save brought back a second record, and none was evicted under the command.');
+  // Its turn comes with the next completed review: it is the oldest of 22 then.
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] COMPLETE\n/);
+  const saved = await savedReviews(f);
+  assert.equal(saved.length, 20);
+  assert.ok(!saved.some(item => item.id === review));
+  assert.ok(!f.sessions.has(report), 'The evicted review took its report session with it.');
+});
+
+test('a session a command still owes its answer is not deleted, and is one of the review\'s own afterwards', async t => {
+  const answering = deferred(), release = deferred();
+  let started, listing;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async during({ role }) {
+      if (!role.endsWith('-verifier') || started) return;
+      // While the review still runs, a person asks in the functional reviewer's session which reviews are saved.
+      // The answer is still on its way when the run ends and its cleanup comes to that session.
+      started = f.sessionsFor('azpr-review-functional')[0].id;
+      listing = f.commands.get('pr-comment').execute({ sessionID: started, prompt: { text: '--list' }, delivery: 'steer' });
+      await within(answering.promise);
+    },
+    async syntheticDelay(input) { if (started && input.sessionID === started) { answering.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  const review = reviewId(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  assert.ok(f.sessions.has(started), 'The session was left alone although no run was active in it.');
+  assert.ok(receipt.includes('\nSession notice: 1 reviewer session(s) of this run were deleted'), receipt);
+  const saved = await savedReview(f, review);
+  assert.deepEqual(saved.reportSessions.sort(), [report, started].sort(), 'Still there, it is one of the review\'s own sessions and goes with the review.');
+  assert.equal(Object.hasOwn(saved, 'closingSessions'), false);
+  release.resolve();
+  await listing;
+  assert.ok(f.notices.some(n => n.sessionID === started && /No completed review is saved for this conversation/.test(n.text)), 'The answer arrived where the command was typed.');
+  // Commands work there again, and mean this review.
+  assert.match(await f.command('pr-comment', '--list', started), new RegExp(`- review ${review} \\(/pr-review\\) of PR #123 [^\\n]*; current\\n`));
+});
+
+test('a session whose deletion OpenCode never answered stays closed to commands, also after a restart, and goes with its review', async t => {
+  const answer = deferred();
+  let risk;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 30,
+    async remove(sessionID) { if (f.sessions.get(sessionID)?.agent === 'azpr-review-risk') { risk = sessionID; await answer.promise; } } });
+  t.after(() => answer.resolve());
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  const review = reviewId(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  assert.ok(receipt.includes('\nSession notice: 1 reviewer session(s) of this run were deleted'), 'Only the deletion OpenCode confirmed is counted.');
+  const saved = await savedReview(f, review);
+  assert.deepEqual(saved.reportSessions, [report], 'It is no session of the review any more.');
+  assert.deepEqual(saved.closingSessions, [risk], 'It stays on record apart, to be deleted with the review.');
+  // OpenCode may still carry the deletion out, so no command starts there: its answer could lose its session.
+  const typed = instance => instance.commands.get('pr-comment').execute({ sessionID: risk, prompt: { text: '--list' }, delivery: 'steer' });
+  await assert.rejects(typed(f), /This reviewer session is being deleted: its run has ended/);
+  // A new plugin instance does not know what the earlier one was waiting for; the saved review tells it.
+  await f.cleanup();
+  const removed = [];
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; }, remove: sessionID => { removed.push(sessionID); } });
+  await assert.rejects(typed(g), /This reviewer session is being deleted: its run has ended/);
+  assert.match(await g.command('pr-comment', '--list', report), /Reviews saved for this conversation \(1\)/, 'The review\'s own session still works.');
+  // Evicted with its review, the session is asked to be deleted again.
+  for (let n = 1; n <= 20; n++) assert.match(await g.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] COMPLETE\n/);
+  assert.ok(removed.includes(risk) && removed.includes(report));
+});
+
+test('an unfinished review keeps its draft session until its command has ended, whatever other runs finish meanwhile', async t => {
+  const stalled = deferred(), deleting = deferred();
+  let stuck;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; },
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) { deleting.resolve(); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const first = f.command('pr-review', f.azure.prUrl(), 'origin-0');
+  await within(deleting.promise);
+  const draft = f.sessionsFor('azpr-review-verifier').at(-1).id;
+  // Twenty newer unfinished runs end in other conversations while the first one's cleanup waits for the host.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] PARTIAL/);
+  assert.ok(f.sessions.has(draft), 'The record of its sessions was not released under it.');
+  const meanwhile = await sessionRecords(f);
+  assert.equal(meanwhile.kept.length, 21, 'One record over the limit while its command has not ended.');
+  assert.deepEqual(meanwhile.kept[0], [draft]);
+  assert.equal(meanwhile.retried.length, 1, 'The sessions its cleanup is deleting are on record apart.');
+  assert.ok(meanwhile.retried[0].includes(stuck) && !meanwhile.retried[0].includes(draft));
+  // The passes those runs started left them to the run's own cleanup: OpenCode was asked once.
+  assert.equal(f.calls.filter(call => call.kind === 'remove' && call.sessionID === stuck).length, 1);
+  stalled.resolve();
+  const receipt = await first;
+  assert.match(receipt, /\] PARTIAL/);
+  assert.ok(receipt.includes(`session=${draft}`) && f.sessions.has(draft), 'The receipt names a draft session that exists.');
+  const after = await sessionRecords(f);
+  assert.deepEqual(after.kept[0], [draft], 'Its record holds what it keeps.');
+  assert.deepEqual(after.retried, [], 'Nothing is left to delete.');
+  // Its turn comes with the next run: its record is the oldest of 22.
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
+  await eventually(async () => (await sessionRecords(f)).kept.length === 20 && !f.sessions.has(draft), 'Its record was not released with the next run.');
+});
+
+test('a session leaves the records only when it is gone: kept drafts in use, refused deletions and evicted reviews', async t => {
+  // 1. A person types a command in an older unfinished review's draft session while 20 later unfinished runs push
+  //    its record beyond the limit: the draft is spared, and recorded as still to be deleted.
+  const answering = deferred(), release = deferred();
+  let draft, refuse;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; },
+    remove(sessionID) { if (refuse?.(sessionID)) throw new Error('Fixture deletion refused'); },
+    async syntheticDelay(input) { if (draft && input.sessionID === draft && /No completed review/.test(input.text)) { answering.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-0'), /\] PARTIAL/);
+  draft = f.sessionsFor('azpr-review-verifier').at(-1).id;
+  const listing = f.commands.get('pr-comment').execute({ sessionID: draft, prompt: { text: '--list' }, delivery: 'steer' });
+  await within(answering.promise);
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] PARTIAL/);
+  await eventually(async () => (await sessionRecords(f)).retried.length === 1 && (await sessionRecords(f)).kept.length === 20);
+  assert.ok(f.sessions.has(draft), 'The draft a command answers in was not deleted.');
+  let records = await sessionRecords(f);
+  assert.deepEqual(records.retried, [[draft]], 'It is on record as still to be deleted.');
+  assert.equal(records.kept.length, 20, 'Its own record made room for the newest 20.');
+  release.resolve();
+  await listing;
+  // 2. The next pass deletes it. A deletion OpenCode refuses is recorded the same way and tried again.
+  refuse = sessionID => sessionID !== draft && f.sessions.get(sessionID)?.agent === 'azpr-review-verifier';
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
+  await eventually(async () => !f.sessions.has(draft) && (await sessionRecords(f)).kept.length === 20 && (await sessionRecords(f)).retried.length === 1 && (await sessionRecords(f)).retried[0][0] !== draft, 'The spared draft did not go with the next pass.');
+  records = await sessionRecords(f);
+  assert.equal(records.retried.length, 1);
+  const [refused] = records.retried[0];
+  assert.ok(f.sessions.has(refused) && refused !== draft, 'The draft OpenCode refused to delete is on record as still to be deleted.');
+  assert.equal(records.kept.length, 20);
+  refuse = null;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-22'), /\] PARTIAL/);
+  await eventually(async () => !f.sessions.has(refused) && !(await sessionRecords(f)).retried.length && (await sessionRecords(f)).kept.length === 20);
+
+  // 3. An evicted review whose report session cannot be deleted leaves that session on record as still to be
+  //    deleted. It takes no commands, also after a restart, and a pass at load tries it again.
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  let refusing = true;
+  const options = { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { if (refusing && sessionID === 'ses_old_0') throw new Error('Fixture deletion refused'); } };
+  const g = await fixture(t, options);
+  assert.match(await g.command(), /\] COMPLETE\n/);
+  const evicted = await sessionRecords(g);
+  assert.deepEqual(evicted.retried, [['ses_old_0']]);
+  assert.match(evicted.names[0], /-retry00000000\.json$/, 'The record is the evicted review\'s.');
+  assert.deepEqual(evicted.kept, []);
+  const fromOld = instance => instance.commands.get('pr-review').execute({ sessionID: 'ses_old_0', prompt: { text: g.azure.prUrl() }, delivery: 'steer' });
+  await assert.rejects(fromOld(g), /This reviewer session is being deleted: its run has ended, or its review is no longer kept/);
+  // A successful review tries it again too; OpenCode still refuses.
+  const attempts = instance => instance.calls.filter(call => call.kind === 'remove' && call.sessionID === 'ses_old_0').length;
+  await eventually(() => attempts(g) >= 2, 'The pass after the review that evicted it did not try again.');
+  const before = attempts(g);
+  assert.match(await g.command('pr-review', g.azure.prUrl(), 'again'), /\] COMPLETE\n/);
+  await eventually(() => attempts(g) > before, 'Not tried again after a successful review.');
+  await eventually(async () => (await sessionRecords(g)).retried.length === 1);
+  await g.cleanup();
+  const h = await fixture(t, { ...options, azure: g.azure });
+  await assert.rejects(fromOld(h), /This reviewer session is being deleted: its run has ended, or its review is no longer kept/, 'Still closed after the restart.');
+  const tried = instance => instance.calls.some(call => call.kind === 'remove' && call.sessionID === 'ses_old_0');
+  for (let waited = 0; !tried(h); waited += 5) { assert.ok(waited < 5000, 'The pass at load did not try it.'); await sleep(5); }
+  assert.deepEqual((await sessionRecords(h)).retried, [['ses_old_0']], 'OpenCode still refuses: the record stays.');
+  await h.cleanup();
+  refusing = false;
+  const i = await fixture(t, { ...options, azure: g.azure });
+  for (let waited = 0; (await sessionRecords(i)).retried.length; waited += 5) { assert.ok(waited < 5000, 'The pass at load did not delete it.'); await sleep(5); }
+  assert.ok(tried(i));
+});
+
+test('what could not be deleted of an unfinished run stays on record when the run\'s kept draft expires', async t => {
+  let stuck, refusing = true;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { stuck ??= sessionID; if (refusing && sessionID === stuck) throw new Error('Fixture deletion refused'); },
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-0'), /\] PARTIAL/);
+  const draft = f.sessionsFor('azpr-review-verifier').at(-1).id;
+  assert.deepEqual(await sessionRecords(f).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft]], retried: [[stuck]] });
+  // Twenty later unfinished runs push the first run's kept draft beyond the limit, while OpenCode still refuses to
+  // delete the run's other session. The run has two records then, and one pass deals with both.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] PARTIAL/);
+  await eventually(async () => !f.sessions.has(draft) && (await sessionRecords(f)).kept.length === 20, 'The expired draft did not go.');
+  assert.ok(f.sessions.has(stuck));
+  assert.deepEqual((await sessionRecords(f)).retried, [[stuck]], 'The session that is still there is still on record: the draft\'s outcome did not replace it.');
+  refusing = false;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
+  await eventually(async () => !f.sessions.has(stuck) && !(await sessionRecords(f)).retried.length, 'It was not tried again.');
+});
+
+test('a session of an unfinished review that is still to be deleted takes no commands, also after a restart', async t => {
+  const typed = (instance, sessionID) => instance.commands.get('pr-comment').execute({ sessionID, prompt: { text: '--list' }, delivery: 'steer' });
+  const garbled = ({ role }) => role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined;
+  // 1. A deletion OpenCode never answered may still be carried out.
+  const answer = deferred();
+  let stuck;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 30, answer: garbled,
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) await answer.promise; } });
+  t.after(() => answer.resolve());
+  assert.match(await f.command(), /\] PARTIAL/);
+  assert.deepEqual((await sessionRecords(f)).retried, [[stuck]]);
+  await assert.rejects(typed(f, stuck), /This reviewer session is being deleted: its run has ended/);
+  await f.cleanup();
+  // A new plugin instance does not know what the earlier one was waiting for; the record tells it.
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { if (sessionID === stuck) throw new Error('Fixture deletion refused'); } });
+  await assert.rejects(typed(g, stuck), /This reviewer session is being deleted: its run has ended/);
+  await g.cleanup();
+  // Also where sessions are no longer deleted: the session stays closed, and every record is left as it is,
+  // those of kept sessions beyond the limit too, so that nothing is forgotten if deletion is turned on again.
+  const earlier = await createReviewStore({ root: f.stateDirectory });
+  for (let n = 0; n < 21; n++) await earlier.keepSessions(`0000${String(n).padStart(4, '0')}`, [`ses_kept_${n}`]);
+  const before = await sessionRecords(f);
+  assert.equal(before.kept.length, 22);
+  const h = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; s.deletePrivateSessions = false; } });
+  await assert.rejects(typed(h, stuck), /This reviewer session is being deleted: its run has ended/);
+  await sleep(100);
+  assert.equal(h.calls.filter(call => call.kind === 'remove').length, 0);
+  assert.deepEqual(await sessionRecords(h), before);
+
+  // 2. A session a command still answered in when the run ended is spared, closed, and deleted at the next pass.
+  const answering = deferred(), release = deferred();
+  let started, listing;
+  const i = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000, answer: garbled,
+    async during({ role }) {
+      if (!role.endsWith('-verifier') || started) return;
+      [started] = [...i.sessions.keys()];
+      listing = typed(i, started);
+      await within(answering.promise);
+    },
+    async syntheticDelay(input) { if (started && input.sessionID === started) { answering.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  assert.match(await i.command(), /\] PARTIAL/);
+  const draft = i.sessionsFor('azpr-review-verifier').at(-1).id;
+  assert.ok(started !== draft && i.sessions.has(started), 'The session the command answers in was left alone.');
+  assert.deepEqual(await sessionRecords(i).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft]], retried: [[started]] });
+  await assert.rejects(typed(i, started), /This reviewer session is being deleted: its run has ended/, 'No further command starts there.');
+  release.resolve();
+  await listing;
+  assert.ok(i.notices.some(n => n.sessionID === started && /No completed review is saved for this conversation/.test(n.text)), 'The answer arrived where the command was typed.');
+  assert.match(await i.command('pr-review', i.azure.prUrl(), 'second'), /\] PARTIAL/);
+  await eventually(async () => !i.sessions.has(started) && !(await sessionRecords(i)).retried.length, 'The next pass did not delete it.');
+  assert.ok(i.sessions.has(draft));
+});
+
+test('an evicted review stays on record until its sessions are dealt with, so a process that ends meanwhile finds it again', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  const stalled = deferred(), deleting = deferred();
+  const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { if (sessionID === 'ses_old_0') { deleting.resolve(); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const reviewing = f.command();
+  await within(deleting.promise);
+  // OpenCode is deleting the evicted review's session; the record that names it is still there.
+  assert.ok((await savedReviews(f)).some(review => review.id === '00000000'), 'A process that ended now would still know the session.');
+  // The next process finds the review over the limit again and deletes its session.
+  const removed = [];
+  const g = await fixture(t, { directory, azure: f.azure, settings: s => { s.debug.enabled = false; }, remove: sessionID => { removed.push(sessionID); } });
+  assert.deepEqual(removed, ['ses_old_0']);
+  assert.ok(!(await savedReviews(g)).some(review => review.id === '00000000'));
+  assert.deepEqual((await sessionRecords(g)).retried, []);
+  stalled.resolve();
+  assert.match(await reviewing, /\] COMPLETE\n/);
+});
+
+test('a session created after its stage was stopped is on record and closed while it is deleted', async t => {
+  const entered = deferred(), release = deferred(), stalled = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], removeTimeoutMs: 60000,
+    async creating() { entered.resolve(); await release.promise; },
+    async remove() { await stalled.promise; } });
+  t.after(() => { release.resolve(); stalled.resolve(); });
+  const running = f.command();
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /cancellation requested/);
+  assert.match(await running, /\] CANCELLED/);
+  // The host finishes creating both initial sessions only now, and is slow to delete them.
+  release.resolve();
+  await eventually(async () => (await sessionRecords(f)).retried.flat().length === 2, 'The late sessions were not put on record.');
+  const late = [...f.sessions.keys()];
+  assert.deepEqual((await sessionRecords(f)).retried.flat().sort(), [...late].sort(), 'A process that ended now would still know both.');
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: late[0], prompt: { text: '--list' }, delivery: 'steer' }), /This reviewer session is being deleted/);
+  stalled.resolve();
+  await eventually(async () => !f.sessions.size && !(await sessionRecords(f)).retried.length, 'The late sessions or their records stayed.');
+});
+
+test('the review whose receipt arrives last is the current one, also when its cleanup waited while another review was used', async t => {
+  const current = async instance => /- review ([a-f0-9]{8}) [^\n]*; current\n/.exec(await instance.command('pr-comment', '--list'))?.[1];
+  // 1. A comment run: OpenCode is slow to delete its planner session, and a person looks at another review meanwhile.
+  const stalled = deferred(), deleting = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { if (f.sessions.get(sessionID)?.agent === 'azpr-review-comment-plan') { deleting.resolve(); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const a = reviewId(await f.command()), b = reviewId(await f.command());
+  assert.equal(await current(f), b);
+  const previewing = f.command('pr-comment', a);
+  await within(deleting.promise);
+  assert.match(await f.command('pr-comment', `${b} --show`), new RegExp(`Review ${b} has no saved preview`));
+  stalled.resolve();
+  const preview = await previewing;
+  assert.match(preview, new RegExp(`\\] PREVIEW; source review=${a}\\n`));
+  assert.equal(await current(f), a, 'A command without an ID acts on the review whose receipt arrived last.');
+  // The choice is saved: a restarted process acts on the same review.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; } });
+  assert.equal(await current(g), a);
+
+  // 2. A review: OpenCode is slow to delete one of its reviewer sessions, and a person looks at an earlier review.
+  const waiting = deferred(), reached = deferred();
+  let slow = false;
+  const h = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove() { if (slow) { slow = false; reached.resolve(); await waiting.promise; } } });
+  t.after(() => waiting.resolve());
+  const earlier = reviewId(await h.command());
+  slow = true;
+  const reviewing = h.command();
+  await within(reached.promise);
+  assert.match(await h.command('pr-comment', `${earlier} --show`), new RegExp(`Review ${earlier} has no saved preview`));
+  waiting.resolve();
+  const receipt = await reviewing;
+  assert.match(receipt, /\] COMPLETE\n/);
+  assert.equal(await current(h), reviewId(receipt), 'The review whose receipt arrived last, not the one looked at during its cleanup.');
+  await h.cleanup();
+  const i = await fixture(t, { directory: h.directory, azure: h.azure, settings: s => { s.debug.enabled = false; } });
+  assert.equal(await current(i), reviewId(receipt));
+});
+
+test('what could not be deleted is tried again after every run: one that creates no session, and a comment run', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { if (sessionID === 'ses_old_0') throw new Error('Fixture deletion refused'); } });
+  const attempts = () => f.calls.filter(call => call.kind === 'remove' && call.sessionID === 'ses_old_0').length;
+  // The review that evicts the oldest one asks OpenCode twice: when it evicts, and in the pass after it.
+  const review = reviewId(await f.command());
+  await eventually(() => attempts() === 2, 'The pass after the review did not try again.');
+  // A check creates no session; a pass follows it all the same.
+  const created = () => f.calls.filter(call => call.kind === 'create').length, before = created();
+  assert.match(await f.command('pr-check'), /^\[AZPR [a-f0-9]{8}\] [A-Z_]+/);
+  assert.equal(created(), before, 'The check created no session.');
+  await eventually(() => attempts() === 3, 'A run that created no session started no pass.');
+  // So does a comment run.
+  assert.match(await f.command('pr-comment', review), /\] PREVIEW; source review=/);
+  await eventually(() => attempts() === 4, 'A comment run started no pass.');
+  assert.deepEqual((await sessionRecords(f)).retried, [['ses_old_0']], 'OpenCode still refuses: it stays on record.');
+});
+
+test('a later preview survives the cleanup of an earlier comment run whose planning failed', async t => {
+  const stalled = deferred(), deleting = deferred();
+  let failPlanning = true, stuck;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    answer: ({ role }) => failPlanning && ROLES[role].format === 'comment-plan' ? { $provider: 401 } : undefined,
+    async remove(sessionID) {
+      if (f.sessions.get(sessionID)?.agent !== 'azpr-review-comment-plan') return;
+      stuck ??= sessionID;
+      if (sessionID === stuck) { deleting.resolve(); await stalled.promise; }
+    } });
+  t.after(() => stalled.resolve());
+  const review = reviewId(await f.command());
+  // The first comment run fails while planning; OpenCode is slow to delete its planner session.
+  const failed = f.command('pr-comment', '');
+  await within(deleting.promise);
+  // The person fixes the cause and tries again at once: this run plans and saves a preview.
+  failPlanning = false;
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW; source review=/);
+  assert.ok((await savedReview(f, review)).plan, 'The preview is saved.');
+  stalled.resolve();
+  assert.match(await failed, /\] INCOMPLETE; source review=/);
+  assert.ok((await savedReview(f, review)).plan, 'The earlier run\'s cleanup did not erase it.');
+  assert.match(await f.command('pr-comment', '--show'), /Saved preview of review [a-f0-9]{8}, planned /);
+});
+
+test('a review whose session a running command answers in is not evicted under it', async t => {
+  const planning = deferred(), entered = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    async during({ role }) { if (role === 'azpr-review-comment-plan') { entered.resolve(); await planning.promise; } } });
+  t.after(() => planning.resolve());
+  const reportOf = receipt => /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  const older = await f.command(), newer = await f.command();
+  const olderReport = reportOf(older);
+  // In the older review's report session a person asks for the newer review's comments: the answer goes there.
+  await f.commands.get('pr-comment').execute({ sessionID: olderReport, prompt: { text: reviewId(newer) }, delivery: 'steer' });
+  await within(entered.promise);
+  // Twenty more reviews complete elsewhere while that command plans: both reviews are over the limit now.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] COMPLETE\n/);
+  assert.ok(f.sessions.has(olderReport), 'The session the command answers in still exists.');
+  const kept = (await savedReviews(f)).map(review => review.id);
+  assert.ok(kept.includes(reviewId(older)) && kept.includes(reviewId(newer)), 'Neither the review that owns it nor the one being commented on was evicted.');
+  planning.resolve();
+  const preview = await within(f.waitFor(notices => notices.find(n => n.sessionID === olderReport && /\] PREVIEW; source review=/.test(n.text))));
+  assert.match(preview.text, new RegExp(`\\] PREVIEW; source review=${reviewId(newer)}\\n`));
+  // The next completed review evicts what waited.
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] COMPLETE\n/);
+  const after = (await savedReviews(f)).map(review => review.id);
+  assert.equal(after.length, 20);
+  assert.ok(!after.includes(reviewId(older)) && !after.includes(reviewId(newer)));
+  assert.ok(!f.sessions.has(olderReport), 'The evicted review took its report session with it.');
+});
+
+test('a run\'s sessions are on record before any is deleted, for a comment run and for an unfinished review', async t => {
+  // A comment run: while its planner session's deletion waits for the host, the saved review names that session.
+  const stalled = deferred(), deleting = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { if (f.sessions.get(sessionID)?.agent === 'azpr-review-comment-plan') { deleting.resolve(sessionID); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const receipt = await f.command();
+  const review = reviewId(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  const previewing = f.command('pr-comment', '');
+  const planner = await within(deleting.promise);
+  const meanwhile = await savedReview(f, review);
+  assert.deepEqual(meanwhile.closingSessions, [planner], 'A process that ended now would still know the planner session, and that it may be gone.');
+  assert.deepEqual(meanwhile.reportSessions, [report]);
+  stalled.resolve();
+  assert.match(await previewing, /\] PREVIEW; source review=/);
+  const after = await savedReview(f, review);
+  assert.deepEqual(after.reportSessions, [report]);
+  assert.equal(Object.hasOwn(after, 'closingSessions'), false);
+
+  // An unfinished review: while its cleanup is under way every session is on record, the one it keeps apart from
+  // those it is deleting.
+  const waiting = deferred(), reached = deferred();
+  let stuck;
+  const garbled = ({ role }) => role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined;
+  const g = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000, answer: garbled,
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) { reached.resolve(); await waiting.promise; } } });
+  t.after(() => waiting.resolve());
+  const partial = g.command();
+  await within(reached.promise);
+  const draft = g.sessionsFor('azpr-review-verifier').at(-1).id;
+  const during = await sessionRecords(g);
+  assert.deepEqual(during.kept, [[draft]], 'The session holding the draft is the one the run keeps.');
+  assert.equal(during.retried.length, 1);
+  assert.equal(during.retried[0].length, 2, 'The other sessions are on record as still to be deleted before any is.');
+  assert.ok(during.retried[0].includes(stuck) && g.sessions.has(stuck));
+  // The process ends here. The next one knows which sessions were still to go: they take no commands, and it
+  // deletes them at once, without waiting for 20 later runs.
+  const removed = [];
+  const h = await fixture(t, { directory: g.directory, azure: g.azure, settings: s => { s.debug.enabled = false; }, remove: sessionID => { removed.push(sessionID); } });
+  await assert.rejects(h.commands.get('pr-comment').execute({ sessionID: stuck, prompt: { text: '--list' }, delivery: 'steer' }), /This reviewer session is being deleted/);
+  await eventually(async () => !(await sessionRecords(h)).retried.length, 'The pass at load did not deal with them.');
+  assert.deepEqual([...removed].sort(), [...during.retried[0]].sort());
+  assert.deepEqual((await sessionRecords(h)).kept, [[draft]], 'The draft session stays the run\'s own.');
+  await h.cleanup();
+  waiting.resolve();
+  assert.match(await partial, /\] PARTIAL/);
+  assert.deepEqual(await sessionRecords(g).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft]], retried: [] }, 'One record for the run, with what it keeps.');
+});
+
+test('a tool call stopped while its observation is saved ends at once and is credited with no read', async t => {
+  const original = fsPromises.writeFile, entered = deferred(), gate = deferred(), outcomes = {};
+  const restore = () => { fsPromises.writeFile = original; syncBuiltinESMExports(); };
+  t.after(() => { restore(); gate.resolve(); });
+  const f = await fixture(t, { azure: fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Other.java': 'other code\n' } }),
+    async during({ session, role, turn, invoke }) {
+      if (turn !== 0 || role !== 'azpr-review-risk') return;
+      // The tool's own work is done when the text it showed is saved for comment planning; that save stalls.
+      fsPromises.writeFile = async (file, data, ...rest) => { if (data === 'other code\n') { entered.resolve(); await gate.promise; } return original(file, data, ...rest); };
+      syncBuiltinESMExports();
+      const controller = new AbortController();
+      const pending = invoke(session, 'azpr_read_file', { path: '/src/Other.java' }, { signal: controller.signal }).then(() => 'returned', error => error);
+      outcomes.saving = await within(entered.promise.then(() => true), 2000);
+      controller.abort(new Error('Fixture: the host stopped the call'));
+      outcomes.stopped = await within(pending, 1000);
+      restore();
+      gate.resolve();
+    } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  assert.equal(outcomes.saving, true, 'The call was stopped while its observation was being saved.');
+  assert.match(outcomes.stopped?.message ?? String(outcomes.stopped), /the host stopped the call/, 'It ended without waiting for the save.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(risk.sessionReads, 1, 'Only the assigned file: the stopped call showed the session nothing.');
+  assert.doesNotMatch(receipt, /observation could not be saved/);
+});
+
+test('a review cannot be started from a saved review\'s own session, also after a restart', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; } });
+  const receipt = await f.command();
+  const report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  const start = (fixtureInstance, name) => fixtureInstance.commands.get(name).execute({ sessionID: report, prompt: { text: f.azure.prUrl() }, delivery: 'steer' });
+  await assert.rejects(start(f, 'pr-review'), /Start a new review from your ordinary development session, not a reviewer session/);
+  // A new plugin instance no longer knows which sessions the earlier one created; the saved review still names its own.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; } });
+  for (const name of ['pr-review', 'pr-quick', 'pr-check']) {
+    await assert.rejects(start(g, name), /Start a new review from your ordinary development session, not a reviewer session/, name);
+  }
+  assert.equal(g.calls.filter(call => call.kind === 'create').length, 0);
+  // Its comment commands still work there.
+  assert.match(await g.command('pr-comment', '--list', report), /Reviews saved for this conversation \(1\)/);
+  // The same holds for the draft session an unfinished review kept: its record names it after a restart.
+  const h = await fixture(t, { settings: s => { s.debug.enabled = false; }, answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
+  assert.match(await h.command(), /\] PARTIAL/);
+  const draft = h.sessionsFor('azpr-review-verifier').at(-1).id;
+  await h.cleanup();
+  const i = await fixture(t, { directory: h.directory, azure: h.azure, settings: s => { s.debug.enabled = false; } });
+  await assert.rejects(i.commands.get('pr-review').execute({ sessionID: draft, prompt: { text: h.azure.prUrl() }, delivery: 'steer' }),
+    /Start a new review from your ordinary development session, not a reviewer session/);
+});
+
+test('private sessions of an unfinished review are deleted except the one holding the draft', async t => {
   const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
   const created = () => f.calls.filter(call => call.kind === 'create').length;
   assert.match(await f.command(), /\] PARTIAL/);
@@ -1770,7 +2571,7 @@ test('private sessions of an unfinished review are deleted except the one holdin
   const draft = f.sessionsFor('azpr-review-verifier').at(-1);
   assert.ok(f.notices.some(n => n.sessionID === draft.id && /# AZPR [a-f0-9]{8} — PARTIAL/.test(n.text)), 'The draft stays readable.');
   assert.equal(removed.length, created() - 1);
-  assert.equal([...f.sessions.values()].filter(session => session.parentID === 'ordinary').length, 1);
+  assert.deepEqual([...f.sessions.keys()], [draft.id], 'Only the session holding the draft is left.');
   assert.equal((await readdir(join(f.stateDirectory, 'sessions'))).length, 1, 'The kept session is remembered for later cleanup.');
   const before = f.calls.length;
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'second'), /\] PARTIAL/);
@@ -1805,7 +2606,8 @@ test('private sessions are deleted a few at a time, so a host that stalls on del
   const starts = [];
   // The host never confirms a deletion; each one ends at the removal timeout.
   const f = await fixture(t, { directory, removeTimeoutMs: 50, remove: () => { starts.push(performance.now()); return new Promise(() => {}); } });
-  assert.deepEqual(f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID).sort(), [...evicted].sort(), 'Every session is still attempted.');
+  // The pass at load tries the unanswered ones again in the background, so a session may be asked for twice here.
+  assert.deepEqual([...new Set(f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID))].sort(), [...evicted].sort(), 'Every session is still attempted.');
   assert.equal(starts.filter(at => at - starts[0] < 25).length, 8, 'Eight start together; the next ones wait for a timeout.');
 });
 
@@ -2124,7 +2926,7 @@ const commentStep = (f, receipt, origin = 'ordinary') => {
 const noCommentStep = async (f, origin = 'ordinary') => {
   await sleep(100);
   assert.ok(!f.notices.some(n => n.sessionID === origin && /\] STARTED \/pr-comment |\] Automatic /.test(n.text)), 'No comment step follows.');
-  assert.ok(![...f.sessions.values()].some(session => session.parentID === origin && /comment-plan$/.test(session.agent)), 'No comments were planned.');
+  assert.ok(![...f.sessions.values()].some(session => session.metadata?.azpr?.conversation === origin && /comment-plan$/.test(session.agent)), 'No comments were planned.');
 };
 
 test('--preview after the PR URL previews the comments of a COMPLETE review in a run of its own; nothing is posted', async t => {
