@@ -93,6 +93,30 @@ test('a run has one record of kept sessions: a later list replaces it and an emp
   assert.deepEqual(await records(), [['ses_5']]);
 });
 
+test('the record of a run whose command has not ended is not released, whatever its age', async t => {
+  const directory = await root(t);
+  let clock = Date.parse('2026-01-01T00:00:00Z');
+  const store = await createReviewStore({ root: directory, limit: 2, now: () => clock++ });
+  const waiting = new Set(['run00001']), inUse = id => waiting.has(id);
+  assert.deepEqual(await store.keepSessions('run00001', ['ses_1', 'ses_2'], inUse), []);
+  assert.deepEqual(await store.keepSessions('run00002', ['ses_3'], inUse), []);
+  assert.deepEqual(await store.keepSessions('run00003', ['ses_4'], inUse), [], 'The oldest record is in use and stays; nothing else is over the limit yet.');
+  assert.equal((await readdir(store.dirs.sessions)).length, 3);
+  waiting.clear();
+  assert.deepEqual((await store.keepSessions('run00004', ['ses_5'], inUse)).sort(), ['ses_1', 'ses_2', 'ses_3']);
+  assert.equal((await readdir(store.dirs.sessions)).length, 2);
+});
+
+test('sessions whose deletion was never answered are saved with the review, and only when there are any', () => {
+  const review = { id: 'aaaaaaaa', origin: 'ordinary', reportSessions: new Set(['ses_report']), publication: new Map() };
+  assert.equal(Object.hasOwn(serializeReview(review), 'closingSessions'), false);
+  assert.equal(Object.hasOwn(deserializeReview(serializeReview(review)), 'closingSessions'), false);
+  assert.equal(Object.hasOwn(serializeReview({ ...review, closingSessions: new Set() }), 'closingSessions'), false);
+  const restored = deserializeReview(JSON.parse(JSON.stringify(serializeReview({ ...review, closingSessions: new Set(['ses_gone']) }))));
+  assert.deepEqual([...restored.closingSessions], ['ses_gone']);
+  assert.deepEqual([...restored.reportSessions], ['ses_report']);
+});
+
 test('publication attempts are shared per PR, re-read before writes and expire after 90 days', async t => {
   const directory = await root(t);
   let clock = Date.parse('2026-01-01T00:00:00Z');

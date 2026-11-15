@@ -27,15 +27,20 @@ export function stateRoot(env = process.env) {
 const checksum = value => createHash('sha256').update(value).digest('hex');
 const inside = (root, path) => { const rel = relative(root, path); return rel && !rel.startsWith('..') && !isAbsolute(rel); };
 
-/** Plain JSON form of a review; Sets and Maps become arrays. */
+/**
+ * Plain JSON form of a review; Sets and Maps become arrays. `closingSessions`
+ * (sessions whose deletion was asked for and never answered) is written only
+ * when there are any.
+ */
 export function serializeReview(review) {
-  const { data, reportSessions, publication, ...rest } = review;
-  return { ...rest, reportSessions: [...(reportSessions ?? [])], publication: [...(publication ?? new Map())],
-    dataDirectory: review.dataDirectory ?? null };
+  const { data, reportSessions, closingSessions, publication, ...rest } = review;
+  return { ...rest, reportSessions: [...(reportSessions ?? [])], ...(closingSessions?.size ? { closingSessions: [...closingSessions] } : {}),
+    publication: [...(publication ?? new Map())], dataDirectory: review.dataDirectory ?? null };
 }
 
 export function deserializeReview(value) {
-  return { ...value, reportSessions: new Set(value.reportSessions ?? []), publication: new Map(value.publication ?? []) };
+  return { ...value, reportSessions: new Set(value.reportSessions ?? []), ...(value.closingSessions ? { closingSessions: new Set(value.closingSessions) } : {}),
+    publication: new Map(value.publication ?? []) };
 }
 
 /**
@@ -154,9 +159,10 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
      * A run has one record: a later call replaces the run's earlier one, and
      * an empty list removes it. The newest `limit` runs keep theirs; returns
      * the session IDs of older runs, whose records are removed, for the caller
-     * to delete.
+     * to delete. `inUse(runId)` names runs whose command has not ended, which
+     * keep their record whatever its age.
      */
-    async keepSessions(runId, sessionIDs) {
+    async keepSessions(runId, sessionIDs, inUse = () => false) {
       const own = (await readdir(dirs.sessions)).filter(name => name.endsWith(`-${runId}.json`)).sort();
       const record = own.at(-1) ?? `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${runId}.json`;
       for (const other of own.slice(0, -1)) await rm(join(dirs.sessions, other), { force: true });
@@ -165,6 +171,8 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
       const files = (await readdir(dirs.sessions)).filter(name => name.endsWith('.json')).sort();
       const released = [];
       for (const old of files.slice(0, Math.max(0, files.length - limit))) {
+        // The record's name ends with its run's ID.
+        if (inUse(old.slice(old.lastIndexOf('-') + 1, -'.json'.length))) continue;
         try {
           const ids = JSON.parse(await readFile(join(dirs.sessions, old), 'utf8'));
           if (Array.isArray(ids)) released.push(...ids.filter(id => typeof id === 'string'));

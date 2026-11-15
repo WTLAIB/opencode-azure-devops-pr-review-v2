@@ -470,17 +470,23 @@ no session is forgotten and none is taken from a command that needs it:
   active the run's conversation and its stages' sessions. A command that
   started in one of a review's sessions just before the cleanup keeps that
   session, which then goes with the review.
-- From the moment a session is to be deleted until OpenCode has answered the
-  deletion, a command typed in it is refused, since its answer would have
-  nowhere to go. A deletion that timed out here may still be carried out by
-  OpenCode, so the session stays closed, and on record, until the answer.
+- From the moment a session is to be deleted, a command typed in it is
+  refused, since its answer would have nowhere to go. A session that is still
+  there afterwards (a command needed it, or OpenCode refused the deletion)
+  takes commands again. A deletion that OpenCode had not answered when AZPR
+  stopped waiting may still be carried out, so that session stays closed for
+  good: it is no session of its review any more, and the review's record
+  names it apart (`closingSessions`), so that a restarted plugin refuses
+  commands there too and deletes it with the review.
 - A review is not evicted before the command that works on it has ended: its
   run, a comment run's last steps, and after a review the cleanup of its
   sessions, the delivery of its receipt and the start of the comment step it
   hands on. Nor is a review evicted while a command answers in one of its
   sessions. This holds in the process and on disk; what waited is evicted
-  when the next review completes. A save of a review that was evicted is
-  refused instead of bringing its record back.
+  when the next review completes. The same holds for an unfinished review's
+  record of kept sessions, which later runs do not release before its command
+  has ended. A save of a review that was evicted is refused instead of
+  bringing its record back.
 - A cancellation can overtake the host: a session OpenCode creates after its
   stage gave up is known to no stage, so it is deleted when it arrives.
 
