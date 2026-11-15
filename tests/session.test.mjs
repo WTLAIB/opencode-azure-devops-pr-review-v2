@@ -38,15 +38,58 @@ test('V2 creation binds exact agent/model and preserves supplied session permiss
   const permissions = [{ action: 'shell', resource: '*', effect: 'deny' }];
   const made = await createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model: 'example/model/path', permissions });
   assert.equal(made.id, sessionID);
-  assert.deepEqual(calls, [{ name: 'create', args: [{ parentID: 'ses_origin', title: 'review', agent: 'azpr-review-functional', model, permissions }] }]);
+  assert.deepEqual(calls, [{ name: 'get', args: [{ sessionID: 'ses_origin' }] },
+    { name: 'create', args: [{ title: 'review', agent: 'azpr-review-functional', model, permissions }] }]);
+});
+
+test('V2 creation makes a session of its own at the conversation\'s location, with the given metadata and no parent', async () => {
+  const metadata = { azpr: { run: '1a2b3c4d', role: 'azpr-review-functional', conversation: 'ses_origin' } };
+  const conversation = location => async ({ sessionID: id }) => ({ id, ...(location ? { location } : {}) });
+  for (const [location, sent] of [
+    [{ directory: '/work/project', workspaceID: 'wrk_1' }, { directory: '/work/project', workspaceID: 'wrk_1' }],
+    [{ directory: '/work/project' }, { directory: '/work/project' }],
+    // Without a usable location the host places the session where this plugin instance runs.
+    [undefined, undefined], [{ directory: '' }, undefined], [{ workspaceID: 'wrk_1' }, undefined],
+  ]) {
+    const { context, calls } = host({ get: conversation(location) });
+    await createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model, metadata });
+    const input = calls.find(call => call.name === 'create').args[0];
+    assert.deepEqual(input, { title: 'review', agent: 'azpr-review-functional', model, ...(sent ? { location: sent } : {}), metadata });
+    assert.equal(Object.hasOwn(input, 'parentID'), false, 'Never a child: OpenCode 2.3.0 hands a child\'s answers to its parent.');
+  }
+  // A conversation that cannot be read does not stop the review; the host's own location applies.
+  const unread = host({ get: async () => { throw new Error('conversation unavailable'); } });
+  await createReviewSession(unread.context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model });
+  assert.deepEqual(unread.calls.find(call => call.name === 'create').args[0], { title: 'review', agent: 'azpr-review-functional', model });
+  // Hosts may wrap records in { data }.
+  const wrapped = host({ get: async ({ sessionID: id }) => ({ data: { id, location: { directory: '/work/project' } } }) });
+  await createReviewSession(wrapped.context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model });
+  assert.deepEqual(wrapped.calls.find(call => call.name === 'create').args[0].location, { directory: '/work/project' });
 });
 
 test('V2 creation rejects changed or reused session identity before prompting', async () => {
-  for (const altered of [{ id: 'ses_origin' }, { parentID: 'ses_other' }, { agent: 'build' }, { model: { ...model, id: 'other' } }]) {
-    const { context, calls } = host({ create: async value => ({ ...value, id: sessionID, ...altered }) });
+  const placed = async ({ sessionID: id }) => ({ id, location: { directory: '/work/project' } });
+  for (const altered of [{ id: 'ses_origin' }, { parentID: 'ses_origin' }, { parentID: 'ses_other' }, { agent: 'build' }, { model: { ...model, id: 'other' } },
+    { location: { directory: '/elsewhere' } }]) {
+    const { context, calls } = host({ get: placed, create: async value => ({ ...value, id: sessionID, ...altered }) });
     await assert.rejects(createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model }), /independent reviewer/);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.filter(call => call.name === 'create').length, 1);
   }
+  // A host that does not echo the location, or names no parent as null, is accepted.
+  for (const tolerated of [{ location: undefined }, { parentID: null }]) {
+    const { context } = host({ get: placed, create: async value => ({ ...value, id: sessionID, ...tolerated }) });
+    assert.equal((await createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model })).id, sessionID);
+  }
+});
+
+test('V2 creation is cancelled while the conversation is read, before a session exists', async () => {
+  const controller = new AbortController();
+  const { context, calls } = host({ get: () => new Promise(() => {}) });
+  const pending = createReviewSession(context, { origin: 'ses_origin', title: 'review', role: 'azpr-review-functional', model, signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort(new Error('manual cancellation'));
+  await assert.rejects(pending, /manual cancellation/);
+  assert.deepEqual(calls.map(call => call.name), ['get']);
 });
 
 test('V2 creation accepts the host-normalized default model variant', async () => {
@@ -325,6 +368,79 @@ test('host continuation is accepted for any provider error wording and a reworde
   const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
   const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
   assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
+});
+
+// OpenCode 2.3.0: a step whose stream broke stays as an errored message marked for retry, directly followed by the
+// retried step's own assistant message; no continuation message is queued.
+function retriedTurn() {
+  const error = { type: 'provider.transport', status: 200, message: 'Connection lost while reading the response' };
+  return [assistant({ id: 'msg_cut', finish: 'error', error, retry: { attempt: 2, at: 4, error },
+    content: [{ type: 'reasoning', text: 'PRIVATE_REASONING' }, { type: 'text', text: '{"status":"COM' }] }),
+  assistant({ content: [{ type: 'text', text: '{"status":"COMPLETE"}' }] }), idle()];
+}
+test('a step the host retried after an interrupted stream leaves the retried answer alone, without another plugin prompt', async () => {
+  const { context, calls } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...retriedTurn()] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }], 'Nothing of the interrupted step is joined to the answer.');
+  assert.equal(answer.retriedSteps, 1);
+  assert.equal(answer.continuation, undefined);
+  assert.equal(answer.info.id, 'msg_answer');
+  assert.doesNotMatch(JSON.stringify(answer), /PRIVATE_REASONING|COM"/);
+  assert.equal(calls.filter(call => call.name === 'prompt').length, 1);
+  // Like a host continuation, it needs the caller's consent.
+  await assert.rejects(requestReview(context, { sessionID, text: input }), error => {
+    assert.match(error.message, /no complete, successful final assistant response/);
+    assert.equal(classifyFailure(error), 'transient');
+    return true;
+  });
+});
+test('retried steps may have run tools and may repeat; the answer is still the final message alone', async () => {
+  const turn = retriedTurn();
+  // The interrupted step had called a tool that ran: the host keeps it and resends from there.
+  turn[0].content = [{ type: 'text', text: 'Reading the file first.' }, { type: 'tool', id: 'tool_1', state: { status: 'completed' } }, { type: 'text', text: '{"status":"CO' }];
+  const second = assistant({ id: 'msg_cut2', finish: 'error', error: turn[0].error, retry: { attempt: 3, at: 5, error: turn[0].error }, content: [{ type: 'text', text: '{"sta' }] });
+  const toolStep = assistant({ id: 'msg_tools', finish: 'tool-calls', content: [{ type: 'tool', id: 'tool_2', state: { status: 'completed' } }] });
+  const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, toolStep, turn[0], second, turn[1], turn[2]] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
+  assert.equal(answer.retriedSteps, 2);
+});
+test('a retried step cannot excuse a missing retry mark, a failed final answer, foreign input, binding changes or unfinished execution', async () => {
+  const mutations = [
+    turn => delete turn[0].retry,
+    turn => turn[0].retry.attempt = 0,
+    turn => turn[0].retry.attempt = 1.5,
+    turn => turn[0].finish = 'length',
+    turn => delete turn[0].time.completed,
+    turn => turn[0].agent = 'build',
+    turn => turn[0].model = { ...model, id: 'changed' },
+    turn => turn[1].agent = 'build',
+    turn => turn[1].finish = 'tool-calls',
+    turn => turn[1].finish = 'error',
+    turn => turn[1].error = { type: 'provider.transport', message: 'again' },
+    turn => Object.assign(turn[1], { finish: 'error', error: { type: 'provider.transport', message: 'again' }, retry: { attempt: 3, at: 6 } }),
+    turn => turn[1].content.push({ type: 'tool', id: 'unexpected' }),
+    turn => turn[2].outcome = 'interrupted',
+    turn => turn[2].outcome = 'failed',
+    turn => turn.splice(1, 0, { type: 'user', text: 'foreign input' }),
+    turn => turn.splice(1, 0, { type: 'synthetic', text: 'foreign input' }),
+    turn => turn.splice(1, 1),
+  ];
+  for (const mutate of mutations) {
+    const turn = retriedTurn(); mutate(turn);
+    const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, ...turn] });
+    await assert.rejects(requestReview(context, { sessionID, text: input, allowHostContinuations: true }), undefined, mutate.toString());
+  }
+});
+test('a retried step and a host continuation in one turn are each handled by their own rule', async () => {
+  // The continued fragment's own retry breaks once more and the host retries that step.
+  const [fragment, synthetic] = continuationTurn();
+  const cut = assistant({ id: 'msg_cut', finish: 'error', error: { type: 'provider.transport', message: 'lost' }, retry: { attempt: 2, at: 5 }, content: [{ type: 'text', text: 'PLE' }] });
+  const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, fragment, synthetic, cut, assistant({ content: [{ type: 'text', text: 'PLETE"}' }] }), idle()] });
+  const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
+  assert.equal(answer.continuation.count, 1);
+  assert.equal(answer.retriedSteps, 1);
 });
 
 test('a follow-up prompt in the same session only examines its own turn', async () => {

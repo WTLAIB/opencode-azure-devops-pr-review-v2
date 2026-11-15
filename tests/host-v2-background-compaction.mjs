@@ -2,11 +2,14 @@ import { withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /** Opt-in exact-host fixture for OpenCode's experimental.background_compaction.
  * node tests/host-v2-background-compaction.mjs /absolute/path/opencode
- * The functional reviewer's first response reports a context past the host's
+ * The functional reviewer's second response reports a context past the host's
  * background-summary threshold but below its compaction threshold, so the host
  * asks for a summary in the background. AZPR refuses it before anything is sent
  * and the turn goes on. The reviewer's next request fails with HTTP 401, a
  * permanent failure: no shard split and no replacement session may follow.
+ * The large context comes with the second response because OpenCode 2.3.0
+ * starts a summary half the room the session began with before the ceiling
+ * (at most 60,000 tokens), so one response alone never reaches the threshold.
  * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
@@ -40,16 +43,19 @@ const provider = createServer(async (request, response) => {
     let call, final, usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
     if (payload?.assignment?.files && !payload.assignment.findingIds) {
       const assigned = payload.assignment.files;
-      if (input.model === 'functional' && results) {
-        // The provider key expired after the first request: a permanent failure.
+      // The functional reviewer reads two files before its key expires; the risk reviewer reads one and answers.
+      const reads = input.model === 'functional' ? 2 : 1;
+      if (input.model === 'functional' && results >= reads) {
+        // The provider key expired after the second request: a permanent failure.
         response.writeHead(401, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: { message: 'Fixture key expired', type: 'authentication_error', code: 'invalid_api_key' } }));
         return;
       }
-      if (!results && fileTool) {
-        call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[0] } : { path: assigned[0], version: 'head' } };
-        // 80% of the 100,000-token window: past the background-summary threshold, below compaction.
-        if (input.model === 'functional') usage = { prompt_tokens: 80000, completion_tokens: 10, total_tokens: 80010 };
+      if (results < reads && fileTool) {
+        call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[0] } : { path: assigned[results] ?? assigned[0], version: 'head' } };
+        // After a small first response the second one reports 80% of the 100,000-token window: past the
+        // background-summary threshold of OpenCode 2.3.0 (and of 2.2.4, 85% of the ceiling), below compaction.
+        if (input.model === 'functional' && results === 1) usage = { prompt_tokens: 80000, completion_tokens: 10, total_tokens: 80010 };
       } else {
         final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings: [], report: `Shard ${payload.assignment.shard} reviewed.` };
       }
@@ -100,11 +106,11 @@ try {
   assert.equal(functional.length, 1, `One functional session: no shard split and no replacement.\n${receipt}`);
   const [stage] = functional;
   assert.ok(stage.requestObservations.kinds.compaction >= 1 && stage.requestObservations.rejected >= 1, 'The host asked for a background summary and AZPR refused it.');
-  assert.equal(stage.requestObservations.authorizedPrimary, 2, 'The turn went on after the refused summary.');
+  assert.equal(stage.requestObservations.authorizedPrimary, 3, 'The turn went on after the refused summary.');
   assert.deepEqual([stage.status, stage.failureClass, stage.execution?.provider?.status, stage.execution?.compaction], ['FAILED', 'permanent', 401, undefined]);
   assert.ok(!result.stages.some(other => /shard \d+\/\d+[ab]$/.test(other.label ?? '')), 'No split shard was started.');
   assert.doesNotMatch(receipt, /context limit/, receipt);
-  assert.equal(requests.filter(r => r.model === 'functional').length, 2, 'No summary request reached the provider.');
+  assert.equal(requests.filter(r => r.model === 'functional').length, 3, 'No summary request reached the provider.');
   const host = /v(\d+\.\d+\.\d+)/.exec(spawnSync(binary, ['--version'], { encoding: 'utf8', env }).stdout)?.[1] ?? 'unknown';
   console.log(JSON.stringify({ status: 'PASS', host, functionalSessions: functional.length,
     failureClass: stage.failureClass, providerStatus: stage.execution.provider.status, refusedRequests: stage.requestObservations.rejected,

@@ -74,18 +74,19 @@ async function fixture(t, opts = {}) {
     return { dispose() { hooks.set(key, (hooks.get(key) ?? []).filter(item => item !== fn)); } };
   };
   const nativeTools = { shell: async () => ({ output: 'shell ran' }), read: async () => ({ output: 'read ran' }) };
-  const invoke = async (session, tool, input = {}) => {
+  // `execution` adds to the context the tool receives (OpenCode's ToolContext), such as `signal`; getters stay getters.
+  const invoke = async (session, tool, input = {}, execution = {}) => {
     const event = { sessionID: session.id, agent: session.agent, messageID: 'msg_tool', id: `call_${++seq}`, tool, input };
     await emit('tool', 'execute.before', event);
     const executor = registry.tool(tool)?.execute ?? nativeTools[tool];
     let result, error;
-    try { result = await executor(input, event); } catch (caught) { error = caught; }
+    try { result = await executor(input, Object.defineProperties({ ...event }, Object.getOwnPropertyDescriptors(execution))); } catch (caught) { error = caught; }
     await emit('tool', 'execute.after', { ...event, ...(error ? { status: 'error', error } : { status: 'completed', result }) });
     if (error) throw error;
     return event.result ?? result;
   };
   const context = {
-    app: { version: opts.version ?? '2.2.4' },
+    app: { version: opts.version ?? '2.3.0' },
     location: { directory },
     // Like a host catalog, each configured model once, however many roles name it.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => Object.values(group)).filter(Boolean)
@@ -123,12 +124,19 @@ async function fixture(t, opts = {}) {
       async create(input) {
         calls.push({ kind: 'create', agent: input.agent, title: input.title });
         const id = `ses_${++seq}`;
-        const session = { ...clone(input), id, history: [], turns: 0, outcome: 'succeeded' };
+        // Like OpenCode: a session without a parent is created at the location it is given, or at the plugin's.
+        const placed = { ...clone(input), ...(input.parentID === undefined ? { location: clone(input.location ?? { directory }) } : {}) };
+        const session = { ...placed, id, history: [], turns: 0, outcome: 'succeeded' };
         if (session.model) session.model.variant ??= 'default';
         sessions.set(id, session);
-        return { ...clone(input), id, ...(session.model ? { model: clone(session.model) } : {}) };
+        return { ...clone(placed), id, ...(session.model ? { model: clone(session.model) } : {}) };
       },
-      async get({ sessionID }) { const { history, running, packet, ...info } = sessions.get(sessionID); return clone(info); },
+      // A conversation is not one of the fixture's sessions; like every session it has a location.
+      async get({ sessionID }) {
+        if (!sessions.has(sessionID)) return opts.conversation ? opts.conversation(sessionID) : { id: sessionID, location: { directory } };
+        const { history, running, packet, ...info } = sessions.get(sessionID);
+        return clone(info);
+      },
       async prompt(input) {
         const session = sessions.get(input.sessionID), role = session.agent;
         calls.push({ kind: 'prompt', sessionID: session.id, role, text: input.text });
@@ -145,7 +153,7 @@ async function fixture(t, opts = {}) {
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-            // Like OpenCode 2.1.4 through 2.2.4: a compaction it attempts in the turn opens its message first, and AZPR's refusal
+            // Like OpenCode 2.1.4 through 2.3.0: a compaction it attempts in the turn opens its message first, and AZPR's refusal
             // ends the turn; a background summary publishes nothing, and its refusal stays in the background.
             const compact = async ({ background = false } = {}) => {
               const message = background ? undefined : { id: `compaction_${++seq}`, type: 'compaction', status: 'running' };
@@ -157,8 +165,15 @@ async function fixture(t, opts = {}) {
             if (turn === 0 && ROLES[role].format === 'initial' && packet.assignment.files.length) {
               await invoke(session, 'azpr_read_file', { path: packet.assignment.files[0], version: 'head' });
             }
-            const result = await opts.answer?.({ role, packet, turn, text: input.text, session }) ?? defaultAnswer({ role, packet });
+            let result = await opts.answer?.({ role, packet, turn, text: input.text, session }) ?? defaultAnswer({ role, packet });
             const model = clone(session.model);
+            // Like OpenCode 2.3.0: a step whose stream broke stays as an errored message marked for retry, and the
+            // retried step answers in a new assistant message.
+            for (let cut = 0; cut < (result?.$retried ?? 0); cut++) {
+              session.history.push({ id: `cut_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
+                error: { type: 'provider.transport', message: 'fixture connection lost' }, retry: { attempt: cut + 2, at: 3 }, content: [{ type: 'text', text: '{"status":"COM' }] });
+            }
+            if (result?.$retried) result = result.answer ?? defaultAnswer({ role, packet });
             if (result?.$provider) {
               session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
                 error: { type: result.$providerType ?? 'provider.api', status: result.$provider, message: 'fixture' }, content: [] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
@@ -1492,7 +1507,7 @@ test('/pr-check names the running installation and warns about another AZPR entr
 test('/pr-check names the tested OpenCode version in its own row', async t => {
   const f = await fixture(t);
   const check = await f.command('pr-check');
-  assert.match(check, /\| OpenCode \| ok \| OpenCode 2\.2\.4, the tested version\. \|/);
+  assert.match(check, /\| OpenCode \| ok \| OpenCode 2\.3\.0, the tested version\. \|/);
   assert.doesNotMatch(check, /Host notice/);
 });
 
@@ -1500,7 +1515,7 @@ test('another OpenCode version is a /pr-check warning, not a failure; review rec
   const f = await fixture(t, { version: '2.2.5' });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/);
-  assert.match(check, /\| OpenCode \| WARNING \| OpenCode 2\.2\.5; AZPR is tested with 2\.2\.4\. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing\. \|/);
+  assert.match(check, /\| OpenCode \| WARNING \| OpenCode 2\.2\.5; AZPR is tested with 2\.3\.0\. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing\. \|/);
   const review = await f.command('pr-review', f.azure.prUrl(), 'review');
   assert.match(review, /\] COMPLETE/);
   assert.doesNotMatch(check + review, /Host notice|differs from the tested/);
@@ -1510,7 +1525,7 @@ test('a host without the permission hook gets a /pr-check warning about the proj
   const f = await fixture(t, { permissionHook: false });
   const check = await f.command('pr-check');
   assert.match(check, /\] READY/, 'A missing permission hook is a warning, not a failure.');
-  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.2\.4, the tested version, has the hook\. \|/);
+  assert.match(check, /\| Project boundary \| WARNING \| This OpenCode has no permission hook, so AZPR cannot keep private reviewers' native read, glob and grep inside the project; .* OpenCode 2\.3\.0, the tested version, has the hook\. \|/);
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'review'), /\] COMPLETE/);
 });
 
@@ -1762,7 +1777,155 @@ test('AZPR tools read ranges, list folders and threads for private reviewers onl
   await assert.rejects(f.registry.tool('azpr_read_file').execute({ path: '/src/Main.java' }, { sessionID: 'ordinary', agent: 'build' }), /only to an active AZPR reviewer session/);
 });
 
-test('private sessions of an unfinished review are deleted except the one holding the draft; completed ones stay', async t => {
+test('private sessions are sessions of their own at the conversation\'s location, marked with their run, role and conversation', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], conversation: id => ({ id, location: { directory: '/work/project', workspaceID: 'wrk_1' } }) });
+  const review = reviewId(await f.command());
+  const reviewers = [...f.sessions.values()];
+  assert.deepEqual(reviewers.map(session => session.agent).sort(), ['azpr-review-functional', 'azpr-review-risk', 'azpr-review-verifier']);
+  for (const session of reviewers) {
+    assert.equal(Object.hasOwn(session, 'parentID'), false, 'Never a child: OpenCode 2.3.0 hands a child\'s answers to its parent.');
+    assert.deepEqual(session.location, { directory: '/work/project', workspaceID: 'wrk_1' });
+    assert.deepEqual(session.metadata, { azpr: { run: review, role: session.agent, conversation: 'ordinary' } });
+    assert.match(session.title, new RegExp(`^\\[AZPR ${review}\\] `));
+  }
+  // A comment run's sessions also name the review they act on.
+  const preview = await f.command('pr-comment', '');
+  const [planner] = f.sessionsFor('azpr-review-comment-plan');
+  assert.deepEqual(planner.metadata, { azpr: { run: reviewId(preview), role: 'azpr-review-comment-plan', conversation: 'ordinary', review } });
+  assert.notEqual(reviewId(preview), review);
+  assert.deepEqual(planner.location, { directory: '/work/project', workspaceID: 'wrk_1' });
+});
+
+test('a completed review keeps only the session holding its report; its other sessions and those of its comment runs are deleted at once', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'], settings: s => { s.debug.enabled = false; } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  const review = reviewId(receipt);
+  const report = /\nReport delivery: report queued to session=(\S+)\.\n/.exec(receipt)[1];
+  const created = () => f.calls.filter(call => call.kind === 'create').length, removed = () => f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID);
+  assert.equal(created(), 3);
+  assert.deepEqual([...f.sessions.keys()], [report], 'Only the session holding the report is left.');
+  assert.equal(f.sessions.get(report).agent, 'azpr-review-verifier');
+  assert.ok(f.notices.some(n => n.sessionID === report && new RegExp(`# AZPR ${review} — COMPLETE`).test(n.text)), 'The report stays readable.');
+  assert.ok(receipt.includes('\nSession notice: 2 reviewer session(s) of this run were deleted when it ended; only a session that holds the report or draft is kept (deletePrivateSessions). debug.enabled keeps them all.\n'), receipt);
+  assert.deepEqual((await savedReview(f, review)).reportSessions, [report]);
+  // The report session still means its review, and a comment run leaves no session of its own.
+  const preview = await f.command('pr-comment', '', report);
+  assert.match(preview, new RegExp(`\\] PREVIEW; source review=${review}\\n`));
+  assert.equal(created(), 4, 'One planning session ran.');
+  assert.equal(removed().length, 3);
+  assert.deepEqual([...f.sessions.keys()], [report]);
+  assert.deepEqual((await savedReview(f, review)).reportSessions, [report]);
+  assert.doesNotMatch(preview, /Session notice/, 'A comment receipt names no session.');
+  // Nothing is removed twice, and the kept session goes with the review.
+  assert.equal(new Set(removed()).size, removed().length);
+});
+
+test('while debugging every session of a review and of its comment runs is kept with the review', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const receipt = await f.command();
+  const review = reviewId(receipt);
+  await f.command('pr-comment', '');
+  assert.equal(f.calls.filter(call => call.kind === 'remove').length, 0);
+  assert.doesNotMatch(receipt, /Session notice/);
+  assert.equal(f.sessions.size, 4);
+  assert.deepEqual((await savedReview(f, review)).reportSessions.sort(), [...f.sessions.keys()].sort(), 'Kept sessions are deleted when the review is.');
+});
+
+test('a session whose deletion fails stays on record and is deleted later with the review or the kept sessions', async t => {
+  let stuck;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) throw new Error('Fixture deletion failed'); } });
+  const receipt = await f.command();
+  const review = reviewId(receipt);
+  const report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+  assert.ok(stuck && stuck !== report);
+  assert.deepEqual((await savedReview(f, review)).reportSessions.sort(), [report, stuck].sort(), 'The review still names the session it could not delete.');
+  assert.match(receipt, /\nSession notice: 1 reviewer session\(s\) of this run were deleted/, 'Only deletions that succeeded are counted.');
+});
+
+test('an unfinished review remembers a session it could not delete next to the one holding its draft', async t => {
+  let stuck;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) throw new Error('Fixture deletion failed'); },
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
+  assert.match(await f.command(), /\] PARTIAL/);
+  const draft = f.sessionsFor('azpr-review-verifier').at(-1);
+  const [file] = await readdir(join(f.stateDirectory, 'sessions'));
+  assert.deepEqual(JSON.parse(await readFile(join(f.stateDirectory, 'sessions', file), 'utf8')).sort(), [draft.id, stuck].sort());
+});
+
+test('a step OpenCode retried after an interrupted stream is counted on its stage; the stage is not repeated', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], answer({ role }) { return role === 'azpr-review-risk' ? { $retried: 2 } : undefined; } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  assert.match(receipt, /\n- azpr-review-risk: COMPLETE; session=\S+; model=\S+; step-retries=2\n/);
+  assert.doesNotMatch(receipt, /Retry notice|stream-continuations/);
+  assert.equal(f.sessionsFor('azpr-review-risk').length, 1, 'No new session: the host already retried the step.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(risk.hostStepRetries, 2);
+  assert.equal(risk.attempt, 1);
+  const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
+  const response = JSON.parse(await readFile(join(debug, (await readdir(debug)).find(name => /azpr-review-risk\.response\.json$/.test(name))), 'utf8'));
+  assert.equal(response.retriedSteps, 2);
+  assert.doesNotMatch(response.text, /^\{"status":"COM\{/, 'The interrupted text is not part of the answer.');
+});
+
+test('a tool call the host stops ends at once: the request only it waits for is aborted, a read the run shares goes on', async t => {
+  const azure = fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Shared.java': 'shared code\n' } });
+  // Every Azure DevOps request with the signal it was sent with.
+  const requests = [], send = azure.fetch;
+  azure.fetch = (url, init = {}) => { requests.push({ url: String(url), signal: init.signal }); return send(url, init); };
+  const requestOf = match => requests.findLast(request => match(new URL(request.url)));
+  // Resolves once the request is on its way, however long the machine takes to send it.
+  const sent = async match => { for (let waited = 0; !requestOf(match); waited += 2) { assert.ok(waited < 5000, 'The request was never sent.'); await sleep(2); } return requestOf(match); };
+  const threadsRequest = url => url.pathname.endsWith('/threads'), sharedRequest = url => url.searchParams.get('path') === '/src/Shared.java';
+  const release = deferred(), outcomes = {};
+  let signalReads = 0;
+  const f = await fixture(t, { azure, async during({ session, role, turn, invoke }) {
+    if (turn !== 0 || role !== 'azpr-review-risk') return;
+    const stoppable = () => { const controller = new AbortController(); return { controller, execution: { get signal() { signalReads++; return controller.signal; } } }; };
+    // 1. A read of the PR threads belongs to this call alone.
+    azure.state.fail.threads = () => new Promise(() => {});
+    const threads = stoppable();
+    const pendingThreads = invoke(session, 'azpr_pr_threads', {}, threads.execution).then(() => 'returned', error => error);
+    const ownRequest = await sent(threadsRequest);
+    assert.equal(ownRequest.signal.aborted, false);
+    threads.controller.abort(new Error('Fixture: the host stopped the call'));
+    outcomes.threads = await within(pendingThreads, 1000);
+    outcomes.threadsRequestAborted = ownRequest.signal.aborted;
+    delete azure.state.fail.threads;
+    // 2. A file read is shared by the run's sessions: the stopped call ends, the request goes on.
+    azure.state.fail.items = call => call.query.path === '/src/Shared.java' ? release.promise.then(() => undefined) : undefined;
+    const shared = stoppable();
+    const pendingRead = invoke(session, 'azpr_read_file', { path: '/src/Shared.java' }, shared.execution).then(() => 'returned', error => error);
+    const sharedRead = await sent(sharedRequest);
+    shared.controller.abort(new Error('Fixture: the host stopped the call'));
+    outcomes.read = await within(pendingRead, 1000);
+    outcomes.readRequestAborted = sharedRead.signal.aborted;
+    const again = invoke(session, 'azpr_read_file', { path: '/src/Shared.java' });
+    release.resolve();
+    outcomes.again = (await again).output;
+    outcomes.sharedRequests = requests.filter(request => sharedRequest(new URL(request.url))).length;
+    // 3. A context without a usable signal (an older host) changes nothing.
+    outcomes.plain = (await invoke(session, 'azpr_read_file', { path: '/src/Shared.java' }, { signal: { aborted: true } })).output;
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/, 'A stopped tool call does not end the run.');
+  assert.match(outcomes.threads.message, /the host stopped the call/);
+  assert.equal(outcomes.threadsRequestAborted, true, 'Its own Azure DevOps request was aborted.');
+  assert.match(outcomes.read.message, /the host stopped the call/);
+  assert.equal(outcomes.readRequestAborted, false, 'The read other sessions may be waiting for went on.');
+  assert.match(outcomes.again, /shared code/);
+  assert.equal(outcomes.sharedRequests, 1, 'The later call got the same read.');
+  assert.match(outcomes.plain, /shared code/);
+  assert.equal(signalReads, 2, 'The signal is read once per call, which is what tells OpenCode 2.3.0 that the tool stops by itself.');
+  const risk = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-risk');
+  assert.equal(risk.toolTimeouts, 0);
+  assert.equal(risk.sessionReads, 2, 'Only reads whose content the session saw count: the assigned file and the shared one, once.');
+});
+
+test('private sessions of an unfinished review are deleted except the one holding the draft', async t => {
   const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
   const created = () => f.calls.filter(call => call.kind === 'create').length;
   assert.match(await f.command(), /\] PARTIAL/);
@@ -1770,7 +1933,7 @@ test('private sessions of an unfinished review are deleted except the one holdin
   const draft = f.sessionsFor('azpr-review-verifier').at(-1);
   assert.ok(f.notices.some(n => n.sessionID === draft.id && /# AZPR [a-f0-9]{8} — PARTIAL/.test(n.text)), 'The draft stays readable.');
   assert.equal(removed.length, created() - 1);
-  assert.equal([...f.sessions.values()].filter(session => session.parentID === 'ordinary').length, 1);
+  assert.deepEqual([...f.sessions.keys()], [draft.id], 'Only the session holding the draft is left.');
   assert.equal((await readdir(join(f.stateDirectory, 'sessions'))).length, 1, 'The kept session is remembered for later cleanup.');
   const before = f.calls.length;
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'second'), /\] PARTIAL/);
@@ -2124,7 +2287,7 @@ const commentStep = (f, receipt, origin = 'ordinary') => {
 const noCommentStep = async (f, origin = 'ordinary') => {
   await sleep(100);
   assert.ok(!f.notices.some(n => n.sessionID === origin && /\] STARTED \/pr-comment |\] Automatic /.test(n.text)), 'No comment step follows.');
-  assert.ok(![...f.sessions.values()].some(session => session.parentID === origin && /comment-plan$/.test(session.agent)), 'No comments were planned.');
+  assert.ok(![...f.sessions.values()].some(session => session.metadata?.azpr?.conversation === origin && /comment-plan$/.test(session.agent)), 'No comments were planned.');
 };
 
 test('--preview after the PR URL previews the comments of a COMPLETE review in a run of its own; nothing is posted', async t => {

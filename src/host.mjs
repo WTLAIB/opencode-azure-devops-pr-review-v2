@@ -6,9 +6,10 @@
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
  */
-export const TESTED_HOST_VERSION = '2.2.4';
+export const TESTED_HOST_VERSION = '2.3.0';
 
-// Text OpenCode (2.0.32 through 2.2.4) queues after resuming an interrupted text stream.
+// Text OpenCode 2.0.32 through 2.2.7 queue after resuming an interrupted text stream. OpenCode 2.3.0 retries the
+// interrupted step instead and queues nothing (see `retriedSteps` in session.mjs).
 export const HOST_CONTINUATION_TEXT = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';
 
 // Context message types that mean someone other than the admitted prompt
@@ -57,7 +58,7 @@ export function packageNamed(target, name, repository) {
 }
 
 /**
- * This plugin's entries in the host's plugin list. OpenCode 2.1.4 through 2.2.4 list
+ * This plugin's entries in the host's plugin list. OpenCode 2.1.4 through 2.3.0 list
  * { id?, source: { type: package|local|builtin|sdk, target?, version? },
  * state: { status: active|failed, error? } } and keeps only the first entry
  * of a plugin ID: a second one is listed as failed with "Duplicate plugin ID".
@@ -93,7 +94,7 @@ export function pluginSourceLabel(source) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.1.2 through 2.2.4 emit one delta event per streamed chunk of answer text,
+ * 2.1.2 through 2.3.0 emit one delta event per streamed chunk of answer text,
  * reasoning or tool-call input; the projected session context shows the text
  * only once the step ends.
  */
@@ -122,7 +123,7 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4 through 2.2.4),
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4 through 2.3.0),
  * whose fetch accepts per-request `proxy` and `tls` options. Node's fetch
  * silently ignores both, so a configured proxy would be bypassed; callers
  * refuse instead.

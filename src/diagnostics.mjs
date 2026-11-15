@@ -203,5 +203,6 @@ export function diagnosticResponse(response) {
     text: raw, textCharacters: raw.length,
     ...(response?.continuation ? { continuation: { count: response.continuation.count,
       fragments: response.continuation.fragments.map(diagnosticResponse) } } : {}),
+    ...(response?.retriedSteps ? { retriedSteps: response.retriedSteps } : {}),
   };
 }

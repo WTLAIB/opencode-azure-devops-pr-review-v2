@@ -106,7 +106,7 @@ export function targetKey(target) {
 /**
  * A REST base URL other than dev.azure.com is accepted only for loopback test
  * servers, so a mistaken override can never send the PAT to another host. All
- * of 127.0.0.0/8 is loopback: OpenCode 2.2.4 adds 127.0.0.1, localhost and ::1
+ * of 127.0.0.0/8 is loopback: OpenCode (2.2.4, 2.3.0) adds 127.0.0.1, localhost and ::1
  * to NO_PROXY, and Bun then bypasses even an explicit proxy, so a proxied test
  * server needs another loopback address.
  */
@@ -434,23 +434,26 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
    * One REST call through the shared queue. Reads retry transient failures
    * (network, timeout, throttling, 5xx) twice; writes are never repeated
    * because publication resolves uncertainty by reading markers back.
+   * `signal` also ends a call that only its caller waits for (a tool call
+   * the host stopped); a call whose result several callers share takes none.
    */
-  async function request(run, { method = 'GET', path, query = {}, body, accept = 'json', maxBytes, label, record = {} }) {
+  async function request(run, { method = 'GET', path, query = {}, body, accept = 'json', maxBytes, label, record = {}, signal }) {
     const url = new URL(`${root}/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
     url.searchParams.set('api-version', API_VERSION);
     const retry = method === 'GET';
+    const stop = signal ? AbortSignal.any([run.controller.signal, signal]) : run.controller.signal;
     for (let attempt = 1; ; attempt++) {
       run.azureCalls = (run.azureCalls ?? 0) + 1;
       const started = performance.now();
       const entry = { method, call: label, ...record, attempt };
       try {
-        const value = await queue.run(signal => send({ method, url, body, accept, maxBytes }, label, signal), { signal: run.controller.signal, label: `Azure DevOps ${label}` });
+        const value = await queue.run(aborting => send({ method, url, body, accept, maxBytes }, label, aborting), { signal: stop, label: `Azure DevOps ${label}` });
         onCall?.(run, { ...entry, ok: true, durationMs: Math.round(performance.now() - started),
           ...(value?.bytes ? { bytes: value.bytes.length } : value?.tooLarge ? { bytes: value.size, tooLarge: true } : {}) });
         return value;
       } catch (caught) {
-        if (run.controller.signal.aborted) throw caught;
+        if (stop.aborted) throw caught;
         const error = caught instanceof AzureError ? caught : caught?.timeout
           ? new AzureError(`Azure DevOps ${label} did not finish within the per-call timeout.`, { kind: 'timeout', transient: true, uncertain: method !== 'GET', cause: caught })
           : new AzureError(`Azure DevOps ${label} failed: ${clean(caught?.message ?? caught)}`, { kind: 'unexpected', cause: caught });
@@ -459,7 +462,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
           error: error.message.slice(0, 300), transient: error.transient, willRetry: again });
         if (again) {
           run.azureRetries = (run.azureRetries ?? 0) + 1;
-          await pause(Math.max(retryDelayMs * (attempt === 1 ? 1 : 3), error.retryAfterMs ?? 0), run.controller.signal);
+          await pause(Math.max(retryDelayMs * (attempt === 1 ? 1 : 3), error.retryAfterMs ?? 0), stop);
           continue;
         }
         if (attempt > 1) error.message = `${error.message.replace(/\.$/, '')} after ${attempt} attempts.`;
@@ -556,16 +559,19 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
       if (file.tooLarge) throw new AzureError(`${file.path} is larger than ${MAX_FILE_BYTES / 1048576} MB at ${version.slice(0, 12)}.`, { kind: 'too-large' });
       return file.text;
     },
-    /** Folder entries at a commit; a recursive listing is read once per run. */
-    async listItems(run, snapshot, path, version, recursive = false) {
+    /**
+     * Folder entries at a commit; a recursive listing is read once per run and
+     * shared, so only a listing of one level ends with its caller's `signal`.
+     */
+    async listItems(run, snapshot, path, version, recursive = false, signal) {
       const scope = normalizePath(path);
-      const read = async () => {
+      const read = async own => {
         const result = await request(run, { path: `${repo(snapshot)}/items`, label: `folder ${scope}`, record: { path: scope, version: version.slice(0, 12), ...(recursive ? { recursive: true } : {}) },
-          query: { scopePath: scope, recursionLevel: recursive ? 'Full' : 'OneLevel', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' } });
+          query: { scopePath: scope, recursionLevel: recursive ? 'Full' : 'OneLevel', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' }, signal: own });
         if (!Array.isArray(result?.value)) throw new AzureError('Azure DevOps returned no item list.');
         return result.value;
       };
-      if (!recursive) return read();
+      if (!recursive) return read(signal);
       const cache = run.listCache ??= new Map(), key = `${version}\n${scope}`;
       if (!cache.has(key)) {
         const pending = read();
@@ -580,9 +586,9 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
         query: { scopePath: '/', recursionLevel: 'Full', $format: 'zip', 'versionDescriptor.version': version, 'versionDescriptor.versionType': 'commit' } });
       return result.tooLarge ? { tooLarge: true, size: result.size } : { bytes: result.bytes };
     },
-    /** Every thread on the PR (one call; the API returns all of them). */
-    async threads(run, snapshot) {
-      const result = await request(run, { path: `${pullRequest(snapshot)}/threads`, label: 'PR threads' });
+    /** Every thread on the PR (one call; the API returns all of them). `signal` ends this caller's read early. */
+    async threads(run, snapshot, signal) {
+      const result = await request(run, { path: `${pullRequest(snapshot)}/threads`, label: 'PR threads', signal });
       if (!Array.isArray(result?.value)) throw new AzureError('Azure DevOps returned no thread list; existing comments could not be checked.');
       return result.value;
     },

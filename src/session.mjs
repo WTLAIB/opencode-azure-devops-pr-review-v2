@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, recordOf, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -66,17 +66,40 @@ function sameModel(actual, expected) {
     (actual?.variant ?? 'default') === (expected.variant ?? 'default');
 }
 
-/** Create a linked, independent session with its agent and model already bound. */
-export async function createReviewSession(context, { origin, title, role, model, permissions, signal }) {
-  const api = sessionApi(context, ['create']);
+/**
+ * The conversation's location, which a child session would inherit. Undefined
+ * when the host reports none; the host then uses the location this plugin
+ * instance serves.
+ */
+async function conversationLocation(api, origin, signal) {
+  const conversation = recordOf(await cancellable(() => api.get({ sessionID: origin }), signal).catch(() => null));
+  const directory = conversation?.location?.directory;
+  if (!textValue(directory)) return undefined;
+  const workspaceID = conversation.location.workspaceID;
+  return { directory, ...(workspaceID === undefined || workspaceID === null ? {} : { workspaceID }) };
+}
+
+/**
+ * Create a session of its own with its agent and model already bound, at the
+ * conversation's location. It is deliberately not a child of the conversation:
+ * OpenCode 2.3.0 and later hand every answer of a child session to its parent
+ * and wake the parent's own model with it. `metadata` marks the session as
+ * AZPR's for tools that list sessions.
+ */
+export async function createReviewSession(context, { origin, title, role, model, permissions, metadata, signal }) {
+  const api = sessionApi(context, ['create', 'get']);
   if (!textValue(origin) || !textValue(role) || !textValue(title)) throw new Error('[AZPR] Incomplete review session identity.');
   const selectedModel = modelRef(model);
+  const location = await conversationLocation(api, origin, signal);
   const made = await cancellable(() => api.create({
-    parentID: origin, title, agent: role, model: selectedModel,
+    title, agent: role, model: selectedModel,
+    ...(location === undefined ? {} : { location }),
+    ...(metadata === undefined ? {} : { metadata }),
     ...(permissions === undefined ? {} : { permissions }),
   }), signal);
-  if (!record(made) || !textValue(made.id) || made.id === origin || made.parentID !== origin ||
-      made.agent !== role || !sameModel(made.model, selectedModel)) {
+  if (!record(made) || !textValue(made.id) || made.id === origin || (made.parentID ?? null) !== null ||
+      made.agent !== role || !sameModel(made.model, selectedModel) ||
+      (location !== undefined && record(made.location) && made.location.directory !== location.directory)) {
     throw new Error('[AZPR] OpenCode V2 did not create the requested independent reviewer session.');
   }
   return made;
@@ -116,9 +139,28 @@ function providerFailure(final, assistants) {
 }
 
 /**
- * Text fragments of a stream the host interrupted and resumed. Accept only
- * errored text-only assistant messages that the host marked for retry, each
- * followed by the host continuation, and finally a successful text answer.
+ * Errored assistant messages of steps the host retried by itself after an
+ * interrupted stream (OpenCode 2.3.0 and later): each is marked for retry and
+ * directly followed by the assistant message of the retried step. The retry is
+ * sent with what the step had finished (its tool calls that ran and what came
+ * before them) and without the output the interruption cut off, so the answer
+ * is the final message alone and nothing of these messages is joined to it.
+ */
+function retriedSteps(turn, enabled) {
+  const retried = new Set();
+  if (!enabled) return retried;
+  turn.forEach((message, index) => {
+    if (message?.type === 'assistant' && message.error && message.finish === 'error' && Number.isInteger(message.retry?.attempt) &&
+        message.retry.attempt >= 1 && Number.isFinite(message.time?.completed) && turn[index + 1]?.type === 'assistant') retried.add(message);
+  });
+  return retried;
+}
+
+/**
+ * Text fragments of a stream the host interrupted and resumed with a
+ * continuation message (OpenCode through 2.2.x). Accept only errored text-only
+ * assistant messages that the host marked for retry, each followed by the host
+ * continuation, and finally a successful text answer.
  */
 function continuedText(turn, enabled) {
   const none = { recovered: new Set(), synthetic: new Set() };
@@ -211,7 +253,9 @@ export async function requestReview(context, { sessionID, text, role, model, met
     throw new Error('[AZPR] The projected prompt differs from the admitted literal input.');
   }
   const turn = messages.slice(indexes[0] + 1);
-  const continuation = continuedText(turn, allowHostContinuations);
+  // Either way the host recovers an interrupted stream; both need the caller's consent.
+  const retried = retriedSteps(turn, allowHostContinuations);
+  const continuation = continuedText(turn.filter(message => !retried.has(message)), allowHostContinuations);
   if (turn.some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
     const error = new Error('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
     error.contextChanged = true;
@@ -247,7 +291,7 @@ export async function requestReview(context, { sessionID, text, role, model, met
     throw responseError('[AZPR] Reviewer agent or model binding changed; no output was accepted.', answer);
   }
   if (!final || turn.at(-2) !== final || !Array.isArray(final.content) || !Number.isFinite(final.time?.completed) ||
-      assistants.some(message => !continuation.recovered.has(message) && (message.error || !Number.isFinite(message.time?.completed) ||
+      assistants.some(message => !continuation.recovered.has(message) && !retried.has(message) && (message.error || !Number.isFinite(message.time?.completed) ||
         !['stop', 'tool-calls'].includes(message.finish)))) {
     const error = responseError('[AZPR] The session has no complete, successful final assistant response.', answer);
     error.transient = true;
@@ -266,6 +310,7 @@ export async function requestReview(context, { sessionID, text, role, model, met
     answer.parts = [{ type: 'text', text: texts.slice(restartedAt).join('') }];
     answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
+  if (retried.size) answer.retriedSteps = retried.size;
   aborted(signal);
   return answer;
 }

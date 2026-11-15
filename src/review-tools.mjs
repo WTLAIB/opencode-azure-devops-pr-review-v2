@@ -394,7 +394,8 @@ export async function runReviewTool(name, input, context) {
   return { ...result, reads: [], text: `${result.text.slice(0, fitEnd(result.text, 0, OUTPUT_BYTES - 200))}\n[Output cut to the tool-output limit; request a narrower range.]` };
 }
 
-async function reviewTool(name, input, { azure, run, snapshot }) {
+// `signal` is the caller's own stop: it goes only to reads no other session of the run shares.
+async function reviewTool(name, input, { azure, run, snapshot, signal }) {
   const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   // Models often send an optional argument as null or "": that means not given.
   const args = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null && !(typeof value === 'string' && !value.trim())));
@@ -454,12 +455,12 @@ async function reviewTool(name, input, { azure, run, snapshot }) {
     const path = pathArgument(args.path, '/');
     const { sha, label } = resolveVersion(args.version, snapshot);
     if (args.recursive !== undefined && typeof args.recursive !== 'boolean') throw new ToolInputError('recursive must be true or false.');
-    return renderListing(await azure.listItems(run, snapshot, path, sha, args.recursive === true), { path, label, version: sha });
+    return renderListing(await azure.listItems(run, snapshot, path, sha, args.recursive === true, signal), { path, label, version: sha });
   }
   if (name === REVIEW_TOOLS.threads) {
     const path = args.path === undefined ? undefined : pathArgument(args.path);
     if (args.threadId !== undefined && (!Number.isInteger(args.threadId) || args.threadId < 1)) throw new ToolInputError('threadId must be a positive integer.');
-    return renderThreads(await azure.threads(run, snapshot), { path, threadId: args.threadId });
+    return renderThreads(await azure.threads(run, snapshot, signal), { path, threadId: args.threadId });
   }
   throw new ToolInputError(`Unknown AZPR tool ${name}.`);
 }

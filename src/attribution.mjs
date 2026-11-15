@@ -266,6 +266,7 @@ function renderStageReceipt(stage) {
     ['repair-turns', stage.repairs?.length],
     ['stream-continuations', stage.hostContinuations],
     ['continuation-restarts', stage.continuationRestarts],
+    ['step-retries', stage.hostStepRetries],
     ['blocked-native-tools', stage.blockedNativeToolCalls],
     ['observed-tool-errors', stage.toolFailures],
     ['tool-timeouts', stage.toolTimeouts],
@@ -290,6 +291,7 @@ export function renderReceipt(run, report, status, error, settings) {
   if (run.draft) body += run.mode === 'quick'
     ? '\nIncomplete draft notice: the quick review did not complete; its observations are unconfirmed and not input for PR comments.\n'
     : '\nIncomplete draft notice: initial observations are unconfirmed because verification did not complete; they are not input for PR comments.\n';
+  if (run.sessionsRemoved) body += `\nSession notice: ${run.sessionsRemoved} reviewer session(s) of this run were deleted when it ended; only a session that holds the report or draft is kept (deletePrivateSessions). debug.enabled keeps them all.\n`;
   body += renderDiagnosticNotices(run, settings);
   body += run.mode === 'check'
     ? '\nStatus: READY means AZPR can read the PR through the Azure DevOps REST API; it does not review or approve the PR.\n'

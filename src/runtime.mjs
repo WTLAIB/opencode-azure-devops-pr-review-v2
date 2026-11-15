@@ -353,32 +353,55 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   /**
    * Delete AZPR's own reviewer sessions (never one an active run uses), a few
    * at a time so a host that stalls on deletion delays the receipt by one
-   * timeout per batch, not per session; failures are ignored.
+   * timeout per batch, not per session. Returns the sessions that are still
+   * there: those an active run uses and those whose deletion failed or timed
+   * out, for a caller that can try again later.
    */
   async function removeSessions(sessionIDs) {
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
+    const requested = [...new Set(sessionIDs ?? [])];
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return requested;
     const active = new Set([...runs.values()].flatMap(run => run.stages.map(stage => stage.sessionID)));
-    const pending = [...new Set(sessionIDs ?? [])].filter(sessionID => !active.has(sessionID));
+    const pending = requested.filter(sessionID => !active.has(sessionID)), left = requested.filter(sessionID => active.has(sessionID));
     const worker = async () => {
       while (pending.length) {
         const sessionID = pending.shift();
-        await deadline(() => context.session.remove({ sessionID }), options.removeTimeoutMs ?? 5000).catch(() => {});
+        await deadline(() => context.session.remove({ sessionID }), options.removeTimeoutMs ?? 5000).catch(() => { left.push(sessionID); });
       }
     };
     await Promise.all(Array.from({ length: Math.min(SESSION_REMOVALS, pending.length) }, worker));
+    return left;
   }
   /**
-   * A review run that saved no review: delete its sessions except the one
-   * holding its report or draft (all are kept while debugging, or when an
-   * abort was not confirmed); kept sessions follow the review limit.
+   * The sessions of a run that ended. OpenCode lists every private session like
+   * a conversation of its own, so only the one in `keep` (the session holding
+   * the run's report or draft) stays and the others are deleted at once; all
+   * are kept while debugging or when an abort was not confirmed. Returns the
+   * sessions that remain, including any that could not be deleted.
    */
+  async function releaseSessions(run, keep) {
+    const sessions = [...new Set(run.stages.map(stage => stage.sessionID).filter(Boolean))];
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove || settings.debug.enabled || run.abortUnconfirmed) return sessions;
+    const obsolete = sessions.filter(id => id !== keep);
+    const left = await removeSessions(obsolete);
+    run.sessionsRemoved = obsolete.length - left.length;
+    return sessions.filter(id => id === keep || left.includes(id));
+  }
+  /** A review run that saved no review: the sessions it leaves follow the review limit. */
   async function releaseUnfinished(run) {
-    const sessions = run.stages.map(stage => stage.sessionID).filter(Boolean);
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove || !sessions.length) return;
-    const keepAll = settings.debug.enabled || run.abortUnconfirmed;
-    const kept = keepAll ? sessions : sessions.filter(id => id === run.reportStage?.sessionID);
-    await removeSessions(sessions.filter(id => !kept.includes(id)));
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
+    const kept = await releaseSessions(run, run.reportStage?.sessionID);
     if (kept.length) await removeSessions(await store.keepSessions(run.id, kept).catch(() => []));
+  }
+  /**
+   * A run of a saved review ended: the review keeps what the run leaves (`keep`
+   * is the session holding the review's report; a comment run keeps none, since
+   * its receipt carries its result) until the review itself is removed.
+   */
+  async function releaseFinished(run, review, keep) {
+    const before = [...review.reportSessions].sort().join('\n');
+    const kept = new Set(await releaseSessions(run, keep));
+    for (const stage of run.stages) if (stage.sessionID) review.reportSessions[kept.has(stage.sessionID) ? 'add' : 'delete'](stage.sessionID);
+    return [...review.reportSessions].sort().join('\n') !== before;
   }
   // One write of a review's record, queued behind the writes of that review before it. `value` is
   // the review or a copy with changes not yet applied to it, and is read when the write starts.
@@ -560,7 +583,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (spec.mode !== run.profile) throw new Error('[AZPR] Reviewer profile mismatch before invocation.');
     const idModel = stageModel(settings, role);
     const title = `[AZPR ${run.id}] ${spec.label}${label ? ` ${label}` : ''}${attempt > 1 ? ` (attempt ${attempt})` : ''}`;
-    const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), signal }), signal);
+    // Marks the session as AZPR's: its run, role and conversation, and for a comment run the review it acts on.
+    const metadata = { azpr: { run: run.id, role, conversation: run.origin, ...(run.review ? { review: run.review.id } : {}) } };
+    const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), metadata, signal }), signal);
     if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');
     seenSessions.add(made.id);
     watch.waiting = false;
@@ -615,6 +640,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           record.hostContinuations = (record.hostContinuations ?? 0) + answer.continuation.count;
           if (answer.continuation.restartedAt) record.continuationRestarts = (record.continuationRestarts ?? 0) + 1;
         }
+        if (answer.retriedSteps) record.hostStepRetries = (record.hostStepRetries ?? 0) + answer.retriedSteps;
         evaluation = await handler.evaluate(answerText, evaluation?.result, session);
         const budget = turn < settings.workflow.repairAttempts;
         if (evaluation.issues?.length && evaluation.repairPrompt && budget) {
@@ -740,7 +766,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (sourceRuns.has(details.origin) || (details.lockKey && commentLocks.has(details.lockKey))) {
       throw Object.assign(new Error('[AZPR] A review/comment command is already running for this conversation or PR.'), { busy: true });
     }
-    requireMethods(context, ['session.create', 'session.prompt', 'session.wait', 'session.context', 'session.interrupt', 'session.synthetic'], 'the review workflow');
+    requireMethods(context, ['session.create', 'session.get', 'session.prompt', 'session.wait', 'session.context', 'session.interrupt', 'session.synthetic'], 'the review workflow');
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
     const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(),
       deadlineAt: settings.runTimeoutSeconds === null ? null : Date.now() + settings.runTimeoutSeconds * 1000 };
@@ -920,8 +946,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       return { status: final.status, report: rendered, review: completedReview };
     }, dispatch);
-    if (status === 'COMPLETE' && review) await rememberReview(review);
-    else await releaseUnfinished(run);
+    if (status === 'COMPLETE' && review) {
+      // Saved with every session first: none is forgotten if this process ends before the others are deleted.
+      await rememberReview(review);
+      if (await releaseFinished(run, review, run.reportStage?.sessionID)) await persistReview(review);
+    } else await releaseUnfinished(run);
     // A review stopped while its report was delivered stays COMPLETE, but its comment step is off,
     // also in the report the receipt encloses, which was rendered before the stop.
     let enclosed = report;
@@ -1161,7 +1190,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (everAdjusted(review)) earlier = describeEarlierText(review, result.otherComments);
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
-    for (const stage of run.stages) review.reportSessions.add(stage.sessionID);
+    await releaseFinished(run, review);
     if (planning) review.plan = null;
     // The review whose receipt arrives last is the current one, as a preview's next steps say; this
     // holds for the automatic step too, which no command selected.
@@ -1278,13 +1307,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (!g?.run.active || g.role !== execution?.agent) throw new Error('[AZPR] AZPR tools are available only to an active AZPR reviewer session.');
     const snapshot = g.referenceSnapshot;
     if (!snapshot) throw new Error('[AZPR] No PR snapshot is available for this reviewer.');
+    // OpenCode aborts this signal when it interrupts the call; from 2.3.0 on, reading it (once) also tells the host
+    // that a call a person stops ends by itself. The call then ends at once and the request only it waits for is
+    // aborted, while reads the run's other sessions share go on.
+    const given = execution.signal, stop = given instanceof AbortSignal ? given : undefined;
     let outcome;
     // Bounded by the Azure DevOps call timeouts, so the inactivity watchdog waits for it.
     g.watch.toolsRunning++;
     try {
-      outcome = await runReviewTool(name, clone(input ?? {}), { azure, run: g.run, snapshot });
+      outcome = await scoped(() => runReviewTool(name, clone(input ?? {}), { azure, run: g.run, snapshot, signal: stop }), stop);
     } catch (error) {
-      if (!g.run.active || g.run.controller.signal.aborted) throw error;
+      if (!g.run.active || g.run.controller.signal.aborted || stop?.aborted) throw error;
       if (error?.kind === 'timeout') g.toolTimeouts++;
       const message = `${name} failed: ${errorText(error)}`;
       return { output: message, content: [{ type: 'text', text: message }], metadata: { isError: true } };
@@ -1404,7 +1437,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Enforce the shell setting and the project boundary, regardless of
       // permission rules the host appends after this plugin. Outside the
       // project only AZPR's own private data is readable; the host's default
-      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.2.4 allow).
+      // for other paths is not trusted (OpenCode 2.0.22 asked; 2.0.31 through 2.3.0 allow).
       // Private reviewers run unattended: a request that would wait for
       // approval is refused at once. Only shell keeps host approvals, and only
       // when the user allowed it (shell: "ask" or "inherit").

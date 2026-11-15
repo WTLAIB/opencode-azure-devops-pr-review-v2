@@ -16,7 +16,10 @@ import { TESTED_HOST_VERSION } from '../src/host.mjs';
  * reviewers read through AZPR's tools while foreign tools, CodeMode MCP tools
  * and image generation stay hidden, a verifier repair turn, comment preview and idempotent publication
  * across a host restart, cancellation, a provider 503 that OpenCode retries in
- * the same session, and private auxiliary-request denial. Automatic comment
+ * the same session, a provider stream cut mid-answer whose step OpenCode
+ * retries, and private auxiliary-request denial. The private sessions are
+ * sessions of their own: the conversation's model gets no request while a
+ * review runs. Automatic comment
  * steps: a flag after the PR URL previews the comments of a COMPLETE review in
  * a run of its own, automatic publication posts a quick review's
  * high-severity finding and holds back only a comment with an image until a
@@ -106,6 +109,7 @@ if (replacement) {
 const requests = [];
 const overloaded = new Set();
 let child, logs = '', stall = null, longStream = null, commentImage = false, commentDiscussed = false;
+const cut = new Set();
 const lastUser = messages => messages?.findLast(message => message.role === 'user')?.content;
 const firstUser = messages => messages?.find(message => message.role === 'user')?.content;
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
@@ -202,6 +206,13 @@ const provider = createServer(async (request, response) => {
   const delta = call ? { tool_calls: [{ index: 0, id: 'call_' + requests.length, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { content: final };
   response.writeHead(200, { 'content-type': 'text/event-stream' });
   const emit = value => response.write(`data: ${JSON.stringify(value)}\n\n`);
+  // The first answer of each quick session breaks off mid-stream: the connection closes after part of the text.
+  if (payload?.userContext?.includes('cut-smoke') && parsed.model === 'quick' && !call && !cut.has(sessionID)) {
+    cut.add(sessionID);
+    emit({ id: 'chatcmpl_cut', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', content: final.slice(0, 60) }, finish_reason: null }] });
+    setTimeout(() => response.destroy(), 150);
+    return;
+  }
   emit({ id: 'chatcmpl_fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', ...delta }, finish_reason: null }] });
   emit({ id: 'chatcmpl_fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   response.end('data: [DONE]\n\n');
@@ -484,6 +495,18 @@ try {
   const reviewStages = await stageRecords(receipt);
   assert.ok(reviewStages.length >= 3 && reviewStages.every(stage => stage.tokens?.requests?.length === stage.modelRequests && stage.tokens.input >= stage.modelRequests),
     'Debug stage records keep the token usage the host reported for every model request.');
+  // The private sessions are sessions of their own: OpenCode 2.3.0 hands every answer of a child session to its
+  // parent and wakes the parent's own model with it. The conversation's model was asked nothing while the review
+  // ran, and each session is placed where the conversation is and names its run, role and conversation.
+  assert.ok(requests.slice(beforeCheck).every(request => request.sessionID !== reviewOrigin && request.model !== 'fixture'), "The conversation's own model received no request during the review.");
+  const conversation = (await api(`/api/session/${reviewOrigin}`)).data;
+  for (const stage of reviewStages) {
+    const session = (await api(`/api/session/${stage.sessionID}`)).data;
+    assert.equal(session.parentID ?? null, null, 'A private session has no parent.');
+    assert.equal(session.location.directory, conversation.location.directory, "A private session is created at the conversation's location.");
+    assert.deepEqual(session.metadata, { azpr: { run: reviewID, role: stage.role, conversation: reviewOrigin } }, 'A private session names its run, role and conversation.');
+  }
+  results.privateSessions = `${reviewStages.length} private sessions of their own (no parent, the conversation's location, AZPR metadata); the conversation's model received no request during the review`;
   results.review = 'COMPLETE with verifier repair turn, hidden shell and persisted review';
 
   // 3. Preview, then publication, then a restart and an idempotent re-run.
@@ -638,6 +661,24 @@ try {
   assert.equal(riskStage.requestObservations.kinds.primary, riskStage.requestObservations.authorizedPrimary);
   results.hostRetry = `provider 503 retried in place by OpenCode (retry delay ${riskStage.requestObservations.retries[0].delayMs ?? 'unknown'} ms); ${riskStage.requestObservations.authorizedPrimary} authorized primary requests, 0 rejected`;
 
+  // 4b2. A provider stream that breaks off mid-answer: OpenCode 2.3.0 retries that step by itself, in the same
+  // session and without the text the break cut off, so AZPR takes the retried answer and starts no new session.
+  const cutOrigin = await newOrigin('Stream cut');
+  const beforeCut = requests.length;
+  await api(`/api/session/${cutOrigin}/command`, { name: 'pr-quick', text: `${prUrl} cut-smoke`, delivery: 'steer' });
+  const cutReceipt = await latest(cutOrigin);
+  assert.match(cutReceipt, /\] COMPLETE; coverage complete; verification none \(quick review\)\n/, cutReceipt);
+  assert.match(cutReceipt, /azpr-quick-reviewer: COMPLETE; session=[^;]+; model=fixture\/quick; step-retries=1\n/, cutReceipt);
+  assert.doesNotMatch(cutReceipt, /attempt=2|Retry notice|stream-continuations/, 'No new session and no continuation message were needed.');
+  const cutRequests = requests.slice(beforeCut);
+  assert.equal(new Set(cutRequests.map(request => request.sessionID)).size, 1, 'The retried step stays in the same session.');
+  assert.equal(cutRequests.length, 3, 'The file read, the answer that broke off and its retry.');
+  assert.ok(cutRequests.every(request => !/previous response was interrupted/i.test(request.last)), 'The retry repeats the step; nothing asks the model to continue.');
+  const [cutStage] = await stageRecords(cutReceipt);
+  assert.equal(cutStage.hostStepRetries, 1);
+  assert.equal(cutStage.result.findings.length, 1, 'The answer is the retried one, whole.');
+  results.streamCut = `a quick answer cut mid-stream was retried by OpenCode in the same session (${cutRequests.length} requests, step-retries=1); COMPLETE without a new session`;
+
   // 4c. The stage inactivity watchdog (workflow.stageIdleSeconds: 60), two reviews
   // at once: a model stream that stops sending is stopped, interrupted on the
   // host and retried; an answer that keeps streaming longer than the window runs on.
@@ -740,7 +781,7 @@ try {
 
   // 7. A corporate network: Azure DevOps over HTTPS only through an authenticating
   // CONNECT proxy that re-signs TLS with its own CA (azure.proxy, azure.caFile, azure.verifyTls).
-  // OpenCode 2.2.4 puts 127.0.0.1, localhost and ::1 in NO_PROXY, and Bun then skips even an explicit proxy,
+  // OpenCode (2.2.4, 2.3.0) puts 127.0.0.1, localhost and ::1 in NO_PROXY, and Bun then skips even an explicit proxy,
   // so the proxied Azure DevOps fixture listens on 127.0.0.2.
   if (replacement) results.proxy = 'covered by the fresh run';
   else if (spawnSync('openssl', ['version']).status !== 0) results.proxy = 'SKIPPED: openssl is unavailable';
