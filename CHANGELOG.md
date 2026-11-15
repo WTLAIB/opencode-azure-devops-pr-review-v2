@@ -44,9 +44,10 @@ Private sessions in the session list:
   list: AZPR had not recorded them yet. Delete those yourself.
 - A session whose deletion failed or timed out stays on record: it is
   deleted with its review, or, when no review keeps it, tried again after
-  every later review. Such a session used to be forgotten. A session AZPR set
-  out to delete takes no AZPR commands. A session OpenCode creates only after
-  its stage was cancelled is deleted when it arrives.
+  every later run and closed to AZPR commands meanwhile. Such a session used
+  to be forgotten. A command typed in a session that is being deleted is
+  refused. A session OpenCode creates only after its stage was cancelled is
+  deleted when it arrives.
 - A new review cannot be started from a saved review's own session, also after
   an OpenCode restart; until now only the running process refused that.
 - Each private session carries `metadata.azpr` with its run, role and

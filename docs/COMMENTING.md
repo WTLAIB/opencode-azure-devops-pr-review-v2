@@ -16,10 +16,10 @@ No command needs a review ID. Without one it acts on the conversation's
 **current review**: the one that was completed or used by a `/pr-comment`
 command there last, which is the one you looked at last. Naming a review by
 its ID makes it the current one, also with `--show` or with adjustments that
-change nothing, and a comment run makes its review the current one when its
-receipt arrives, the automatic preview after a review included. The choice is
-saved with the review when it is made, also when commands overlap, so it holds
-after a restart; if it cannot be saved, the answer says so. In a review's own session (the one
+change nothing, and a review or a comment run makes its review the current
+one when its receipt arrives, the automatic preview after a review included.
+The choice is saved with the review when it is made, also when commands
+overlap, so it holds after a restart; if it cannot be saved, the answer says so. In a review's own session (the one
 that shows the report, or any of its sessions while debug keeps them all) a
 command without an ID means that review. So that a command without an ID can be checked at a glance, the
 `STARTED` notice and the receipt of every comment run name the review and its

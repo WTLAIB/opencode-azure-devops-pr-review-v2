@@ -187,29 +187,31 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
      */
     keepSessions: (runId, sessionIDs) => recordSessions(runId, sessionIDs),
     /**
-     * Remember sessions that should be gone and could not be deleted, under
-     * the ID of the run or review they belonged to. They are due at every
-     * pass (`expiredSessions`) and do not count against the limit. One record
-     * per ID, replaced by a later call and removed by an empty list.
+     * Remember sessions that are still to be deleted, under the ID of the
+     * run or review they belonged to: those a cleanup is about to delete,
+     * then those it could not delete. They are due at every pass
+     * (`expiredSessions`) and do not count against the limit. One record per
+     * ID, replaced by a later call and removed by an empty list.
      */
     retrySessions: (id, sessionIDs) => recordSessions(`${RETRY}${id}`, sessionIDs),
     /**
      * The sessions that are due to go, one entry per run or review, as
-     * { runId, sessionIDs, kept }: those that could not be deleted earlier,
-     * due at every pass, and the kept sessions of runs beyond the newest
-     * `limit` (`kept`), oldest first. A run with both has one entry, so that
-     * what is left of it is recorded once. `inUse(runId)` names runs whose
-     * command has not ended; their kept sessions are left out whatever their
-     * age. The records stay: the caller deletes the sessions, records what
-     * is left (`retrySessions`) and only then removes a kept record
-     * (`keepSessions`). An unreadable record names nothing and is removed.
+     * { runId, sessionIDs, kept }: those still to be deleted, due at every
+     * pass, and the kept sessions of runs beyond the newest `limit` (`kept`),
+     * oldest first. A run with both has one entry, so that what is left of it
+     * is recorded once. `inUse(runId)` names runs whose command has not
+     * ended: their own cleanup deals with their sessions, so both of their
+     * records are left out, whatever their age. The records stay: the caller
+     * deletes the sessions, records what is left (`retrySessions`) and only
+     * then removes a kept record (`keepSessions`). An unreadable record
+     * names nothing and is removed.
      */
     async expiredSessions(inUse = () => false) {
       const files = (await readdir(dirs.sessions)).filter(name => name.endsWith('.json')).sort();
       const kept = files.filter(name => !isRetry(name)), due = new Map();
       for (const name of [...files.filter(isRetry), ...kept.slice(0, Math.max(0, kept.length - limit))]) {
         const retry = isRetry(name), runId = retry ? idOf(name).slice(RETRY.length) : idOf(name);
-        if (!retry && inUse(runId)) continue;
+        if (inUse(runId)) continue;
         let ids;
         try { ids = JSON.parse(await readFile(join(dirs.sessions, name), 'utf8')); } catch { ids = null; }
         if (!Array.isArray(ids)) { await rm(join(dirs.sessions, name), { force: true }); continue; }

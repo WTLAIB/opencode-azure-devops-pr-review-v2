@@ -496,27 +496,38 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
   /**
    * A review run that saved no review. Its sessions go on record before any is
-   * deleted, so that a process ending during the cleanup forgets none of them;
-   * the record then holds what the run keeps on purpose, and follows the
-   * review limit. What should be gone and is not is recorded apart, tried
-   * again at every pass and closed to commands meanwhile. Until the command
-   * has ended (`output.release`, given up by `launch`) later runs do not evict
-   * the run's record: its draft session would go with it.
+   * deleted: those the run keeps on purpose on its own record, which follows
+   * the review limit, and those to delete apart, as still to be deleted. A
+   * process that ends during the cleanup therefore forgets none of them, and
+   * the next one knows which are still to go. What should be gone and is not
+   * stays on that record, tried again at every pass and closed to commands
+   * meanwhile. Until the command has ended (`output.release`, given up by
+   * `launch`) later runs do not evict the run's own record, since its draft
+   * session would go with it, and no pass takes on the sessions this cleanup
+   * is deleting.
    */
   async function releaseUnfinished(run, output) {
     if (!deletesSessions) return;
     const { sessions, obsolete } = endedSessions(run, run.reportStage?.sessionID);
-    if (!sessions.length) return;
-    for (const id of obsolete) closing.add(id);
-    (output.release ??= []).push(hold(settling, run.id));
-    await store.keepSessions(run.id, sessions).catch(() => {});
-    if (obsolete.length) {
-      const { left, unanswered } = await deleteClosing(run, obsolete);
-      const survivors = [...left, ...unanswered];
-      for (const id of obsolete) if (!survivors.includes(id)) closing.delete(id);
-      const retried = !survivors.length || await store.retrySessions(run.id, survivors).then(() => true, () => false);
-      await store.keepSessions(run.id, sessions.filter(id => !obsolete.includes(id) || (!retried && survivors.includes(id)))).catch(() => {});
+    if (sessions.length) {
+      const kept = sessions.filter(id => !obsolete.includes(id));
+      for (const id of obsolete) closing.add(id);
+      (output.release ??= []).push(hold(settling, run.id));
+      // Every session in one write first, so that no moment leaves one of them unrecorded; then those to delete
+      // apart, and the run's own record with what it keeps. Where they cannot be recorded apart, the run's own
+      // record goes on naming them.
+      await store.keepSessions(run.id, sessions).catch(() => {});
+      const apart = !obsolete.length || await store.retrySessions(run.id, obsolete).then(() => true, () => false);
+      if (apart && obsolete.length) await store.keepSessions(run.id, kept).catch(() => {});
+      if (obsolete.length) {
+        const { left, unanswered } = await deleteClosing(run, obsolete);
+        const survivors = [...left, ...unanswered];
+        for (const id of obsolete) if (!survivors.includes(id)) closing.delete(id);
+        if (apart) await store.retrySessions(run.id, survivors).catch(() => {});
+        else await store.keepSessions(run.id, [...kept, ...survivors]).catch(() => {});
+      }
     }
+    // Also after a run that created no session: what an earlier cleanup could not delete is tried again.
     void releaseExpired();
   }
   /**
@@ -1132,7 +1143,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // the cleanup: sessions left without a record would be forgotten just the same.
       const obsolete = scheduleCleanup(run, review, run.reportStage?.sessionID);
       await rememberReview(review);
-      if (await finishCleanup(run, review, obsolete)) await persistReview(review);
+      await finishCleanup(run, review, obsolete);
+      // The review whose receipt arrives last is the current one, as its report says. The cleanup may have waited
+      // for OpenCode while a person used another review here, so the choice is made now, next to the receipt.
+      review.usedAt = stamp();
+      await persistReview(review);
       // What an eviction or an earlier cleanup could not delete is tried again.
       void releaseExpired();
     } else await releaseUnfinished(run, output);
@@ -1375,16 +1390,21 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (everAdjusted(review)) earlier = describeEarlierText(review, result.otherComments);
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
-    // What this run decides about the review is settled here, before anything is awaited: the command locks are
-    // released already, so a later command may be planning or saving while this run's sessions are deleted.
+    // What this run decides about the review's preview and its own sessions is settled here, before anything is
+    // awaited: the command locks are released already, so a later command may be planning or saving while this
+    // run's sessions are deleted.
     if (planning) review.plan = null;
-    // The review whose receipt arrives last is the current one, as a preview's next steps say; this
-    // holds for the automatic step too, which no command selected.
-    review.usedAt = stamp();
     // A comment run keeps none of its sessions; the record names them before they are deleted.
     const obsolete = scheduleCleanup(run, review);
     await persistReview(review);
-    if (await finishCleanup(run, review, obsolete)) await persistReview(review);
+    await finishCleanup(run, review, obsolete);
+    // The review whose receipt arrives last is the current one, as a preview's next steps say; this holds for
+    // the automatic step too, which no command selected. The cleanup may have waited for OpenCode while a
+    // person used another review here, so the choice is made now, next to the receipt.
+    review.usedAt = stamp();
+    await persistReview(review);
+    // What an earlier cleanup could not delete is tried again.
+    void releaseExpired();
     const safe = (report || '').replaceAll('</azpr_comment_data>', '&lt;/azpr_comment_data&gt;');
     // A held preview says itself what to do; an adjustment says whether it was saved.
     const retry = failure && ['INCOMPLETE', 'FAILED', 'PARTIALLY_POSTED'].includes(status) && !hold

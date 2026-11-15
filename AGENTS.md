@@ -132,11 +132,15 @@ settings, backups and failure records. Never upload `.local/`.
   the review and its PR, so a wrong pick shows before and after it acts. Save
   the choice when it is made, also for a command that answers at once
   (`--show`, unchanged adjustments): a choice kept only in memory lets a
-  command after a restart publish to another PR. Every write of a review's
-  record goes through its queue in `store.mjs`, and a save reads the review
-  when it starts, so overlapping commands never leave an older choice on disk.
-  A command that starts a run registers the run before its first await, so it
-  never waits for that save.
+  command after a restart publish to another PR. A run that ends makes its
+  review the current one next to its receipt, after the cleanup of its
+  sessions: a choice made before a wait can be overtaken by a command typed
+  meanwhile, and the receipt that arrives last then names another review
+  than commands act on. Every write of a review's record goes through its
+  queue in `store.mjs`, and a save reads the review when it starts, so
+  overlapping commands never leave an older choice on disk. A command that
+  starts a run registers the run before its first await, so it never waits
+  for that save.
 
 **Publication is idempotent.**
 - Recheck the PR (active, unchanged head) before writing; skip existing markers;
@@ -182,19 +186,20 @@ settings, backups and failure records. Never upload `.local/`.
   run keeps none; all stay while debugging or after an unconfirmed abort).
   Choose the sessions to delete the moment the run ends, before any await:
   from then on a command typed in one is refused. Put every session on record
-  before deleting it (the review's record, with those to delete apart as
-  `closingSessions`; the run's own record for an unfinished review; a record
-  of its own for a session OpenCode creates after its stage was cancelled),
-  and remove a review's record only after its sessions were dealt with, so
-  that a process ending during a cleanup forgets none and the next one knows
-  which may be gone.
+  before deleting it, those to delete apart from those kept (the review's
+  record with `closingSessions`; for an unfinished review the run's own
+  record and a retry record; a retry record for a session OpenCode creates
+  after its stage was cancelled), and remove a review's record only after
+  its sessions were dealt with, so that a process ending during a cleanup
+  forgets none and the next one knows which are still to go.
 - A session leaves the records only when it is gone: a confirmed deletion, or
-  OpenCode's `Session.NotFoundError`. What should be gone and is not goes on
-  a retry record, apart from the sessions a run keeps on purpose; it takes no
-  commands, also after a restart, and a background pass tries it again after
-  every review, every unfinished run and at load. Deal with a run's records
-  together, so that neither list replaces the other, and never make a receipt
-  wait for a pass.
+  OpenCode's `Session.NotFoundError`. What is still to be deleted outside a
+  saved review is on a retry record, apart from the sessions a run keeps on
+  purpose; it takes no commands, also after a restart, and a background pass
+  tries it again after every run and at load, leaving a run whose command
+  has not ended to its own cleanup. Deal with a run's records together, so
+  that neither list replaces the other, and never make a receipt wait for a
+  pass.
 - Never delete a session a command needs: the one it answers in, until its
   last notice is out, and its run's conversation and stage sessions. A session
   that is still there after the cleanup is its review's own again. A deletion

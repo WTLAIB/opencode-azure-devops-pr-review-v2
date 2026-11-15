@@ -387,13 +387,15 @@ markers back (`VERIFIED`). Creation results are `POSTED`, `ALREADY_PRESENT`,
 recorded thread whose comment someone deleted on the PR; it is not posted
 again). Re-running publication is safe.
 
-A `/pr-comment` command without a review ID acts on the conversation's
-current review: in one of a review's own sessions that review, otherwise the
+A `/pr-comment` command without a review ID acts on the conversation's current
+review: in one of a review's own sessions that review, otherwise the
 conversation's review with the latest `completedAt` or `usedAt`. `usedAt` is
 set when a comment command selects a review, also one that answers at once
-(`--show`, unchanged adjustments) or is refused, and again when a comment run
-ends, so the review whose receipt arrived last is the current one. Every
-write of a review's record, and its removal on eviction, goes through one
+(`--show`, unchanged adjustments) or is refused, and again when a review or a
+comment run has ended, after the cleanup of its sessions and next to its
+receipt. The review whose receipt arrived last is therefore the current one,
+also when that cleanup waited for OpenCode while a person used another review.
+Every write of a review's record, and its removal on eviction, goes through one
 queue per review (`createReviewWrites`), so two writes of a record never
 overlap and an earlier one never lands after a later one. A selection is
 saved by a write that reads the review when it starts: a choice made before it
@@ -466,11 +468,13 @@ no session is forgotten and none is taken from a command that needs it:
   its answer would have nowhere to go.
 - They go on record before any is deleted. A saved review's record takes all
   of the run's sessions and names those to delete apart, as
-  `closingSessions`; an unfinished review writes its run's record of kept
-  sessions first. An evicted review's record, which names its sessions, is
-  removed only after they were dealt with. A process that ends during a
-  cleanup therefore forgets no session, and the next one knows which may be
-  gone or may still go.
+  `closingSessions`. An unfinished review writes all of its sessions to its
+  run's record in one write, then those to delete to a record of their own,
+  as still to be deleted, and leaves on the run's record what the run keeps.
+  An evicted review's record, which names its sessions, is removed only
+  after they were dealt with. A process that ends during a cleanup therefore
+  forgets no session, and the next one knows which may be gone or may still
+  go.
 - What OpenCode confirms as deleted leaves the record. A session that is
   still there, because a command needed it or OpenCode refused the deletion,
   is one of the review's own again and takes commands. A deletion OpenCode
@@ -492,21 +496,21 @@ no session is forgotten and none is taken from a command that needs it:
 - A session leaves the records only when it is gone: OpenCode confirmed its
   deletion, or answered the deletion or a read of it with
   `Session.NotFoundError`. Any other failure settles nothing.
-- What should be gone and is not goes on a record of its own
-  (`sessions/…-retry<id>.json`), apart from the sessions a run keeps on
-  purpose: a session of an unfinished run, of an evicted review or of an
-  unfinished run whose record is beyond the limit, or a late session (see
-  below), that a command needed or whose deletion OpenCode refused or never
-  answered. From the moment AZPR sets out to delete such a session it takes
-  no commands, also after a restart.
+- Sessions that are still to be deleted and belong to no saved review are on
+  records of their own (`sessions/…-retry<id>.json`), apart from the sessions
+  a run keeps on purpose: those an unfinished run is deleting, a late session
+  (see below), and what could not be deleted of an evicted review or of an
+  unfinished run whose record went beyond the limit, because a command
+  needed the session or OpenCode refused or never answered. Such a session
+  takes no commands, also after a restart.
 - A pass tries these sessions again, and deletes the kept sessions of
-  unfinished runs beyond the limit: after every review, after every
-  unfinished run and at load. It runs in the background, one pass at a time,
-  so no receipt waits for a host that is slow to delete. A run with both
-  kinds of record is dealt with once, so that neither list replaces the
-  other, and its kept record is removed only after what is left of it was
-  recorded. With `deletePrivateSessions: false` the records are left as they
-  are.
+  unfinished runs beyond the limit: after every run and at load. It runs in
+  the background, one pass at a time, so no receipt waits for a host that is
+  slow to delete, and it leaves a run whose command has not ended to that
+  run's own cleanup. A run with both kinds of record is dealt with once, so
+  that neither list replaces the other, and its kept record is removed only
+  after what is left of it was recorded. With `deletePrivateSessions: false`
+  the records are left as they are.
 - A cancellation can overtake the host: a session OpenCode creates after its
   stage gave up is known to no stage, so it is put on record and deleted when
   it arrives.

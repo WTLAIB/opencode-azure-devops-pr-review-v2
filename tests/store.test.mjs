@@ -117,12 +117,13 @@ test('sessions that could not be deleted are due at every pass and do not count 
   await store.keepSessions('bbbbbbbb', ['ses_draft_b']);
   await store.retrySessions('aaaaaaaa', ['ses_stuck']);
   assert.deepEqual(await store.expiredSessions(), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck'], kept: false }], 'Due although only two runs keep sessions.');
-  assert.deepEqual(await store.expiredSessions(() => true), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck'], kept: false }], 'A command that has not ended holds what it keeps, not what should be gone.');
+  assert.deepEqual(await store.expiredSessions(() => true), [], 'While the run\'s command has not ended, its own cleanup deals with them.');
   // A third run pushes the oldest kept record beyond the limit. The run has one entry for both of its records:
   // the caller records what is left of all of them once, so neither list replaces the other.
   await store.keepSessions('cccccccc', ['ses_draft_c']);
   assert.deepEqual(await store.expiredSessions(), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck', 'ses_draft_a'], kept: true }]);
-  assert.deepEqual(await store.expiredSessions(() => true), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck'], kept: false }], 'While the run\'s command has not ended, only what should be gone is due.');
+  assert.deepEqual(await store.expiredSessions(id => id === 'aaaaaaaa'), [], 'Neither of its records is due while the run\'s command has not ended.');
+  assert.deepEqual(await store.expiredSessions(id => id === 'bbbbbbbb'), [{ runId: 'aaaaaaaa', sessionIDs: ['ses_stuck', 'ses_draft_a'], kept: true }]);
   const recorded = await store.recordedSessions();
   assert.deepEqual({ kept: recorded.kept.sort(), due: recorded.due }, { kept: ['ses_draft_a', 'ses_draft_b', 'ses_draft_c'], due: ['ses_stuck'] });
   // Replaced in place, and removed by an empty list, without touching the run's kept record.
