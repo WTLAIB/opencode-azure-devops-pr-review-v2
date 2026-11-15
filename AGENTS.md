@@ -184,10 +184,14 @@ settings, backups and failure records. Never upload `.local/`.
   an unfinished review) before deleting any, and keep on record a session that
   could not be deleted: what is kept goes with its review. A session OpenCode
   creates after its stage was cancelled is deleted too.
-- Never delete a session a running command needs (its conversation, the
-  session its notices go to, a stage's session), refuse a command typed in a
-  session that is being deleted, and never evict a review while a command
-  works on it; a save of an evicted review must not bring its record back.
+- Never delete a session a command needs: the one it answers in, until its
+  last notice is out, and its run's conversation and stage sessions. Refuse a
+  command typed in a session whose deletion OpenCode has not answered yet: a
+  deletion this process stopped waiting for may still be carried out.
+- Never evict a review before the command working on it has ended: its run, a
+  comment run's last steps, and after a review its cleanup, its receipt and
+  the start of the comment step it hands on. A save of an evicted review must
+  not bring its record back.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 

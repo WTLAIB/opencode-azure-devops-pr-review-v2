@@ -119,10 +119,27 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const sourceRuns = new Map();     // origin session -> active run ID
   const completed = new Map();      // review ID -> completed review (persisted)
   const commentLocks = new Set();   // PR targets with an active comment command
-  const closing = new Set();        // private sessions being deleted: a command typed in one is refused
-  const settling = new Set();       // reviews whose run is sorting out its sessions: not evicted meanwhile
-  // Sessions a running command still needs: its conversation, the session its notices go to and its stages' sessions.
-  const sessionsInUse = () => new Set([...runs.values()].flatMap(run => [run.origin, run.notifySession, ...run.stages.map(stage => stage.sessionID)]));
+  const closing = new Set();        // private sessions about to be deleted
+  const removing = new Map();       // private sessions whose deletion OpenCode has not settled yet (counted)
+  const answering = new Map();      // sessions a command still owes a notice, until its last one is out (counted)
+  const settling = new Map();       // reviews a command is still finishing with: not evicted meanwhile (counted)
+  // Count one more holder of `key`; the returned function gives it up, once.
+  const hold = (holders, key) => {
+    holders.set(key, (holders.get(key) ?? 0) + 1);
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      const others = holders.get(key) - 1;
+      if (others > 0) holders.set(key, others); else holders.delete(key);
+    };
+  };
+  // Sessions a command still needs: the one it answers in, until its last notice is out, and while its run is
+  // active the run's conversation, the session its notices go to and its stages' sessions.
+  const sessionsInUse = () => new Set([...answering.keys(),
+    ...[...runs.values()].flatMap(run => [run.origin, run.notifySession, ...run.stages.map(stage => stage.sessionID)])]);
+  // A command typed in a session that is being deleted is refused: its answer would have nowhere to go.
+  const sessionClosing = sessionID => closing.has(sessionID) || removing.has(sessionID);
   const openStores = new Map();     // data directory -> store promise
   const jobs = new Set();
   const registrations = [];
@@ -357,9 +374,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   /**
    * Delete AZPR's own reviewer sessions, a few at a time so a host that stalls
    * on deletion delays the receipt by one timeout per batch, not per session.
-   * A session a running command needs is left alone, checked when its turn
-   * comes. Returns the sessions that are still there: those, and the ones
-   * whose deletion failed or timed out, for a caller that can try again later.
+   * A session a command needs is left alone, checked when its turn comes.
+   * Returns the sessions that may still be there: those, and the ones whose
+   * deletion failed or timed out, for a caller that can try again later.
+   * OpenCode may still finish a deletion this process stopped waiting for, so
+   * such a session stays closed to commands until OpenCode has answered.
    */
   async function removeSessions(sessionIDs) {
     const requested = [...new Set(sessionIDs ?? [])];
@@ -369,7 +388,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       while (pending.length) {
         const sessionID = pending.shift();
         if (sessionsInUse().has(sessionID)) { left.push(sessionID); continue; }
-        await deadline(() => context.session.remove({ sessionID }), options.removeTimeoutMs ?? 5000).catch(() => { left.push(sessionID); });
+        const answered = hold(removing, sessionID);
+        const removal = Promise.resolve().then(() => context.session.remove({ sessionID }));
+        void removal.then(answered, answered);
+        await deadline(() => removal, options.removeTimeoutMs ?? 5000).catch(() => { left.push(sessionID); });
       }
     };
     await Promise.all(Array.from({ length: Math.min(SESSION_REMOVALS, pending.length) }, worker));
@@ -388,8 +410,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
   /**
    * Delete a run's obsolete sessions. From here on a command typed in one of
-   * them is refused; one that started there earlier keeps its session.
-   * Returns the sessions that could not be deleted.
+   * them is refused, until OpenCode has answered the deletion; one that
+   * started there earlier keeps its session. Returns the sessions that could
+   * not be deleted.
    */
   async function deleteObsolete(run, obsolete) {
     for (const id of obsolete) closing.add(id);
@@ -999,14 +1022,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       return { status: final.status, report: rendered, review: completedReview };
     }, dispatch);
     if (status === 'COMPLETE' && review) {
-      // Not evicted while its sessions are sorted out: the save that follows would bring its record back.
-      settling.add(review.id);
-      try {
-        const recorded = await rememberReview(review);
-        if (await releaseFinished(run, review, run.reportStage?.sessionID, { recorded })) await persistReview(review);
-      } finally { settling.delete(review.id); }
-      // What could not be evicted while this review was in use is evicted now.
-      if (completed.size > REVIEW_LIMIT) await evictReviews();
+      // Not evicted until this command has ended, with its receipt delivered and the comment step it hands on
+      // done: an eviction in between would bring the record back with the cleanup's save, or take the report
+      // session and the review's data from under the receipt and that step. `launch` gives the hold up.
+      (output.release ??= []).push(hold(settling, review.id));
+      const recorded = await rememberReview(review);
+      if (await releaseFinished(run, review, run.reportStage?.sessionID, { recorded })) await persistReview(review);
     } else await releaseUnfinished(run);
     // A review stopped while its report was delivered stays COMPLETE, but its comment step is off,
     // also in the report the receipt encloses, which was rendered before the stop.
@@ -1284,7 +1305,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function execute(input, output, dispatch) {
     const mode = COMMANDS[input.command];
     if (!mode) return;
-    if (closing.has(input.sessionID)) {
+    if (sessionClosing(input.sessionID)) {
       throw new Error('[AZPR] This reviewer session is being deleted now that its run has ended. Type the command in the conversation the review was started in, or in the session that holds its report.');
     }
     if (HELP_ARGUMENT.test(String(input.arguments ?? '').trim())) {
@@ -1304,13 +1325,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    */
   async function launch(name, sessionID, body) {
     const output = {};
+    // Until this command's last notice is out, the session it answers in is needed, and so is what the body
+    // holds (`output.release`), also after its run has ended.
+    const answered = hold(answering, sessionID);
+    const ended = () => { answered(); for (const giveUp of output.release ?? []) giveUp(); };
     let release;
     const dispatch = { ready: new Promise(resolve => { release = resolve; }) };
     const task = body(output, dispatch);
     // Validation and /pr-stop answer immediately; workflows run in the background.
     if (!dispatch.run) {
-      await task;
-      await deliver(sessionID, output.text);
+      try {
+        await task;
+        await deliver(sessionID, output.text);
+      } finally { ended(); }
       return;
     }
     const run = dispatch.run;
@@ -1320,7 +1347,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }).catch(async error => {
       const delivered = await deliver(sessionID, `[AZPR ${run.id}] INCOMPLETE\nReason: ${errorText(error)}`, run.id);
       await run.debug?.write('delivery.json', { ...delivered, sessionID, error: errorText(error) });
-    }).then(() => output.next && commentAfterReview(sessionID, output.next)).catch(() => { /* The step reports its own outcome. */ });
+    }).then(() => output.next && commentAfterReview(sessionID, output.next)).catch(() => { /* The step reports its own outcome. */ }).finally(ended);
     jobs.add(completion);
     void completion.finally(() => jobs.delete(completion));
     try {

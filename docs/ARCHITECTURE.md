@@ -465,16 +465,22 @@ no session is forgotten and none is taken from a command that needs it:
   review's record, or for an unfinished review on the run's own record of kept
   sessions. A process that ends during the cleanup therefore still deletes
   them later. A session that could not be deleted stays on that record.
-- A session a running command needs is left alone: its conversation, the
-  session its notices go to and its stages' sessions. A command that started
-  in one of a review's sessions just before the cleanup keeps that session,
-  which then goes with the review.
-- From the moment a session is to be deleted, a command typed in it is
-  refused, since its answer would have nowhere to go.
-- A review is not evicted while a command works on it (its run, a comment
-  run's last steps, the cleanup of its sessions), in this process and on
-  disk, and a save of a review that was evicted is refused instead of
-  bringing its record back.
+- A session a command needs is left alone: the session it answers in, from
+  the moment it is typed until its last notice is out, and while its run is
+  active the run's conversation and its stages' sessions. A command that
+  started in one of a review's sessions just before the cleanup keeps that
+  session, which then goes with the review.
+- From the moment a session is to be deleted until OpenCode has answered the
+  deletion, a command typed in it is refused, since its answer would have
+  nowhere to go. A deletion that timed out here may still be carried out by
+  OpenCode, so the session stays closed, and on record, until the answer.
+- A review is not evicted before the command that works on it has ended: its
+  run, a comment run's last steps, and after a review the cleanup of its
+  sessions, the delivery of its receipt and the start of the comment step it
+  hands on. Nor is a review evicted while a command answers in one of its
+  sessions. This holds in the process and on disk; what waited is evicted
+  when the next review completes. A save of a review that was evicted is
+  refused instead of bringing its record back.
 - A cancellation can overtake the host: a session OpenCode creates after its
   stage gave up is known to no stage, so it is deleted when it arrives.
 
