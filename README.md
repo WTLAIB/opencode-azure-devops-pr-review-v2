@@ -961,7 +961,9 @@ at once; a comment run keeps none, since its receipt carries the preview or
 the publication result. That one session goes when its review is evicted (a
 review that did not complete follows the same limit of 20 runs). While debug is
 enabled every session is kept until then, so turn `debug.enabled` off for
-everyday use if the list gets long. Your own conversations are never deleted.
+everyday use if the list gets long. A review that an OpenCode restart
+interrupts leaves its sessions in the list; delete those yourself. Your own
+conversations are never deleted.
 
 ## Development and removal
 

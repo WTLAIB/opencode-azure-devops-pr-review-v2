@@ -177,7 +177,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   // An unwritable state directory must not disable the plugin: fall back to a
   // per-user directory under the system temporary directory.
   let storeFallback;
-  const onRemove = review => removeSessions([...review.reportSessions, ...(review.closingSessions ?? [])]);
+  // An evicted review takes its sessions with it; what cannot be deleted then stays on a record of kept sessions.
+  const onRemove = review => discardSessions([...review.reportSessions, ...(review.closingSessions ?? [])], review.id);
   const store = await createReviewStore({ root: options.stateDirectory ?? stateRoot(), onRemove }).catch(error => {
     storeFallback = errorText(error);
     return createReviewStore({ root: join(tmpdir(), `azpr-v2-state-${process.getuid?.() ?? 'user'}`), onRemove });
@@ -399,6 +400,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return { left, unanswered };
   }
   /**
+   * Delete sessions that no review or run keeps any more. A session leaves the
+   * records only when it is gone: what could not be deleted (a command needs
+   * it, OpenCode refused, or never answered) goes on the record of kept
+   * sessions `recordId`, which later passes try again, and an unanswered
+   * deletion closes the session to commands.
+   */
+  async function discardSessions(sessionIDs, recordId = randomUUID().slice(0, 8)) {
+    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
+    const { left, unanswered } = await removeSessions(sessionIDs);
+    for (const id of unanswered) closing.add(id);
+    await store.keepSessions(recordId, [...left, ...unanswered]).catch(() => {});
+  }
+  /** Delete the sessions of unfinished runs whose records are beyond the limit, except those whose command has not ended. */
+  async function releaseExpired() {
+    for (const record of await store.expiredSessions(id => settling.has(id)).catch(() => [])) await discardSessions(record.sessionIDs, record.runId);
+  }
+  /**
    * The sessions of a run that ended, and those to delete now. OpenCode lists
    * every private session like a conversation of its own, so only `keep` (the
    * session holding the run's report or draft) stays; all stay while debugging,
@@ -437,14 +455,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (!sessions.length) return;
     for (const id of obsolete) closing.add(id);
     (output.release ??= []).push(hold(settling, run.id));
-    const inUse = id => settling.has(id);
-    const released = await store.keepSessions(run.id, sessions, inUse).catch(() => []);
+    await store.keepSessions(run.id, sessions).catch(() => {});
     if (obsolete.length) {
       const { left, unanswered } = await deleteClosing(run, obsolete);
       const remaining = sessions.filter(id => !obsolete.includes(id) || left.includes(id) || unanswered.includes(id));
-      if (run.sessionsRemoved) released.push(...await store.keepSessions(run.id, remaining, inUse).catch(() => []));
+      if (run.sessionsRemoved) await store.keepSessions(run.id, remaining).catch(() => {});
     }
-    await removeSessions(released);
+    await releaseExpired();
   }
   /**
    * A run of a saved review ended: what to do with its sessions, decided before
@@ -684,7 +701,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const metadata = { azpr: { run: run.id, role, conversation: run.origin, ...(run.review ? { review: run.review.id } : {}) } };
     const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), metadata, signal,
       // Created after its stage was cancelled: no stage knows this session, so it is deleted here.
-      onLate: late => { seenSessions.add(late.id); void removeSessions([late.id]); } }), signal);
+      onLate: late => { seenSessions.add(late.id); void discardSessions([late.id]); } }), signal);
     if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');
     seenSessions.add(made.id);
     watch.waiting = false;

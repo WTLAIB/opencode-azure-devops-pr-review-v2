@@ -40,6 +40,8 @@ Private sessions in the session list:
 - While `debug.enabled` is on, every session is still kept until the review
   is evicted, so each review adds all of its sessions to the list. Turn debug
   off for everyday use; `deletePrivateSessions: false` keeps everything too.
+- A review that an OpenCode restart interrupts leaves its sessions in the
+  list: AZPR had not recorded them yet. Delete those yourself.
 - A session whose deletion failed or timed out stays on record and is deleted
   again with its review; such a session used to be forgotten. A session
   OpenCode creates only after its stage was cancelled is deleted when it

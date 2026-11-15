@@ -155,31 +155,40 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
       return removed;
     },
     /**
-     * Remember reviewer sessions kept from a run that left no saved review.
-     * A run has one record: a later call replaces the run's earlier one, and
-     * an empty list removes it. The newest `limit` runs keep theirs; returns
-     * the session IDs of older runs, whose records are removed, for the caller
-     * to delete. `inUse(runId)` names runs whose command has not ended, which
-     * keep their record whatever its age.
+     * Remember reviewer sessions that are still to be deleted: those a run
+     * that left no saved review keeps, and those that could not be deleted
+     * when their record went. A run (or review) has one record: a later call
+     * replaces its earlier one and keeps its place in the order, and an empty
+     * list removes it.
      */
-    async keepSessions(runId, sessionIDs, inUse = () => false) {
+    async keepSessions(runId, sessionIDs) {
       const own = (await readdir(dirs.sessions)).filter(name => name.endsWith(`-${runId}.json`)).sort();
       const record = own.at(-1) ?? `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${runId}.json`;
       for (const other of own.slice(0, -1)) await rm(join(dirs.sessions, other), { force: true });
       if (sessionIDs.length) await writeAtomic(join(dirs.sessions, record), JSON.stringify(sessionIDs));
       else await rm(join(dirs.sessions, record), { force: true });
+    },
+    /**
+     * The records of kept sessions beyond the newest `limit`, oldest first, as
+     * { runId, sessionIDs }. `inUse(runId)` names runs whose command has not
+     * ended, which are left out whatever their age. The records stay: a
+     * record goes only with its sessions, so the caller deletes the sessions
+     * and then replaces the record with what could not be deleted
+     * (`keepSessions`). An unreadable record names nothing and is removed.
+     */
+    async expiredSessions(inUse = () => false) {
       const files = (await readdir(dirs.sessions)).filter(name => name.endsWith('.json')).sort();
-      const released = [];
+      const expired = [];
       for (const old of files.slice(0, Math.max(0, files.length - limit))) {
         // The record's name ends with its run's ID.
-        if (inUse(old.slice(old.lastIndexOf('-') + 1, -'.json'.length))) continue;
-        try {
-          const ids = JSON.parse(await readFile(join(dirs.sessions, old), 'utf8'));
-          if (Array.isArray(ids)) released.push(...ids.filter(id => typeof id === 'string'));
-        } catch { /* An unreadable record releases nothing. */ }
-        await rm(join(dirs.sessions, old), { force: true });
+        const runId = old.slice(old.lastIndexOf('-') + 1, -'.json'.length);
+        if (inUse(runId)) continue;
+        let ids;
+        try { ids = JSON.parse(await readFile(join(dirs.sessions, old), 'utf8')); } catch { ids = null; }
+        if (Array.isArray(ids)) expired.push({ runId, sessionIDs: ids.filter(id => typeof id === 'string') });
+        else await rm(join(dirs.sessions, old), { force: true });
       }
-      return released;
+      return expired;
     },
     /** Every session the records of unfinished runs name. */
     async keptSessions() {

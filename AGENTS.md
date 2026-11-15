@@ -186,7 +186,9 @@ settings, backups and failure records. Never upload `.local/`.
   apart as `closingSessions`, or the run's own record for an unfinished
   review), so that a process ending during the cleanup forgets none and the
   next one knows which may be gone. A session OpenCode creates after its stage
-  was cancelled is deleted too.
+  was cancelled is deleted too. A session leaves the records only when it is
+  gone: what an eviction or an expired record could not delete goes on a
+  record of kept sessions for a later pass.
 - Never delete a session a command needs: the one it answers in, until its
   last notice is out, and its run's conversation and stage sessions. A session
   that is still there after the cleanup is its review's own again. A deletion

@@ -3299,7 +3299,10 @@ transient failure, and its error names the last activity.
 - **Private sessions in the session list.** OpenCode lists AZPR's private
   sessions next to conversations, and its plugin API cannot archive them.
   AZPR deletes all but the report session when a run ends; with debug enabled
-  every session stays until its review is evicted.
+  every session stays until its review is evicted. A review interrupted by an
+  OpenCode restart leaves its sessions behind: AZPR had not recorded them yet
+  and does not delete them later. Their titles (`[AZPR <id>] …`) and
+  `metadata.azpr` identify them.
 - **Azure DevOps Services only.** Azure DevOps Server (on-premises) is not
   supported by the current URL handling.
 - **File encoding and size.** Files are read as UTF-8, so text in another

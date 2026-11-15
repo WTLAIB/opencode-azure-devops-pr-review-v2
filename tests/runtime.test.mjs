@@ -2109,6 +2109,54 @@ test('an unfinished review keeps its draft session until its command has ended, 
   assert.ok(!f.sessions.has(draft));
 });
 
+test('a session leaves the records only when it is gone: kept drafts in use, refused deletions and evicted reviews', async t => {
+  // 1. A person types a command in an older unfinished review's draft session while 20 later unfinished runs push
+  //    its record beyond the limit: the draft is spared, and still on record afterwards.
+  const answering = deferred(), release = deferred();
+  let draft, listing, refuse;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; },
+    remove(sessionID) { if (refuse?.(sessionID)) throw new Error('Fixture deletion refused'); },
+    async syntheticDelay(input) { if (draft && input.sessionID === draft && /No completed review/.test(input.text)) { answering.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  const records = async () => Promise.all((await readdir(join(f.stateDirectory, 'sessions'))).sort().map(async name => JSON.parse(await readFile(join(f.stateDirectory, 'sessions', name), 'utf8'))));
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-0'), /\] PARTIAL/);
+  const first = f.sessionsFor('azpr-review-verifier').at(-1).id;
+  draft = first;
+  listing = f.commands.get('pr-comment').execute({ sessionID: draft, prompt: { text: '--list' }, delivery: 'steer' });
+  await within(answering.promise);
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] PARTIAL/);
+  assert.ok(f.sessions.has(draft), 'The draft a command answers in was not deleted.');
+  assert.deepEqual((await records())[0], [draft], 'Its record stays, so a later pass deletes it.');
+  assert.equal((await records()).length, 21);
+  release.resolve();
+  await listing;
+  // 2. The next pass deletes it; a deletion OpenCode refuses keeps its session on record as well.
+  refuse = sessionID => sessionID !== draft && f.sessions.get(sessionID)?.agent === 'azpr-review-verifier';
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
+  assert.ok(!f.sessions.has(draft), 'The spared draft went with the next pass.');
+  const second = (await records())[0];
+  assert.equal(second.length, 1);
+  assert.ok(f.sessions.has(second[0]), 'The draft OpenCode refused to delete is still on its record.');
+  assert.equal((await records()).length, 21);
+  refuse = null;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-22'), /\] PARTIAL/);
+  assert.ok(!f.sessions.has(second[0]));
+  assert.equal((await records()).length, 20);
+
+  // 3. An evicted review whose report session cannot be deleted leaves that session on a record of kept sessions.
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  const g = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { if (sessionID === 'ses_old_0') throw new Error('Fixture deletion refused'); } });
+  assert.match(await g.command(), /\] COMPLETE\n/);
+  const kept = await readdir(join(g.stateDirectory, 'sessions'));
+  assert.equal(kept.length, 1);
+  assert.match(kept[0], /-00000000\.json$/, 'The record is the evicted review\'s.');
+  assert.deepEqual(JSON.parse(await readFile(join(g.stateDirectory, 'sessions', kept[0]), 'utf8')), ['ses_old_0']);
+});
+
 test('a review whose session a running command answers in is not evicted under it', async t => {
   const planning = deferred(), entered = deferred();
   const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
