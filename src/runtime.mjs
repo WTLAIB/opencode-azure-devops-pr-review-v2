@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyL
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, isSessionNotFound, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials } from './host.mjs';
 import {
   reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions,
   renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview,
@@ -122,6 +122,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   const closing = new Set();        // private sessions about to be deleted, or whose deletion OpenCode never answered
   const answering = new Map();      // sessions a command still owes a notice, until its last one is out (counted)
   const settling = new Map();       // reviews and unfinished runs a command is still finishing with: not evicted meanwhile (counted)
+  const createdEarlier = new Set(); // private sessions an earlier process created: those of saved reviews and of the session records
+  let expiring = Promise.resolve(); // the passes over sessions that are due to go, one after another
+  let expiringNext = false;         // a pass is waiting for its turn: it covers what later callers ask for
   // Count one more holder of `key`; the returned function gives it up, once.
   const hold = (holders, key) => {
     holders.set(key, (holders.get(key) ?? 0) + 1);
@@ -177,13 +180,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   // An unwritable state directory must not disable the plugin: fall back to a
   // per-user directory under the system temporary directory.
   let storeFallback;
-  // An evicted review takes its sessions with it; what cannot be deleted then stays on a record of kept sessions.
+  // An evicted review takes its sessions with it, before its record goes; what cannot be deleted then is recorded
+  // as still to be deleted.
   const onRemove = review => discardSessions([...review.reportSessions, ...(review.closingSessions ?? [])], review.id);
   const store = await createReviewStore({ root: options.stateDirectory ?? stateRoot(), onRemove }).catch(error => {
     storeFallback = errorText(error);
     return createReviewStore({ root: join(tmpdir(), `azpr-v2-state-${process.getuid?.() ?? 'user'}`), onRemove });
   });
   const capabilities = hostCapabilities(context);
+  // Whether AZPR deletes its private sessions at all: the setting, and a host that can.
+  const deletesSessions = Boolean(settings.deletePrivateSessions && capabilities.sessionRemove);
   // When reviews were completed and last used decides which one a command without an ID acts on,
   // so these times never repeat or run backwards, whatever the clock does: each is later than every
   // one issued in this process or saved by an earlier one.
@@ -198,11 +204,18 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     savedUse.set(review.id, review.usedAt);
     // A deletion an earlier process asked for and never saw answered may still be carried out.
     for (const sessionID of review.closingSessions ?? []) closing.add(sessionID);
+    // The sessions an earlier process created stay private sessions, also once their review is evicted.
+    for (const sessionID of [...review.reportSessions, ...(review.closingSessions ?? [])]) createdEarlier.add(sessionID);
     for (const time of [review.completedAt, review.usedAt]) if (Number.isFinite(Date.parse(time))) lastStamp = Math.max(lastStamp, Date.parse(time));
   }
-  // Sessions an earlier process kept from unfinished runs: no review starts in them either.
-  const createdEarlier = new Set(await store.keptSessions().catch(() => []));
+  // So do the sessions the records name: kept from unfinished runs, or still to be deleted. The latter take no
+  // commands either: a deletion may have been asked for and never answered.
+  const recorded = await store.recordedSessions().catch(() => ({ kept: [], due: [] }));
+  for (const sessionID of [...recorded.kept, ...recorded.due]) createdEarlier.add(sessionID);
+  for (const sessionID of recorded.due) closing.add(sessionID);
   void store.sweep().catch(() => {});
+  // What an earlier process could not delete is tried again now.
+  void releaseExpired();
 
   // ---------------------------------------------------------------- helpers
   // OpenCode lists these next to the command names on one line and cuts what does not fit (a user's
@@ -374,18 +387,27 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     owner.data = undefined;
   }
   /**
+   * Whether OpenCode may still have the session: false only when OpenCode says
+   * it does not exist. A read that fails otherwise settles nothing, so the
+   * session stays on record.
+   */
+  async function sessionExists(sessionID) {
+    try { await deadline(() => context.session.get({ sessionID }), options.removeTimeoutMs ?? 5000); return true; }
+    catch (error) { return !isSessionNotFound(error); }
+  }
+  /**
    * Delete AZPR's own reviewer sessions, a few at a time so a host that stalls
    * on deletion delays the receipt by one timeout per batch, not per session.
    * A session a command needs is left alone, checked when its turn comes.
    * Returns the sessions that are not known to be gone, for a caller that can
    * try again later: `left` are still there (needed by a command, or OpenCode
-   * refused the deletion), `unanswered` are those whose deletion OpenCode had
-   * not answered when this process stopped waiting, so it may still be
-   * carried out.
+   * refused the deletion of a session it still has), `unanswered` are those
+   * whose deletion OpenCode had not answered when this process stopped
+   * waiting, so it may still be carried out.
    */
   async function removeSessions(sessionIDs) {
     const requested = [...new Set(sessionIDs ?? [])];
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return { left: requested, unanswered: [] };
+    if (!deletesSessions) return { left: requested, unanswered: [] };
     const pending = [...requested], left = [], unanswered = [];
     const worker = async () => {
       while (pending.length) {
@@ -393,28 +415,60 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         if (sessionsInUse().has(sessionID)) { left.push(sessionID); continue; }
         let answered = false;
         const removal = Promise.resolve().then(() => context.session.remove({ sessionID })).finally(() => { answered = true; });
-        await deadline(() => removal, options.removeTimeoutMs ?? 5000).catch(() => { (answered ? left : unanswered).push(sessionID); });
+        try { await deadline(() => removal, options.removeTimeoutMs ?? 5000); }
+        catch (error) {
+          if (!answered) unanswered.push(sessionID);
+          // A session that is gone already needs no further attempt; OpenCode says so here, or when it is read.
+          else if (!isSessionNotFound(error) && await sessionExists(sessionID)) left.push(sessionID);
+        }
       }
     };
     await Promise.all(Array.from({ length: Math.min(SESSION_REMOVALS, pending.length) }, worker));
     return { left, unanswered };
   }
   /**
-   * Delete sessions that no review or run keeps any more. A session leaves the
-   * records only when it is gone: what could not be deleted (a command needs
-   * it, OpenCode refused, or never answered) goes on the record of kept
-   * sessions `recordId`, which later passes try again, and an unanswered
-   * deletion closes the session to commands.
+   * Delete sessions that no review or run keeps any more. From here on they
+   * are private sessions that take no commands, until they are gone. A session
+   * leaves the records only when it is gone: what could not be deleted (a
+   * command needs it, OpenCode refused, or never answered) is recorded under
+   * `id` as still to be deleted, which every later pass tries again.
+   * `unrecorded` sessions are on no record yet, so they are recorded before
+   * the attempt. Returns false when sessions that are still there could not be
+   * recorded.
    */
-  async function discardSessions(sessionIDs, recordId = randomUUID().slice(0, 8)) {
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
-    const { left, unanswered } = await removeSessions(sessionIDs);
-    for (const id of unanswered) closing.add(id);
-    await store.keepSessions(recordId, [...left, ...unanswered]).catch(() => {});
+  async function discardSessions(sessionIDs, id = randomUUID().slice(0, 8), unrecorded = false) {
+    if (!deletesSessions) return true;
+    const due = [...new Set(sessionIDs ?? [])];
+    for (const sessionID of due) closing.add(sessionID);
+    if (unrecorded) await store.retrySessions(id, due).catch(() => {});
+    const { left, unanswered } = await removeSessions(due);
+    for (const sessionID of due) if (!left.includes(sessionID) && !unanswered.includes(sessionID)) closing.delete(sessionID);
+    return store.retrySessions(id, [...left, ...unanswered]).then(() => true, () => !left.length && !unanswered.length);
   }
-  /** Delete the sessions of unfinished runs whose records are beyond the limit, except those whose command has not ended. */
-  async function releaseExpired() {
-    for (const record of await store.expiredSessions(id => settling.has(id)).catch(() => [])) await discardSessions(record.sessionIDs, record.runId);
+  /**
+   * One pass over the sessions that are due to go: those that could not be
+   * deleted earlier, tried again every time, and those kept from unfinished
+   * runs beyond the limit, except runs whose command has not ended. Passes
+   * run one after another, after a review or an unfinished run and at load,
+   * and in the background: no receipt waits for an earlier failure to be
+   * tried again. A pass reads the records when its turn comes, so one that
+   * waits serves every caller until then, and a host that is slow to delete
+   * never has more than one pass waiting. A pass never fails; the next one
+   * tries what it left. Where sessions are not deleted at all, the records
+   * are left as they are.
+   */
+  function releaseExpired() {
+    const pass = async () => {
+      expiringNext = false;
+      try {
+        for (const due of await store.expiredSessions(id => settling.has(id))) {
+          // A kept record goes once its sessions are deleted, or recorded as still to be deleted.
+          if (await discardSessions(due.sessionIDs, due.runId) && due.kept) await store.keepSessions(due.runId, []);
+        }
+      } catch { /* The next pass tries again. */ }
+    };
+    if (deletesSessions && !expiringNext) { expiringNext = true; expiring = expiring.then(pass); }
+    return expiring;
   }
   /**
    * The sessions of a run that ended, and those to delete now. OpenCode lists
@@ -424,33 +478,33 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    */
   function endedSessions(run, keep) {
     const sessions = [...new Set(run.stages.map(stage => stage.sessionID).filter(Boolean))];
-    const prune = settings.deletePrivateSessions && capabilities.sessionRemove && !settings.debug.enabled && !run.abortUnconfirmed;
+    const prune = deletesSessions && !settings.debug.enabled && !run.abortUnconfirmed;
     return { sessions, obsolete: prune ? sessions.filter(id => id !== keep) : [] };
   }
   /**
    * Delete a run's obsolete sessions, which are closed to commands already
    * (`closing`): a command typed in one is refused, since its answer would have
-   * nowhere to go. A session that is still there afterwards is open to commands
-   * again. One whose deletion OpenCode never answered stays closed for good:
-   * that deletion may still be carried out. Returns both kinds.
+   * nowhere to go. Counts the deleted ones for the receipt and returns the
+   * others: `left` are still there, `unanswered` are those whose deletion
+   * OpenCode never answered and may still carry out. The caller decides which
+   * of them stay closed.
    */
   async function deleteClosing(run, obsolete) {
-    let outcome = { left: obsolete, unanswered: [] };
-    try {
-      outcome = await removeSessions(obsolete);
-      run.sessionsRemoved = obsolete.length - outcome.left.length - outcome.unanswered.length;
-      return outcome;
-    } finally { for (const id of obsolete) if (!outcome.unanswered.includes(id)) closing.delete(id); }
+    const outcome = await removeSessions(obsolete);
+    run.sessionsRemoved = obsolete.length - outcome.left.length - outcome.unanswered.length;
+    return outcome;
   }
   /**
    * A review run that saved no review. Its sessions go on record before any is
    * deleted, so that a process ending during the cleanup forgets none of them;
-   * the record then holds what is left, and follows the review limit. Until
-   * the command has ended (`output.release`, given up by `launch`) later runs
-   * do not evict that record: its draft session would go with it.
+   * the record then holds what the run keeps on purpose, and follows the
+   * review limit. What should be gone and is not is recorded apart, tried
+   * again at every pass and closed to commands meanwhile. Until the command
+   * has ended (`output.release`, given up by `launch`) later runs do not evict
+   * the run's record: its draft session would go with it.
    */
   async function releaseUnfinished(run, output) {
-    if (!settings.deletePrivateSessions || !capabilities.sessionRemove) return;
+    if (!deletesSessions) return;
     const { sessions, obsolete } = endedSessions(run, run.reportStage?.sessionID);
     if (!sessions.length) return;
     for (const id of obsolete) closing.add(id);
@@ -458,10 +512,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await store.keepSessions(run.id, sessions).catch(() => {});
     if (obsolete.length) {
       const { left, unanswered } = await deleteClosing(run, obsolete);
-      const remaining = sessions.filter(id => !obsolete.includes(id) || left.includes(id) || unanswered.includes(id));
-      if (run.sessionsRemoved) await store.keepSessions(run.id, remaining).catch(() => {});
+      const survivors = [...left, ...unanswered];
+      for (const id of obsolete) if (!survivors.includes(id)) closing.delete(id);
+      const retried = !survivors.length || await store.retrySessions(run.id, survivors).then(() => true, () => false);
+      await store.keepSessions(run.id, sessions.filter(id => !obsolete.includes(id) || (!retried && survivors.includes(id)))).catch(() => {});
     }
-    await releaseExpired();
+    void releaseExpired();
   }
   /**
    * A run of a saved review ended: what to do with its sessions, decided before
@@ -496,10 +552,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const { left, unanswered } = await deleteClosing(run, obsolete);
     for (const id of obsolete) {
       if (unanswered.includes(id)) continue;
-      review.closingSessions.delete(id);
+      review.closingSessions?.delete(id);
+      closing.delete(id);
       if (left.includes(id)) review.reportSessions.add(id);
     }
-    if (!review.closingSessions.size) delete review.closingSessions;
+    if (!review.closingSessions?.size) delete review.closingSessions;
     return obsolete.length > unanswered.length;
   }
   // One write of a review's record, queued behind the writes of that review before it. `value` is
@@ -701,7 +758,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const metadata = { azpr: { run: run.id, role, conversation: run.origin, ...(run.review ? { review: run.review.id } : {}) } };
     const made = await bounded(() => createReviewSession(context, { origin: run.origin, title, role, model: modelRef(idModel), metadata, signal,
       // Created after its stage was cancelled: no stage knows this session, so it is deleted here.
-      onLate: late => { seenSessions.add(late.id); void discardSessions([late.id]); } }), signal);
+      onLate: late => { seenSessions.add(late.id); void discardSessions([late.id], undefined, true); } }), signal);
     if (!text(made.id) || made.id === run.origin || seenSessions.has(made.id)) throw new Error('SDK did not return a new independent session.');
     seenSessions.add(made.id);
     watch.waiting = false;
@@ -1020,8 +1077,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function executeReview(mode, input, output, dispatch) {
     // Also after a restart, when this process no longer knows the sessions it created: the saved reviews and the
     // records of unfinished runs name them.
-    if (seenSessions.has(input.sessionID) || createdEarlier.has(input.sessionID) ||
-        [...completed.values()].some(review => review.reportSessions.has(input.sessionID) || review.closingSessions?.has(input.sessionID))) {
+    if (seenSessions.has(input.sessionID) || createdEarlier.has(input.sessionID)) {
       throw new Error('[AZPR] Start a new review from your ordinary development session, not a reviewer session.');
     }
     if (!text(input.sessionID) || !text(input.arguments) || input.arguments.length > 16000) {
@@ -1077,6 +1133,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const obsolete = scheduleCleanup(run, review, run.reportStage?.sessionID);
       await rememberReview(review);
       if (await finishCleanup(run, review, obsolete)) await persistReview(review);
+      // What an eviction or an earlier cleanup could not delete is tried again.
+      void releaseExpired();
     } else await releaseUnfinished(run, output);
     // A review stopped while its report was delivered stays COMPLETE, but its comment step is off,
     // also in the report the receipt encloses, which was rendered before the stop.
@@ -1317,15 +1375,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (everAdjusted(review)) earlier = describeEarlierText(review, result.otherComments);
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
-    // A comment run keeps none of its sessions; the record names them before they are deleted.
-    const obsolete = scheduleCleanup(run, review);
-    if (obsolete.length) await persistReview(review);
-    await finishCleanup(run, review, obsolete);
+    // What this run decides about the review is settled here, before anything is awaited: the command locks are
+    // released already, so a later command may be planning or saving while this run's sessions are deleted.
     if (planning) review.plan = null;
     // The review whose receipt arrives last is the current one, as a preview's next steps say; this
     // holds for the automatic step too, which no command selected.
     review.usedAt = stamp();
+    // A comment run keeps none of its sessions; the record names them before they are deleted.
+    const obsolete = scheduleCleanup(run, review);
     await persistReview(review);
+    if (await finishCleanup(run, review, obsolete)) await persistReview(review);
     const safe = (report || '').replaceAll('</azpr_comment_data>', '&lt;/azpr_comment_data&gt;');
     // A held preview says itself what to do; an adjustment says whether it was saved.
     const retry = failure && ['INCOMPLETE', 'FAILED', 'PARTIALLY_POSTED'].includes(status) && !hold
@@ -1359,7 +1418,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (!mode) return;
     // Its answer would have nowhere to go.
     if (closing.has(input.sessionID)) {
-      throw new Error('[AZPR] This reviewer session is being deleted now that its run has ended. Type the command in the conversation the review was started in, or in the session that holds its report.');
+      throw new Error('[AZPR] This reviewer session is being deleted: its run has ended, or its review is no longer kept. Type the command in the conversation the review was started in, or in the session that holds its report.');
     }
     if (HELP_ARGUMENT.test(String(input.arguments ?? '').trim())) {
       output.text = `${COMMAND_HELP[input.command]()}\nNo model or Azure DevOps request was made for this help.`;

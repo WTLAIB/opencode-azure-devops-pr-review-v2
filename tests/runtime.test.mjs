@@ -1849,15 +1849,61 @@ test('a session whose deletion fails stays on record and is deleted later with t
   assert.match(await f.command('pr-comment', '--list', stuck), /Reviews saved for this conversation \(1\)/);
 });
 
-test('an unfinished review remembers a session it could not delete next to the one holding its draft', async t => {
-  let stuck;
+// Resolves once `settled` holds: the pass over sessions that are due to go runs in the background.
+const eventually = async (settled, message = 'The background pass did not get there.') => {
+  for (let waited = 0; !(await settled()); waited += 5) { assert.ok(waited < 5000, message); await sleep(5); }
+};
+// The records of sessions under the state directory: those a run keeps on purpose, and those still to be deleted.
+const sessionRecords = async f => {
+  const kept = [], retried = [], names = [];
+  for (const name of (await readdir(join(f.stateDirectory, 'sessions'))).filter(file => file.endsWith('.json')).sort()) {
+    // A record that a pass removes while this reads is no record any more.
+    let sessionIDs;
+    try { sessionIDs = JSON.parse(await readFile(join(f.stateDirectory, 'sessions', name), 'utf8')); } catch { continue; }
+    names.push(name);
+    (/-retry[^-]*\.json$/.test(name) ? retried : kept).push(sessionIDs);
+  }
+  return { kept, retried, names };
+};
+
+test('an unfinished review records a session it could not delete as still to be deleted, apart from the one holding its draft', async t => {
+  let stuck, refusing = true;
   const f = await fixture(t, { settings: s => { s.debug.enabled = false; },
-    remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) throw new Error('Fixture deletion failed'); },
+    remove(sessionID) { stuck ??= sessionID; if (refusing && sessionID === stuck) throw new Error('Fixture deletion failed'); },
     answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
   assert.match(await f.command(), /\] PARTIAL/);
   const draft = f.sessionsFor('azpr-review-verifier').at(-1);
-  const [file] = await readdir(join(f.stateDirectory, 'sessions'));
-  assert.deepEqual(JSON.parse(await readFile(join(f.stateDirectory, 'sessions', file), 'utf8')).sort(), [draft.id, stuck].sort());
+  assert.deepEqual(await sessionRecords(f).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft.id]], retried: [[stuck]] });
+  assert.ok(f.sessions.has(stuck));
+  // It is tried again with the next run, however few records there are; the draft stays.
+  refusing = false;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'second'), /\] PARTIAL/);
+  await eventually(() => !f.sessions.has(stuck), 'The session was not tried again.');
+  assert.ok(f.sessions.has(draft.id));
+  await eventually(async () => !(await sessionRecords(f)).retried.length);
+  const after = await sessionRecords(f);
+  assert.deepEqual(after.retried, []);
+  assert.equal(after.kept.length, 2);
+});
+
+test('a deletion OpenCode refuses because the session is gone already needs no further attempt', async t => {
+  const notFound = () => Object.assign(new Error(''), { _tag: 'Session.NotFoundError', name: 'Session.NotFoundError', sessionID: 'ses_old_0' });
+  // What OpenCode answers when the evicted review's session is deleted, and when it is read afterwards.
+  for (const [label, removal, reading, recorded] of [
+    ['OpenCode says the session does not exist', notFound, null, []],
+    ['the deletion fails otherwise and the session cannot be found', () => new Error('Fixture deletion failed'), notFound, []],
+    ['the deletion fails and the session is still there', () => new Error('Fixture deletion failed'), null, [['ses_old_0']]],
+    ['the deletion fails and the session cannot be read either', () => new Error('Fixture deletion failed'), () => new Error('Fixture read failed'), [['ses_old_0']]],
+  ]) {
+    const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    await oldReviews(directory, 20);
+    const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+      conversation(id) { if (id === 'ses_old_0' && reading) throw reading(); return { id, location: { directory } }; },
+      remove(sessionID) { if (sessionID === 'ses_old_0') throw removal(); } });
+    assert.match(await f.command(), /\] COMPLETE\n/, label);
+    assert.deepEqual((await sessionRecords(f)).retried, recorded, `${label}: ${recorded.length ? 'it stays on record and is tried again' : 'nothing is recorded for a session that is gone'}.`);
+  }
 });
 
 test('a step OpenCode retried after an interrupted stream is counted on its stage; the stage is not repeated', async t => {
@@ -1978,12 +2024,12 @@ test('once a run has ended, a command typed in a session it is deleting is refus
   const reviewing = f.command();
   const risk = await within(deleting.promise);
   assert.ok(risk, 'The cleanup reached the risk reviewer session.');
-  await assert.rejects(typed(f, risk), /This reviewer session is being deleted now that its run has ended\. Type the command in the conversation/);
+  await assert.rejects(typed(f, risk), /This reviewer session is being deleted: its run has ended, or its review is no longer kept\. Type the command in the conversation/);
   stalled.resolve();
   const receipt = await reviewing;
   assert.match(receipt, /\] COMPLETE\n/);
   const report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
-  assert.match(outcomes.whileSaved, /This reviewer session is being deleted now that its run has ended/, 'Refused from the moment the run ended, before anything was saved or deleted.');
+  assert.match(outcomes.whileSaved, /This reviewer session is being deleted: its run has ended/, 'Refused from the moment the run ended, before anything was saved or deleted.');
   // The record saved before the deletions names both sessions apart: a process ending then would not take them for the review's own.
   assert.deepEqual(outcomes.recordWhileSaved.reportSessions, [report]);
   assert.deepEqual(outcomes.recordWhileSaved.closingSessions.sort(), [outcomes.functional, risk].sort());
@@ -2071,12 +2117,12 @@ test('a session whose deletion OpenCode never answered stays closed to commands,
   assert.deepEqual(saved.closingSessions, [risk], 'It stays on record apart, to be deleted with the review.');
   // OpenCode may still carry the deletion out, so no command starts there: its answer could lose its session.
   const typed = instance => instance.commands.get('pr-comment').execute({ sessionID: risk, prompt: { text: '--list' }, delivery: 'steer' });
-  await assert.rejects(typed(f), /This reviewer session is being deleted now that its run has ended/);
+  await assert.rejects(typed(f), /This reviewer session is being deleted: its run has ended/);
   // A new plugin instance does not know what the earlier one was waiting for; the saved review tells it.
   await f.cleanup();
   const removed = [];
   const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; }, remove: sessionID => { removed.push(sessionID); } });
-  await assert.rejects(typed(g), /This reviewer session is being deleted now that its run has ended/);
+  await assert.rejects(typed(g), /This reviewer session is being deleted: its run has ended/);
   assert.match(await g.command('pr-comment', '--list', report), /Reviews saved for this conversation \(1\)/, 'The review\'s own session still works.');
   // Evicted with its review, the session is asked to be deleted again.
   for (let n = 1; n <= 20; n++) assert.match(await g.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] COMPLETE\n/);
@@ -2105,56 +2151,219 @@ test('an unfinished review keeps its draft session until its command has ended, 
   assert.deepEqual((await records())[0], [draft], 'Its record holds what the cleanup left.');
   // Its turn comes with the next run: its record is the oldest of 22.
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
-  assert.equal((await records()).length, 20);
-  assert.ok(!f.sessions.has(draft));
+  await eventually(async () => (await records()).length === 20 && !f.sessions.has(draft), 'Its record was not released with the next run.');
 });
 
 test('a session leaves the records only when it is gone: kept drafts in use, refused deletions and evicted reviews', async t => {
   // 1. A person types a command in an older unfinished review's draft session while 20 later unfinished runs push
-  //    its record beyond the limit: the draft is spared, and still on record afterwards.
+  //    its record beyond the limit: the draft is spared, and recorded as still to be deleted.
   const answering = deferred(), release = deferred();
-  let draft, listing, refuse;
+  let draft, refuse;
   const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
     answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; },
     remove(sessionID) { if (refuse?.(sessionID)) throw new Error('Fixture deletion refused'); },
     async syntheticDelay(input) { if (draft && input.sessionID === draft && /No completed review/.test(input.text)) { answering.resolve(); await release.promise; } } });
   t.after(() => release.resolve());
-  const records = async () => Promise.all((await readdir(join(f.stateDirectory, 'sessions'))).sort().map(async name => JSON.parse(await readFile(join(f.stateDirectory, 'sessions', name), 'utf8'))));
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-0'), /\] PARTIAL/);
-  const first = f.sessionsFor('azpr-review-verifier').at(-1).id;
-  draft = first;
-  listing = f.commands.get('pr-comment').execute({ sessionID: draft, prompt: { text: '--list' }, delivery: 'steer' });
+  draft = f.sessionsFor('azpr-review-verifier').at(-1).id;
+  const listing = f.commands.get('pr-comment').execute({ sessionID: draft, prompt: { text: '--list' }, delivery: 'steer' });
   await within(answering.promise);
   for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] PARTIAL/);
+  await eventually(async () => (await sessionRecords(f)).retried.length === 1 && (await sessionRecords(f)).kept.length === 20);
   assert.ok(f.sessions.has(draft), 'The draft a command answers in was not deleted.');
-  assert.deepEqual((await records())[0], [draft], 'Its record stays, so a later pass deletes it.');
-  assert.equal((await records()).length, 21);
+  let records = await sessionRecords(f);
+  assert.deepEqual(records.retried, [[draft]], 'It is on record as still to be deleted.');
+  assert.equal(records.kept.length, 20, 'Its own record made room for the newest 20.');
   release.resolve();
   await listing;
-  // 2. The next pass deletes it; a deletion OpenCode refuses keeps its session on record as well.
+  // 2. The next pass deletes it. A deletion OpenCode refuses is recorded the same way and tried again.
   refuse = sessionID => sessionID !== draft && f.sessions.get(sessionID)?.agent === 'azpr-review-verifier';
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
-  assert.ok(!f.sessions.has(draft), 'The spared draft went with the next pass.');
-  const second = (await records())[0];
-  assert.equal(second.length, 1);
-  assert.ok(f.sessions.has(second[0]), 'The draft OpenCode refused to delete is still on its record.');
-  assert.equal((await records()).length, 21);
+  await eventually(async () => !f.sessions.has(draft) && (await sessionRecords(f)).kept.length === 20 && (await sessionRecords(f)).retried.length === 1 && (await sessionRecords(f)).retried[0][0] !== draft, 'The spared draft did not go with the next pass.');
+  records = await sessionRecords(f);
+  assert.equal(records.retried.length, 1);
+  const [refused] = records.retried[0];
+  assert.ok(f.sessions.has(refused) && refused !== draft, 'The draft OpenCode refused to delete is on record as still to be deleted.');
+  assert.equal(records.kept.length, 20);
   refuse = null;
   assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-22'), /\] PARTIAL/);
-  assert.ok(!f.sessions.has(second[0]));
-  assert.equal((await records()).length, 20);
+  await eventually(async () => !f.sessions.has(refused) && !(await sessionRecords(f)).retried.length && (await sessionRecords(f)).kept.length === 20);
 
-  // 3. An evicted review whose report session cannot be deleted leaves that session on a record of kept sessions.
+  // 3. An evicted review whose report session cannot be deleted leaves that session on record as still to be
+  //    deleted. It takes no commands, also after a restart, and a pass at load tries it again.
   const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await oldReviews(directory, 20);
-  const g = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
-    remove(sessionID) { if (sessionID === 'ses_old_0') throw new Error('Fixture deletion refused'); } });
+  let refusing = true;
+  const options = { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { if (refusing && sessionID === 'ses_old_0') throw new Error('Fixture deletion refused'); } };
+  const g = await fixture(t, options);
   assert.match(await g.command(), /\] COMPLETE\n/);
-  const kept = await readdir(join(g.stateDirectory, 'sessions'));
-  assert.equal(kept.length, 1);
-  assert.match(kept[0], /-00000000\.json$/, 'The record is the evicted review\'s.');
-  assert.deepEqual(JSON.parse(await readFile(join(g.stateDirectory, 'sessions', kept[0]), 'utf8')), ['ses_old_0']);
+  const evicted = await sessionRecords(g);
+  assert.deepEqual(evicted.retried, [['ses_old_0']]);
+  assert.match(evicted.names[0], /-retry00000000\.json$/, 'The record is the evicted review\'s.');
+  assert.deepEqual(evicted.kept, []);
+  const fromOld = instance => instance.commands.get('pr-review').execute({ sessionID: 'ses_old_0', prompt: { text: g.azure.prUrl() }, delivery: 'steer' });
+  await assert.rejects(fromOld(g), /This reviewer session is being deleted: its run has ended, or its review is no longer kept/);
+  // A successful review tries it again too; OpenCode still refuses.
+  const attempts = instance => instance.calls.filter(call => call.kind === 'remove' && call.sessionID === 'ses_old_0').length;
+  await eventually(() => attempts(g) >= 2, 'The pass after the review that evicted it did not try again.');
+  const before = attempts(g);
+  assert.match(await g.command('pr-review', g.azure.prUrl(), 'again'), /\] COMPLETE\n/);
+  await eventually(() => attempts(g) > before, 'Not tried again after a successful review.');
+  await eventually(async () => (await sessionRecords(g)).retried.length === 1);
+  await g.cleanup();
+  const h = await fixture(t, { ...options, azure: g.azure });
+  await assert.rejects(fromOld(h), /This reviewer session is being deleted: its run has ended, or its review is no longer kept/, 'Still closed after the restart.');
+  const tried = instance => instance.calls.some(call => call.kind === 'remove' && call.sessionID === 'ses_old_0');
+  for (let waited = 0; !tried(h); waited += 5) { assert.ok(waited < 5000, 'The pass at load did not try it.'); await sleep(5); }
+  assert.deepEqual((await sessionRecords(h)).retried, [['ses_old_0']], 'OpenCode still refuses: the record stays.');
+  await h.cleanup();
+  refusing = false;
+  const i = await fixture(t, { ...options, azure: g.azure });
+  for (let waited = 0; (await sessionRecords(i)).retried.length; waited += 5) { assert.ok(waited < 5000, 'The pass at load did not delete it.'); await sleep(5); }
+  assert.ok(tried(i));
+});
+
+test('what could not be deleted of an unfinished run stays on record when the run\'s kept draft expires', async t => {
+  let stuck, refusing = true;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { stuck ??= sessionID; if (refusing && sessionID === stuck) throw new Error('Fixture deletion refused'); },
+    answer({ role }) { return role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined; } });
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-0'), /\] PARTIAL/);
+  const draft = f.sessionsFor('azpr-review-verifier').at(-1).id;
+  assert.deepEqual(await sessionRecords(f).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft]], retried: [[stuck]] });
+  // Twenty later unfinished runs push the first run's kept draft beyond the limit, while OpenCode still refuses to
+  // delete the run's other session. The run has two records then, and one pass deals with both.
+  for (let n = 1; n <= 20; n++) assert.match(await f.command('pr-review', f.azure.prUrl(), `origin-${n}`), /\] PARTIAL/);
+  await eventually(async () => !f.sessions.has(draft) && (await sessionRecords(f)).kept.length === 20, 'The expired draft did not go.');
+  assert.ok(f.sessions.has(stuck));
+  assert.deepEqual((await sessionRecords(f)).retried, [[stuck]], 'The session that is still there is still on record: the draft\'s outcome did not replace it.');
+  refusing = false;
+  assert.match(await f.command('pr-review', f.azure.prUrl(), 'origin-21'), /\] PARTIAL/);
+  await eventually(async () => !f.sessions.has(stuck) && !(await sessionRecords(f)).retried.length, 'It was not tried again.');
+});
+
+test('a session of an unfinished review that is still to be deleted takes no commands, also after a restart', async t => {
+  const typed = (instance, sessionID) => instance.commands.get('pr-comment').execute({ sessionID, prompt: { text: '--list' }, delivery: 'steer' });
+  const garbled = ({ role }) => role.endsWith('-verifier') ? 'I could not decide anything in JSON.' : undefined;
+  // 1. A deletion OpenCode never answered may still be carried out.
+  const answer = deferred();
+  let stuck;
+  const f = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 30, answer: garbled,
+    async remove(sessionID) { stuck ??= sessionID; if (sessionID === stuck) await answer.promise; } });
+  t.after(() => answer.resolve());
+  assert.match(await f.command(), /\] PARTIAL/);
+  assert.deepEqual((await sessionRecords(f)).retried, [[stuck]]);
+  await assert.rejects(typed(f, stuck), /This reviewer session is being deleted: its run has ended/);
+  await f.cleanup();
+  // A new plugin instance does not know what the earlier one was waiting for; the record tells it.
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; },
+    remove(sessionID) { if (sessionID === stuck) throw new Error('Fixture deletion refused'); } });
+  await assert.rejects(typed(g, stuck), /This reviewer session is being deleted: its run has ended/);
+  await g.cleanup();
+  // Also where sessions are no longer deleted: the session stays closed, and every record is left as it is,
+  // those of kept sessions beyond the limit too, so that nothing is forgotten if deletion is turned on again.
+  const earlier = await createReviewStore({ root: f.stateDirectory });
+  for (let n = 0; n < 21; n++) await earlier.keepSessions(`0000${String(n).padStart(4, '0')}`, [`ses_kept_${n}`]);
+  const before = await sessionRecords(f);
+  assert.equal(before.kept.length, 22);
+  const h = await fixture(t, { directory: f.directory, azure: f.azure, settings: s => { s.debug.enabled = false; s.deletePrivateSessions = false; } });
+  await assert.rejects(typed(h, stuck), /This reviewer session is being deleted: its run has ended/);
+  await sleep(100);
+  assert.equal(h.calls.filter(call => call.kind === 'remove').length, 0);
+  assert.deepEqual(await sessionRecords(h), before);
+
+  // 2. A session a command still answered in when the run ended is spared, closed, and deleted at the next pass.
+  const answering = deferred(), release = deferred();
+  let started, listing;
+  const i = await fixture(t, { settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000, answer: garbled,
+    async during({ role }) {
+      if (!role.endsWith('-verifier') || started) return;
+      [started] = [...i.sessions.keys()];
+      listing = typed(i, started);
+      await within(answering.promise);
+    },
+    async syntheticDelay(input) { if (started && input.sessionID === started) { answering.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  assert.match(await i.command(), /\] PARTIAL/);
+  const draft = i.sessionsFor('azpr-review-verifier').at(-1).id;
+  assert.ok(started !== draft && i.sessions.has(started), 'The session the command answers in was left alone.');
+  assert.deepEqual(await sessionRecords(i).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft]], retried: [[started]] });
+  await assert.rejects(typed(i, started), /This reviewer session is being deleted: its run has ended/, 'No further command starts there.');
+  release.resolve();
+  await listing;
+  assert.ok(i.notices.some(n => n.sessionID === started && /No completed review is saved for this conversation/.test(n.text)), 'The answer arrived where the command was typed.');
+  assert.match(await i.command('pr-review', i.azure.prUrl(), 'second'), /\] PARTIAL/);
+  await eventually(async () => !i.sessions.has(started) && !(await sessionRecords(i)).retried.length, 'The next pass did not delete it.');
+  assert.ok(i.sessions.has(draft));
+});
+
+test('an evicted review stays on record until its sessions are dealt with, so a process that ends meanwhile finds it again', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-runtime-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await oldReviews(directory, 20);
+  const stalled = deferred(), deleting = deferred();
+  const f = await fixture(t, { directory, files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    async remove(sessionID) { if (sessionID === 'ses_old_0') { deleting.resolve(); await stalled.promise; } } });
+  t.after(() => stalled.resolve());
+  const reviewing = f.command();
+  await within(deleting.promise);
+  // OpenCode is deleting the evicted review's session; the record that names it is still there.
+  assert.ok((await savedReviews(f)).some(review => review.id === '00000000'), 'A process that ended now would still know the session.');
+  // The next process finds the review over the limit again and deletes its session.
+  const removed = [];
+  const g = await fixture(t, { directory, azure: f.azure, settings: s => { s.debug.enabled = false; }, remove: sessionID => { removed.push(sessionID); } });
+  assert.deepEqual(removed, ['ses_old_0']);
+  assert.ok(!(await savedReviews(g)).some(review => review.id === '00000000'));
+  assert.deepEqual((await sessionRecords(g)).retried, []);
+  stalled.resolve();
+  assert.match(await reviewing, /\] COMPLETE\n/);
+});
+
+test('a session created after its stage was stopped is on record and closed while it is deleted', async t => {
+  const entered = deferred(), release = deferred(), stalled = deferred();
+  const f = await fixture(t, { files: ['/src/Main.java'], removeTimeoutMs: 60000,
+    async creating() { entered.resolve(); await release.promise; },
+    async remove() { await stalled.promise; } });
+  t.after(() => { release.resolve(); stalled.resolve(); });
+  const running = f.command();
+  await entered.promise;
+  assert.match(await f.command('pr-stop', ''), /cancellation requested/);
+  assert.match(await running, /\] CANCELLED/);
+  // The host finishes creating both initial sessions only now, and is slow to delete them.
+  release.resolve();
+  await eventually(async () => (await sessionRecords(f)).retried.flat().length === 2, 'The late sessions were not put on record.');
+  const late = [...f.sessions.keys()];
+  assert.deepEqual((await sessionRecords(f)).retried.flat().sort(), [...late].sort(), 'A process that ended now would still know both.');
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: late[0], prompt: { text: '--list' }, delivery: 'steer' }), /This reviewer session is being deleted/);
+  stalled.resolve();
+  await eventually(async () => !f.sessions.size && !(await sessionRecords(f)).retried.length, 'The late sessions or their records stayed.');
+});
+
+test('a later preview survives the cleanup of an earlier comment run whose planning failed', async t => {
+  const stalled = deferred(), deleting = deferred();
+  let failPlanning = true, stuck;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; }, removeTimeoutMs: 60000,
+    answer: ({ role }) => failPlanning && ROLES[role].format === 'comment-plan' ? { $provider: 401 } : undefined,
+    async remove(sessionID) {
+      if (f.sessions.get(sessionID)?.agent !== 'azpr-review-comment-plan') return;
+      stuck ??= sessionID;
+      if (sessionID === stuck) { deleting.resolve(); await stalled.promise; }
+    } });
+  t.after(() => stalled.resolve());
+  const review = reviewId(await f.command());
+  // The first comment run fails while planning; OpenCode is slow to delete its planner session.
+  const failed = f.command('pr-comment', '');
+  await within(deleting.promise);
+  // The person fixes the cause and tries again at once: this run plans and saves a preview.
+  failPlanning = false;
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW; source review=/);
+  assert.ok((await savedReview(f, review)).plan, 'The preview is saved.');
+  stalled.resolve();
+  assert.match(await failed, /\] INCOMPLETE; source review=/);
+  assert.ok((await savedReview(f, review)).plan, 'The earlier run\'s cleanup did not erase it.');
+  assert.match(await f.command('pr-comment', '--show'), /Saved preview of review [a-f0-9]{8}, planned /);
 });
 
 test('a review whose session a running command answers in is not evicted under it', async t => {
@@ -2318,7 +2527,8 @@ test('private sessions are deleted a few at a time, so a host that stalls on del
   const starts = [];
   // The host never confirms a deletion; each one ends at the removal timeout.
   const f = await fixture(t, { directory, removeTimeoutMs: 50, remove: () => { starts.push(performance.now()); return new Promise(() => {}); } });
-  assert.deepEqual(f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID).sort(), [...evicted].sort(), 'Every session is still attempted.');
+  // The pass at load tries the unanswered ones again in the background, so a session may be asked for twice here.
+  assert.deepEqual([...new Set(f.calls.filter(call => call.kind === 'remove').map(call => call.sessionID))].sort(), [...evicted].sort(), 'Every session is still attempted.');
   assert.equal(starts.filter(at => at - starts[0] < 25).length, 8, 'Eight start together; the next ones wait for a timeout.');
 });
 

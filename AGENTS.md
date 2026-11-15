@@ -181,14 +181,20 @@ settings, backups and failure records. Never upload `.local/`.
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
   Choose the sessions to delete the moment the run ends, before any await:
-  from then on a command typed in one is refused. Put every session of the
-  run on record before deleting any (the review's record, with those to delete
-  apart as `closingSessions`, or the run's own record for an unfinished
-  review), so that a process ending during the cleanup forgets none and the
-  next one knows which may be gone. A session OpenCode creates after its stage
-  was cancelled is deleted too. A session leaves the records only when it is
-  gone: what an eviction or an expired record could not delete goes on a
-  record of kept sessions for a later pass.
+  from then on a command typed in one is refused. Put every session on record
+  before deleting it (the review's record, with those to delete apart as
+  `closingSessions`; the run's own record for an unfinished review; a record
+  of its own for a session OpenCode creates after its stage was cancelled),
+  and remove a review's record only after its sessions were dealt with, so
+  that a process ending during a cleanup forgets none and the next one knows
+  which may be gone.
+- A session leaves the records only when it is gone: a confirmed deletion, or
+  OpenCode's `Session.NotFoundError`. What should be gone and is not goes on
+  a retry record, apart from the sessions a run keeps on purpose; it takes no
+  commands, also after a restart, and a background pass tries it again after
+  every review, every unfinished run and at load. Deal with a run's records
+  together, so that neither list replaces the other, and never make a receipt
+  wait for a pass.
 - Never delete a session a command needs: the one it answers in, until its
   last notice is out, and its run's conversation and stage sessions. A session
   that is still there after the cleanup is its review's own again. A deletion

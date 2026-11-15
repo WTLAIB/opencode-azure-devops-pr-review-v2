@@ -168,6 +168,13 @@ export const USED_UP_LIMITS = Object.freeze({
   'provider.model-budget-limit': "OpenCode reports this model's spend limit as reached",
 });
 
+/**
+ * Whether a rejected session call says the session does not exist. OpenCode
+ * 2.2.4 and 2.3.0 reject `session.get` and `session.remove` of such a session
+ * with an error whose `_tag` and `name` are `Session.NotFoundError`.
+ */
+export const isSessionNotFound = error => (error?._tag ?? error?.name) === 'Session.NotFoundError';
+
 /** Throw one readable error naming every missing host method. */
 export function requireMethods(context, paths, purpose) {
   const missing = paths.filter(path => typeof path.split('.').reduce((value, key) => value?.[key], context) !== 'function');

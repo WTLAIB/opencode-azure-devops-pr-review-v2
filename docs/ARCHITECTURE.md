@@ -28,7 +28,7 @@ repository through AZPR's own read-only tools, which use the same client.
 | `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
-| `src/store.mjs` | Persistent reviews (each with the reviewer sessions it still keeps), data cleanup, fallback receipt files and the records of reviewer sessions still to be deleted (those kept from unfinished runs, named for deletion beyond the review limit, and those that could not be deleted); the per-review queue that keeps writes of one record from overlapping. |
+| `src/store.mjs` | Persistent reviews (each with the reviewer sessions it still keeps; a review's record goes only after its sessions were dealt with), data cleanup, fallback receipt files and the session records: the sessions an unfinished run keeps on purpose, due beyond the review limit, and apart from them the sessions that should be gone and could not be deleted, due at every pass; the per-review queue that keeps writes of one record from overlapping. |
 | `src/attribution.mjs` | Deterministic reports, provenance, receipts and ledgers. |
 | `src/diagnostics.mjs` | Optional private diagnostic files (bounded by `debug.keepRuns`) and stage timing. |
 | `src/prompts/` | Shared review rules, role prompts and comment policy. |
@@ -467,8 +467,10 @@ no session is forgotten and none is taken from a command that needs it:
 - They go on record before any is deleted. A saved review's record takes all
   of the run's sessions and names those to delete apart, as
   `closingSessions`; an unfinished review writes its run's record of kept
-  sessions first. A process that ends during the cleanup therefore forgets no
-  session, and the next one knows which may be gone or may still go.
+  sessions first. An evicted review's record, which names its sessions, is
+  removed only after they were dealt with. A process that ends during a
+  cleanup therefore forgets no session, and the next one knows which may be
+  gone or may still go.
 - What OpenCode confirms as deleted leaves the record. A session that is
   still there, because a command needed it or OpenCode refused the deletion,
   is one of the review's own again and takes commands. A deletion OpenCode
@@ -487,13 +489,27 @@ no session is forgotten and none is taken from a command that needs it:
   record of kept sessions, which later runs do not release before its command
   has ended. A save of a review that was evicted is refused instead of
   bringing its record back.
-- A session leaves the records only when it is gone. When an evicted review,
-  an unfinished run whose record is beyond the limit, or a late session (see
-  below) cannot be deleted, because a command needs the session, OpenCode
-  refused or never answered, the session goes on a record of kept sessions,
-  and a later pass tries again.
+- A session leaves the records only when it is gone: OpenCode confirmed its
+  deletion, or answered the deletion or a read of it with
+  `Session.NotFoundError`. Any other failure settles nothing.
+- What should be gone and is not goes on a record of its own
+  (`sessions/…-retry<id>.json`), apart from the sessions a run keeps on
+  purpose: a session of an unfinished run, of an evicted review or of an
+  unfinished run whose record is beyond the limit, or a late session (see
+  below), that a command needed or whose deletion OpenCode refused or never
+  answered. From the moment AZPR sets out to delete such a session it takes
+  no commands, also after a restart.
+- A pass tries these sessions again, and deletes the kept sessions of
+  unfinished runs beyond the limit: after every review, after every
+  unfinished run and at load. It runs in the background, one pass at a time,
+  so no receipt waits for a host that is slow to delete. A run with both
+  kinds of record is dealt with once, so that neither list replaces the
+  other, and its kept record is removed only after what is left of it was
+  recorded. With `deletePrivateSessions: false` the records are left as they
+  are.
 - A cancellation can overtake the host: a session OpenCode creates after its
-  stage gave up is known to no stage, so it is deleted when it arrives.
+  stage gave up is known to no stage, so it is put on record and deleted when
+  it arrives.
 
 One case is not covered: a process that ends while a run is still under way
 has recorded none of that run's sessions yet, so they stay in OpenCode's

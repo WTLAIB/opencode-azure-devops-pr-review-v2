@@ -18,6 +18,8 @@ const RECEIPT_LIMIT = 50;
 const STALE_DATA_MS = 24 * 60 * 60 * 1000;
 const FORMAT = 1;
 const ATTEMPT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+// Marks a record of sessions that should be gone and could not be deleted. Run and review IDs are hexadecimal.
+const RETRY = 'retry';
 
 export function stateRoot(env = process.env) {
   const base = isAbsolute(env.XDG_STATE_HOME ?? '') ? env.XDG_STATE_HOME : join(homedir(), '.local', 'state');
@@ -77,8 +79,12 @@ async function writeAtomic(path, content) {
 }
 
 /**
- * `onRemove(review)` runs after an evicted or removed review's files are
- * deleted (for example to delete its reviewer sessions); its errors are ignored.
+ * `onRemove(review)` runs before an evicted or removed review's files are
+ * deleted, to delete its reviewer sessions: the review's record is what names
+ * them, so it stays until they are dealt with, and a process that ends
+ * meanwhile finds the review again. When it returns false (sessions that are
+ * still there could not be put on record elsewhere) the review stays for a
+ * later attempt; its errors are ignored.
  */
 export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIMIT, now = () => Date.now(), onRemove } = {}) {
   const dirs = { reviews: join(root, 'reviews'), data: join(root, 'data'), receipts: join(root, 'receipts'), sessions: join(root, 'sessions'), attempts: join(root, 'attempts') };
@@ -99,10 +105,27 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
     return reviews.sort((a, b) => String(a.completedAt ?? '').localeCompare(String(b.completedAt ?? '')));
   }
 
+  // One record of sessions per key: written, replaced in its place, or removed by an empty list.
+  async function recordSessions(key, sessionIDs) {
+    const own = (await readdir(dirs.sessions)).filter(name => name.endsWith(`-${key}.json`)).sort();
+    const record = own.at(-1) ?? `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${key}.json`;
+    for (const other of own.slice(0, -1)) await rm(join(dirs.sessions, other), { force: true });
+    if (sessionIDs.length) await writeAtomic(join(dirs.sessions, record), JSON.stringify(sessionIDs));
+    else await rm(join(dirs.sessions, record), { force: true });
+  }
+
+  // A record's name ends with its ID; the ID of a record of sessions still to be deleted starts with RETRY.
+  const idOf = name => name.slice(name.lastIndexOf('-') + 1, -'.json'.length);
+  const isRetry = name => idOf(name).startsWith(RETRY);
+
+  /** Remove a review and its data, after `onRemove`; false when `onRemove` kept it. */
   async function removeReview(review) {
+    let settled = true;
+    try { settled = (await onRemove?.(review)) !== false; } catch { /* Cleanup never fails an eviction. */ }
+    if (!settled) return false;
     await rm(join(dirs.reviews, `${review.id}.json`), { force: true });
     if (review.dataDirectory && inside(dirs.data, review.dataDirectory)) await rm(review.dataDirectory, { recursive: true, force: true });
-    try { await onRemove?.(review); } catch { /* Cleanup never fails an eviction. */ }
+    return true;
   }
 
   return {
@@ -124,9 +147,11 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
      */
     async enforceLimit(inUse = () => false) {
       const reviews = await listReviews();
-      const evicted = reviews.slice(0, Math.max(0, reviews.length - limit)).filter(review => !inUse(review.id));
-      for (const review of evicted) await removeReview(review);
-      return evicted.map(review => review.id);
+      const evicted = [];
+      for (const review of reviews.slice(0, Math.max(0, reviews.length - limit))) {
+        if (!inUse(review.id) && await removeReview(review)) evicted.push(review.id);
+      }
+      return evicted;
     },
     remove: removeReview,
     /** Delete stale unreferenced data and legacy temporary directories. */
@@ -155,51 +180,56 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
       return removed;
     },
     /**
-     * Remember reviewer sessions that are still to be deleted: those a run
-     * that left no saved review keeps, and those that could not be deleted
-     * when their record went. A run (or review) has one record: a later call
-     * replaces its earlier one and keeps its place in the order, and an empty
-     * list removes it.
+     * Remember the reviewer sessions a run that left no saved review keeps
+     * on purpose, such as the one holding its draft; the newest `limit` runs
+     * keep theirs. A run has one record: a later call replaces its earlier
+     * one and keeps its place in the order, and an empty list removes it.
      */
-    async keepSessions(runId, sessionIDs) {
-      const own = (await readdir(dirs.sessions)).filter(name => name.endsWith(`-${runId}.json`)).sort();
-      const record = own.at(-1) ?? `${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${runId}.json`;
-      for (const other of own.slice(0, -1)) await rm(join(dirs.sessions, other), { force: true });
-      if (sessionIDs.length) await writeAtomic(join(dirs.sessions, record), JSON.stringify(sessionIDs));
-      else await rm(join(dirs.sessions, record), { force: true });
-    },
+    keepSessions: (runId, sessionIDs) => recordSessions(runId, sessionIDs),
     /**
-     * The records of kept sessions beyond the newest `limit`, oldest first, as
-     * { runId, sessionIDs }. `inUse(runId)` names runs whose command has not
-     * ended, which are left out whatever their age. The records stay: a
-     * record goes only with its sessions, so the caller deletes the sessions
-     * and then replaces the record with what could not be deleted
+     * Remember sessions that should be gone and could not be deleted, under
+     * the ID of the run or review they belonged to. They are due at every
+     * pass (`expiredSessions`) and do not count against the limit. One record
+     * per ID, replaced by a later call and removed by an empty list.
+     */
+    retrySessions: (id, sessionIDs) => recordSessions(`${RETRY}${id}`, sessionIDs),
+    /**
+     * The sessions that are due to go, one entry per run or review, as
+     * { runId, sessionIDs, kept }: those that could not be deleted earlier,
+     * due at every pass, and the kept sessions of runs beyond the newest
+     * `limit` (`kept`), oldest first. A run with both has one entry, so that
+     * what is left of it is recorded once. `inUse(runId)` names runs whose
+     * command has not ended; their kept sessions are left out whatever their
+     * age. The records stay: the caller deletes the sessions, records what
+     * is left (`retrySessions`) and only then removes a kept record
      * (`keepSessions`). An unreadable record names nothing and is removed.
      */
     async expiredSessions(inUse = () => false) {
       const files = (await readdir(dirs.sessions)).filter(name => name.endsWith('.json')).sort();
-      const expired = [];
-      for (const old of files.slice(0, Math.max(0, files.length - limit))) {
-        // The record's name ends with its run's ID.
-        const runId = old.slice(old.lastIndexOf('-') + 1, -'.json'.length);
-        if (inUse(runId)) continue;
+      const kept = files.filter(name => !isRetry(name)), due = new Map();
+      for (const name of [...files.filter(isRetry), ...kept.slice(0, Math.max(0, kept.length - limit))]) {
+        const retry = isRetry(name), runId = retry ? idOf(name).slice(RETRY.length) : idOf(name);
+        if (!retry && inUse(runId)) continue;
         let ids;
-        try { ids = JSON.parse(await readFile(join(dirs.sessions, old), 'utf8')); } catch { ids = null; }
-        if (Array.isArray(ids)) expired.push({ runId, sessionIDs: ids.filter(id => typeof id === 'string') });
-        else await rm(join(dirs.sessions, old), { force: true });
+        try { ids = JSON.parse(await readFile(join(dirs.sessions, name), 'utf8')); } catch { ids = null; }
+        if (!Array.isArray(ids)) { await rm(join(dirs.sessions, name), { force: true }); continue; }
+        const entry = due.get(runId) ?? { runId, sessionIDs: [], kept: false };
+        for (const id of ids) if (typeof id === 'string' && !entry.sessionIDs.includes(id)) entry.sessionIDs.push(id);
+        if (!retry) entry.kept = true;
+        due.set(runId, entry);
       }
-      return expired;
+      return [...due.values()];
     },
-    /** Every session the records of unfinished runs name. */
-    async keptSessions() {
-      const sessionIDs = [];
+    /** Every session the records name, as { kept, due }: kept on purpose by an unfinished run, and still to be deleted. */
+    async recordedSessions() {
+      const kept = [], due = [];
       for (const name of (await readdir(dirs.sessions).catch(() => [])).filter(file => file.endsWith('.json'))) {
         try {
           const ids = JSON.parse(await readFile(join(dirs.sessions, name), 'utf8'));
-          if (Array.isArray(ids)) sessionIDs.push(...ids.filter(id => typeof id === 'string'));
+          if (Array.isArray(ids)) (isRetry(name) ? due : kept).push(...ids.filter(id => typeof id === 'string'));
         } catch { /* An unreadable record names nothing. */ }
       }
-      return sessionIDs;
+      return { kept, due };
     },
     /**
      * Thread-creation attempts of one PR, keyed by comment marker and shared by
