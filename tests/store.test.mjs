@@ -93,6 +93,16 @@ test('a run has one record of kept sessions: a later list replaces it and an emp
   assert.deepEqual(await records(), [['ses_5']]);
 });
 
+test('the records of unfinished runs name every session they keep', async t => {
+  const directory = await root(t);
+  const store = await createReviewStore({ root: directory });
+  assert.deepEqual(await store.keptSessions(), []);
+  await store.keepSessions('run00001', ['ses_1', 'ses_2']);
+  await store.keepSessions('run00002', ['ses_3']);
+  await writeFile(join(store.dirs.sessions, 'damaged.json'), '{not json');
+  assert.deepEqual((await store.keptSessions()).sort(), ['ses_1', 'ses_2', 'ses_3'], 'An unreadable record names nothing.');
+});
+
 test('the record of a run whose command has not ended is not released, whatever its age', async t => {
   const directory = await root(t);
   let clock = Date.parse('2026-01-01T00:00:00Z');

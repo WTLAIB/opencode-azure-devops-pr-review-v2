@@ -180,16 +180,19 @@ settings, backups and failure records. Never upload `.local/`.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
-  Put every session of the run on record (the review's, or the run's own for
-  an unfinished review) before deleting any, and keep on record a session that
-  could not be deleted: what is kept goes with its review. A session OpenCode
-  creates after its stage was cancelled is deleted too.
+  Choose the sessions to delete the moment the run ends, before any await:
+  from then on a command typed in one is refused. Put every session of the
+  run on record before deleting any (the review's record, with those to delete
+  apart as `closingSessions`, or the run's own record for an unfinished
+  review), so that a process ending during the cleanup forgets none and the
+  next one knows which may be gone. A session OpenCode creates after its stage
+  was cancelled is deleted too.
 - Never delete a session a command needs: the one it answers in, until its
-  last notice is out, and its run's conversation and stage sessions. Refuse a
-  command typed in a session that is being deleted. A deletion OpenCode never
-  answered may still be carried out: such a session stays closed to commands
-  for good, is no session of its review any more and is saved apart with it
-  (`closingSessions`), so that a restarted plugin knows too.
+  last notice is out, and its run's conversation and stage sessions. A session
+  that is still there after the cleanup is its review's own again. A deletion
+  OpenCode never answered may still be carried out: that session stays among
+  `closingSessions` for good, closed to commands also after a restart, and
+  goes with its review.
 - Never evict a review, or an unfinished run's record of kept sessions, before
   the command working on it has ended: its run, a comment run's last steps,
   and after a review its cleanup, its receipt and the start of the comment

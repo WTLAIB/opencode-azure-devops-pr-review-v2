@@ -181,6 +181,17 @@ export async function createReviewStore({ root = stateRoot(), limit = REVIEW_LIM
       }
       return released;
     },
+    /** Every session the records of unfinished runs name. */
+    async keptSessions() {
+      const sessionIDs = [];
+      for (const name of (await readdir(dirs.sessions).catch(() => [])).filter(file => file.endsWith('.json'))) {
+        try {
+          const ids = JSON.parse(await readFile(join(dirs.sessions, name), 'utf8'));
+          if (Array.isArray(ids)) sessionIDs.push(...ids.filter(id => typeof id === 'string'));
+        } catch { /* An unreadable record names nothing. */ }
+      }
+      return sessionIDs;
+    },
     /**
      * Thread-creation attempts of one PR, keyed by comment marker and shared by
      * every review: an attempt is recorded before its request is sent and its

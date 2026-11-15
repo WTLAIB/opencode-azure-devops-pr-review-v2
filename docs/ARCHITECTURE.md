@@ -461,23 +461,23 @@ deletes its sessions except the one that holds the report or draft; see
 [retention](../README.md#retention-and-privacy). The cleanup is ordered so that
 no session is forgotten and none is taken from a command that needs it:
 
-- Every session of the run is on record before any is deleted: on the saved
-  review's record, or for an unfinished review on the run's own record of kept
-  sessions. A process that ends during the cleanup therefore still deletes
-  them later. A session that could not be deleted stays on that record.
-- A session a command needs is left alone: the session it answers in, from
-  the moment it is typed until its last notice is out, and while its run is
-  active the run's conversation and its stages' sessions. A command that
-  started in one of a review's sessions just before the cleanup keeps that
-  session, which then goes with the review.
-- From the moment a session is to be deleted, a command typed in it is
-  refused, since its answer would have nowhere to go. A session that is still
-  there afterwards (a command needed it, or OpenCode refused the deletion)
-  takes commands again. A deletion that OpenCode had not answered when AZPR
-  stopped waiting may still be carried out, so that session stays closed for
-  good: it is no session of its review any more, and the review's record
-  names it apart (`closingSessions`), so that a restarted plugin refuses
-  commands there too and deletes it with the review.
+- The sessions to delete are chosen the moment the run ends, before anything
+  is awaited. From then on a command typed in one of them is refused, since
+  its answer would have nowhere to go.
+- They go on record before any is deleted. A saved review's record takes all
+  of the run's sessions and names those to delete apart, as
+  `closingSessions`; an unfinished review writes its run's record of kept
+  sessions first. A process that ends during the cleanup therefore forgets no
+  session, and the next one knows which may be gone or may still go.
+- What OpenCode confirms as deleted leaves the record. A session that is
+  still there, because a command needed it or OpenCode refused the deletion,
+  is one of the review's own again and takes commands. A deletion OpenCode
+  had not answered when AZPR stopped waiting may still be carried out, so
+  that session stays among `closingSessions` for good: commands are refused
+  there, also by a restarted plugin, and it is deleted with the review.
+- A session a command needs is left alone: the one it answers in, from the
+  moment it is typed until its last notice is out, and while its run is active
+  the run's conversation and its stages' sessions.
 - A review is not evicted before the command that works on it has ended: its
   run, a comment run's last steps, and after a review the cleanup of its
   sessions, the delivery of its receipt and the start of the comment step it
@@ -490,9 +490,9 @@ no session is forgotten and none is taken from a command that needs it:
 - A cancellation can overtake the host: a session OpenCode creates after its
   stage gave up is known to no stage, so it is deleted when it arrives.
 
-A new review cannot be started from one of a saved review's own sessions,
-also after a restart, when the process no longer knows which sessions it
-created: the saved review names them.
+A new review cannot be started from a session AZPR created, also after a
+restart, when the process no longer knows which sessions it created: the
+saved reviews and the records of unfinished runs name them.
 
 Hooks enforce the grant:
 
