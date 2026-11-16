@@ -46,10 +46,15 @@ AZPR opens the PAT file without following symbolic links and refuses it unless
 it is a regular file owned by the OpenCode user with no group or other access,
 and it reads the file at start and before each command, so a replaced PAT
 needs a restart of the OpenCode service. The installer and `/pr-setup` create
-`settings.json` with mode `600`; source replacement preserves it, and native
-package updates do not write to it. Keep it outside shared profiles and Git,
-and restart the OpenCode service (`opencode service restart`) after changing
-it. A file only its owner can read protects the
+`settings.json` with mode `600`, and source replacement preserves it. AZPR
+itself writes to the file in two cases only: `/pr-setup`, and the first time
+OpenCode loads a version that brings a setting the file leaves out, which is
+then added at its default (the file is replaced atomically, with mode `600`).
+A settings file that configuration management owns can stay untouched: keep
+it complete (the settings example names every setting), or make it a symbolic
+link, which AZPR reads and never replaces; `/pr-check` then names the
+settings it leaves out. Keep the file outside shared profiles and Git, and
+restart the OpenCode service (`opencode service restart`) after changing it. A file only its owner can read protects the
 PAT from other accounts, not from programs that run as the same user (an
 agent's shell commands, for example), so keep the PAT's scopes minimal and its
 lifetime short, and keep it out of environment variables that child processes
@@ -154,11 +159,12 @@ on, or when every finding is already discussed on the PR. `/pr-check` lists
 the `afterReview` setting of each mode and who posts. An automatic preview
 still uses a model.
 
-The runtime posts the saved preview, rechecks that the PR is active and its
-source commit is unchanged, and skips existing comment markers. If no preview
-is saved, `--publish` plans and publishes in the same command; run the preview
-first when you want to inspect the text. Publication uses the PAT owner's Azure
-identity. Models themselves have no Azure write tool. Repeating publication
+The runtime posts the saved preview, rechecks that the PR's source commit is
+unchanged, and skips existing comment markers. A completed or abandoned PR
+takes comments like an active one; the receipt names that status. If no
+preview is saved, `--publish` plans and publishes in the same command; run the
+preview first when you want to inspect the text. Publication uses the PAT
+owner's Azure identity. Models themselves have no Azure write tool. Repeating publication
 recovers partial results; avoid publishing the same PR concurrently from
 different OpenCode processes. See [commenting](COMMENTING.md).
 
@@ -192,10 +198,11 @@ or published Azure comments.
 
 The [terminal panel](../README.md#terminal-panel) runs in OpenCode's terminal
 UI. It reads AZPR's notices and the report queued to a review session from the
-OpenCode server that terminal UI is connected to, keeps what it read in memory
-only, and stores one preference (whether it opens by itself) in the terminal
-UI's own plugin storage. It sends nothing to a model, to Azure DevOps or
-anywhere else, and reads neither AZPR's settings nor the PAT.
+OpenCode server that terminal UI is connected to, and keeps what it read in
+memory only; it stores nothing. It sends nothing to a model, to Azure DevOps
+or anywhere else, and reads neither AZPR's settings file nor the PAT: the one
+setting meant for it, `terminalPanel`, reaches it as metadata of AZPR's
+notices.
 
 Diagnostics are off by default (`debug.enabled: false`). When enabled, they
 can include source, PR details, prompts, answers and secrets echoed in them.

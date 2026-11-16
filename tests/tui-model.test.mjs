@@ -80,6 +80,12 @@ test('a run that starts and a report or preview that arrives open the panel; pro
   assert.equal(opensPanel('[AZPR] Reviews saved for this conversation (2); no model or Azure DevOps request was made.'), false);
   assert.equal(opensPanel('A message that quotes <azpr_report_data>\nx\n</azpr_report_data>'), false, 'Only AZPR\'s own notices count.');
   assert.equal(opensPanel(undefined), false);
+  // terminalPanel: manual reaches the panel in the metadata of the runtime's notices: none of them opens it then.
+  const manual = { azpr: { panel: 'manual' } };
+  for (const text of [started(RUN, 'pr-review'), reviewReceipt(), previewReceipt('## PR Review Summary')]) {
+    assert.equal(opensPanel(text, manual), false);
+    for (const other of [undefined, null, {}, { azpr: {} }, { azpr: { panel: 'auto' } }, { azpr: 'manual' }, { panel: 'manual' }]) assert.equal(opensPanel(text, other), true, JSON.stringify(other));
+  }
 });
 
 test('table cells written for Azure DevOps are made readable, and AZPR\'s comment markers are left out', () => {

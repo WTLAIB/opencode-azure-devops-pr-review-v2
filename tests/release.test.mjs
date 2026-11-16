@@ -37,6 +37,10 @@ test('the terminal part is shipped compiled and binds only what OpenCode provide
   for (const name of ['For', 'Show']) assert.ok(solid.includes(name), `${name} is imported from solid-js`);
   assert.doesNotMatch(read('src/tui-model.mjs'), /^import\b|\bimport\(/m, 'What the panel shows is worked out without any import.');
   assert.doesNotMatch(compiled + read('src/tui-model.mjs'), /settings\.json|node:fs|process\.env/, 'The terminal part reads no file and no environment.');
+  // One command of its own, to show or hide the panel. Whether the panel opens by itself is a setting of AZPR
+  // (terminalPanel), which reaches it with the notices: it keeps no preference of its own.
+  assert.deepEqual([...compiled.matchAll(/slash:\s*\{\s*name:\s*"([^"]+)"/g)].map(match => match[1]), ['pr-panel']);
+  assert.doesNotMatch(compiled, /\.storage\b/, 'The terminal part stores nothing.');
 });
 
 test('release notes and install instructions name the package version', () => {

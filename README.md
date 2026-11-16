@@ -466,7 +466,16 @@ AZPR's commands disappear until the package is available and the service
 restarts.
 
 External settings, the PAT file and review records stay in place; a working
-configuration needs no new `/pr-setup`. `opencode plugin list` should then
+configuration needs no new `/pr-setup`. Settings that a new version brings
+are written into your settings file, at their defaults, when OpenCode first
+loads that version: AZPR behaves as it did, and each new setting is in the
+file for you to change. `/pr-check` then lists what was added. Your values
+and their order stay, and the file is written with two-space indentation and
+readable by its owner only (mode 600). A settings file that is a symbolic
+link, or in a directory other users can write to, is left as it is, and
+`/pr-check` names the settings it leaves out. To go back to an earlier
+version afterwards, remove the settings that version does not know: it names
+the first one (`Unknown setting settings.terminalPanel`) instead of starting. `opencode plugin list` should then
 show a single `azpr` row with the new version (from 0.3.1, `/pr-check` names
 it too); if it still shows the previous one, run `opencode service restart`.
 Exact versions stay pinned, so `opencode plugin update` leaves them unchanged.
@@ -560,7 +569,9 @@ Keep `LICENSE` with copied or redistributed packages.
 
 Run `/pr-setup` to see the active settings path. Native packages use the
 external configuration described above; source installations retain their
-installed `plugins/azpr-v2/settings.json`. Edit that file and restart the
+installed `plugins/azpr-v2/settings.json`. The file names every setting, each
+at its default until you change it (see
+[all settings](#all-settings-and-defaults)). Edit that file and restart the
 OpenCode service (`opencode service restart`, or your own `opencode serve`
 process). A changed file blocks new commands until the restart; running
 commands keep the settings they started with.
@@ -687,6 +698,7 @@ copies that different reviewers get can each produce a finding.
 | `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode. `inherit`: host permissions decide. |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
 | `deletePrivateSessions` | `true`: when a command ends, AZPR deletes its private reviewer sessions except the one that holds the review's report (see [retention](#retention-and-privacy)); `false` keeps every session. |
+| `terminalPanel` | `auto`: the [terminal panel](#terminal-panel) opens by itself when a review or comment run starts and when a report or preview arrives.<br>`manual`: it opens only with `/pr-panel`. |
 | `afterReview.quick` / `.review` / `.deep` | What follows a COMPLETE review of that mode; `preview` each.<br>`preview`: plan a comment preview (a model runs; nothing is posted).<br>`none`: nothing follows; run `/pr-comment` yourself.<br>`publish`: plan the comments and post them as the PAT owner; a comment that a safeguard holds back waits for a person.<br>A flag after the PR URL (`--preview`, `--publish`, `--no-comment`) overrides it for one run. See [automatic comments](#automatic-comments). |
 | `azure.organization` | Required. The `<org>` of `https://dev.azure.com/<org>`; PR URLs of other organizations are refused. |
 | `azure.pat` | A personal access token for that organization with **Code (Read)** and **Pull Request Threads (Read & write)**, or `""` when `azure.patFile` is set. Sent only to `https://dev.azure.com/<org>` and never logged. |
@@ -813,12 +825,11 @@ publication follows (see [automatic comments](#automatic-comments)).
 
 A failed final version recheck adds a warning; it does not by itself prevent
 COMPLETE in any review mode. Read the receipt warnings. Publication separately
-rechecks that the PR is active and its source commit is unchanged before
-posting.
+rechecks that the PR's source commit is unchanged before posting.
 
-In OpenCode's terminal UI, `/pr-panel`, `/pr-panel-auto` and `/pr-sessions`
-belong to the [terminal panel](#terminal-panel); they run no model and make no
-Azure DevOps request.
+In OpenCode's terminal UI, `/pr-panel` shows or hides the
+[terminal panel](#terminal-panel); it runs no model and makes no Azure DevOps
+request.
 
 ## Terminal panel
 
@@ -831,20 +842,26 @@ can open one.
 - **It opens by itself** when a review or a comment run starts and when a
   report or preview arrives, in the conversation that is on screen. The
   keyboard stays with the prompt, so the next command can be typed while the
-  report is in view. `/pr-panel-auto` turns this off, and on again; the choice
-  is kept across restarts.
+  report is in view. To have it open only when you ask, set `terminalPanel`
+  in the [settings](#all-settings-and-defaults):
+
+  ```json
+  "terminalPanel": "manual"
+  ```
+
 - **Sessions.** While a review runs, each of its sessions is a row with its
   state. Click a row to open that session; OpenCode opens it in a tab, and the
   panel is there again when you return to the conversation. After the review
   the rows are the sessions that still exist (see
   [retention](#retention-and-privacy)), first the one that holds the report.
-  `/pr-sessions` offers the same sessions in a list for the keyboard.
+  OpenCode's own session list has them too.
 - **Report or preview.** Below the sessions: the report of the review, then
   the comment preview once one is planned, and the saved preview again after
   `/pr-comment --show`. A check (`/pr-check`) shows its table there too.
-- **Keys.** `/pr-panel` shows and hides the panel. A click inside it gives it
-  the keyboard: the arrow keys or `j` and `k`, Page Up and Page Down, Home and
-  End scroll, and Escape or `q` closes it.
+- **Keys.** `/pr-panel` shows and hides the panel; it is the panel's only
+  command. A click inside it gives it the keyboard: the arrow keys or `j` and
+  `k`, Page Up and Page Down, Home and End scroll, and Escape or `q` closes
+  it.
 - **A narrow terminal** (fewer than 108 columns) has no room for two panes,
   and OpenCode would show the panel in place of the conversation. There the
   panel does not open by itself; it says that something is ready, and
@@ -853,8 +870,9 @@ can open one.
 The panel only reads what AZPR already put into your conversation and into the
 session that holds a report. It sends no prompt, starts no review and posts
 nothing; `/pr-comment --publish` is still a command you type. It comes with
-the package and needs no setup or setting. Other OpenCode clients, such as the
-desktop app, do not load it and show AZPR's notices as before.
+the package and needs no setup; `terminalPanel` is its one setting. Other
+OpenCode clients, such as the desktop app, do not load it and show AZPR's
+notices as before.
 
 ## Comments
 
@@ -970,15 +988,18 @@ When every finding is already discussed on the PR, typically by AZPR's own
 comment from an earlier run, there is nothing new to post: the receipt says
 `NOTHING_TO_POST` and the plan is saved (the summary's marker follows the
 inline comments, so re-reviewing an unchanged PR would otherwise add a summary
-each time). Publication itself still rechecks that the PR is active and
+each time). Publication itself still rechecks that the PR's source commit is
 unchanged. A command you type, such as `/pr-comment --publish`, posts
 every item of the saved preview, held ones included.
 
 ### Publication
 
-Publication is runtime code: it refuses an inactive PR or a changed source
-commit, lists every existing thread, skips items whose hidden marker already
-exists, creates the rest with the exact saved text, and reads the markers back.
+Publication is runtime code: it refuses a changed source commit, lists every
+existing thread, skips items whose hidden marker already exists, creates the
+rest with the exact saved text, and reads the markers back. The PR's status
+stops nothing: a PR that was completed or abandoned, such as one merged before
+its review was commented on, is reviewed and takes comments like an active
+one, and the receipt names that status.
 Markers are stable fingerprints of PR, file and anchored lines, so a later
 review of unchanged code does not post duplicates. A failed or uncertain item can
 simply be published again; a comment someone deleted on the PR is reported as

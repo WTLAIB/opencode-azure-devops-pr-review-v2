@@ -303,7 +303,9 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
 
 /**
  * Publish a saved plan with deterministic Azure DevOps calls.
- * - Refuses if the PR is no longer active or its source commit changed.
+ * - Refuses if the PR's source commit changed. The PR's status stops nothing: a
+ *   completed or abandoned PR takes comments like an active one, and the
+ *   result names such a status (`prStatus`) for the receipt.
  * - Skips items whose marker already exists on the PR (idempotent re-runs).
  * - Coordinates through `attempts` (per PR, shared by every review; not a
  *   lock between processes): an attempt is saved before its request and
@@ -323,7 +325,6 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
   const ledger = review.publication ??= new Map();
   const current = await azure.versions(run, review.snapshot);
-  if (current.status !== 'active') return { status: 'INCOMPLETE', reason: `The PR is ${current.status}; nothing was posted.` };
   if (current.head !== review.snapshot.head) {
     return { status: 'STALE', reason: `The PR source commit changed after the review (reviewed ${review.snapshot.head.slice(0, 12)}, current ${current.head.slice(0, 12)}). Run a new review before commenting.` };
   }
@@ -413,6 +414,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
   const planned = new Set(items.map(item => item.marker));
-  return { status, readBack, ...(reason ? { reason } : {}), counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
+  return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
+    counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
     ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };
 }

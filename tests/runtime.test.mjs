@@ -829,6 +829,40 @@ test('direct --publish plans and posts in one command; a failed write is retried
   assert.equal(f.azure.state.threads.length, 3);
 });
 
+test('a PR that is completed or abandoned is checked, reviewed and commented on like an active one; its status is named', async t => {
+  // Merged before it was reviewed: the review and its comments still belong on the PR.
+  const f = await fixture(t);
+  f.azure.state.status = 'completed';
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/, 'A status is no reason to call the PR unreadable.');
+  assert.match(check, /\| PR metadata \| WARNING \| PR #123 is completed; head bbbbbbbbbbbb, base aaaaaaaaaaaa\. Reviews and comments work on it as on an active PR \|/);
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  assert.equal(f.azure.state.threads.length, 0);
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, /\] POSTED/);
+  assert.match(posted, /\nPublication \(VERIFIED=3\); the PR is completed:\n/, 'The receipt says which kind of PR took the comments.');
+  assert.equal(f.azure.state.threads.length, 3);
+  // Abandoned after the review: the same.
+  const g = await fixture(t);
+  await g.command();
+  g.azure.state.status = 'abandoned';
+  const abandoned = await g.command('pr-comment', '--publish');
+  assert.match(abandoned, /\] POSTED[\s\S]*\nPublication \(VERIFIED=3\); the PR is abandoned:\n/);
+  // The automatic step follows a review of such a PR as it follows any other.
+  const h = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
+  h.azure.state.status = 'completed';
+  const step = await commentStep(h, await h.command());
+  assert.match(step.receipt, /\] POSTED; source review=[a-f0-9]{8}\n[\s\S]*Publication \(VERIFIED=3\); the PR is completed:\n/);
+  // An active PR: the check row and the publication line are what they were.
+  const i = await fixture(t);
+  assert.match(await i.command('pr-check'), /\| PR metadata \| ok \| PR #123 is active; head bbbbbbbbbbbb, base aaaaaaaaaaaa \|/);
+  await i.command();
+  assert.match(await i.command('pr-comment', '--publish'), /\nPublication \(VERIFIED=3\):\n/);
+});
+
 test('comment commands only see reviews from their own conversation; report sessions route to it', async t => {
   const f = await fixture(t);
   const review = reviewId(await f.command('pr-review', f.azure.prUrl(), 'origin-a'));
@@ -3202,6 +3236,30 @@ test('flags belong to the review commands: /pr-check refuses them and unknown op
   await assert.rejects(g.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: '' } }), /Usage: \/pr-review <Azure PR URL> \[--preview\|--publish\|--no-comment\] \[your context\]/);
   assert.equal(g.prompts().length, 0);
   assert.equal(g.azure.state.calls.length, calls, 'A refused command makes no Azure DevOps call.');
+});
+
+test('terminalPanel: manual travels with every notice, for the terminal panel; the default sends notices as before', async t => {
+  // The panel runs in the TUI's process and reads no settings file: the runtime marks its notices instead.
+  const f = await fixture(t, { settings: s => { s.terminalPanel = 'manual'; } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  await f.command('pr-comment', '');
+  await f.command('pr-comment', '--show');
+  await f.command('pr-check');
+  const kinds = ['STARTED /pr-review', 'PROGRESS', 'COMPLETE', '# AZPR', 'STARTED /pr-comment', 'PREVIEW', '[AZPR] Saved preview', 'READY'];
+  for (const kind of kinds) assert.ok(f.notices.some(n => n.text.includes(kind)), kind);
+  assert.ok(f.notices.length >= kinds.length);
+  for (const n of f.notices) assert.deepEqual(n.metadata, { azpr: { panel: 'manual' } }, n.text.slice(0, 60));
+  // Nothing of it opens the panel; the same texts without the mark do.
+  for (const n of f.notices) assert.equal(opensPanel(n.text, n.metadata), false);
+  assert.equal(f.notices.filter(n => opensPanel(n.text)).length, 6, 'Two STARTED notices, the receipt of the review, the preview, the saved preview shown again and the table of checks.');
+  // The default: no metadata at all, so every request to the host is the one earlier versions made.
+  const g = await fixture(t);
+  await g.command();
+  await g.command('pr-comment', '');
+  assert.ok(g.notices.length >= 5 && g.notices.every(n => !Object.hasOwn(n, 'metadata')));
+  assert.deepEqual(Object.keys(g.notices[0]).sort(), ['delivery', 'description', 'resume', 'sessionID', 'text']);
+  assert.equal(g.notices.filter(n => opensPanel(n.text, n.metadata)).length, 4);
 });
 
 // The terminal panel (src/tui-model.mjs) reads these notices as text: their form is part of what a run tells the user.

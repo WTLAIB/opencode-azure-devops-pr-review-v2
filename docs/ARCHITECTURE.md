@@ -13,10 +13,10 @@ repository through AZPR's own read-only tools, which use the same client.
 | File | Responsibility |
 | --- | --- |
 | `src/plugin.js` | V2 plugin definition and setup entry. |
-| `src/setup.mjs` | Native package bootstrap, external settings selection and the deterministic `/pr-setup` command. |
+| `src/setup.mjs` | Native package bootstrap, external settings selection, the completion of the settings file at load and the deterministic `/pr-setup` command. |
 | `src/runtime.mjs` | Registration, hooks, grants, workflows, stage attempts (repair turns and retries), notices, cancellation and lifecycle. |
 | `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
-| `src/config.mjs` | Settings validation, roles, native tool rules, shared prompt policies, prompt variants per mode and agent compilation. |
+| `src/config.mjs` | Settings validation and defaults (`SETTING_DEFAULTS`), roles, native tool rules, shared prompt policies, prompt variants per mode and agent compilation. |
 | `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations and retried steps, failure classification, interrupt and synthetic notices. |
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
@@ -53,6 +53,26 @@ unusable, the review commands answer `SETUP REQUIRED` and name the problem
 found at load (no file yet, an unreadable file's error code, invalid JSON, a
 validation error or an unusable PAT file), never a setting value; an unknown
 key is named only when it looks like a setting name.
+
+**Settings a version brings.** Every setting with a default is in
+`SETTING_DEFAULTS` (`config.mjs`), which the settings example and the schema
+match (a test compares them). When OpenCode loads AZPR and the settings file
+is valid and enabled, `setup.mjs` writes the settings the file leaves out
+into it, at those defaults, before the runtime reads the file for good.
+Validation assumes the same defaults for a missing setting, so the completed
+file behaves as the file did; values, their order and unrelated names stay.
+The file is replaced as `/pr-setup` replaces it: a temporary owner-only file
+renamed over it, under the setup lock, only when it is a regular file of the
+user's own, without hard links, in a directory no other user can write to.
+A file that cannot be completed is used as it is and never fails the load;
+`/pr-check` then names what it leaves out and why, and otherwise lists what
+was added. AZPR can be loaded more than once at the same time (several
+OpenCode processes, or several project instances), and the runtime later
+compares the file with the text it read: a load that finds another one
+writing therefore waits for it and reads the result, so none keeps a text
+the file no longer has. A source installation's settings
+are completed by the installer as before (`scripts/merge-settings.py`), from
+the same example.
 
 `ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
 `/pr-quick`, `/pr-stop` and `/pr-comment`. A command that starts a workflow (a
@@ -381,8 +401,9 @@ each finding (the whole file when small) and a digest of every live thread, both
 read deterministically; findings are inline. A page usually
 finishes in one model request without tools.
 
-Publication (runtime) rechecks that the PR is active and the head unchanged,
-lists every thread, skips items whose marker exists, creates the rest with
+Publication (runtime) rechecks that the head is unchanged (the PR's status
+stops nothing; one that is not active is named in the receipt), lists every
+thread, skips items whose marker exists, creates the rest with
 `POST …/threads` (right-side `threadContext` for inline items; Azure DevOps adds
 the iteration context itself), records each result immediately, and reads all
 markers back (`VERIFIED`). Creation results are `POSTED`, `ALREADY_PRESENT`,
@@ -646,9 +667,14 @@ decided several things in it:
   The panel asks the server for the sessions once per conversation and takes
   those whose `metadata.azpr.conversation` matches.
 
-The automatic opening can be turned off (`/pr-panel-auto`). The choice is in
-the TUI's own plugin storage, not in AZPR's settings, which the panel cannot
-and must not read.
+`/pr-panel` is the panel's only command. Whether it opens by itself is the
+setting `terminalPanel` (`auto` or `manual`). The panel runs in the TUI's
+process and cannot and must not read AZPR's settings file, so the runtime
+tells it: with `manual`, every notice AZPR queues carries
+`metadata.azpr.panel: "manual"` (`session.synthetic` stores metadata with a
+notice and never sends it to a model), and a notice so marked opens nothing.
+With the default no metadata is sent, so those requests are the ones earlier
+versions made. The panel keeps no preference of its own.
 
 **Why a compiled file.** OpenCode compiles a plugin's JSX when it loads it,
 but OpenCode 2.3.0 (OpenTUI 0.8.4) skips every file under `node_modules`,

@@ -40,9 +40,10 @@ terminal UI, not by the service, and only when the terminal UI starts.
 
 - **After installing or upgrading**, quit the terminal UI and start it again.
   `/pr-panel` then appears among the slash commands.
-- **It does not open by itself.** `/pr-panel-auto` may have turned that off;
-  run it again and read what it says. In a terminal with fewer than 108
-  columns the panel only announces itself; `/pr-panel` shows it. It also
+- **It does not open by itself.** The setting `terminalPanel` may be
+  `manual`; set it to `auto` and restart the OpenCode service. In a terminal
+  with fewer than 108 columns the panel only announces itself; `/pr-panel`
+  shows it. It also
   stays closed while a dialog or another plugin's panel is open, and in a
   conversation that is not on screen when the notice arrives.
 - **`/pr-panel` is missing.** Look for `plugin operation failed` in OpenCode's

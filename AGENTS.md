@@ -120,6 +120,16 @@ settings, backups and failure records. Never upload `.local/`.
   mentioned, delegated, compacted or used for auxiliary requests.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
   grant, not files or catalogs.
+- Before that read, loading AZPR writes the settings a valid file leaves out
+  into it, at the defaults validation assumes anyway (`SETTING_DEFAULTS` in
+  `config.mjs`; the settings example and schema must match it), so a new
+  setting shows where its user edits the others. Give every new setting a
+  default there. The completion never changes how a file behaves, never
+  touches a file that is invalid, disabled, a symbolic link or not safely
+  replaceable, replaces the file as `/pr-setup` does (atomic, owner-only,
+  under the setup lock) and never fails a load: a file it cannot complete is
+  used as it is, and `/pr-check` says what it leaves out. Processes that load
+  AZPR together wait for the one that writes, so each reads the finished file.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,
@@ -143,8 +153,11 @@ settings, backups and failure records. Never upload `.local/`.
   for that save.
 
 **Publication is idempotent.**
-- Recheck the PR (active, unchanged head) before writing; skip existing markers;
-  save each result immediately; read markers back. Re-running is always safe.
+- Recheck the PR's head before writing; skip existing markers; save each
+  result immediately; read markers back. Re-running is always safe. The PR's
+  status stops nothing: a completed or abandoned PR (merged before its review
+  was commented on, say) is checked, reviewed and commented on like an active
+  one, and the check and the publication receipt name that status.
 - Automatic publication (`afterReview: publish` or `--publish` after the PR
   URL) follows only a COMPLETE review with findings to comment on that nothing
   stopped. It posts item by item: an item whose text has an `@<…>` mention,
@@ -218,8 +231,12 @@ settings, backups and failure records. Never upload `.local/`.
   compiled to `src/tui.js`) shows what the runtime already produced: AZPR's
   notices in the conversation, the report queued to a review session and the
   sessions' `metadata.azpr`. It sends no prompt, runs no command of the server
-  part, makes no Azure DevOps request and reads no settings file; a preference
-  of its own goes into the TUI's plugin storage.
+  part, makes no Azure DevOps request, reads no settings file and keeps no
+  preference of its own. The one setting meant for it (`terminalPanel`)
+  reaches it in the metadata of the runtime's notices, sent only when it is
+  not the default, so default requests stay as they were.
+- `/pr-panel` is its only command. Add another only for what neither a
+  setting nor OpenCode's own UI (its session list, say) already does.
 - The text of notices and receipts is therefore an interface. Change it
   together with `tui-model.mjs`, whose tests run against `renderReceipt` and
   against the notices of a whole run.

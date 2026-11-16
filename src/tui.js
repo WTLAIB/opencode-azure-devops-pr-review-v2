@@ -14,11 +14,13 @@ import { createElement as _$createElement } from "@opentui/solid";
 // Its upper part lists the sessions of the run under way or last ended, each a row that opens
 // that session when it is clicked; its lower part shows the newest report or comment preview as
 // rendered Markdown. A run that starts, and a report or preview that arrives, opens the panel in
-// the session on screen and leaves the keyboard with the prompt.
+// the session on screen and leaves the keyboard with the prompt; with the setting
+// terminalPanel: manual it opens only with /pr-panel, its one command.
 //
 // The panel only reads: AZPR's own notices in the conversation, the report queued to a review
 // session, and the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It sends
-// no prompt, runs no command of the server part and reads no settings file.
+// no prompt, runs no command of the server part and reads no settings file: the server part writes
+// that setting into the metadata of its notices.
 //
 // This is the source. OpenCode loads src/tui.js, which scripts/build-tui.mjs compiles from it:
 // OpenCode 2.3.0 compiles no JSX of a package it installed, so the package carries the result.
@@ -513,7 +515,7 @@ export default {
   id: "azpr.tui",
   setup(context) {
     // A host without these parts of the plugin API has no place for the panel: stay out of its way.
-    const needed = [context?.ui?.slot, context?.ui?.panel?.open, context?.ui?.router?.navigate, context?.keymap?.layer, context?.data?.listen, context?.data?.session?.pending?.list, context?.storage?.store];
+    const needed = [context?.ui?.slot, context?.ui?.panel?.open, context?.ui?.router?.navigate, context?.keymap?.layer, context?.data?.listen, context?.data?.session?.pending?.list];
     if (needed.some(part => typeof part !== "function")) return;
     const data = context.data;
     // The host keeps the messages and the inbox of the session on screen and of open tabs, and drops those of
@@ -666,13 +668,6 @@ export default {
       unasked = byItself;
       return context.ui.panel.open(PANEL);
     };
-
-    // The user can turn the automatic opening off; the choice is kept across restarts of the TUI.
-    const [preferences, updatePreferences] = context.storage.store("panel", {
-      initial: {
-        automatic: true
-      }
-    });
     const stop = data.listen(event => {
       const details = event?.details;
       if (details?.type === "session.deleted") return mark(details.data?.sessionID, "missing");
@@ -685,9 +680,10 @@ export default {
         return;
       }
       if (details?.type !== "session.inbox.enqueued") return;
-      // A run that starts, and a report or preview that arrives, opens the panel in the session on screen.
+      // A run that starts, and a report or preview that arrives, opens the panel in the session on screen,
+      // unless the notice says that the settings leave the panel to /pr-panel.
       const item = details.data?.item;
-      if (item?.type !== "synthetic" || !opensPanel(item.payload?.text) || !preferences.automatic) return;
+      if (item?.type !== "synthetic" || !opensPanel(item.payload?.text, item.payload?.metadata)) return;
       const route = context.ui.router.current();
       if (route.type === "session" && route.sessionID === details.data.sessionID) show("notice");
     });
@@ -731,67 +727,6 @@ export default {
             wanted.delete(route.sessionID);
             context.ui.panel.close();
           } else show();
-        }
-      }, {
-        id: "azpr.panel.automatic",
-        title: "AZPR: open the review panel by itself (on or off)",
-        description: "Whether a review that starts, and a report or preview that arrives, opens the panel. Kept across restarts.",
-        group: "AZPR",
-        palette: true,
-        slash: {
-          name: "pr-panel-auto"
-        },
-        run() {
-          const automatic = !preferences.automatic;
-          void updatePreferences(draft => {
-            draft.automatic = automatic;
-          }).catch(() => undefined);
-          context.ui.toast.show({
-            message: automatic ? "AZPR: the panel opens by itself again." : "AZPR: the panel now opens only with /pr-panel.",
-            variant: "info"
-          });
-        }
-      }, {
-        id: "azpr.sessions",
-        title: "AZPR: open a reviewer session",
-        description: "Choose one of the sessions of the review in this conversation.",
-        group: "AZPR",
-        palette: true,
-        slash: {
-          name: "pr-sessions"
-        },
-        async run() {
-          const route = context.ui.router.current();
-          if (route.type !== "session") return;
-          const sessionID = route.sessionID;
-          const options = () => ({
-            known: known(),
-            read: read(),
-            titles: state.titles
-          });
-          discover(data.session.get(sessionID)?.metadata?.azpr?.conversation ?? sessionID);
-          // Twice at most: the conversation first when this is one of its sessions, then the run's sessions.
-          for (let round = 0; round < 2; round++) await Promise.all(buildPanel(source, sessionID, options()).needs.map(load));
-          const rows = buildPanel(source, sessionID, options()).rows;
-          if (rows.length === 0) {
-            context.ui.toast.show({
-              message: "AZPR: no reviewer session to open here.",
-              variant: "info"
-            });
-            return;
-          }
-          const picked = await context.ui.dialog.select({
-            title: "AZPR sessions",
-            options: rows.map(row => ({
-              title: `${row.label}${row.report ? " (report)" : ""}`,
-              description: `${row.state} · ${row.id}`,
-              value: row.id
-            }))
-          });
-          if (picked) context.ui.router.navigate({
-            type: "session",
-            sessionID: picked
-          });
         }
       }]
     }));

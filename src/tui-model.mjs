@@ -4,9 +4,11 @@
  * sessions' `metadata.azpr`. Nothing here imports OpenTUI or the host: the view
  * (tui-view.jsx, compiled to tui.js) hands it plain data, and so do the tests.
  *
- * The panel never sends a prompt, never reads AZPR's settings and never decides
- * anything about a review. It only reads texts whose form the runtime owns
- * (attribution.mjs, runtime.mjs); tests/tui-model.test.mjs holds that form.
+ * The panel never sends a prompt, never reads AZPR's settings file and never
+ * decides anything about a review. It only reads texts whose form the runtime
+ * owns (attribution.mjs, runtime.mjs) and the one setting meant for it, which
+ * the runtime sends along with its notices; tests/tui-model.test.mjs holds
+ * that form.
  */
 
 /** The panel's name in the host's `session.panel` slot; names are shared between plugins. */
@@ -59,11 +61,14 @@ export const reportIn = entries => entries.map(entry => entry.text).findLast(tex
 
 /**
  * A notice that opens the panel by itself in the session on screen: a review or
- * comment run that starts, and a report or preview that arrives. Progress
- * notices and commands without a document, such as /pr-check, do not.
+ * comment run that starts, and a document that arrives: a report, a preview,
+ * the table of /pr-check. Progress notices and answers without a document do
+ * not, and no notice does with the setting terminalPanel: manual, which the
+ * runtime writes into the metadata of every notice it sends (`azpr.panel`).
  */
-export const opensPanel = text =>
-  typeof text === 'string' && (RUN_STARTED.test(text) || (HEAD.test(text) && (DATA.test(text) || REPORT_SESSION.test(text))));
+export const opensPanel = (text, metadata) =>
+  typeof text === 'string' && metadata?.azpr?.panel !== 'manual' &&
+  (RUN_STARTED.test(text) || (HEAD.test(text) && (DATA.test(text) || REPORT_SESSION.test(text))));
 
 /**
  * The same Markdown, made readable in a terminal. AZPR writes table cells with

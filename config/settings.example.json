@@ -30,6 +30,7 @@
   "shell": "deny",
   "progressNotices": true,
   "deletePrivateSessions": true,
+  "terminalPanel": "auto",
   "afterReview": {
     "quick": "preview",
     "review": "preview",

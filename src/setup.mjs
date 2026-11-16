@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { COMMANDS, modelRef, privateAgent, validateSettings } from './config.mjs';
+import { COMMANDS, modelRef, privateAgent, validateSettings, withMissingSettings } from './config.mjs';
 import { parseUniqueJSON } from './output.mjs';
 import { appendReport } from './session.mjs';
 import { listOf, recordOf, requireMethods } from './host.mjs';
@@ -103,26 +103,31 @@ async function checkModel(context, value) {
 }
 
 async function readExisting(path) {
-  let handle;
-  try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const info = await handle.stat();
-    if (!info.isFile() || info.nlink !== 1 || (typeof process.getuid === 'function' && info.uid !== process.getuid())) {
-      throw new Error('[AZPR] Setup requires a regular settings file owned by you, without hard links.');
-    }
-    if (info.size > MAX_SETTINGS_BYTES) throw new Error('[AZPR] settings.json is larger than 1 MB.');
-    return await handle.readFile('utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    if (error.code === 'ELOOP') throw new Error('[AZPR] Setup refuses a symbolic link for settings.json.');
-    throw error;
-  } finally { await handle?.close(); }
+  for (let attempt = 1; ; attempt++) {
+    let handle;
+    try {
+      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const info = await handle.stat();
+      // No name left: another writer replaced the file between the open and this check. Read the file that is there now.
+      if (info.nlink === 0 && attempt < 5) continue;
+      if (!info.isFile() || info.nlink !== 1 || (typeof process.getuid === 'function' && info.uid !== process.getuid())) {
+        throw new Error('[AZPR] Setup requires a regular settings file owned by you, without hard links.');
+      }
+      if (info.size > MAX_SETTINGS_BYTES) throw new Error('[AZPR] settings.json is larger than 1 MB.');
+      return await handle.readFile('utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      if (error.code === 'ELOOP') throw new Error('[AZPR] Setup refuses a symbolic link for settings.json.');
+      throw error;
+    } finally { await handle?.close(); }
+  }
 }
 
 /**
  * Atomic, owner-only save; serialize setup calls and preserve unrelated values.
  * Without --pat-file, a replacement keeps the PAT file already set and a first
- * setup uses the default PAT file. Returns the saved organization and PAT file.
+ * setup uses the default PAT file. The file names every setting, those setup
+ * does not ask for at their defaults. Returns the saved organization and PAT file.
  */
 export async function saveSetup(context, path, arguments_, environment = process.env) {
   const previous = await readExisting(path);
@@ -141,9 +146,9 @@ export async function saveSetup(context, path, arguments_, environment = process
   if (typeof patFile !== 'string' || !isAbsolute(patFile) || resolve(patFile) === resolve(path)) {
     throw new Error('[AZPR] --pat-file must name an absolute path separate from settings.json.');
   }
-  const next = { ...raw, models: { ...raw.models,
+  const { settings: next } = withMissingSettings({ ...raw, models: { ...raw.models,
     review: { functional: model, risk: model, verifier: model }, quick: { reviewer: model } },
-    azure: { ...raw.azure, organization, pat: '', patFile } };
+    azure: { ...raw.azure, organization, pat: '', patFile } });
   validateSettings(next);
   await checkModel(context, model);
   try { await readPatFile(patFile); }
@@ -153,6 +158,16 @@ export async function saveSetup(context, path, arguments_, environment = process
     const problem = error.message.replace(/^\[AZPR\] azure\.patFile /, '');
     throw new Error(`[AZPR] No --pat-file was given, and the ${kept ? 'PAT file in the current settings' : 'default PAT file'} ${patFile} ${problem} Create it as the quickstart shows, or name another file with --pat-file.`);
   }
+  await writeSettings(path, previous, next);
+  return { organization, patFile };
+}
+
+/**
+ * Replace the settings file (or create it, when `previous` is null) atomically and owner-only, under
+ * the setup lock, and only while the file still is what `previous` was. The errors of a held lock and
+ * of a file changed meanwhile are marked `busy`: someone else is writing the file.
+ */
+async function writeSettings(path, previous, settings) {
   const parent = dirname(path);
   await mkdir(parent, { recursive: true, mode: 0o700 });
   const parentInfo = await lstat(parent);
@@ -163,9 +178,9 @@ export async function saveSetup(context, path, arguments_, environment = process
   let handle, acquired = false;
   try {
     try { handle = await open(lock, 'wx', 0o600); acquired = true; }
-    catch (error) { if (error.code === 'EEXIST') throw new Error('[AZPR] Another setup is active, or a previous setup lock remains. No settings changed.'); throw error; }
-    if (await readExisting(path) !== previous) throw new Error('[AZPR] Settings changed during setup; retry after reviewing the file.');
-    await writeTemporary(temporary, JSON.stringify(next, null, 2) + '\n');
+    catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('[AZPR] Another setup is active, or a previous setup lock remains. No settings changed.'), { busy: true }); throw error; }
+    if (await readExisting(path) !== previous) throw Object.assign(new Error('[AZPR] Settings changed during setup; retry after reviewing the file.'), { busy: true });
+    await writeTemporary(temporary, JSON.stringify(settings, null, 2) + '\n');
     if (previous === null) await link(temporary, path); // Refuse a concurrent creator rather than overwriting it.
     else await rename(temporary, path);
   } finally {
@@ -173,12 +188,62 @@ export async function saveSetup(context, path, arguments_, environment = process
     await handle?.close();
     if (acquired) await unlink(lock);
   }
-  return { organization, patFile };
 }
 
 async function writeTemporary(path, text) {
   const handle = await open(path, 'wx', 0o600);
   try { await handle.writeFile(text); await handle.sync(); } finally { await handle.close(); }
+}
+
+/**
+ * Write the settings a valid settings file leaves out into it, at their defaults, so that a version
+ * which brings a new setting shows it where its user edits the others. The defaults are what
+ * validation assumes for a missing setting anyway: the completed file behaves as the file did.
+ * Values, their order and unrelated names stay; the file is replaced like a setup's (atomic,
+ * owner-only, a regular file of the user's own, never through a symbolic link).
+ *
+ * This runs when OpenCode loads AZPR, before the settings are read for good, and never fails a load:
+ * a file that cannot be rewritten is used as it is. Several processes and project instances load
+ * AZPR at once; they would write the same text, and one that finds another writing waits for it
+ * and reads the result, so that each ends up with the file as it then stays.
+ *
+ * Returns `added` (the names written, possibly none) or, when the file could not be completed,
+ * `missing` (the names it lacks) with `problem`, which never holds a setting's value.
+ */
+export async function addMissingSettings(path, { waitMs = 3000, pauseMs = 100 } = {}) {
+  const deadline = Date.now() + waitMs;
+  let missing = [];
+  try {
+    for (;;) {
+      const previous = await readExisting(path);
+      if (previous === null) return { added: [] };
+      const raw = settingsJSON(previous);
+      const { settings, added } = withMissingSettings(raw);
+      if (!added.length) return { added: [] };
+      // A file that cannot be used is its user's to repair: nothing is added around the problem.
+      try { validateSettings(raw); validateSettings(settings); } catch { return { added: [] }; }
+      missing = added;
+      try {
+        await writeSettings(path, previous, settings);
+        return { added };
+      } catch (error) {
+        if (!error.busy || Date.now() >= deadline) throw error;
+        await new Promise(done => setTimeout(done, pauseMs));
+      }
+    }
+  } catch (error) {
+    // What the file lacks now, read as the runtime reads it: a file this refuses to replace (a symbolic link, a
+    // hard link) is still used, and another load may have completed the file since this one last looked.
+    try {
+      const raw = settingsJSON(await readFile(path, 'utf8'));
+      validateSettings(raw);
+      missing = withMissingSettings(raw).added;
+    } catch { /* The runtime reports a file it cannot use; what was known of it stays. */ }
+    if (!missing.length) return { added: [] };
+    // Names and error codes only: an OS or parser message may quote the file.
+    const own = typeof error?.message === 'string' && error.message.startsWith('[AZPR] ');
+    return { added: [], missing, problem: own ? error.message.slice(7) : `the file could not be rewritten (${error?.code ?? 'unknown error'}).` };
+  }
 }
 
 async function guide(context, path, problem, environment) {
@@ -258,7 +323,13 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
     } });
   });
   let cleanup;
-  try { if (!blocked) cleanup = await setupAzurePrReview(context, sourceDirectory, { ...runtimeOptions, settingsPath: path }); }
+  try {
+    if (!blocked) {
+      // Before the runtime reads the settings for good: it compares later reads with this one.
+      const completion = await addMissingSettings(path);
+      cleanup = await setupAzurePrReview(context, sourceDirectory, { ...runtimeOptions, settingsPath: path, settingsCompletion: completion });
+    }
+  }
   catch (error) { await registration.dispose(); throw error; }
   return async () => { await cleanup?.(); await registration.dispose(); };
 }

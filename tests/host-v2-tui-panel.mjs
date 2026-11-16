@@ -5,8 +5,11 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * drives its keyboard and mouse. A review of six files starts from the TUI, and its reviewers are
  * held until the panel was seen with them running. Checked on the screen: the panel opens by itself
  * and leaves the keyboard with the prompt; a click on a row opens that session, and the panel is
- * back with the conversation; the report and the comment preview are rendered Markdown; /pr-sessions,
- * /pr-panel and /pr-panel-auto; a terminal too narrow for two panes is not taken over.
+ * back with the conversation; the report and the comment preview are rendered Markdown; /pr-panel,
+ * the panel's one command; a terminal too narrow for two panes is not taken over. The host is then
+ * restarted with terminalPanel: manual: the notices carry the setting, and the panel opens only when
+ * asked. The settings file starts without the settings newer versions brought: loading AZPR adds
+ * them, and commands start all the same.
  * With --native the package is installed by OpenCode's plugin manager, where OpenCode 2.3.0 compiles
  * no JSX: the compiled view must load from there, and the compiler must not be installed with it.
  * --package SPEC installs a published package (an npm version or a public Git commit) instead of
@@ -14,11 +17,12 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * Synthetic completions test the panel and the host, not model review quality.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -115,9 +119,21 @@ if (native) {
   await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
   run('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')]);
 }
+// The settings file as a version before these settings existed left it: loading AZPR writes them into it.
+const settingsFile = native ? join(fixture, 'xdg-config', 'azpr', 'settings.json') : join(dirs.config, 'plugins', 'azpr-v2', 'settings.json');
+const newer = ['terminalPanel', 'deletePrivateSessions', 'progressNotices'];
+const older = JSON.parse(await readFile(settingsFile, 'utf8'));
+for (const name of newer) { assert.ok(Object.hasOwn(older, name), name); delete older[name]; }
+delete older.workflow.stageIdleSeconds;
+await writeFile(settingsFile, JSON.stringify(older, null, 2) + '\n', { mode: 0o600 });
 
 // ------------------------------------------------------------------ the terminal
-const socket = join(fixture, 'tmux.sock'), tmuxConfig = join(fixture, 'tmux.conf');
+// A Unix socket's path is limited to about a hundred bytes, which a checkout in a long directory exceeds
+// (as on a CI runner), and a long TMPDIR too.
+const socketRoot = [tmpdir(), '/tmp'].find(directory => Buffer.byteLength(join(directory, 'azpr-tui-XXXXXX', 's')) < 100);
+assert.ok(socketRoot, 'No temporary directory with a path short enough for tmux\'s socket.');
+const socketDirectory = await mkdtemp(join(socketRoot, 'azpr-tui-'));
+const socket = join(socketDirectory, 's'), tmuxConfig = join(fixture, 'tmux.conf');
 await writeFile(tmuxConfig, ['set -g default-terminal "tmux-256color"', 'set -as terminal-features ",*:RGB"', 'set -g escape-time 0', 'set -g mouse off', 'set -g status off', 'set -g history-limit 0'].join('\n') + '\n');
 const tmux = (...args) => spawnSync('tmux', ['-S', socket, '-f', tmuxConfig, ...args], { encoding: 'utf8', env, timeout: 15000 });
 const screen = () => tmux('capture-pane', '-p', '-t', 'azpr').stdout ?? '';
@@ -163,16 +179,35 @@ async function command(name, suggestion, text) {
   await sleep(400);
   key('Enter');
 }
+/** What the TUI suggests for the start of a command, once `expected` is among it. */
+async function suggested(prefix, expected) {
+  key('C-u');
+  type(prefix);
+  const shown = await see(now => now.includes(expected) && now, `The TUI did not suggest "${expected}" for ${prefix}.`);
+  key('C-u');
+  return shown;
+}
 
 const result = { status: 'PASS', installation: published ? `native ${published}` : native ? 'native' : 'source' };
 let diagnose = async () => {};
 try {
-  child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  const url = await Promise.race([new Promise((ready, reject) => { child.once('error', reject); child.once('exit', code => reject(new Error('Host exited ' + code))); child.stdout.on('data', data => { logs += data; const match = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) ready(match[1]); }); child.stderr.on('data', data => { logs += data; }); }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('startup timeout')), 30000).unref())]);
+  /** Start the host; resolves with its URL. What it prints is searched from where this start began. */
+  const serve = () => {
+    const from = logs.length;
+    const started = child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    return Promise.race([new Promise((ready, reject) => { started.once('error', reject); started.once('exit', code => reject(new Error('Host exited ' + code))); started.stdout.on('data', data => { logs += data; const match = logs.slice(from).match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) ready(match[1]); }); started.stderr.on('data', data => { logs += data; }); }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('startup timeout')), 30000).unref())]);
+  };
+  const stopServer = async () => {
+    if (!child || child.exitCode !== null) return;
+    const stopped = once(child, 'exit'); child.kill('SIGTERM');
+    const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer);
+  };
+  let url = await serve();
   const api = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(60000) }); const raw = await response.text(); if (!response.ok) throw new Error(`${path}: ${response.status} ${raw}`); return raw ? JSON.parse(raw) : undefined; };
   const origin = (await api('/api/session', { title: 'Panel fixture', location: { directory: dirs.work } })).data.id;
-  const inbox = async () => (await api(`/api/session/${origin}/inbox`)).data.map(item => item.payload?.text ?? '');
+  const queued = async () => (await api(`/api/session/${origin}/inbox`)).data;
+  const inbox = async () => (await queued()).map(item => item.payload?.text ?? '');
   // On a failure: what the server holds for each of AZPR's sessions, next to the screen.
   diagnose = async () => {
     const sessions = (await api('/api/session')).data.filter(session => session.metadata?.azpr || session.id === origin);
@@ -185,12 +220,27 @@ try {
   };
   // The server lists the plugin with a terminal part, which the TUI then loads by itself.
   const listed = async () => (await api('/api/plugin')).data.find(plugin => plugin.id === 'azpr');
-  for (let attempt = 0; attempt < 100 && !(await listed()); attempt++) await sleep(200);
-  assert.deepEqual((await listed())?.features, { server: true, tui: true });
+  const loaded = async () => { for (let attempt = 0; attempt < 100 && !(await listed()); attempt++) await sleep(200); return listed(); };
+  assert.deepEqual((await loaded())?.features, { server: true, tui: true });
   assert.equal((await listed()).source.type, native ? 'package' : 'local');
+  // Loading AZPR completed the settings file: the newer settings are there at their defaults, the rest is as it was,
+  // and the file is the owner's alone. The review below then starts, so the runtime read the completed file.
+  const completed = JSON.parse(await readFile(settingsFile, 'utf8'));
+  assert.deepEqual(newer.map(name => completed[name]), ['auto', true, true]);
+  assert.equal(completed.workflow.stageIdleSeconds, 600);
+  assert.deepEqual({ ...completed, workflow: { ...completed.workflow, stageIdleSeconds: undefined }, ...Object.fromEntries(newer.map(name => [name, undefined])) },
+    { ...older, workflow: { ...older.workflow, stageIdleSeconds: undefined }, ...Object.fromEntries(newer.map(name => [name, undefined])) });
+  assert.equal((await stat(settingsFile)).mode & 0o777, 0o600);
+  assert.deepEqual((await readdir(dirname(settingsFile))).filter(name => /\.tmp$|\.lock$/.test(name)), []);
+  result.settings = 'settings an earlier version did not have were written into the file when AZPR loaded';
 
-  assert.equal(tmux('new-session', '-d', '-s', 'azpr', '-x', '170', '-y', '46', '-c', dirs.work, binary, '--server', url, '--session', origin).status, 0);
-  await see(/ctrl\+p\s+commands/, 'The TUI did not start.');
+  /** The TUI in a terminal of this size, showing the fixture's conversation. */
+  const openTerminal = async (width, height) => {
+    const started = tmux('new-session', '-d', '-s', 'azpr', '-x', String(width), '-y', String(height), '-c', dirs.work, binary, '--server', url, '--session', origin);
+    assert.equal(started.status, 0, `tmux could not start the TUI: ${started.stderr || started.error?.message || 'no message'}`);
+    await see(/ctrl\+p\s+commands/, 'The TUI did not start.');
+  };
+  await openTerminal(170, 46);
 
   // 1. A review that starts opens the panel by itself, with its sessions running, and the prompt keeps the keyboard.
   await command('pr-review', 'Verified Azure DevOps PR review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321');
@@ -230,7 +280,7 @@ try {
   assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
   result.preview = 'opens the panel and replaces the report';
 
-  // 5. Keyboard: the panel scrolls and closes with Escape once it has the keyboard; /pr-sessions lists the sessions.
+  // 5. Keyboard: the panel scrolls and closes with Escape once it has the keyboard.
   // A click inside the panel gives it the keyboard. Its header stays while the content scrolls.
   await click('Sessions (click one to open it)');
   key('PageDown');
@@ -239,15 +289,10 @@ try {
   await see(/Sessions \(click one to open it\)/, 'Home did not scroll the panel back to its top.');
   await escape();
   await see(shown => !panelOpen(shown), 'Escape did not close the panel that had the keyboard.');
-  await command('pr-sessions', 'Choose one of the sessions of the review');
-  await see(/AZPR sessions/, '/pr-sessions did not open its list.');
-  await see(/Verification \(report\)/, '/pr-sessions does not list the report session.');
-  key('Enter');
-  await see(new RegExp(`^.*Panel fixture.*\\[AZPR ${review}\\] Verification`, 'm'), '/pr-sessions did not open the chosen session.');
-  await click('Panel fixture');
-  result.keyboard = 'PageDown and Escape in the panel; /pr-sessions opens a session';
+  result.keyboard = 'PageDown, Home and Escape in the panel';
 
-  // 6. /pr-panel shows and hides it; /pr-panel-auto stops it from opening by itself.
+  // 6. /pr-panel shows and hides it. It is the panel's only command: sessions are opened from its rows or with
+  // OpenCode's own session list, and whether it opens by itself is the setting terminalPanel.
   await command('pr-panel', 'The sessions of the review in this conversation');
   await see(panelOpen, '/pr-panel did not show the panel.');
   // The prompt keeps the keyboard, so the same command hides it again; q closes a panel that was given the keyboard.
@@ -257,17 +302,15 @@ try {
   await click('Sessions (click one to open it)');
   key('q');
   await see(shown => !panelOpen(shown), 'q did not close the panel that had the keyboard.');
-  await command('pr-panel-auto', 'Whether a review that starts');
-  await see(/the panel now opens only with \/pr-panel/, '/pr-panel-auto did not say that the panel stays closed.');
+  assert.doesNotMatch(await suggested('/pr-p', 'The sessions of the review in this conversation'), /pr-panel-auto/, 'The panel has one command.');
+  assert.doesNotMatch(await suggested('/pr-s', 'pr-stop'), /pr-sessions/, 'The panel has one command.');
+  // --show answers at once with the saved preview, and with the default setting that opens the panel again.
   await command('pr-comment', 'Preview, adjust or publish review comments', '--show');
-  // The answer is longer than the screen: wait for it in the conversation's inbox.
-  for (let attempt = 0; attempt < 150 && !(await inbox()).at(-1)?.startsWith('[AZPR] Saved preview of review'); attempt++) await sleep(200);
-  assert.match((await inbox()).at(-1), /^\[AZPR\] Saved preview of review [a-f0-9]{8}[\s\S]*<azpr_comment_data>/, '--show answers at once with the saved preview.');
-  await sleep(1500);
-  assert.ok(!panelOpen(screen()), 'With automatic opening off, a preview that arrives leaves the panel closed.');
-  await command('pr-panel-auto', 'Whether a review that starts');
-  await see(/the panel opens by itself again/, '/pr-panel-auto did not turn automatic opening back on.');
-  result.commands = '/pr-panel shows and hides; /pr-panel-auto turns automatic opening off and on';
+  await see(panelOpen, 'With terminalPanel: auto a preview shown again did not open the panel.');
+  assert.ok((await queued()).every(item => item.payload?.metadata === undefined), 'With the default setting AZPR\'s notices carry no metadata.');
+  await click('close');
+  await see(shown => !panelOpen(shown), 'The panel did not close.');
+  result.commands = '/pr-panel shows and hides and is the only command of the panel';
 
   // 7. A terminal too narrow for two panes: the panel does not take the screen unasked.
   assert.equal(tmux('resize-window', '-t', 'azpr', '-x', '100', '-y', '40').status, 0);
@@ -280,6 +323,33 @@ try {
   await escape();
   await see(/ctrl\+p\s+commands/, 'Escape did not give the narrow screen back.');
   result.narrow = 'announces itself instead of taking the screen; opens when asked';
+
+  // 8. terminalPanel: manual. Settings are read when AZPR loads, so the host is restarted with the changed file; the
+  // conversation, its notices and the saved review are still there.
+  tmux('kill-server');
+  await stopServer();
+  await writeFile(settingsFile, JSON.stringify({ ...completed, terminalPanel: 'manual' }, null, 2) + '\n', { mode: 0o600 });
+  url = await serve();
+  assert.deepEqual((await loaded())?.features, { server: true, tui: true });
+  await openTerminal(170, 46);
+  const before = (await queued()).length;
+  // A comment run that starts and the preview it returns, then the saved preview shown again: none opens the panel.
+  await command('pr-comment', 'Preview, adjust or publish review comments', '');
+  for (let attempt = 0; attempt < 600 && !(await inbox()).slice(before).some(text => /^\[AZPR [a-f0-9]{8}\] PREVIEW/.test(text)); attempt++) await sleep(200);
+  await command('pr-comment', 'Preview, adjust or publish review comments', '--show');
+  for (let attempt = 0; attempt < 150 && !(await inbox()).at(-1)?.startsWith('[AZPR] Saved preview of review'); attempt++) await sleep(200);
+  const marked = (await queued()).slice(before);
+  assert.deepEqual(marked.map(item => /^\[AZPR(?: [a-f0-9]{8})?\] ?(Saved preview|[A-Z_]+)/.exec(item.payload.text)?.[1]).filter(kind => kind !== 'PROGRESS'), ['STARTED', 'PREVIEW', 'Saved preview']);
+  assert.ok(marked.every(item => item.payload.metadata?.azpr?.panel === 'manual'), 'With terminalPanel: manual every notice says so, where the panel reads it.');
+  await sleep(1500);
+  assert.ok(!panelOpen(screen()), 'With terminalPanel: manual a run that starts and a preview that arrives leave the panel closed.');
+  assert.doesNotMatch(screen(), /AZPR: report or preview ready/, 'Nor does it announce itself.');
+  assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
+  // Asked for, it opens as always, with the newest preview.
+  await command('pr-panel', 'The sessions of the review in this conversation');
+  await see(panelOpen, 'With terminalPanel: manual /pr-panel did not show the panel.');
+  await see(/AZPR [a-f0-9]{8} · PREVIEW/, 'The panel opened by hand does not show the preview.');
+  result.manual = 'terminalPanel: manual reaches the panel with the notices; it opens only with /pr-panel';
 
   // What the panel must never do: ask a model, or fail to load.
   assert.deepEqual([...new Set(requests.map(request => request.model))].sort(), ['functional', 'risk', 'verifier'], 'Only AZPR\'s reviewers, verifier and planner asked a model; the panel and the conversation asked none.');
@@ -299,6 +369,7 @@ try {
 } finally {
   await writeFile(join(fixture, 'screen.txt'), screen()).catch(() => {});
   tmux('kill-server');
+  await rm(socketDirectory, { recursive: true, force: true }).catch(() => {});
   release();
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
   provider.closeAllConnections(); await new Promise(done => provider.close(done));

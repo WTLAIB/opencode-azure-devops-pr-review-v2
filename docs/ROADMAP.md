@@ -150,7 +150,14 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   terminal part shows the newest report or preview rendered beside the
   conversation and lists the sessions of the review, each a click away. It
   opens by itself, leaves the keyboard with the prompt and only reads what
-  the runtime already produced.
+  the runtime already produced. `terminalPanel: manual` leaves it to
+  `/pr-panel`, its only command.
+- **Comments on a PR that is no longer active.** A PR merged before its
+  review was commented on could be reviewed but not commented on. The PR's
+  status no longer stops a publication; the check and the receipt name it.
+- **New settings reach the settings file.** Loading a version writes the
+  settings it brings into the file, at their defaults, so each can be found
+  and changed there; until then only a source installation did.
 
 ## Planned
 

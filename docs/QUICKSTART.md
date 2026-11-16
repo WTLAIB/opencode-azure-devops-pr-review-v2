@@ -224,8 +224,9 @@ first, as in `/pr-comment 1a2b3c4d --publish`; `/pr-comment --list` shows the
 saved reviews with their IDs and PRs.
 
 This explicit command posts the saved preview through your PAT after checking
-the PR is active and its source commit is unchanged. Existing markers are
-skipped. Check the publication receipt for failures or incomplete read-back.
+that the PR's source commit is unchanged; a PR that was completed meanwhile
+takes the comments all the same. Existing markers are skipped. Check the
+publication receipt for failures or incomplete read-back.
 An adjusted review needs a saved preview planned after its latest adjustment,
 also after `--reset`; `--publish` refuses if that preview is missing. Once
 publication starts, its adjustments and preview are fixed, and `--publish`

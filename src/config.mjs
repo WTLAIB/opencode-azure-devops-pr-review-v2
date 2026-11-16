@@ -110,13 +110,57 @@ export const AFTER_REVIEW = Object.freeze(['none', 'preview', 'publish']);
 // The largest azure.archiveMegabytes: the repository zip for content search is held in memory.
 export const MAX_ARCHIVE_MEGABYTES = 1024;
 
+// Whether the panel in OpenCode's terminal UI opens by itself (a run starts, a report or preview arrives) or only with /pr-panel.
+export const TERMINAL_PANEL = Object.freeze(['auto', 'manual']);
+
+const deepFreeze = value => { for (const item of Object.values(value)) if (item !== null && typeof item === 'object') deepFreeze(item); return Object.freeze(value); };
+/**
+ * Every setting that has a default, with it, in the order of config/settings.example.json. The review
+ * models and azure.organization have none: a person chooses them. Validation applies these values to
+ * what a settings file leaves out, and withMissingSettings writes them into the file.
+ */
+export const SETTING_DEFAULTS = deepFreeze({
+  models: { review: { rater: '' }, deep: { functional: '', risk: '', verifier: '', rater: '' }, quick: { reviewer: '' } },
+  enabled: true,
+  returnReport: 'receipt',
+  debug: { enabled: false, directory: '', keepRuns: 20 },
+  outputLanguage: 'en',
+  runTimeoutSeconds: null,
+  shell: 'deny',
+  progressNotices: true,
+  deletePrivateSessions: true,
+  terminalPanel: 'auto',
+  afterReview: { quick: 'preview', review: 'preview', deep: 'preview' },
+  azure: { pat: '', patFile: '', concurrency: 6, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true },
+  workflow: { shardFiles: 25, shardFindings: 15, parallelSessions: 8, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 },
+});
 const DEFAULTS = Object.freeze({
-  afterReview: Object.freeze({ quick: 'preview', review: 'preview', deep: 'preview' }),
-  azure: Object.freeze({ organization: '', pat: '', patFile: '', concurrency: 6, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true }),
-  workflow: Object.freeze({ shardFiles: 25, shardFindings: 15, parallelSessions: 8, repairAttempts: 2, stageRetries: 1, stageIdleSeconds: 600 }),
+  afterReview: SETTING_DEFAULTS.afterReview,
+  azure: Object.freeze({ organization: '', ...SETTING_DEFAULTS.azure }),
+  workflow: SETTING_DEFAULTS.workflow,
 });
 const withDefault = (value, fallback) => value === undefined ? fallback : value;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * `raw` with every setting it leaves out, at its default: what validation assumes for them anyway, so
+ * the result behaves as `raw` does. Values that are there stay as they are, also where they are not
+ * what a default expects; new names follow the existing ones. Returns the settings and the names added.
+ */
+export function withMissingSettings(raw) {
+  const added = [];
+  const copy = value => isObject(value) ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copy(item)])) : value;
+  const fill = (existing, defaults, prefix) => {
+    const result = { ...existing };
+    for (const [key, value] of Object.entries(defaults)) {
+      // A group added as a whole is named once, not once per value in it.
+      if (!Object.hasOwn(result, key)) { result[key] = copy(value); added.push(prefix + key); }
+      else if (isObject(value) && isObject(result[key])) result[key] = fill(result[key], value, `${prefix}${key}.`);
+    }
+    return result;
+  };
+  return { settings: fill(raw, SETTING_DEFAULTS, ''), added };
+}
 function keys(value, allowed, at) {
   if (!isObject(value)) throw new Error(`${at} must be a JSON object.`);
   // Name an unknown key only when it looks like a setting name: a long one may be a pasted secret.
@@ -160,7 +204,7 @@ export function validateSettings(raw) {
     throw new Error('settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.patFile (or azure.pat), and remove mcp.');
   }
   keys(raw, ['$schema', 'version', 'enabled', 'models', 'debug', 'outputLanguage', 'returnReport', 'runTimeoutSeconds',
-    'shell', 'progressNotices', 'deletePrivateSessions', 'afterReview', 'azure', 'workflow'], 'settings');
+    'shell', 'progressNotices', 'deletePrivateSessions', 'terminalPanel', 'afterReview', 'azure', 'workflow'], 'settings');
   if (raw.version !== 2) throw new Error('settings.version must be 2. Use the V2 settings example; older host layouts are not supported.');
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('enabled must be boolean.');
   if (raw.$schema !== undefined && typeof raw.$schema !== 'string') throw new Error('$schema must be a string.');
@@ -183,24 +227,26 @@ export function validateSettings(raw) {
   }
   // The optional rater does not count: deep mode is on when its three review roles are set.
   const deepConfigured = MODEL_SLOTS.deep.filter(slot => models.deep[slot]).length;
-  const returnReport = withDefault(raw.returnReport, 'receipt');
+  const returnReport = withDefault(raw.returnReport, SETTING_DEFAULTS.returnReport);
   if (!['receipt', 'full'].includes(returnReport)) throw new Error('returnReport must be receipt or full.');
-  const outputLanguage = languageTag(raw.outputLanguage === undefined ? 'en' : raw.outputLanguage);
-  const debug = raw.debug === undefined ? { enabled: false, directory: '' } : raw.debug;
+  const outputLanguage = languageTag(withDefault(raw.outputLanguage, SETTING_DEFAULTS.outputLanguage));
+  const debug = raw.debug === undefined ? { enabled: SETTING_DEFAULTS.debug.enabled, directory: SETTING_DEFAULTS.debug.directory } : raw.debug;
   keys(debug, ['enabled', 'directory', 'keepRuns'], 'debug');
   if (typeof debug.enabled !== 'boolean' || (debug.directory !== undefined &&
       (typeof debug.directory !== 'string' || /[\0\r\n]/.test(debug.directory) || debug.directory.startsWith('~')))) throw new Error('debug requires enabled (boolean) and an optional directory path; use an absolute path or a project-relative path, not ~.');
-  const keepRuns = withDefault(debug.keepRuns, 20);
+  const keepRuns = withDefault(debug.keepRuns, SETTING_DEFAULTS.debug.keepRuns);
   integer(keepRuns, 'debug.keepRuns', 0, 1000);
-  const runTimeoutSeconds = withDefault(raw.runTimeoutSeconds, null);
+  const runTimeoutSeconds = withDefault(raw.runTimeoutSeconds, SETTING_DEFAULTS.runTimeoutSeconds);
   if (runTimeoutSeconds !== null) integer(runTimeoutSeconds, 'runTimeoutSeconds', 10, 7200);
-  const shell = withDefault(raw.shell, 'deny');
+  const shell = withDefault(raw.shell, SETTING_DEFAULTS.shell);
   if (!SHELL_MODES.includes(shell)) throw new Error('shell must be deny, ask or inherit.');
-  const progressNotices = withDefault(raw.progressNotices, true);
+  const progressNotices = withDefault(raw.progressNotices, SETTING_DEFAULTS.progressNotices);
   if (typeof progressNotices !== 'boolean') throw new Error('progressNotices must be boolean.');
-  const deletePrivateSessions = withDefault(raw.deletePrivateSessions, true);
+  const deletePrivateSessions = withDefault(raw.deletePrivateSessions, SETTING_DEFAULTS.deletePrivateSessions);
   if (typeof deletePrivateSessions !== 'boolean') throw new Error('deletePrivateSessions must be boolean.');
-  // A missing mode makes no comments after its reviews.
+  const terminalPanel = withDefault(raw.terminalPanel, SETTING_DEFAULTS.terminalPanel);
+  if (!TERMINAL_PANEL.includes(terminalPanel)) throw new Error('terminalPanel must be auto or manual.');
+  // A mode left out has the default.
   const afterReview = { ...DEFAULTS.afterReview, ...(raw.afterReview === undefined ? {} : (keys(raw.afterReview, MODES, 'afterReview'), raw.afterReview)) };
   for (const mode of MODES) if (!AFTER_REVIEW.includes(afterReview[mode])) throw new Error(`afterReview.${mode} must be none, preview or publish.`);
   const azure = { ...DEFAULTS.azure, ...(raw.azure === undefined ? {} : (keys(raw.azure, Object.keys(DEFAULTS.azure), 'azure'), raw.azure)) };
@@ -233,7 +279,7 @@ export function validateSettings(raw) {
   const idle = workflow.stageIdleSeconds;
   if (idle !== 0 && (!Number.isInteger(idle) || idle < 60 || idle > 7200)) throw new Error('workflow.stageIdleSeconds must be 0 (off) or an integer from 60 to 7200.');
   return { models, debug: { enabled: debug.enabled, directory: debug.directory ?? '', keepRuns },
-    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, afterReview, azure, workflow,
+    enabled: raw.enabled !== false, outputLanguage, returnReport, runTimeoutSeconds, shell, progressNotices, deletePrivateSessions, terminalPanel, afterReview, azure, workflow,
     deepReady: deepConfigured === MODEL_SLOTS.deep.length,
     deepPartial: deepConfigured > 0 && deepConfigured < MODEL_SLOTS.deep.length,
     quickReady: models.quick.reviewer !== '' };

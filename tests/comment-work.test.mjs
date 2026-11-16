@@ -8,6 +8,7 @@ import { createCommentData } from '../src/comment-data.mjs';
 import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
 import { publicationItems, inlineMarker } from '../src/comments.mjs';
+import { renderPublication } from '../src/attribution.mjs';
 import { fakeAzure, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const head = 'b'.repeat(40);
@@ -570,17 +571,36 @@ test('nothing is sent when the attempt cannot be saved first', async t => {
   assert.equal(azure.state.threads.length, 3);
 });
 
-test('publication refuses a changed source commit or an inactive PR before writing', async t => {
+test('publication refuses a changed source commit before writing; the PR\'s status stops nothing and is named', async t => {
   const azure = fakeAzure();
   const { review } = await plannedReview(t, azure);
   const { api, run, attempts } = publisher(azure);
   azure.state.head = 'c'.repeat(40);
   const stale = await publishPlan({ run, review, azure: api, attempts });
   assert.equal(stale.status, 'STALE');
+  assert.equal(azure.callsTo('createThread').length, 0);
+  // A PR completed before its review was commented on (merged too early, say) takes the comments like an active one.
   azure.state.head = head;
   azure.state.status = 'completed';
-  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'INCOMPLETE');
-  assert.equal(azure.callsTo('createThread').length, 0);
+  const posted = await publishPlan({ run, review, azure: api, attempts });
+  assert.equal(posted.status, 'POSTED');
+  assert.equal(posted.prStatus, 'completed');
+  assert.equal(azure.state.threads.length, 3);
+  assert.match(renderPublication(review, posted), /^Publication \(VERIFIED=3\); the PR is completed:\n/);
+  // So does an abandoned one, and a second run still posts nothing twice.
+  azure.state.status = 'abandoned';
+  const again = await publishPlan({ run, review, azure: api, attempts });
+  assert.deepEqual([again.status, again.prStatus, again.counts], ['POSTED', 'abandoned', { ALREADY_PRESENT: 3 }]);
+  assert.equal(azure.state.threads.length, 3);
+  // An active PR is not mentioned: the receipt of the usual case stays as it was.
+  azure.state.status = 'active';
+  const active = await publishPlan({ run, review, azure: api, attempts });
+  assert.equal(Object.hasOwn(active, 'prStatus'), false);
+  assert.match(renderPublication(review, active), /^Publication \(ALREADY_PRESENT=3\):\n/);
+  // The changed source commit of a completed PR is refused like any other.
+  azure.state.status = 'completed';
+  azure.state.head = 'c'.repeat(40);
+  assert.equal((await publishPlan({ run, review, azure: api, attempts })).status, 'STALE');
 });
 
 test('the discussion digest lists only live threads, compactly', () => {
