@@ -30,3 +30,7 @@ jobs:
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise a refused background summary followed by a permanent failure
         run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
+      - name: Exercise the scale review with debug off, where each run deletes its sessions when it ends
+        run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup
+      - name: Exercise an unfinished review with debug off, which keeps only the session holding its draft
+        run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup

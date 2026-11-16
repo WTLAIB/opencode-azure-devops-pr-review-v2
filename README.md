@@ -981,13 +981,17 @@ node tests/host-v2-smoke.mjs /absolute/path/to/opencode --replace
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode --native
 node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode
 node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode
+node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode --cleanup
+node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode --cleanup
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config --apply
 ```
 
 The host fixtures run a real OpenCode binary with a loopback fake model provider
 and a loopback fake Azure DevOps REST service in disposable directories under
-`.local/`.
+`.local/`. They keep debug on to read its records, and debug keeps every
+private session; the two `--cleanup` runs turn it off, so that each run deletes
+its sessions as an installation with default settings does.
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 For a native installation, remove the entry you added, for example

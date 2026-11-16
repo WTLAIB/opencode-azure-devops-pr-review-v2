@@ -15,12 +15,13 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  five runs on the real OpenCode 2.3.0 host with isolated profiles and fake
+  seven runs on the real OpenCode 2.3.0 host with isolated profiles and fake
   model and Azure DevOps services: fresh, replacement and native installation
   (including an authenticating proxy, a custom CA certificate, a foreign MCP
   server behind CodeMode and an image model), a 120-file
   review in shards with a context-overflow split and idempotent publication,
-  and a refused background summary followed by a permanent failure.
+  a refused background summary followed by a permanent failure, and the last
+  two once more with debug off, where a run deletes its sessions when it ends.
 - **Live, with real models on Azure DevOps Services.** Reviews, comment
   previews and publication on three test PRs with 1, 35 and 316 changed
   files. On OpenCode 2.1.4 with gpt-6-luna, all six quick and review runs
@@ -28,6 +29,8 @@ acceptance runs, including the MCP-based runs, are preserved in
   policy defects of the 316-file PR and the 3 known defects of the 1-file PR.
   Live automatic publication on the 35-file PR (OpenCode 2.1.2) posted and
   read back its comments, and a second run on the unchanged PR wrote nothing.
+  On OpenCode 2.3.0 with AZPR 0.4.1, a gpt-6-luna review and its preview
+  completed on the 1-file and the 35-file PR.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -43,6 +46,78 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.1 after publication: live reviews and session cleanup on real hosts (2026-11-16)
+
+Environment: Ubuntu 22.04.5 under WSL2 and Node 22.23.3. AZPR 0.4.1 was
+installed from npm as a native package on the maintainer's OpenCode service,
+first on OpenCode 2.2.4 and, after that host was upgraded, on 2.3.0. Every
+role used `openai/gpt-6-luna`, `afterReview` was `preview`, and nothing was
+posted to Azure DevOps. The fixture runs at the end used isolated profiles
+and the fake model and Azure DevOps services.
+
+- **Publication.** The registry's integrity and shasum for 0.4.1 equal those
+  of the package built from the tag, and the tarball downloaded from the
+  registry is byte-identical to it. The native smoke fixture passed with the
+  package installed from npm and with the Git package at the tag, each with
+  110 model and 187 Azure DevOps requests. The release's source archive and
+  GitHub's archive of the tag passed the clean-directory installation check.
+- **Live reviews.** `/pr-review` with its automatic preview, once per PR and
+  host:
+
+  | OpenCode | PR | Review | Stages | Confirmed | Preview | Cached input |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 2.2.4 | 1 file | COMPLETE, 75 s | 3 | the 3 known defects | PREVIEW | 58% |
+  | 2.2.4 | 35 files | COMPLETE, 65 s | 5 | seeded defect 1 of 2, one test weakness | PREVIEW, 1 inline comment | 52% |
+  | 2.3.0 | 1 file | COMPLETE, 70 s | 3 | the 3 known defects | PREVIEW | 57% |
+  | 2.3.0 | 35 files | COMPLETE, 65 s | 5 | seeded defect 1 of 2 | PREVIEW, 1 inline comment | 55% |
+
+  Times are to the nearest 5 seconds. Every stage completed in its first
+  session, without a tool failure, a retried step or a continuation, and
+  Azure DevOps calls needed no retry.
+  Every private session had no parent, AZPR's metadata and the
+  conversation's directory. On both hosts the conversation itself made no
+  model request: its session had no messages and no tokens. The seeded defect
+  that was missed is the one gpt-6-luna has missed before (see
+  [known limitations](#known-limitations)). On 2.3.0 `/pr-check` showed the
+  OpenCode row as the tested version; on 2.2.4 it showed the WARNING row. The
+  commands without a review ID (`--list`, `--help`, `--show` and
+  `--exclude F-1`, which planned a new preview) were used in the 1-file
+  conversation on 2.2.4.
+- **Prompt cache.** Cached tokens were 52% to 58% of the input in these four
+  reviews. The last review of the 1-file PR with child sessions (the 0.3.7
+  candidate on OpenCode 2.2.4, same prompts and model) had 65%, and earlier
+  reviews of the 35-file PR with child sessions, on other AZPR versions and
+  hosts, had roughly 40% to 70%. With one run per case this does not separate
+  an effect of sessions of their own from the variation between runs.
+- **Deletion with a real provider.** The reviews above ran with
+  `debug.enabled`, which keeps every session. One more review of the 1-file
+  PR ran on OpenCode 2.3.0 with debug off: the receipt reported 2 reviewer
+  sessions deleted, the service no longer had the two reviewers' sessions,
+  the session holding the report was still there, no session of the
+  automatic preview's run was listed afterwards, and the saved review named
+  one session and none still to be deleted.
+- **Deletion in the host fixtures.** Until now every host fixture ran with
+  debug on, to read its records, so the deletion of a run's sessions was
+  covered by the offline tests and had not run on a real host. The
+  comment-scale and background-compaction fixtures now have a `--cleanup`
+  mode with debug off, which CI runs. On OpenCode 2.3.0: the 120-file review
+  named 15 sessions in its receipt, 14 were deleted and counted in the
+  `Session notice`, and the host listed one private session, the report; a
+  preview planned in 8 sessions and left none; publication from that preview
+  created the 20 threads; a command typed in the report session was
+  answered; no session record was left (34 model and 71 Azure DevOps
+  requests). The review that ends PARTIAL named 3 sessions, 2 were deleted,
+  and the session holding the draft was the only one left, named by the
+  run's record of kept sessions (8 model requests). The default modes of both
+  fixtures passed unchanged (34 and 75 requests, largest 38,240 characters;
+  8 model requests). Before the host was upgraded, the same checks, made
+  with a copy of the released tree, passed on OpenCode 2.2.4 with the same
+  session counts.
+
+Not covered: the 316-file PR, `/pr-quick`, `/pr-deep`, publication and other
+models on OpenCode 2.3.0; a person stopping a private session's tool call;
+and repeated runs that would measure the prompt cache.
 
 ## 0.4.1 release candidate acceptance (2026-11-16)
 
@@ -3342,10 +3417,13 @@ transient failure, and its error names the last activity.
   `/pr-check` and are not validated, apart from the host fixtures of 0.4.1,
   which also passed on 2.2.4; OpenCode 1.x is not supported. Other operating systems
   are not validated yet.
-- **OpenCode 2.3.0 with real models.** The move to 2.3.0 was validated with
-  fake model and Azure DevOps services only. No review with a real provider
-  has run on OpenCode 2.3.0 or on 0.4.1 yet, so the effect of sessions of
-  their own on a provider's prompt cache is not measured.
+- **OpenCode 2.3.0 with real models.** On 2.3.0, AZPR 0.4.1 has reviewed and
+  previewed the 1-file and the 35-file test PR with gpt-6-luna, once each
+  (see [the record](#041-after-publication-live-reviews-and-session-cleanup-on-real-hosts-2026-11-16)).
+  The 316-file PR, `/pr-quick`, `/pr-deep`, publication and other models have
+  not run there, and the effect of sessions of their own on a provider's
+  prompt cache is not measured: one run per case cannot separate it from the
+  variation between runs.
 - **Private sessions in the session list.** OpenCode lists AZPR's private
   sessions next to conversations, and its plugin API cannot archive them.
   AZPR deletes all but the report session when a run ends; with debug enabled

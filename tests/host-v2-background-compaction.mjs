@@ -1,4 +1,4 @@
-import { withCommandCompletion } from './host-command.mjs';
+import { privateSessions, withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /** Opt-in exact-host fixture for OpenCode's experimental.background_compaction.
  * node tests/host-v2-background-compaction.mjs /absolute/path/opencode
@@ -10,6 +10,11 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * The large context comes with the second response because OpenCode 2.3.0
  * starts a summary half the room the session began with before the ceiling
  * (at most 60,000 tokens), so one response alone never reaches the threshold.
+ * With --cleanup the same review runs with debug off, as installed by default.
+ * It saves no review (PARTIAL), so its run keeps the session holding the draft
+ * and deletes the others: the fixture checks that on the host and in the run's
+ * record of kept sessions. The checks that read debug records belong to the
+ * default mode.
  * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
@@ -21,8 +26,9 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2];
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2], cleanup = process.argv[3] === '--cleanup';
 assert.ok(binary?.startsWith('/'));
+assert.ok(cleanup || process.argv[3] === undefined, 'The only option is --cleanup.');
 await mkdir(join(root, '.local'), { recursive: true });
 const fixture = await mkdtemp(join(root, '.local/host-v2-background-'));
 const dirs = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work'].map(name => [name, join(fixture, name)]));
@@ -78,7 +84,7 @@ adoServer.listen(0, '127.0.0.1'); await once(adoServer, 'listening');
 const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
 const settings = JSON.parse(await readFile(join(root, 'config/settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
-settings.debug = { enabled: true, directory: join(fixture, 'debug') };
+settings.debug = { enabled: !cleanup, directory: join(fixture, 'debug') };
 settings.workflow = { ...settings.workflow, shardFiles: 24, parallelSessions: 4 };
 // These steps drive each comment step themselves; the default (a preview after every review) is covered by the runtime tests.
 settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
@@ -101,20 +107,39 @@ try {
   const origin = (await api('/api/session', { title: 'Background compaction fixture', location: { directory: dirs.work } })).data;
   await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
   const receipt = (await api(`/api/session/${origin.id}/inbox`)).data.at(-1).payload.text;
-  const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8'));
-  const functional = result.stages.filter(stage => stage.role === 'azpr-review-functional');
-  assert.equal(functional.length, 1, `One functional session: no shard split and no replacement.\n${receipt}`);
-  const [stage] = functional;
-  assert.ok(stage.requestObservations.kinds.compaction >= 1 && stage.requestObservations.rejected >= 1, 'The host asked for a background summary and AZPR refused it.');
-  assert.equal(stage.requestObservations.authorizedPrimary, 3, 'The turn went on after the refused summary.');
-  assert.deepEqual([stage.status, stage.failureClass, stage.execution?.provider?.status, stage.execution?.compaction], ['FAILED', 'permanent', 401, undefined]);
-  assert.ok(!result.stages.some(other => /shard \d+\/\d+[ab]$/.test(other.label ?? '')), 'No split shard was started.');
-  assert.doesNotMatch(receipt, /context limit/, receipt);
-  assert.equal(requests.filter(r => r.model === 'functional').length, 3, 'No summary request reached the provider.');
   const host = /v(\d+\.\d+\.\d+)/.exec(spawnSync(binary, ['--version'], { encoding: 'utf8', env }).stdout)?.[1] ?? 'unknown';
-  console.log(JSON.stringify({ status: 'PASS', host, functionalSessions: functional.length,
-    failureClass: stage.failureClass, providerStatus: stage.execution.provider.status, refusedRequests: stage.requestObservations.rejected,
-    compactionRequests: stage.requestObservations.kinds.compaction, providerRequests: requests.length }, null, 2));
+  if (cleanup) {
+    // Debug is off, as installed by default. The review saves no review, so its run keeps the session holding
+    // the draft and deletes the others.
+    assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] PARTIAL/, receipt);
+    assert.match(receipt, /\n- azpr-review-functional: FAILED; [^\n]*failure=permanent/, receipt);
+    const sessions = privateSessions(rawApi, dirs.state);
+    const created = sessions.named(receipt), draft = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+    const left = [];
+    for (const id of created) if (await sessions.exists(id)) left.push(id);
+    assert.equal(created.length, 3, 'Two reviewers and the verifier.');
+    assert.deepEqual(left, [draft], 'Only the session holding the draft exists on the host.');
+    assert.match(receipt, /\nSession notice: 2 reviewer session\(s\) of this run were deleted/);
+    assert.equal((await sessions.listed()).length, 1, 'The host lists one private session, the draft.');
+    assert.deepEqual(Object.values(await sessions.records()), [[draft]], "The run's record names the session it keeps, and nothing is left to delete.");
+    assert.equal(requests.filter(r => r.model === 'functional').length, 3, 'No summary request reached the provider.');
+    console.log(JSON.stringify({ status: 'PASS', mode: 'cleanup', host, review: 'PARTIAL', reviewSessions: created.length, deletedAfterReview: created.length - 1, privateSessionsLeft: left.length,
+      providerRequests: requests.length }, null, 2));
+  } else {
+    const result = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'result.json'), 'utf8'));
+    const functional = result.stages.filter(stage => stage.role === 'azpr-review-functional');
+    assert.equal(functional.length, 1, `One functional session: no shard split and no replacement.\n${receipt}`);
+    const [stage] = functional;
+    assert.ok(stage.requestObservations.kinds.compaction >= 1 && stage.requestObservations.rejected >= 1, 'The host asked for a background summary and AZPR refused it.');
+    assert.equal(stage.requestObservations.authorizedPrimary, 3, 'The turn went on after the refused summary.');
+    assert.deepEqual([stage.status, stage.failureClass, stage.execution?.provider?.status, stage.execution?.compaction], ['FAILED', 'permanent', 401, undefined]);
+    assert.ok(!result.stages.some(other => /shard \d+\/\d+[ab]$/.test(other.label ?? '')), 'No split shard was started.');
+    assert.doesNotMatch(receipt, /context limit/, receipt);
+    assert.equal(requests.filter(r => r.model === 'functional').length, 3, 'No summary request reached the provider.');
+    console.log(JSON.stringify({ status: 'PASS', host, functionalSessions: functional.length,
+      failureClass: stage.failureClass, providerStatus: stage.execution.provider.status, refusedRequests: stage.requestObservations.rejected,
+      compactionRequests: stage.requestObservations.kinds.compaction, providerRequests: requests.length }, null, 2));
+  }
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
   provider.closeAllConnections(); await new Promise(resolveDone => provider.close(resolveDone));
