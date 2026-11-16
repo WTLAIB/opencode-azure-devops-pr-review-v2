@@ -24,7 +24,22 @@ const REPORT_SESSION = new RegExp(`Report delivery: report queued to session=(${
 const ACTS_ON = / It acts on review ([a-f0-9]{8}) /;
 const SOURCE_REVIEW = /; source review=([a-f0-9]{8})/;
 const RUN_STARTED = /^\[AZPR [a-f0-9]{8}\] STARTED \/pr-(?:review|quick|deep|comment)\b/;
+// A run's receipt: its status, then `;`, a line break or the end. Text follows STARTED and PROGRESS, and a run
+// also says things that are neither (`[AZPR <run>] Automatic preview skipped: …`).
+const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
 const REPORT_HEAD = '# AZPR ';
+// The summary table of a report or preview, whose cells the runtime writes with numeric character references.
+const SUMMARY_TABLE = /^\| Severity \| Summary \| [^|\n]+ \|$/;
+const MARKER = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
+// The opening line of a fenced code block: backticks with no further backtick on the line, or tildes.
+const FENCE = /^ {0,3}(?:(`{3,})(?!.*`)|(~{3,}))/;
+
+/**
+ * What the runtime itself wrote in a notice: everything before the report or preview it encloses.
+ * The stage lines and the report session are facts only there; the enclosed text is a model's, and a
+ * line in it that looks like one of them is just text.
+ */
+const ledgerOf = text => text.split(/^<azpr_(?:report|comment)_data>$/m)[0];
 
 /** The text of a delivered message, or of a notice that still waits in a session's inbox. */
 export const textOf = entry =>
@@ -51,8 +66,9 @@ export function noticesOf(entries) {
     const head = HEAD.exec(text);
     if (!head) return [];
     const [, run, status = ''] = head;
-    const kind = !run ? 'ANSWER' : status === 'STARTED' ? 'STARTED' : status === 'PROGRESS' ? 'PROGRESS' : 'RECEIPT';
-    return [{ id, run, kind, status, text }];
+    // NOTE: something a run says besides its start, its progress and its receipt; it changes nothing shown.
+    const kind = !run ? 'ANSWER' : status === 'STARTED' ? 'STARTED' : status === 'PROGRESS' ? 'PROGRESS' : RECEIPT.test(text) ? 'RECEIPT' : 'NOTE';
+    return [{ id, run, kind, status: kind === 'NOTE' ? '' : status, text }];
   });
 }
 
@@ -68,25 +84,73 @@ export const reportIn = entries => entries.map(entry => entry.text).findLast(tex
  */
 export const opensPanel = (text, metadata) =>
   typeof text === 'string' && metadata?.azpr?.panel !== 'manual' &&
-  (RUN_STARTED.test(text) || (HEAD.test(text) && (DATA.test(text) || REPORT_SESSION.test(text))));
+  (RUN_STARTED.test(text) || (HEAD.test(text) && (DATA.test(text) || REPORT_SESSION.test(ledgerOf(text)))));
 
 /**
- * The same Markdown, made readable in a terminal. AZPR writes table cells with
- * numeric character references so that Azure DevOps shows their characters
- * literally, and marks its comments with HTML comments that Azure DevOps hides.
- * The terminal renderer decodes neither: show the characters, escaped where
- * Markdown would read them as markup, and leave the markers out.
+ * The same Markdown, made readable in a terminal. AZPR writes the cells of its
+ * summary table with numeric character references so that Azure DevOps shows
+ * their characters literally, and marks its comments with HTML comments that
+ * Azure DevOps hides. The terminal renderer decodes neither: in that table,
+ * show the characters, escaped where Markdown would read them as markup, and
+ * leave the marker lines out.
+ *
+ * Only those two things change. A reference or a marker that a finding quotes,
+ * in a code block or anywhere else, is its text: the preview shown must be the
+ * preview that publication posts.
  */
-export const readable = markdown =>
-  String(markdown ?? '')
-    .replace(/^<!-- azpr-comment:[a-f0-9]{32} -->\n?/gm, '')
-    .replace(/&#(\d{2,3});/g, (reference, code) => {
+export function readable(markdown) {
+  const shown = [];
+  let fence = null, table = false;
+  for (const line of String(markdown ?? '').split('\n')) {
+    if (fence) {
+      // A fence ends with at least as many of its own characters and nothing else.
+      if (new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`).test(line)) fence = null;
+      shown.push(line);
+      continue;
+    }
+    const opened = FENCE.exec(line);
+    if (opened) { fence = opened[1] ?? opened[2]; table = false; shown.push(line); continue; }
+    if (MARKER.test(line)) continue;
+    if (SUMMARY_TABLE.test(line)) { table = true; shown.push(line); continue; }
+    table &&= line.startsWith('|');
+    shown.push(!table ? line : line.replace(/&#(\d{2,3});/g, (reference, code) => {
       const character = String.fromCharCode(Number(code));
       if (character === '`' || character === '_' || character === '&') return character;
       return /[|*[\]\\<>]/.test(character) ? `\\${character}` : reference;
-    });
+    }));
+  }
+  return shown.join('\n');
+}
+
+/** Whether a failed request says that the session is not there, as opposed to a request that did not get through. */
+export const notFound = error => /NotFound|\b404\b/.test(String(error?.name ?? '') + String(error?._tag ?? '') + String(error));
+
+/**
+ * What loading a session and its inbox established, from the two requests' outcomes
+ * (as `Promise.allSettled` gives them) and whether the host has the session now:
+ * 'exists'; 'missing', only when the server said so, by a not-found answer to either
+ * request or a lookup that succeeded and found nothing; otherwise 'retry', since a
+ * request that failed says nothing about the session, and the host not having a
+ * session loaded is the usual case.
+ */
+export function loadOutcome([synced, inbox], present) {
+  const errors = [synced, inbox].filter(result => result.status === 'rejected').map(result => result.reason);
+  if (errors.some(notFound)) return 'missing';
+  if (present) return 'exists';
+  return synced.status === 'fulfilled' ? 'missing' : 'retry';
+}
 
 const short = title => String(title).replace(/^\[AZPR [a-f0-9]{8}\] /, '');
+
+/**
+ * Whether a session the host has is one of this conversation's, by what the session itself says: AZPR's
+ * metadata, or, for a session AZPR 0.4.0 or earlier created (a child of the conversation, without that
+ * metadata), its parent. Never by a text that names it.
+ */
+const belongs = (session, conversation) => {
+  const azpr = session.metadata?.azpr;
+  return azpr ? azpr.conversation === conversation : session.parentID === conversation;
+};
 
 /**
  * What the panel shows for the session on screen.
@@ -105,11 +169,16 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   const needs = new Set();
   const entriesOf = id => syntheticOf(source.messages(id), source.pending(id));
   const self = source.session(sessionID);
-  // In one of AZPR's own sessions the notices are in the conversation that started the run.
+  // In one of AZPR's own sessions the notices are in the conversation that started the run, and with them those
+  // of commands typed in this session, which the runtime answers here (IDs sort by creation time across sessions).
   const conversation = self?.metadata?.azpr?.conversation ?? sessionID;
   if (conversation !== sessionID && !source.session(conversation) && known[conversation] !== 'missing') needs.add(conversation);
-  const notices = noticesOf(entriesOf(conversation));
-  const run = notices.findLast(notice => notice.run)?.run;
+  const entries = conversation === sessionID ? entriesOf(conversation)
+    : [...new Map([...entriesOf(conversation), ...entriesOf(sessionID)].map(entry => [entry.id, entry])).values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const notices = noticesOf(entries);
+  // The run under way or last ended: the one that last started, progressed or ended. What a run says besides
+  // (a review's note that no preview follows can arrive after the next run started) does not make it current.
+  const run = notices.findLast(notice => notice.run && notice.kind !== 'NOTE')?.run;
   const begins = notices.findIndex(notice => notice.run === run);
   const ofRun = notices.filter(notice => notice.run === run);
   const receipt = ofRun.findLast(notice => notice.kind === 'RECEIPT');
@@ -119,7 +188,7 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // Any other run stands alone, so a review under way never shows the report of the review before it.
   const reviewRun = SOURCE_REVIEW.exec(receipt?.text.split('\n')[0] ?? '')?.[1] ?? ACTS_ON.exec(ofRun.find(notice => notice.kind === 'STARTED')?.text ?? '')?.[1] ?? run;
   const review = reviewRun === run ? receipt : notices.findLast(notice => notice.kind === 'RECEIPT' && notice.run === reviewRun);
-  const reportSession = REPORT_SESSION.exec(review?.text ?? '')?.[1];
+  const reportSession = REPORT_SESSION.exec(ledgerOf(review?.text ?? ''))?.[1];
 
   // The document is the newest report or preview of these runs, or of a command that answered at once after
   // them (--show): enclosed in the notice, or queued to the review's report session.
@@ -129,20 +198,29 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     if (!ours) return;
     const head = notice.text.split('\n')[0];
     const enclosed = DATA.exec(notice.text);
-    const queued = REPORT_SESSION.exec(notice.text)?.[1];
+    const queued = REPORT_SESSION.exec(ledgerOf(notice.text))?.[1];
     if (enclosed) document = { head, markdown: enclosed[2], token: notice.id };
     else if (queued) document = { head, session: queued, token: notice.id };
   });
-  const own = conversation === sessionID ? '' : reportIn(entriesOf(sessionID));
-  const markdown = readable(own || (document?.markdown ?? (document?.session ? reportIn(entriesOf(document.session)) : '')));
+  // A queued report is read from the session a receipt names, once that session says itself that it belongs to
+  // this conversation: until the host has it, it is looked up, and a session of someone else's is never read.
+  const holder = document?.session ? source.session(document.session) : undefined;
+  const awaited = Boolean(document?.session) && !holder && known[document.session] !== 'missing';
+  if (awaited) needs.add(document.session);
+  const held = holder !== undefined && belongs(holder, conversation);
+  // In a session that holds a report, that report is shown until the notices say what is newest: they may not be
+  // loaded yet, and once they are, a preview planned after the report takes its place.
+  const found = document?.markdown ?? (held ? reportIn(entriesOf(document.session)) : '');
+  const own = found || conversation === sessionID ? '' : reportIn(entriesOf(sessionID));
+  const markdown = readable(found || own);
   // A queued report waits in its session's inbox, which the host loads only for the session on screen.
-  const inbox = !markdown && document?.session && known[document.session] !== 'missing' ? { sessionID: document.session, token: document.token } : undefined;
-  const loading = inbox !== undefined && !read[`${inbox.sessionID}:${inbox.token}`];
+  const inbox = !markdown && held ? { sessionID: document.session, token: document.token } : undefined;
+  const loading = !markdown && (awaited || (inbox !== undefined && !read[`${inbox.sessionID}:${inbox.token}`]));
 
   // Candidates: what the host lists for these runs, what their receipts name, and the report session.
   const stages = new Map();
   for (const notice of new Set([review, receipt])) {
-    if (notice) for (const [, role, label, state, id] of notice.text.matchAll(STAGE)) stages.set(id, { role, label, state });
+    if (notice) for (const [, role, label, state, id] of ledgerOf(notice.text).matchAll(STAGE)) stages.set(id, { role, label, state });
   }
   const runs = new Set([run, reviewRun]);
   const candidates = new Set(stages.keys());
@@ -161,14 +239,17 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
       else needs.add(id);
       continue;
     }
+    // A session says itself whose it is: one of another conversation or run is not listed, whatever named it.
+    const azpr = info.metadata?.azpr;
+    if (!belongs(info, conversation) || (azpr && !runs.has(azpr.run))) continue;
     if (info.title) titles.set(id, short(info.title));
     const stage = stages.get(id);
     rows.push({
       id,
-      label: titles.get(id) ?? (stage ? `${stage.role}${stage.label ? ` ${stage.label}` : ''}` : info.metadata?.azpr?.role ?? id),
+      label: titles.get(id) ?? (stage ? `${stage.role}${stage.label ? ` ${stage.label}` : ''}` : azpr?.role ?? id),
       state: source.status(id) === 'running' ? 'running' : stage ? stage.state.toLowerCase() : 'idle',
       report: id === reportSession,
-      current: info.metadata?.azpr?.run === run,
+      current: azpr?.run === run,
     });
   }
   // The report first, then the run under way or last ended, then by name ("shard 2/12" before "shard 10/12").

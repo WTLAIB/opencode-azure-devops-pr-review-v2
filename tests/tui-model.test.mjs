@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PANEL, buildPanel, noticesOf, opensPanel, readable, reportIn, syntheticOf, textOf } from '../src/tui-model.mjs';
+import { PANEL, buildPanel, loadOutcome, notFound, noticesOf, opensPanel, readable, reportIn, syntheticOf, textOf } from '../src/tui-model.mjs';
 import { renderReceipt } from '../src/attribution.mjs';
 
 const CONVERSATION = 'ses_conversation0000000000001';
@@ -60,9 +60,16 @@ test('AZPR\'s notices are told apart by kind; other synthetic text is not a noti
     { id: 'd', text: '[AZPR] Saved preview of review bb6a8570; no model or Azure DevOps request was made.' },
     { id: 'e', text: '<subagent sessionID="ses_x" state="completed">not ours</subagent>' },
     { id: 'f', text: `[AZPR ${COMMENT_RUN}] ALREADY_PRESENT\nNothing new was posted.` },
+    // What a run says besides its start, progress and receipt, as the runtime writes it.
+    { id: 'g', text: `[AZPR ${RUN}] Automatic preview skipped: the review has no findings to comment on.` },
+    { id: 'h', text: `[AZPR ${RUN}] Automatic publication did not start: the comment step could not be queued.` },
+    { id: 'i', text: `[AZPR ${RUN}] Authorization revoked and cancellation requested (2/2 session(s) settled).` },
+    { id: 'j', text: `[AZPR ${COMMENT_RUN}] POSTED; source review=${RUN}\nActed on review ${RUN}.` },
+    { id: 'k', text: `[AZPR ${RUN}] INCOMPLETE` },
   ]);
   assert.deepEqual(notices.map(notice => [notice.id, notice.kind, notice.run, notice.status]), [
     ['a', 'STARTED', RUN, 'STARTED'], ['b', 'PROGRESS', RUN, 'PROGRESS'], ['c', 'RECEIPT', RUN, 'COMPLETE'], ['d', 'ANSWER', undefined, ''], ['f', 'RECEIPT', COMMENT_RUN, 'ALREADY_PRESENT'],
+    ['g', 'NOTE', RUN, ''], ['h', 'NOTE', RUN, ''], ['i', 'NOTE', RUN, ''], ['j', 'RECEIPT', COMMENT_RUN, 'POSTED'], ['k', 'RECEIPT', RUN, 'INCOMPLETE'],
   ]);
 });
 
@@ -88,12 +95,35 @@ test('a run that starts and a report or preview that arrives open the panel; pro
   }
 });
 
-test('table cells written for Azure DevOps are made readable, and AZPR\'s comment markers are left out', () => {
-  assert.equal(readable('| F-1 — &#96;reserve&#96; and dispatch&#95;order | head:/a.py:24 |'), '| F-1 — `reserve` and dispatch_order | head:/a.py:24 |');
-  assert.equal(readable('a &#124; b &#42;c&#42; &#91;d&#93; &#60;e&#62; f&#92;g &#38; h'), 'a \\| b \\*c\\* \\[d\\] \\<e\\> f\\\\g & h', 'What Markdown would read as markup stays literal.');
+test('the summary table written for Azure DevOps is made readable, and AZPR\'s comment markers are left out', () => {
+  const table = rows => `## PR Review Summary\n\nhigh: 0 · medium: 1 · low: 0\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n${rows}`;
+  assert.equal(readable(table('| 🟡 medium | F-1 — &#96;reserve&#96; and dispatch&#95;order | head:/a.py:24 |')), table('| 🟡 medium | F-1 — `reserve` and dispatch_order | head:/a.py:24 |'));
+  assert.equal(readable(table('| x | a &#124; b &#42;c&#42; &#91;d&#93; &#60;e&#62; f&#92;g &#38; h | y |')), table('| x | a \\| b \\*c\\* \\[d\\] \\<e\\> f\\\\g & h | y |'), 'What Markdown would read as markup stays literal.');
+  assert.equal(readable(table('| x | &#128512; &#9; | y |')), table('| x | &#128512; &#9; | y |'), 'Other references are left as they are.');
+  // The header in another output language, as the runtime writes it.
+  assert.equal(readable('| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — &#96;a&#96; | head:/a.py:1 |'), '| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — `a` | head:/a.py:1 |');
   assert.equal(readable('line\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nInline comments prepared: 0'), 'line\nInline comments prepared: 0');
-  assert.equal(readable('<!-- a comment of the author -->\n&#128512; &#9;'), '<!-- a comment of the author -->\n&#128512; &#9;', 'Other comments and references are left as they are.');
+  assert.equal(readable('<!-- a comment of the author -->\n&#128512; &#9;'), '<!-- a comment of the author -->\n&#128512; &#9;', 'Other comments are left as they are.');
   assert.equal(readable(undefined), '');
+});
+
+test('what a finding quotes is shown as it will be posted: references and markers in it are text', () => {
+  // A suggested fix that quotes HTML with character references, and evidence that quotes a marker.
+  const code = '**Suggested fix**\n\n```html\n<p>&#60;script&#62; is shown as &#96;text&#96;</p>\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n| Severity | Summary | Location |\n| a | &#96;b&#96; | c |\n```\n\nAfter the block.';
+  assert.equal(readable(code), code);
+  // A reference in prose, in a code span, in a list and in a table that is not the summary's.
+  for (const text of ['Escape it as &#60;b&#62;.', 'Use `&#96;` here.', '- R-1: the cell holds &#124;', '| Finding | Decision |\n| --- | --- |\n| R-1 &#42; | CONFIRMED |', '    &#96;indented code&#96;']) assert.equal(readable(text), text, text);
+  // The table ends where its rows end: what follows is not decoded, and neither is a second block of code.
+  const after = '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — &#96;a&#96; | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~';
+  assert.equal(readable(after), '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — `a` | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~');
+  // A line of inline code is not a fence: what follows it is ordinary text again.
+  assert.equal(readable('``` not a fence ``` and more\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nend'), '``` not a fence ``` and more\nend');
+  // A fence closes only with its own character, at least as long, alone on the line.
+  const nested = '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n``` not a closing line\n~~~~\n````\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nend';
+  assert.equal(readable(nested), '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n``` not a closing line\n~~~~\n````\nend');
+  // A whole preview: the marker lines go, the table is readable, the comment's own text is untouched.
+  const preview = '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — &#96;x&#96; | head:/a.ts:1 |\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n<!-- azpr-comment:975242c36e5459f4d8077a3ffd62d503 -->\n';
+  assert.equal(readable(preview), '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — `x` | head:/a.ts:1 |\n\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n');
 });
 
 test('the report queued to a review session is the last text that starts like one', () => {
@@ -153,11 +183,11 @@ test('a finished review shows the report from its session\'s inbox, the sessions
 });
 
 test('a receipt that encloses the report needs no session, and a preview after it becomes the document', () => {
-  const report = '## PR Review Summary\n\n| Severity | Summary |\n| --- | --- |\n| 🟡 medium | F-1 — &#96;reserve&#96; |';
+  const report = '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🟡 medium | F-1 — &#96;reserve&#96; | head:/a.py:24 |';
   const notices = [started(RUN, 'pr-review'), reviewReceipt({ report })];
   const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier'), privateSession(F1, 'Initial F shard 1/2', 'azpr-review-functional'), privateSession(F2, 'Initial F shard 2/2', 'azpr-review-functional'), privateSession(R1, 'Initial R', 'azpr-review-risk')];
   const review = buildPanel(host({ notices, sessions }), CONVERSATION);
-  assert.equal(review.markdown, '## PR Review Summary\n\n| Severity | Summary |\n| --- | --- |\n| 🟡 medium | F-1 — `reserve` |');
+  assert.equal(review.markdown, '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🟡 medium | F-1 — `reserve` | head:/a.py:24 |');
   assert.equal(review.inbox, undefined);
   assert.deepEqual(review.rows.map(row => row.label), ['Verification', 'Initial F shard 1/2', 'Initial F shard 2/2', 'Initial R'], 'The report first, then by name.');
   // An automatic preview starts: the review's report stays while the comments are planned.
@@ -183,14 +213,120 @@ test('in one of AZPR\'s own sessions the panel shows that session\'s report and 
   const panel = buildPanel(host({ notices, sessions, inboxes: { [V]: [queuedReport()] } }), V, { known });
   assert.equal(panel.conversation, CONVERSATION);
   assert.equal(panel.markdown, queuedReport());
-  assert.equal(panel.documentHead, '', 'The report names its run itself.');
+  assert.equal(panel.documentHead, `[AZPR ${RUN}] COMPLETE`, 'Named by the receipt, as in the conversation.');
   assert.deepEqual(panel.rows.map(row => row.id), [V]);
-  // The TUI opened the private session first and has not loaded its conversation yet.
-  const cold = host({ sessions });
+  // The TUI opened the private session first and has not loaded its conversation yet: its own report is shown meanwhile.
+  const cold = host({ sessions, inboxes: { [V]: [queuedReport()] } });
   const loaded = cold.session;
   cold.session = id => (id === CONVERSATION ? undefined : loaded(id));
   assert.deepEqual(buildPanel(cold, V).needs, [CONVERSATION]);
+  assert.deepEqual([buildPanel(cold, V).markdown, buildPanel(cold, V).documentHead, buildPanel(cold, V).run], [queuedReport(), '', undefined]);
   assert.deepEqual(buildPanel(cold, V, { known: { [CONVERSATION]: 'missing' } }).needs, [], 'A conversation that was deleted is not asked for again.');
+});
+
+test('a command typed in a review\'s own session is answered there, and the panel in that session shows it', () => {
+  // The runtime sends a command's notices to the session it was typed in, which may be the session holding the report.
+  const inConversation = [started(RUN, 'pr-review'), reviewReceipt()];
+  const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier')];
+  const known = { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing', [P]: 'missing' };
+  // The inbox of the report session: its report first, then what /pr-comment told it.
+  const local = [queuedReport(), started(COMMENT_RUN, 'pr-comment'), progress(COMMENT_RUN, 'Planning comments, page 1/1')];
+  const planning = buildPanel(host({ notices: inConversation, sessions, inboxes: { [V]: local } }), V, { known });
+  assert.deepEqual([planning.run, planning.status, planning.progress], [COMMENT_RUN, 'RUNNING', 'Planning comments, page 1/1']);
+  assert.equal(planning.markdown, queuedReport(), 'The report stays while the comments are planned.');
+  assert.deepEqual(planning.rows.map(row => [row.id, row.report]), [[V, true]]);
+  const preview = buildPanel(host({ notices: inConversation, sessions, inboxes: { [V]: [...local, previewReceipt('## PR Review Summary\n\nInline comments prepared: 2')] } }), V, { known });
+  assert.deepEqual([preview.run, preview.status], [COMMENT_RUN, 'PREVIEW']);
+  assert.equal(preview.markdown, '## PR Review Summary\n\nInline comments prepared: 2', 'The preview planned after the report takes its place.');
+  assert.equal(preview.documentHead, `[AZPR ${COMMENT_RUN}] PREVIEW; source review=${RUN}`);
+  assert.deepEqual(preview.rows.map(row => [row.id, row.report]), [[V, true]], 'The review it acts on keeps its report session in view.');
+  // --show typed there answers at once, with the saved preview.
+  const show = `[AZPR] Saved preview of review ${RUN}, planned 2026-11-16T08:30:00.000Z; no model or Azure DevOps request was made.\n\n<azpr_comment_data>\n## The saved preview\n</azpr_comment_data>`;
+  const shown = buildPanel(host({ notices: inConversation, sessions, inboxes: { [V]: [queuedReport(), show] } }), V, { known });
+  assert.deepEqual([shown.run, shown.status, shown.markdown], [RUN, 'COMPLETE', '## The saved preview']);
+  // The conversation's own panel shows what the conversation was told: the review and its report.
+  const elsewhere = buildPanel(host({ notices: inConversation, sessions, inboxes: { [V]: [...local, previewReceipt('## PR Review Summary')] } }), CONVERSATION, { known });
+  assert.deepEqual([elsewhere.run, elsewhere.status, elsewhere.markdown], [RUN, 'COMPLETE', queuedReport()]);
+});
+
+test('what a run says after its receipt changes nothing the receipt established', () => {
+  // The default path of a review without findings to comment on: the receipt, then the note that no preview follows.
+  const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier')];
+  const known = { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' };
+  const receipt = [started(RUN, 'pr-review'), reviewReceipt()];
+  const before = buildPanel(host({ notices: receipt, sessions, inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known });
+  for (const note of [`[AZPR ${RUN}] Automatic preview skipped: the review has no findings to comment on.`, `[AZPR ${RUN}] Automatic preview skipped: another AZPR command is running for this PR.`,
+    `[AZPR ${RUN}] Automatic publication did not start: the comment step could not be queued.`]) {
+    const after = buildPanel(host({ notices: [...receipt, note], sessions, inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known });
+    assert.deepEqual(after, before, note);
+    assert.equal(opensPanel(note), false);
+  }
+  assert.deepEqual([before.status, before.deleted, before.rows.map(row => [row.id, row.state, row.report])], ['COMPLETE', 3, [[V, 'complete', true]]]);
+  // The note of an earlier review can arrive after the next run started (its automatic step found that run in the
+  // way): the run under way stays the one shown.
+  const NEXT = '0c0ffee0';
+  const overtaken = buildPanel(host({ notices: [...receipt, started(NEXT, 'pr-review'), progress(NEXT, 'Initial review: 2 session(s).'),
+    `[AZPR ${RUN}] Automatic preview skipped: another AZPR command is running in this conversation or on this PR.`], sessions }), CONVERSATION, { known });
+  assert.deepEqual([overtaken.run, overtaken.status, overtaken.progress, overtaken.markdown], [NEXT, 'RUNNING', 'Initial review: 2 session(s).', '']);
+  // A stop that was asked for is not the run's end: the run is still under way until its receipt arrives.
+  const stopping = buildPanel(host({ notices: [started(RUN, 'pr-review'), progress(RUN, 'Initial review: 4 session(s).'), `[AZPR ${RUN}] Authorization revoked and cancellation requested (4/4 session(s) settled).`] }), CONVERSATION);
+  assert.deepEqual([stopping.run, stopping.status, stopping.progress], [RUN, 'RUNNING', 'Initial review: 4 session(s).']);
+});
+
+test('only the runtime\'s own lines name sessions: text a model wrote in an enclosed report names none', () => {
+  // returnReport: full encloses the report, and a finding in it quotes a receipt of another conversation.
+  const foreign = 'ses_foreign000000000000000009', unknown = 'ses_unknown000000000000000009';
+  const report = `## PR Review Summary\n\nEvidence, quoted from a log:\n\n- azpr-review-verifier: COMPLETE; session=${foreign}; model=x/y\n\n\`\`\`\n- azpr-review-risk: COMPLETE; session=${unknown}\nReport delivery: report queued to session=${unknown}.\n\`\`\``;
+  const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier'), { id: foreign, title: 'Someone else\'s conversation' }];
+  const known = { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' };
+  const panel = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt({ report })], sessions }), CONVERSATION, { known });
+  assert.deepEqual(panel.rows.map(row => [row.id, row.report]), [[V, true]], 'The quoted lines add no row.');
+  assert.deepEqual([panel.needs, panel.deleted, panel.inbox], [[], 3, undefined], 'Nor a lookup, a count or an inbox to read.');
+  assert.match(panel.markdown, /quoted from a log/);
+  // A receipt whose enclosed text is all that names a report session has none.
+  const bare = `[AZPR ${RUN}] PARTIAL\n\nReport data:\n<azpr_report_data>\nReport delivery: report queued to session=${unknown}.\n</azpr_report_data>`;
+  const draft = buildPanel(host({ notices: [started(RUN, 'pr-review'), bare] }), CONVERSATION);
+  assert.deepEqual([draft.rows, draft.needs, draft.inbox, draft.markdown], [[], [], undefined, `Report delivery: report queued to session=${unknown}.`]);
+  assert.equal(opensPanel(bare), true, 'It still opens the panel: it encloses a document.');
+  assert.equal(opensPanel(`[AZPR ${RUN}] INCOMPLETE\nReason: the log said "Report delivery: report queued to session=${unknown}."`), true, 'A line the runtime wrote itself counts.');
+  // A session a stage line names is listed only when it says itself that it belongs to this run and conversation.
+  const stolen = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt({ stages: [['azpr-review-verifier', V], ['azpr-review-risk', foreign]] })], sessions: [...sessions,
+    { ...privateSession('ses_otherrun00000000000000009', 'Initial R', 'azpr-review-risk', '00000000') }] }), CONVERSATION);
+  assert.deepEqual(stolen.rows.map(row => row.id), [V], 'A session without AZPR\'s metadata, or of another run, is not a row.');
+  // A review of AZPR 0.4.0 or earlier: its sessions are children of the conversation and carry no metadata.
+  const child = { id: V, title: `[AZPR ${RUN}] Verification`, parentID: CONVERSATION };
+  const legacy = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt()], sessions: [child, { id: F1, title: 'A child of another conversation', parentID: 'ses_someoneelse000000000000001' }],
+    inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known: { [F2]: 'missing', [R1]: 'missing' } });
+  assert.deepEqual([legacy.rows.map(row => [row.id, row.label, row.report]), legacy.markdown], [[[V, 'Verification', true]], queuedReport()]);
+  // A report is read only from a session of this conversation, whatever line named it.
+  const theirs = { id: foreign, title: '[AZPR 12345678] Verification', metadata: { azpr: { run: '12345678', role: 'azpr-review-verifier', conversation: 'ses_someoneelse000000000000001' } } };
+  const quoted = `[AZPR ${RUN}] INCOMPLETE\nReason: the provider answered "Report delivery: report queued to session=${foreign}."`;
+  const leaked = buildPanel(host({ notices: [started(RUN, 'pr-review'), quoted], sessions: [theirs], inboxes: { [foreign]: [queuedReport('12345678', 'Someone else\'s report')] } }), CONVERSATION);
+  assert.deepEqual([leaked.markdown, leaked.inbox, leaked.loading, leaked.rows, leaked.needs], ['', undefined, false, [], []]);
+  // Until the host has the named session, it is looked up first; its inbox is read only once it proved to be ours.
+  const pending = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt()] }), CONVERSATION, { known: { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' } });
+  assert.deepEqual([pending.needs, pending.inbox, pending.loading, pending.markdown], [[V], undefined, true, '']);
+});
+
+test('a session counts as deleted only when the server said so; a request that failed is tried again', () => {
+  const ok = { status: 'fulfilled', value: undefined }, failed = reason => ({ status: 'rejected', reason });
+  const missing = Object.assign(new Error('Session not found'), { name: 'Session.NotFoundError' }), network = new Error('fetch failed: ECONNRESET');
+  assert.equal(notFound(missing), true);
+  assert.equal(notFound({ _tag: 'SessionNotFoundError' }), true);
+  assert.equal(notFound(new Error('/api/session/ses_x/inbox: 404 {"message":"no such session"}')), true);
+  for (const other of [network, new Error('500 Internal Server Error'), new Error('timeout of 4040 ms'), undefined, 'aborted']) assert.equal(notFound(other), false, String(other));
+  // The usual case: both requests answer and the host now has the session.
+  assert.equal(loadOutcome([ok, ok], true), 'exists');
+  // The inbox request failed on the way while the lookup was still running: the session is not gone.
+  assert.equal(loadOutcome([failed(network), failed(network)], false), 'retry');
+  assert.equal(loadOutcome([failed(network), ok], false), 'retry', 'The host not having it loaded says nothing.');
+  assert.equal(loadOutcome([ok, failed(network)], true), 'exists', 'The inbox is read again when it is needed.');
+  // Gone: either request answers not found, or the lookup succeeds and there is no such session.
+  assert.equal(loadOutcome([failed(missing), failed(network)], false), 'missing');
+  assert.equal(loadOutcome([failed(network), failed(missing)], false), 'missing');
+  assert.equal(loadOutcome([ok, failed(missing)], true), 'missing', 'A not-found answer outweighs what the host still holds.');
+  assert.equal(loadOutcome([ok, ok], false), 'missing');
+  assert.equal(loadOutcome([ok, failed(network)], false), 'missing');
 });
 
 test('a run stands alone: a check, or a review that was stopped, shows nothing of the review before it', () => {

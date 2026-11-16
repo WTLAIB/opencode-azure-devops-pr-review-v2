@@ -26,7 +26,7 @@ import { createElement as _$createElement } from "@opentui/solid";
 // OpenCode 2.3.0 compiles no JSX of a package it installed, so the package carries the result.
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core";
-import { PANEL, buildPanel, opensPanel, reportIn, syntheticOf } from "./tui-model.mjs";
+import { PANEL, buildPanel, loadOutcome, notFound, opensPanel, reportIn, syntheticOf } from "./tui-model.mjs";
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
 const READY = "AZPR: report or preview ready. /pr-panel shows it.";
@@ -518,11 +518,14 @@ export default {
     const needed = [context?.ui?.slot, context?.ui?.panel?.open, context?.ui?.router?.navigate, context?.keymap?.layer, context?.data?.listen, context?.data?.session?.pending?.list];
     if (needed.some(part => typeof part !== "function")) return;
     const data = context.data;
+    // Set when the TUI unloads the plugin: nothing is asked of the host after that.
+    let disposed = false;
     // The host keeps the messages and the inbox of the session on screen and of open tabs, and drops those of
     // other sessions again. What the panel needs of another session, such as the report waiting in a review
     // session's inbox, it therefore reads from the server itself and keeps here.
     const [fetched, setFetched] = createSignal({});
     const fetchInbox = async sessionID => {
+      if (disposed) return [];
       const result = await context.client.session.inbox.list({
         sessionID
       });
@@ -540,8 +543,6 @@ export default {
       messages: id => data.session.message.list(id),
       pending: id => [...data.session.pending.list(id), ...(fetched()[id] ?? [])]
     };
-    const gone = error => /NotFound|\b404\b/.test(String(error?.name ?? "") + String(error?._tag ?? "") + String(error));
-
     // Which sessions were looked up and are gone, and which inboxes were read.
     const [known, setKnown] = createSignal({});
     const [read, setRead] = createSignal({});
@@ -550,31 +551,50 @@ export default {
       [sessionID]: value
     });
     const loading = new Map();
-    /** Load a session and its inbox, once at a time; a session the host no longer has is remembered as missing. */
+    // How often a session's load failed without an answer about the session itself; reset when the server reconnects.
+    const failed = new Map();
+    /**
+     * Load a session and its inbox, once at a time. A session is remembered as missing only when the server said
+     * so (see loadOutcome). A load whose requests failed is tried again a few times, further apart, and then left
+     * until the server reconnects.
+     */
     const load = sessionID => {
-      if (known()[sessionID] === "missing") return Promise.resolve();
+      if (disposed || known()[sessionID] === "missing" || failed.get(sessionID) >= 4) return Promise.resolve();
       const running = loading.get(sessionID);
       if (running) return running;
-      const started = Promise.all([data.session.sync(sessionID), fetchInbox(sessionID)]).then(() => mark(sessionID, data.session.get(sessionID) ? "exists" : "missing"), error => {
-        if (gone(error) || !data.session.get(sessionID)) mark(sessionID, "missing");
+      const started = Promise.allSettled([Promise.resolve().then(() => data.session.sync(sessionID)), fetchInbox(sessionID)]).then(results => {
+        const outcome = loadOutcome(results, Boolean(data.session.get(sessionID)));
+        if (outcome !== "retry") {
+          failed.delete(sessionID);
+          return mark(sessionID, outcome);
+        }
+        const count = (failed.get(sessionID) ?? 0) + 1;
+        failed.set(sessionID, count);
+        if (count < 4) setTimeout(() => void load(sessionID), 500 * 2 ** count);
       }).finally(() => loading.delete(sessionID));
       loading.set(sessionID, started);
       return started;
     };
     const reading = new Set();
-    /** Read the inbox of the session that holds a report; a report that is not there after a moment is not coming. */
+    /**
+     * Read the inbox of the session that holds a report. A report that is not there after a moment is not coming,
+     * and a request that failed on the way is made again; only a not-found answer says that the session is gone.
+     */
     const readInbox = (sessionID, token) => {
       const key = `${sessionID}:${token}`;
       if (read()[key] || reading.has(key)) return;
       reading.add(key);
       const attempt = async left => {
-        if (left <= 1 || reportIn(syntheticOf([], await fetchInbox(sessionID)))) return;
+        try {
+          if (reportIn(syntheticOf([], await fetchInbox(sessionID)))) return;
+        } catch (error) {
+          if (notFound(error)) return mark(sessionID, "missing");
+        }
+        if (left <= 1 || disposed) return;
         await new Promise(done => setTimeout(done, 400));
         return attempt(left - 1);
       };
-      attempt(3).catch(error => {
-        if (gone(error)) mark(sessionID, "missing");
-      }).finally(() => {
+      attempt(4).finally(() => {
         reading.delete(key);
         setRead(current => ({
           ...current,
@@ -674,6 +694,7 @@ export default {
       if (details?.type === "server.connected") {
         // What was published while the TUI was away was missed: look everything up again.
         discovered.clear();
+        failed.clear();
         setKnown({});
         setRead({});
         setFetched({});
@@ -730,6 +751,9 @@ export default {
         }
       }]
     }));
-    return () => stop?.();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
   }
 };

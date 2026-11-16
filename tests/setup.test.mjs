@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readFile, writeFile, lstat, rm, symlink, readdir, cp } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, writeFile, lstat, rm, symlink, readdir, cp, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addMissingSettings, defaultPatFile, settingsFileFor, parseSetupArguments, saveSetup, setupPlugin } from '../src/setup.mjs';
-import { COMMANDS, SETTING_DEFAULTS, validateSettings, withMissingSettings } from '../src/config.mjs';
+import { COMMANDS, SETTING_DEFAULTS, settingsText, validateSettings, withMissingSettings } from '../src/config.mjs';
 import { FAKE_PAT, fakeAzure, toolRegistry } from './fake-azure.mjs';
 
 async function fixture(t) {
@@ -223,7 +223,7 @@ test('setup refuses unsafe PAT, symlinked settings, writable directories and loc
   await assert.rejects(saveSetup(f.context, f.path, f.args), /writable by other users/);
   await chmod(join(f.root, 'private config'), 0o700);
   await writeFile(`${f.path}.setup.lock`, 'existing');
-  await assert.rejects(saveSetup(f.context, f.path, f.args), /setup lock/);
+  await assert.rejects(saveSetup(f.context, f.path, f.args), /Another setup is active, or its lock was left behind \(if none is running, delete settings\.json\.setup\.lock beside the settings file\)\. No settings changed\./);
   assert.equal(await readFile(`${f.path}.setup.lock`, 'utf8'), 'existing');
 });
 
@@ -327,8 +327,17 @@ test('a settings file another writer holds: the load waits for it, then uses the
   assert.ok(Date.now() - started >= 150, 'It waited for the other writer.');
   assert.equal(held.added.length, 0);
   assert.equal(held.missing.length, 19);
-  assert.equal(held.problem, 'Another setup is active, or a previous setup lock remains. No settings changed.');
+  assert.equal(held.problem, 'Another setup is active, or its lock was left behind (if none is running, delete settings.json.setup.lock beside the settings file). No settings changed.');
   assert.equal(await readFile(f.path, 'utf8'), minimal);
+  // A lock left behind long ago has no writer to wait for: the load goes on at once.
+  const longAgo = new Date(Date.now() - 120000);
+  await utimes(`${f.path}.setup.lock`, longAgo, longAgo);
+  const startedOld = Date.now();
+  const old = await addMissingSettings(f.path, { waitMs: 5000, pauseMs: 20 });
+  assert.ok(Date.now() - startedOld < 2000, 'Nothing waits for a lock that no one will release.');
+  assert.deepEqual([old.added.length, old.missing.length, old.problem], [0, 19, held.problem]);
+  assert.equal(await readFile(f.path, 'utf8'), minimal);
+  await writeFile(`${f.path}.setup.lock`, '');
   // A lock that goes away: the file is completed after it.
   setTimeout(() => rm(`${f.path}.setup.lock`), 60);
   const after = await addMissingSettings(f.path, { waitMs: 3000, pauseMs: 20 });
@@ -346,6 +355,85 @@ test('a settings file another writer holds: the load waits for it, then uses the
   await link(f.path, join(f.root, 'second name'));
   assert.match((await addMissingSettings(f.path)).problem, /^Setup requires a regular settings file owned by you, without hard links\.$/);
   assert.equal(await readFile(f.path, 'utf8'), minimal);
+});
+
+test('what a person saves while the settings file is being completed is kept', async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.root, 'private config'), { mode: 0o700 });
+  const minimal = minimalSettings(f);
+  await writeFile(f.path, JSON.stringify(minimal), { mode: 0o600 });
+  // The setup lock keeps AZPR's own writers apart, not an editor: this one saves after the completed text
+  // was prepared and before it takes the file's place.
+  let saves = 0;
+  const edited = JSON.stringify({ ...minimal, terminalPanel: 'manual', outputLanguage: 'ja' });
+  const result = await addMissingSettings(f.path, { pauseMs: 5, prepared: async () => { if (saves++ === 0) await writeFile(f.path, edited); } });
+  const saved = JSON.parse(await readFile(f.path, 'utf8'));
+  assert.deepEqual([saved.terminalPanel, saved.outputLanguage], ['manual', 'ja'], 'The person\'s values were not replaced by the defaults.');
+  assert.deepEqual(saved, withMissingSettings(JSON.parse(edited)).settings, 'The saved file was then completed in its turn.');
+  assert.equal(saves, 2, 'One attempt gave way to the save, the next one completed the saved file.');
+  assert.ok(result.added.length > 0 && !result.added.includes('terminalPanel') && !result.added.includes('outputLanguage'));
+  assert.deepEqual(await readdir(join(f.root, 'private config')), ['settings.json']);
+  // A save on every attempt: the completion gives up after its wait and leaves the last save as it is.
+  await writeFile(f.path, JSON.stringify(minimal), { mode: 0o600 });
+  let count = 0;
+  const busy = await addMissingSettings(f.path, { waitMs: 100, pauseMs: 10, prepared: () => writeFile(f.path, JSON.stringify({ ...minimal, outputLanguage: `x${count++ % 2 ? 'a' : 'b'}` })) });
+  assert.equal(busy.added.length, 0);
+  assert.equal(busy.problem, 'Settings changed during setup; retry after reviewing the file.');
+  assert.match(JSON.parse(await readFile(f.path, 'utf8')).outputLanguage, /^x[ab]$/, 'The file is the editor\'s last save.');
+  assert.deepEqual(await readdir(join(f.root, 'private config')), ['settings.json']);
+});
+
+test('a settings file switched off while AZPR loads is not rewritten', async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.root, 'private config'), { mode: 0o700 });
+  const disabled = JSON.stringify({ ...minimalSettings(f), enabled: false });
+  await writeFile(f.path, disabled, { mode: 0o600 });
+  assert.deepEqual(await addMissingSettings(f.path), { added: [] }, 'Called for a disabled file, the completion writes nothing.');
+  assert.equal(await readFile(f.path, 'utf8'), disabled);
+  // Enabled when the load looked at it, switched off before the completion could write.
+  await writeFile(f.path, JSON.stringify(minimalSettings(f)), { mode: 0o600 });
+  let done = false;
+  const result = await addMissingSettings(f.path, { pauseMs: 5, prepared: async () => { if (!done) { done = true; await writeFile(f.path, disabled); } } });
+  assert.deepEqual(result, { added: [] });
+  assert.equal(await readFile(f.path, 'utf8'), disabled, 'The file its user switched off stays as they saved it.');
+});
+
+test('a load that stopped waiting for another writer accepts the completed file later; a person\'s change still blocks', async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.root, 'private config'), { mode: 0o700 });
+  const minimal = JSON.stringify(minimalSettings(f));
+  await writeFile(f.path, minimal, { mode: 0o600 });
+  // Another load holds the lock while this one loads: it reads the file as it is.
+  await writeFile(`${f.path}.setup.lock`, '');
+  t.after(await f.setup({ settingsWaitMs: 60 }));
+  assert.equal(await readFile(f.path, 'utf8'), minimal);
+  const waiting = await checkReport(f);
+  assert.match(waiting, /\] READY/, waiting);
+  assert.match(waiting, /\| Settings \| WARNING \| 19 setting\(s\) are not in the settings file and could not be added to it: Another setup is active, or its lock was left behind \(if none is running, delete settings\.json\.setup\.lock beside the settings file\)\. No settings changed\. Their defaults apply: models\.review\.rater, models\.deep and 17 more\. \|/);
+  // The other load finishes: the file now has the same settings with their defaults written in.
+  await writeFile(f.path, settingsText(withMissingSettings(JSON.parse(minimal)).settings), { mode: 0o600 });
+  await rm(`${f.path}.setup.lock`);
+  const completed = await checkReport(f);
+  assert.match(completed, /\] READY/, 'The completed file is the loaded settings: commands are not refused over it.');
+  assert.doesNotMatch(completed, /\| Settings \|/, 'Nothing is missing any more, so nothing is warned about.');
+  assert.match(await checkReport(f), /\] READY/, 'And it stays accepted.');
+  // A value someone changed is still a changed file.
+  const edited = JSON.parse(await readFile(f.path, 'utf8'));
+  edited.outputLanguage = 'ja';
+  await writeFile(f.path, settingsText(edited));
+  await f.invoke('pr-check', f.azure.prUrl());
+  for (let count = 0; count < 200 && !f.reports.some(report => report.includes('changed since OpenCode')); count++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(f.reports.some(report => report.includes('settings.json changed since OpenCode loaded it')));
+  // So is a completed file that also carries another value.
+  const g = await fixture(t);
+  await mkdir(join(g.root, 'private config'), { mode: 0o700 });
+  await writeFile(g.path, minimal.replace(f.pat, g.pat), { mode: 0o600 });
+  await writeFile(`${g.path}.setup.lock`, '');
+  t.after(await g.setup({ settingsWaitMs: 60 }));
+  await writeFile(g.path, settingsText({ ...withMissingSettings(minimalSettings(g)).settings, shell: 'ask' }), { mode: 0o600 });
+  await g.invoke('pr-check', g.azure.prUrl());
+  for (let count = 0; count < 200 && !g.reports.some(report => report.includes('changed since OpenCode')); count++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(g.reports.some(report => report.includes('settings.json changed since OpenCode loaded it')), 'Defaults written in are accepted, a changed value with them is not.');
 });
 
 test('loads that happen at the same time complete the settings file once and all read the same text', async t => {

@@ -128,8 +128,14 @@ settings, backups and failure records. Never upload `.local/`.
   touches a file that is invalid, disabled, a symbolic link or not safely
   replaceable, replaces the file as `/pr-setup` does (atomic, owner-only,
   under the setup lock) and never fails a load: a file it cannot complete is
-  used as it is, and `/pr-check` says what it leaves out. Processes that load
-  AZPR together wait for the one that writes, so each reads the finished file.
+  used as it is, and `/pr-check` says what it leaves out. The lock keeps
+  AZPR's own writers apart, not a person's editor: compare the file with the
+  text that was read once more, right before the new text replaces it, and
+  give way when it changed. Loads that happen together wait for the one that
+  writes, so each reads the finished file; a load that stopped waiting accepts
+  the completed text when it appears later (the preflight compares with the
+  completion of what it loaded), so its commands are never refused over
+  defaults another load wrote. Any other difference still blocks new runs.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,
@@ -237,6 +243,20 @@ settings, backups and failure records. Never upload `.local/`.
   not the default, so default requests stay as they were.
 - `/pr-panel` is its only command. Add another only for what neither a
   setting nor OpenCode's own UI (its session list, say) already does.
+- What names a session or a status is the runtime's own text only: a
+  receipt's lines before the report or preview it encloses, whose text a
+  model wrote. A session is listed, and a report read from it, only when its
+  own `metadata.azpr` says that it belongs to that run and conversation (a
+  session of 0.4.0 or earlier, which has none: when it is a child of the
+  conversation). A run's notice that is neither its start, its progress nor
+  its receipt (a status word followed by `;`, a line break or the end)
+  changes nothing shown, and does not make its run the current one. The panel in a review's own session also reads the notices of
+  commands typed there, which the runtime answers there.
+- The Markdown shown is the Markdown saved: only the cells of the summary
+  table are decoded and only AZPR's marker lines are left out, never inside
+  code. A preview on screen must be the preview that publication posts.
+- A session counts as deleted only when the server said so; a request that
+  failed is tried again.
 - The text of notices and receipts is therefore an interface. Change it
   together with `tui-model.mjs`, whose tests run against `renderReceipt` and
   against the notices of a whole run.

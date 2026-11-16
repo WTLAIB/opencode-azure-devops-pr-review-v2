@@ -64,13 +64,26 @@ file behaves as the file did; values, their order and unrelated names stay.
 The file is replaced as `/pr-setup` replaces it: a temporary owner-only file
 renamed over it, under the setup lock, only when it is a regular file of the
 user's own, without hard links, in a directory no other user can write to.
-A file that cannot be completed is used as it is and never fails the load;
-`/pr-check` then names what it leaves out and why, and otherwise lists what
-was added. AZPR can be loaded more than once at the same time (several
-OpenCode processes, or several project instances), and the runtime later
-compares the file with the text it read: a load that finds another one
-writing therefore waits for it and reads the result, so none keeps a text
-the file no longer has. A source installation's settings
+The lock keeps AZPR's own writers apart, not a person's editor, so the file
+is compared with the text that was read once more after the new text is
+ready, right before the rename: a save made meanwhile is kept, and the
+completion starts again from it. A file switched off meanwhile is left as
+saved. A file that cannot be completed is used as it is and never fails the
+load; `/pr-check` then names what it leaves out and why, and otherwise lists
+what was added.
+
+AZPR can be loaded more than once at the same time (several OpenCode
+processes, or several project instances), and the runtime later compares the
+file with the text it read. A load that finds another one writing therefore
+waits for it, up to three seconds, and reads the result; one that opened the
+file just before it was replaced reads the file that is there now. A lock
+older than thirty seconds was left behind by a process that ended, and
+nothing waits for it; its message names the lock file to delete. A load that
+stopped waiting has read the file as it was. When the other load finishes
+later, the preflight finds a file that differs from the loaded text only by
+the defaults written in (it compares with the completion of what it loaded)
+and accepts it, so commands are not refused over AZPR's own completion; any
+other difference blocks new runs as before. A source installation's settings
 are completed by the installer as before (`scripts/merge-settings.py`), from
 the same example.
 
@@ -641,6 +654,31 @@ and not in a terminal. A comment run is shown together with the review it acts
 on, which its STARTED notice and its receipt name; any other run stands alone,
 so a review under way never shows the report of the review before it.
 
+What the model takes as fact is the runtime's own text, never a model's:
+
+- A receipt is a notice whose status word is followed by `;`, a line break or
+  the end. A run also says other things under its ID, such as `Automatic
+  preview skipped: …` after the receipt of a review without findings; those
+  change nothing shown, and do not make their run the current one when
+  another run has started since.
+- Stage lines and the report session are read from a receipt's lines before
+  the report or preview it encloses. A line in the enclosed text that looks
+  like one is just text.
+- A session is a row, and a report is read from its inbox, only when the
+  session's own `metadata.azpr` names this conversation (and, for a row, one
+  of the runs shown). A session that AZPR 0.4.0 or earlier created has no such
+  metadata and is a child of its conversation; that counts the same. A named
+  session the host has not loaded is looked up first.
+- In one of AZPR's own sessions the panel reads the conversation's notices
+  and those of that session: the runtime answers a command typed there
+  (`/pr-comment` in the session that holds the report) in that session, and a
+  preview planned after the report takes the report's place.
+- The Markdown shown is the saved Markdown. The cells of the summary table,
+  which the runtime writes with numeric character references for Azure
+  DevOps, are decoded, and AZPR's marker lines are left out; a reference or a
+  marker inside a code block, or anywhere else in a finding's text, stays as
+  it is, so the preview on screen is the preview that publication posts.
+
 `src/tui-view.jsx` is the view and the wiring to the host. What the host does
 decided several things in it:
 
@@ -658,7 +696,10 @@ decided several things in it:
   session on screen and of open tabs, and drops those of other sessions again.
   The panel therefore reads the inbox of the report session from the server
   itself (`client.session.inbox.list`) and keeps what it read. A session the
-  server no longer has is counted as deleted, not listed.
+  server no longer has is counted as deleted, not listed. Only the server's
+  answer establishes that: a not-found error, or a lookup that succeeded and
+  found nothing. A request that failed on the way says nothing about the
+  session and is tried again, three more times and further apart.
 - **Leaving and returning.** The host closes a panel when the screen leaves
   its session, which a click on a session row does. The panel is opened again
   when the screen returns to a session in which it was open and which the user

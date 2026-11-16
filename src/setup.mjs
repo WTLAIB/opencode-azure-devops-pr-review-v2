@@ -1,11 +1,11 @@
 /** Native package bootstrap. Configuration lives outside the package cache. */
 import { constants } from 'node:fs';
-import { open, readFile, lstat, mkdir, link, rename, unlink } from 'node:fs/promises';
+import { open, readFile, lstat, mkdir, link, rename, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { COMMANDS, modelRef, privateAgent, validateSettings, withMissingSettings } from './config.mjs';
+import { COMMANDS, modelRef, privateAgent, settingsText, validateSettings, withMissingSettings } from './config.mjs';
 import { parseUniqueJSON } from './output.mjs';
 import { appendReport } from './session.mjs';
 import { listOf, recordOf, requireMethods } from './host.mjs';
@@ -18,6 +18,10 @@ const SETUP_DESCRIPTION = 'Set up AZPR: organization, model, PAT file; --help. U
 const USAGE = '/pr-setup --organization ORG --model PROVIDER/MODEL [--pat-file "/absolute/path/to/pat"]';
 const RESTART = 'restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process)';
 const MAX_SETTINGS_BYTES = 1024 * 1024;
+// A writer holds the setup lock for a few milliseconds. One this old was left behind by a process that
+// ended while it held it: no one will release it, so nothing waits for it.
+const LOCK_LEFT_BEHIND_MS = 30000;
+const lockOf = path => `${path}.setup.lock`;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /** AZPR's directory for user files: $XDG_CONFIG_HOME/azpr, otherwise ~/.config/azpr. */
@@ -166,21 +170,31 @@ export async function saveSetup(context, path, arguments_, environment = process
  * Replace the settings file (or create it, when `previous` is null) atomically and owner-only, under
  * the setup lock, and only while the file still is what `previous` was. The errors of a held lock and
  * of a file changed meanwhile are marked `busy`: someone else is writing the file.
+ *
+ * The lock keeps other AZPR writers out, not a person's editor. The file is therefore compared with
+ * `previous` once more after the new text is ready, right before it takes the file's place: what
+ * someone saved while that text was written is not overwritten.
  */
-async function writeSettings(path, previous, settings) {
+async function writeSettings(path, previous, settings, prepared) {
   const parent = dirname(path);
   await mkdir(parent, { recursive: true, mode: 0o700 });
   const parentInfo = await lstat(parent);
   if (!parentInfo.isDirectory() || (parentInfo.mode & 0o022) || (typeof process.getuid === 'function' && parentInfo.uid !== process.getuid())) {
     throw new Error('[AZPR] The settings directory must be a directory owned by you, not a symbolic link or writable by other users.');
   }
-  const lock = `${path}.setup.lock`, temporary = `${path}.${randomUUID()}.tmp`;
+  const lock = lockOf(path), temporary = `${path}.${randomUUID()}.tmp`;
+  const changed = () => Object.assign(new Error('[AZPR] Settings changed during setup; retry after reviewing the file.'), { busy: true });
   let handle, acquired = false;
   try {
     try { handle = await open(lock, 'wx', 0o600); acquired = true; }
-    catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('[AZPR] Another setup is active, or a previous setup lock remains. No settings changed.'), { busy: true }); throw error; }
-    if (await readExisting(path) !== previous) throw Object.assign(new Error('[AZPR] Settings changed during setup; retry after reviewing the file.'), { busy: true });
-    await writeTemporary(temporary, JSON.stringify(settings, null, 2) + '\n');
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      throw Object.assign(new Error(`[AZPR] Another setup is active, or its lock was left behind (if none is running, delete ${basename(lock)} beside the settings file). No settings changed.`), { busy: true });
+    }
+    if (await readExisting(path) !== previous) throw changed();
+    await writeTemporary(temporary, settingsText(settings));
+    await prepared?.();
+    if (await readExisting(path) !== previous) throw changed();
     if (previous === null) await link(temporary, path); // Refuse a concurrent creator rather than overwriting it.
     else await rename(temporary, path);
   } finally {
@@ -205,12 +219,15 @@ async function writeTemporary(path, text) {
  * This runs when OpenCode loads AZPR, before the settings are read for good, and never fails a load:
  * a file that cannot be rewritten is used as it is. Several processes and project instances load
  * AZPR at once; they would write the same text, and one that finds another writing waits for it
- * and reads the result, so that each ends up with the file as it then stays.
+ * and reads the result, so that each ends up with the file as it then stays. A load that stops
+ * waiting reads the file as it is; the runtime accepts the completed text when it appears later
+ * (see its preflight), so a slow writer never leaves commands refused.
  *
  * Returns `added` (the names written, possibly none) or, when the file could not be completed,
  * `missing` (the names it lacks) with `problem`, which never holds a setting's value.
+ * `prepared` (offline tests only) runs once the new text is ready, before it replaces the file.
  */
-export async function addMissingSettings(path, { waitMs = 3000, pauseMs = 100 } = {}) {
+export async function addMissingSettings(path, { waitMs = 3000, pauseMs = 100, prepared } = {}) {
   const deadline = Date.now() + waitMs;
   let missing = [];
   try {
@@ -218,16 +235,21 @@ export async function addMissingSettings(path, { waitMs = 3000, pauseMs = 100 } 
       const previous = await readExisting(path);
       if (previous === null) return { added: [] };
       const raw = settingsJSON(previous);
+      // Switched off, also since this load began: AZPR does nothing, also not to the file.
+      if (raw.enabled === false) return { added: [] };
       const { settings, added } = withMissingSettings(raw);
       if (!added.length) return { added: [] };
       // A file that cannot be used is its user's to repair: nothing is added around the problem.
       try { validateSettings(raw); validateSettings(settings); } catch { return { added: [] }; }
       missing = added;
       try {
-        await writeSettings(path, previous, settings);
+        await writeSettings(path, previous, settings, prepared);
         return { added };
       } catch (error) {
         if (!error.busy || Date.now() >= deadline) throw error;
+        // A lock no live writer holds will not go away: do not wait for it.
+        const held = await stat(lockOf(path)).catch(() => null);
+        if (held && Date.now() - held.mtimeMs > LOCK_LEFT_BEHIND_MS) throw error;
         await new Promise(done => setTimeout(done, pauseMs));
       }
     }
@@ -237,7 +259,7 @@ export async function addMissingSettings(path, { waitMs = 3000, pauseMs = 100 } 
     try {
       const raw = settingsJSON(await readFile(path, 'utf8'));
       validateSettings(raw);
-      missing = withMissingSettings(raw).added;
+      missing = raw.enabled === false ? [] : withMissingSettings(raw).added;
     } catch { /* The runtime reports a file it cannot use; what was known of it stays. */ }
     if (!missing.length) return { added: [] };
     // Names and error codes only: an OS or parser message may quote the file.
@@ -283,7 +305,7 @@ async function settingsProblem(path) {
 
 /** Missing/invalid settings expose only setup and blocked command explanations, with the reason. */
 export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, testOptions = {}) {
-  const { environment = process.env, ...runtimeOptions } = testOptions;
+  const { environment = process.env, settingsWaitMs, ...runtimeOptions } = testOptions;
   const path = await settingsFileFor(context.options ?? {}, sourceDirectory, environment);
   const { problem, disabled } = await settingsProblem(path);
   const blocked = Boolean(problem);
@@ -326,7 +348,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   try {
     if (!blocked) {
       // Before the runtime reads the settings for good: it compares later reads with this one.
-      const completion = await addMissingSettings(path);
+      const completion = await addMissingSettings(path, settingsWaitMs === undefined ? {} : { waitMs: settingsWaitMs, pauseMs: 10 });
       cleanup = await setupAzurePrReview(context, sourceDirectory, { ...runtimeOptions, settingsPath: path, settingsCompletion: completion });
     }
   }

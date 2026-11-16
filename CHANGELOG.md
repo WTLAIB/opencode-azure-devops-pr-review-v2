@@ -62,10 +62,12 @@ Settings:
   `Settings` row).
 - The file is replaced as `/pr-setup` replaces it: atomically, owner-only and
   only when it is a regular file of your own in a directory no one else can
-  write to. A settings file that is a symbolic link, invalid or switched off
-  (`enabled: false`) is left as it is; where settings are missing and could
-  not be added, the `Settings` row of `/pr-check` is a WARNING that names
-  them and the reason.
+  write to. What you save in an editor at that moment is kept. A settings
+  file that is a symbolic link, invalid or switched off (`enabled: false`) is
+  left as it is; where settings are missing and could not be added, the
+  `Settings` row of `/pr-check` is a WARNING that names them and the reason.
+- A setup lock that a process left behind is now named: the message says
+  which file to delete when no setup is running.
 - `/pr-setup` writes every setting from the start, those it does not ask for
   at their defaults.
 - Going back to an earlier version after 0.4.2 completed the file needs one

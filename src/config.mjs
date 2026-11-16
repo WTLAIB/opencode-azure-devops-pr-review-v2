@@ -161,6 +161,9 @@ export function withMissingSettings(raw) {
   };
   return { settings: fill(raw, SETTING_DEFAULTS, ''), added };
 }
+
+/** A settings file as AZPR writes it: the text setup saves and the one a completed file has. */
+export const settingsText = settings => JSON.stringify(settings, null, 2) + '\n';
 function keys(value, allowed, at) {
   if (!isObject(value)) throw new Error(`${at} must be a JSON object.`);
   // Name an unknown key only when it looks like a setting name: a long one may be a pasted secret.

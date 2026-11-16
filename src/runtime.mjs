@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, modelRef, modelSlots, configuredOptionalSlots, stageModel, commentSlot, patProblem } from './config.mjs';
+import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, modelSlots, configuredOptionalSlots, stageModel, commentSlot, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -103,6 +103,15 @@ async function deadline(operation, milliseconds) {
   const timer = setTimeout(() => controller.abort(new Error('Timed out.')), milliseconds);
   try { return await bounded(() => operation(controller.signal), controller.signal); }
   finally { clearTimeout(timer); }
+}
+
+/** The settings a settings text leaves out; none for a text that cannot be read as settings. */
+function missingSettings(text) {
+  try { return withMissingSettings(parseUniqueJSON(text)).added; } catch { return []; }
+}
+/** The text a settings file has once AZPR wrote its missing settings into it; null where it cannot be worked out. */
+function completedText(text) {
+  try { return settingsText(withMissingSettings(parseUniqueJSON(text)).settings); } catch { return null; }
 }
 
 /**
@@ -358,7 +367,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const signal = run.controller.signal;
     let now;
     try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { throw new Error('[AZPR] settings.json is not readable.'); }
-    if (now !== state.raw) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new settings; running reviews are unaffected.');
+    if (now !== state.raw) {
+      // The loaded settings with nothing but the defaults another load of AZPR wrote into the file since (it was
+      // still writing when this load stopped waiting for it): the settings in use are the file's, and no person's
+      // change is passed over. Any other difference blocks new runs as before.
+      if (now !== completedText(state.raw)) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new settings; running reviews are unaffected.');
+      state.raw = now;
+    }
     if (settings.azure.patFile && await scoped(() => readPatFile(settings.azure.patFile), signal) !== pat) {
       throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new PAT; running reviews are unaffected.');
     }
@@ -1048,14 +1063,21 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       : { name: 'OpenCode', ok: true, warning: true, detail: `${host}; AZPR is tested with ${TESTED_HOST_VERSION}. Reviews still run: AZPR detects what this OpenCode provides and refuses to start if something it needs is missing.` });
     checks.push(await installationCheck(run));
     // Settings this version knows and the file left out: written into it when AZPR loaded, or the reason they were not.
+    // What the file lacks is read from its text as the preflight just accepted it, so a file another load completed
+    // meanwhile gets no warning.
     const completion = options.settingsCompletion;
-    // A row is cut at 300 characters: the reason comes before the names, and fewer are named beside it.
+    const lacking = missingSettings(state.raw);
+    // A row is cut at 300 characters: the reason comes before the names, and only as many are named as fit.
     const named = (names, limit) => `${names.slice(0, limit).join(', ')}${names.length > limit ? ` and ${names.length - limit} more` : ''}`;
+    const fitting = (text, names, limit) => {
+      for (let count = Math.min(limit, names.length); count > 1; count--) if ((text + named(names, count)).length < 300) return text + named(names, count) + '.';
+      return text + named(names, 1) + '.';
+    };
     if (completion?.added?.length) {
-      checks.push({ name: 'Settings', ok: true, detail: `${completion.added.length} setting(s) the settings file left out were added to it when AZPR loaded, at their defaults: ${named(completion.added, 8)}.` });
-    } else if (completion?.missing?.length) {
+      checks.push({ name: 'Settings', ok: true, detail: fitting(`${completion.added.length} setting(s) the settings file left out were added to it when AZPR loaded, at their defaults: `, completion.added, 8) });
+    } else if (completion?.problem && lacking.length) {
       checks.push({ name: 'Settings', ok: true, warning: true,
-        detail: `${completion.missing.length} setting(s) are not in the settings file and could not be added to it: ${completion.problem} Their defaults apply: ${named(completion.missing, 4)}.` });
+        detail: fitting(`${lacking.length} setting(s) are not in the settings file and could not be added to it: ${completion.problem} Their defaults apply: `, lacking, 4) });
     }
     // What follows a COMPLETE review of each mode; automatic publication posts as the PAT owner.
     const publishing = MODES.filter(mode => settings.afterReview[mode] === 'publish').map(mode => `/pr-${mode}`);
