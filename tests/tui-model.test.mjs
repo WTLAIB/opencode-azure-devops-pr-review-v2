@@ -105,7 +105,10 @@ test('the summary table written for Azure DevOps is made readable, and AZPR\'s c
   assert.equal(readable(table('| x | &#128512; &#9; &#65; | y |')), table('| x | &#128512; &#9; &#65; | y |'), 'References the runtime does not write are left as they are.');
   // The header in another output language, as the runtime writes it.
   assert.equal(readable('| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — &#96;a&#96; | head:/a.py:1 |'), '| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — \\`a\\` | head:/a.py:1 |');
-  assert.equal(readable('line\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nInline comments prepared: 0'), 'line\nInline comments prepared: 0');
+  // A marker as the runtime writes it: a paragraph of its own.
+  assert.equal(readable('line\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nInline comments prepared: 0'), 'line\n\n\nInline comments prepared: 0');
+  assert.equal(readable('<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->'), '');
+  assert.equal(readable('last line\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n'), 'last line\n\n');
   assert.equal(readable('<!-- a comment of the author -->\n&#128512; &#9;'), '<!-- a comment of the author -->\n&#128512; &#9;', 'Other comments are left as they are.');
   assert.equal(readable(undefined), '');
 });
@@ -120,10 +123,17 @@ test('what a finding quotes is shown as it will be posted: references and marker
   const after = '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — &#96;a&#96; | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~';
   assert.equal(readable(after), '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — \\`a\\` | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~');
   // A line of inline code is not a fence: what follows it is ordinary text again.
-  assert.equal(readable('``` not a fence ``` and more\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nend'), '``` not a fence ``` and more\nend');
+  assert.equal(readable('``` not a fence ``` and more\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nend'), '``` not a fence ``` and more\n\n\nend');
+  // A code span may run over several lines, never over a blank one: a marker on a line of such a paragraph is the
+  // finding's text, as is one that merely follows or precedes other text.
+  const span = 'The log shows ``\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n`` between two deliveries.';
+  assert.equal(readable(span), span);
+  for (const text of ['quoted:\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->', '<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nfollowed at once', 'a\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nb']) assert.equal(readable(text), text, text);
+  // The summary's header inside a paragraph, or without its delimiter row, begins no table of the runtime's.
+  for (const text of ['Quoted:\n| Severity | Summary | Location |\n| --- | --- | --- |\n| x | &#96;y&#96; | z |', '| Severity | Summary | Location |\n| x | &#96;y&#96; | z |']) assert.equal(readable(text), text, text);
   // A fence closes only with its own character, at least as long, alone on the line.
-  const nested = '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n``` not a closing line\n~~~~\n````\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nend';
-  assert.equal(readable(nested), '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n``` not a closing line\n~~~~\n````\nend');
+  const nested = '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\n``` not a closing line\n~~~~\n````\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nend';
+  assert.equal(readable(nested), '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\n``` not a closing line\n~~~~\n````\n\n\nend');
   // A whole preview: the marker lines go, the table is readable, the comment's own text is untouched.
   const preview = '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — &#96;x&#96; | head:/a.ts:1 |\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n<!-- azpr-comment:975242c36e5459f4d8077a3ffd62d503 -->\n';
   assert.equal(readable(preview), '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — \\`x\\` | head:/a.ts:1 |\n\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n');
@@ -175,7 +185,7 @@ test('a finished review shows the report from its session\'s inbox, the sessions
   assert.deepEqual(second.needs, []);
   assert.equal(second.deleted, 3);
   assert.equal(second.markdown, queuedReport());
-  assert.equal(second.documentHead, `[AZPR ${RUN}] COMPLETE`);
+  assert.equal(second.documentHead, '', 'A report read from its session names its run and status in its own first line.');
   assert.deepEqual([second.inbox, second.loading], [undefined, false]);
   // The inbox was read and holds no report: say so instead of loading for ever.
   const empty = buildPanel(host({ notices, sessions }), CONVERSATION, { known, read });
@@ -202,9 +212,9 @@ test('a receipt that encloses the report needs no session, and a preview after i
   assert.deepEqual(during.rows.map(row => [row.label, row.state]), [['Verification', 'complete'], ['Comment plan page 1/1', 'running'], ['Initial F shard 1/2', 'complete'], ['Initial F shard 2/2', 'complete'], ['Initial R', 'complete']],
     'The report, then the run under way, then the review it acts on.');
   // The preview arrives.
-  const preview = buildPanel(host({ notices: [...planning, previewReceipt('## PR Review Summary\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nInline comments prepared: 0')], sessions }), CONVERSATION, { known: { [P]: 'missing' } });
+  const preview = buildPanel(host({ notices: [...planning, previewReceipt('## PR Review Summary\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nInline comments prepared: 0')], sessions }), CONVERSATION, { known: { [P]: 'missing' } });
   assert.deepEqual([preview.run, preview.status], [COMMENT_RUN, 'PREVIEW']);
-  assert.equal(preview.markdown, '## PR Review Summary\n\nInline comments prepared: 0');
+  assert.equal(preview.markdown, '## PR Review Summary\n\n\nInline comments prepared: 0');
   assert.equal(preview.documentHead, `[AZPR ${COMMENT_RUN}] PREVIEW; source review=${RUN}`);
   assert.equal(preview.deleted, 0, 'A comment run names no stage in its receipt, so nothing is counted for it.');
 });
@@ -216,7 +226,7 @@ test('in one of AZPR\'s own sessions the panel shows that session\'s report and 
   const panel = buildPanel(host({ notices, sessions, inboxes: { [V]: [queuedReport()] } }), V, { known });
   assert.equal(panel.conversation, CONVERSATION);
   assert.equal(panel.markdown, queuedReport());
-  assert.equal(panel.documentHead, `[AZPR ${RUN}] COMPLETE`, 'Named by the receipt, as in the conversation.');
+  assert.equal(panel.documentHead, '', 'The report names its run itself.');
   assert.deepEqual(panel.rows.map(row => row.id), [V]);
   // The TUI opened the private session first and has not loaded its conversation yet: its own report is shown meanwhile.
   const cold = host({ sessions, inboxes: { [V]: [queuedReport()] } });
@@ -348,7 +358,7 @@ test('what is read of another session is decided by that session, and asked for 
   assert.deepEqual([stale.run, stale.status, stale.markdown, stale.loading], [RUN, 'COMPLETE', '', true]);
   assert.deepEqual(stale.inbox?.sessionID, V, 'The report of the run shown is fetched.');
   const fresh = buildPanel(host({ notices: conversationNotices, sessions: [older, newer], inboxes: { [V_OLD]: [queuedReport(OLDER, 'The older report')], [V]: [queuedReport()] } }), V_OLD, { known, read: { [`${CONVERSATION}:notices`]: true } });
-  assert.deepEqual([fresh.markdown, fresh.documentHead, fresh.inbox], [queuedReport(), `[AZPR ${RUN}] COMPLETE`, undefined]);
+  assert.deepEqual([fresh.markdown, fresh.documentHead, fresh.inbox], [queuedReport(), '', undefined]);
   // A receipt whose own text quotes the report line of an older review of the same conversation: that session
   // holds another run's report, and it is neither shown nor read.
   const quoting = `[AZPR ${RUN}] INCOMPLETE\nReason: the provider answered "Report delivery: report queued to session=${V_OLD}."`;
@@ -412,7 +422,7 @@ test('a comment run that ends without a preview leaves the review\'s report in v
   const notices = [started(RUN, 'pr-review'), reviewReceipt(), started(COMMENT_RUN, 'pr-comment'), failedRun];
   const panel = buildPanel(host({ notices, sessions, inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known });
   assert.deepEqual([panel.run, panel.status, panel.markdown], [COMMENT_RUN, 'INCOMPLETE', queuedReport()], 'The run\'s status, and the report of the review it acted on.');
-  assert.equal(panel.documentHead, `[AZPR ${RUN}] COMPLETE`);
+  assert.equal(panel.documentHead, '', 'The report says itself which run it is of.');
   assert.deepEqual(panel.rows.map(row => [row.id, row.report]), [[V, true]]);
   // Until the report is cached it is asked for, as after the review itself.
   const uncached = buildPanel(host({ notices, sessions }), CONVERSATION, { known });
@@ -549,12 +559,14 @@ const toldMessage = (id, text) => ({ id, type: 'synthetic', text });
 const networkError = () => new Error('fetch failed: ECONNRESET');
 const goneError = () => Object.assign(new Error('Session not found'), { name: 'Session.NotFoundError' });
 /** A reader over a host whose answers the test gives: `calls` lists what was asked, in order. */
-function readerHost({ kept, context = true } = {}) {
-  const calls = [], present = new Set();
+function readerHost({ kept, context = true, heldPauses = false } = {}) {
+  const calls = [], present = new Set(), pauses = [];
   let changes = 0;
   const ask = kind => sessionID => { const call = { kind, sessionID, ...deferred() }; calls.push(call); return call.promise; };
-  const reader = createReader({ inbox: ask('inbox'), ...(context ? { context: ask('context') } : {}), lookup: ask('lookup'), list: ask('list'), present: id => present.has(id), changed: () => { changes++; }, pause: () => Promise.resolve(), ...(kept ? { kept } : {}) });
-  return { reader, calls, present, changes: () => changes, last: kind => calls.findLast(call => call.kind === kind) };
+  // With `heldPauses` a wait between attempts lasts until the test ends it.
+  const pause = ms => { if (!heldPauses) return Promise.resolve(); const wait = { ms, ...deferred() }; pauses.push(wait); return wait.promise; };
+  const reader = createReader({ inbox: ask('inbox'), ...(context ? { context: ask('context') } : {}), lookup: ask('lookup'), list: ask('list'), present: id => present.has(id), changed: () => { changes++; }, pause, ...(kept ? { kept } : {}) });
+  return { reader, calls, present, pauses, changes: () => changes, last: kind => calls.findLast(call => call.kind === kind) };
 }
 
 test('the reader looks a session up before anything else, and believes only the server about a missing one', async () => {
@@ -827,5 +839,91 @@ test('the reader asks the server for a conversation\'s sessions once, page by pa
   assert.deepEqual(reconnecting.calls.map(call => call.kind), ['list']);
   void reconnecting.reader.discover(CONVERSATION); await settle();
   assert.equal(reconnecting.calls.filter(call => call.kind === 'list').length, 2);
+});
+
+test('what the inbox answered is held when the messages cannot be read, and the read goes on', async () => {
+  const h = readerHost();
+  const done = h.reader.readInbox(CONVERSATION, 'notices', false);
+  await settle();
+  h.last('inbox').resolve([pendingItem('msg_1', `[AZPR ${RUN}] COMPLETE`)]);
+  await settle();
+  assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id), ['msg_1'], 'Held as soon as the inbox answered.');
+  // The messages cannot be read: the receipt stays, and both are asked for again.
+  h.last('context').reject(networkError());
+  await settle();
+  assert.deepEqual([h.reader.entries(CONVERSATION).map(entry => entry.id), h.reader.read()], [['msg_1'], {}]);
+  h.last('inbox').resolve([pendingItem('msg_1', `[AZPR ${RUN}] COMPLETE`)]);
+  await settle();
+  h.last('context').resolve([toldMessage('msg_0', started(RUN, 'pr-review'))]);
+  await done;
+  assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id).sort(), ['msg_0', 'msg_1']);
+  assert.deepEqual(h.reader.read(), { [`${CONVERSATION}:notices`]: true });
+  // The messages never readable: after four attempts the read ends with what the inbox gave.
+  const g = readerHost();
+  const never = g.reader.readInbox(CONVERSATION, 'notices', false);
+  for (let attempt = 0; attempt < 4; attempt++) { await settle(); g.last('inbox').resolve([pendingItem('msg_1', 'kept')]); await settle(); g.last('context').reject(networkError()); }
+  await never;
+  assert.deepEqual([g.reader.entries(CONVERSATION).map(entry => entry.id), g.reader.read()[`${CONVERSATION}:notices`], g.calls.filter(call => call.kind === 'inbox').length], [['msg_1'], true, 4]);
+});
+
+test('from the moment a session\'s notices are asked for, each one the host reports is kept, also when no request succeeds', async () => {
+  const h = readerHost();
+  const done = h.reader.readInbox(CONVERSATION, 'notices', false);
+  h.reader.arrived(CONVERSATION, pendingItem('msg_1', started(RUN, 'pr-review')));
+  assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id), ['msg_1'], 'Before any request was answered.');
+  // Every request fails; the read ends.
+  for (let attempt = 0; attempt < 4; attempt++) { await settle(); h.last('inbox').reject(networkError()); }
+  await done;
+  assert.equal(h.reader.read()[`${CONVERSATION}:notices`], true);
+  // The receipt arrives afterwards: the panel in the review's session still follows its conversation.
+  h.reader.arrived(CONVERSATION, pendingItem('msg_2', reviewReceipt()));
+  assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id), ['msg_1', 'msg_2']);
+  const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier')];
+  const source = host({ sessions, inboxes: { [V]: [queuedReport()] } });
+  const pending = source.pending;
+  source.pending = id => [...pending(id), ...h.reader.entries(id)];
+  const panel = buildPanel(source, V, { known: { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' }, read: h.reader.read() });
+  assert.deepEqual([panel.run, panel.status, panel.markdown], [RUN, 'COMPLETE', queuedReport()]);
+  // A session whose notices were never asked for is not followed.
+  h.reader.arrived(F1, pendingItem('msg_3', 'elsewhere'));
+  assert.deepEqual(h.reader.entries(F1), []);
+});
+
+test('a lookup that failed waits for its next attempt, however often the panel asks for the session meanwhile', async () => {
+  const h = readerHost({ heldPauses: true });
+  const first = h.reader.lookup(V);
+  await settle();
+  h.last('lookup').reject(networkError());
+  await settle();
+  assert.deepEqual([h.calls.length, h.pauses.map(wait => wait.ms)], [1, [1000]], 'One attempt, and a wait before the next.');
+  // Other lookups end and notices arrive: each refreshes the panel, which asks for the session again.
+  for (let refresh = 0; refresh < 10; refresh++) assert.equal(h.reader.lookup(V), first, 'The lookup that is waiting stands for the session.');
+  await settle();
+  assert.equal(h.calls.length, 1, 'No attempt was started or used up.');
+  // The wait is over: the second attempt, and after its failure a longer wait.
+  h.pauses[0].resolve();
+  await settle();
+  assert.equal(h.calls.length, 2);
+  h.last('lookup').reject(networkError());
+  await settle();
+  assert.deepEqual(h.pauses.map(wait => wait.ms), [1000, 2000]);
+  for (let refresh = 0; refresh < 10; refresh++) void h.reader.lookup(V);
+  await settle();
+  assert.equal(h.calls.length, 2);
+  // The server is back for the third attempt.
+  h.present.add(V);
+  h.pauses[1].resolve();
+  await settle();
+  h.last('lookup').resolve();
+  await first;
+  assert.deepEqual([h.calls.length, h.reader.known()[V]], [3, 'exists']);
+  // A reconnection during a wait: the waiting lookup is dropped, and a new one starts at once.
+  void h.reader.lookup(F1); await settle();
+  h.last('lookup').reject(networkError()); await settle();
+  h.reader.reconnected();
+  void h.reader.lookup(F1); await settle();
+  assert.equal(h.calls.filter(call => call.sessionID === F1).length, 2);
+  h.pauses.at(-1).resolve(); await settle();
+  assert.equal(h.calls.filter(call => call.sessionID === F1).length, 2, 'The wait from before the reconnection starts nothing.');
 });
 

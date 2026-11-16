@@ -106,14 +106,18 @@ export const opensPanel = (text, metadata) =>
  * markup (a file named `__init__.py` keeps its underscores, a backtick stays
  * a backtick, as on the PR), and leave the marker lines out.
  *
- * Only those two things change. A reference or a marker that a finding quotes,
- * in a code block or anywhere else, is its text: the preview shown must be the
- * preview that publication posts.
+ * Only those two things change, and only where the runtime wrote them: a marker
+ * that stands alone between blank lines, and a table that begins after a blank
+ * line with the summary's header and its delimiter row. A reference or a marker
+ * that a finding quotes, in a code block, in a code span that runs over several
+ * lines or anywhere else, is its text: the preview shown must be the preview
+ * that publication posts.
  */
 export function readable(markdown) {
-  const shown = [];
+  const lines = String(markdown ?? '').split('\n'), shown = [];
+  const blank = index => index < 0 || index >= lines.length || lines[index].trim() === '';
   let fence = null, table = false;
-  for (const line of String(markdown ?? '').split('\n')) {
+  for (const [index, line] of lines.entries()) {
     if (fence) {
       // A fence ends with at least as many of its own characters and nothing else.
       if (new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`).test(line)) fence = null;
@@ -122,8 +126,10 @@ export function readable(markdown) {
     }
     const opened = FENCE.exec(line);
     if (opened) { fence = opened[1] ?? opened[2]; table = false; shown.push(line); continue; }
-    if (MARKER.test(line)) continue;
-    if (SUMMARY_TABLE.test(line)) { table = true; shown.push(line); continue; }
+    // The runtime puts each marker in a paragraph of its own. A line of a longer paragraph may be inside a code
+    // span, which can run over several lines but never over a blank one.
+    if (MARKER.test(line) && blank(index - 1) && blank(index + 1)) continue;
+    if (SUMMARY_TABLE.test(line) && blank(index - 1) && /^\|(?: --- \|)+$/.test(lines[index + 1] ?? '')) { table = true; shown.push(line); continue; }
     table &&= line.startsWith('|');
     // The characters the runtime writes as references (see `cell` in renderReviewSummary), each one literal.
     shown.push(!table ? line : line.replace(/&#(\d{2,3});/g, (reference, code) => {
@@ -170,9 +176,12 @@ export function lookupOutcome(looked, present) {
  * - A session counts as gone only when the server said so (lookupOutcome, notFound), and then it stays
  *   gone until the server reconnects: a lookup that was under way and answers later, from what the host
  *   still holds, does not bring it back.
+ * - From the moment a session's notices are asked for, every notice the host reports for it is kept,
+ *   whatever becomes of the requests: while they are under way, after they failed, and afterwards.
  * - An inbox is read before the messages: a notice that is delivered between the two reads was still in
- *   the inbox for the first. A notice the host reports while a read is under way is kept with its answer.
- * - A request that failed is made again a few times; then it is left until the server reconnects.
+ *   the inbox for the first. What the inbox answered is kept also when the messages cannot be read.
+ * - A request that failed is made again a few times; then it is left until the server reconnects. One
+ *   lookup of a session is under way or waiting for its next attempt at a time, however often it is asked for.
  * - What was asked before a reconnection is out of date when it answers: it is dropped and nothing is
  *   marked as read by it, since notices were missed while the TUI was away.
  * - The entries of the `kept` sessions read last are held; one that was let go is read again when needed,
@@ -181,24 +190,24 @@ export function lookupOutcome(looked, present) {
 export function createReader({ inbox, context, lookup, present, list, changed = () => {}, pause = ms => new Promise(done => setTimeout(done, ms)), kept = 24 }) {
   let connection = 0, disposed = false;
   let known = {}, read = {};
-  const fetched = new Map();   // session → entries read from the server; the session read last comes last
-  const failed = new Map();    // session → lookups that failed without an answer about the session
-  const looking = new Map();   // session → its lookup under way
-  const reading = new Set();   // `<session>:<token>` reads under way
-  const arriving = new Map();  // session → { count, items }: notices reported while a read of it is under way
+  const fetched = new Map();    // session → entries read from the server or reported since; the session read last comes last
+  const failed = new Map();     // session → lookups that failed without an answer about the session
+  const looking = new Map();    // session → its lookup under way, or the wait for its next attempt
+  const reading = new Set();    // `<session>:<token>` reads under way
   const discovered = new Set(); // conversations whose sessions were asked for from the server
   const listOf = result => (Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : []);
-  const mark = (sessionID, value) => {
-    // Gone stays gone: nothing that answers later says otherwise.
-    if (known[sessionID] === value || known[sessionID] === 'missing') return;
-    known = { ...known, [sessionID]: value };
-    if (value === 'missing') forget(sessionID);
-    changed();
-  };
+  const gone = sessionID => known[sessionID] === 'missing';
   /** Let go of what was read of a session, and of the marks that it was read. */
   const forget = sessionID => {
     fetched.delete(sessionID);
     read = Object.fromEntries(Object.entries(read).filter(([key]) => !key.startsWith(`${sessionID}:`)));
+  };
+  const mark = (sessionID, value) => {
+    // Gone stays gone: nothing that answers later says otherwise.
+    if (known[sessionID] === value || gone(sessionID)) return;
+    known = { ...known, [sessionID]: value };
+    if (value === 'missing') forget(sessionID);
+    changed();
   };
   const keep = (sessionID, entries) => {
     fetched.delete(sessionID);
@@ -207,47 +216,48 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
     changed();
   };
 
-  /** Read a session's notices: its inbox and, with `delivered`, its messages. Returns them, or [] when out of date. */
+  /**
+   * Read a session's notices into what is held of it: its inbox and, with `delivered`, its messages.
+   * Throws when a request failed; what the other one answered is held all the same.
+   */
   async function fetchEntries(sessionID, delivered) {
-    if (disposed || known[sessionID] === 'missing') return [];
     const asked = connection;
-    const waiting = arriving.get(sessionID) ?? { count: 0, items: [] };
-    waiting.count++;
-    arriving.set(sessionID, waiting);
-    try {
-      const pending = await inbox(sessionID);
-      if (asked !== connection || disposed) return [];
-      const told = delivered && context ? await context(sessionID) : [];
-      if (asked !== connection || disposed || known[sessionID] === 'missing') return [];
-      // With what was read of this session before: a later read of its inbox alone must not lose what it was told.
-      const entries = mergeEntries(fetched.get(sessionID) ?? [], listOf(told).filter(entry => entry?.type === 'synthetic'), listOf(pending), waiting.items);
-      keep(sessionID, entries);
-      return entries;
-    } finally {
-      if (--waiting.count === 0 && arriving.get(sessionID) === waiting) arriving.delete(sessionID);
-    }
+    const stale = () => asked !== connection || disposed || gone(sessionID);
+    if (stale()) return;
+    const pending = await inbox(sessionID);
+    if (stale()) return;
+    // With what is held of this session already: what was read before, and what the host reported meanwhile.
+    keep(sessionID, mergeEntries(fetched.get(sessionID) ?? [], listOf(pending)));
+    if (!delivered || !context) return;
+    const told = await context(sessionID);
+    if (stale()) return;
+    keep(sessionID, mergeEntries(listOf(told).filter(entry => entry?.type === 'synthetic'), fetched.get(sessionID) ?? []));
   }
 
-  /** Look a session up, once at a time. */
+  /** Look a session up: one lookup, or the wait for its next attempt, at a time. */
   function lookupSession(sessionID) {
-    if (disposed || known[sessionID] === 'missing' || failed.get(sessionID) >= 4) return Promise.resolve();
+    if (disposed || gone(sessionID) || failed.get(sessionID) >= 4) return Promise.resolve();
     const running = looking.get(sessionID);
     if (running) return running;
     const asked = connection;
     const started = (async () => {
       const [looked] = await Promise.allSettled([Promise.resolve().then(() => lookup(sessionID))]);
-      // This lookup is over before anything follows from it, so that the next attempt is a lookup of its own.
-      if (looking.get(sessionID) === started) looking.delete(sessionID);
       if (asked !== connection || disposed) return;
       const outcome = lookupOutcome(looked, Boolean(present(sessionID)));
       if (outcome !== 'retry') {
         failed.delete(sessionID);
+        looking.delete(sessionID);
         return mark(sessionID, outcome);
       }
       const count = (failed.get(sessionID) ?? 0) + 1;
       failed.set(sessionID, count);
-      // Again, further apart.
-      if (count < 4) void pause(500 * 2 ** count).then(() => { if (asked === connection) void lookupSession(sessionID); });
+      if (count >= 4) return void looking.delete(sessionID);
+      // Again, further apart. Until then this lookup stands for the session: asking for it again, as the panel
+      // does whenever anything changes, neither shortens the wait nor uses up an attempt.
+      await pause(500 * 2 ** count);
+      if (asked !== connection || disposed) return;
+      looking.delete(sessionID);
+      return lookupSession(sessionID);
     })();
     looking.set(sessionID, started);
     return started;
@@ -260,22 +270,22 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
    */
   function readInbox(sessionID, token, report) {
     const key = `${sessionID}:${token}`;
-    if (disposed || known[sessionID] === 'missing' || read[key] || reading.has(key)) return Promise.resolve();
+    if (disposed || gone(sessionID) || read[key] || reading.has(key)) return Promise.resolve();
     reading.add(key);
+    // Held from now on, also while it is empty: every notice the host reports for this session is kept.
+    if (!fetched.has(sessionID)) keep(sessionID, []);
     const asked = connection;
-    let answered = false;
     const attempt = async (left, delivered) => {
       try {
-        const entries = await fetchEntries(sessionID, delivered);
+        await fetchEntries(sessionID, delivered);
         if (asked !== connection) return;
-        answered = true;
-        if (!report || reportIn(syntheticOf(entries, []))) return;
+        if (!report || reportIn(syntheticOf(fetched.get(sessionID) ?? [], []))) return;
       } catch (error) {
         if (asked !== connection) return;
         if (notFound(error)) return mark(sessionID, 'missing');
       }
       // A session that was deleted meanwhile has nothing more to read.
-      if (left <= 1 || disposed || known[sessionID] === 'missing') return;
+      if (left <= 1 || disposed || gone(sessionID)) return;
       await pause(400);
       if (asked !== connection) return;
       return attempt(left - 1, true);
@@ -286,7 +296,7 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
       reading.delete(key);
       // What this read brought may have been let go already, when many reads ended together, or its session
       // may be gone: then it is not marked as read, so that it is read again when the panel needs it.
-      if (!answered || (fetched.has(sessionID) && known[sessionID] !== 'missing')) read = { ...read, [key]: true };
+      if (fetched.has(sessionID) && !gone(sessionID)) read = { ...read, [key]: true };
       changed();
     });
   }
@@ -311,7 +321,7 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
   }
 
   return {
-    /** What was read of a session from the server; [] for one that was not read or was let go. */
+    /** What is held of a session: read from the server or reported since; [] for one that was not read or was let go. */
     entries: sessionID => fetched.get(sessionID) ?? [],
     /** Sessions looked up: 'exists' or 'missing'. */
     known: () => known,
@@ -321,10 +331,9 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
     readInbox,
     discover,
 
-    /** A notice the host reported for a session: kept with what was read of that session, and with a read under way. */
+    /** A notice the host reported for a session: kept when that session's notices were asked for. */
     arrived(sessionID, item) {
       if (disposed || item?.type !== 'synthetic' || typeof item.id !== 'string') return;
-      arriving.get(sessionID)?.items.push(item);
       const held = fetched.get(sessionID);
       if (held && !held.some(entry => entry.id === item.id)) keep(sessionID, [...held, item]);
     },
@@ -340,7 +349,6 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
       failed.clear();
       looking.clear();
       reading.clear();
-      arriving.clear();
       discovered.clear();
       fetched.clear();
       known = {};
@@ -508,7 +516,9 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     rows,
     deleted,
     markdown,
-    documentHead: own ? '' : document?.head ?? '',
+    // A report read from its session says its run and status in its own first line; an enclosed document is named by
+    // the notice that encloses it.
+    documentHead: own || document?.session ? '' : document?.head ?? '',
     inbox,
     notices: notes,
     loading,

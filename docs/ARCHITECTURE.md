@@ -694,20 +694,25 @@ preview, is no document: the report of the review it acted on stays in view.
   or in a tab: what waits in its inbox and what was delivered since (a
   notice is delivered once the conversation's model runs). The inbox is read
   first and the messages after it, so that a notice delivered between the
-  two reads is in one of them. Each later notice is added as the host
-  reports it, also one that arrives while the read is under way. A read that
-  was asked before the server reconnected is dropped when it answers, and
-  everything is read again. The session's own report is shown only for the review shown, or
+  two reads is in one of them, and what the inbox answered is kept when the
+  messages cannot be read. From the moment a session's notices are asked
+  for, each notice the host reports for it is kept: while the requests are
+  under way, after they failed, and afterwards. A read that was asked before
+  the server reconnected is dropped when it answers, and everything is read
+  again. The session's own report is shown only for the review shown, or
   while nothing is known of any run yet: a status never stands above another
   review's report.
 - The Markdown shown is the saved Markdown. The cells of the summary table,
   which the runtime writes with numeric character references for Azure
   DevOps, are decoded, each character escaped so that Markdown reads none of
   them as markup: a backtick stays a backtick and `__init__.py` keeps its
-  underscores, as on the PR. AZPR's marker lines are left out. A reference
-  or a marker inside a code block, or anywhere else in a finding's text,
-  stays as it is, so the preview on screen is the preview that publication
-  posts.
+  underscores, as on the PR. AZPR's marker lines are left out. Both happen
+  only where the runtime wrote them: a marker that stands alone between
+  blank lines, and a table that begins after a blank line with the
+  summary's header and its delimiter row. A reference or a marker inside a
+  code block, inside a code span that runs over several lines, or anywhere
+  else in a finding's text stays as it is, so the preview on screen is the
+  preview that publication posts.
 
 `src/tui-view.jsx` is the view and the wiring to the host. What the host does
 decided several things in it:
@@ -732,8 +737,11 @@ decided several things in it:
   server no longer has is counted as deleted, not listed, whatever the host
   still holds of it and whatever a lookup under way answers later. Only the
   server's answer establishes that: a not-found error, a lookup that
-  succeeded and found nothing, or the host's report of a deletion. A request that failed on the way says nothing about the
-  session and is tried again, three more times and further apart. The panel
+  succeeded and found nothing, or the host's report of a deletion. A request
+  that failed on the way says nothing about the session and is tried again,
+  three more times and further apart; while a lookup waits for its next
+  attempt it stands for its session, so the panel's asking again whenever
+  something changes starts no attempt and uses none up. The panel
   keeps the inboxes of the 24 sessions it read last; one it let go is read
   again when it is needed, also when it was let go while its own read was
   still ending.

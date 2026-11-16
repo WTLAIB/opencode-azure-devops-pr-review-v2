@@ -268,14 +268,21 @@ settings, backups and failure records. Never upload `.local/`.
   tab: read them from the server, the inbox first and then the delivered
   messages (a notice is delivered once its conversation's model runs, and
   one delivered between the two reads must be in one of them), and keep with
-  the answer what arrives while it is under way. What was asked before a
-  reconnection is dropped when it answers. This reading lives in
+  the answer what arrives while it is under way. From the moment a session's
+  notices are asked for, every notice the host reports for it is kept,
+  whatever becomes of the requests; what the inbox answered is kept when the
+  messages cannot be read; one lookup of a session, or its wait for the next
+  attempt, exists at a time however often the panel asks. What was asked
+  before a reconnection is dropped when it answers. This reading lives in
   `createReader` (`tui-model.mjs`), not in the view, so that its order and
   its races are tested with delayed answers; keep it there.
 - The Markdown shown is the Markdown saved: only the cells of the summary
   table are decoded, each character escaped so that it stays literal as on
-  the PR, and only AZPR's marker lines are left out, never inside code. A
-  preview on screen must be the preview that publication posts.
+  the PR, and only AZPR's marker lines are left out. Both only where the
+  runtime wrote them (a marker alone between blank lines; a table that
+  begins after a blank line with the summary's header and delimiter row),
+  never inside code, fenced or in a span over several lines. A preview on
+  screen must be the preview that publication posts.
 - A session counts as deleted only when the server said so, and then it is
   gone whatever the host still holds of it and whatever answers later, until
   the server reconnects; a request that failed is tried again.
