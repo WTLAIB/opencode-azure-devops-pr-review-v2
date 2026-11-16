@@ -846,14 +846,15 @@ test('a session is not let go while a read of it is under way: what its requests
     await read;
   }
   assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id), ['msg_2'], 'The receipt is still held: its read has not ended.');
-  assert.equal(others.filter(sessionID => h.reader.entries(sessionID).length).length, 23, 'Of the others, the ones read last are held, 24 with the one being read.');
-  assert.deepEqual(Object.keys(h.reader.read()).length, 23, 'What was let go is not marked as read.');
+  assert.deepEqual(others.filter(sessionID => h.reader.entries(sessionID).length), others.slice(-24), 'Of the others, the 24 read last are held, beside the one being read.');
+  assert.deepEqual(Object.keys(h.reader.read()).sort(), others.slice(-24).map(sessionID => `${sessionID}:notices`), 'What was let go is not marked as read.');
   // A notice the host reports for it meanwhile is kept too, and then the messages answer.
   h.reader.arrived(CONVERSATION, pendingItem('msg_3', `[AZPR ${COMMENT_RUN}] STARTED /pr-comment`));
   messages.resolve([toldMessage('msg_1', started(RUN, 'pr-review'))]);
   await done;
   assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id).sort(), ['msg_1', 'msg_2', 'msg_3'], 'The start, the receipt and what arrived: nothing of the read was lost.');
   assert.equal(h.reader.read()[`${CONVERSATION}:notices`], true);
+  assert.deepEqual(others.filter(sessionID => h.reader.entries(sessionID).length), others.slice(-23), 'Its read has ended: it is one of the 24 read last now.');
   assert.deepEqual(buildPanel({ session: id => ({ id }), sessions: () => [], status: () => 'idle', messages: () => [], pending: id => h.reader.entries(id) }, CONVERSATION).status, 'RUNNING', 'The comment run that started last.');
   // Two reads of one session, one for its notices and one for a report: it is held until both have ended.
   const g = readerHost({ kept: 1 });
@@ -863,19 +864,68 @@ test('a session is not let go while a read of it is under way: what its requests
   second.resolve([pendingItem('msg_5', queuedReport())]);
   await report;
   assert.deepEqual([g.reader.read(), g.reader.entries(V).length], [{ [`${V}:msg_receipt`]: true }, 1]);
-  // Another session is read to its end meanwhile; only one session is kept, and it is not the one being read.
+  // Another session is read to its end meanwhile. One session is kept: that one, beside the one being read.
   const other = g.reader.readInbox(F1, 'notices', false);
   await settle();
-  g.last('inbox').resolve([]);
+  g.last('inbox').resolve([pendingItem('msg_6', 'another')]);
   await settle();
   g.last('context').resolve([]);
   await other;
-  assert.deepEqual([g.reader.entries(V).length, g.reader.entries(F1).length, g.reader.read()[`${F1}:notices`]], [1, 0, undefined]);
+  assert.deepEqual([g.reader.entries(V).length, g.reader.entries(F1).length, g.reader.read()[`${F1}:notices`]], [1, 1, true]);
   first.resolve([pendingItem('msg_4', `[AZPR ${RUN}] COMPLETE`)]);
   await settle();
   g.calls.findLast(call => call.kind === 'context' && call.sessionID === V).resolve([]);
   await notices;
-  assert.deepEqual([g.reader.entries(V).map(entry => entry.id).sort(), g.reader.read()], [['msg_4', 'msg_5'], { [`${V}:msg_receipt`]: true, [`${V}:notices`]: true }]);
+  assert.deepEqual([g.reader.entries(V).map(entry => entry.id).sort(), g.reader.read(), g.reader.entries(F1)], [['msg_4', 'msg_5'], { [`${V}:msg_receipt`]: true, [`${V}:notices`]: true }, []],
+    'Both reads have ended: it is the one read last, and the other one was let go.');
+});
+
+test('what was read last stays held while other reads wait for their answers: the panel reads its conversation once', async () => {
+  // As many reads as sessions are kept never get an answer.
+  const h = readerHost();
+  const slow = Array.from({ length: 24 }, (unused, index) => `ses_slow${String(index).padStart(2, '0')}`);
+  for (const sessionID of slow) void h.reader.readInbox(sessionID, 'notices', false);
+  await settle();
+  // The review's own session is on screen. As the view does whenever the reader changed: work out the panel, and
+  // ask for what it says is to be read.
+  const session = privateSession(V, 'Verification', 'azpr-review-verifier');
+  const source = { session: id => (id === V ? session : undefined), sessions: () => [session], status: () => 'idle', messages: () => [], pending: id => h.reader.entries(id) };
+  const refresh = () => {
+    const panel = buildPanel(source, V, { known: h.reader.known(), read: h.reader.read() });
+    if (panel.notices) void h.reader.readInbox(panel.notices.sessionID, panel.notices.token, false);
+    if (panel.inbox) void h.reader.readInbox(panel.inbox.sessionID, panel.inbox.token, true);
+    return panel;
+  };
+  const requests = () => h.calls.filter(call => call.kind !== 'lookup').length;
+  assert.deepEqual(refresh().notices, { sessionID: CONVERSATION, token: 'notices' });
+  await settle();
+  const report = '## PR Review Summary\n\nNo findings.';
+  h.calls.findLast(call => call.kind === 'inbox' && call.sessionID === CONVERSATION).resolve([pendingItem('msg_2', reviewReceipt({ report }))]);
+  await settle();
+  h.calls.findLast(call => call.kind === 'context' && call.sessionID === CONVERSATION).resolve([toldMessage('msg_1', started(RUN, 'pr-review'))]);
+  await settle();
+  assert.equal(requests(), 26, 'The 24 reads that wait, and the conversation\'s inbox and messages.');
+  for (let turn = 0; turn < 5; turn++) {
+    const panel = refresh();
+    await settle();
+    assert.deepEqual([panel.run, panel.status, panel.markdown, panel.notices, panel.inbox], [RUN, 'COMPLETE', report, undefined, undefined], 'The document stays, and nothing more is to be read.');
+  }
+  assert.equal(requests(), 26, 'No request was made again.');
+  assert.deepEqual([h.reader.entries(CONVERSATION).map(entry => entry.id), h.reader.read()], [['msg_1', 'msg_2'], { [`${CONVERSATION}:notices`]: true }]);
+  // The same with one session kept and one read that waits: every session read to its end takes the place of the
+  // one read before it, never of itself.
+  const g = readerHost({ kept: 1 });
+  void g.reader.readInbox(R1, 'notices', false);
+  for (const sessionID of [F1, F2]) {
+    const read = g.reader.readInbox(sessionID, 'notices', false);
+    await settle();
+    g.calls.findLast(call => call.kind === 'inbox' && call.sessionID === sessionID).resolve([pendingItem(`msg_${sessionID}`, sessionID)]);
+    await settle();
+    g.calls.findLast(call => call.kind === 'context' && call.sessionID === sessionID).resolve([]);
+    await read;
+    assert.deepEqual([g.reader.entries(sessionID).length, g.reader.read()], [1, { [`${sessionID}:notices`]: true }]);
+  }
+  assert.deepEqual(g.reader.entries(F1), []);
 });
 
 test('the reader asks the server for a conversation\'s sessions once, page by page, and stops when it is unloaded', async () => {
@@ -1067,7 +1117,9 @@ async function interleaving(seed, { kept, failures }) {
       const sessionID = pick(names), report = random() < 0.4, key = `${sessionID}:${report ? 'report' : 'notices'}`;
       trace.push(`read ${key}`);
       if (!busy(sessionID) && !marked(sessionID)) told.get(sessionID).clear();
-      const read = { sessionID, connection, ended: false };
+      // A read of its own, not one that joins a read under way or finds its session read or gone already.
+      const own = !reader.read()[key] && !reads.some(read => read.key === key && !read.ended && read.connection === connection) && !gone.has(sessionID);
+      const read = { key, sessionID, connection, own, ended: false };
       reads.push(read);
       void reader.readInbox(sessionID, report ? 'report' : 'notices', report).then(() => { read.ended = true; });
     },
@@ -1145,9 +1197,13 @@ async function interleaving(seed, { kept, failures }) {
   const weights = [['read', 22], ['answer', 34], ['notice', 14], ['deliver', 8], ['resume', 12], ['lookup', 4], ['remove', 2], ['reconnect', 2]];
   for (let step = 0; step < 160; step++) {
     let at = random() * 98;
+    const open = reads.filter(read => !read.ended);
     steps[weights.find(([, weight]) => (at -= weight) < 0)?.[0] ?? 'answer']();
     await flush();
     check();
+    // A read that ended in this step is marked as read, so that the panel does not ask for it again: also when
+    // more sessions are being read than are kept. Not one of a session that is gone, nor one from before a reconnection.
+    for (const read of open) if (read.ended && read.own && read.connection === connection && !gone.has(read.sessionID) && !server.get(read.sessionID).deleted) assert.equal(reader.read()[read.key], true, `A read that ended is marked (${read.key}). ${where()}`);
   }
   // Everything still asked is answered and every wait ends: then every read has ended.
   for (let round = 0; round < 200 && (requests.length || waits.length); round++) {

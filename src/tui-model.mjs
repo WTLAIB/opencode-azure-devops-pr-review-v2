@@ -204,7 +204,7 @@ export function lookupOutcome(looked, present) {
  * - What was asked before a reconnection is out of date when it answers: it is dropped and nothing is
  *   marked as read by it, since notices were missed while the TUI was away.
  * - The entries of the `kept` sessions read last are held; one that was let go is read again when needed.
- *   A session is not let go while a read of it is under way, so more are held for as long as reads last.
+ *   A session with a read under way is held beside them and is not let go before that read has ended.
  */
 export function createReader({ inbox, context, lookup, present, list, changed = () => {}, pause = ms => new Promise(done => setTimeout(done, ms)), kept = 24 }) {
   let connection = 0, disposed = false;
@@ -230,19 +230,16 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
   };
   const beingRead = sessionID => { for (const key of reading) if (key.startsWith(`${sessionID}:`)) return true; return false; };
   /**
-   * Let go of the sessions read longest ago when more are held than are kept, but of none while a read of it
-   * is under way: what a read's requests answer one after the other belongs together, and so does what the
-   * host reports meanwhile. Let go in between, a session would be held again with the later answer alone, and
-   * its read would end as if it had read everything.
+   * Hold what was read of the `kept` sessions read last, and beside them every session that has a read under
+   * way. One of those is not let go: what a read's requests answer one after the other belongs together, and
+   * so does what the host reports meanwhile; let go in between, the session would be held again with the later
+   * answer alone, and its read would end as if it had read everything. Nor does it take the place of one that
+   * was read: while many reads wait for their answers, what the panel shows stays held. (A read whose requests
+   * never answer keeps its session held until the server reconnects, like its place among the reads under way.)
    */
   const letGo = () => {
-    let over = fetched.size - kept;
-    for (const id of [...fetched.keys()]) {
-      if (over <= 0) break;
-      if (beingRead(id)) continue;
-      forget(id);
-      over--;
-    }
+    const idle = [...fetched.keys()].filter(id => !beingRead(id));
+    for (const id of idle.slice(0, Math.max(0, idle.length - kept))) forget(id);
   };
   const keep = (sessionID, entries) => {
     fetched.delete(sessionID);
@@ -329,10 +326,15 @@ export function createReader({ inbox, context, lookup, present, list, changed = 
       // A read from before a reconnection says nothing about now: the reconnection started everything anew.
       if (asked !== connection) return;
       reading.delete(key);
-      // Marked as read while its session is held: not one that is gone, which has nothing more to read.
-      if (fetched.has(sessionID) && !gone(sessionID)) read = { ...read, [key]: true };
-      // From now on its session may be let go, when many reads ended together: with this mark, so that it is
-      // read again when the panel needs it.
+      // Marked as read while its session is held (one that is gone has nothing more to read), and the session
+      // read last from now on. When more reads have ended than sessions are kept, the one read longest ago is
+      // let go, with its marks, and read again when the panel needs it.
+      const held = fetched.get(sessionID);
+      if (held && !gone(sessionID)) {
+        fetched.delete(sessionID);
+        fetched.set(sessionID, held);
+        read = { ...read, [key]: true };
+      }
       letGo();
       changed();
     });

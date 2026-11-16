@@ -756,11 +756,13 @@ decided several things in it:
   attempt it stands for its session, so the panel's asking again whenever
   something changes starts no attempt and uses none up. The panel
   keeps the inboxes of the 24 sessions it read last; one it let go is read
-  again when it is needed. A session is not let go while a read of it is
-  under way, however many others are read meanwhile: what a read's requests
-  answer one after the other, and what the host reports in between, are
-  held together, and the read is marked as done only with all of it. More
-  than 24 can therefore be held for as long as their reads last.
+  again when it is needed. A session with a read under way is held beside
+  those 24 and is not let go, however many others are read meanwhile: what
+  a read's requests answer one after the other, and what the host reports
+  in between, are held together, and the read is marked as done only with
+  all of it. It takes none of the 24 places either, so what the panel shows
+  stays held, and is not read again, while other reads wait for answers. A
+  session whose read has ended is the one read last.
 - **Leaving and returning.** The host closes a panel when the screen leaves
   its session, which a click on a session row does. The panel is opened again
   when the screen returns to a session in which it was open and which the user
