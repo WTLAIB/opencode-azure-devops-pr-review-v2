@@ -277,8 +277,8 @@ settings, backups and failure records. Never upload `.local/`.
   the PR, and only AZPR's marker lines are left out, never inside code. A
   preview on screen must be the preview that publication posts.
 - A session counts as deleted only when the server said so, and then it is
-  gone whatever the host still holds of it; a request that failed is tried
-  again.
+  gone whatever the host still holds of it and whatever answers later, until
+  the server reconnects; a request that failed is tried again.
 - A step the panel takes a moment after it mounted (handing the keyboard
   back, withdrawing) acts only while that panel is still the one open in
   that session, and no timer outlives the panel.

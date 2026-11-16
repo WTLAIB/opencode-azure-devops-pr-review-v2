@@ -553,7 +553,7 @@ function readerHost({ kept, context = true } = {}) {
   const calls = [], present = new Set();
   let changes = 0;
   const ask = kind => sessionID => { const call = { kind, sessionID, ...deferred() }; calls.push(call); return call.promise; };
-  const reader = createReader({ inbox: ask('inbox'), ...(context ? { context: ask('context') } : {}), lookup: ask('lookup'), present: id => present.has(id), changed: () => { changes++; }, pause: () => Promise.resolve(), ...(kept ? { kept } : {}) });
+  const reader = createReader({ inbox: ask('inbox'), ...(context ? { context: ask('context') } : {}), lookup: ask('lookup'), list: ask('list'), present: id => present.has(id), changed: () => { changes++; }, pause: () => Promise.resolve(), ...(kept ? { kept } : {}) });
   return { reader, calls, present, changes: () => changes, last: kind => calls.findLast(call => call.kind === kind) };
 }
 
@@ -724,3 +724,108 @@ test('the reader holds what it read of the sessions read last, and reads one it 
   h.reader.arrived(F2, pendingItem('msg_y', 'late'));
   assert.deepEqual([h.calls.length, h.changes()], [asked + 1, changes]);
 });
+
+test('a session the server reported as deleted stays gone when a lookup of it answers later', async () => {
+  const h = readerHost();
+  h.present.add(V);   // The host still holds the session's metadata.
+  const looked = h.reader.lookup(V);
+  const reading = h.reader.readInbox(V, 'msg_7', true);
+  await settle();
+  h.reader.deleted(V);
+  assert.equal(h.reader.known()[V], 'missing');
+  // The lookup and the inbox read that were under way answer as if the session were there.
+  h.last('lookup').resolve();
+  h.last('inbox').resolve([pendingItem('msg_5', queuedReport())]);
+  await looked; await reading; await settle();
+  assert.equal(h.reader.known()[V], 'missing', 'The lookup\'s answer does not bring it back.');
+  assert.deepEqual([h.reader.entries(V), h.reader.read()], [[], {}], 'Nothing is kept of it, and nothing marked.');
+  // The model then neither lists it nor reads its report, whatever the host holds.
+  const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier')];
+  const panel = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt({ stages: [['azpr-review-verifier', V]] })], sessions, inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known: h.reader.known(), read: h.reader.read() });
+  assert.deepEqual([panel.rows, panel.deleted, panel.markdown, panel.inbox, panel.needs], [[], 1, '', undefined, []]);
+  // A later lookup is not made at all, and a reconnection starts over.
+  const asked = h.calls.length;
+  await h.reader.lookup(V);
+  assert.equal(h.calls.length, asked);
+  h.reader.reconnected();
+  void h.reader.lookup(V); await settle();
+  h.last('lookup').resolve(); await settle();
+  assert.equal(h.reader.known()[V], 'exists', 'After a reconnection the server is asked again, and believed.');
+});
+
+test('an inbox that was let go while its own read ended is not marked as read, and is read again', async () => {
+  const h = readerHost({ kept: 2, context: false });
+  // Three reads end together; only two sessions are kept.
+  const reads = [F1, F2, R1].map(sessionID => h.reader.readInbox(sessionID, 'notices', false));
+  await settle();
+  for (const call of h.calls.filter(call => call.kind === 'inbox')) call.resolve([pendingItem(`msg_${call.sessionID}`, call.sessionID)]);
+  await Promise.all(reads);
+  assert.deepEqual([F1, F2, R1].map(sessionID => h.reader.entries(sessionID).length), [0, 1, 1], 'The first one read was let go.');
+  assert.deepEqual(Object.keys(h.reader.read()).sort(), [`${F2}:notices`, `${R1}:notices`].sort(), 'It is not marked as read: nothing of it is held.');
+  // The panel needs it again: it is read again.
+  const asked = h.calls.length;
+  const again = h.reader.readInbox(F1, 'notices', false);
+  await settle();
+  assert.equal(h.calls.length, asked + 1);
+  h.last('inbox').resolve([pendingItem('msg_again', 'again')]);
+  await again;
+  assert.deepEqual([h.reader.entries(F1).length, h.reader.read()[`${F1}:notices`]], [1, true]);
+  // A read whose requests all failed is marked, so that it is not repeated without end.
+  const failing = h.reader.readInbox(V, 'notices', false);
+  for (let attempt = 0; attempt < 4; attempt++) { await settle(); h.last('inbox').reject(networkError()); }
+  await failing;
+  assert.deepEqual([h.reader.entries(V), h.reader.read()[`${V}:notices`]], [[], true]);
+});
+
+test('the reader asks the server for a conversation\'s sessions once, page by page, and stops when it is unloaded', async () => {
+  const mine = id => privateSession(id, 'Initial R', 'azpr-review-risk');
+  const theirs = { ...mine('ses_foreign000000000000000001'), metadata: { azpr: { run: RUN, role: 'azpr-review-risk', conversation: 'ses_someoneelse000000000000001' } } };
+  const legacy = { id: 'ses_legacy0000000000000000001', title: `[AZPR ${RUN}] Verification`, parentID: CONVERSATION };
+  const h = readerHost();
+  const found = h.reader.discover(CONVERSATION);
+  await h.reader.discover(CONVERSATION);
+  await settle();
+  assert.deepEqual(h.calls.map(call => [call.kind, call.sessionID]), [['list', undefined]], 'A conversation is asked for once.');
+  h.calls[0].resolve({ data: [mine(F1), theirs, { id: CONVERSATION, title: 'My conversation' }], cursor: 'page-2' });
+  await settle();
+  assert.deepEqual(h.calls.slice(1).map(call => [call.kind, call.sessionID]).sort(), [['list', 'page-2'], ['lookup', F1]].sort(), 'Its own session is looked up; another conversation\'s is not.');
+  h.calls.find(call => call.kind === 'list' && call.sessionID === 'page-2').resolve({ data: [legacy, mine(F2)] });
+  await found; await settle();
+  assert.deepEqual(h.calls.filter(call => call.kind === 'lookup').map(call => call.sessionID).sort(), [F1, F2, legacy.id].sort(), 'A session of 0.4.0 counts by its parent and title.');
+  assert.equal(h.calls.filter(call => call.kind === 'list').length, 2, 'No cursor, no further page.');
+  // At most five pages, however many the server offers.
+  const many = readerHost();
+  const long = many.reader.discover(CONVERSATION);
+  for (let page = 1; page <= 5; page++) { await settle(); many.last('list').resolve({ data: [], cursor: `page-${page + 1}` }); }
+  await long;
+  assert.equal(many.calls.filter(call => call.kind === 'list').length, 5);
+  // A list that could not be read is asked for again the next time.
+  const failing = readerHost();
+  const failed = failing.reader.discover(CONVERSATION);
+  await settle(); failing.last('list').reject(networkError());
+  await failed;
+  void failing.reader.discover(CONVERSATION); await settle();
+  assert.equal(failing.calls.filter(call => call.kind === 'list').length, 2);
+  // Unloaded while a page is under way: its answer starts nothing.
+  const unloading = readerHost();
+  const pending = unloading.reader.discover(CONVERSATION);
+  await settle();
+  unloading.reader.dispose();
+  unloading.last('list').resolve({ data: [mine(F1)], cursor: 'page-2' });
+  await pending; await settle();
+  assert.deepEqual(unloading.calls.map(call => call.kind), ['list'], 'No lookup and no further page after the plugin was unloaded.');
+  await unloading.reader.discover('ses_another0000000000000000001');
+  assert.equal(unloading.calls.length, 1);
+  // A reconnection while a page is under way: the old answer starts nothing, and the conversation is asked for anew.
+  const reconnecting = readerHost();
+  const before = reconnecting.reader.discover(CONVERSATION);
+  await settle();
+  const stale = reconnecting.last('list');
+  reconnecting.reader.reconnected();
+  stale.resolve({ data: [mine(F1)], cursor: 'page-2' });
+  await before; await settle();
+  assert.deepEqual(reconnecting.calls.map(call => call.kind), ['list']);
+  void reconnecting.reader.discover(CONVERSATION); await settle();
+  assert.equal(reconnecting.calls.filter(call => call.kind === 'list').length, 2);
+});
+

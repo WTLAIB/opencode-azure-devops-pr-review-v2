@@ -556,6 +556,9 @@ export default {
       }) : undefined,
       lookup: sessionID => data.session.sync(sessionID),
       present: sessionID => data.session.get(sessionID),
+      list: cursor => context.client.session.list(cursor ? {
+        cursor
+      } : {}),
       changed: () => setVersion(count => count + 1)
     });
     const source = {
@@ -613,20 +616,6 @@ export default {
         });
       }
     });
-
-    /** After a TUI restart the host has not loaded a run's sessions: ask the server once per conversation. */
-    const discovered = new Set();
-    const discover = conversation => {
-      if (discovered.has(conversation)) return;
-      discovered.add(conversation);
-      const page = (cursor, left = 5) => Promise.resolve(context.client.session.list(cursor ? {
-        cursor
-      } : {})).then(result => {
-        for (const session of result?.data ?? []) if (conversationOf(session) === conversation) void reader.lookup(session.id);
-        if (result?.cursor && result.cursor !== cursor && left > 1) return page(result.cursor, left - 1);
-      });
-      page().catch(() => discovered.delete(conversation));
-    };
     const shown = sessionID => {
       const current = context.ui.panel.current();
       return current?.name === PANEL && current.sessionID === sessionID;
@@ -641,7 +630,8 @@ export default {
       const route = context.ui.router.current();
       if (route.type !== "session") return false;
       const sessionID = route.sessionID;
-      discover(conversationOf(data.session.get(sessionID)) ?? sessionID);
+      // After a TUI restart the host has not loaded a run's sessions: the reader asks the server for them.
+      void reader.discover(conversationOf(data.session.get(sessionID)) ?? sessionID);
       wanted.add(sessionID);
       if (shown(sessionID)) return true;
       if (byItself && (occupied === sessionID || context.keymap.mode?.current?.() === "modal")) {
@@ -661,7 +651,6 @@ export default {
       if (details?.type === "server.connected") {
         // What was published while the TUI was away was missed: look everything up again, and let nothing that
         // was asked before the reconnection answer for now.
-        discovered.clear();
         reader.reconnected();
         return;
       }

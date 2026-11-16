@@ -74,13 +74,13 @@ to `/pr-panel` and the setting `terminalPanel`, and added the two other
 changes. What follows was run on the final tree unless it says otherwise.
 
 - **Offline.** `npm run check`, which now also compiles `tui-view.jsx` and
-  compares the result with `src/tui.js`, and 542 tests (489 for 0.4.1). Of the
-  53 new tests:
+  compares the result with `src/tui.js`, and 545 tests (489 for 0.4.1). Of the
+  56 new tests:
 
   | Tests | What they hold |
   | --- | --- |
   | 29 | What the panel shows (`tests/tui-model.test.mjs`), one of them against the runtime's own `renderReceipt`: which run, status, rows and document for sequences of notices; a notice marked `terminalPanel: manual` opens nothing; only the runtime's own lines name sessions, and a session is a row or read only when it says itself that it is this conversation's and that run's; a run's other notices change nothing; a saved preview shown again is about its review, and a status never stands above another review's document; a comment run that ends without a preview leaves the report in view; commands typed in a review's own session; a quoted code block is shown as saved and a summary cell literally; a session counts as deleted only on the server's word, and then whatever the host still holds of it. |
-  | 6 | What the panel reads of other sessions (`createReader`), with answers that arrive when the test says so: a session is looked up before anything it holds is read; the inbox is read before the delivered messages; a notice that arrives during a read is kept with its answer; a report is looked for in the inbox and then among the messages; a failed request is made again and a not-found answer is final; what was asked before a reconnection is dropped and read anew; the sessions read last are held, and nothing is asked after the plugin was unloaded. |
+  | 9 | What the panel reads of other sessions (`createReader`), with answers that arrive when the test says so: a session is looked up before anything it holds is read; the inbox is read before the delivered messages; a notice that arrives during a read is kept with its answer; a report is looked for in the inbox and then among the messages; a failed request is made again and a not-found answer is final; a session reported as deleted stays gone when a lookup of it answers later; what was asked before a reconnection is dropped and read anew; the sessions read last are held, and one let go while its own read ended is read again; a conversation's sessions are asked for once, page by page; nothing is asked after the plugin was unloaded. |
   | 4 | Whole runs through the runtime, their notices read with the panel's model: a review, a preview, `--show` and a check; a review without findings and the note that no preview follows; a comment run typed in the session that holds the report, with `returnReport: full`; a comment run whose planning fails. |
   | 1 | The compiled file: no JSX left; imports only from `@opentui/solid`, `@opentui/core`, `solid-js` and the model beside it; no file or environment access; one slash command; nothing stored. |
   | 3 | The defaults: `terminalPanel`; one table of defaults that equals the settings example and the schema; a completed file validates to exactly what the file did, keeps every value and the order of its names, and lacks nothing afterwards. |

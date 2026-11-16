@@ -160,21 +160,25 @@ export function lookupOutcome(looked, present) {
  *   context(sessionID) → that session's messages since the last compaction; optional
  *   lookup(sessionID)  → load the session itself into the host (nothing it holds)
  *   present(sessionID) → whether the host has the session now
+ *   list(cursor)       → a page of the server's sessions, `{ data, cursor }`; optional
  *   changed()          → called whenever what the reader holds has changed
  *   pause(ms)          → a wait between attempts
  *
  * The rules it keeps:
  * - A session is looked up before anything it holds is read; the model decides from the session's own
  *   metadata whose it is, and only then names its inbox (see buildPanel).
- * - A session counts as gone only when the server said so (lookupOutcome, notFound).
+ * - A session counts as gone only when the server said so (lookupOutcome, notFound), and then it stays
+ *   gone until the server reconnects: a lookup that was under way and answers later, from what the host
+ *   still holds, does not bring it back.
  * - An inbox is read before the messages: a notice that is delivered between the two reads was still in
  *   the inbox for the first. A notice the host reports while a read is under way is kept with its answer.
  * - A request that failed is made again a few times; then it is left until the server reconnects.
  * - What was asked before a reconnection is out of date when it answers: it is dropped and nothing is
  *   marked as read by it, since notices were missed while the TUI was away.
- * - The entries of the `kept` sessions read last are held; one that was let go is read again when needed.
+ * - The entries of the `kept` sessions read last are held; one that was let go is read again when needed,
+ *   also when it was let go while its own read was still ending.
  */
-export function createReader({ inbox, context, lookup, present, changed = () => {}, pause = ms => new Promise(done => setTimeout(done, ms)), kept = 24 }) {
+export function createReader({ inbox, context, lookup, present, list, changed = () => {}, pause = ms => new Promise(done => setTimeout(done, ms)), kept = 24 }) {
   let connection = 0, disposed = false;
   let known = {}, read = {};
   const fetched = new Map();   // session → entries read from the server; the session read last comes last
@@ -182,24 +186,30 @@ export function createReader({ inbox, context, lookup, present, changed = () => 
   const looking = new Map();   // session → its lookup under way
   const reading = new Set();   // `<session>:<token>` reads under way
   const arriving = new Map();  // session → { count, items }: notices reported while a read of it is under way
+  const discovered = new Set(); // conversations whose sessions were asked for from the server
   const listOf = result => (Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : []);
   const mark = (sessionID, value) => {
-    if (known[sessionID] === value) return;
+    // Gone stays gone: nothing that answers later says otherwise.
+    if (known[sessionID] === value || known[sessionID] === 'missing') return;
     known = { ...known, [sessionID]: value };
+    if (value === 'missing') forget(sessionID);
     changed();
+  };
+  /** Let go of what was read of a session, and of the marks that it was read. */
+  const forget = sessionID => {
+    fetched.delete(sessionID);
+    read = Object.fromEntries(Object.entries(read).filter(([key]) => !key.startsWith(`${sessionID}:`)));
   };
   const keep = (sessionID, entries) => {
     fetched.delete(sessionID);
     fetched.set(sessionID, entries);
-    const dropped = [...fetched.keys()].slice(0, Math.max(0, fetched.size - kept));
-    for (const id of dropped) fetched.delete(id);
-    if (dropped.length) read = Object.fromEntries(Object.entries(read).filter(([key]) => !dropped.some(id => key.startsWith(`${id}:`))));
+    for (const id of [...fetched.keys()].slice(0, Math.max(0, fetched.size - kept))) forget(id);
     changed();
   };
 
   /** Read a session's notices: its inbox and, with `delivered`, its messages. Returns them, or [] when out of date. */
   async function fetchEntries(sessionID, delivered) {
-    if (disposed) return [];
+    if (disposed || known[sessionID] === 'missing') return [];
     const asked = connection;
     const waiting = arriving.get(sessionID) ?? { count: 0, items: [] };
     waiting.count++;
@@ -208,7 +218,7 @@ export function createReader({ inbox, context, lookup, present, changed = () => 
       const pending = await inbox(sessionID);
       if (asked !== connection || disposed) return [];
       const told = delivered && context ? await context(sessionID) : [];
-      if (asked !== connection || disposed) return [];
+      if (asked !== connection || disposed || known[sessionID] === 'missing') return [];
       // With what was read of this session before: a later read of its inbox alone must not lose what it was told.
       const entries = mergeEntries(fetched.get(sessionID) ?? [], listOf(told).filter(entry => entry?.type === 'synthetic'), listOf(pending), waiting.items);
       keep(sessionID, entries);
@@ -250,18 +260,22 @@ export function createReader({ inbox, context, lookup, present, changed = () => 
    */
   function readInbox(sessionID, token, report) {
     const key = `${sessionID}:${token}`;
-    if (disposed || read[key] || reading.has(key)) return Promise.resolve();
+    if (disposed || known[sessionID] === 'missing' || read[key] || reading.has(key)) return Promise.resolve();
     reading.add(key);
     const asked = connection;
+    let answered = false;
     const attempt = async (left, delivered) => {
       try {
         const entries = await fetchEntries(sessionID, delivered);
-        if (asked !== connection || !report || reportIn(syntheticOf(entries, []))) return;
+        if (asked !== connection) return;
+        answered = true;
+        if (!report || reportIn(syntheticOf(entries, []))) return;
       } catch (error) {
         if (asked !== connection) return;
         if (notFound(error)) return mark(sessionID, 'missing');
       }
-      if (left <= 1 || disposed) return;
+      // A session that was deleted meanwhile has nothing more to read.
+      if (left <= 1 || disposed || known[sessionID] === 'missing') return;
       await pause(400);
       if (asked !== connection) return;
       return attempt(left - 1, true);
@@ -270,9 +284,30 @@ export function createReader({ inbox, context, lookup, present, changed = () => 
       // A read from before a reconnection says nothing about now: the reconnection started everything anew.
       if (asked !== connection) return;
       reading.delete(key);
-      read = { ...read, [key]: true };
+      // What this read brought may have been let go already, when many reads ended together, or its session
+      // may be gone: then it is not marked as read, so that it is read again when the panel needs it.
+      if (!answered || (fetched.has(sessionID) && known[sessionID] !== 'missing')) read = { ...read, [key]: true };
       changed();
     });
+  }
+
+  /**
+   * Ask the server for the sessions of a conversation, once per conversation and connection: after a restart of
+   * the TUI the host has not loaded a run's sessions. Each one that says itself that it is the conversation's is
+   * looked up. At most five pages are read.
+   */
+  function discover(conversation) {
+    if (disposed || !list || discovered.has(conversation)) return Promise.resolve();
+    discovered.add(conversation);
+    const asked = connection;
+    const page = async (cursor, left) => {
+      const result = await list(cursor);
+      if (asked !== connection || disposed) return;
+      for (const session of listOf(result)) if (conversationOf(session) === conversation && typeof session.id === 'string') void lookupSession(session.id);
+      if (result?.cursor && result.cursor !== cursor && left > 1) return page(result.cursor, left - 1);
+    };
+    // A list that could not be read is asked for again the next time the panel is shown.
+    return page(undefined, 5).catch(() => { if (asked === connection) discovered.delete(conversation); });
   }
 
   return {
@@ -284,6 +319,7 @@ export function createReader({ inbox, context, lookup, present, changed = () => 
     read: () => read,
     lookup: lookupSession,
     readInbox,
+    discover,
 
     /** A notice the host reported for a session: kept with what was read of that session, and with a read under way. */
     arrived(sessionID, item) {
@@ -305,6 +341,7 @@ export function createReader({ inbox, context, lookup, present, changed = () => 
       looking.clear();
       reading.clear();
       arriving.clear();
+      discovered.clear();
       fetched.clear();
       known = {};
       read = {};

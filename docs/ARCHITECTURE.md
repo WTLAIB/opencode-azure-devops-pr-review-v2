@@ -649,8 +649,10 @@ three things the runtime already produced:
 `src/tui-model.mjs` works out what to show from these as plain data, without
 any host import, so `npm test` covers it. It also holds the reader
 (`createReader`): what the panel asks the server of sessions other than the
-one on screen, in which order, how often again after a failure, and what it
-does with an answer that arrives after the server reconnected. The view gives
+one on screen (lookups, inboxes, delivered messages, the list of a
+conversation's sessions), in which order, how often again after a failure,
+and what it does with an answer that arrives after the server reconnected,
+after its session was deleted or after the plugin was unloaded. The view gives
 it the host's functions; the tests give it answers that arrive when they say
 so. `tests/tui-model.test.mjs` runs it
 against `renderReceipt`, and a runtime test against the notices of a whole
@@ -728,11 +730,13 @@ decided several things in it:
   The panel therefore reads the inbox of the report session from the server
   itself (`client.session.inbox.list`) and keeps what it read. A session the
   server no longer has is counted as deleted, not listed, whatever the host
-  still holds of it. Only the server's answer establishes that: a not-found
-  error, or a lookup that succeeded and found nothing. A request that failed on the way says nothing about the
+  still holds of it and whatever a lookup under way answers later. Only the
+  server's answer establishes that: a not-found error, a lookup that
+  succeeded and found nothing, or the host's report of a deletion. A request that failed on the way says nothing about the
   session and is tried again, three more times and further apart. The panel
   keeps the inboxes of the 24 sessions it read last; one it let go is read
-  again when it is needed.
+  again when it is needed, also when it was let go while its own read was
+  still ending.
 - **Leaving and returning.** The host closes a panel when the screen leaves
   its session, which a click on a session row does. The panel is opened again
   when the screen returns to a session in which it was open and which the user
