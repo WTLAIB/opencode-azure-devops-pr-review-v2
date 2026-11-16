@@ -1,4 +1,4 @@
-import { withCommandCompletion } from './host-command.mjs';
+import { privateSessions, withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /** Opt-in exact-host scale fixture. Fake loopback models and Azure DevOps REST only.
  * node tests/host-v2-comment-scale.mjs /absolute/path/opencode
@@ -8,6 +8,12 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * moves one finding into a file of the first, so a duplicate-check session
  * merges it. The other 29 are planned in pages of four, two pages at a time,
  * and published; a second publish creates nothing.
+ * With --cleanup the same review runs with debug off, as installed by default.
+ * A run then deletes its sessions when it ends, which debug prevents: the
+ * fixture checks on the host that only the session holding the report is left
+ * after the review, that a preview keeps none of its planner sessions and that
+ * no session record stays. The checks that read debug records belong to the
+ * default mode.
  * Synthetic completions test orchestration, not model review quality.
  */
 import assert from 'node:assert/strict';
@@ -19,8 +25,9 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2];
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2], cleanup = process.argv[3] === '--cleanup';
 assert.ok(binary?.startsWith('/'));
+assert.ok(cleanup || process.argv[3] === undefined, 'The only option is --cleanup.');
 await mkdir(join(root, '.local'), { recursive: true });
 const fixture = await mkdtemp(join(root, '.local/host-v2-scale-'));
 const dirs = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work'].map(name => [name, join(fixture, name)]));
@@ -93,7 +100,7 @@ adoServer.listen(0, '127.0.0.1'); await once(adoServer, 'listening');
 const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
 const settings = JSON.parse(await readFile(join(root, 'config/settings.example.json'), 'utf8'));
 for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
-settings.debug = { enabled: true, directory: join(fixture, 'debug') };
+settings.debug = { enabled: !cleanup, directory: join(fixture, 'debug') };
 settings.workflow = { ...settings.workflow, shardFiles: 24, shardFindings: 15, parallelSessions: 4 };
 // These steps drive each comment step themselves; the default (a preview after every review) is covered by the runtime tests.
 settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
@@ -117,41 +124,69 @@ try {
   await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
   const receipt = await latest();
   assert.match(receipt, /\] COMPLETE\n/, receipt);
-  const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
-  const result = JSON.parse(await readFile(join(debug, 'result.json'), 'utf8'));
-  const stages = role => result.stages.filter(stage => stage.role === `azpr-review-${role}`);
-  const functional = stages('functional');
-  const overflowed = functional.filter(stage => stage.failureClass === 'overflow');
-  const compactionObserved = functional.some(stage => stage.requestObservations?.kinds?.compaction > 0);
-  assert.equal(stages('risk').filter(stage => stage.status !== 'FAILED').length, 5, 'Five risk shards of 24 files.');
-  assert.equal(overflowed.length, 1, 'Exactly one functional shard overflowed.');
-  assert.ok(compactionObserved, 'The host attempted compaction and AZPR refused it.');
-  assert.deepEqual(functional.filter(stage => stage.status !== 'FAILED').map(stage => stage.label).sort().slice(0, 2), ['shard 1/5a', 'shard 1/5b']);
-  assert.ok(stages('risk').every(stage => stage.status === 'FAILED' || stage.completedTools === 1), 'Each risk reviewer read its first file as a diff.');
-  assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
-  assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
-  // These settings name no rater: no severity rating runs, no rating role is registered and the verifiers' levels are final.
-  assert.deepEqual(stages('rating'), [], 'No severity rating without models.review.rater.');
-  assert.doesNotMatch(receipt, /azpr-review-rating/);
-  assert.equal((await api('/api/agent')).data.some(agent => agent.name === 'azpr-review-rating'), false, 'The rating role is not registered without a rater.');
-  const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];
-  assert.equal(merged.length, 1, 'The moved duplicate is merged into the finding that stays.');
-  const coverage = functional.filter(stage => stage.status !== 'FAILED').reduce((n, stage) => n + stage.result.coverage.files.length, 0);
-  assert.equal(coverage, 120, 'Every file is reviewed once by the functional role, including split shards.');
-  await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
-  const posted = await latest();
-  assert.match(posted, /\] POSTED/, posted);
-  const state = azure.state;
-  assert.equal(state.threads.length, 20, '19 high findings inline plus one summary; 10 low findings stay in the summary.');
-  const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
-  assert.equal(planner.length, 8, '29 findings in planning pages of four.');
-  assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
-  await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
-  assert.match(await latest(), /ALREADY_PRESENT/);
-  assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
-  console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-    riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, plannerSessions: planner.length, planningInFlightMax: planningMost, threads: state.threads.length, providerRequests: requests.length,
-    maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
+  if (cleanup) {
+    // Debug is off, as installed by default: a run's sessions are deleted when it ends.
+    const sessions = privateSessions(rawApi, dirs.state);
+    const created = sessions.named(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
+    const left = [];
+    for (const id of created) if (await sessions.exists(id)) left.push(id);
+    assert.ok(created.length > 10, 'The receipt names the session of every stage.');
+    assert.deepEqual(left, [report], 'After the review only the session holding the report exists on the host.');
+    assert.equal(Number(/\nSession notice: (\d+) reviewer session\(s\) of this run were deleted/.exec(receipt)?.[1]), created.length - 1, 'The receipt counts the deleted sessions.');
+    assert.equal((await sessions.listed()).length, 1, 'The host lists one private session, the report.');
+    assert.deepEqual(await sessions.records(), {}, 'Nothing is left to delete, and no unfinished run keeps a session.');
+    // A preview plans in eight sessions and keeps none of them; the report session stays.
+    await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '', delivery: 'steer' });
+    assert.match(await latest(), /\] PREVIEW/);
+    assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
+    assert.equal((await sessions.listed()).length, 1, 'A comment run keeps none of its sessions.');
+    assert.ok(await sessions.exists(report), 'The report session is still there after the preview.');
+    await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+    assert.match(await latest(), /\] POSTED/);
+    assert.equal(azure.state.threads.length, 20, 'The saved preview is posted as in the default mode.');
+    // A command typed in the report session still acts on its review.
+    await rawApi(`/api/session/${report}/command`, { name: 'pr-comment', text: '--show', delivery: 'steer' });
+    assert.match((await rawApi(`/api/session/${report}/inbox`)).data.at(-1).payload.text, /^\[AZPR\] Saved preview of review [a-f0-9]{8}/);
+    assert.deepEqual([(await sessions.listed()).length, await sessions.records()], [1, {}]);
+    console.log(JSON.stringify({ status: 'PASS', mode: 'cleanup', files: files.length, reviewSessions: created.length, deletedAfterReview: created.length - 1, privateSessionsLeft: 1,
+      plannerSessionsLeft: 0, threads: azure.state.threads.length, providerRequests: requests.length, azureCalls: azure.state.calls.length }, null, 2));
+  } else {
+    const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
+    const result = JSON.parse(await readFile(join(debug, 'result.json'), 'utf8'));
+    const stages = role => result.stages.filter(stage => stage.role === `azpr-review-${role}`);
+    const functional = stages('functional');
+    const overflowed = functional.filter(stage => stage.failureClass === 'overflow');
+    const compactionObserved = functional.some(stage => stage.requestObservations?.kinds?.compaction > 0);
+    assert.equal(stages('risk').filter(stage => stage.status !== 'FAILED').length, 5, 'Five risk shards of 24 files.');
+    assert.equal(overflowed.length, 1, 'Exactly one functional shard overflowed.');
+    assert.ok(compactionObserved, 'The host attempted compaction and AZPR refused it.');
+    assert.deepEqual(functional.filter(stage => stage.status !== 'FAILED').map(stage => stage.label).sort().slice(0, 2), ['shard 1/5a', 'shard 1/5b']);
+    assert.ok(stages('risk').every(stage => stage.status === 'FAILED' || stage.completedTools === 1), 'Each risk reviewer read its first file as a diff.');
+    assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
+    assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
+    // These settings name no rater: no severity rating runs, no rating role is registered and the verifiers' levels are final.
+    assert.deepEqual(stages('rating'), [], 'No severity rating without models.review.rater.');
+    assert.doesNotMatch(receipt, /azpr-review-rating/);
+    assert.equal((await api('/api/agent')).data.some(agent => agent.name === 'azpr-review-rating'), false, 'The rating role is not registered without a rater.');
+    const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];
+    assert.equal(merged.length, 1, 'The moved duplicate is merged into the finding that stays.');
+    const coverage = functional.filter(stage => stage.status !== 'FAILED').reduce((n, stage) => n + stage.result.coverage.files.length, 0);
+    assert.equal(coverage, 120, 'Every file is reviewed once by the functional role, including split shards.');
+    await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+    const posted = await latest();
+    assert.match(posted, /\] POSTED/, posted);
+    const state = azure.state;
+    assert.equal(state.threads.length, 20, '19 high findings inline plus one summary; 10 low findings stay in the summary.');
+    const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
+    assert.equal(planner.length, 8, '29 findings in planning pages of four.');
+    assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
+    await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
+    assert.match(await latest(), /ALREADY_PRESENT/);
+    assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
+    console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
+      riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, plannerSessions: planner.length, planningInFlightMax: planningMost, threads: state.threads.length, providerRequests: requests.length,
+      maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
+  }
 } finally {
   if (child && child.exitCode === null) { const stopped = once(child, 'exit'); child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000).unref(); await stopped; clearTimeout(timer); }
   provider.closeAllConnections(); await new Promise(resolveDone => provider.close(resolveDone));

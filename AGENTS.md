@@ -221,7 +221,10 @@ Detect capabilities; do not assume them.
 Run `npm run check` and `npm test`. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
 `--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>` and
-`node tests/host-v2-background-compaction.mjs <opencode binary>`.
+`node tests/host-v2-background-compaction.mjs <opencode binary>`, the last two
+also with `--cleanup`. The fixtures keep debug on to read its records, and
+debug keeps every private session: only the `--cleanup` runs, with debug off,
+exercise the deletion of a run's sessions on a real host.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.

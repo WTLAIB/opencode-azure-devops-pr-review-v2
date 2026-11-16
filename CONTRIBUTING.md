@@ -45,7 +45,7 @@ findings and independently verified findings. Add a focused regression test
 when fixing behavior, and update the relevant documentation when it changes.
 
 Changes to hooks, sessions, tools, Azure access or publication also need all
-five host fixture runs. Install the tested host into a disposable local directory
+seven host fixture runs. Install the tested host into a disposable local directory
 without changing your everyday OpenCode installation:
 
 ```sh
@@ -56,7 +56,12 @@ node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --replace
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --native
 node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST"
+node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST" --cleanup
+node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST" --cleanup
 ```
+
+The last two run with debug off. Debug keeps every private session, so only
+these runs exercise the deletion of a run's sessions on the host.
 
 The fixtures need `openssl` and use isolated configuration, a fake model
 provider and fake Azure services. They do not need your PAT or provider account,
