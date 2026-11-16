@@ -3322,6 +3322,29 @@ test('the terminal panel in a review\'s own session shows the comment run typed 
   assert.ok(again.markdown.length > 100 && inReport.markdown.startsWith(again.markdown));
 });
 
+test('the terminal panel keeps the review\'s report in view when a comment run fails before it has a preview', async t => {
+  let failPlanning = true;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    answer: ({ role }) => failPlanning && ROLES[role].format === 'comment-plan' ? { $provider: 401 } : undefined });
+  const receipt = await f.command();
+  const verifier = f.sessionsFor('azpr-review-verifier')[0];
+  const failed = await f.command('pr-comment', '');
+  assert.match(failed, /\] INCOMPLETE; source review=/);
+  assert.match(failed, /<azpr_comment_data>\n\n<\/azpr_comment_data>/, 'The receipt has the block for a preview, and nothing in it.');
+  assert.equal(opensPanel(failed), false);
+  for (const sessionID of ['ordinary', verifier.id]) {
+    const panel = buildPanel(panelSource(f), sessionID);
+    assert.deepEqual([panel.run, panel.status], [reviewId(failed), 'INCOMPLETE'], sessionID);
+    assert.match(panel.markdown, new RegExp(`^# AZPR ${reviewId(receipt)} — COMPLETE\\n`), 'The report of the review the run acted on is still shown.');
+    assert.ok(panel.rows.some(row => row.id === verifier.id && row.report));
+  }
+  // The cause fixed, the next run's preview takes the report's place.
+  failPlanning = false;
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW; source review=/);
+  assert.match(buildPanel(panelSource(f), 'ordinary').markdown, /PR Review Summary/);
+});
+
 // The terminal panel (src/tui-model.mjs) reads these notices as text: their form is part of what a run tells the user.
 test('the terminal panel reads what a review, its report and its preview tell the conversation', async t => {
   const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'] });

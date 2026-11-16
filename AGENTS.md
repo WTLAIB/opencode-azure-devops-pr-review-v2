@@ -260,13 +260,18 @@ settings, backups and failure records. Never upload `.local/`.
   so the panel shows that review's status and sessions). A status never
   stands above another review's document: the report of the session on
   screen is shown only for the review shown, or while nothing is known of
-  any run yet.
+  any run yet. A receipt that encloses nothing (a comment run that failed
+  before it had a preview) is no document: the review's report stays.
 - The panel in a review's own session reads the conversation's notices and
   those of commands typed in that session, which the runtime answers there.
   The host has another session's notices only while it is on screen or in a
-  tab: read them from the server, pending and delivered (a notice is
-  delivered once its conversation's model runs), and keep with the answer
-  what arrives while it is under way.
+  tab: read them from the server, the inbox first and then the delivered
+  messages (a notice is delivered once its conversation's model runs, and
+  one delivered between the two reads must be in one of them), and keep with
+  the answer what arrives while it is under way. What was asked before a
+  reconnection is dropped when it answers. This reading lives in
+  `createReader` (`tui-model.mjs`), not in the view, so that its order and
+  its races are tested with delayed answers; keep it there.
 - The Markdown shown is the Markdown saved: only the cells of the summary
   table are decoded, each character escaped so that it stays literal as on
   the PR, and only AZPR's marker lines are left out, never inside code. A

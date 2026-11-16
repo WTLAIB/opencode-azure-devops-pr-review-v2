@@ -26,7 +26,7 @@ import { createElement as _$createElement } from "@opentui/solid";
 // OpenCode 2.3.0 compiles no JSX of a package it installed, so the package carries the result.
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core";
-import { PANEL, buildPanel, conversationOf, lookupOutcome, mergeEntries, notFound, opensPanel, reportIn, syntheticOf } from "./tui-model.mjs";
+import { PANEL, buildPanel, conversationOf, createReader, opensPanel } from "./tui-model.mjs";
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
 const READY = "AZPR: report or preview ready. /pr-panel shows it.";
@@ -541,124 +541,32 @@ export default {
     const data = context.data;
     // Set when the TUI unloads the plugin: nothing is asked of the host after that.
     let disposed = false;
-    // Which sessions were looked up and are gone, and which inboxes were read.
-    const [known, setKnown] = createSignal({});
-    const [read, setRead] = createSignal({});
     // The host keeps the messages and the inbox of the session on screen and of open tabs, and drops those of
-    // other sessions again. What the panel needs of another session, such as the report waiting in a review
-    // session's inbox, it therefore reads from the server itself and keeps here: the inboxes of the sessions
-    // read last, so that a terminal UI left open for weeks does not hold every report it ever showed.
-    const KEPT_INBOXES = 24;
-    const [fetched, setFetched] = createSignal({});
-    const keep = (sessionID, items) => {
-      const {
-        [sessionID]: _replaced,
-        ...others
-      } = fetched();
-      const entries = Object.entries(others);
-      const dropped = entries.slice(0, Math.max(0, entries.length - (KEPT_INBOXES - 1))).map(([id]) => id);
-      setFetched(Object.fromEntries([...entries.slice(dropped.length), [sessionID, items]]));
-      // An inbox that was let go is read again when the panel needs it.
-      if (dropped.length) setRead(current => Object.fromEntries(Object.entries(current).filter(([key]) => !dropped.some(id => key.startsWith(`${id}:`)))));
-    };
-    const listOf = result => Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : [];
-    // Notices that the host reported for a session while a read of that session was under way: the answer to the
-    // read may be older than they are.
-    const arriving = new Map();
-    /**
-     * Read a session's notices from the server: what waits in its inbox and, with `delivered`, what it was
-     * already told (its messages since the last compaction), since a notice is delivered once its conversation's
-     * model runs. What arrives during the read is kept with the answer.
-     */
-    const fetchEntries = async (sessionID, delivered) => {
-      if (disposed) return [];
-      const waiting = arriving.get(sessionID) ?? {
-        count: 0,
-        items: []
-      };
-      waiting.count++;
-      arriving.set(sessionID, waiting);
-      try {
-        const [pending, told] = await Promise.all([context.client.session.inbox.list({
-          sessionID
-        }), delivered && typeof context.client.session.context === "function" ? context.client.session.context({
-          sessionID
-        }) : []]);
-        // With what was read of this session before: a later read of its inbox alone must not lose what it was told.
-        const entries = mergeEntries(fetched()[sessionID] ?? [], listOf(told).filter(entry => entry?.type === "synthetic"), listOf(pending), waiting.items);
-        keep(sessionID, entries);
-        return entries;
-      } finally {
-        if (--waiting.count === 0) arriving.delete(sessionID);
-      }
-    };
+    // other sessions again. What the panel needs of another session (the report waiting in a review session's
+    // inbox, the notices of the conversation when one of AZPR's own sessions is on screen) is read from the
+    // server by the reader in tui-model.mjs, which also knows which sessions are gone. `version` makes what it
+    // holds reactive.
+    const [version, setVersion] = createSignal(0);
+    const reader = createReader({
+      inbox: sessionID => context.client.session.inbox.list({
+        sessionID
+      }),
+      context: typeof context.client?.session?.context === "function" ? sessionID => context.client.session.context({
+        sessionID
+      }) : undefined,
+      lookup: sessionID => data.session.sync(sessionID),
+      present: sessionID => data.session.get(sessionID),
+      changed: () => setVersion(count => count + 1)
+    });
     const source = {
       session: id => data.session.get(id),
       sessions: () => data.session.list(),
       status: id => data.session.status(id),
       messages: id => data.session.message.list(id),
-      pending: id => [...data.session.pending.list(id), ...(fetched()[id] ?? [])]
+      pending: id => (version(), [...data.session.pending.list(id), ...reader.entries(id)])
     };
-    const mark = (sessionID, value) => setKnown(current => current[sessionID] === value ? current : {
-      ...current,
-      [sessionID]: value
-    });
-    const looking = new Map();
-    // How often a session's lookup failed without an answer about the session itself; reset when the server reconnects.
-    const failed = new Map();
-    /**
-     * Look a session up, once at a time: the session itself, nothing it holds. Whose it is must be known before
-     * its inbox is read, and the model decides that from the session's own metadata. A session is remembered as
-     * missing only when the server said so (see lookupOutcome); a lookup that failed on the way is made again a
-     * few times, further apart, and then left until the server reconnects.
-     */
-    const lookup = sessionID => {
-      if (disposed || known()[sessionID] === "missing" || failed.get(sessionID) >= 4) return Promise.resolve();
-      const running = looking.get(sessionID);
-      if (running) return running;
-      const started = Promise.allSettled([Promise.resolve().then(() => data.session.sync(sessionID))]).then(([looked]) => {
-        const outcome = lookupOutcome(looked, Boolean(data.session.get(sessionID)));
-        if (outcome !== "retry") {
-          failed.delete(sessionID);
-          return mark(sessionID, outcome);
-        }
-        const count = (failed.get(sessionID) ?? 0) + 1;
-        failed.set(sessionID, count);
-        if (count < 4) setTimeout(() => void lookup(sessionID), 500 * 2 ** count);
-      }).finally(() => looking.delete(sessionID));
-      looking.set(sessionID, started);
-      return started;
-    };
-    const reading = new Set();
-    /**
-     * Read the inbox of a session the model named: the one that holds a report (`report`: a report that is not
-     * there after a moment is not coming), or a conversation's, for its notices. A request that failed on the way
-     * is made again; only a not-found answer says that the session is gone.
-     */
-    const readInbox = (sessionID, token, report) => {
-      const key = `${sessionID}:${token}`;
-      if (read()[key] || reading.has(key)) return;
-      reading.add(key);
-      const attempt = async (left, delivered) => {
-        try {
-          // A report waits in the inbox unless someone prompted its session since: then it is among the messages.
-          const entries = await fetchEntries(sessionID, delivered);
-          if (!report || reportIn(syntheticOf(entries, []))) return;
-        } catch (error) {
-          if (notFound(error)) return mark(sessionID, "missing");
-        }
-        if (left <= 1 || disposed) return;
-        await new Promise(done => setTimeout(done, 400));
-        return attempt(left - 1, true);
-      };
-      attempt(4, !report).finally(() => {
-        reading.delete(key);
-        setRead(current => ({
-          ...current,
-          [key]: true
-        }));
-      });
-    };
+    const known = () => (version(), reader.known());
+    const read = () => (version(), reader.read());
 
     // Sessions whose panel this plugin opened and the user has not closed. The host closes a panel when the
     // screen leaves its session; coming back to such a session opens it again.
@@ -672,8 +580,8 @@ export default {
       known,
       read,
       titles: new Map(),
-      lookup,
-      readInbox,
+      lookup: reader.lookup,
+      readInbox: reader.readInbox,
       dismiss: sessionID => void wanted.delete(sessionID),
       takeUnasked: () => {
         const value = unasked;
@@ -714,7 +622,7 @@ export default {
       const page = (cursor, left = 5) => Promise.resolve(context.client.session.list(cursor ? {
         cursor
       } : {})).then(result => {
-        for (const session of result?.data ?? []) if (conversationOf(session) === conversation) void lookup(session.id);
+        for (const session of result?.data ?? []) if (conversationOf(session) === conversation) void reader.lookup(session.id);
         if (result?.cursor && result.cursor !== cursor && left > 1) return page(result.cursor, left - 1);
       });
       page().catch(() => discovered.delete(conversation));
@@ -749,25 +657,18 @@ export default {
     const stop = data.listen(event => {
       if (disposed) return;
       const details = event?.details;
-      if (details?.type === "session.deleted") return mark(details.data?.sessionID, "missing");
+      if (details?.type === "session.deleted") return reader.deleted(details.data?.sessionID);
       if (details?.type === "server.connected") {
-        // What was published while the TUI was away was missed: look everything up again.
+        // What was published while the TUI was away was missed: look everything up again, and let nothing that
+        // was asked before the reconnection answer for now.
         discovered.clear();
-        failed.clear();
-        setKnown({});
-        setRead({});
-        setFetched({});
+        reader.reconnected();
         return;
       }
       if (details?.type !== "session.inbox.enqueued") return;
       const item = details.data?.item;
-      // What this plugin read of a session itself is kept current: the host tells of each new notice. One that
-      // arrives while a read is under way is handed to that read, whose answer may not have it yet.
-      const about = details.data?.sessionID;
-      if (item?.type === "synthetic" && typeof item.id === "string") {
-        arriving.get(about)?.items.push(item);
-        if (fetched()[about] && !fetched()[about].some(held => held.id === item.id)) keep(about, [...fetched()[about], item]);
-      }
+      // What was read of a session from the server is kept current: the host tells of each new notice.
+      reader.arrived(details.data?.sessionID, item);
       // A run that starts, and a report or preview that arrives, opens the panel in the session on screen,
       // unless the notice says that the settings leave the panel to /pr-panel.
       if (item?.type !== "synthetic" || !opensPanel(item.payload?.text, item.payload?.metadata)) return;
@@ -819,6 +720,7 @@ export default {
     }));
     return () => {
       disposed = true;
+      reader.dispose();
       stop?.();
     };
   }

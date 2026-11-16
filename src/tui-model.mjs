@@ -43,6 +43,15 @@ const FENCE = /^ {0,3}(?:(`{3,})(?!.*`)|(~{3,}))/;
  */
 const ledgerOf = text => text.split(/^<azpr_(?:report|comment)_data>$/m)[0];
 
+/**
+ * The report or preview a notice encloses, or undefined: also for an empty block, which the receipt of a
+ * comment run carries when the run failed or was stopped before it had a preview.
+ */
+const enclosedIn = text => {
+  const body = DATA.exec(text)?.[2];
+  return body?.trim() ? body : undefined;
+};
+
 /** The text of a delivered message, or of a notice that still waits in a session's inbox. */
 export const textOf = entry =>
   typeof entry?.text === 'string' ? entry.text : typeof entry?.payload?.text === 'string' ? entry.payload.text : typeof entry?.description === 'string' ? entry.description : '';
@@ -86,7 +95,7 @@ export const reportIn = entries => entries.map(entry => entry.text).findLast(tex
  */
 export const opensPanel = (text, metadata) =>
   typeof text === 'string' && metadata?.azpr?.panel !== 'manual' &&
-  (RUN_STARTED.test(text) || (HEAD.test(text) && (DATA.test(text) || REPORT_SESSION.test(ledgerOf(text)))));
+  (RUN_STARTED.test(text) || (HEAD.test(text) && (enclosedIn(text) !== undefined || REPORT_SESSION.test(ledgerOf(text)))));
 
 /**
  * The same Markdown, made readable in a terminal. AZPR writes the cells of its
@@ -140,6 +149,173 @@ export const notFound = error => /NotFound|\b404\b/.test(String(error?.name ?? '
 export function lookupOutcome(looked, present) {
   if (looked.status === 'rejected') return notFound(looked.reason) ? 'missing' : 'retry';
   return present ? 'exists' : 'missing';
+}
+
+/**
+ * What the panel reads of sessions other than the one on screen, and when. It is kept apart from the
+ * view so that the order of its requests and their races are tested with delayed answers.
+ *
+ * The host is asked through the functions given:
+ *   inbox(sessionID)   → what waits in that session's inbox (an array, or `{ data }`)
+ *   context(sessionID) → that session's messages since the last compaction; optional
+ *   lookup(sessionID)  → load the session itself into the host (nothing it holds)
+ *   present(sessionID) → whether the host has the session now
+ *   changed()          → called whenever what the reader holds has changed
+ *   pause(ms)          → a wait between attempts
+ *
+ * The rules it keeps:
+ * - A session is looked up before anything it holds is read; the model decides from the session's own
+ *   metadata whose it is, and only then names its inbox (see buildPanel).
+ * - A session counts as gone only when the server said so (lookupOutcome, notFound).
+ * - An inbox is read before the messages: a notice that is delivered between the two reads was still in
+ *   the inbox for the first. A notice the host reports while a read is under way is kept with its answer.
+ * - A request that failed is made again a few times; then it is left until the server reconnects.
+ * - What was asked before a reconnection is out of date when it answers: it is dropped and nothing is
+ *   marked as read by it, since notices were missed while the TUI was away.
+ * - The entries of the `kept` sessions read last are held; one that was let go is read again when needed.
+ */
+export function createReader({ inbox, context, lookup, present, changed = () => {}, pause = ms => new Promise(done => setTimeout(done, ms)), kept = 24 }) {
+  let connection = 0, disposed = false;
+  let known = {}, read = {};
+  const fetched = new Map();   // session → entries read from the server; the session read last comes last
+  const failed = new Map();    // session → lookups that failed without an answer about the session
+  const looking = new Map();   // session → its lookup under way
+  const reading = new Set();   // `<session>:<token>` reads under way
+  const arriving = new Map();  // session → { count, items }: notices reported while a read of it is under way
+  const listOf = result => (Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : []);
+  const mark = (sessionID, value) => {
+    if (known[sessionID] === value) return;
+    known = { ...known, [sessionID]: value };
+    changed();
+  };
+  const keep = (sessionID, entries) => {
+    fetched.delete(sessionID);
+    fetched.set(sessionID, entries);
+    const dropped = [...fetched.keys()].slice(0, Math.max(0, fetched.size - kept));
+    for (const id of dropped) fetched.delete(id);
+    if (dropped.length) read = Object.fromEntries(Object.entries(read).filter(([key]) => !dropped.some(id => key.startsWith(`${id}:`))));
+    changed();
+  };
+
+  /** Read a session's notices: its inbox and, with `delivered`, its messages. Returns them, or [] when out of date. */
+  async function fetchEntries(sessionID, delivered) {
+    if (disposed) return [];
+    const asked = connection;
+    const waiting = arriving.get(sessionID) ?? { count: 0, items: [] };
+    waiting.count++;
+    arriving.set(sessionID, waiting);
+    try {
+      const pending = await inbox(sessionID);
+      if (asked !== connection || disposed) return [];
+      const told = delivered && context ? await context(sessionID) : [];
+      if (asked !== connection || disposed) return [];
+      // With what was read of this session before: a later read of its inbox alone must not lose what it was told.
+      const entries = mergeEntries(fetched.get(sessionID) ?? [], listOf(told).filter(entry => entry?.type === 'synthetic'), listOf(pending), waiting.items);
+      keep(sessionID, entries);
+      return entries;
+    } finally {
+      if (--waiting.count === 0 && arriving.get(sessionID) === waiting) arriving.delete(sessionID);
+    }
+  }
+
+  /** Look a session up, once at a time. */
+  function lookupSession(sessionID) {
+    if (disposed || known[sessionID] === 'missing' || failed.get(sessionID) >= 4) return Promise.resolve();
+    const running = looking.get(sessionID);
+    if (running) return running;
+    const asked = connection;
+    const started = (async () => {
+      const [looked] = await Promise.allSettled([Promise.resolve().then(() => lookup(sessionID))]);
+      // This lookup is over before anything follows from it, so that the next attempt is a lookup of its own.
+      if (looking.get(sessionID) === started) looking.delete(sessionID);
+      if (asked !== connection || disposed) return;
+      const outcome = lookupOutcome(looked, Boolean(present(sessionID)));
+      if (outcome !== 'retry') {
+        failed.delete(sessionID);
+        return mark(sessionID, outcome);
+      }
+      const count = (failed.get(sessionID) ?? 0) + 1;
+      failed.set(sessionID, count);
+      // Again, further apart.
+      if (count < 4) void pause(500 * 2 ** count).then(() => { if (asked === connection) void lookupSession(sessionID); });
+    })();
+    looking.set(sessionID, started);
+    return started;
+  }
+
+  /**
+   * Read the inbox of a session the model named: the one that holds a report (`report`: a report that is
+   * not there after a moment is not coming; it is among the messages when someone prompted that session
+   * since), or a conversation's, for its notices, pending and delivered.
+   */
+  function readInbox(sessionID, token, report) {
+    const key = `${sessionID}:${token}`;
+    if (disposed || read[key] || reading.has(key)) return Promise.resolve();
+    reading.add(key);
+    const asked = connection;
+    const attempt = async (left, delivered) => {
+      try {
+        const entries = await fetchEntries(sessionID, delivered);
+        if (asked !== connection || !report || reportIn(syntheticOf(entries, []))) return;
+      } catch (error) {
+        if (asked !== connection) return;
+        if (notFound(error)) return mark(sessionID, 'missing');
+      }
+      if (left <= 1 || disposed) return;
+      await pause(400);
+      if (asked !== connection) return;
+      return attempt(left - 1, true);
+    };
+    return attempt(4, !report).finally(() => {
+      // A read from before a reconnection says nothing about now: the reconnection started everything anew.
+      if (asked !== connection) return;
+      reading.delete(key);
+      read = { ...read, [key]: true };
+      changed();
+    });
+  }
+
+  return {
+    /** What was read of a session from the server; [] for one that was not read or was let go. */
+    entries: sessionID => fetched.get(sessionID) ?? [],
+    /** Sessions looked up: 'exists' or 'missing'. */
+    known: () => known,
+    /** Reads that ended, as `<session>:<token>`. */
+    read: () => read,
+    lookup: lookupSession,
+    readInbox,
+
+    /** A notice the host reported for a session: kept with what was read of that session, and with a read under way. */
+    arrived(sessionID, item) {
+      if (disposed || item?.type !== 'synthetic' || typeof item.id !== 'string') return;
+      arriving.get(sessionID)?.items.push(item);
+      const held = fetched.get(sessionID);
+      if (held && !held.some(entry => entry.id === item.id)) keep(sessionID, [...held, item]);
+    },
+
+    /** The server said that a session was deleted. */
+    deleted(sessionID) {
+      if (typeof sessionID === 'string') mark(sessionID, 'missing');
+    },
+
+    /** The server is connected again: what was missed meanwhile is read anew, and nothing asked before counts. */
+    reconnected() {
+      connection++;
+      failed.clear();
+      looking.clear();
+      reading.clear();
+      arriving.clear();
+      fetched.clear();
+      known = {};
+      read = {};
+      changed();
+    },
+
+    /** The TUI unloads the plugin: nothing is asked of the host after this. */
+    dispose() {
+      disposed = true;
+    },
+  };
 }
 
 const TITLE = /^\[AZPR ([a-f0-9]{8})\] /;
@@ -203,7 +379,7 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // What the panel is about is what happened last: a run that started, progressed or ended, or a saved preview
   // shown again, which names its review. What a run says besides (a review's note that no preview follows can
   // arrive after the next run started) changes nothing, and neither does an answer without a document.
-  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && DATA.test(notice.text)));
+  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && enclosedIn(notice.text) !== undefined));
   const answered = subject?.kind === 'ANSWER' ? SAVED_PREVIEW.exec(subject.text)[1] : undefined;
   // A saved preview shown again is about its review: that review's status, sessions and report session.
   const run = answered ?? subject?.run;
@@ -218,15 +394,16 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   const reportSession = REPORT_SESSION.exec(ledgerOf(review?.text ?? ''))?.[1];
 
   // The document: the saved preview shown again, or the newest report or preview of the run and of the review it
-  // acts on, enclosed in a receipt or queued to the review's report session.
+  // acts on, enclosed in a receipt or queued to the review's report session. A receipt that encloses nothing (a
+  // comment run that failed before it had a preview) leaves the document as it was: the review's report.
   let document;
-  if (answered) document = { head: subject.text.split('\n')[0], markdown: DATA.exec(subject.text)[2], token: subject.id };
+  if (answered) document = { head: subject.text.split('\n')[0], markdown: enclosedIn(subject.text), token: subject.id };
   else for (const notice of notices) {
     if (notice.kind !== 'RECEIPT' || (notice.run !== run && notice.run !== reviewRun)) continue;
     const head = notice.text.split('\n')[0];
-    const enclosed = DATA.exec(notice.text);
+    const enclosed = enclosedIn(notice.text);
     const queued = REPORT_SESSION.exec(ledgerOf(notice.text))?.[1];
-    if (enclosed) document = { head, markdown: enclosed[2], token: notice.id };
+    if (enclosed !== undefined) document = { head, markdown: enclosed, token: notice.id };
     else if (queued) document = { head, session: queued, run: notice.run, token: notice.id };
   }
   // A queued report is read from the session a receipt names, once that session says itself that it is this

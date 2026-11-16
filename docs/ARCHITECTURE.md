@@ -647,7 +647,12 @@ three things the runtime already produced:
   run and conversation while the run has no receipt yet.
 
 `src/tui-model.mjs` works out what to show from these as plain data, without
-any host import, so `npm test` covers it. `tests/tui-model.test.mjs` runs it
+any host import, so `npm test` covers it. It also holds the reader
+(`createReader`): what the panel asks the server of sessions other than the
+one on screen, in which order, how often again after a failure, and what it
+does with an answer that arrives after the server reconnected. The view gives
+it the host's functions; the tests give it answers that arrive when they say
+so. `tests/tui-model.test.mjs` runs it
 against `renderReceipt`, and a runtime test against the notices of a whole
 review, a preview, `--show` and a check: a change to their form fails there
 and not in a terminal. A comment run is shown together with the review it acts
@@ -658,7 +663,9 @@ The panel is about what happened last in the conversation: a run that
 started, progressed or ended, or a saved preview shown again, which names its
 review (`/pr-comment <review> --show` makes that review the current one, and
 the panel shows that review's status, sessions and preview). What the model
-takes as fact is the runtime's own text, never a model's:
+takes as fact is the runtime's own text, never a model's. A receipt that
+encloses nothing, as a comment run's does when it failed before it had a
+preview, is no document: the report of the review it acted on stays in view.
 
 - A receipt is a notice whose status word is followed by `;`, a line break or
   the end. A run also says other things under its ID, such as `Automatic
@@ -683,9 +690,12 @@ takes as fact is the runtime's own text, never a model's:
   its parent, when it carries AZPR's title). Its notices are read from the
   server, since the host has them only while the conversation is on screen
   or in a tab: what waits in its inbox and what was delivered since (a
-  notice is delivered once the conversation's model runs). Each later notice
-  is added as the host reports it, also one that arrives while the read is
-  under way. The session's own report is shown only for the review shown, or
+  notice is delivered once the conversation's model runs). The inbox is read
+  first and the messages after it, so that a notice delivered between the
+  two reads is in one of them. Each later notice is added as the host
+  reports it, also one that arrives while the read is under way. A read that
+  was asked before the server reconnected is dropped when it answers, and
+  everything is read again. The session's own report is shown only for the review shown, or
   while nothing is known of any run yet: a status never stands above another
   review's report.
 - The Markdown shown is the saved Markdown. The cells of the summary table,
