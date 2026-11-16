@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   renderReceipt, renderDiagnosticNotices, searchLimitation, describeReview, renderCommentActions, renderFinalReport, renderCheckReport, renderPublication,
-  reviewProvenance, provenanceReport, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote,
+  reviewProvenance, provenanceReport, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote, enclose,
 } from '../src/attribution.mjs';
+import { buildPanel, disclose } from '../src/tui-model.mjs';
 
 function freeze(value) {
   if (value && typeof value === 'object') {
@@ -52,6 +53,34 @@ test('the PR comments section says which comment step follows automatically; the
   assert.match(renderCommentActions('12345678', 'zh-CN', { mode: 'publish', source: '--publish' }), /\*\*自动发布\*\*/);
   const receipt = renderReceipt({ ...run(), afterReview: { mode: 'preview', source: '--preview' } }, '', 'COMPLETE', '', { ...settings, outputLanguage: 'en' });
   assert.match(receipt, /## PR comments\n\n\*\*Automatic preview\*\* \(`--preview`\)/);
+});
+
+test('enclosed text never holds its block\'s closing tag, and one level off gives the text back exactly', () => {
+  // What the block of a notice may be given: its own closing tag, the entity form the tag is written as, forms
+  // escaped further, forms whose two halves differ, and the other block's tags.
+  const tag = name => `</azpr_${name}_data>`, entity = (name, a, b) => `&${'amp;'.repeat(a)}lt;/azpr_${name}_data&${'amp;'.repeat(b)}gt;`;
+  for (const name of ['report', 'comment']) {
+    const other = name === 'report' ? 'comment' : 'report';
+    const texts = ['plain text & <b>markup</b> &lt;p&gt;', tag(name), `\`\`\`js\nconst end = '${tag(name)}';\n\`\`\``, entity(name, 0, 0), entity(name, 1, 1), entity(name, 3, 3), entity(name, 0, 1), entity(name, 2, 0),
+      `${tag(name)}${tag(name)} ${entity(name, 0, 0)}${entity(name, 1, 1)}`, `line\n${tag(name)}\nline`, tag(other), entity(other, 0, 0), `<azpr_${name}_data>`, `&lt;/azpr_${name}_data>`, `</azpr_${name}_data&gt;`, ''];
+    for (const text of texts) {
+      const enclosed = enclose(name, text);
+      assert.ok(!enclosed.includes(tag(name)), `${name}: ${JSON.stringify(text)}`);
+      assert.equal(disclose(name, enclosed), text, `${name}: ${JSON.stringify(text)}`);
+      // Twice enclosed, twice disclosed.
+      assert.equal(disclose(name, disclose(name, enclose(name, enclosed))), text);
+    }
+    assert.equal(enclose(name, tag(name)), entity(name, 0, 0));
+    assert.equal(enclose(name, entity(name, 0, 0)), entity(name, 1, 1), 'The entity form a finding wrote itself is not taken for the tag afterwards.');
+    assert.equal(enclose(name, `${tag(other)} ${entity(other, 0, 0)} & < >`), `${tag(other)} ${entity(other, 0, 0)} & < >`, 'Nothing else is changed.');
+    assert.equal(enclose(name, undefined), '');
+  }
+  // Through a receipt and the panel: a report that quotes the closing tag is shown as it was written.
+  const quoted = 'A finding quotes the receipt format:\n\n```js\nbody += \'\\n</azpr_report_data>\\n\'; // not &lt;/azpr_report_data&gt;\n```';
+  const receipt = renderReceipt(run(), quoted, 'PARTIAL', 'A reviewer failed.', settings);
+  assert.equal(receipt.split('</azpr_report_data>').length, 2, 'The receipt has its closing tag once.');
+  const source = { session: id => ({ id }), sessions: () => [], status: () => 'idle', messages: () => [], pending: () => [{ id: 'msg_1', type: 'synthetic', payload: { text: receipt } }] };
+  assert.equal(buildPanel(source, 'ses_conversation').markdown, quoted);
 });
 
 test('receipt rendering is pure and encloses the report in full mode or when it was not queued', () => {

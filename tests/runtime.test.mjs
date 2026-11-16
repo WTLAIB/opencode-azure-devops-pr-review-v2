@@ -3345,6 +3345,34 @@ test('the terminal panel keeps the review\'s report in view when a comment run f
   assert.match(buildPanel(panelSource(f), 'ordinary').markdown, /PR Review Summary/);
 });
 
+test('a comment that quotes the closing tag of AZPR\'s own notice is shown in the panel as it is posted', async t => {
+  // A review of code that writes such notices: the planned comment quotes the tag and the form it is written in.
+  const quote = "The writer appends the tag itself:\n\n```js\nbody += '\\n</azpr_comment_data>\\n'; // inside a block: &lt;/azpr_comment_data&gt;\n```\n\nEscape `</azpr_comment_data>` before enclosing the preview.";
+  const f = await fixture(t, { files: ['/src/Main.java'], answer: input => {
+    if (ROLES[input.role].format !== 'comment-plan') return undefined;
+    const plan = defaultAnswer(input);
+    return { ...plan, comments: plan.comments.map(comment => ({ ...comment, body: `${comment.body}\n\n${quote}` })) };
+  } });
+  const review = reviewId(await f.command());
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW; source review=/);
+  // The notice ends its block once, where the runtime put the tag; the conversation's model reads the quote escaped.
+  assert.equal(preview.split('</azpr_comment_data>').length, 2);
+  assert.ok(commentData(preview).includes("body += '\\n&lt;/azpr_comment_data&gt;\\n'; // inside a block: &amp;lt;/azpr_comment_data&amp;gt;"));
+  const planned = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual([planned.run, planned.status], [reviewId(preview), 'PREVIEW']);
+  assert.ok(planned.markdown.includes(quote), 'The panel shows the comment as it was planned.');
+  // --show: the saved preview, enclosed the same way.
+  const shown = await f.command('pr-comment', '--show');
+  assert.match(shown, new RegExp(`^\\[AZPR\\] Saved preview of review ${review}\\b`));
+  assert.equal(shown.split('</azpr_comment_data>').length, 2);
+  assert.ok(buildPanel(panelSource(f), 'ordinary').markdown.includes(quote));
+  // Publication posts that text.
+  assert.match(await f.command('pr-comment', '--publish'), /\] POSTED/);
+  const posted = f.azure.state.threads.flatMap(thread => thread.comments.map(comment => comment.content)).filter(content => content.includes('azpr_comment_data'));
+  assert.ok(posted.length >= 1 && posted.every(content => content.includes(quote)), 'What was posted is what the panel showed.');
+});
+
 // The terminal panel (src/tui-model.mjs) reads these notices as text: their form is part of what a run tells the user.
 test('the terminal panel reads what a review, its report and its preview tell the conversation', async t => {
   const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'] });

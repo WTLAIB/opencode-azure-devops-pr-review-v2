@@ -18,7 +18,8 @@ const SESSION = 'ses_[A-Za-z0-9]+';
 // `[AZPR <run>] STATUS…` for a run's notices; `[AZPR] …` for a command that answered at once.
 const HEAD = /^\[AZPR(?: ([a-f0-9]{8}))?\] ?(?:([A-Z_]+)\b)?/;
 const STAGE = new RegExp(`^- (azpr-[a-z-]+)(?: \\[([^\\]]+)\\])?: ([A-Z_]+); session=(${SESSION})`, 'gm');
-const DATA = /<(azpr_(?:report|comment)_data)>\n([\s\S]*?)\n<\/\1>/;
+// The block of a notice that encloses a document: its name (report or comment) and its text.
+const DATA = /<azpr_(report|comment)_data>\n([\s\S]*?)\n<\/azpr_\1_data>/;
 const REPORT_SESSION = new RegExp(`Report delivery: report queued to session=(${SESSION})\\.`);
 // A comment run names the review it acts on: in its STARTED notice and in the head of its receipt.
 const ACTS_ON = / It acts on review ([a-f0-9]{8}) /;
@@ -44,12 +45,30 @@ const FENCE = /^ {0,3}(?:(`{3,})(?!.*`)|(~{3,}))/;
 const ledgerOf = text => text.split(/^<azpr_(?:report|comment)_data>$/m)[0];
 
 /**
- * The report or preview a notice encloses, or undefined: also for an empty block, which the receipt of a
- * comment run carries when the run failed or was stopped before it had a preview.
+ * A block's text as it was before the runtime enclosed it. The runtime writes the block's own closing tag
+ * as `&lt;/azpr_NAME_data&gt;` and gives text that already had that form one more level of `&amp;` (see
+ * `enclose` in attribution.mjs): one level is taken off here, and nothing else is changed. A finding that
+ * quotes the tag is then shown as publication posts it.
  */
+export function disclose(name, text) {
+  const tag = `/azpr_${name}_data`;
+  return text.replace(new RegExp(`&((?:amp;)*)lt;${tag}&((?:amp;)*)gt;`, 'g'), (found, left, right) =>
+    (left === '' && right === '' ? `<${tag}>` : left && right ? `&${left.slice(4)}lt;${tag}&${right.slice(4)}gt;` : found));
+}
+
+/**
+ * The block of a notice that encloses a report or preview, or undefined: also for an empty block, which the
+ * receipt of a comment run carries when the run failed or was stopped before it had a preview.
+ */
+const blockIn = text => {
+  const found = DATA.exec(text);
+  return found?.[2].trim() ? found : undefined;
+};
+const encloses = text => blockIn(text) !== undefined;
+/** The report or preview a notice encloses, as it was written, or undefined. */
 const enclosedIn = text => {
-  const body = DATA.exec(text)?.[2];
-  return body?.trim() ? body : undefined;
+  const found = blockIn(text);
+  return found && disclose(found[1], found[2]);
 };
 
 /** The text of a delivered message, or of a notice that still waits in a session's inbox. */
@@ -95,7 +114,7 @@ export const reportIn = entries => entries.map(entry => entry.text).findLast(tex
  */
 export const opensPanel = (text, metadata) =>
   typeof text === 'string' && metadata?.azpr?.panel !== 'manual' &&
-  (RUN_STARTED.test(text) || (HEAD.test(text) && (enclosedIn(text) !== undefined || REPORT_SESSION.test(ledgerOf(text)))));
+  (RUN_STARTED.test(text) || (HEAD.test(text) && (encloses(text) || REPORT_SESSION.test(ledgerOf(text)))));
 
 /**
  * The same Markdown, made readable in a terminal. AZPR writes the cells of its
@@ -424,7 +443,7 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // What the panel is about is what happened last: a run that started, progressed or ended, or a saved preview
   // shown again, which names its review. What a run says besides (a review's note that no preview follows can
   // arrive after the next run started) changes nothing, and neither does an answer without a document.
-  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && enclosedIn(notice.text) !== undefined));
+  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && encloses(notice.text)));
   const answered = subject?.kind === 'ANSWER' ? SAVED_PREVIEW.exec(subject.text)[1] : undefined;
   // A saved preview shown again is about its review: that review's status, sessions and report session.
   const run = answered ?? subject?.run;

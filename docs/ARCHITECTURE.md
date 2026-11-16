@@ -713,6 +713,17 @@ preview, is no document: the report of the review it acted on stays in view.
   code block, inside a code span that runs over several lines, or anywhere
   else in a finding's text stays as it is, so the preview on screen is the
   preview that publication posts.
+- A notice's block ends at its closing tag, so that tag cannot stand in the
+  enclosed text. `enclose` (`attribution.mjs`) writes it there as
+  `&lt;/azpr_NAME_data&gt;`, and gives text that already holds that form, or
+  one escaped further, one more `&amp;` on each side, so that nothing in the
+  block can be read two ways. The panel takes one level off again
+  (`disclose`): a finding that quotes the tag, in a review of code that
+  handles such notices, is shown with the tag, as it is posted. Every block
+  is written through `enclose`; a test takes texts of all these forms there
+  and back. A notice that 0.4.1 or earlier wrote, still in a conversation
+  after an upgrade, has the tag in the same form but left a text's own
+  entity form as it was, so there such a form is read as the tag.
 
 `src/tui-view.jsx` is the view and the wiring to the host. What the host does
 decided several things in it:

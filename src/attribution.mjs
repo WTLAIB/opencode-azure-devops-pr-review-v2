@@ -251,6 +251,19 @@ export function renderCheckReport(snapshot, checks, readiness) {
   return `## Source readiness\n\n${snapshot ? `${snapshot.organization}/${snapshot.project}/${snapshot.repository} · PR #${snapshot.prId} · ${snapshot.status}${snapshot.title ? ` · "${snapshot.title}"` : ''}\n\n- head: \`${snapshot.head}\`\n- base: \`${snapshot.base}\`${snapshot.baseKind === 'target' ? ' (target branch tip; no merge base reported)' : ' (merge base)'}\n- changed files: ${snapshot.files.length} (${snapshot.filesComplete ? 'complete list' : 'partial list; reviewers will look for the rest'})\n\n` : ''}| Check | Result | Detail |\n| --- | --- | --- |\n${rows}${models}\n\nREADY means AZPR can read this PR through the Azure DevOps REST API with the configured PAT; it is not a review or an approval.`;
 }
 
+/**
+ * Text for the `<azpr_NAME_data>` block of a notice (`report` or `comment`). The block ends at its closing
+ * tag, so that tag must not occur in the text: it is written as `&lt;/azpr_NAME_data&gt;`. Text that already
+ * holds that entity form, or one escaped further, gets one more level of `&amp;`, so that nothing is
+ * ambiguous: a reader takes exactly one level off again and has the text as it was (the terminal panel does,
+ * see `disclose` in tui-model.mjs). Everything else is left as it is.
+ */
+export function enclose(name, text) {
+  const tag = `/azpr_${name}_data`;
+  return String(text ?? '').replace(new RegExp(`<${tag}>|&((?:amp;)*)lt;${tag}&((?:amp;)*)gt;`, 'g'),
+    (found, left, right) => (left === undefined ? `&lt;${tag}&gt;` : `&amp;${left}lt;${tag}&amp;${right}gt;`));
+}
+
 /** Publication ledger rows for receipts. */
 export function renderPublication(review, result) {
   const rows = [...(review.publication ?? new Map()).values()].map(entry =>
@@ -314,7 +327,7 @@ export function renderReceipt(run, report, status, error, settings) {
     if (last?.reportQueued) body += `\nReport delivery: report queued to session=${last.sessionID}.\n`;
     else if (run.stages.length) body += '\nReport delivery: the report could not be queued to a review session; it is enclosed below.\n';
     if (settings.returnReport === 'full' || run.draft || ['PARTIAL', 'INCOMPLETE', 'STALE'].includes(status) || !last?.reportQueued) {
-      body += `\nReport data:\n<azpr_report_data>\n${report.replaceAll('</azpr_report_data>', '&lt;/azpr_report_data&gt;')}\n</azpr_report_data>\n`;
+      body += `\nReport data:\n<azpr_report_data>\n${enclose('report', report)}\n</azpr_report_data>\n`;
     }
   }
   if (['review', 'deep', 'quick'].includes(run.mode) && status === 'COMPLETE' && settings.returnReport !== 'full') body += '\n' + renderCommentActions(run.id, settings.outputLanguage, run.afterReview) + '\n';

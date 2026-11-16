@@ -34,6 +34,11 @@ Terminal panel (OpenCode's terminal UI only):
 - The panel only reads: AZPR's notices in the conversation, the report queued
   to the review's session, and which sessions belong to the run. It sends no
   prompt, starts nothing and posts nothing.
+- A report or preview that a notice encloses is shown exactly as it was
+  written, also when it quotes the tag that ends the notice's block. For
+  that, text which already holds the escaped form of that tag
+  (`&lt;/azpr_report_data&gt;`, `&lt;/azpr_comment_data&gt;`) is now enclosed
+  with one more `&amp;`; the tag itself is written as before.
 - Other OpenCode clients, such as the desktop app, do not load the panel and
   show AZPR's notices as before.
 

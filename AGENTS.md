@@ -283,6 +283,12 @@ settings, backups and failure records. Never upload `.local/`.
   begins after a blank line with the summary's header and delimiter row),
   never inside code, fenced or in a span over several lines. A preview on
   screen must be the preview that publication posts.
+- A notice ends its block at the block's closing tag, so the runtime writes
+  that tag inside the block in an escaped form (`enclose` in
+  `attribution.mjs`), and the panel takes exactly that off again (`disclose`
+  in `tui-model.mjs`). The two are each other's inverse for any text,
+  including text that already holds the escaped form: change them together,
+  and write every block through `enclose`.
 - A session counts as deleted only when the server said so, and then it is
   gone whatever the host still holds of it and whatever answers later, until
   the server reconnects; a request that failed is tried again.
