@@ -826,6 +826,58 @@ test('an inbox that was let go while its own read ended is not marked as read, a
   assert.deepEqual([h.reader.entries(V), h.reader.read()[`${V}:notices`]], [[], true]);
 });
 
+test('a session is not let go while a read of it is under way: what its requests answer is held together', async () => {
+  // The default number of sessions kept. The conversation's inbox answers with the receipt; its messages are slow.
+  const h = readerHost();
+  const done = h.reader.readInbox(CONVERSATION, 'notices', false);
+  await settle();
+  h.last('inbox').resolve([pendingItem('msg_2', `[AZPR ${RUN}] COMPLETE`)]);
+  await settle();
+  const messages = h.last('context');
+  assert.equal(messages.sessionID, CONVERSATION);
+  // Meanwhile more other sessions are read than are kept, each to its end.
+  const others = Array.from({ length: 30 }, (unused, index) => `ses_other${String(index).padStart(2, '0')}`);
+  for (const sessionID of others) {
+    const read = h.reader.readInbox(sessionID, 'notices', false);
+    await settle();
+    h.last('inbox').resolve([pendingItem(`msg_${sessionID}`, sessionID)]);
+    await settle();
+    h.last('context').resolve([]);
+    await read;
+  }
+  assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id), ['msg_2'], 'The receipt is still held: its read has not ended.');
+  assert.equal(others.filter(sessionID => h.reader.entries(sessionID).length).length, 23, 'Of the others, the ones read last are held, 24 with the one being read.');
+  assert.deepEqual(Object.keys(h.reader.read()).length, 23, 'What was let go is not marked as read.');
+  // A notice the host reports for it meanwhile is kept too, and then the messages answer.
+  h.reader.arrived(CONVERSATION, pendingItem('msg_3', `[AZPR ${COMMENT_RUN}] STARTED /pr-comment`));
+  messages.resolve([toldMessage('msg_1', started(RUN, 'pr-review'))]);
+  await done;
+  assert.deepEqual(h.reader.entries(CONVERSATION).map(entry => entry.id).sort(), ['msg_1', 'msg_2', 'msg_3'], 'The start, the receipt and what arrived: nothing of the read was lost.');
+  assert.equal(h.reader.read()[`${CONVERSATION}:notices`], true);
+  assert.deepEqual(buildPanel({ session: id => ({ id }), sessions: () => [], status: () => 'idle', messages: () => [], pending: id => h.reader.entries(id) }, CONVERSATION).status, 'RUNNING', 'The comment run that started last.');
+  // Two reads of one session, one for its notices and one for a report: it is held until both have ended.
+  const g = readerHost({ kept: 1 });
+  const notices = g.reader.readInbox(V, 'notices', false), report = g.reader.readInbox(V, 'msg_receipt', true);
+  await settle();
+  const [first, second] = g.calls.filter(call => call.kind === 'inbox');
+  second.resolve([pendingItem('msg_5', queuedReport())]);
+  await report;
+  assert.deepEqual([g.reader.read(), g.reader.entries(V).length], [{ [`${V}:msg_receipt`]: true }, 1]);
+  // Another session is read to its end meanwhile; only one session is kept, and it is not the one being read.
+  const other = g.reader.readInbox(F1, 'notices', false);
+  await settle();
+  g.last('inbox').resolve([]);
+  await settle();
+  g.last('context').resolve([]);
+  await other;
+  assert.deepEqual([g.reader.entries(V).length, g.reader.entries(F1).length, g.reader.read()[`${F1}:notices`]], [1, 0, undefined]);
+  first.resolve([pendingItem('msg_4', `[AZPR ${RUN}] COMPLETE`)]);
+  await settle();
+  g.calls.findLast(call => call.kind === 'context' && call.sessionID === V).resolve([]);
+  await notices;
+  assert.deepEqual([g.reader.entries(V).map(entry => entry.id).sort(), g.reader.read()], [['msg_4', 'msg_5'], { [`${V}:msg_receipt`]: true, [`${V}:notices`]: true }]);
+});
+
 test('the reader asks the server for a conversation\'s sessions once, page by page, and stops when it is unloaded', async () => {
   const mine = id => privateSession(id, 'Initial R', 'azpr-review-risk');
   const theirs = { ...mine('ses_foreign000000000000000001'), metadata: { azpr: { run: RUN, role: 'azpr-review-risk', conversation: 'ses_someoneelse000000000000001' } } };
@@ -964,3 +1016,149 @@ test('a lookup that failed waits for its next attempt, however often the panel a
   assert.equal(h.calls.filter(call => call.sessionID === F1).length, 2, 'The wait from before the reconnection starts nothing.');
 });
 
+/**
+ * One random order of events against the reader. A small model of the server answers the reader's requests in
+ * an order drawn from the seed; in between notices arrive and are delivered, sessions are deleted, waits end and
+ * the server reconnects. After every step what the reader holds is compared with what it was told and with what
+ * the server has. With `failures` a quarter of the requests fail on the way.
+ */
+async function interleaving(seed, { kept, failures }) {
+  let state = seed * 7919 + 17;
+  const random = () => (state = (state * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = list => list[Math.floor(random() * list.length)];
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const names = ['ses_a', 'ses_b', 'ses_c', 'ses_d', 'ses_e', 'ses_f'];
+  const server = new Map(names.map(id => [id, { inbox: [], told: [], deleted: false }]));
+  const requests = [], waits = [], reads = [], trace = [];
+  let connection = 0, sequence = 0;
+  const ask = kind => sessionID => { const request = { kind, sessionID, connection, ...deferred() }; requests.push(request); return request.promise; };
+  // The host still holds a deleted session, and answers that were on their way, until the server reconnects.
+  const reader = createReader({ inbox: ask('inbox'), context: ask('context'), lookup: ask('lookup'), list: ask('list'), present: id => !server.get(id).deleted || Boolean(server.get(id).before),
+    pause: () => { const wait = deferred(); waits.push(wait); return wait.promise; }, kept });
+  // What the reader was told of a session since the read that holds it began: the answers to its requests and
+  // the notices the host reported. And the sessions the reader knows to be gone.
+  const told = new Map(names.map(id => [id, new Set()])), gone = new Set();
+  const busy = id => reads.some(read => read.sessionID === id && !read.ended && read.connection === connection);
+  const marked = id => Object.keys(reader.read()).some(key => key.startsWith(`${id}:`));
+  const where = () => `seed ${seed}, ${kept} kept${failures ? ', failing requests' : ''}; last: ${trace.slice(-14).join(' | ')}`;
+  const check = () => {
+    for (const id of names) {
+      if (reader.known()[id] === 'missing') gone.add(id);
+      const held = reader.entries(id).map(entry => entry.id), truth = server.get(id);
+      assert.equal(new Set(held).size, held.length, `Each notice once (${id}). ${where()}`);
+      if (gone.has(id)) {
+        assert.deepEqual([held, marked(id), reader.known()[id]], [[], false, 'missing'], `Gone stays gone (${id}). ${where()}`);
+        continue;
+      }
+      if (truth.deleted) continue;
+      const notices = [...truth.inbox, ...truth.told].filter(item => item.type === 'synthetic');
+      assert.deepEqual(held.filter(entry => !notices.some(item => item.id === entry)), [], `Only what the server has (${id}). ${where()}`);
+      if (!busy(id) && !marked(id)) { told.get(id).clear(); continue; }
+      assert.deepEqual([...told.get(id)].filter(entry => !held.includes(entry)), [], `While ${id} is read or marked as read, all the reader was told of it is held. ${where()}`);
+      // No request failed on the way: a session whose notices are marked as read is held whole, and a report
+      // that exists was found.
+      if (failures) continue;
+      if (reader.read()[`${id}:notices`]) assert.deepEqual(notices.map(item => item.id).filter(entry => !held.includes(entry)), [], `Every notice of ${id}. ${where()}`);
+      if (reader.read()[`${id}:report`] && notices.some(item => (item.payload?.text ?? item.text).startsWith('# AZPR '))) assert.ok(reportIn(syntheticOf(reader.entries(id), [])), `The report of ${id}. ${where()}`);
+    }
+  };
+  const steps = {
+    read() {
+      const sessionID = pick(names), report = random() < 0.4, key = `${sessionID}:${report ? 'report' : 'notices'}`;
+      trace.push(`read ${key}`);
+      if (!busy(sessionID) && !marked(sessionID)) told.get(sessionID).clear();
+      const read = { sessionID, connection, ended: false };
+      reads.push(read);
+      void reader.readInbox(sessionID, report ? 'report' : 'notices', report).then(() => { read.ended = true; });
+    },
+    lookup() {
+      const sessionID = pick(names);
+      trace.push(`lookup ${sessionID}`);
+      void reader.lookup(sessionID);
+    },
+    answer() {
+      if (!requests.length) return;
+      const [request] = requests.splice(Math.floor(random() * requests.length), 1), truth = server.get(request.sessionID);
+      if (request.kind === 'list') return request.resolve({ data: [] });
+      // Of a deleted session the server says so, or an answer it gave before the deletion is still on its way.
+      if (truth.deleted && (!truth.before || random() < 0.5)) {
+        trace.push(`${request.kind} ${request.sessionID}: not found`);
+        return request.kind === 'lookup' && random() < 0.5 ? request.resolve(undefined) : request.reject(goneError());
+      }
+      if (failures && random() < 0.25) {
+        trace.push(`${request.kind} ${request.sessionID}: failed`);
+        return request.reject(networkError());
+      }
+      trace.push(`${request.kind} ${request.sessionID}: answered`);
+      if (request.kind === 'lookup') return request.resolve({ id: request.sessionID });
+      const from = truth.deleted ? truth.before : truth;
+      const answer = (request.kind === 'inbox' ? from.inbox : from.told).map(item => ({ ...item }));
+      if (!truth.deleted && request.connection === connection && !gone.has(request.sessionID)) for (const item of answer) if (item.type === 'synthetic') told.get(request.sessionID).add(item.id);
+      request.resolve(request.kind === 'inbox' ? { data: answer } : answer);
+    },
+    notice() {
+      const sessionID = pick(names), truth = server.get(sessionID);
+      if (truth.deleted) return;
+      const id = `msg_${String(++sequence).padStart(6, '0')}`;
+      const item = pendingItem(id, random() < 0.3 ? queuedReport(RUN, `report ${sequence}`) : progress(RUN, `step ${sequence}`));
+      truth.inbox.push(item);
+      trace.push(`notice ${sessionID} ${id}`);
+      if (busy(sessionID) || marked(sessionID)) told.get(sessionID).add(id);
+      reader.arrived(sessionID, { ...item });
+    },
+    deliver() {
+      const sessionID = pick(names), truth = server.get(sessionID);
+      if (truth.deleted || !truth.inbox.length) return;
+      trace.push(`deliver ${sessionID}`);
+      truth.told.push(...truth.inbox.map(item => toldMessage(item.id, item.payload.text)), { id: `msg_${String(++sequence).padStart(6, '0')}`, type: 'assistant', text: 'an answer' });
+      truth.inbox = [];
+    },
+    remove() {
+      const sessionID = pick(names), truth = server.get(sessionID);
+      if (truth.deleted) return;
+      trace.push(`delete ${sessionID}`);
+      Object.assign(truth, { deleted: true, before: { inbox: truth.inbox, told: truth.told }, inbox: [], told: [] });
+      gone.add(sessionID);
+      told.get(sessionID).clear();
+      reader.deleted(sessionID);
+    },
+    reconnect() {
+      trace.push('reconnect');
+      // What happened while the connection was down was not reported.
+      for (let missed = Math.floor(random() * 3); missed > 0; missed--) {
+        const truth = server.get(pick(names));
+        if (!truth.deleted) truth.inbox.push(pendingItem(`msg_${String(++sequence).padStart(6, '0')}`, progress(RUN, `missed ${sequence}`)));
+      }
+      connection++;
+      gone.clear();
+      for (const ids of told.values()) ids.clear();
+      // What the server answered before a deletion is not on its way any more.
+      for (const truth of server.values()) delete truth.before;
+      reader.reconnected();
+    },
+    resume() {
+      if (!waits.length) return;
+      trace.push('a wait ends');
+      waits.splice(Math.floor(random() * waits.length), 1)[0].resolve();
+    },
+  };
+  const weights = [['read', 22], ['answer', 34], ['notice', 14], ['deliver', 8], ['resume', 12], ['lookup', 4], ['remove', 2], ['reconnect', 2]];
+  for (let step = 0; step < 160; step++) {
+    let at = random() * 98;
+    steps[weights.find(([, weight]) => (at -= weight) < 0)?.[0] ?? 'answer']();
+    await flush();
+    check();
+  }
+  // Everything still asked is answered and every wait ends: then every read has ended.
+  for (let round = 0; round < 200 && (requests.length || waits.length); round++) {
+    while (requests.length) steps.answer();
+    while (waits.length) waits.pop().resolve();
+    await flush();
+    check();
+  }
+  assert.deepEqual([requests.length, waits.length, reads.filter(read => !read.ended).length], [0, 0, 0], `Every read ends. ${where()}`);
+}
+
+test('whatever the order of answers, notices, deletions and reconnections, the reader holds what it was told', async () => {
+  for (const failures of [false, true]) for (const kept of [1, 2, 3]) for (let seed = 1; seed <= 40; seed++) await interleaving(seed, { kept, failures });
+});

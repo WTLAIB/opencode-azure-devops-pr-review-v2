@@ -271,9 +271,10 @@ settings, backups and failure records. Never upload `.local/`.
   the answer what arrives while it is under way. From the moment a session's
   notices are asked for, every notice the host reports for it is kept,
   whatever becomes of the requests; what the inbox answered is kept when the
-  messages cannot be read; one lookup of a session, or its wait for the next
-  attempt, exists at a time however often the panel asks. What was asked
-  before a reconnection is dropped when it answers. This reading lives in
+  messages cannot be read; a session is not let go, however many others are
+  read meanwhile, while a read of it is under way; one lookup of a session,
+  or its wait for the next attempt, exists at a time however often the panel
+  asks. What was asked before a reconnection is dropped when it answers. This reading lives in
   `createReader` (`tui-model.mjs`), not in the view, so that its order and
   its races are tested with delayed answers; keep it there.
 - The Markdown shown is the Markdown saved: only the cells of the summary

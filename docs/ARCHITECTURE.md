@@ -654,7 +654,9 @@ conversation's sessions), in which order, how often again after a failure,
 and what it does with an answer that arrives after the server reconnected,
 after its session was deleted or after the plugin was unloaded. The view gives
 it the host's functions; the tests give it answers that arrive when they say
-so. `tests/tui-model.test.mjs` runs it
+so, and one of them draws the order of answers, notices, deletions and
+reconnections from fixed seeds and compares, after every step, what the
+reader holds with what it was told. `tests/tui-model.test.mjs` runs it
 against `renderReceipt`, and a runtime test against the notices of a whole
 review, a preview, `--show` and a check: a change to their form fails there
 and not in a terminal. A comment run is shown together with the review it acts
@@ -754,8 +756,11 @@ decided several things in it:
   attempt it stands for its session, so the panel's asking again whenever
   something changes starts no attempt and uses none up. The panel
   keeps the inboxes of the 24 sessions it read last; one it let go is read
-  again when it is needed, also when it was let go while its own read was
-  still ending.
+  again when it is needed. A session is not let go while a read of it is
+  under way, however many others are read meanwhile: what a read's requests
+  answer one after the other, and what the host reports in between, are
+  held together, and the read is marked as done only with all of it. More
+  than 24 can therefore be held for as long as their reads last.
 - **Leaving and returning.** The host closes a panel when the screen leaves
   its session, which a click on a session row does. The panel is opened again
   when the screen returns to a session in which it was open and which the user
