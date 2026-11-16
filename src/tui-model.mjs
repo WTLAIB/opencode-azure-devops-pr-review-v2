@@ -126,30 +126,41 @@ export function readable(markdown) {
 export const notFound = error => /NotFound|\b404\b/.test(String(error?.name ?? '') + String(error?._tag ?? '') + String(error));
 
 /**
- * What loading a session and its inbox established, from the two requests' outcomes
- * (as `Promise.allSettled` gives them) and whether the host has the session now:
- * 'exists'; 'missing', only when the server said so, by a not-found answer to either
- * request or a lookup that succeeded and found nothing; otherwise 'retry', since a
- * request that failed says nothing about the session, and the host not having a
- * session loaded is the usual case.
+ * What looking a session up established, from the lookup's outcome (as
+ * `Promise.allSettled` gives it) and whether the host has the session now:
+ * 'exists'; 'missing', only when the server said so, by a not-found answer or
+ * a lookup that succeeded and found nothing; otherwise 'retry', since a request
+ * that failed says nothing about the session, and the host not having a session
+ * loaded is the usual case. The lookup reads the session itself, never what the
+ * session holds: whose it is must be known before anything of it is read.
  */
-export function loadOutcome([synced, inbox], present) {
-  const errors = [synced, inbox].filter(result => result.status === 'rejected').map(result => result.reason);
-  if (errors.some(notFound)) return 'missing';
-  if (present) return 'exists';
-  return synced.status === 'fulfilled' ? 'missing' : 'retry';
+export function lookupOutcome(looked, present) {
+  if (looked.status === 'rejected') return notFound(looked.reason) ? 'missing' : 'retry';
+  return present ? 'exists' : 'missing';
 }
 
-const short = title => String(title).replace(/^\[AZPR [a-f0-9]{8}\] /, '');
+const TITLE = /^\[AZPR [a-f0-9]{8}\] /;
+const short = title => String(title).replace(TITLE, '');
 
 /**
- * Whether a session the host has is one of this conversation's, by what the session itself says: AZPR's
- * metadata, or, for a session AZPR 0.4.0 or earlier created (a child of the conversation, without that
- * metadata), its parent. Never by a text that names it.
+ * The conversation one of AZPR's own sessions belongs to, by what the session itself says: AZPR's
+ * metadata, or, for a session AZPR 0.4.0 or earlier created (a child of the conversation that carries
+ * AZPR's title and no such metadata), its parent. Undefined for any other session, a conversation included.
  */
-const belongs = (session, conversation) => {
+export function conversationOf(session) {
+  const azpr = session?.metadata?.azpr;
+  if (azpr) return typeof azpr.conversation === 'string' ? azpr.conversation : undefined;
+  return typeof session?.parentID === 'string' && TITLE.test(session.title ?? '') ? session.parentID : undefined;
+}
+
+/**
+ * Whether a session the host has is this conversation's and, where `run` is given, that run's, by what
+ * the session itself says: never by a text that names it. A session of 0.4.0 or earlier says no run;
+ * its being a child of the conversation is all it can say.
+ */
+const belongs = (session, conversation, run) => {
   const azpr = session.metadata?.azpr;
-  return azpr ? azpr.conversation === conversation : session.parentID === conversation;
+  return azpr ? azpr.conversation === conversation && (run === undefined || azpr.run === run) : session.parentID === conversation;
 };
 
 /**
@@ -162,8 +173,11 @@ const belongs = (session, conversation) => {
  * names the inboxes read so far, as `<session>:<notice that named it>`;
  * `titles` keeps the names of sessions seen while they existed.
  *
- * The result lists in `needs` the sessions to load before more can be shown,
- * and in `inbox` the report session whose inbox holds the document.
+ * The result lists in `needs` the sessions to look up before more can be shown,
+ * in `inbox` the report session whose inbox holds the document, and in
+ * `notices` the conversation whose notices are to be read when the session on
+ * screen is one of AZPR's own. Only a session that proved to be this
+ * conversation's is named in `inbox`.
  */
 export function buildPanel(source, sessionID, { known = {}, read = {}, titles = new Map() } = {}) {
   const needs = new Set();
@@ -171,8 +185,11 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   const self = source.session(sessionID);
   // In one of AZPR's own sessions the notices are in the conversation that started the run, and with them those
   // of commands typed in this session, which the runtime answers here (IDs sort by creation time across sessions).
-  const conversation = self?.metadata?.azpr?.conversation ?? sessionID;
+  const conversation = conversationOf(self) ?? sessionID;
   if (conversation !== sessionID && !source.session(conversation) && known[conversation] !== 'missing') needs.add(conversation);
+  // The host holds the notices of the session on screen and of open tabs only: those of the conversation are
+  // read from the server, once, whether or not the host knows the conversation itself.
+  const notes = conversation !== sessionID && known[conversation] !== 'missing' && !read[`${conversation}:notices`] ? { sessionID: conversation, token: 'notices' } : undefined;
   const entries = conversation === sessionID ? entriesOf(conversation)
     : [...new Map([...entriesOf(conversation), ...entriesOf(sessionID)].map(entry => [entry.id, entry])).values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const notices = noticesOf(entries);
@@ -200,21 +217,22 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     const enclosed = DATA.exec(notice.text);
     const queued = REPORT_SESSION.exec(ledgerOf(notice.text))?.[1];
     if (enclosed) document = { head, markdown: enclosed[2], token: notice.id };
-    else if (queued) document = { head, session: queued, token: notice.id };
+    else if (queued) document = { head, session: queued, run: notice.run, token: notice.id };
   });
-  // A queued report is read from the session a receipt names, once that session says itself that it belongs to
-  // this conversation: until the host has it, it is looked up, and a session of someone else's is never read.
+  // A queued report is read from the session a receipt names, once that session says itself that it is this
+  // conversation's and holds the report of that receipt's run: until the host has it, it is looked up, and a
+  // session of someone else's, or of another review, is never read.
   const holder = document?.session ? source.session(document.session) : undefined;
   const awaited = Boolean(document?.session) && !holder && known[document.session] !== 'missing';
   if (awaited) needs.add(document.session);
-  const held = holder !== undefined && belongs(holder, conversation);
-  // In a session that holds a report, that report is shown until the notices say what is newest: they may not be
-  // loaded yet, and once they are, a preview planned after the report takes its place.
+  const held = holder !== undefined && belongs(holder, conversation, document.run);
   const found = document?.markdown ?? (held ? reportIn(entriesOf(document.session)) : '');
-  const own = found || conversation === sessionID ? '' : reportIn(entriesOf(sessionID));
+  // In a session that holds a report, that report is shown only while the notices name no document: they may
+  // not be read yet. Once they name one, it alone is shown, so a status never stands above another run's report.
+  const own = !document && conversation !== sessionID ? reportIn(entriesOf(sessionID)) : '';
   const markdown = readable(found || own);
   // A queued report waits in its session's inbox, which the host loads only for the session on screen.
-  const inbox = !markdown && held ? { sessionID: document.session, token: document.token } : undefined;
+  const inbox = !found && held ? { sessionID: document.session, token: document.token } : undefined;
   const loading = !markdown && (awaited || (inbox !== undefined && !read[`${inbox.sessionID}:${inbox.token}`]));
 
   // Candidates: what the host lists for these runs, what their receipts name, and the report session.
@@ -248,7 +266,7 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
       id,
       label: titles.get(id) ?? (stage ? `${stage.role}${stage.label ? ` ${stage.label}` : ''}` : azpr?.role ?? id),
       state: source.status(id) === 'running' ? 'running' : stage ? stage.state.toLowerCase() : 'idle',
-      report: id === reportSession,
+      report: id === reportSession && belongs(info, conversation, reviewRun),
       current: azpr?.run === run,
     });
   }
@@ -264,6 +282,7 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     markdown,
     documentHead: own ? '' : document?.head ?? '',
     inbox,
+    notices: notes,
     loading,
     needs: [...needs],
   };

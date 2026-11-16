@@ -665,14 +665,22 @@ What the model takes as fact is the runtime's own text, never a model's:
   the report or preview it encloses. A line in the enclosed text that looks
   like one is just text.
 - A session is a row, and a report is read from its inbox, only when the
-  session's own `metadata.azpr` names this conversation (and, for a row, one
-  of the runs shown). A session that AZPR 0.4.0 or earlier created has no such
-  metadata and is a child of its conversation; that counts the same. A named
-  session the host has not loaded is looked up first.
+  session's own `metadata.azpr` names this conversation and the run: one of
+  the runs shown for a row, the run of the receipt that named it for a
+  report. A session that AZPR 0.4.0 or earlier created has no such metadata
+  and is a child of its conversation; that counts the same. A named session
+  the host has not loaded is looked up first, the session itself and nothing
+  it holds, so that no inbox is read before its session proved to be ours.
 - In one of AZPR's own sessions the panel reads the conversation's notices
   and those of that session: the runtime answers a command typed there
   (`/pr-comment` in the session that holds the report) in that session, and a
-  preview planned after the report takes the report's place.
+  preview planned after the report takes the report's place. The conversation
+  is the one the session itself names (its metadata; for a session of 0.4.0
+  its parent, when it carries AZPR's title). Its notices are read from the
+  server, since the host has them only while the conversation is on screen
+  or in a tab, and each later notice is added as the host reports it. The
+  session's own report is shown only while the notices name no document: a
+  status never stands above another run's report.
 - The Markdown shown is the saved Markdown. The cells of the summary table,
   which the runtime writes with numeric character references for Azure
   DevOps, are decoded, and AZPR's marker lines are left out; a reference or a
@@ -699,7 +707,9 @@ decided several things in it:
   server no longer has is counted as deleted, not listed. Only the server's
   answer establishes that: a not-found error, or a lookup that succeeded and
   found nothing. A request that failed on the way says nothing about the
-  session and is tried again, three more times and further apart.
+  session and is tried again, three more times and further apart. The panel
+  keeps the inboxes of the 24 sessions it read last; one it let go is read
+  again when it is needed.
 - **Leaving and returning.** The host closes a panel when the screen leaves
   its session, which a click on a session row does. The panel is opened again
   when the screen returns to a session in which it was open and which the user

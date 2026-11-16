@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PANEL, buildPanel, loadOutcome, notFound, noticesOf, opensPanel, readable, reportIn, syntheticOf, textOf } from '../src/tui-model.mjs';
+import { PANEL, buildPanel, conversationOf, lookupOutcome, notFound, noticesOf, opensPanel, readable, reportIn, syntheticOf, textOf } from '../src/tui-model.mjs';
 import { renderReceipt } from '../src/attribution.mjs';
 
 const CONVERSATION = 'ses_conversation0000000000001';
@@ -133,7 +133,7 @@ test('the report queued to a review session is the last text that starts like on
 
 test('a conversation without an AZPR run shows nothing and needs nothing', () => {
   const panel = buildPanel(host(), CONVERSATION);
-  assert.deepEqual(panel, { conversation: CONVERSATION, run: undefined, status: '', progress: undefined, rows: [], deleted: 0, markdown: '', documentHead: '', inbox: undefined, loading: false, needs: [] });
+  assert.deepEqual(panel, { conversation: CONVERSATION, run: undefined, status: '', progress: undefined, rows: [], deleted: 0, markdown: '', documentHead: '', inbox: undefined, notices: undefined, loading: false, needs: [] });
 });
 
 test('a review under way lists its sessions with their state and hides the report of the review before it', () => {
@@ -308,25 +308,76 @@ test('only the runtime\'s own lines name sessions: text a model wrote in an encl
   assert.deepEqual([pending.needs, pending.inbox, pending.loading, pending.markdown], [[V], undefined, true, '']);
 });
 
-test('a session counts as deleted only when the server said so; a request that failed is tried again', () => {
+test('a session counts as deleted only when the server said so; a lookup that failed is made again', () => {
   const ok = { status: 'fulfilled', value: undefined }, failed = reason => ({ status: 'rejected', reason });
   const missing = Object.assign(new Error('Session not found'), { name: 'Session.NotFoundError' }), network = new Error('fetch failed: ECONNRESET');
   assert.equal(notFound(missing), true);
   assert.equal(notFound({ _tag: 'SessionNotFoundError' }), true);
   assert.equal(notFound(new Error('/api/session/ses_x/inbox: 404 {"message":"no such session"}')), true);
   for (const other of [network, new Error('500 Internal Server Error'), new Error('timeout of 4040 ms'), undefined, 'aborted']) assert.equal(notFound(other), false, String(other));
-  // The usual case: both requests answer and the host now has the session.
-  assert.equal(loadOutcome([ok, ok], true), 'exists');
-  // The inbox request failed on the way while the lookup was still running: the session is not gone.
-  assert.equal(loadOutcome([failed(network), failed(network)], false), 'retry');
-  assert.equal(loadOutcome([failed(network), ok], false), 'retry', 'The host not having it loaded says nothing.');
-  assert.equal(loadOutcome([ok, failed(network)], true), 'exists', 'The inbox is read again when it is needed.');
-  // Gone: either request answers not found, or the lookup succeeds and there is no such session.
-  assert.equal(loadOutcome([failed(missing), failed(network)], false), 'missing');
-  assert.equal(loadOutcome([failed(network), failed(missing)], false), 'missing');
-  assert.equal(loadOutcome([ok, failed(missing)], true), 'missing', 'A not-found answer outweighs what the host still holds.');
-  assert.equal(loadOutcome([ok, ok], false), 'missing');
-  assert.equal(loadOutcome([ok, failed(network)], false), 'missing');
+  assert.equal(lookupOutcome(ok, true), 'exists');
+  assert.equal(lookupOutcome(ok, false), 'missing', 'The lookup succeeded and there is no such session.');
+  assert.equal(lookupOutcome(failed(missing), false), 'missing');
+  assert.equal(lookupOutcome(failed(missing), true), 'missing', 'A not-found answer outweighs what the host still holds.');
+  assert.equal(lookupOutcome(failed(network), false), 'retry', 'The host not having it loaded says nothing.');
+  assert.equal(lookupOutcome(failed(network), true), 'retry');
+});
+
+test('a session\'s conversation is what the session itself says: its metadata, or for a session of 0.4.0 its parent', () => {
+  assert.equal(conversationOf(privateSession(V, 'Verification', 'azpr-review-verifier')), CONVERSATION);
+  assert.equal(conversationOf({ id: V, title: `[AZPR ${RUN}] Verification`, parentID: CONVERSATION }), CONVERSATION, 'A child that carries AZPR\'s title.');
+  assert.equal(conversationOf({ id: V, title: 'Explore the repository', parentID: CONVERSATION }), undefined, 'Someone\'s own subagent session is not AZPR\'s.');
+  assert.equal(conversationOf({ id: CONVERSATION, title: 'My conversation' }), undefined);
+  assert.equal(conversationOf({ id: V, title: `[AZPR ${RUN}] Verification`, parentID: CONVERSATION, metadata: { azpr: { run: RUN } } }), undefined, 'Metadata that names no conversation is not completed from the parent.');
+  assert.equal(conversationOf(undefined), undefined);
+});
+
+test('what is read of another session is decided by that session, and asked for only when it proved to be ours', () => {
+  const OLDER = '11111111', V_OLD = 'ses_e1e3aaaaaffeOlderVerifier001';
+  const older = privateSession(V_OLD, 'Verification', 'azpr-review-verifier', OLDER);
+  const newer = privateSession(V, 'Verification', 'azpr-review-verifier');
+  const oldStages = [['azpr-review-verifier', V_OLD]];
+  const conversationNotices = [started(OLDER, 'pr-review'), reviewReceipt({ run: OLDER, stages: oldStages }).replace(`session=${V}.`, `session=${V_OLD}.`), started(RUN, 'pr-review'), reviewReceipt()];
+  const known = { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' };
+  // The session of an older review is on screen, and the conversation has completed another review since. The newer
+  // report is not cached: it is asked for, and the older report on screen is not shown under the newer status.
+  const stale = buildPanel(host({ notices: conversationNotices, sessions: [older, newer], inboxes: { [V_OLD]: [queuedReport(OLDER, 'The older report')] } }), V_OLD, { known, read: { [`${CONVERSATION}:notices`]: true } });
+  assert.deepEqual([stale.run, stale.status, stale.markdown, stale.loading], [RUN, 'COMPLETE', '', true]);
+  assert.deepEqual(stale.inbox?.sessionID, V, 'The report of the run shown is fetched.');
+  const fresh = buildPanel(host({ notices: conversationNotices, sessions: [older, newer], inboxes: { [V_OLD]: [queuedReport(OLDER, 'The older report')], [V]: [queuedReport()] } }), V_OLD, { known, read: { [`${CONVERSATION}:notices`]: true } });
+  assert.deepEqual([fresh.markdown, fresh.documentHead, fresh.inbox], [queuedReport(), `[AZPR ${RUN}] COMPLETE`, undefined]);
+  // A receipt whose own text quotes the report line of an older review of the same conversation: that session
+  // holds another run's report, and it is neither shown nor read.
+  const quoting = `[AZPR ${RUN}] INCOMPLETE\nReason: the provider answered "Report delivery: report queued to session=${V_OLD}."`;
+  const other = buildPanel(host({ notices: [...conversationNotices.slice(0, 2), started(RUN, 'pr-review'), quoting], sessions: [older], inboxes: { [V_OLD]: [queuedReport(OLDER, 'The older report')] } }), CONVERSATION);
+  assert.deepEqual([other.run, other.status, other.markdown, other.inbox, other.loading, other.rows], [RUN, 'INCOMPLETE', '', undefined, false, []]);
+  // The conversation's notices are read from the server when one of AZPR's sessions is on screen, whether or not
+  // the host knows the conversation itself, and once.
+  const cold = host({ sessions: [newer], inboxes: { [V]: [queuedReport()] } });
+  const first = buildPanel(cold, V);
+  assert.deepEqual([first.notices, first.needs, first.markdown, first.run], [{ sessionID: CONVERSATION, token: 'notices' }, [], queuedReport(), undefined], 'Its own report meanwhile.');
+  assert.equal(buildPanel(cold, V, { read: { [`${CONVERSATION}:notices`]: true } }).notices, undefined);
+  assert.equal(buildPanel(cold, V, { known: { [CONVERSATION]: 'missing' } }).notices, undefined, 'A conversation that was deleted is not read.');
+  assert.equal(buildPanel(cold, CONVERSATION).notices, undefined, 'A conversation on screen has its notices with the host.');
+  // A named session the host has not loaded is looked up, and nothing of it is read before that.
+  const unknown = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt()] }), CONVERSATION, { known });
+  assert.deepEqual([unknown.needs, unknown.inbox, unknown.loading], [[V], undefined, true]);
+});
+
+test('a session of AZPR 0.4.0 on screen shows its conversation\'s run and its own report', () => {
+  // Sessions of 0.4.0 and earlier are children of the conversation and carry no metadata.
+  const child = { id: V, title: `[AZPR ${RUN}] Verification`, parentID: CONVERSATION };
+  const known = { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' };
+  const panel = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt()], sessions: [child], inboxes: { [V]: [queuedReport()] } }), V, { known, read: { [`${CONVERSATION}:notices`]: true } });
+  assert.deepEqual([panel.conversation, panel.run, panel.status, panel.markdown], [CONVERSATION, RUN, 'COMPLETE', queuedReport()]);
+  assert.deepEqual(panel.rows.map(row => [row.id, row.label, row.report]), [[V, 'Verification', true]]);
+  // Before the conversation's notices are read: its own report, and the request for them.
+  const before = buildPanel(host({ sessions: [child], inboxes: { [V]: [queuedReport()] } }), V);
+  assert.deepEqual([before.conversation, before.markdown, before.notices], [CONVERSATION, queuedReport(), { sessionID: CONVERSATION, token: 'notices' }]);
+  // Someone's own subagent session is a conversation of its own to the panel.
+  const subagent = { id: 'ses_subagent0000000000000001', title: 'Explore the repository', parentID: CONVERSATION };
+  const plain = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt()], sessions: [subagent] }), subagent.id);
+  assert.deepEqual([plain.conversation, plain.run, plain.notices], [subagent.id, undefined, undefined]);
 });
 
 test('a run stands alone: a check, or a review that was stopped, shows nothing of the review before it', () => {

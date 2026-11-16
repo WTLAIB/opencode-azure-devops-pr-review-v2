@@ -248,10 +248,17 @@ settings, backups and failure records. Never upload `.local/`.
   model wrote. A session is listed, and a report read from it, only when its
   own `metadata.azpr` says that it belongs to that run and conversation (a
   session of 0.4.0 or earlier, which has none: when it is a child of the
-  conversation). A run's notice that is neither its start, its progress nor
-  its receipt (a status word followed by `;`, a line break or the end)
-  changes nothing shown, and does not make its run the current one. The panel in a review's own session also reads the notices of
-  commands typed there, which the runtime answers there.
+  conversation). Look a session up before reading anything it holds: an
+  inbox is read only of a session that proved to be ours, or of the
+  conversation that the session on screen itself names. A run's notice that
+  is neither its start, its progress nor its receipt (a status word followed
+  by `;`, a line break or the end) changes nothing shown, and does not make
+  its run the current one.
+- The panel in a review's own session reads the conversation's notices (from
+  the server: the host has them only while the conversation is on screen or
+  in a tab) and those of commands typed in that session, which the runtime
+  answers there. A status never stands above another run's document: the
+  session's own report is shown only while the notices name no document.
 - The Markdown shown is the Markdown saved: only the cells of the summary
   table are decoded and only AZPR's marker lines are left out, never inside
   code. A preview on screen must be the preview that publication posts.

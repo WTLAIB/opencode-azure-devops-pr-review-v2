@@ -234,9 +234,9 @@ try {
   assert.deepEqual((await readdir(dirname(settingsFile))).filter(name => /\.tmp$|\.lock$/.test(name)), []);
   result.settings = 'settings an earlier version did not have were written into the file when AZPR loaded';
 
-  /** The TUI in a terminal of this size, showing the fixture's conversation. */
-  const openTerminal = async (width, height) => {
-    const started = tmux('new-session', '-d', '-s', 'azpr', '-x', String(width), '-y', String(height), '-c', dirs.work, binary, '--server', url, '--session', origin);
+  /** The TUI in a terminal of this size, showing the fixture's conversation or another session. */
+  const openTerminal = async (width, height, session = origin) => {
+    const started = tmux('new-session', '-d', '-s', 'azpr', '-x', String(width), '-y', String(height), '-c', dirs.work, binary, '--server', url, '--session', session);
     assert.equal(started.status, 0, `tmux could not start the TUI: ${started.stderr || started.error?.message || 'no message'}`);
     await see(/ctrl\+p\s+commands/, 'The TUI did not start.');
   };
@@ -350,6 +350,29 @@ try {
   await see(panelOpen, 'With terminalPanel: manual /pr-panel did not show the panel.');
   await see(/AZPR [a-f0-9]{8} · PREVIEW/, 'The panel opened by hand does not show the preview.');
   result.manual = 'terminalPanel: manual reaches the panel with the notices; it opens only with /pr-panel';
+
+  // 9. A TUI that starts in the session holding the report, with the conversation neither on screen nor in a tab:
+  // the host has the conversation's notices of no session but the one on screen, so the panel reads them from
+  // the server. A command typed in that session is answered there, and the panel shows it.
+  const kept = (await api('/api/session')).data.filter(session => session.metadata?.azpr?.conversation === origin);
+  assert.deepEqual(kept.map(session => session.metadata.azpr.role), ['azpr-review-verifier'], 'The review keeps the session that holds its report.');
+  tmux('kill-server');
+  await openTerminal(170, 46, kept[0].id);
+  await command('pr-panel', 'The sessions of the review in this conversation');
+  const latest = (await see(/AZPR ([a-f0-9]{8}) · PREVIEW/, 'In the report session the panel does not show the conversation\'s newest run.'))[1];
+  // The newest document the conversation was told about is the saved preview shown again in step 8.
+  await see(new RegExp(`\\[AZPR\\] Saved preview of review ${review}`), 'It does not show the document read from the conversation\'s notices.');
+  await see(/○ Verification \(report\) complete ses_/, 'The session on screen is not listed as the one holding the report.');
+  const told = (await inbox()).length;
+  const own = async () => (await api(`/api/session/${kept[0].id}/inbox`)).data.map(item => item.payload?.text ?? '');
+  // A comment run typed here: its notices arrive in this session, and the panel follows them.
+  await command('pr-comment', 'Preview, adjust or publish review comments', '');
+  const typedHere = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · PREVIEW/.exec(shown); return match && match[1] !== latest && match; }, 'The panel does not show the comment run typed in the review\'s own session.', 120000))[1];
+  await see(new RegExp(`\\[AZPR ${typedHere}\\] PREVIEW; source review=${review}`), 'The panel does not name the preview planned from this session.');
+  assert.ok((await own()).some(text => text.startsWith(`[AZPR ${typedHere}] PREVIEW; source review=${review}`)), 'The runtime answered in the session the command was typed in.');
+  assert.equal((await inbox()).length, told, 'Nothing more was told to the conversation.');
+  assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
+  result.ownSession = 'started in the report session: the conversation\'s run is read from the server; a command typed there is shown';
 
   // What the panel must never do: ask a model, or fail to load.
   assert.deepEqual([...new Set(requests.map(request => request.model))].sort(), ['functional', 'risk', 'verifier'], 'Only AZPR\'s reviewers, verifier and planner asked a model; the panel and the conversation asked none.');
