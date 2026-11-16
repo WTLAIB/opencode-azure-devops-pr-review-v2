@@ -254,16 +254,29 @@ settings, backups and failure records. Never upload `.local/`.
   is neither its start, its progress nor its receipt (a status word followed
   by `;`, a line break or the end) changes nothing shown, and does not make
   its run the current one.
-- The panel in a review's own session reads the conversation's notices (from
-  the server: the host has them only while the conversation is on screen or
-  in a tab) and those of commands typed in that session, which the runtime
-  answers there. A status never stands above another run's document: the
-  session's own report is shown only while the notices name no document.
+- What the panel is about is what happened last: a run that started,
+  progressed or ended, or a saved preview shown again, which names its
+  review (`/pr-comment <review> --show` makes that review the current one,
+  so the panel shows that review's status and sessions). A status never
+  stands above another review's document: the report of the session on
+  screen is shown only for the review shown, or while nothing is known of
+  any run yet.
+- The panel in a review's own session reads the conversation's notices and
+  those of commands typed in that session, which the runtime answers there.
+  The host has another session's notices only while it is on screen or in a
+  tab: read them from the server, pending and delivered (a notice is
+  delivered once its conversation's model runs), and keep with the answer
+  what arrives while it is under way.
 - The Markdown shown is the Markdown saved: only the cells of the summary
-  table are decoded and only AZPR's marker lines are left out, never inside
-  code. A preview on screen must be the preview that publication posts.
-- A session counts as deleted only when the server said so; a request that
-  failed is tried again.
+  table are decoded, each character escaped so that it stays literal as on
+  the PR, and only AZPR's marker lines are left out, never inside code. A
+  preview on screen must be the preview that publication posts.
+- A session counts as deleted only when the server said so, and then it is
+  gone whatever the host still holds of it; a request that failed is tried
+  again.
+- A step the panel takes a moment after it mounted (handing the keyboard
+  back, withdrawing) acts only while that panel is still the one open in
+  that session, and no timer outlives the panel.
 - The text of notices and receipts is therefore an interface. Change it
   together with `tui-model.mjs`, whose tests run against `renderReceipt` and
   against the notices of a whole run.

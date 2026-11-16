@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PANEL, buildPanel, conversationOf, lookupOutcome, notFound, noticesOf, opensPanel, readable, reportIn, syntheticOf, textOf } from '../src/tui-model.mjs';
+import { PANEL, buildPanel, conversationOf, lookupOutcome, mergeEntries, notFound, noticesOf, opensPanel, readable, reportIn, syntheticOf, textOf } from '../src/tui-model.mjs';
 import { renderReceipt } from '../src/attribution.mjs';
 
 const CONVERSATION = 'ses_conversation0000000000001';
@@ -97,11 +97,14 @@ test('a run that starts and a report or preview that arrives open the panel; pro
 
 test('the summary table written for Azure DevOps is made readable, and AZPR\'s comment markers are left out', () => {
   const table = rows => `## PR Review Summary\n\nhigh: 0 · medium: 1 · low: 0\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n${rows}`;
-  assert.equal(readable(table('| 🟡 medium | F-1 — &#96;reserve&#96; and dispatch&#95;order | head:/a.py:24 |')), table('| 🟡 medium | F-1 — `reserve` and dispatch_order | head:/a.py:24 |'));
-  assert.equal(readable(table('| x | a &#124; b &#42;c&#42; &#91;d&#93; &#60;e&#62; f&#92;g &#38; h | y |')), table('| x | a \\| b \\*c\\* \\[d\\] \\<e\\> f\\\\g & h | y |'), 'What Markdown would read as markup stays literal.');
-  assert.equal(readable(table('| x | &#128512; &#9; | y |')), table('| x | &#128512; &#9; | y |'), 'Other references are left as they are.');
+  // Each character the runtime wrote as a reference is shown as itself: escaped, so that Markdown reads none as markup.
+  assert.equal(readable(table('| 🟡 medium | F-1 — &#96;reserve&#96; and dispatch&#95;order | head:/a.py:24 |')), table('| 🟡 medium | F-1 — \\`reserve\\` and dispatch\\_order | head:/a.py:24 |'));
+  assert.equal(readable(table('| x | a &#124; b &#42;c&#42; &#91;d&#93; &#60;e&#62; f&#92;g &#38; h | y |')), table('| x | a \\| b \\*c\\* \\[d\\] \\<e\\> f\\\\g \\& h | y |'));
+  // A file name with double underscores keeps them instead of turning bold, and an entity a finding names stays text.
+  assert.equal(readable(table('| x | &#95;&#95;all&#95;&#95; and &#38;lt; | head:/pkg/&#95;&#95;init&#95;&#95;.py:1 |')), table('| x | \\_\\_all\\_\\_ and \\&lt; | head:/pkg/\\_\\_init\\_\\_.py:1 |'));
+  assert.equal(readable(table('| x | &#128512; &#9; &#65; | y |')), table('| x | &#128512; &#9; &#65; | y |'), 'References the runtime does not write are left as they are.');
   // The header in another output language, as the runtime writes it.
-  assert.equal(readable('| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — &#96;a&#96; | head:/a.py:1 |'), '| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — `a` | head:/a.py:1 |');
+  assert.equal(readable('| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — &#96;a&#96; | head:/a.py:1 |'), '| Severity | Summary | 位置 |\n| --- | --- | --- |\n| 🟡 medium | F-1 — \\`a\\` | head:/a.py:1 |');
   assert.equal(readable('line\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nInline comments prepared: 0'), 'line\nInline comments prepared: 0');
   assert.equal(readable('<!-- a comment of the author -->\n&#128512; &#9;'), '<!-- a comment of the author -->\n&#128512; &#9;', 'Other comments are left as they are.');
   assert.equal(readable(undefined), '');
@@ -115,7 +118,7 @@ test('what a finding quotes is shown as it will be posted: references and marker
   for (const text of ['Escape it as &#60;b&#62;.', 'Use `&#96;` here.', '- R-1: the cell holds &#124;', '| Finding | Decision |\n| --- | --- |\n| R-1 &#42; | CONFIRMED |', '    &#96;indented code&#96;']) assert.equal(readable(text), text, text);
   // The table ends where its rows end: what follows is not decoded, and neither is a second block of code.
   const after = '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — &#96;a&#96; | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~';
-  assert.equal(readable(after), '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — `a` | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~');
+  assert.equal(readable(after), '| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — \\`a\\` | head:/a.ts:1 |\n\nThe reference &#96; stays.\n\n~~~\n&#96;\n~~~');
   // A line of inline code is not a fence: what follows it is ordinary text again.
   assert.equal(readable('``` not a fence ``` and more\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\nend'), '``` not a fence ``` and more\nend');
   // A fence closes only with its own character, at least as long, alone on the line.
@@ -123,7 +126,7 @@ test('what a finding quotes is shown as it will be posted: references and marker
   assert.equal(readable(nested), '````md\n```\n&#96; <!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n``` not a closing line\n~~~~\n````\nend');
   // A whole preview: the marker lines go, the table is readable, the comment's own text is untouched.
   const preview = '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — &#96;x&#96; | head:/a.ts:1 |\n\n<!-- azpr-comment:5397f777e1b991075943586db103cf5e -->\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n<!-- azpr-comment:975242c36e5459f4d8077a3ffd62d503 -->\n';
-  assert.equal(readable(preview), '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — `x` | head:/a.ts:1 |\n\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n');
+  assert.equal(readable(preview), '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🔴 high | R-1 — \\`x\\` | head:/a.ts:1 |\n\n\nInline comments prepared: 1\n\n### R-1 — /a.ts:1-1\n\n```ts\nconst s = "&#96;";\n```\n\n');
 });
 
 test('the report queued to a review session is the last text that starts like one', () => {
@@ -187,7 +190,7 @@ test('a receipt that encloses the report needs no session, and a preview after i
   const notices = [started(RUN, 'pr-review'), reviewReceipt({ report })];
   const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier'), privateSession(F1, 'Initial F shard 1/2', 'azpr-review-functional'), privateSession(F2, 'Initial F shard 2/2', 'azpr-review-functional'), privateSession(R1, 'Initial R', 'azpr-review-risk')];
   const review = buildPanel(host({ notices, sessions }), CONVERSATION);
-  assert.equal(review.markdown, '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🟡 medium | F-1 — `reserve` | head:/a.py:24 |');
+  assert.equal(review.markdown, '## PR Review Summary\n\n| Severity | Summary | Location |\n| --- | --- | --- |\n| 🟡 medium | F-1 — \\`reserve\\` | head:/a.py:24 |');
   assert.equal(review.inbox, undefined);
   assert.deepEqual(review.rows.map(row => row.label), ['Verification', 'Initial F shard 1/2', 'Initial F shard 2/2', 'Initial R'], 'The report first, then by name.');
   // An automatic preview starts: the review's report stays while the comments are planned.
@@ -364,6 +367,62 @@ test('what is read of another session is decided by that session, and asked for 
   assert.deepEqual([unknown.needs, unknown.inbox, unknown.loading], [[V], undefined, true]);
 });
 
+test('a status never stands above another review\'s document', () => {
+  const OLDER = '11111111', NEWER = '22222222', V_OLD = 'ses_e1e3aaaaaffeOlderVerifier001';
+  const older = privateSession(V_OLD, 'Verification', 'azpr-review-verifier', OLDER);
+  const newer = privateSession(V, 'Verification', 'azpr-review-verifier');
+  const olderReceipt = reviewReceipt({ run: OLDER, stages: [['azpr-review-verifier', V_OLD]] }).replace(`session=${V}.`, `session=${V_OLD}.`);
+  const read = { [`${CONVERSATION}:notices`]: true }, known = { [F1]: 'missing', [F2]: 'missing', [R1]: 'missing' };
+  const inboxes = { [V_OLD]: [queuedReport(OLDER, 'The older report')], [V]: [queuedReport()] };
+  // The session of the older review is on screen while a newer review starts, runs and is stopped: that run has no
+  // document, and the older report on screen is not put under its status.
+  for (const [last, status] of [[started(NEWER, 'pr-review'), 'RUNNING'], [progress(NEWER, 'Initial review: 2 session(s).'), 'RUNNING'], [`[AZPR ${NEWER}] CANCELLED\nReason (workflow): Stopped by /pr-stop.`, 'CANCELLED']]) {
+    const notices = [started(OLDER, 'pr-review'), olderReceipt, ...(last.includes('STARTED') ? [] : [started(NEWER, 'pr-review')]), last];
+    const panel = buildPanel(host({ notices, sessions: [older], inboxes }), V_OLD, { read, known });
+    assert.deepEqual([panel.run, panel.status, panel.markdown, panel.inbox], [NEWER, status, '', undefined], last);
+  }
+  // Its own review shown: its own report, by the notices or, before they are read, by itself.
+  const mine = buildPanel(host({ notices: [started(OLDER, 'pr-review'), olderReceipt], sessions: [older], inboxes }), V_OLD, { read, known });
+  assert.deepEqual([mine.run, mine.status, mine.markdown], [OLDER, 'COMPLETE', queuedReport(OLDER, 'The older report')]);
+  const cold = buildPanel(host({ sessions: [older], inboxes }), V_OLD);
+  assert.deepEqual([cold.run, cold.markdown], [undefined, queuedReport(OLDER, 'The older report')]);
+  // A saved preview of the older review shown again after the newer review completed: the panel is about the older
+  // review then, with its status, its sessions and its preview, as the runtime makes it the current review.
+  const show = review => `[AZPR] Saved preview of review ${review}, planned 2026-11-16T08:30:00.000Z; no model or Azure DevOps request was made.\nNot published.\n\n<azpr_comment_data>\n## Preview of ${review}\n</azpr_comment_data>`;
+  const both = [started(OLDER, 'pr-review'), olderReceipt, started(RUN, 'pr-review'), reviewReceipt()];
+  const shown = buildPanel(host({ notices: [...both, show(OLDER)], sessions: [older, newer], inboxes }), CONVERSATION, { known });
+  assert.deepEqual([shown.run, shown.status, shown.markdown, shown.rows.map(row => [row.id, row.report]), shown.progress], [OLDER, 'COMPLETE', `## Preview of ${OLDER}`, [[V_OLD, true]], undefined]);
+  assert.match(shown.documentHead, new RegExp(`^\\[AZPR\\] Saved preview of review ${OLDER}`));
+  // And of the newer one again: back to it. A list of reviews, which has no document, changes nothing.
+  const back = buildPanel(host({ notices: [...both, show(OLDER), show(RUN), '[AZPR] Reviews saved for this conversation (2); no model or Azure DevOps request was made.'], sessions: [older, newer], inboxes }), CONVERSATION, { known });
+  assert.deepEqual([back.run, back.status, back.markdown, back.rows.map(row => row.id)], [RUN, 'COMPLETE', `## Preview of ${RUN}`, [V]]);
+  // A run that starts afterwards is what the panel is about again, and the preview shown before it is not its document.
+  const after = buildPanel(host({ notices: [...both, show(OLDER), started(NEWER, 'pr-quick')], sessions: [older, newer], inboxes }), CONVERSATION, { known });
+  assert.deepEqual([after.run, after.status, after.markdown], [NEWER, 'RUNNING', '']);
+  // A saved preview of a review whose receipt the conversation no longer holds: named, without a status.
+  const alone = buildPanel(host({ notices: [show(OLDER)] }), CONVERSATION);
+  assert.deepEqual([alone.run, alone.status, alone.markdown, alone.rows], [OLDER, '', `## Preview of ${OLDER}`, []]);
+});
+
+test('the server\'s word that a session is gone outweighs what the host still holds of it', () => {
+  const sessions = [privateSession(V, 'Verification', 'azpr-review-verifier'), privateSession(F1, 'Initial F shard 1/2', 'azpr-review-functional')];
+  const notices = [started(RUN, 'pr-review'), reviewReceipt()];
+  const here = buildPanel(host({ notices, sessions, inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known: { [F2]: 'missing', [R1]: 'missing' } });
+  assert.deepEqual([here.rows.map(row => row.id), here.deleted, here.markdown], [[V, F1], 2, queuedReport()]);
+  // The inbox request for the report session answered not found, and the host still lists both sessions.
+  const gone = buildPanel(host({ notices, sessions, inboxes: { [V]: [queuedReport()] } }), CONVERSATION, { known: { [F2]: 'missing', [R1]: 'missing', [V]: 'missing', [F1]: 'missing' } });
+  assert.deepEqual([gone.rows, gone.deleted, gone.markdown, gone.inbox, gone.loading, gone.needs], [[], 4, '', undefined, false, []], 'Not a row, not the report\'s holder, counted as deleted.');
+});
+
+test('what was read of a session and what arrived meanwhile are one list, each notice once', () => {
+  const a = { id: 'msg_1', type: 'synthetic', payload: { text: 'first' } }, b = { id: 'msg_2', type: 'synthetic', payload: { text: 'second' } };
+  const delivered = { id: 'msg_1', type: 'synthetic', text: 'first' };
+  assert.deepEqual(mergeEntries([a], [b], [a]).map(entry => entry.id), ['msg_1', 'msg_2']);
+  assert.deepEqual(mergeEntries([a, b], [delivered]), [delivered, b], 'A notice that was delivered since is the same notice.');
+  assert.deepEqual(mergeEntries([], [undefined, { type: 'synthetic' }, a]), [a], 'Entries without an ID are left out.');
+  assert.deepEqual(mergeEntries(), []);
+});
+
 test('a session of AZPR 0.4.0 on screen shows its conversation\'s run and its own report', () => {
   // Sessions of 0.4.0 and earlier are children of the conversation and carry no metadata.
   const child = { id: V, title: `[AZPR ${RUN}] Verification`, parentID: CONVERSATION };
@@ -374,6 +433,10 @@ test('a session of AZPR 0.4.0 on screen shows its conversation\'s run and its ow
   // Before the conversation's notices are read: its own report, and the request for them.
   const before = buildPanel(host({ sessions: [child], inboxes: { [V]: [queuedReport()] } }), V);
   assert.deepEqual([before.conversation, before.markdown, before.notices], [CONVERSATION, queuedReport(), { sessionID: CONVERSATION, token: 'notices' }]);
+  // Its title names its run: it is not the report session of another review of the conversation.
+  const NEWER = '22222222';
+  const other = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt(), started(NEWER, 'pr-review')], sessions: [child], inboxes: { [V]: [queuedReport()] } }), V, { known, read: { [`${CONVERSATION}:notices`]: true } });
+  assert.deepEqual([other.run, other.status, other.markdown, other.rows], [NEWER, 'RUNNING', '', []]);
   // Someone's own subagent session is a conversation of its own to the panel.
   const subagent = { id: 'ses_subagent0000000000000001', title: 'Explore the repository', parentID: CONVERSATION };
   const plain = buildPanel(host({ notices: [started(RUN, 'pr-review'), reviewReceipt()], sessions: [subagent] }), subagent.id);

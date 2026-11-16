@@ -26,7 +26,7 @@ import { createElement as _$createElement } from "@opentui/solid";
 // OpenCode 2.3.0 compiles no JSX of a package it installed, so the package carries the result.
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core";
-import { PANEL, buildPanel, conversationOf, lookupOutcome, notFound, opensPanel, reportIn, syntheticOf } from "./tui-model.mjs";
+import { PANEL, buildPanel, conversationOf, lookupOutcome, mergeEntries, notFound, opensPanel, reportIn, syntheticOf } from "./tui-model.mjs";
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
 const READY = "AZPR: report or preview ready. /pr-panel shows it.";
@@ -222,6 +222,24 @@ function Panel(props) {
   // the keyboard. A terminal too narrow for two panes shows the panel alone, with no prompt to return to.
   // A panel that opened by itself must never be left with the keyboard: where it cannot hand it back, it
   // closes again, and says that something is ready when a notice opened it.
+  // The two steps below run a moment after the panel mounted. By then the host may show another plugin's panel in
+  // this place, or another session: each step acts only while this panel is the one open here, and none outlives it.
+  const timers = new Set();
+  const mine = () => {
+    const current = context.ui.panel.current();
+    return current?.name === PANEL && current.sessionID === props.panel.sessionID;
+  };
+  const later = (step, delay) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (mine()) step();
+    }, delay);
+    timers.add(timer);
+  };
+  onCleanup(() => {
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+  });
   onMount(() => {
     const unasked = state.takeUnasked();
     const withdraw = () => {
@@ -233,9 +251,9 @@ function Panel(props) {
       });
     };
     if (props.panel.presentation === "fullscreen") return unasked ? withdraw() : undefined;
-    setTimeout(() => {
+    later(() => {
       context.keymap.dispatch("pane.focus.left");
-      if (unasked) setTimeout(() => props.panel.focused && withdraw(), 50);
+      if (unasked) later(() => props.panel.focused && withdraw(), 50);
     }, 0);
   });
 
@@ -543,14 +561,36 @@ export default {
       // An inbox that was let go is read again when the panel needs it.
       if (dropped.length) setRead(current => Object.fromEntries(Object.entries(current).filter(([key]) => !dropped.some(id => key.startsWith(`${id}:`)))));
     };
-    const fetchInbox = async sessionID => {
+    const listOf = result => Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : [];
+    // Notices that the host reported for a session while a read of that session was under way: the answer to the
+    // read may be older than they are.
+    const arriving = new Map();
+    /**
+     * Read a session's notices from the server: what waits in its inbox and, with `delivered`, what it was
+     * already told (its messages since the last compaction), since a notice is delivered once its conversation's
+     * model runs. What arrives during the read is kept with the answer.
+     */
+    const fetchEntries = async (sessionID, delivered) => {
       if (disposed) return [];
-      const result = await context.client.session.inbox.list({
-        sessionID
-      });
-      const items = Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : [];
-      keep(sessionID, items);
-      return items;
+      const waiting = arriving.get(sessionID) ?? {
+        count: 0,
+        items: []
+      };
+      waiting.count++;
+      arriving.set(sessionID, waiting);
+      try {
+        const [pending, told] = await Promise.all([context.client.session.inbox.list({
+          sessionID
+        }), delivered && typeof context.client.session.context === "function" ? context.client.session.context({
+          sessionID
+        }) : []]);
+        // With what was read of this session before: a later read of its inbox alone must not lose what it was told.
+        const entries = mergeEntries(fetched()[sessionID] ?? [], listOf(told).filter(entry => entry?.type === "synthetic"), listOf(pending), waiting.items);
+        keep(sessionID, entries);
+        return entries;
+      } finally {
+        if (--waiting.count === 0) arriving.delete(sessionID);
+      }
     };
     const source = {
       session: id => data.session.get(id),
@@ -599,18 +639,19 @@ export default {
       const key = `${sessionID}:${token}`;
       if (read()[key] || reading.has(key)) return;
       reading.add(key);
-      const attempt = async left => {
+      const attempt = async (left, delivered) => {
         try {
-          const items = await fetchInbox(sessionID);
-          if (!report || reportIn(syntheticOf([], items))) return;
+          // A report waits in the inbox unless someone prompted its session since: then it is among the messages.
+          const entries = await fetchEntries(sessionID, delivered);
+          if (!report || reportIn(syntheticOf(entries, []))) return;
         } catch (error) {
           if (notFound(error)) return mark(sessionID, "missing");
         }
         if (left <= 1 || disposed) return;
         await new Promise(done => setTimeout(done, 400));
-        return attempt(left - 1);
+        return attempt(left - 1, true);
       };
-      attempt(4).finally(() => {
+      attempt(4, !report).finally(() => {
         reading.delete(key);
         setRead(current => ({
           ...current,
@@ -688,6 +729,7 @@ export default {
      * another plugin's panel is disturbed.
      */
     const show = byItself => {
+      if (disposed) return false;
       const route = context.ui.router.current();
       if (route.type !== "session") return false;
       const sessionID = route.sessionID;
@@ -705,6 +747,7 @@ export default {
       return context.ui.panel.open(PANEL);
     };
     const stop = data.listen(event => {
+      if (disposed) return;
       const details = event?.details;
       if (details?.type === "session.deleted") return mark(details.data?.sessionID, "missing");
       if (details?.type === "server.connected") {
@@ -718,9 +761,13 @@ export default {
       }
       if (details?.type !== "session.inbox.enqueued") return;
       const item = details.data?.item;
-      // An inbox this plugin read itself is kept current: the host tells of each new notice.
+      // What this plugin read of a session itself is kept current: the host tells of each new notice. One that
+      // arrives while a read is under way is handed to that read, whose answer may not have it yet.
       const about = details.data?.sessionID;
-      if (item?.type === "synthetic" && typeof item.id === "string" && fetched()[about] && !fetched()[about].some(held => held.id === item.id)) keep(about, [...fetched()[about], item]);
+      if (item?.type === "synthetic" && typeof item.id === "string") {
+        arriving.get(about)?.items.push(item);
+        if (fetched()[about] && !fetched()[about].some(held => held.id === item.id)) keep(about, [...fetched()[about], item]);
+      }
       // A run that starts, and a report or preview that arrives, opens the panel in the session on screen,
       // unless the notice says that the settings leave the panel to /pr-panel.
       if (item?.type !== "synthetic" || !opensPanel(item.payload?.text, item.payload?.metadata)) return;

@@ -74,16 +74,16 @@ to `/pr-panel` and the setting `terminalPanel`, and added the two other
 changes. What follows was run on the final tree unless it says otherwise.
 
 - **Offline.** `npm run check`, which now also compiles `tui-view.jsx` and
-  compares the result with `src/tui.js`, and 518 tests (489 for 0.4.1). Of the
-  29 new tests:
+  compares the result with `src/tui.js`, and 534 tests (489 for 0.4.1). Of the
+  45 new tests:
 
   | Tests | What they hold |
   | --- | --- |
-  | 17 | What the panel shows (`tests/tui-model.test.mjs`), one of them against the runtime's own `renderReceipt`; a notice marked `terminalPanel: manual` opens nothing. |
-  | 1 | A whole review, a preview, `--show` and a check run through the runtime, their notices read with the panel's model. |
+  | 28 | What the panel shows (`tests/tui-model.test.mjs`), one of them against the runtime's own `renderReceipt`: which run, status, rows and document for sequences of notices; a notice marked `terminalPanel: manual` opens nothing; only the runtime's own lines name sessions, and a session is a row or read only when it says itself that it is this conversation's and that run's; a run's other notices change nothing; a saved preview shown again is about its review, and a status never stands above another review's document; commands typed in a review's own session; a quoted code block is shown as saved and a summary cell literally; a session counts as deleted only on the server's word, and then whatever the host still holds of it. |
+  | 3 | Whole runs through the runtime, their notices read with the panel's model: a review, a preview, `--show` and a check; a review without findings and the note that no preview follows; a comment run typed in the session that holds the report, with `returnReport: full`. |
   | 1 | The compiled file: no JSX left; imports only from `@opentui/solid`, `@opentui/core`, `solid-js` and the model beside it; no file or environment access; one slash command; nothing stored. |
   | 3 | The defaults: `terminalPanel`; one table of defaults that equals the settings example and the schema; a completed file validates to exactly what the file did, keeps every value and the order of its names, and lacks nothing afterwards. |
-  | 5 | The completion at load: a file as 0.4.1's `/pr-setup` wrote it is completed, with mode 600 and no lock or temporary file left, and `/pr-check` is READY and lists what was added; a complete file is not replaced; a file that is switched off, invalid or a symbolic link is never rewritten, and `/pr-check` names what the link leaves out; a held lock is waited for, and an unsafe directory or a hard link is refused with a reason that names no value; sixteen loads at once, in 25 rounds, write the file once per round and all read the same text. |
+  | 8 | The completion at load: a file as 0.4.1's `/pr-setup` wrote it is completed, with mode 600 and no lock or temporary file left, and `/pr-check` is READY and lists what was added; a complete file is not replaced; a file that is switched off, invalid or a symbolic link is never rewritten, and `/pr-check` names what the link leaves out; a held lock is waited for, a lock left behind is not, and an unsafe directory or a hard link is refused with a reason that names no value; sixteen loads at once, in 25 rounds, write the file once per round and all read the same text; a save made by an editor while the file is completed is kept; a file switched off meanwhile is not rewritten; a load that stopped waiting accepts the completed file later, while a changed value still blocks. |
   | 1 | A completed and an abandoned PR: `/pr-check` READY with a WARNING row, the review, the preview, a typed and an automatic publication, each receipt naming the status; an active PR's check row and receipt as before. |
   | 1 | With `terminalPanel: manual` every notice of a review, a preview, `--show` and a check carries the mark; with the default no notice has metadata, and its fields are those of 0.4.1. |
 
@@ -130,9 +130,13 @@ changes. What follows was run on the final tree unless it says otherwise.
   | `/pr-panel` | The panel is shown and hidden; `q` closes a panel that has the keyboard. The TUI suggests no `/pr-panel-auto` and no `/pr-sessions`. A `--show` answer opens the panel again, and no notice in the conversation has metadata. |
   | 100 columns | A `--show` answer does not open the panel: a toast says that something is ready and the conversation stays on screen; `/pr-panel` shows the panel full screen, and Escape gives the screen back. |
   | `terminalPanel: manual` | The host is stopped, the setting changed and the host and the TUI started again. A comment run that starts, the preview it returns and a `--show` answer each carry `metadata.azpr.panel: "manual"` in the conversation's inbox, and the panel stays closed without announcing itself; `/pr-panel` then shows the newest preview. |
+  | The TUI started in the report session | The conversation is neither on screen nor in a tab, and its notices were delivered beforehand (the fixture prompts the conversation's own model once). `/pr-panel` shows what the conversation was told last, read from the server, and lists the session on screen as the one holding the report. `/pr-comment` typed there is answered in that session, and the panel shows the new preview; the conversation is told nothing more. |
 
-  Each run made 13 model requests, all by AZPR's reviewers, verifier and
-  planner and none by the conversation's model, and 24 Azure DevOps calls.
+  Each run made 15 model requests by AZPR's reviewers, verifier and planner
+  and 31 Azure DevOps calls. The panel asked no model. The conversation's own
+  model ran only when the fixture prompted it before the last step; OpenCode
+  2.3.0 then answered the prompt and gave each of the 16 notices waiting in
+  the conversation's inbox a turn of its own (17 requests).
   The host's log has no `plugin operation failed` line. With the package, the
   compiled view loaded from OpenCode's package cache, and the cache held
   neither `@babel` nor `babel-preset-solid`. On the first step of the
@@ -3563,6 +3567,17 @@ transient failure, and its error names the last activity.
   package it installed; an OpenCode with OpenTUI 0.9 changes that and also
   the Markdown element the panel uses, so the panel must be checked again
   before that OpenCode becomes the tested one.
+- **Notices and the conversation's own model.** AZPR queues its notices to
+  the conversation without waking it, so a review costs the conversation's
+  model nothing. When a person later prompts that same conversation,
+  OpenCode 2.3.0 answers the prompt and then hands each notice still waiting
+  in the inbox to the conversation's model, one turn per notice (observed
+  with the fake services while the terminal fixture was extended: three
+  queued notices and one prompt made four requests). A conversation that is
+  used for other work after a review therefore spends one turn of its model
+  per notice; one that is used only for AZPR's commands spends none.
+  `progressNotices: false` leaves fewer notices. Nothing in AZPR changes
+  this yet.
 - **Private sessions in the session list.** OpenCode lists AZPR's private
   sessions next to conversations, and its plugin API cannot archive them.
   AZPR deletes all but the report session when a run ends; with debug enabled

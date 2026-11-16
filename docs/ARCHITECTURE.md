@@ -654,7 +654,11 @@ and not in a terminal. A comment run is shown together with the review it acts
 on, which its STARTED notice and its receipt name; any other run stands alone,
 so a review under way never shows the report of the review before it.
 
-What the model takes as fact is the runtime's own text, never a model's:
+The panel is about what happened last in the conversation: a run that
+started, progressed or ended, or a saved preview shown again, which names its
+review (`/pr-comment <review> --show` makes that review the current one, and
+the panel shows that review's status, sessions and preview). What the model
+takes as fact is the runtime's own text, never a model's:
 
 - A receipt is a notice whose status word is followed by `;`, a line break or
   the end. A run also says other things under its ID, such as `Automatic
@@ -678,14 +682,20 @@ What the model takes as fact is the runtime's own text, never a model's:
   is the one the session itself names (its metadata; for a session of 0.4.0
   its parent, when it carries AZPR's title). Its notices are read from the
   server, since the host has them only while the conversation is on screen
-  or in a tab, and each later notice is added as the host reports it. The
-  session's own report is shown only while the notices name no document: a
-  status never stands above another run's report.
+  or in a tab: what waits in its inbox and what was delivered since (a
+  notice is delivered once the conversation's model runs). Each later notice
+  is added as the host reports it, also one that arrives while the read is
+  under way. The session's own report is shown only for the review shown, or
+  while nothing is known of any run yet: a status never stands above another
+  review's report.
 - The Markdown shown is the saved Markdown. The cells of the summary table,
   which the runtime writes with numeric character references for Azure
-  DevOps, are decoded, and AZPR's marker lines are left out; a reference or a
-  marker inside a code block, or anywhere else in a finding's text, stays as
-  it is, so the preview on screen is the preview that publication posts.
+  DevOps, are decoded, each character escaped so that Markdown reads none of
+  them as markup: a backtick stays a backtick and `__init__.py` keeps its
+  underscores, as on the PR. AZPR's marker lines are left out. A reference
+  or a marker inside a code block, or anywhere else in a finding's text,
+  stays as it is, so the preview on screen is the preview that publication
+  posts.
 
 `src/tui-view.jsx` is the view and the wiring to the host. What the host does
 decided several things in it:
@@ -693,7 +703,10 @@ decided several things in it:
 - **The keyboard.** The host gives the keyboard to a panel that opens and has
   no way to open one without it. The panel hands it back to the prompt
   (`pane.focus.left`), so the next command can be typed while a report is in
-  view. A click gives the panel the keyboard, and its keys (scrolling, Escape
+  view. That happens a moment after the panel mounted; the step acts only
+  while this panel is still the one open in that session, and its timers end
+  with the panel, so another plugin's panel that took the place is left
+  alone. A click gives the panel the keyboard, and its keys (scrolling, Escape
   or `q`) are a keymap layer of the panel, active only then. A panel that
   opened by itself and cannot hand the keyboard back closes again and shows a
   toast instead: in a terminal too narrow for two panes, where the host shows
@@ -704,9 +717,9 @@ decided several things in it:
   session on screen and of open tabs, and drops those of other sessions again.
   The panel therefore reads the inbox of the report session from the server
   itself (`client.session.inbox.list`) and keeps what it read. A session the
-  server no longer has is counted as deleted, not listed. Only the server's
-  answer establishes that: a not-found error, or a lookup that succeeded and
-  found nothing. A request that failed on the way says nothing about the
+  server no longer has is counted as deleted, not listed, whatever the host
+  still holds of it. Only the server's answer establishes that: a not-found
+  error, or a lookup that succeeded and found nothing. A request that failed on the way says nothing about the
   session and is tried again, three more times and further apart. The panel
   keeps the inboxes of the 24 sessions it read last; one it let go is read
   again when it is needed.

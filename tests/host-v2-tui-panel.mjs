@@ -264,6 +264,8 @@ try {
   await see(new RegExp(`AZPR ${review} · COMPLETE`), 'The panel does not show the review as COMPLETE.', 120000);
   // The conversation shows the table as Markdown source (| Severity | Summary |); the panel draws it as a grid.
   await see(/│ Severity\s+│ Summary/, 'The report\'s table is not rendered in the panel.');
+  // The cells show the characters the runtime escaped for Azure DevOps as themselves, backticks included.
+  await see(/R-1 — `invoice` drops the guard/, 'The summary cell does not show its text literally.');
   await see(/○ Verification \(report\) complete ses_/, 'The session that holds the report is not listed.');
   await see(/4 session\(s\) were deleted when their run ended\./, 'The panel does not say that the reviewer sessions were deleted.');
   const receipt = (await inbox()).findLast(text => text.startsWith(`[AZPR ${review}] COMPLETE`));
@@ -307,6 +309,9 @@ try {
   // --show answers at once with the saved preview, and with the default setting that opens the panel again.
   await command('pr-comment', 'Preview, adjust or publish review comments', '--show');
   await see(panelOpen, 'With terminalPanel: auto a preview shown again did not open the panel.');
+  // A saved preview shown again is about its review: the review's status, with the preview as the document.
+  await see(new RegExp(`AZPR ${review} · COMPLETE`), 'The saved preview is not shown under its review.');
+  await see(new RegExp(`\\[AZPR\\] Saved preview of review ${review}`), 'The saved preview is not named.');
   assert.ok((await queued()).every(item => item.payload?.metadata === undefined), 'With the default setting AZPR\'s notices carry no metadata.');
   await click('close');
   await see(shown => !panelOpen(shown), 'The panel did not close.');
@@ -348,34 +353,49 @@ try {
   // Asked for, it opens as always, with the newest preview.
   await command('pr-panel', 'The sessions of the review in this conversation');
   await see(panelOpen, 'With terminalPanel: manual /pr-panel did not show the panel.');
-  await see(/AZPR [a-f0-9]{8} · PREVIEW/, 'The panel opened by hand does not show the preview.');
+  await see(new RegExp(`\\[AZPR\\] Saved preview of review ${review}`), 'The panel opened by hand does not show the saved preview.');
   result.manual = 'terminalPanel: manual reaches the panel with the notices; it opens only with /pr-panel';
 
   // 9. A TUI that starts in the session holding the report, with the conversation neither on screen nor in a tab:
-  // the host has the conversation's notices of no session but the one on screen, so the panel reads them from
-  // the server. A command typed in that session is answered there, and the panel shows it.
+  // the host has the notices of no session but the one on screen, so the panel reads the conversation's from the
+  // server, here after they were delivered. A command typed in that session is answered there, and the panel
+  // shows it.
   const kept = (await api('/api/session')).data.filter(session => session.metadata?.azpr?.conversation === origin);
   assert.deepEqual(kept.map(session => session.metadata.azpr.role), ['azpr-review-verifier'], 'The review keeps the session that holds its report.');
   tmux('kill-server');
+  // A person talks to the conversation's own model: every notice that waited in its inbox is delivered, so the
+  // inbox is empty and what AZPR told the conversation is among its messages. (The host gives each queued notice
+  // a turn of that model; only this prompt of the fixture's makes the conversation's model run at all.)
+  const asked = requests.length;
+  assert.ok(requests.every(request => request.model !== 'chat'), 'Until here the conversation\'s own model was never asked.');
+  await api(`/api/session/${origin}/prompt`, { text: 'Thanks. Anything else?' });
+  await api(`/api/experimental/session/${origin}/wait`, {});
+  const turns = requests.slice(asked);
+  assert.ok(turns.length >= 1 && turns.every(request => request.model === 'chat' && request.sessionID === origin), 'Only the conversation\'s own model ran, in the conversation.');
+  assert.deepEqual(await inbox(), [], 'The notices were delivered: none waits in the conversation\'s inbox.');
+  const told = (await api(`/api/session/${origin}/context`)).data.filter(message => message.type === 'synthetic').length;
+  assert.ok(told >= 10, 'They are among the conversation\'s messages.');
   await openTerminal(170, 46, kept[0].id);
   await command('pr-panel', 'The sessions of the review in this conversation');
-  const latest = (await see(/AZPR ([a-f0-9]{8}) · PREVIEW/, 'In the report session the panel does not show the conversation\'s newest run.'))[1];
-  // The newest document the conversation was told about is the saved preview shown again in step 8.
+  // The last thing the conversation was told is the saved preview shown again in step 8, which is about the review.
+  await see(new RegExp(`AZPR ${review} · COMPLETE`), 'In the report session the panel does not show what the conversation was told last.');
   await see(new RegExp(`\\[AZPR\\] Saved preview of review ${review}`), 'It does not show the document read from the conversation\'s notices.');
   await see(/○ Verification \(report\) complete ses_/, 'The session on screen is not listed as the one holding the report.');
-  const told = (await inbox()).length;
   const own = async () => (await api(`/api/session/${kept[0].id}/inbox`)).data.map(item => item.payload?.text ?? '');
   // A comment run typed here: its notices arrive in this session, and the panel follows them.
   await command('pr-comment', 'Preview, adjust or publish review comments', '');
-  const typedHere = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · PREVIEW/.exec(shown); return match && match[1] !== latest && match; }, 'The panel does not show the comment run typed in the review\'s own session.', 120000))[1];
+  const typedHere = (await see(/AZPR ([a-f0-9]{8}) · PREVIEW/, 'The panel does not show the comment run typed in the review\'s own session.', 120000))[1];
   await see(new RegExp(`\\[AZPR ${typedHere}\\] PREVIEW; source review=${review}`), 'The panel does not name the preview planned from this session.');
   assert.ok((await own()).some(text => text.startsWith(`[AZPR ${typedHere}] PREVIEW; source review=${review}`)), 'The runtime answered in the session the command was typed in.');
-  assert.equal((await inbox()).length, told, 'Nothing more was told to the conversation.');
+  assert.deepEqual(await inbox(), [], 'Nothing more was told to the conversation.');
+  assert.equal((await api(`/api/session/${origin}/context`)).data.filter(message => message.type === 'synthetic').length, told);
   assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
   result.ownSession = 'started in the report session: the conversation\'s run is read from the server; a command typed there is shown';
 
   // What the panel must never do: ask a model, or fail to load.
-  assert.deepEqual([...new Set(requests.map(request => request.model))].sort(), ['functional', 'risk', 'verifier'], 'Only AZPR\'s reviewers, verifier and planner asked a model; the panel and the conversation asked none.');
+  const conversationTurns = requests.filter(request => request.model === 'chat');
+  assert.deepEqual([...new Set(requests.map(request => request.model))].sort(), ['chat', 'functional', 'risk', 'verifier']);
+  assert.deepEqual(conversationTurns, turns, 'Only AZPR\'s reviewers, verifier and planner asked a model, and the fixture\'s own prompt the conversation\'s: the panel asked none.');
   const hostLog = await readFile(join(dirs.data, 'opencode', 'log', 'opencode.log'), 'utf8').catch(() => '');
   assert.doesNotMatch(hostLog, /plugin operation failed/, 'The TUI loaded the plugin\'s terminal part without an error.');
   if (native) {
@@ -384,7 +404,7 @@ try {
     assert.ok(!cached.some(path => /(^|\/)(@babel|babel-preset-solid)(\/|$)/.test(path)), 'The compiler is a development dependency: installing the package brings none of it.');
     result.package = 'compiled view loaded from the package cache; no compiler installed';
   }
-  Object.assign(result, { reviewRun: review, previewRun: preview, providerRequests: requests.length, azureCalls: azure.state.calls.length });
+  Object.assign(result, { reviewRun: review, previewRun: preview, providerRequests: requests.length - conversationTurns.length, conversationTurns: conversationTurns.length, azureCalls: azure.state.calls.length });
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
   await diagnose().catch(() => {});

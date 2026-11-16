@@ -28,6 +28,8 @@ const RUN_STARTED = /^\[AZPR [a-f0-9]{8}\] STARTED \/pr-(?:review|quick|deep|com
 // also says things that are neither (`[AZPR <run>] Automatic preview skipped: …`).
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
 const REPORT_HEAD = '# AZPR ';
+// `/pr-comment [review] --show` answers at once with a review's saved preview, and names the review.
+const SAVED_PREVIEW = /^\[AZPR\] Saved preview of review ([a-f0-9]{8})\b/;
 // The summary table of a report or preview, whose cells the runtime writes with numeric character references.
 const SUMMARY_TABLE = /^\| Severity \| Summary \| [^|\n]+ \|$/;
 const MARKER = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
@@ -91,8 +93,9 @@ export const opensPanel = (text, metadata) =>
  * summary table with numeric character references so that Azure DevOps shows
  * their characters literally, and marks its comments with HTML comments that
  * Azure DevOps hides. The terminal renderer decodes neither: in that table,
- * show the characters, escaped where Markdown would read them as markup, and
- * leave the marker lines out.
+ * show each such character, escaped so that Markdown reads none of them as
+ * markup (a file named `__init__.py` keeps its underscores, a backtick stays
+ * a backtick, as on the PR), and leave the marker lines out.
  *
  * Only those two things change. A reference or a marker that a finding quotes,
  * in a code block or anywhere else, is its text: the preview shown must be the
@@ -113,10 +116,10 @@ export function readable(markdown) {
     if (MARKER.test(line)) continue;
     if (SUMMARY_TABLE.test(line)) { table = true; shown.push(line); continue; }
     table &&= line.startsWith('|');
+    // The characters the runtime writes as references (see `cell` in renderReviewSummary), each one literal.
     shown.push(!table ? line : line.replace(/&#(\d{2,3});/g, (reference, code) => {
       const character = String.fromCharCode(Number(code));
-      if (character === '`' || character === '_' || character === '&') return character;
-      return /[|*[\]\\<>]/.test(character) ? `\\${character}` : reference;
+      return /[&<>|`*_[\]\\]/.test(character) ? `\\${character}` : reference;
     }));
   }
   return shown.join('\n');
@@ -139,7 +142,7 @@ export function lookupOutcome(looked, present) {
   return present ? 'exists' : 'missing';
 }
 
-const TITLE = /^\[AZPR [a-f0-9]{8}\] /;
+const TITLE = /^\[AZPR ([a-f0-9]{8})\] /;
 const short = title => String(title).replace(TITLE, '');
 
 /**
@@ -155,13 +158,17 @@ export function conversationOf(session) {
 
 /**
  * Whether a session the host has is this conversation's and, where `run` is given, that run's, by what
- * the session itself says: never by a text that names it. A session of 0.4.0 or earlier says no run;
- * its being a child of the conversation is all it can say.
+ * the session itself says: never by a text that names it. A session of 0.4.0 or earlier has no metadata:
+ * it is a child of its conversation, and its title, which AZPR gave it, names its run.
  */
 const belongs = (session, conversation, run) => {
   const azpr = session.metadata?.azpr;
-  return azpr ? azpr.conversation === conversation && (run === undefined || azpr.run === run) : session.parentID === conversation;
+  if (azpr) return azpr.conversation === conversation && (run === undefined || azpr.run === run);
+  return session.parentID === conversation && (run === undefined || TITLE.exec(session.title ?? '')?.[1] === run);
 };
+
+/** Entries of several lists as one, each ID once (a later list's entry wins), for what was read and what arrived meanwhile. */
+export const mergeEntries = (...lists) => [...new Map(lists.flat().filter(entry => typeof entry?.id === 'string').map(entry => [entry.id, entry])).values()];
 
 /**
  * What the panel shows for the session on screen.
@@ -191,45 +198,51 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // read from the server, once, whether or not the host knows the conversation itself.
   const notes = conversation !== sessionID && known[conversation] !== 'missing' && !read[`${conversation}:notices`] ? { sessionID: conversation, token: 'notices' } : undefined;
   const entries = conversation === sessionID ? entriesOf(conversation)
-    : [...new Map([...entriesOf(conversation), ...entriesOf(sessionID)].map(entry => [entry.id, entry])).values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    : mergeEntries(entriesOf(conversation), entriesOf(sessionID)).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const notices = noticesOf(entries);
-  // The run under way or last ended: the one that last started, progressed or ended. What a run says besides
-  // (a review's note that no preview follows can arrive after the next run started) does not make it current.
-  const run = notices.findLast(notice => notice.run && notice.kind !== 'NOTE')?.run;
-  const begins = notices.findIndex(notice => notice.run === run);
-  const ofRun = notices.filter(notice => notice.run === run);
+  // What the panel is about is what happened last: a run that started, progressed or ended, or a saved preview
+  // shown again, which names its review. What a run says besides (a review's note that no preview follows can
+  // arrive after the next run started) changes nothing, and neither does an answer without a document.
+  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && DATA.test(notice.text)));
+  const answered = subject?.kind === 'ANSWER' ? SAVED_PREVIEW.exec(subject.text)[1] : undefined;
+  // A saved preview shown again is about its review: that review's status, sessions and report session.
+  const run = answered ?? subject?.run;
+  const ofRun = notices.filter(notice => notice.run === run && notice.kind !== 'NOTE');
   const receipt = ofRun.findLast(notice => notice.kind === 'RECEIPT');
   const progress = ofRun.findLast(notice => notice.kind === 'PROGRESS');
-  const status = receipt ? receipt.status : run ? 'RUNNING' : '';
+  const status = receipt ? receipt.status : run && !answered ? 'RUNNING' : '';
   // A comment run belongs with the review it acts on: that review's sessions and report stay in view.
   // Any other run stands alone, so a review under way never shows the report of the review before it.
   const reviewRun = SOURCE_REVIEW.exec(receipt?.text.split('\n')[0] ?? '')?.[1] ?? ACTS_ON.exec(ofRun.find(notice => notice.kind === 'STARTED')?.text ?? '')?.[1] ?? run;
   const review = reviewRun === run ? receipt : notices.findLast(notice => notice.kind === 'RECEIPT' && notice.run === reviewRun);
   const reportSession = REPORT_SESSION.exec(ledgerOf(review?.text ?? ''))?.[1];
 
-  // The document is the newest report or preview of these runs, or of a command that answered at once after
-  // them (--show): enclosed in the notice, or queued to the review's report session.
+  // The document: the saved preview shown again, or the newest report or preview of the run and of the review it
+  // acts on, enclosed in a receipt or queued to the review's report session.
   let document;
-  notices.forEach((notice, index) => {
-    const ours = notice.kind === 'RECEIPT' ? notice.run === run || notice.run === reviewRun : notice.kind === 'ANSWER' && index > begins;
-    if (!ours) return;
+  if (answered) document = { head: subject.text.split('\n')[0], markdown: DATA.exec(subject.text)[2], token: subject.id };
+  else for (const notice of notices) {
+    if (notice.kind !== 'RECEIPT' || (notice.run !== run && notice.run !== reviewRun)) continue;
     const head = notice.text.split('\n')[0];
     const enclosed = DATA.exec(notice.text);
     const queued = REPORT_SESSION.exec(ledgerOf(notice.text))?.[1];
     if (enclosed) document = { head, markdown: enclosed[2], token: notice.id };
     else if (queued) document = { head, session: queued, run: notice.run, token: notice.id };
-  });
+  }
   // A queued report is read from the session a receipt names, once that session says itself that it is this
   // conversation's and holds the report of that receipt's run: until the host has it, it is looked up, and a
-  // session of someone else's, or of another review, is never read.
-  const holder = document?.session ? source.session(document.session) : undefined;
-  const awaited = Boolean(document?.session) && !holder && known[document.session] !== 'missing';
+  // session of someone else's, or of another review, is never read. A session the server said is gone is gone,
+  // whatever the host still holds of it.
+  const gone = id => known[id] === 'missing';
+  const holder = document?.session && !gone(document.session) ? source.session(document.session) : undefined;
+  const awaited = Boolean(document?.session) && !holder && !gone(document.session);
   if (awaited) needs.add(document.session);
   const held = holder !== undefined && belongs(holder, conversation, document.run);
   const found = document?.markdown ?? (held ? reportIn(entriesOf(document.session)) : '');
-  // In a session that holds a report, that report is shown only while the notices name no document: they may
-  // not be read yet. Once they name one, it alone is shown, so a status never stands above another run's report.
-  const own = !document && conversation !== sessionID ? reportIn(entriesOf(sessionID)) : '';
+  // In a session that holds a report, that report is shown while the notices name no document, and only when it
+  // is the report of the review shown, or nothing is known yet of any run (the notices may not be read yet). A
+  // status never stands above another review's report.
+  const own = !document && conversation !== sessionID && self && (run === undefined || belongs(self, conversation, reviewRun)) ? reportIn(entriesOf(sessionID)) : '';
   const markdown = readable(found || own);
   // A queued report waits in its session's inbox, which the host loads only for the session on screen.
   const inbox = !found && held ? { sessionID: document.session, token: document.token } : undefined;
@@ -250,10 +263,11 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   const rows = [];
   let deleted = 0;
   for (const id of candidates) {
-    const info = source.session(id);
+    // The server's word that a session is gone outweighs what the host still holds of it.
+    const info = gone(id) ? undefined : source.session(id);
     if (!info) {
       // A finished run names every stage in its receipt; what was deleted since is counted, not listed.
-      if (known[id] === 'missing') deleted += stages.has(id) ? 1 : 0;
+      if (gone(id)) deleted += stages.has(id) ? 1 : 0;
       else needs.add(id);
       continue;
     }
