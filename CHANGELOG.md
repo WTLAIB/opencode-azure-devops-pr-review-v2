@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.4.2 — 2026-11-17
+
+A panel in OpenCode's terminal UI shows the report and the comment preview
+rendered instead of as Markdown source, and lists the sessions of the review
+so that you can open one. The server part is unchanged: the reviewer, verifier
+and comment-planning instructions are those of 0.4.1, the notices and receipts
+read as before, and no setting is new.
+
+Terminal panel (OpenCode's terminal UI only):
+
+- OpenCode shows what a plugin tells a conversation as plain text, so a report
+  or a comment preview appeared as Markdown source. A panel beside the
+  conversation now shows the newest one rendered: headings, emphasis, lists,
+  code and tables. A check's table is shown there too.
+- The panel lists the sessions of the review with their state while they run,
+  and afterwards those that still exist, first the one that holds the report.
+  A click opens the session in a tab. Until now a reviewer session had to be
+  picked from OpenCode's session list. `/pr-sessions` offers the same sessions
+  in a list for the keyboard.
+- It opens by itself when a review or a comment run starts and when a report
+  or preview arrives, in the conversation on screen, and leaves the keyboard
+  with the prompt. `/pr-panel` shows and hides it; `/pr-panel-auto` turns the
+  automatic opening off and on, and the choice is kept across restarts.
+- A click inside the panel gives it the keyboard: the arrow keys or `j` and
+  `k`, Page Up and Page Down, Home and End scroll, and Escape or `q` closes it.
+- In a terminal with fewer than 108 columns, where OpenCode shows a panel in
+  place of the conversation, it does not open by itself and says that
+  something is ready; `/pr-panel` shows it full screen.
+- The panel only reads: AZPR's notices in the conversation, the report queued
+  to the review's session, and which sessions belong to the run. It sends no
+  prompt, starts nothing and posts nothing.
+- Other OpenCode clients, such as the desktop app, do not load the panel and
+  show AZPR's notices as before.
+
+Package:
+
+- The package has a second entry, `./tui`, which OpenCode's terminal UI loads
+  by itself when the plugin is active. Installing and upgrading are as before;
+  the package still has no dependency and runs nothing at installation.
+- OpenCode 2.3.0 does not compile the JSX of a package it installed (restored
+  in OpenTUI 0.9.0, which OpenCode has not shipped yet), so the package
+  carries the compiled view next to its source. Building it needs a
+  development dependency in the repository only.
+- A source installation copies two more files, `tui-model.mjs` and `tui.js`;
+  the manual-copy list in the README has 34 files.
+
 ## 0.4.1 — 2026-11-16
 
 AZPR is tested with OpenCode 2.3.0 instead of 2.2.4, and two things that went

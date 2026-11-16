@@ -12,6 +12,7 @@ import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES } from '../src/config.mjs';
 import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
+import { buildPanel, opensPanel } from '../src/tui-model.mjs';
 import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -3201,4 +3202,66 @@ test('flags belong to the review commands: /pr-check refuses them and unknown op
   await assert.rejects(g.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: '' } }), /Usage: \/pr-review <Azure PR URL> \[--preview\|--publish\|--no-comment\] \[your context\]/);
   assert.equal(g.prompts().length, 0);
   assert.equal(g.azure.state.calls.length, calls, 'A refused command makes no Azure DevOps call.');
+});
+
+// The terminal panel (src/tui-model.mjs) reads these notices as text: their form is part of what a run tells the user.
+test('the terminal panel reads what a review, its report and its preview tell the conversation', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'] });
+  // The host as a TUI has it loaded: every notice waits in its session's inbox.
+  const source = () => ({
+    session: id => (id === 'ordinary' ? { id } : f.sessions.get(id)),
+    sessions: () => [...f.sessions.values()],
+    status: () => 'idle',
+    messages: () => [],
+    pending: id => f.notices.flatMap((notice, index) => (notice.sessionID === id ? [{ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic', payload: { text: notice.text } }] : [])),
+  });
+  const receipt = await f.command();
+  const texts = f.notices.filter(n => n.sessionID === 'ordinary').map(n => n.text);
+  assert.equal(opensPanel(texts[0]), true, 'The STARTED notice of a review opens the panel.');
+  const progressNotices = texts.filter(text => /\] PROGRESS — /.test(text));
+  assert.ok(progressNotices.length >= 2 && progressNotices.every(text => !opensPanel(text)), 'Progress notices leave the panel as it is.');
+  assert.equal(opensPanel(receipt), true, 'The receipt names the session that holds the report.');
+  const review = buildPanel(source(), 'ordinary');
+  assert.deepEqual([review.run, review.status, review.progress], [reviewId(receipt), 'COMPLETE', undefined]);
+  const stageSessions = [...receipt.matchAll(/^- azpr-[^\n]*session=(ses_[A-Za-z0-9]+)/gm)].map(match => match[1]);
+  assert.ok(stageSessions.length >= 3);
+  assert.deepEqual(review.rows.map(row => row.id).sort(), [...stageSessions].sort(), 'Every stage the receipt names is a row.');
+  const verifier = f.sessionsFor('azpr-review-verifier')[0];
+  assert.deepEqual(review.rows.filter(row => row.report).map(row => row.id), [verifier.id], 'The verifier session holds the report.');
+  assert.ok(review.rows.every(row => row.state === 'complete' && !/^azpr-/.test(row.label)), 'Rows carry the sessions\' titles and the stages\' results.');
+  assert.match(review.markdown, new RegExp(`^# AZPR ${review.run} — COMPLETE\\n\\n[\\s\\S]*FINAL_REPORT`), 'The report queued to the verifier session is the document.');
+  assert.deepEqual([review.needs, review.inbox, review.deleted], [[], undefined, 0]);
+  const inReport = buildPanel(source(), verifier.id);
+  assert.deepEqual([inReport.conversation, inReport.run, inReport.markdown], ['ordinary', review.run, review.markdown], 'In the report session the panel shows the same run.');
+  // A preview: its STARTED notice opens the panel, and its receipt encloses the document.
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  assert.equal(opensPanel(f.notices.find(n => /\] STARTED \/pr-comment/.test(n.text)).text), true);
+  assert.equal(opensPanel(preview), true);
+  const planned = buildPanel(source(), 'ordinary');
+  assert.deepEqual([planned.run, planned.status], [reviewId(preview), 'PREVIEW']);
+  // While the comments were planned, the STARTED notice already named the review: its report and sessions stayed in view.
+  const upTo = f.notices.findIndex(n => /\] STARTED \/pr-comment/.test(n.text));
+  const planning = buildPanel({ ...source(), pending: id => source().pending(id).filter(entry => Number(entry.id.slice(4)) <= upTo) }, 'ordinary');
+  assert.deepEqual([planning.run, planning.status, planning.markdown], [reviewId(preview), 'RUNNING', review.markdown]);
+  assert.ok(planning.rows.some(row => row.id === verifier.id && row.report));
+  assert.match(planned.markdown, /PR Review Summary/);
+  assert.doesNotMatch(planned.markdown, /azpr_comment_data|<!-- azpr-comment:/, 'The enclosing tags and the comment markers are not part of what is shown.');
+  assert.match(planned.documentHead, new RegExp(`^\\[AZPR ${planned.run}\\] PREVIEW; source review=${review.run}$`));
+  assert.ok(planned.rows.some(row => row.id === verifier.id && row.report), 'The review\'s report session stays listed next to the comment run.');
+  // --show answers at once with the saved preview; a check has nothing for the panel.
+  const shown = await f.command('pr-comment', '--show');
+  assert.match(shown, /^\[AZPR\] Saved preview of review /);
+  assert.equal(opensPanel(shown), true);
+  const again = buildPanel(source(), 'ordinary');
+  assert.ok(again.markdown.length > 100 && planned.markdown.startsWith(again.markdown), 'The saved preview shown again is the same document, without the line about posting it.');
+  assert.match(again.documentHead, /^\[AZPR\] Saved preview of review /);
+  // A check starts no session; its receipt encloses the table of checks, and the review before it is not its business.
+  const before = f.notices.length;
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/);
+  assert.deepEqual(f.notices.slice(before).map(n => opensPanel(n.text)), [false, true], 'The STARTED notice of a check leaves the panel alone; its receipt opens it.');
+  const checked = buildPanel(source(), 'ordinary');
+  assert.deepEqual([checked.run, checked.status, checked.rows], [reviewId(check), 'READY', []]);
+  assert.match(checked.markdown, /^## Source readiness\n[\s\S]*\n\| Check \| Result \| Detail \|\n/, 'The check\'s table is the document.');
 });

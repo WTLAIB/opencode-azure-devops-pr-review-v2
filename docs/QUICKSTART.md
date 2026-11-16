@@ -55,7 +55,7 @@ conversation or command argument.
 ## 3. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.1
+opencode plugin add opencode-azure-devops-pr-review@0.4.2
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -64,7 +64,7 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.1'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.2'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -158,6 +158,11 @@ instead: it runs one reviewer per shard without independent verification.
 `/pr-review --help` (and every other command with `--help`) shows the options
 without running a model.
 
+In the terminal UI a panel opens beside the conversation: it lists the
+review's sessions while they run, and then shows the report and the comment
+preview rendered instead of as Markdown source (see the
+[terminal panel](../README.md#terminal-panel)).
+
 Follow the progress notices and wait for the review receipt. If the COMPLETE
 review has findings to comment on, a separate comment run follows and saves a
 preview; wait for its receipt too. **Neither run posts to Azure** with the
@@ -246,7 +251,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.4.1 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.1.tar.gz),
+[v0.4.2 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.2.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings, so add `--replace` to the setup

@@ -30,13 +30,23 @@ can go straight to a pull request.
 
 Use Node.js 22.12 or later, POSIX `sh`, Python 3 and Git. The current host
 acceptance target is OpenCode V2 `@opencode/cli@2.3.0` on Ubuntu 22.04; other
-environments are not yet validated. The runtime has no npm dependencies or
-build step. From your checkout:
+environments are not yet validated. The installed plugin has no npm
+dependencies and is not built at installation. The checkout has one
+development dependency, the compiler of the terminal panel's JSX, which
+`npm ci` installs. From your checkout:
 
 ```sh
+npm ci
 npm run check
 npm test
 ```
+
+The terminal panel's view is written in `src/tui-view.jsx` and compiled to
+`src/tui.js`, which is what OpenCode loads (see
+[architecture](docs/ARCHITECTURE.md#terminal-panel)). After changing the
+source, run `npm run build:tui` and commit both files; `npm run check` fails
+when they differ. What the panel shows is worked out in `src/tui-model.mjs`,
+which has ordinary unit tests.
 
 Read [AGENTS.md](AGENTS.md) for the design rules and change-specific checks.
 Keep deterministic PR facts and Azure writes in the runtime; models supply
@@ -44,8 +54,9 @@ review judgment and comment text. Preserve the distinction between quick
 findings and independently verified findings. Add a focused regression test
 when fixing behavior, and update the relevant documentation when it changes.
 
-Changes to hooks, sessions, tools, Azure access or publication also need all
-seven host fixture runs. Install the tested host into a disposable local directory
+Changes to hooks, sessions, tools, Azure access or publication also need the
+first seven host fixture runs below; changes to the terminal panel, or to the
+text of notices and receipts, which the panel reads, need the last two. Install the tested host into a disposable local directory
 without changing your everyday OpenCode installation:
 
 ```sh
@@ -58,10 +69,16 @@ node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST" --cleanup
 node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST" --cleanup
+node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST"
+node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST" --native
 ```
 
-The last two run with debug off. Debug keeps every private session, so only
-these runs exercise the deletion of a run's sessions on the host.
+The two `--cleanup` runs have debug off. Debug keeps every private session, so
+only these runs exercise the deletion of a run's sessions on the host. The two
+`host-v2-tui-panel` runs start the real terminal UI in a detached `tmux`
+session, read its screen and drive its keyboard and mouse; they need `tmux`
+(3.2 or later), once installed from source and once as OpenCode's plugin
+manager installs the package.
 
 The fixtures need `openssl` and use isolated configuration, a fake model
 provider and fake Azure services. They do not need your PAT or provider account,

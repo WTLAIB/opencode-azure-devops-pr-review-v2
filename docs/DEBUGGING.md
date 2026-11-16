@@ -33,6 +33,34 @@ conversations and verifies that `/pr-stop` cancels from that same TUI.
 | `…/azpr-v2/data/` | Private source excerpts and large comment inputs for persisted reviews. |
 | Debug directory (below) | Optional per-run diagnostics. |
 
+## The terminal panel does not appear
+
+The [terminal panel](../README.md#terminal-panel) is loaded by OpenCode's
+terminal UI, not by the service, and only when the terminal UI starts.
+
+- **After installing or upgrading**, quit the terminal UI and start it again.
+  `/pr-panel` then appears among the slash commands.
+- **It does not open by itself.** `/pr-panel-auto` may have turned that off;
+  run it again and read what it says. In a terminal with fewer than 108
+  columns the panel only announces itself; `/pr-panel` shows it. It also
+  stays closed while a dialog or another plugin's panel is open, and in a
+  conversation that is not on screen when the notice arrives.
+- **`/pr-panel` is missing.** Look for `plugin operation failed` in OpenCode's
+  log (`${XDG_DATA_HOME:-~/.local/share}/opencode/log/opencode.log`): it names
+  the file that did not load and why. `opencode plugin list` shows whether
+  the plugin is active; the service lists it with a terminal part
+  (`features.tui`).
+- **The panel says the report is in its session.** The session that held the
+  report was deleted or its report could not be read; the receipt in the
+  conversation still names it, and `/pr-comment --show` shows a saved preview
+  again.
+- **Other clients.** The desktop app and other OpenCode clients do not load
+  the panel.
+
+The panel reads AZPR's notices as text. A notice that was edited, or another
+plugin's message that begins like one, can show up in it; the panel never acts
+on what it shows.
+
 ## Enable diagnostics
 
 In the settings file shown by `/pr-setup` (external configuration for native

@@ -190,6 +190,13 @@ again with the review. Setting this option to `false` keeps the sessions. Your o
 deleted by AZPR, and deleting local records does not delete provider records
 or published Azure comments.
 
+The [terminal panel](../README.md#terminal-panel) runs in OpenCode's terminal
+UI. It reads AZPR's notices and the report queued to a review session from the
+OpenCode server that terminal UI is connected to, keeps what it read in memory
+only, and stores one preference (whether it opens by itself) in the terminal
+UI's own plugin storage. It sends nothing to a model, to Azure DevOps or
+anywhere else, and reads neither AZPR's settings nor the PAT.
+
 Diagnostics are off by default (`debug.enabled: false`). When enabled, they
 can include source, PR details, prompts, answers and secrets echoed in them.
 The default location is `…/opencode/azpr-v2-debug/`, separate from review state;

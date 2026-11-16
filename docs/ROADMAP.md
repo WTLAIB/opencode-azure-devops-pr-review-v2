@@ -144,6 +144,14 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   NEEDS_INFO and gets no comment. Such confirmations came from GPT-6 Luna
   verifiers whose own reason refuted the finding.
 
+- **A panel in the terminal UI.** OpenCode shows a plugin's notices as plain
+  text, so reports and comment previews appeared as Markdown source, and a
+  reviewer session had to be picked from the session list. The package's
+  terminal part shows the newest report or preview rendered beside the
+  conversation and lists the sessions of the review, each a click away. It
+  opens by itself, leaves the keyboard with the prompt and only reads what
+  the runtime already produced.
+
 ## Planned
 
 Nothing is scheduled at the moment. A change to what reviewers file or how
@@ -159,6 +167,20 @@ and are not planned; see
 [Deferred](#three-changes-the-martian-benchmark-run-pointed-to).
 
 ## Deferred
+
+### Shipping the terminal panel as JSX source
+
+OpenCode 2.3.0 does not compile the JSX of a package it installed, so the
+package carries the panel's view compiled (`src/tui.js`) next to its source,
+and the repository has a compiler as a development dependency. OpenTUI 0.9.0
+compiles such files again (anomalyco/opentui#2051). When the tested OpenCode
+includes it, the package can export `src/tui-view.jsx` itself and drop the
+compiled file, the build script and the development dependency. Until then
+the compiled file is the only form that loads from an npm or Git package.
+
+The panel is for OpenCode's terminal UI. The desktop app has a plugin entry of
+its own, which OpenCode still marks as experimental; a panel there waits for
+that interface to settle.
 
 ### Default whole-run timeout and per-stage step cap
 

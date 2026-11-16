@@ -9,14 +9,20 @@ source tree and contain the same runtime.
 1. Set the version in `package.json`, add a dated changelog section, and write
    `docs/releases/vVERSION.md`. Update the quickstart, README install commands
    and download links to that version.
-2. Run `npm run check` and `npm test`. Follow `AGENTS.md` for required host
-   checks. Release validation includes fresh and replacement source installs,
-   `host-v2-smoke.mjs --native`, `host-v2-comment-scale.mjs` and
-   `host-v2-background-compaction.mjs`, the last two also with `--cleanup`,
+2. Run `npm ci`, `npm run check` and `npm test`. `npm run check` fails when
+   `src/tui.js` is not what `src/tui-view.jsx` compiles to; run
+   `npm run build:tui` and commit both files then. Follow `AGENTS.md` for
+   required host checks. Release validation includes fresh and replacement
+   source installs, `host-v2-smoke.mjs --native`, `host-v2-comment-scale.mjs`
+   and `host-v2-background-compaction.mjs`, the last two also with `--cleanup`,
+   and `host-v2-tui-panel.mjs` with and without `--native` (it needs `tmux`),
    on the exact documented host. Keep simulated services and live model/Azure results distinct.
 3. Inspect `npm pack --dry-run --json`: it holds only `package.json`, the
-   entry, the runtime modules and prompts under `src/`, the README, the
-   changelog and the license. Documentation pages, media, installers, the
+   entry, the runtime modules and prompts under `src/`, the terminal panel
+   (its model, its JSX source and the compiled `src/tui.js`), the README, the
+   changelog and the license. `package.json` names no dependency and no
+   install script; the compiler under `devDependencies` is not installed with
+   the package. Documentation pages, media, installers, the
    settings example and schema, private settings, `.local/`, credentials,
    diagnostics and recordings stay out; npmjs.com resolves the README's
    relative links and images against the GitHub repository. The native
@@ -71,6 +77,7 @@ Then verify the actual published installation:
 ```sh
 npm view opencode-azure-devops-pr-review@VERSION dist.integrity
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode --native --package opencode-azure-devops-pr-review@VERSION
+node tests/host-v2-tui-panel.mjs /absolute/path/to/opencode --native --package opencode-azure-devops-pr-review@VERSION
 opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#vVERSION'
 ```
 

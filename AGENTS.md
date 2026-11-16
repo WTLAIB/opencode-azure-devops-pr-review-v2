@@ -213,12 +213,37 @@ settings, backups and failure records. Never upload `.local/`.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 
+**The terminal panel only reads.**
+- The package's terminal part (`src/tui-model.mjs` and `src/tui-view.jsx`,
+  compiled to `src/tui.js`) shows what the runtime already produced: AZPR's
+  notices in the conversation, the report queued to a review session and the
+  sessions' `metadata.azpr`. It sends no prompt, runs no command of the server
+  part, makes no Azure DevOps request and reads no settings file; a preference
+  of its own goes into the TUI's plugin storage.
+- The text of notices and receipts is therefore an interface. Change it
+  together with `tui-model.mjs`, whose tests run against `renderReceipt` and
+  against the notices of a whole run.
+- `src/tui.js` is generated: edit `tui-view.jsx`, run `npm run build:tui` and
+  commit both. OpenCode 2.3.0 compiles no JSX of an installed package, so the
+  package ships the compiled file; keep it free of JSX and importing only what
+  the host provides (`@opentui/solid`, `@opentui/core`, `solid-js`). The
+  compiler stays a development dependency at an exact version: the package
+  has no dependency, no lifecycle script and no build at installation.
+- A panel that opens by itself never keeps the keyboard, never takes a screen
+  too narrow for two panes and never replaces another plugin's panel; where it
+  cannot open like that, it says that something is ready.
+- The host drops the data of sessions that are neither on screen nor in a tab:
+  read another session's inbox from the server, not from the host's cache.
+
 **Compatibility.** Host response shapes and constants belong in `host.mjs`.
-Detect capabilities; do not assume them.
+Detect capabilities; do not assume them. The terminal part runs in the TUI's
+process: it checks the TUI plugin API it uses at setup and reads theme tokens
+through fallbacks.
 
 ## Verification and delivery
 
-Run `npm run check` and `npm test`. For changes touching hooks, sessions, tools, Azure access or
+Run `npm ci` once, then `npm run check` and `npm test`; `npm run check` compiles the
+terminal panel's source and fails when `src/tui.js` differs. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
 `--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>` and
 `node tests/host-v2-background-compaction.mjs <opencode binary>`, the last two
@@ -228,6 +253,9 @@ exercise the deletion of a run's sessions on a real host.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.
+For changes touching the terminal part, or the text of notices and receipts,
+also run `node tests/host-v2-tui-panel.mjs <opencode binary>` and the same with
+`--native`: they drive the real terminal UI in `tmux`, which they need.
 Installer tests must preserve unrelated files and private settings, reject
 conflicts and test rollback and archival uninstall. Keep the README manual-copy
 list exact.

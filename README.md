@@ -52,7 +52,7 @@ is an actual capture excerpt with identifying UI removed and its text unchanged.
    [company networks](docs/ENTERPRISE.md#company-networks) first):
 
    ```sh
-   opencode plugin add opencode-azure-devops-pr-review@0.4.1
+   opencode plugin add opencode-azure-devops-pr-review@0.4.2
    ```
 
 2. Follow the [quickstart](docs/QUICKSTART.md) to save your PAT in a private
@@ -305,6 +305,7 @@ models and runs.
 | Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
 | Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
 | Installation | OpenCode's plugin manager with the npm package or the versioned Git package, or the source installer with POSIX `sh` and Python 3; no plugin build step or npm dependencies. |
+| Terminal panel | OpenCode's terminal UI (see [terminal panel](#terminal-panel)). Other clients, such as the desktop app, show AZPR's notices as before. |
 | Models | Your OpenCode provider/model IDs with tool support. Each mode checks the models it uses. Name a concrete model, not one that routes each session to another model (see [configuration](#configuration)). |
 
 The npm package, the Git package and the release source archive contain the
@@ -400,14 +401,14 @@ Azure DevOps REST API with the runtime's built-in `fetch`.
 Install the npm package with OpenCode's plugin manager:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.1
+opencode plugin add opencode-azure-devops-pr-review@0.4.2
 ```
 
 The same release is also a versioned Git package, which needs Git but not the
 npm registry:
 
 ```sh
-opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.1'
+opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.2'
 ```
 
 Add only one of them. OpenCode 2.3.0 loads the plugin into a running OpenCode
@@ -421,7 +422,7 @@ To select another configuration file, use an absolute path in the host config:
 ```json
 {
   "plugins": [{
-    "package": "opencode-azure-devops-pr-review@0.4.1",
+    "package": "opencode-azure-devops-pr-review@0.4.2",
     "options": { "settingsFile": "/absolute/path/to/azpr/settings.json" }
   }]
 }
@@ -446,7 +447,7 @@ For an entry that `opencode plugin add` created, add the new version and,
 only when that succeeds, remove the previous one:
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.1 &&
+opencode plugin add opencode-azure-devops-pr-review@0.4.2 &&
   opencode plugin remove opencode-azure-devops-pr-review@PREVIOUS_VERSION
 ```
 
@@ -469,7 +470,7 @@ configuration needs no new `/pr-setup`. `opencode plugin list` should then
 show a single `azpr` row with the new version (from 0.3.1, `/pr-check` names
 it too); if it still shows the previous one, run `opencode service restart`.
 Exact versions stay pinned, so `opencode plugin update` leaves them unchanged.
-See the [0.4.1 release notes](docs/releases/v0.4.1.md) for what changed, the
+See the [0.4.2 release notes](docs/releases/v0.4.2.md) for what changed, the
 [0.4.0 release notes](docs/releases/v0.4.0.md) for commands without review IDs and the
 [0.2.0 release notes](docs/releases/v0.2.0.md) for automatic comments. A
 preview follows each COMPLETE review unless `afterReview` says otherwise;
@@ -481,8 +482,8 @@ review command flag.
 <details>
 <summary>Source installation and replacement</summary>
 
-Download the [v0.4.1 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.1.tar.gz)
-and extract it, or check out tag `v0.4.1`. The installer needs POSIX `sh` and
+Download the [v0.4.2 source archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.2.tar.gz)
+and extract it, or check out tag `v0.4.2`. The installer needs POSIX `sh` and
 Python 3's standard library. From that source directory:
 
 ```sh
@@ -508,7 +509,7 @@ sh install.sh --config-dir /absolute/path/to/v2-opencode-config --replace
 ### Manual copying without Git
 
 Keep these relative paths under one source directory, then run its installer.
-These **32 files** include the runtime and its license:
+These **34 files** include the runtime and its license:
 
 <details>
 <summary>Show the required files</summary>
@@ -537,6 +538,8 @@ src/search.mjs
 src/review-tools.mjs
 src/review-work.mjs
 src/store.mjs
+src/tui-model.mjs
+src/tui.js
 src/prompts/common.md
 src/prompts/functional.md
 src/prompts/risk.md
@@ -813,6 +816,46 @@ COMPLETE in any review mode. Read the receipt warnings. Publication separately
 rechecks that the PR is active and its source commit is unchanged before
 posting.
 
+In OpenCode's terminal UI, `/pr-panel`, `/pr-panel-auto` and `/pr-sessions`
+belong to the [terminal panel](#terminal-panel); they run no model and make no
+Azure DevOps request.
+
+## Terminal panel
+
+OpenCode shows what a plugin tells a conversation as plain text, so a report
+or a comment preview appears there as Markdown source. In OpenCode's terminal
+UI, AZPR therefore adds a panel beside the conversation: it shows the newest
+report or preview rendered, and lists the sessions of the review so that you
+can open one.
+
+- **It opens by itself** when a review or a comment run starts and when a
+  report or preview arrives, in the conversation that is on screen. The
+  keyboard stays with the prompt, so the next command can be typed while the
+  report is in view. `/pr-panel-auto` turns this off, and on again; the choice
+  is kept across restarts.
+- **Sessions.** While a review runs, each of its sessions is a row with its
+  state. Click a row to open that session; OpenCode opens it in a tab, and the
+  panel is there again when you return to the conversation. After the review
+  the rows are the sessions that still exist (see
+  [retention](#retention-and-privacy)), first the one that holds the report.
+  `/pr-sessions` offers the same sessions in a list for the keyboard.
+- **Report or preview.** Below the sessions: the report of the review, then
+  the comment preview once one is planned, and the saved preview again after
+  `/pr-comment --show`. A check (`/pr-check`) shows its table there too.
+- **Keys.** `/pr-panel` shows and hides the panel. A click inside it gives it
+  the keyboard: the arrow keys or `j` and `k`, Page Up and Page Down, Home and
+  End scroll, and Escape or `q` closes it.
+- **A narrow terminal** (fewer than 108 columns) has no room for two panes,
+  and OpenCode would show the panel in place of the conversation. There the
+  panel does not open by itself; it says that something is ready, and
+  `/pr-panel` shows it full screen.
+
+The panel only reads what AZPR already put into your conversation and into the
+session that holds a report. It sends no prompt, starts no review and posts
+nothing; `/pr-comment --publish` is still a command you type. It comes with
+the package and needs no setup or setting. Other OpenCode clients, such as the
+desktop app, do not load it and show AZPR's notices as before.
+
 ## Comments
 
 `/pr-comment` plans one general summary plus inline comments for confirmed high
@@ -966,6 +1009,9 @@ every later run. While debug is enabled every session is kept until its
 review is evicted, so turn `debug.enabled` off for everyday use if the list
 gets long. A review that an OpenCode restart interrupts leaves its sessions in
 the list; delete those yourself. Your own conversations are never deleted.
+In the terminal UI you need not look for these sessions in the list: the
+[terminal panel](#terminal-panel) names those of the latest review and opens
+the one you click.
 
 ## Development and removal
 
@@ -974,6 +1020,7 @@ See [Contributing](CONTRIBUTING.md) for bug reports and development checks,
 [code of conduct](CODE_OF_CONDUCT.md) for community conduct.
 
 ```sh
+npm ci
 npm run check
 npm test
 node tests/host-v2-smoke.mjs /absolute/path/to/opencode
@@ -983,6 +1030,8 @@ node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode
 node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode
 node tests/host-v2-comment-scale.mjs /absolute/path/to/opencode --cleanup
 node tests/host-v2-background-compaction.mjs /absolute/path/to/opencode --cleanup
+node tests/host-v2-tui-panel.mjs /absolute/path/to/opencode
+node tests/host-v2-tui-panel.mjs /absolute/path/to/opencode --native
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config --apply
 ```
@@ -991,12 +1040,17 @@ The host fixtures run a real OpenCode binary with a loopback fake model provider
 and a loopback fake Azure DevOps REST service in disposable directories under
 `.local/`. They keep debug on to read its records, and debug keeps every
 private session; the two `--cleanup` runs turn it off, so that each run deletes
-its sessions as an installation with default settings does.
+its sessions as an installation with default settings does. The two
+`host-v2-tui-panel` runs drive the real terminal UI in `tmux`, which they need,
+once installed from source and once as OpenCode's plugin manager installs the
+package. `npm ci` installs the compiler of the terminal panel's JSX, which only
+`npm run check` and `npm run build:tui` use; the installed plugin has no
+dependency and is not built on your machine.
 Uninstall without `--apply` previews; `--apply` archives only this package under
 `azpr-v2-backups` and leaves the private state directory for you to delete.
 For a native installation, remove the entry you added, for example
-`opencode plugin remove opencode-azure-devops-pr-review@0.4.1` or
-`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.1'`;
+`opencode plugin remove opencode-azure-devops-pr-review@0.4.2` or
+`opencode plugin remove 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.2'`;
 the external settings, PAT file and private review state remain available.
 
 [Architecture](docs/ARCHITECTURE.md), [commenting](docs/COMMENTING.md),
@@ -1009,7 +1063,7 @@ or personal model selections.
 ## License and releases
 
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
-release scope, [v0.4.1](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.4.1)
+release scope, [v0.4.2](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.4.2)
 for downloads, the [npm package](https://www.npmjs.com/package/opencode-azure-devops-pr-review),
 [v0.2.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.0)
 for the recorded demonstration, and [releasing](docs/RELEASING.md) for the

@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.4.1, the move to OpenCode 2.3.0, a run of Martian's public code review
+0.4.2, the move to OpenCode 2.3.0, a run of Martian's public code review
 benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
 of 0.3.7 run on ReviewBench's test set. Host
@@ -15,13 +15,15 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  seven runs on the real OpenCode 2.3.0 host with isolated profiles and fake
+  nine runs on the real OpenCode 2.3.0 host with isolated profiles and fake
   model and Azure DevOps services: fresh, replacement and native installation
   (including an authenticating proxy, a custom CA certificate, a foreign MCP
   server behind CodeMode and an image model), a 120-file
   review in shards with a context-overflow split and idempotent publication,
-  a refused background summary followed by a permanent failure, and the last
-  two once more with debug off, where a run deletes its sessions when it ends.
+  a refused background summary followed by a permanent failure, the last
+  two once more with debug off, where a run deletes its sessions when it ends,
+  and the terminal panel in the real terminal UI, installed from source and
+  as OpenCode's plugin manager installs the package.
 - **Live, with real models on Azure DevOps Services.** Reviews, comment
   previews and publication on three test PRs with 1, 35 and 316 changed
   files. On OpenCode 2.1.4 with gpt-6-luna, all six quick and review runs
@@ -46,6 +48,87 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.2 release candidate acceptance (2026-11-17)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode 2.3.0 and
+tmux 3.2a, with isolated OpenCode profiles and the fake model and Azure DevOps
+services. No real model and no Azure DevOps organization was used, and nothing
+was posted.
+
+0.4.2 adds the terminal panel (see [architecture](ARCHITECTURE.md#terminal-panel)).
+No module of the server part changed: `src/` gained `tui-model.mjs`,
+`tui-view.jsx` and the compiled `tui.js`, `install.sh` copies two more files,
+and `package.json` gained the `./tui` entry and two development dependencies.
+
+- **Offline.** `npm run check`, which now also compiles `tui-view.jsx` and
+  compares the result with `src/tui.js`, and 508 tests (489 for 0.4.1). Of the
+  19 new tests, 17 cover what the panel shows (`tests/tui-model.test.mjs`, one
+  of them against the runtime's own `renderReceipt`). One runs a whole review,
+  a preview, `--show` and a check through the runtime and reads their notices
+  with the panel's model. One holds the compiled file: no JSX left; imports
+  only from `@opentui/solid`, `@opentui/core`, `solid-js` and the model beside
+  it; no file or environment access.
+- **The server part on the host.** The seven existing fixture runs passed with
+  the request counts of 0.4.1: fresh 110 model and 187 Azure DevOps requests,
+  replace 92 and 157, native 110 and 194, comment scale 34 and 75 (largest
+  request 38,240 characters), background compaction 8, and with debug off 34
+  and 71, and 8. The smoke fixture's own terminal step, which types
+  `/pr-review` and `/pr-stop` into a real TUI, passed with the panel loaded.
+- **The panel in the real terminal UI** (`tests/host-v2-tui-panel.mjs`, new).
+  OpenCode's TUI runs in a detached tmux session of 170 by 46 cells; the
+  fixture reads the screen and sends keys and mouse clicks. A 6-file review is
+  typed into the TUI, and its reviewers are held until the panel was seen.
+  Checked on the screen, for a source installation and for the package as
+  OpenCode's plugin manager installs it:
+
+  | Step | What the screen showed |
+  | --- | --- |
+  | A review starts | The panel opens by itself with the four reviewer sessions as running; text typed at that moment arrives in the prompt. |
+  | A click on a session row | That session opens in a tab; back in the conversation the panel is there again. |
+  | The review completes | Status COMPLETE; the report's table drawn as a grid; the report session listed; "4 session(s) were deleted". The receipt did not enclose the report (`returnReport: receipt`): the panel read it from the report session's inbox. |
+  | `/pr-comment` | The panel opens again and shows the preview, named by its run and its source review; nothing was posted. |
+  | Keyboard | After a click in the panel, Page Down scrolls, Home returns and Escape closes it; `/pr-sessions` lists the report session and Enter opens it. |
+  | `/pr-panel`, `/pr-panel-auto` | The panel is shown and hidden; `q` closes a panel that has the keyboard; with automatic opening off, a `--show` answer leaves the panel closed. |
+  | 100 columns | A `--show` answer does not open the panel: a toast says that something is ready and the conversation stays on screen; `/pr-panel` shows the panel full screen, and Escape gives the screen back. |
+
+  Each run made 11 model requests, all by AZPR's reviewers, verifier and
+  planner and none by the conversation's model, and 17 Azure DevOps calls.
+  The host's log has no `plugin operation failed` line. With the package, the
+  compiled view loaded from OpenCode's package cache, and the cache held
+  neither `@babel` nor `babel-preset-solid`. After its first pass the fixture
+  ran eight more times and passed each time: five runs for the source
+  installation and four for the package in all, the last of each on the
+  final tree.
+- **Settings closer to an everyday installation**, by hand in the same kind of
+  profile. With `debug.enabled`, `afterReview: preview` and
+  `returnReport: full`, the panel showed the preview that followed the review
+  by itself, and listed all seven sessions of the review and its preview. The
+  TUI was closed and started again while a review ran: `/pr-panel` then listed
+  that run's sessions, which it found through the server.
+- **A receipt of a live run.** The preview receipt of the 1-file PR from the
+  0.4.1 live runs (zh-TW, with a three-column table) was queued into a
+  fixture conversation. The panel drew the table with the CJK text aligned and
+  showed the escaped table cells (`&#96;reserve&#96;`) as their characters.
+- **Package.** `npm pack --dry-run` lists 36 files (33 for 0.4.1); the three
+  files of the terminal part are new. The native fixtures install that
+  package. `package.json` has no dependency and no lifecycle script.
+
+What the development of the panel showed about OpenCode 2.3.0, each handled in
+the code and described in the architecture page:
+
+| Observation | Consequence |
+| --- | --- |
+| A `.tsx` terminal entry in a package that the plugin manager installed fails to load ("Cannot find package 'react'"): OpenTUI 0.8.4 compiles no JSX under `node_modules`. | The package ships the view compiled. anomalyco/opentui#2051 restores the compilation in OpenTUI 0.9.0; OpenCode's `dev` branch still pinned 0.8.4 on 2026-11-17. |
+| The host gives the keyboard to a panel that opens. | The panel hands it back with the host's `pane.focus.left` command, and withdraws where that is not possible. |
+| The host drops the messages and the inbox of sessions that are neither on screen nor in a tab, also after a plugin loaded them. | A first version read the report from the host's cache and intermittently found none. The panel reads the report session's inbox from the server. |
+| The host closes a panel when the screen leaves its session. | The panel opens again when the screen returns. |
+| A toast wraps at about fifty characters. | The panel's messages fit one line. |
+
+Not covered: a review with a real model and the panel open; terminal emulators
+other than tmux, in particular their mouse reporting; a change of theme while
+the panel is open; a review with dozens of sessions in the panel; OpenCode
+versions other than 2.3.0; the desktop app, which does not load the panel.
 
 ## 0.4.1 after publication: live reviews and session cleanup on real hosts (2026-11-16)
 
@@ -3424,6 +3507,15 @@ transient failure, and its error names the last activity.
   not run there, and the effect of sessions of their own on a provider's
   prompt cache is not measured: one run per case cannot separate it from the
   variation between runs.
+- **The terminal panel.** It is part of OpenCode's terminal UI and was
+  exercised on OpenCode 2.3.0 inside tmux with fake services (see
+  [the record](#042-release-candidate-acceptance-2026-11-17)). No review with
+  a real model has run with it, other terminal emulators and their mouse
+  reporting are untested, and the desktop app does not load it. The package
+  carries its view compiled, because OpenCode 2.3.0 compiles no JSX of a
+  package it installed; an OpenCode with OpenTUI 0.9 changes that and also
+  the Markdown element the panel uses, so the panel must be checked again
+  before that OpenCode becomes the tested one.
 - **Private sessions in the session list.** OpenCode lists AZPR's private
   sessions next to conversations, and its plugin API cannot archive them.
   AZPR deletes all but the report session when a run ends; with debug enabled
