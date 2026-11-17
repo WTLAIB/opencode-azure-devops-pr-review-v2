@@ -32,7 +32,8 @@ acceptance runs, including the MCP-based runs, are preserved in
   Live automatic publication on the 35-file PR (OpenCode 2.1.2) posted and
   read back its comments, and a second run on the unchanged PR wrote nothing.
   On OpenCode 2.3.0 with AZPR 0.4.1, a gpt-6-luna review and its preview
-  completed on the 1-file and the 35-file PR.
+  completed on the 1-file and the 35-file PR, and with the 0.4.2 candidate
+  one more on the 35-file PR, with the terminal panel open.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -48,6 +49,30 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.2 after publication (2026-11-17)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and OpenCode
+2.3.0, in isolated OpenCode profiles with the fake model and Azure DevOps
+services.
+
+- **The merged tree.** The pull request was merged with a merge commit whose
+  tree is that of the candidate's last commit. CI passed on that commit, on
+  `main` and on the tag.
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. Both passed the clean-directory installation check: 21 runtime
+  modules, 9 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.2`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (110 model and 187 Azure DevOps requests) and the terminal panel's fixture
+  (15 and 31), the compiled view loading from the package cache.
+- **The npm package.** The registry's integrity and shasum for 0.4.2 equal
+  those of the package built from the tag (36 files), and the tarball
+  downloaded from the registry is byte-identical to it. Installed from the
+  registry, the package passed the same two fixtures with the same request
+  counts.
 
 ## 0.4.2 release candidate acceptance (2026-11-17)
 
@@ -2614,10 +2639,10 @@ company's HTTP proxy and `azure.verifyTls` false (shown as a WARNING row); no
 
 ## Live run (Azure DevOps Services, real model)
 
-PR kevin888y/OpenCode #2 (one changed file), `openai/gpt-5.6-luna` for all three
-roles, `zh-TW`, through the user's OpenCode service with the installed package,
-`azure.organization` and an existing PAT in AZPR's settings. The AZPR comments
-of earlier runs were deleted first.
+Test PR 2 of the maintainer's Azure DevOps test project (one changed file),
+`openai/gpt-5.6-luna` for all three roles, `zh-TW`, through the user's OpenCode
+service with the installed package, `azure.organization` and an existing PAT
+in AZPR's settings. The AZPR comments of earlier runs were deleted first.
 
 | Step | Result |
 | --- | --- |
@@ -2638,8 +2663,8 @@ complete list and the merge base; through MCP 2.9.0 the runtime saw 100.
 
 ## Live run: large PR (Azure DevOps Services, real model)
 
-PR kevin888y/OpenCode #3 (316 changed files), the same models, language and
-service; `/pr-review` only, nothing was posted.
+Test PR 3 of the same project (316 changed files), the same models, language
+and service; `/pr-review` only, nothing was posted.
 
 The first attempt stalled 45 seconds in: in four reviewer sessions the model ran
 native `grep` on the repository path `/scale_lab`, OpenCode asked for
@@ -2667,8 +2692,8 @@ files; a unit test reproduces the 48-finding distribution.
 
 ## Live run: large PR with publication (commit 68c1f7e)
 
-PR kevin888y/OpenCode #3 again, at the same head, with the same models, language
-and service, running the installed package of commit `68c1f7e` (the revision
+Test PR 3 again, at the same head, with the same models, language and
+service, running the installed package of commit `68c1f7e` (the revision
 before the verifier and planner corrections below). The 24 AZPR comments of an
 earlier run were deleted first; the comments of this run were kept on the PR.
 
@@ -2795,8 +2820,8 @@ reading rules, all with 8/6:
 
 ## Live run: real code (review only)
 
-PR kevin888y/OpenCode #4 was created for this test from pydantic (MIT): a
-snapshot at `125921fdc9` as the base and the changes of the next 20 upstream
+Test PR 4 of the same project was created for this test from pydantic (MIT):
+a snapshot at `125921fdc9` as the base and the changes of the next 20 upstream
 commits as the source (35 files, +1,074/−293 lines, Python and Rust; 13 changed
 source files have more than 1,000 lines). Two regressions were seeded: one in a
 changed hunk (`json_schema.py` declares millisecond temporal values as strings
