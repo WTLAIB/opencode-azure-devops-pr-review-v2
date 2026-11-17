@@ -183,6 +183,47 @@ changes. What follows was run on the final tree unless it says otherwise.
 - **Package.** `npm pack --dry-run` lists 36 files (33 for 0.4.1); the three
   files of the terminal part are new. The native fixtures install that
   package. `package.json` has no dependency and no lifecycle script.
+- **Reviews by a second model.** Ten reviews of the pull request followed the
+  second step (GPT-6 Astra at its highest reasoning effort through the Codex
+  CLI, in a read-only sandbox on a clean clone), each of the tree as
+  corrected after the one before. The first nine reported 33 defects (8, 5,
+  7, 3, 3, 4, 1, 1 and 1); the tenth, of the tree to which only the
+  recording and its documentation were added afterwards, found nothing to
+  change. Three were in the completion of the settings file: a save from an
+  editor while the file was completed was overwritten, a load that had
+  stopped waiting later refused every command over the defaults another load
+  wrote, and a file switched off meanwhile was still rewritten. The other 30
+  were in the panel, which is new in this release:
+  - What it is about. A status stood above another review's report; a saved
+    preview of an older review was shown under the newest run; a run's note
+    after its receipt was taken for the receipt; the empty preview block of a
+    comment run that failed blanked the panel.
+  - What it takes as fact. Stage lines and the report session were read from
+    the enclosed report as well, whose text a model wrote; an inbox was read
+    before its session had proved to be this conversation's, and a report
+    from a session of another run; a session of 0.4.0 was taken for a
+    conversation.
+  - What it reads of other sessions. The notices of a command typed in a
+    review's own session, of a conversation after the TUI was restarted, and
+    those already delivered were not read; a notice that arrived during a
+    read, between its two requests or after requests that failed was lost;
+    an answer from before a reconnection was kept; a session counted as
+    deleted after a request that had merely failed, and a deleted one came
+    back when a lookup answered late; the attempts of a lookup that failed
+    were used up at once; paging went on after the plugin was unloaded; a
+    session was let go between the two requests of its own read, and, once
+    that was corrected, a session just read lost its place to reads that
+    were waiting and was read again and again.
+  - What it shows of a document. References and markers were decoded or
+    removed inside quoted code; decoded underscores became emphasis; a
+    document that quotes its block's closing tag was shown in the escaped
+    form of the notice.
+  - Its timers could act on another plugin's panel after it had closed.
+
+  The corrections moved the panel's reading of other sessions out of the view
+  into `createReader`, where its order and its races are tested with answers
+  that arrive when the test says so, and added the test that draws the order
+  of events from fixed seeds.
 
 What the development of the panel showed about OpenCode 2.3.0, each handled in
 the code and described in the architecture page:
