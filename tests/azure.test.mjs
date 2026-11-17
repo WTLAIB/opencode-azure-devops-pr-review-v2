@@ -17,7 +17,7 @@ const pr = (extra = {}) => ({ pullRequestId: 123, status: 'active', title: 'T', 
 const iterations = [{ id: 1, sourceRefCommit: { commitId: 'd'.repeat(40) }, commonRefCommit: { commitId: M } },
   { id: 2, sourceRefCommit: { commitId: H }, commonRefCommit: { commitId: M }, targetRefCommit: { commitId: T } }];
 const run = () => ({ id: 'run1', controller: new AbortController() });
-const client = (azure, options = {}) => createAzureClient({ organization: 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 2000 }),
+const client = (azure, options = {}) => createAzureClient({ organization: options.organization ?? 'org', pat: FAKE_PAT, queue: createToolQueue({ concurrency: 2, timeoutMs: options.timeoutMs ?? 2000 }),
   retryDelayMs: 1, fetch: options.fetch ?? azure.fetch, onCall: options.onCall, maxArchiveBytes: options.maxArchiveBytes, transport: options.transport });
 
 test('snapshot: latest iteration head against its merge base, lowercased SHAs, normalized unique paths and change types', () => {
@@ -152,6 +152,34 @@ test('client errors: a rejected PAT and not-found are permanent; 5xx, throttling
   assert.equal((await d.threads(r, snapshot)).length, 0);
   failures = 0;
   await assert.rejects(d.createThread(r, snapshot, { kind: 'summary', content: 'x' }), error => error.kind === 'network' && error.uncertain === true);
+});
+
+test('access: one small read says whether the PAT is accepted for the organization, and is never repeated', async () => {
+  const records = [];
+  const azure = fakeAzure();
+  const c = client(azure, { onCall: (_run, record) => records.push(record) });
+  await c.access(run());
+  assert.deepEqual(azure.state.calls.map(call => [call.method, call.route, call.path, call.query]), [['GET', 'access', '/org/_apis/git/pullrequests', { $top: '1', 'api-version': API_VERSION }]]);
+  // What was refused is told by the error's kind; a person waits for this answer, so a transient failure is not tried again.
+  azure.state.fail.access = () => azureError(503, 'ServiceUnavailableException', 'Busy.');
+  await assert.rejects(c.access(run()), error => error.kind === 'server' && error.status === 503 && !/attempts/.test(error.message));
+  assert.equal(azure.callsTo('access').length, 2);
+  azure.state.fail.access = () => ({ status: 200, headers: { 'content-type': 'application/json', ...AZURE_HEADERS }, body: '{"count":0}' });
+  await assert.rejects(c.access(run()), /returned no pull request list/);
+  delete azure.state.fail.access;
+  azure.state.pat = 'another-valid-token-0123456789abc';
+  await assert.rejects(c.access(run()), error => error.kind === 'auth' && error.status === 203);
+  azure.state.pat = FAKE_PAT;
+  await assert.rejects(client(azure, { organization: 'elsewhere' }).access(run()), error => error.kind === 'not-found' && error.status === 404);
+  // Azure DevOps answers an unknown token with 401 and no content, and an unknown organization with 404 as plain text.
+  const answered = (status, type) => client(azure, { fetch: async () => new Response(type ? 'Not found' : null, { status, headers: { ...AZURE_HEADERS, ...(type ? { 'content-type': type } : {}) } }) });
+  await assert.rejects(answered(401).access(run()), error => error.kind === 'auth' && error.status === 401);
+  await assert.rejects(answered(404, 'text/plain').access(run()), error => error.kind === 'not-found');
+  let attempts = 0;
+  const refused = client(azure, { fetch: async () => { attempts++; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); } });
+  await assert.rejects(refused.access(run()), error => error.kind === 'network');
+  assert.equal(attempts, 1);
+  assert.ok(!JSON.stringify(records).includes(FAKE_PAT));
 });
 
 test('client timeouts abort the request, retry reads and mark writes uncertain', async () => {

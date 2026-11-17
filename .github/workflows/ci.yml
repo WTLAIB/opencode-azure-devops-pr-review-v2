@@ -36,9 +36,13 @@ jobs:
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup
       - name: Exercise an unfinished review with debug off, which keeps only the session holding its draft
         run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup
-      - name: Install tmux, in which the terminal panel's fixture runs the real TUI
+      - name: Install tmux, in which the terminal fixtures run the real TUI
         run: command -v tmux >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq tmux; }
       - name: Exercise the terminal panel in the real TUI, installed from source
         run: node tests/host-v2-tui-panel.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise the terminal panel as the plugin manager installs the package
         run: node tests/host-v2-tui-panel.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --native
+      - name: Exercise setup in the real TUI, installed from source
+        run: node tests/host-v2-tui-setup.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
+      - name: Exercise setup in the real TUI as the plugin manager installs the package
+        run: node tests/host-v2-tui-setup.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --native

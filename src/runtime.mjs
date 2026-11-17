@@ -73,7 +73,7 @@ export async function readPatFile(path) {
   return text;
 }
 /** azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings. */
-async function readCaCertificates(path) {
+export async function readCaCertificates(path) {
   if (!path) return [];
   let raw;
   try {

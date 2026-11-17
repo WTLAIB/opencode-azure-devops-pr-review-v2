@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.4.3 — 2026-11-18
+
+`/pr-setup` sets AZPR up in OpenCode's terminal UI: dialogs ask for the
+organization, a proxy if the network needs one, the token and a model, check
+the token with Azure DevOps and save it in a file only you can read; a first
+setup needs no restart. Afterwards the same command lists the settings to
+change. And after a review, the next thing you say in the same conversation
+no longer costs one model request per AZPR notice. The reviewer, verifier and
+comment-planning instructions are those of 0.4.2, and no setting is new.
+
+Setup in the terminal UI:
+
+- Until now a first setup meant creating the PAT file by hand in a terminal,
+  typing a model ID into `/pr-setup`, editing JSON for a proxy, and
+  restarting the OpenCode service. In OpenCode's terminal UI, `/pr-setup`
+  without options now opens dialogs for it: the organization (its name, or
+  the URL of a pull request), a proxy, the token, and a model picked from
+  OpenCode's list.
+- The proxy is asked before the token, because the token is checked over the
+  network; Enter skips it. After a proxy, the CA certificate file of a
+  company that inspects HTTPS is asked the same way.
+- The token is typed or pasted into a field that shows only how many
+  characters it holds. AZPR asks Azure DevOps once whether it works for the
+  organization and says what was refused: the token, the organization, or
+  the way there. When Azure DevOps cannot be reached, the proxy or the CA
+  file can be set right there and the same token tried again; it can also be
+  saved unchecked.
+- The token is saved alone in a file only you can read (mode 600; by default
+  `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`), created or replaced in one step,
+  and the settings name that file. It is in no conversation, notice or log.
+- With settings in place, `/pr-setup` lists them with their values:
+  organization, token, proxy, CA certificate file, the review, quick and deep
+  models, output language, what follows a review, the report in the
+  conversation, progress notices, the review panel and debug records. A
+  change is saved at once. Posting comments without a preview asks once
+  more, with "no" first. The command palette has the list too ("AZPR:
+  settings").
+- When AZPR has no usable settings, the terminal UI says so once after it
+  starts and names `/pr-setup`.
+- The dialogs only ask: the plugin's server part checks every answer, writes
+  the two files, and is the only part that contacts Azure DevOps. Other
+  clients, such as the desktop app, do not load the dialogs; there
+  `/pr-setup` prints its instructions as before.
+
+Setup, in every client:
+
+- A first setup is loaded at once, with the dialogs and with options: the
+  review commands work without a restart of the OpenCode service, in the
+  project directory where setup ran. Another project directory that the same
+  OpenCode service had already opened without settings still needs the
+  restart, and its review commands say so. A change to settings that are in
+  use takes effect after a restart as before, and `/pr-setup` says so.
+- `/pr-setup` takes options that change one setting each in existing
+  settings, without `--replace`: `--proxy`, `--ca-file`, `--review-model`,
+  `--quick-model`, `--deep-model`, `--language`, `--after-review`, `--report`,
+  `--progress`, `--panel` and `--debug`. They can be combined, also with the
+  options of a first setup (`--proxy` behind a company proxy, for example).
+  `/pr-setup --help` lists them.
+- A source installation has one more file, `src/tui-setup.mjs`: 35 in all
+  for manual copying.
+
+Notices and the conversation's model:
+
+- AZPR's notices (`STARTED`, `PROGRESS`, the receipts) wait in the
+  conversation's inbox and start no response of its model. Until now, when
+  you then prompted that conversation, OpenCode 2.3.0 answered your prompt
+  and after it gave each waiting notice a turn of the conversation's model:
+  a review with its comment preview leaves about eight notices, so about
+  eight more requests, each carrying the whole conversation, and the model
+  replied to each notice. The notices are now left in the inbox the way
+  OpenCode leaves its own notices about background shells, and the
+  conversation's model reads all of them together with your prompt, in one
+  request. In the terminal fixture, a prompt after 16 notices made 17
+  requests of the conversation's model before and makes 1 now.
+- A notice that arrives while the conversation's model is working is handed
+  to it at its next step, or in one request right after its answer; before,
+  each such notice took a request of its own after the answer.
+- The notices themselves, the panel and the report session are as in 0.4.2,
+  and a conversation used only for AZPR's commands still costs no request of
+  its model. The text of the notices still enters the conversation's context
+  once, when its model next runs.
+
 ## 0.4.2 — 2026-11-17
 
 A panel in OpenCode's terminal UI shows the report and the comment preview

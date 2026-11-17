@@ -174,7 +174,7 @@
     "progressNotices": {
       "type": "boolean",
       "default": true,
-      "description": "Queue short PROGRESS notices to the invoking conversation during long reviews and publication. They never start a model response."
+      "description": "Send short PROGRESS notices to the invoking conversation during long reviews and publication. They start no model response in an idle conversation; its own model reads them together with your next prompt there."
     },
     "deletePrivateSessions": {
       "type": "boolean",

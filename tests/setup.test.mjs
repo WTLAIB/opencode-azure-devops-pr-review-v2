@@ -4,8 +4,9 @@ import { chmod, mkdtemp, mkdir, readFile, writeFile, lstat, rm, symlink, readdir
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addMissingSettings, defaultPatFile, settingsFileFor, parseSetupArguments, saveSetup, setupPlugin } from '../src/setup.mjs';
-import { COMMANDS, SETTING_DEFAULTS, settingsText, validateSettings, withMissingSettings } from '../src/config.mjs';
-import { FAKE_PAT, fakeAzure, toolRegistry } from './fake-azure.mjs';
+import { AFTER_REVIEW, COMMANDS, SETTING_DEFAULTS, TERMINAL_PANEL, settingsText, validateSettings, withMissingSettings } from '../src/config.mjs';
+import { AZURE_HEADERS, FAKE_PAT, azureError, fakeAzure, toolRegistry } from './fake-azure.mjs';
+import { SETUP_RPC, createSetup } from '../src/tui-setup.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'azpr-setup-'));
@@ -14,7 +15,9 @@ async function fixture(t) {
   await mkdir(source);
   await cp(new URL('../src/prompts', import.meta.url), join(source, 'prompts'), { recursive: true });
   await writeFile(pat, FAKE_PAT, { mode: 0o600 });
-  const commands = new Map(), agents = new Map(), reports = [], hooks = [];
+  const commands = new Map(), agents = new Map(), reports = [], notices = [], hooks = [];
+  // The RPC the terminal UI's dialogs call: the handlers of the newest registration that was not disposed.
+  const rpc = { definition: null, handlers: null, events: [] };
   const azure = fakeAzure({ org: 'fixture' });
   const tools = toolRegistry();
   const registration = () => ({ dispose() {} });
@@ -32,9 +35,10 @@ async function fixture(t) {
     },
     agent: {
       get: async ({ agentID }) => ({ data: agents.get(agentID) }),
-      transform: async callback => { callback({ get: id => agents.get(id), update(id, mutate) {
-        const agent = { id, permissions: [] }; mutate(agent); agents.set(id, agent);
-      } }); return registration(); },
+      // Like the host, a disposed transform takes what it added with it.
+      transform: async callback => { const added = []; callback({ get: id => agents.get(id), update(id, mutate) {
+        const agent = { id, permissions: [] }; mutate(agent); agents.set(id, agent); added.push(id);
+      } }); return { dispose() { added.forEach(id => agents.delete(id)); } }; },
     },
     session: {
       get: async () => ({ data: { agent: 'build' } }),
@@ -44,14 +48,17 @@ async function fixture(t) {
       hook: async (name, callback) => { hooks.push({ name, callback }); return registration(); },
       synthetic: async input => {
         reports.push(input.text);
-        return { id: `notice-${reports.length}`, sessionID: input.sessionID, type: 'synthetic', delivery: 'queue', payload: { text: input.text } };
+        notices.push({ text: input.text, metadata: input.metadata });
+        return { id: `notice-${reports.length}`, sessionID: input.sessionID, type: 'synthetic', delivery: input.delivery, payload: { text: input.text } };
       },
     },
     tool: { hook: async () => registration(), list: tools.list, transform: tools.transform },
+    rpc: { register: async (definition, handlers) => { Object.assign(rpc, { definition, handlers });
+      return { events: { emit: async (name, data) => { rpc.events.push([name, data]); } }, dispose() { if (rpc.handlers === handlers) rpc.handlers = null; } }; } },
   };
   const args = parseSetupArguments(`--organization fixture --model fixture/model --pat-file "${pat}"`);
   const options = { stateDirectory: join(root, 'state'), fetch: azure.fetch };
-  return { root, source, path, pat, context, commands, agents, reports, hooks, azure, args,
+  return { root, source, path, pat, context, commands, agents, reports, notices, hooks, azure, args, rpc,
     setup: (extra = {}) => setupPlugin(context, source, { ...options, ...extra }),
     invoke: async (name, text = '') => {
       await commands.get(name).execute({ sessionID: 'origin', prompt: { text } });
@@ -101,8 +108,9 @@ test('without --pat-file setup uses the default PAT file, or keeps the one alrea
   await writeFile(defaultPat, FAKE_PAT, { mode: 0o600 });
   t.after(await f.setup({ environment }));
   const receipt = await f.invoke('pr-setup', '--organization https://dev.azure.com/fixture/project/_git/repo/pullrequest/1 --model fixture/model');
-  assert.ok(receipt.startsWith(`[AZPR] SETTINGS SAVED\nSettings: ${f.path}\nOrganization: fixture; PAT file: ${defaultPat}\n` +
-    'To load them, restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process), then run /pr-check <PR URL>.'), receipt);
+  // A first setup is loaded at once: nothing was in use before it.
+  assert.equal(receipt, `[AZPR] SETTINGS SAVED\nSettings: ${f.path}\nOrganization: fixture; PAT file: ${defaultPat}\n` +
+    'AZPR has loaded them: run /pr-check <PR URL>. No model or Azure request was made.');
   assert.match(await f.invoke('pr-setup', '--help'), new RegExp(`by default ${defaultPat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
   const saved = async () => { const { organization, pat, patFile } = JSON.parse(await readFile(f.path, 'utf8')).azure; return { organization, pat, patFile }; };
   assert.deepEqual(await saved(), { organization: 'fixture', pat: '', patFile: defaultPat });
@@ -135,7 +143,7 @@ test('missing settings expose setup and blocked commands, without agents, tools 
   assert.deepEqual(await readdir(f.source), ['prompts']);
 });
 
-test('setup writes private external settings, uses one model and requires restart before review', async t => {
+test('setup writes private external settings, uses one model and loads a first setup at once', async t => {
   const f = await fixture(t);
   const cleanup = await f.setup();
   assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model#high --pat-file "${f.pat}"`), /SETTINGS SAVED/);
@@ -150,9 +158,16 @@ test('setup writes private external settings, uses one model and requires restar
   assert.equal(saved.azure.patFile, f.pat);
   assert.equal((await lstat(f.path)).mode & 0o777, 0o600);
   assert.equal((await lstat(join(f.root, 'private config'))).mode & 0o777, 0o700);
-  assert.match(await f.invoke('pr-review', 'a URL'), /SETUP REQUIRED/);
-  assert.equal(f.agents.size, 0);
+  // Nothing was loaded before, so the settings are read now, once: the commands are the real ones, without a restart.
+  assert.ok(f.agents.has('azpr-review-functional'), 'The first setup loaded the runtime.');
+  assert.deepEqual([...f.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
+  await assert.rejects(f.invoke('pr-review', 'a URL'), /absolute HTTPS Azure DevOps PR URL/, 'The review command itself answers.');
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+  // A second setup changes settings that are in use: it waits for a restart, as before.
+  assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}" --replace`),
+    /^\[AZPR\] SETTINGS SAVED\n[\s\S]*\nTo load them, restart the OpenCode service /);
   await cleanup();
+  assert.equal(f.commands.size, 0, 'Unloading removes every command, also those the first setup brought.');
   t.after(await f.setup());
   assert.ok(f.agents.has('azpr-review-functional'));
   assert.ok(f.agents.has('azpr-quick-reviewer'));
@@ -481,8 +496,8 @@ test('SETUP REQUIRED and /pr-setup --help name the problem, never a setting valu
     try { return [await f.invoke('pr-review', f.azure.prUrl()), await f.invoke('pr-setup', '--help')]; } finally { await cleanup(); }
   };
   const [blocked, help] = await shown();
-  assert.match(blocked, /^\[AZPR\] SETUP REQUIRED\nNo review or Azure request was started\. Settings at .+ could not be used when OpenCode loaded AZPR: there is no settings file yet\. Run \/pr-setup --help/);
-  assert.match(help, /^\[AZPR\] SETUP REQUIRED\nSettings: .+\nProblem when OpenCode loaded AZPR: there is no settings file yet\.\n\n1\. /);
+  assert.match(blocked, /^\[AZPR\] SETUP REQUIRED\nNo review or Azure request was started\. Settings at .+ could not be used when OpenCode loaded AZPR: there is no settings file yet\. Run \/pr-setup \(in the terminal UI it asks in dialogs; --help shows the options\)/);
+  assert.match(help, /^\[AZPR\] SETUP REQUIRED\nSettings: .+\nProblem when OpenCode loaded AZPR: there is no settings file yet\.\n\nIn OpenCode's terminal UI, \/pr-setup alone asks [^\n]+\n\n1\. /);
   await saveSetup(f.context, f.path, f.args);
   const valid = JSON.parse(await readFile(f.path, 'utf8'));
   const cases = [
@@ -508,6 +523,417 @@ test('SETUP REQUIRED and /pr-setup --help name the problem, never a setting valu
   finally { await chmod(f.path, 0o600); }
   const cleanup = await f.setup();
   t.after(cleanup);
-  assert.match(await f.invoke('pr-setup', '--help'), /^\[AZPR\] SETUP\nSettings: .+\n\n1\. /, 'Usable settings show no problem.');
+  assert.match(await f.invoke('pr-setup', '--help'), /^\[AZPR\] SETUP\nSettings: .+\n\nIn OpenCode's terminal UI, [^\n]+\n\n1\. /, 'Usable settings show no problem.');
   assert.ok(f.reports.every(report => !report.includes(FAKE_PAT)));
+});
+
+// ------------------------------------------------------------------ setup from the terminal UI's dialogs
+const HOSTED = [{ id: 'fixture/model', name: 'Fixture Model', provider: 'Fixture AI', variants: ['high'] }];
+const NEW_TOKEN = 'another-valid-token-0123456789abcdefghijklmnop';
+/** The terminal part's setup against this fixture's server part: dialogs answer from a list, everything shown is kept. */
+function dialogs(f, answers) {
+  const shown = [], toasts = [];
+  const queue = [...answers];
+  const next = (kind, options) => {
+    shown.push({ kind, ...options });
+    if (!queue.length) throw new Error(`No answer was scripted for the ${kind} "${options.title}".`);
+    return queue.shift();
+  };
+  const setup = createSetup({ call: (method, input) => f.rpc.handlers[method](input),
+    dialog: { prompt: async options => next('prompt', options), select: async options => next('select', options), confirm: async options => next('confirm', options), alert: async options => { shown.push({ kind: 'alert', ...options }); } },
+    secret: async options => next('secret', options), toast: options => toasts.push(options), models: async () => HOSTED });
+  return { setup, shown, toasts, left: () => queue.length, said: () => JSON.stringify([shown, toasts]) };
+}
+const environmentOf = f => ({ HOME: join(f.root, 'home'), XDG_CONFIG_HOME: join(f.root, 'xdg') });
+const mode = async path => (await lstat(path)).mode & 0o777;
+const rowsOf = status => Object.fromEntries(status.rows.map(row => [row.id, row]));
+
+test('the dialogs and the server part set AZPR up together: the token is checked, files are owner-only, and AZPR is loaded at once', async t => {
+  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  t.after(await f.setup({ environment }));
+  assert.equal(f.rpc.definition, SETUP_RPC);
+  const before = await f.rpc.handlers.status({});
+  assert.deepEqual([before.version, before.state, before.problem, before.editable, before.settingsFile, before.organization], [1, 'required', 'there is no settings file yet.', true, f.path, '']);
+  assert.deepEqual(before.rows.map(row => `${row.group}/${row.id}/${row.kind}`), ['Azure DevOps/organization/text', 'Azure DevOps/token/secret', 'Azure DevOps/proxy/text', 'Azure DevOps/caFile/text',
+    'Models/reviewModel/model', 'Models/quickModel/model', 'Models/deepModel/model', 'Reviews/language/choice', 'Reviews/afterReview/choice', 'Reviews/report/choice', 'Reviews/progress/choice',
+    'Terminal UI/panel/choice', 'Diagnostics/debug/choice']);
+  assert.deepEqual([rowsOf(before).token.saved, rowsOf(before).token.value, rowsOf(before).reviewModel.value, rowsOf(before).language.value, rowsOf(before).afterReview.value], [false, 'not set', 'not set', 'en', 'preview']);
+  // A row offers exactly the values its setting accepts, and only posting without a preview is confirmed.
+  const offered = id => rowsOf(before)[id].choices.map(choice => choice.value).sort();
+  assert.deepEqual([offered('afterReview'), offered('panel'), offered('report'), offered('progress'), offered('debug')], [[...AFTER_REVIEW].sort(), [...TERMINAL_PANEL].sort(), ['full', 'receipt'], ['off', 'on'], ['off', 'on']]);
+  assert.deepEqual(before.rows.flatMap(row => (row.choices ?? []).filter(choice => choice.confirm).map(choice => `${row.id}=${choice.value}`)), ['afterReview=publish']);
+  assert.ok(!before.rows.some(row => /shell|verifyTls|tls/i.test(row.id)), 'What weakens a review\'s isolation is not offered.');
+
+  const d = dialogs(f, ['https://dev.azure.com/fixture/project/_git/repo/pullrequest/1', '', FAKE_PAT, 'fixture/model', '', true]);
+  await d.setup.open();
+  assert.equal(d.left(), 0);
+  assert.deepEqual(d.shown.map(item => `${item.kind}: ${item.title}`), ['prompt: Azure DevOps organization', 'prompt: Proxy for Azure DevOps (optional)', 'secret: Personal access token',
+    'select: Model for /pr-review', 'select: Variant of fixture/model', 'confirm: Save AZPR\'s settings?', 'alert: AZPR is set up']);
+  assert.match(d.shown[2].description, /^Create one at https:\/\/dev\.azure\.com\/fixture\/_usersSettings\/tokens with the scopes Code \(Read\) and Pull Request Threads \(Read & write\)\./);
+  assert.match(d.shown.at(-1).message, /^Check access to a pull request, then review it:\n\n\/pr-check <PR URL>/, 'The first setup was loaded: no restart is asked for.');
+  // One request asked Azure DevOps whether the token works, before anything was written.
+  assert.deepEqual(f.azure.state.calls.map(call => [call.route, call.path, call.query]), [['access', '/fixture/_apis/git/pullrequests', { $top: '1', 'api-version': '7.1' }]]);
+
+  const saved = JSON.parse(await readFile(f.path, 'utf8'));
+  assert.deepEqual(saved.azure, { organization: 'fixture', pat: '', patFile: tokenFile, concurrency: 6, callTimeoutSeconds: 120, archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
+  assert.deepEqual(saved.models, { review: { functional: 'fixture/model', risk: 'fixture/model', verifier: 'fixture/model', rater: '' }, quick: { reviewer: 'fixture/model' }, deep: { functional: '', risk: '', verifier: '', rater: '' } });
+  assert.deepEqual(withMissingSettings(saved).added, [], 'The file names every setting.');
+  assert.equal(await readFile(tokenFile, 'utf8'), FAKE_PAT, 'The token file holds the token alone.');
+  assert.deepEqual([await mode(tokenFile), await mode(f.path), await mode(join(environment.XDG_CONFIG_HOME, 'azpr')), await mode(join(f.root, 'private config'))], [0o600, 0o600, 0o700, 0o700]);
+  assert.deepEqual((await readdir(join(environment.XDG_CONFIG_HOME, 'azpr'))), ['pat'], 'No temporary file is left beside the token.');
+
+  // Nothing was loaded before, so the settings are in use now: the review commands are the real ones, and the
+  // server part said so once, for clients that would otherwise keep the commands they knew.
+  assert.ok(f.agents.has('azpr-review-functional'));
+  assert.deepEqual(f.rpc.events, [['loaded', {}]]);
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+  const after = await f.rpc.handlers.status({});
+  assert.deepEqual([after.state, after.problem, after.organization, rowsOf(after).token.saved, rowsOf(after).token.value, rowsOf(after).reviewModel.value, rowsOf(after).quickModel.value, rowsOf(after).deepModel.value],
+    ['ready', '', 'fixture', true, 'saved', 'fixture/model', 'fixture/model', 'off']);
+  assert.ok(rowsOf(after).token.description.endsWith(` The saved token is in ${tokenFile}.`), 'The token\'s dialog says where the saved token is.');
+  assert.match(after.settingsFileShown, /^…\/private config\/settings\.json$/);
+  for (const text of [d.said(), JSON.stringify(f.notices), JSON.stringify(after), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(FAKE_PAT), 'The token is in the token file and nowhere else.');
+});
+
+test('the access check tells a refused token, an unknown organization and a network that needs a proxy or a CA file apart, and asks once', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  let network = 'direct';
+  const seen = [];
+  const fetch = (url, init) => {
+    seen.push({ url: String(url), proxy: init.proxy, ca: init.tls?.ca?.length });
+    const refuse = code => Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code } }));
+    if (network === 'refused') return refuse('ECONNREFUSED');
+    if (network === 'certificate') return refuse('SELF_SIGNED_CERT_IN_CHAIN');
+    if (network === 'proxy-login') return Promise.resolve(new Response('', { status: 407 }));
+    if (network === 'gateway') return Promise.resolve(new Response('<html>blocked</html>', { status: 403, headers: { 'content-type': 'text/html' } }));
+    if (network === 'busy') return Promise.resolve(new Response(azureError(503, 'ServiceUnavailableException', 'Busy.').body, { status: 503, headers: { 'content-type': 'application/json', ...AZURE_HEADERS } }));
+    if (network === 'forbidden') return Promise.resolve(new Response(azureError(403, 'GitNeedsPermissionException', 'TF401019').body, { status: 403, headers: { 'content-type': 'application/json', ...AZURE_HEADERS } }));
+    return f.azure.fetch(url, init);
+  };
+  t.after(await f.setup({ environment, fetch }));
+  const check = input => f.rpc.handlers.check(input);
+  assert.deepEqual(await check({ organization: 'fixture', token: FAKE_PAT }), { ok: true, organization: 'fixture' });
+  assert.deepEqual(await check({ organization: 'https://dev.azure.com/fixture/project', token: `  ${FAKE_PAT}\n` }), { ok: true, organization: 'fixture' }, 'A URL names the organization, and blanks around a pasted token are not part of it.');
+  assert.deepEqual(await check({ organization: 'fixture', token: NEW_TOKEN }),
+    { ok: false, fix: 'token', problem: 'Azure DevOps did not accept this token for the organization "fixture" (HTTP 203). It may be mistyped or expired, or belong to another organization.' });
+  assert.deepEqual(await check({ organization: 'elsewhere', token: FAKE_PAT }), { ok: false, fix: 'organization', problem: 'Azure DevOps knows no organization named "elsewhere" (HTTP 404).' });
+  assert.deepEqual(await check({ organization: 'fixture', token: 'short' }), { ok: false, fix: 'token', problem: 'That is not one token of 20 to 1024 printable characters.' });
+  assert.deepEqual(await check({ organization: 'not a name', token: FAKE_PAT }), { ok: false, fix: '', problem: 'Use your Azure DevOps organization name (the <org> in https://dev.azure.com/<org>), or the URL of one of its pull requests.' });
+  assert.deepEqual(await check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved yet.' });
+  const asked = seen.length;
+  for (const [situation, expected] of [
+    ['refused', { fix: 'proxy', problem: 'Azure DevOps could not be reached (ECONNREFUSED). This network may need a proxy.' }],
+    ['certificate', { fix: 'caFile', problem: 'The TLS certificate of the connection was not accepted (SELF_SIGNED_CERT_IN_CHAIN). A proxy that inspects HTTPS needs its root CA certificate.' }],
+    ['proxy-login', { fix: 'proxy', problem: 'The proxy asks for a user name and password (HTTP 407).' }],
+    ['gateway', { fix: 'proxy', problem: 'A proxy or gateway answered instead of Azure DevOps (HTTP 403).' }],
+    ['busy', { fix: '', problem: 'Azure DevOps answered with an error (HTTP 503). Try again in a moment.' }],
+    ['forbidden', { fix: 'token', problem: 'Azure DevOps accepted the token but did not let it list pull requests (HTTP 403). It needs the scopes Code (Read) and Pull Request Threads (Read & write).' }],
+  ]) {
+    network = situation;
+    assert.deepEqual(await check({ organization: 'fixture', token: FAKE_PAT }), { ok: false, ...expected }, situation);
+  }
+  assert.equal(seen.length, asked + 6, 'A person is waiting: every check is one request, also where a read would be tried again.');
+  // The proxy and the CA file that were just entered are the ones used, and a proxy's password is in no answer.
+  network = 'refused';
+  const through = await check({ organization: 'fixture', token: FAKE_PAT, proxy: 'http://user:pw-secret@proxy.example:8080' });
+  assert.deepEqual(through, { ok: false, fix: 'proxy', problem: 'Azure DevOps could not be reached (ECONNREFUSED). Check the proxy http://proxy.example:8080 (with credentials).' });
+  assert.equal(seen.at(-1).proxy, 'http://user:pw-secret@proxy.example:8080');
+  assert.deepEqual(await check({ organization: 'fixture', token: FAKE_PAT, proxy: 'proxy.example:8080' }),
+    { ok: false, fix: '', problem: 'azure.proxy must be empty or a proxy URL such as http://proxy.example.com:8080, optionally with percent-encoded credentials (http://user:password@host:port), without a path, query or fragment.' });
+  assert.deepEqual(await check({ organization: 'fixture', token: FAKE_PAT, caFile: join(f.root, 'missing.pem') }), { ok: false, fix: '', problem: 'azure.caFile could not be read (ENOENT).' });
+  // What is given is text. Anything else is refused before anything is asked, not read as an answer that is empty or absent.
+  network = 'direct';
+  const before = seen.length;
+  for (const input of [{ organization: null, token: FAKE_PAT }, { organization: 'fixture', token: 7 }, { organization: 'fixture', token: [FAKE_PAT] },
+    { organization: 'fixture', token: FAKE_PAT, proxy: false }, { organization: 'fixture', token: FAKE_PAT, caFile: { path: 'x' } }]) {
+    assert.deepEqual(await check(input), { ok: false, fix: '', problem: 'Setup takes each answer as text.' }, JSON.stringify(input));
+  }
+  assert.equal(seen.length, before, 'Nothing was sent for them.');
+  assert.ok(!JSON.stringify(f.notices).includes(FAKE_PAT) && f.notices.length === 0, 'A check tells the conversation nothing.');
+});
+
+test('answers are checked without being saved; a saved proxy\'s user name and password never leave the server part', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment }));
+  const { validate, save, status } = f.rpc.handlers;
+  assert.deepEqual(await validate({ changes: { organization: 'https://fixture.visualstudio.com/DefaultCollection/project' } }), { ok: true, values: { organization: 'fixture' }, shown: { organization: 'fixture' } });
+  assert.deepEqual(await validate({ changes: { proxy: ' none ' } }), { ok: true, values: { proxy: '' }, shown: { proxy: 'none' } });
+  assert.deepEqual(await validate({ changes: { proxy: 'http://user:pw-secret@proxy.example:8080' } }),
+    { ok: true, values: { proxy: 'http://user:pw-secret@proxy.example:8080' }, shown: { proxy: 'http://proxy.example:8080 (with credentials)' } });
+  for (const [changes, problem] of [
+    [{ organization: 'https://example.com/fixture' }, /^Only dev\.azure\.com and <organization>\.visualstudio\.com URLs name an organization\.$/],
+    [{ organization: '' }, /^Use your Azure DevOps organization name/],
+    [{ proxy: 'socks5://proxy.example:1080' }, /^azure\.proxy must be empty or a proxy URL/],
+    [{ caFile: 'relative.pem' }, /^The CA certificate file must be an absolute path\.$/],
+    [{ caFile: f.pat }, /^azure\.caFile contains no PEM certificate/],
+    [{ model: 'Fixture Model' }, /^The model: select an actual provider\/model ID/],
+    [{ model: 'fixture/absent' }, /^The selected model is unavailable in OpenCode\./],
+    [{ language: 'Traditional Chinese' }, /^outputLanguage must be a language tag/],
+    [{ afterReview: 'always' }, /^After a review must be one of: preview, none, publish\.$/],
+    [{ shell: 'inherit' }, /^Setup does not know one of the settings it was given\.$/],
+    [{ token: FAKE_PAT }, /^Setup does not know one of the settings it was given\.$/],
+    [{ __proto__: null, constructor: 'x' }, /^Setup does not know one of the settings it was given\.$/],
+  ]) {
+    const result = await validate({ changes });
+    assert.equal(result.ok, false, JSON.stringify(changes));
+    assert.match(result.problem, problem, JSON.stringify(changes));
+    assert.ok(!Object.values(changes).some(value => value && result.problem.includes(value)), 'A refused answer is not quoted.');
+  }
+  assert.deepEqual(await validate({}), { ok: false, fix: '', problem: 'Setup was given no settings to change.' });
+  // An answer is text. Anything else is refused, not read as an empty answer (which would clear a proxy).
+  for (const answer of [0, null, true, ['http://proxy.example:8080'], { url: 'x' }]) {
+    assert.deepEqual(await validate({ changes: { proxy: answer } }), { ok: false, fix: '', problem: 'Setup takes each setting as text.' });
+  }
+  for (const input of [null, 'changes', 7, [], { changes: [] }, { changes: 'proxy' }]) assert.equal((await validate(input)).ok, false);
+  await assert.rejects(lstat(f.path), { code: 'ENOENT' }, 'Checking answers writes nothing.');
+
+  // With a proxy that has a password saved, the dialog starts with the proxy alone; left as it is, it stands for the saved one.
+  await writeFile(f.pat, FAKE_PAT, { mode: 0o600 });
+  assert.equal((await save({ changes: { organization: 'fixture', model: 'fixture/model', proxy: 'http://user:pw-secret@proxy.example:8080' }, token: FAKE_PAT })).ok, true);
+  const row = rowsOf(await status({})).proxy;
+  assert.deepEqual([row.value, row.current], ['http://proxy.example:8080 (with credentials)', 'http://proxy.example:8080']);
+  assert.match(row.description, /The saved proxy has a user name and password, which are not shown: leave the URL as it is to keep them\.$/);
+  assert.deepEqual(await validate({ changes: { proxy: 'http://proxy.example:8080' } }), { ok: true, values: { proxy: 'http://proxy.example:8080' }, shown: { proxy: 'http://proxy.example:8080 (with credentials)' } });
+  assert.equal((await save({ changes: { proxy: 'http://proxy.example:8080' } })).ok, true);
+  assert.equal(JSON.parse(await readFile(f.path, 'utf8')).azure.proxy, 'http://user:pw-secret@proxy.example:8080', 'Unchanged in the dialog: the saved proxy with its password stays.');
+  assert.equal((await save({ changes: { proxy: 'http://other.example:3128' } })).ok, true);
+  assert.equal(JSON.parse(await readFile(f.path, 'utf8')).azure.proxy, 'http://other.example:3128');
+  assert.ok(!JSON.stringify([await status({}), await validate({ changes: { proxy: 'http://other.example:3128' } })]).includes('pw-secret'));
+});
+
+test('one setting is saved at a time from the list; settings in use wait for a restart, and say so', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  await saveSetup(f.context, f.path, f.args);
+  const initial = await readFile(f.path, 'utf8');
+  t.after(await f.setup({ environment }));
+  const { save, status } = f.rpc.handlers;
+  assert.equal((await status({})).state, 'ready');
+  assert.deepEqual(f.rpc.events, [], 'Settings that were there when OpenCode loaded AZPR are no first setup.');
+  // Choosing the value a setting already has writes nothing, and nothing waits for a restart.
+  const unchanged = await save({ changes: { language: 'en', afterReview: 'preview' } });
+  assert.deepEqual([unchanged.ok, unchanged.status.state, await readFile(f.path, 'utf8')], [true, 'ready', initial]);
+  const value = async id => rowsOf(await status({}))[id].value;
+  for (const [changes, id, shown, read] of [
+    [{ language: 'zh-TW' }, 'language', 'zh-TW', raw => raw.outputLanguage],
+    [{ afterReview: 'none' }, 'afterReview', 'none', raw => raw.afterReview],
+    [{ report: 'full' }, 'report', 'full', raw => raw.returnReport],
+    [{ progress: 'off' }, 'progress', 'off', raw => raw.progressNotices],
+    [{ panel: 'manual' }, 'panel', 'manual', raw => raw.terminalPanel],
+    [{ debug: 'on' }, 'debug', 'on', raw => raw.debug],
+    [{ deepModel: 'fixture/model#high' }, 'deepModel', 'fixture/model#high', raw => raw.models.deep],
+    [{ quickModel: 'off' }, 'quickModel', 'off', raw => raw.models.quick],
+    [{ reviewModel: 'fixture/model#high' }, 'reviewModel', 'fixture/model#high', raw => raw.models.review],
+  ]) {
+    const result = await save({ changes });
+    assert.equal(result.ok, true, JSON.stringify(changes));
+    assert.equal(result.status.state, 'restart', 'The runtime read the settings once; what is saved now waits for a restart.');
+    assert.equal(await value(id), shown);
+    assert.ok(read(JSON.parse(await readFile(f.path, 'utf8'))) !== undefined);
+  }
+  const saved = JSON.parse(await readFile(f.path, 'utf8'));
+  assert.deepEqual([saved.outputLanguage, saved.afterReview, saved.returnReport, saved.progressNotices, saved.terminalPanel, saved.debug],
+    ['zh-TW', { review: 'none', deep: 'none', quick: 'none' }, 'full', false, 'manual', { enabled: true, directory: '', keepRuns: 20 }]);
+  assert.deepEqual(saved.models, { review: { functional: 'fixture/model#high', risk: 'fixture/model#high', verifier: 'fixture/model#high', rater: '' },
+    deep: { functional: 'fixture/model#high', risk: 'fixture/model#high', verifier: 'fixture/model#high', rater: '' }, quick: { reviewer: '' } });
+  // Everything setup does not ask for is as it was, and the file is still owner-only and complete.
+  const untouched = ({ models, outputLanguage, afterReview, returnReport, progressNotices, terminalPanel, debug, ...rest }) => rest;
+  assert.deepEqual(untouched(saved), untouched(JSON.parse(initial)));
+  assert.equal(await mode(f.path), 0o600);
+  // The runtime still has the settings it read: it refuses new runs until the restart, as for any changed file.
+  await f.invoke('pr-check', f.azure.prUrl());
+  for (let attempt = 0; attempt < 200 && !f.reports.some(report => /settings\.json changed since OpenCode loaded it/.test(report)); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(f.reports.at(-1), /settings\.json changed since OpenCode loaded it\. Restart the OpenCode service/);
+  // A value that differs between the roles or modes is shown as it is.
+  await writeFile(f.path, JSON.stringify({ ...saved, afterReview: { quick: 'none', review: 'preview', deep: 'publish' }, models: { ...saved.models, review: { functional: 'fixture/model', risk: 'fixture/model#high', verifier: 'fixture/model' } } }));
+  assert.deepEqual([await value('afterReview'), await value('reviewModel')], ['differs by mode', 'differs by role'], 'The list has room for a few words; the file has each value.');
+  const refused = await save({ changes: { language: 'no such language' } });
+  assert.deepEqual([refused.ok, refused.problem], [false, 'outputLanguage must be a language tag such as en, zh-TW, zh-CN, or ja (not a language name or instruction).']);
+});
+
+test('a new token replaces the token file in one step and owner-only; a path that is not the user\'s own regular file is refused', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  await saveSetup(f.context, f.path, f.args);
+  t.after(await f.setup({ environment }));
+  const { save, status, check } = f.rpc.handlers;
+  const before = await readFile(f.path, 'utf8');
+  const result = await save({ token: ` ${NEW_TOKEN}\n` });
+  assert.deepEqual([result.ok, result.status.state], [true, 'restart']);
+  assert.equal(await readFile(f.pat, 'utf8'), NEW_TOKEN);
+  assert.equal(await mode(f.pat), 0o600);
+  assert.equal(await readFile(f.path, 'utf8'), before, 'The settings already name this token file: they are not rewritten.');
+  // The same token again changes nothing: no file is written, and nothing new waits for a restart.
+  const written = (await lstat(f.pat)).ino;
+  assert.equal((await save({ token: NEW_TOKEN })).ok, true);
+  assert.equal((await lstat(f.pat)).ino, written, 'The token file was not replaced by an identical one.');
+  assert.deepEqual((await readdir(f.root)).filter(name => name.includes('.tmp')), []);
+  // The saved token is the one a check without a token uses, and it goes only to the organization it was saved for.
+  f.azure.state.pat = NEW_TOKEN;
+  assert.deepEqual(await check({ organization: 'fixture' }), { ok: true, organization: 'fixture' });
+  assert.deepEqual(await check({ organization: 'FIXTURE' }), { ok: true, organization: 'FIXTURE' }, 'Organization names differ by case only in writing.');
+  const sent = f.azure.state.calls.length;
+  assert.deepEqual(await check({ organization: 'elsewhere' }), { ok: false, fix: 'token', problem: 'The saved token was saved for the organization "fixture". Enter a token of "elsewhere".' });
+  assert.equal(f.azure.state.calls.length, sent, 'Nothing was sent: the saved token never goes to another organization.');
+  // A token file that is unusable is said to be so.
+  await chmod(f.pat, 0o644);
+  assert.deepEqual(await check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'The saved token cannot be used: its file could not be used (group or others may access it; run chmod 600 on it).' });
+  await chmod(f.pat, 0o600);
+  for (const [token, problem] of [['short', 'The token is not one token of 20 to 1024 printable characters.'], ['two words 0123456789abcdefghij', 'The token is not one token of 20 to 1024 printable characters.'],
+    ['REPLACE_WITH_YOUR_TOKEN_0123456789', 'The token is still a placeholder.']]) {
+    assert.deepEqual(await save({ token }), { ok: false, problem });
+  }
+  for (const token of [null, 7, [FAKE_PAT], { token: FAKE_PAT }]) assert.deepEqual(await save({ token }), { ok: false, fix: '', problem: 'Setup takes each answer as text.' });
+  assert.equal(await readFile(f.pat, 'utf8'), NEW_TOKEN, 'A refused token changes nothing.');
+  // The token file is replaced only where it is a regular file of the user's own, in a directory no one else can write to.
+  const elsewhere = join(f.root, 'elsewhere');
+  await writeFile(elsewhere, 'not a token', { mode: 0o600 });
+  await rm(f.pat);
+  await symlink(elsewhere, f.pat);
+  assert.deepEqual(await save({ token: FAKE_PAT }), { ok: false, fix: '', problem: 'The token file must be a regular file owned by you, without hard links; it was left as it is.' });
+  assert.equal(await readFile(elsewhere, 'utf8'), 'not a token', 'Nothing is written through a symbolic link.');
+  await rm(f.pat);
+  // Settings can name any path: a file that holds something other than one token is not replaced.
+  for (const content of ['-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n', 'two words', 'x'.repeat(5000)]) {
+    await writeFile(f.pat, content, { mode: 0o600 });
+    assert.deepEqual(await save({ token: FAKE_PAT }), { ok: false, fix: '', problem: 'The file that azure.patFile names holds something other than one token; it was left as it is. Name another file there, or remove this one.' });
+    assert.equal(await readFile(f.pat, 'utf8'), content);
+  }
+  // An empty file, or one that holds an unusable token, is one: it is replaced, owner-only.
+  for (const content of ['', 'expired-token\n']) {
+    await writeFile(f.pat, content, { mode: 0o644 });
+    assert.equal((await save({ token: NEW_TOKEN })).ok, true);
+    assert.deepEqual([await readFile(f.pat, 'utf8'), await mode(f.pat)], [NEW_TOKEN, 0o600]);
+  }
+  await rm(f.pat);
+  await chmod(f.root, 0o777);
+  try { assert.deepEqual(await save({ token: FAKE_PAT }), { ok: false, fix: '', problem: 'The directory of the token file must be a directory owned by you, not a symbolic link or writable by other users.' }); }
+  finally { await chmod(f.root, 0o700); }
+  await assert.rejects(lstat(f.pat), { code: 'ENOENT' });
+  // A settings file that keeps the token in itself (azure.pat) gets a token file instead, and names it.
+  await writeFile(f.path, JSON.stringify({ ...JSON.parse(before), azure: { ...JSON.parse(before).azure, pat: FAKE_PAT, patFile: '' } }), { mode: 0o600 });
+  assert.deepEqual([rowsOf(await status({})).token.value, rowsOf(await status({})).token.saved], ['in the settings file', true]);
+  assert.equal((await save({ token: NEW_TOKEN })).ok, true);
+  const moved = JSON.parse(await readFile(f.path, 'utf8')).azure;
+  assert.deepEqual([moved.pat, moved.patFile], ['', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat')]);
+  assert.equal(await readFile(moved.patFile, 'utf8'), NEW_TOKEN);
+  for (const text of [JSON.stringify(await status({})), JSON.stringify(f.notices), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(NEW_TOKEN) && !text.includes(FAKE_PAT));
+});
+
+test('a settings file setup cannot change is reported, never rewritten', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  await mkdir(join(f.root, 'private config'), { mode: 0o700 });
+  await writeFile(f.path, '{"version":2,"azure":{"pat":"PRIVATE_TOKEN_0123456789abcdef",}', { mode: 0o600 });
+  const broken = await readFile(f.path, 'utf8');
+  t.after(await f.setup({ environment }));
+  const { status, validate, check, save } = f.rpc.handlers;
+  const view = await status({});
+  assert.deepEqual([view.state, view.editable, view.fileProblem], ['required', false, 'settings.json must be a JSON object without duplicate keys; repair it manually before setup.']);
+  for (const answer of [await validate({ changes: { language: 'ja' } }), await check({ organization: 'fixture', token: FAKE_PAT }), await save({ changes: { language: 'ja' } })]) {
+    assert.equal(answer.ok, false);
+    assert.equal(answer.problem, 'settings.json must be a JSON object without duplicate keys; repair it manually before setup.');
+  }
+  assert.equal(await readFile(f.path, 'utf8'), broken);
+  assert.ok(!JSON.stringify(view).includes('PRIVATE_TOKEN'));
+  // The dialogs only say so.
+  const d = dialogs(f, []);
+  await d.setup.open();
+  assert.deepEqual(d.shown.map(item => item.title), ['AZPR\'s settings file needs repair']);
+  // A file whose groups are not objects, or of another version, is the same case; a symbolic link is not followed.
+  for (const [content, problem] of [['{"version":2,"models":[]}', '"models" in the settings file is not a JSON object.'], ['{"version":3}', 'Setup supports only version-2 settings.'],
+    ['{"version":2,"models":{"review":"fixture/model"}}', '"models.review" in the settings file is not a JSON object.']]) {
+    await writeFile(f.path, content);
+    assert.equal((await status({})).fileProblem, problem);
+  }
+  await rm(f.path);
+  await symlink(f.pat, f.path);
+  assert.deepEqual([(await status({})).editable, (await status({})).fileProblem], [false, 'Setup refuses a symbolic link for settings.json.']);
+});
+
+test('/pr-setup alone tells the terminal UI to ask; options change one setting each without --replace', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment }));
+  // Before any settings exist, a single setting has nothing to change.
+  assert.equal(await f.invoke('pr-setup', '--language zh-TW'), '[AZPR] There are no settings yet. Supply --organization and --model, or run /pr-setup alone in OpenCode\'s terminal UI. Use /pr-setup --help.');
+  await f.invoke('pr-setup', '');
+  assert.deepEqual(f.notices.at(-1).metadata, { azpr: { setup: true } }, 'The notice of /pr-setup alone is marked: the terminal UI opens its dialogs.');
+  await f.invoke('pr-setup', '   ');
+  assert.deepEqual(f.notices.at(-1).metadata, { azpr: { setup: true } });
+  await f.invoke('pr-setup', '--help');
+  assert.equal(f.notices.at(-1).metadata, undefined, '--help only explains.');
+  assert.match(f.notices.at(-1).text, /One setting of existing settings is changed without --replace: --proxy URL\|none, --ca-file PATH\|none, --review-model PROVIDER\/MODEL, --quick-model PROVIDER\/MODEL\|off, --deep-model PROVIDER\/MODEL\|off, --language [^,]+, --after-review preview\|none\|publish, --report receipt\|full, --progress on\|off, --panel auto\|manual, --debug on\|off\./);
+  assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}" --language ja --deep-model fixture/model#high`),
+    /^\[AZPR\] SETTINGS SAVED\nSettings: .+\nOrganization: fixture; PAT file: .+\nChanged: Deep model, Output language\nAZPR has loaded them: run \/pr-check <PR URL>\./);
+  assert.equal(f.notices.at(-1).metadata, undefined);
+  const read = async () => JSON.parse(await readFile(f.path, 'utf8'));
+  assert.deepEqual([(await read()).outputLanguage, (await read()).models.deep.verifier], ['ja', 'fixture/model#high']);
+  assert.equal(await f.invoke('pr-setup', '--language zh-TW --after-review none --proxy http://user:pw-secret@proxy.example:8080'),
+    `[AZPR] SETTINGS SAVED\nSettings: ${f.path}\nChanged: Proxy, Output language, After a review\nTo load them, restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process), then run /pr-check <PR URL>. No model or Azure request was made. Existing reviews keep their original settings.`);
+  assert.deepEqual([(await read()).outputLanguage, (await read()).afterReview, (await read()).azure.proxy], ['zh-TW', { review: 'none', deep: 'none', quick: 'none' }, 'http://user:pw-secret@proxy.example:8080']);
+  assert.match(await f.invoke('pr-setup', '--proxy none --deep-model off --quick-model off --debug on --progress off --panel manual --report full'), /\nChanged: Proxy, Quick model, Deep model, Report in the conversation, Progress notices, Review panel, Debug records\n/);
+  const now = await read();
+  assert.deepEqual([now.azure.proxy, now.models.deep.functional, now.models.quick.reviewer, now.debug.enabled, now.progressNotices, now.terminalPanel, now.returnReport], ['', '', '', true, false, 'manual', 'full']);
+  const unchanged = await readFile(f.path, 'utf8');
+  for (const [options, problem] of [
+    ['--language "Traditional Chinese"', /^\[AZPR\] outputLanguage must be a language tag/], ['--after-review always', /^\[AZPR\] After a review must be one of: preview, none, publish\.$/],
+    ['--review-model fixture/absent', /^\[AZPR\] The selected model is unavailable/], ['--ca-file relative.pem', /^\[AZPR\] The CA certificate file must be an absolute path\.$/],
+    ['--proxy ftp://proxy.example', /^\[AZPR\] azure\.proxy must be empty or a proxy URL/], ['--debug maybe', /^\[AZPR\] Debug records must be one of: on, off\.$/],
+    ['--organization other', /^\[AZPR\] Supply --organization and --model/], ['--organization other --model fixture/model', /^\[AZPR\] Settings already exist\. Add --replace/],
+    ['--token abc', /^\[AZPR\] Unknown or repeated setup option\./], ['--language', /^\[AZPR\] A setup option needs a value\./], ['--language en --language ja', /^\[AZPR\] Unknown or repeated setup option\./],
+  ]) assert.match(await f.invoke('pr-setup', options), problem, options);
+  assert.equal(await readFile(f.path, 'utf8'), unchanged, 'A refused option changes nothing.');
+  assert.ok(!JSON.stringify(f.notices).includes('pw-secret'), 'A proxy\'s password is in no notice.');
+});
+
+test('a process that found no usable settings loads nothing by itself: settings another process saved wait for a restart', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  const cleanup = await f.setup({ environment });
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] SETUP REQUIRED\n/);
+  // Settings that still cannot be used are named with their problem of now, not the one found at load.
+  await mkdir(join(f.root, 'private config'), { recursive: true, mode: 0o700 });
+  await writeFile(f.path, '{"version":2,"models":{"review":{"functional":"fixture/model","risk":"fixture/model","verifier":"fixture/model"}},"azure":{"organization":"fixture","pat":"","patFile":""}}', { mode: 0o600 });
+  assert.match(await f.invoke('pr-review', f.azure.prUrl()), /^\[AZPR\] SETUP REQUIRED\n.*could not be used when OpenCode loaded AZPR: azure\.pat must be an Azure DevOps personal access token/);
+  await rm(f.path);
+  // Another OpenCode process (or the same one, for another project directory) completes a first setup, or
+  // someone writes the file: this process read no settings and reads none now. A restart loads them, as always.
+  await saveSetup(f.context, f.path, f.args);
+  assert.equal(await f.invoke('pr-check', f.azure.prUrl()),
+    `[AZPR] RESTART REQUIRED\nNo review or Azure request was started. The settings at ${f.path} can be used now, but this OpenCode process found none when it loaded AZPR and was not the one that saved them. To load them, restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process).`);
+  assert.equal(f.agents.size, 0);
+  assert.deepEqual(f.rpc.events, [], 'Nothing was loaded, so nothing is announced.');
+  assert.equal((await f.rpc.handlers.status({})).state, 'required');
+  assert.equal(f.azure.state.calls.length, 0);
+  await cleanup();
+  t.after(await f.setup({ environment }));
+  assert.ok(f.agents.has('azpr-review-functional'), 'After the restart the settings are in use.');
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+});
+
+test('a first setup that cannot be loaded is saved and says why; a host without the RPC keeps the options', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  delete f.context.rpc;
+  const cleanup = await f.setup({ environment, releaseWaitMs: 50 });
+  assert.equal(f.rpc.handlers, null, 'No RPC is registered where the host has none.');
+  // Another plugin took a review command's name after AZPR was loaded: the runtime refuses to load beside it.
+  const original = f.context.command.list;
+  f.context.command.list = async () => ({ data: [...(await original()).data, { name: 'pr-review' }] });
+  const receipt = await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`);
+  assert.match(receipt, /^\[AZPR\] SETTINGS SAVED\nSettings: .+\nOrganization: fixture; PAT file: .+\nAZPR could not load them: Reserved command name conflict: pr-review Repair that, then restart the OpenCode service /);
+  assert.equal(f.agents.size, 0);
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n[\s\S]*Reserved command name conflict: pr-review/, 'The commands that say so are back.');
+  f.context.command.list = original;
+  // The settings are fine by now, and a review command says what stands in the way; setup itself tries again.
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n.*are saved, but AZPR could not load them: Reserved command name conflict: pr-review Repair that, then restart/);
+  assert.equal(f.agents.size, 0);
+  assert.match(await f.invoke('pr-setup', '--language en'), /^\[AZPR\] SETTINGS SAVED\nSettings: .+\nChanged: Output language\nAZPR has loaded them: run \/pr-check <PR URL>\./);
+  assert.ok(f.agents.has('azpr-review-functional'));
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+  await cleanup();
+  assert.equal(f.commands.size, 0);
+  // After it was unloaded, a save that was still under way loads nothing.
+  const late = await fixture(t);
+  const unload = await late.setup({ environment: environmentOf(late) });
+  const save = late.rpc.handlers.save;
+  await unload();
+  await writeFile(late.pat, FAKE_PAT, { mode: 0o600 });
+  const result = await save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
+  assert.deepEqual([result.ok, result.status.state, late.agents.size, late.commands.size], [true, 'required', 0, 0]);
 });

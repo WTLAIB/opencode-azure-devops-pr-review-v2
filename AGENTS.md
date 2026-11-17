@@ -118,8 +118,19 @@ settings, backups and failure records. Never upload `.local/`.
   posts nothing; publication is never a default. Every private prompt is the
   exact runtime-pending text with a fresh nonce; private agents cannot be
   mentioned, delegated, compacted or used for auxiliary requests.
+- A notice never wakes a model: leave it in the session's inbox with
+  `resume: false`, steered, as the host leaves its own notices about
+  background shells. The host hands the steered items that wait to the
+  session's own model together with its next input, in one request; it gives
+  each queued item a turn of its own, so never queue a notice.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
-  grant, not files or catalogs.
+  grant, not files or catalogs. A first setup is that one read, not an
+  exception to it: a process that found no usable settings has read none, so
+  it loads them when a save of its own setup makes them usable. Settings
+  that anything else wrote (another process's setup, an editor, a tool) are
+  read after a restart, as always, also by a process that had none; and
+  settings that are in use wait for the restart, which setup says where the
+  change is made.
 - Before that read, loading AZPR writes the settings a valid file leaves out
   into it, at the defaults validation assumes anyway (`SETTING_DEFAULTS` in
   `config.mjs`; the settings example and schema must match it), so a new
@@ -233,16 +244,19 @@ settings, backups and failure records. Never upload `.local/`.
   configuration.
 
 **The terminal panel only reads.**
-- The package's terminal part (`src/tui-model.mjs` and `src/tui-view.jsx`,
-  compiled to `src/tui.js`) shows what the runtime already produced: AZPR's
+- The panel of the package's terminal part (`src/tui-model.mjs` and
+  `src/tui-view.jsx`, compiled to `src/tui.js`) shows what the runtime already
+  produced: AZPR's
   notices in the conversation, the report queued to a review session and the
   sessions' `metadata.azpr`. It sends no prompt, runs no command of the server
   part, makes no Azure DevOps request, reads no settings file and keeps no
   preference of its own. The one setting meant for it (`terminalPanel`)
   reaches it in the metadata of the runtime's notices, sent only when it is
   not the default, so default requests stay as they were.
-- `/pr-panel` is its only command. Add another only for what neither a
-  setting nor OpenCode's own UI (its session list, say) already does.
+- `/pr-panel` is the terminal part's only slash command. Add another only for
+  what neither a setting nor OpenCode's own UI (its session list, say)
+  already does; setup is reached through the server part's `/pr-setup` and
+  an entry of the command palette.
 - What names a session or a status is the runtime's own text only: a
   receipt's lines before the report or preview it encloses, whose text a
   model wrote. A session is listed, and a report read from it, only when its
@@ -312,6 +326,50 @@ settings, backups and failure records. Never upload `.local/`.
 - The host drops the data of sessions that are neither on screen nor in a tab:
   read another session's inbox from the server, not from the host's cache.
 
+**Setup has one writer; its dialogs only ask.**
+- `/pr-setup` is the one way to set AZPR up: with options, or in the terminal
+  UI with dialogs, which open when the command's notice arrives marked
+  `metadata.azpr.setup` in the session on screen. Both end in `setup.mjs`,
+  which checks every value, is the only writer of the settings file and the
+  token file, and is the only one to ask Azure DevOps whether a token works.
+- What setup can set is one table (`ROWS` in `setup.mjs`): a row reads, shows,
+  accepts and writes its value, and its option of `/pr-setup` and its dialog
+  are the same row. Give a setting people change a row; leave the rest to the
+  settings file. `shell` and `azure.verifyTls` get none.
+- The dialogs (`src/tui-setup.mjs`, which imports nothing so that its order
+  is tested with scripted answers, and the token field in `tui-view.jsx`) use
+  the host's own dialogs and hand every answer to the server part over the
+  plugin's RPC. They read and write no file, contact neither Azure DevOps nor
+  a model, run no command and store nothing.
+- A token is typed into AZPR's own field, which takes keys and pastes itself
+  and draws only bullets and a count: the host's text prompt shows what is
+  typed. The terminal part passes it on once and keeps it nowhere, not in a
+  toast, a dialog text, a log or a store. The server part writes it to the
+  token file in one step, owner-only, and empties `azure.pat`. Settings name
+  that file and settings can be wrong: an existing file is replaced only when
+  it is a regular file of the user's own that is empty or holds one token.
+- A saved token is sent only for the organization it was saved for, like
+  every other use of the PAT; a check for another organization needs a token
+  that was entered for it.
+- The RPC never throws and never quotes a refused value: its schemas are
+  loose, the server part checks every answer itself, and what it returns
+  holds neither the token nor a proxy's user name and password (a proxy that
+  comes back as it was shown stands for the saved one).
+- A token is checked before it is saved: one request through `azure.mjs`
+  (`access`), not repeated, since a person waits. It runs in a queue of
+  setup's own with one slot, because it must work before settings, and so
+  the runtime and its queue, exist. A check that fails says what was
+  refused; the token can still be saved unchecked.
+- Ask first for what can make a later step fail, and let it be skipped: the
+  proxy before the token is checked, the CA file after a proxy. Offer them
+  again when the check cannot reach Azure DevOps.
+- A dangerous value is confirmed in a list whose first row keeps the current
+  setting, never with the host's confirm dialog, whose default is to confirm.
+- OpenCode 2.3.0 announces commands that change after a plugin was loaded
+  without their location, and its clients ignore that event: when a first
+  setup is loaded the server part publishes the RPC event `loaded`, and the
+  terminal part reads the commands again.
+
 **Compatibility.** Host response shapes and constants belong in `host.mjs`.
 Detect capabilities; do not assume them. The terminal part runs in the TUI's
 process: it checks the TUI plugin API it uses at setup and reads theme tokens
@@ -332,7 +390,9 @@ For package entry points, first-run setup or settings-path changes, also run
 packed artifact through OpenCode's plugin manager in an isolated profile.
 For changes touching the terminal part, or the text of notices and receipts,
 also run `node tests/host-v2-tui-panel.mjs <opencode binary>` and the same with
-`--native`: they drive the real terminal UI in `tmux`, which they need.
+`--native`; for changes touching setup, the terminal part or the settings
+path, also `node tests/host-v2-tui-setup.mjs <opencode binary>` and the same
+with `--native`. They drive the real terminal UI in `tmux`, which they need.
 Installer tests must preserve unrelated files and private settings, reject
 conflicts and test rollback and archival uninstall. Keep the README manual-copy
 list exact.

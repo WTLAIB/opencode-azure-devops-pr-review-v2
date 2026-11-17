@@ -45,8 +45,9 @@ The terminal panel's view is written in `src/tui-view.jsx` and compiled to
 `src/tui.js`, which is what OpenCode loads (see
 [architecture](docs/ARCHITECTURE.md#terminal-panel)). After changing the
 source, run `npm run build:tui` and commit both files; `npm run check` fails
-when they differ. What the panel shows is worked out in `src/tui-model.mjs`,
-which has ordinary unit tests.
+when they differ. What the panel shows is worked out in `src/tui-model.mjs`
+and what the setup dialogs ask in `src/tui-setup.mjs`; both import nothing
+and have ordinary unit tests.
 
 Read [AGENTS.md](AGENTS.md) for the design rules and change-specific checks.
 Keep deterministic PR facts and Azure writes in the runtime; models supply
@@ -71,14 +72,17 @@ node tests/host-v2-comment-scale.mjs "$AZPR_TEST_HOST" --cleanup
 node tests/host-v2-background-compaction.mjs "$AZPR_TEST_HOST" --cleanup
 node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST" --native
+node tests/host-v2-tui-setup.mjs "$AZPR_TEST_HOST"
+node tests/host-v2-tui-setup.mjs "$AZPR_TEST_HOST" --native
 ```
 
 The two `--cleanup` runs have debug off. Debug keeps every private session, so
-only these runs exercise the deletion of a run's sessions on the host. The two
-`host-v2-tui-panel` runs start the real terminal UI in a detached `tmux`
-session, read its screen and drive its keyboard and mouse; they need `tmux`
-(3.2 or later), once installed from source and once as OpenCode's plugin
-manager installs the package.
+only these runs exercise the deletion of a run's sessions on the host. The
+`host-v2-tui-panel` and `host-v2-tui-setup` runs start the real terminal UI
+in a detached `tmux` session, read its screen and drive its keyboard and
+mouse; they need `tmux` (3.2 or later), each once installed from source and
+once as OpenCode's plugin manager installs the package. The setup runs start
+without usable settings and set AZPR up through its dialogs.
 
 The fixtures need `openssl` and use isolated configuration, a fake model
 provider and fake Azure services. They do not need your PAT or provider account,

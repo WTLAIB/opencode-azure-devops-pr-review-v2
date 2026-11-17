@@ -339,7 +339,8 @@ try {
     assert.match(await invoke('pr-setup', '--organization fixture --model fixture/missing'), /unavailable/);
     await assert.rejects(stat(externalSettings), { code: 'ENOENT' });
     const saved = await invoke('pr-setup', `--organization ${setupUrl} --model fixture/fixture`);
-    assert.ok(saved.startsWith(`[AZPR] SETTINGS SAVED\nSettings: ${externalSettings}\nOrganization: fixture; PAT file: ${patFile}\nTo load them, restart the OpenCode service (in a terminal: opencode service restart;`), saved);
+    // A first setup is loaded at once: nothing was in use before it, so this is the one time the settings are read.
+    assert.equal(saved, `[AZPR] SETTINGS SAVED\nSettings: ${externalSettings}\nOrganization: fixture; PAT file: ${patFile}\nAZPR has loaded them: run /pr-check <PR URL>. No model or Azure request was made.`);
     const initial = JSON.parse(await readFile(externalSettings, 'utf8'));
     assert.equal((await stat(externalSettings)).mode & 0o777, 0o600);
     assert.deepEqual(initial.models.review, { functional: 'fixture/fixture', risk: 'fixture/fixture', verifier: 'fixture/fixture', rater: '' });
@@ -348,7 +349,11 @@ try {
     assert.equal(initial.models.quick.reviewer, 'fixture/fixture');
     assert.equal(initial.azure.pat, '');
     assert.equal(initial.azure.patFile, patFile);
-    assert.match(await invoke('pr-review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/123'), /SETUP REQUIRED/);
+    // Without a restart the private roles are registered and the review commands are the real ones.
+    for (let attempt = 0; attempt < 50 && !(await rawApi('/api/agent')).data.some(agent => agent.name.startsWith('azpr-')); attempt++) await new Promise(resolveReady => setTimeout(resolveReady, 100));
+    assert.ok((await rawApi('/api/agent')).data.some(agent => agent.name === 'azpr-review-functional'), 'The first setup loaded the runtime.');
+    assert.ok((await rawApi('/api/command')).data.filter(command => command.name.startsWith('pr-')).every(command => !/setup required/.test(command.description ?? '')));
+    assert.match(await invoke('pr-review', '--help'), /^\[AZPR\] \/pr-review <Azure DevOps PR URL>/, 'The review command itself answers.');
     assert.equal(requests.length, 0);
     assert.equal(azure.state.calls.length, 0);
     // The copy OpenCode installed (under its package cache) holds no settings.
@@ -369,7 +374,7 @@ try {
     await writeFile(join(directories.config, 'opencode.json'), JSON.stringify(config, null, 2));
     url = await startHost();
     await waitForCommands();
-    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews; setup validates model and private PAT file without network calls, uses the default XDG PAT file and takes the organization from a PR URL; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
+    nativeSetup = `${publishedPackage ? `CLI plugin add ${publishedPackage}` : 'npm pack plus CLI plugin add from an isolated Git commit'}; missing config blocks reviews; setup validates model and private PAT file without network calls and is loaded without a restart, uses the default XDG PAT file and takes the organization from a PR URL; default XDG and explicit options.settingsFile both work; external mode-600 settings survive restart; installed package holds no settings or PAT`;
   }
   const waitForMcp = async () => {
     for (let attempt = 0; attempt < 100; attempt++) {
