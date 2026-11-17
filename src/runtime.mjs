@@ -118,6 +118,8 @@ function completedText(text) {
  * AZPR_TEST_AZURE_BASE_URL for exact-host fixtures) must be a loopback test server.
  * setup.mjs passes settingsPath and settingsCompletion (what it added to the
  * settings file before this read, for /pr-check).
+ * Returns the function that unloads it; its `settingsDrift()` says whether the settings file and the PAT
+ * file are still what was loaded (not for settings that are switched off, which load nothing).
  */
 export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, options = {}) {
   const settingsPath = options.settingsPath ?? join(baseDirectory, 'settings.json');
@@ -360,20 +362,32 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
   }
 
-  async function preflight(run) {
-    const signal = run.controller.signal;
+  /**
+   * What is no longer as this runtime loaded it, so that new runs are refused: 'unreadable' (the settings
+   * file), 'settings' (its text), 'pat' (the content of the PAT file) or '' (nothing). One policy for the
+   * preflight and for what setup reports as waiting for a restart. A PAT file that cannot be used throws
+   * what `readPatFile` says.
+   */
+  async function settingsDrift(signal) {
     let now;
-    try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { throw new Error('[AZPR] settings.json is not readable.'); }
+    try { now = await scoped(() => readFile(settingsPath, 'utf8'), signal); } catch { return 'unreadable'; }
     if (now !== state.raw) {
       // The loaded settings with nothing but the defaults another load of AZPR wrote into the file since (it was
       // still writing when this load stopped waiting for it): the settings in use are the file's, and no person's
       // change is passed over. Any other difference blocks new runs as before.
-      if (now !== completedText(state.raw)) throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new settings; running reviews are unaffected.');
+      if (now !== completedText(state.raw)) return 'settings';
       state.raw = now;
     }
-    if (settings.azure.patFile && await scoped(() => readPatFile(settings.azure.patFile), signal) !== pat) {
-      throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new PAT; running reviews are unaffected.');
-    }
+    if (settings.azure.patFile && await scoped(() => readPatFile(settings.azure.patFile), signal) !== pat) return 'pat';
+    return '';
+  }
+
+  async function preflight(run) {
+    const signal = run.controller.signal;
+    const drift = await settingsDrift(signal);
+    if (drift === 'unreadable') throw new Error('[AZPR] settings.json is not readable.');
+    if (drift === 'settings') throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new settings; running reviews are unaffected.');
+    if (drift === 'pat') throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new PAT; running reviews are unaffected.');
     await checkCommands(signal);
     await pinAgents(run.profile, signal);
     await readiness(run);
@@ -1794,7 +1808,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));
     throw error;
   }
-  return async () => {
+  const unload = async () => {
     disposed = true;
     await Promise.allSettled([...runs.values()].map(run => abortRun(run, 'OpenCode V2 plugin unloaded.')));
     await Promise.allSettled([...jobs]);
@@ -1803,4 +1817,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     openStores.clear();
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));
   };
+  // Setup asks with it whether the settings and the PAT file are still what is in use here (src/setup.mjs).
+  unload.settingsDrift = () => settingsDrift();
+  return unload;
 }

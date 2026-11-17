@@ -61,8 +61,10 @@ const variantOf = value => text(value).includes('#') ? text(value).slice(text(va
  * @param {(options: {title?: string, message: string, variant?: string, duration?: number}) => void} host.toast
  * @param {() => Promise<Array<{id: string, name: string, provider: string, variants: string[]}>>} host.models models the host offers that can call tools
  * @param {() => void} [host.loaded] told when a first setup was loaded, so that the commands are read again
+ * @param {() => (() => void)} [host.pin] called when a setup opens: from then until the function it returns
+ *   is called, `call`, `models` and `loaded` must reach the same server part, whatever is on screen meanwhile
  */
-export function createSetup({ call, dialog, secret, toast, models, loaded }) {
+export function createSetup({ call, dialog, secret, toast, models, loaded, pin }) {
   let running = false, hinted = false;
 
   /**
@@ -125,10 +127,10 @@ export function createSetup({ call, dialog, secret, toast, models, loaded }) {
    * checked and stays), `{ organization: problem }` when Azure DevOps knows no such organization, or
    * undefined when the person left.
    * `network()` gives the proxy and CA file to check with (none: the saved ones); `repair(fix)` lets the
-   * person change the proxy or the CA file after a failure and says whether to try again.
+   * person change the proxy or the CA file after a failure and says whether to try again; `problem` is
+   * what the dialog says first.
    */
-  async function askToken(row, { organization, network, repair }) {
-    let problem = '';
+  async function askToken(row, { organization, network, repair, problem = '' }) {
     for (;;) {
       const answer = await secret({ title: row.title, problem, optional: row.saved === true,
         description: text(row.description).replaceAll('{organization}', organization) + (row.saved === true ? ' Leave it empty to keep the saved token.' : '') });
@@ -200,7 +202,7 @@ export function createSetup({ call, dialog, secret, toast, models, loaded }) {
     const yes = await dialog.confirm({ title: 'Save AZPR\'s settings?', label: { confirm: 'Save', cancel: 'Leave' },
       message: [`Organization: ${answers.organization}`, `Proxy: ${shown.proxy || 'none'}`, ...(answers.caFile ? [`CA certificate file: ${answers.caFile}`] : []),
         `Token: ${token === undefined ? 'the saved one' : 'the one just entered, in a file only you can read'}`,
-        `Model: ${model} (reviewers, verifier and /pr-quick)`, '', 'Everything else keeps its default; /pr-setup changes it later.'].join('\n') });
+        `Model: ${model} (reviewers, verifier and /pr-quick)`, '', 'Other settings keep their values (the defaults in a new file); /pr-setup changes them later.'].join('\n') });
     if (!yes) return false;
     const saved = await call('save', { changes: { organization: answers.organization, proxy: answers.proxy, ...(answers.caFile === undefined ? {} : { caFile: answers.caFile }), model },
       ...(token === undefined ? {} : { token }) });
@@ -242,15 +244,32 @@ export function createSetup({ call, dialog, secret, toast, models, loaded }) {
         continue;
       }
       const row = rows.find(item => item.id === choice);
+      const tokenRow = rows.find(item => item.kind === 'secret');
+      const repair = fix => change(rows.find(item => item.id === fix));
       let input;
       if (row.kind === 'secret') {
         const organization = text(status.organization);
         if (!organization) { await dialog.alert({ title: row.title, message: 'Set the organization first: a token is checked for it.' }); continue; }
-        const answer = await askToken(row, { organization, network: () => ({}), repair: fix => change(rows.find(item => item.id === fix)) });
+        const answer = await askToken(row, { organization, network: () => ({}), repair });
         if (answer === undefined) continue;
         if (answer.organization !== undefined) { await dialog.alert({ title: row.title, message: answer.organization }); continue; }
         if (answer.token === undefined) continue; // The saved token was checked, or left unchecked: nothing to save.
-        input = { token: answer.token };
+        // Saved for the organization it was checked for: the server part refuses it when the settings name another by now.
+        input = { token: answer.token, organization };
+      } else if (row.id === 'organization' && tokenRow?.saved === true) {
+        const answer = await askText(row);
+        if (answer === undefined) continue;
+        const previous = text(status.organization);
+        if (answer.value.toLowerCase() === previous.toLowerCase()) input = { changes: { organization: answer.value } };
+        else {
+          // The saved token was saved for the organization that is being replaced: the new one gets its own,
+          // checked for it, and both are saved together or not at all.
+          const token = await askToken({ ...tokenRow, saved: false }, { organization: answer.value, network: () => ({}), repair,
+            problem: `The saved token was saved for ${previous}. Enter a token of ${answer.value}; without one the organization stays ${previous}.` });
+          if (token === undefined) continue;
+          if (token.organization !== undefined) { await dialog.alert({ title: row.title, message: token.organization }); continue; }
+          input = { changes: { organization: answer.value }, token: token.token };
+        }
       } else {
         const value = row.kind === 'model' ? await askModel(row) : row.kind === 'choice' ? await askChoice(row) : (await askText(row))?.value;
         if (value === undefined) continue;
@@ -268,6 +287,8 @@ export function createSetup({ call, dialog, secret, toast, models, loaded }) {
     async open() {
       if (running) return;
       running = true;
+      // One setup talks to one server part, from its first question to its save.
+      const release = pin?.();
       try {
         let status;
         try { status = await call('status', {}); } catch { toast({ title: 'AZPR setup', message: UNAVAILABLE, variant: 'error', duration: 10000 }); return; }
@@ -284,7 +305,7 @@ export function createSetup({ call, dialog, secret, toast, models, loaded }) {
       } catch {
         // What the error says is not shown: it is the host's text, and this part cannot know that it holds no answer.
         toast({ title: 'AZPR setup', message: STOPPED, variant: 'error', duration: 10000 });
-      } finally { running = false; }
+      } finally { running = false; release?.(); }
     },
     /** Say once, when AZPR has no usable settings, how to set it up. */
     async hint() {

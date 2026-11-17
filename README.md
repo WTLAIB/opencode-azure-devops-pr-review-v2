@@ -614,6 +614,8 @@ command palette has them too ("AZPR: settings").
   conversation, progress notices, the review panel and debug records. Choose
   one to change it. It is saved at once, and the list says that a restart is
   needed. Posting comments without a preview asks once more, with "no" first.
+  Another organization asks for a token of its own, since the saved one was
+  saved for the organization it was checked for; the two are saved together.
   The other settings are in the settings file, which the list names.
 
 The dialogs only ask. The plugin's server part checks every answer, writes

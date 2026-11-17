@@ -126,11 +126,12 @@ settings, backups and failure records. Never upload `.local/`.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
   grant, not files or catalogs. A first setup is that one read, not an
   exception to it: a process that found no usable settings has read none, so
-  it loads them when a save of its own setup makes them usable. Settings
-  that anything else wrote (another process's setup, an editor, a tool) are
-  read after a restart, as always, also by a process that had none; and
-  settings that are in use wait for the restart, which setup says where the
-  change is made.
+  it loads them when a save of its own setup makes them usable (and tries
+  again with that setup's next save when loading them failed). Settings
+  that anything else made usable (another process's setup, an editor, a
+  tool) are read after a restart, as always, also by a process that had
+  none, whatever its own setup saves afterwards; and settings that are in
+  use wait for the restart, which setup says where the change is made.
 - Before that read, loading AZPR writes the settings a valid file leaves out
   into it, at the defaults validation assumes anyway (`SETTING_DEFAULTS` in
   `config.mjs`; the settings example and schema must match it), so a new
@@ -350,7 +351,24 @@ settings, backups and failure records. Never upload `.local/`.
   it is a regular file of the user's own that is empty or holds one token.
 - A saved token is sent only for the organization it was saved for, like
   every other use of the PAT; a check for another organization needs a token
-  that was entered for it.
+  that was entered for it. A save binds the two: a token is saved with the
+  organization it was checked for, which must still be the one in the
+  settings, and the RPC changes the organization of settings that have a
+  saved token only together with a token of the new one. (The options of
+  `/pr-setup` keep their behaviour: there the person keeps the PAT file.)
+- Several server parts share one settings file (one per project directory,
+  and other processes). The token file and the settings that name it are
+  therefore written under the setup lock, the token first, after the
+  settings were compared once more under the lock with what the answers were
+  checked against; a save that finds the lock held writes neither.
+- The dialogs of one setup talk to one server part: the place is fixed when
+  they open, since the session on screen can change while they are open.
+- What setup reports as waiting for a restart is the loaded runtime's own
+  answer (`settingsDrift` in `runtime.mjs`, the rule of its preflight), so
+  that the two never disagree; do not compare texts in `setup.mjs`.
+- A process without usable settings registers commands that only say so.
+  They are AZPR's own: never register one under a name that another plugin
+  has taken meanwhile, since adding a command replaces the one of that name.
 - The RPC never throws and never quotes a refused value: its schemas are
   loose, the server part checks every answer itself, and what it returns
   holds neither the token nor a proxy's user name and password (a proxy that

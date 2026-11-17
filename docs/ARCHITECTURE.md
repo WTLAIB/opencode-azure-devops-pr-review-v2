@@ -658,7 +658,10 @@ screen. Every answer goes to the server part over the plugin's RPC
 (`azpr.setup`, registered with `ctx.rpc.register`), the way OpenCode's own
 `/goal` talks to its server part. The terminal part reads and writes no file,
 contacts neither Azure DevOps nor a model, runs no command and stores nothing;
-the token is passed on once and is in no toast, dialog text or log.
+the token is passed on once and is in no toast, dialog text or log. Each
+project directory has a server part of its own: the dialogs of one setup
+talk to the one of the session that was on screen when they opened, also
+when another session comes on screen before they end.
 
 **The server part knows the settings.** One table in `src/setup.mjs` (`ROWS`)
 names what setup can set: organization, token, proxy, CA certificate file, the
@@ -678,10 +681,10 @@ quote the input.
 
 | Method | What it does |
 | --- | --- |
-| `status` | The rows with their values, the settings file, and `state`: `required` (no usable settings were found), `ready`, or `restart` (settings were saved that the loaded runtime has not read). Never the token, and a proxy without its user name and password. |
+| `status` | The rows with their values, the settings file, and `state`: `required` (there are no usable settings), `ready`, or `restart`. For settings in use, `restart` is the loaded runtime's own answer, by the rule of its preflight: the settings text differs by more than the defaults a load wrote into it, or the PAT file holds another token, whoever changed them. For a process that found no usable settings, it means that there are usable ones now which it did not load. Never the token, and a proxy without its user name and password. |
 | `validate` | Whether answers can be used, their saved form and how they may be shown, without saving anything. |
 | `check` | Asks Azure DevOps once whether a token works for an organization (`access` in `azure.mjs`: at most one pull request of the organization; not repeated, since a person waits), with the token given or else the saved one, and the proxy and CA file given or else the saved ones. The saved token is sent only for the organization it was saved for. The answer says what was refused and which answer to ask for again: the token, the organization, the proxy or the CA file. |
-| `save` | Applies answers and, when one was given, the token: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one token, since settings can name any path), then the settings that name it, through the same atomic, owner-only writer as before. |
+| `save` | Applies answers and, when one was given, the token. A token is saved with the organization it was checked for: the one this save sets, or the one the request names, which must still be the one in the settings; and the organization of settings that have a saved token changes only together with a token of the new one. Both files are written under the setup lock, after the settings file was compared once more with what the answers were checked against: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one token, since settings can name any path), then the settings that name it, through the same atomic, owner-only writer as before. A save that finds the lock held writes neither, so two setups that save at the same moment never leave the organization of one with the token of the other. |
 
 A proxy that a dialog shows without its user name and password stands for
 the saved one when it comes back unchanged, so those never leave the server
@@ -701,13 +704,18 @@ registered only `/pr-setup` and the commands that answer `SETUP REQUIRED`.
 Once a save of its own setup (the dialogs' or the command's) makes the
 settings usable, `setupPlugin` removes those commands and loads the runtime:
 nothing was read before, so this is the one time the settings are read. Only
-that save does it. Another OpenCode process, or another project directory of
-the same one, that had found no settings reads none either when they appear,
-whoever wrote them: its review commands answer `RESTART REQUIRED`. A restart
-stays the moment at which settings from elsewhere take effect. Settings that
-are in use are read once as well: a later save leaves `state: restart`, the
-dialogs say so at the setting, and the runtime refuses new runs until the
-restart as for any changed file.
+that save does it, and a later save of the same setup tries again when
+loading them failed (the commands that say so come back meanwhile, except
+under a name that another plugin has taken: adding a command would replace
+that plugin's). Another OpenCode process, or another project directory
+of the same one, that had found no settings reads none either when they
+appear, whoever wrote them: its review commands answer `RESTART REQUIRED`,
+its setup reports `state: restart`, and what that setup saves afterwards
+waits for the restart too, since something else made the settings usable. A
+restart stays the moment at which settings from elsewhere take effect.
+Settings that are in use are read once as well: a later save leaves
+`state: restart`, the dialogs say so at the setting, and the runtime refuses
+new runs until the restart as for any changed file.
 
 OpenCode 2.3.0 announces a change of commands that a plugin makes after it
 was loaded without the location, and its clients ignore such an event, so a

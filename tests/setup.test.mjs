@@ -27,10 +27,12 @@ async function fixture(t) {
     model: { list: async () => ({ data: [{ providerID: 'fixture', id: 'model', enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] }] }) },
     command: {
       list: async () => ({ data: [...commands.values()] }),
+      // Like the host: adding a command replaces the one that has its name, and a disposed transform takes
+      // with it what it added, not what replaced that since.
       transform: async callback => {
         const added = [];
-        callback({ add(command) { commands.set(command.name, command); added.push(command.name); } });
-        return { dispose() { added.forEach(name => commands.delete(name)); } };
+        callback({ add(command) { commands.set(command.name, command); added.push(command); } });
+        return { dispose() { for (const command of added) if (commands.get(command.name) === command) commands.delete(command.name); } };
       },
     },
     agent: {
@@ -428,6 +430,7 @@ test('a load that stopped waiting for another writer accepts the completed file 
   // The other load finishes: the file now has the same settings with their defaults written in.
   await writeFile(f.path, settingsText(withMissingSettings(JSON.parse(minimal)).settings), { mode: 0o600 });
   await rm(`${f.path}.setup.lock`);
+  assert.equal((await f.rpc.handlers.status({})).state, 'ready', 'Setup says what the preflight will: defaults another load wrote in are no change.');
   const completed = await checkReport(f);
   assert.match(completed, /\] READY/, 'The completed file is the loaded settings: commands are not refused over it.');
   assert.doesNotMatch(completed, /\| Settings \|/, 'Nothing is missing any more, so nothing is warned about.');
@@ -439,6 +442,7 @@ test('a load that stopped waiting for another writer accepts the completed file 
   await f.invoke('pr-check', f.azure.prUrl());
   for (let count = 0; count < 200 && !f.reports.some(report => report.includes('changed since OpenCode')); count++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(f.reports.some(report => report.includes('settings.json changed since OpenCode loaded it')));
+  assert.equal((await f.rpc.handlers.status({})).state, 'restart');
   // So is a completed file that also carries another value.
   const g = await fixture(t);
   await mkdir(join(g.root, 'private config'), { mode: 0o700 });
@@ -595,6 +599,43 @@ test('the dialogs and the server part set AZPR up together: the token is checked
   for (const text of [d.said(), JSON.stringify(f.notices), JSON.stringify(after), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(FAKE_PAT), 'The token is in the token file and nowhere else.');
 });
 
+test('a token saved without an organization is not offered: the dialogs ask for a token, and saving replaces the file', async t => {
+  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  // Made by hand before any settings existed, as the quickstart for setup with options has it.
+  await mkdir(join(environment.XDG_CONFIG_HOME, 'azpr'), { recursive: true, mode: 0o700 });
+  await writeFile(tokenFile, NEW_TOKEN, { mode: 0o600 });
+  t.after(await f.setup({ environment }));
+  const before = rowsOf(await f.rpc.handlers.status({})).token;
+  assert.deepEqual([before.saved, before.value], [false, 'saved without an organization']);
+  assert.ok(before.description.endsWith(` The token you enter replaces the one in ${tokenFile}, which was saved without an organization.`));
+  assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved for an organization yet.' });
+  assert.equal(f.azure.state.calls.length, 0, 'The token in the file was sent nowhere.');
+  const d = dialogs(f, ['fixture', '', FAKE_PAT, 'fixture/model', '', true]);
+  await d.setup.open();
+  assert.equal(d.left(), 0);
+  const asked = d.shown.find(item => item.kind === 'secret');
+  assert.ok(asked.optional === false && !/Leave it empty/.test(asked.description), 'Keeping a saved token is not offered.');
+  assert.equal(await readFile(tokenFile, 'utf8'), FAKE_PAT);
+  assert.equal(await mode(tokenFile), 0o600);
+  assert.deepEqual([rowsOf(await f.rpc.handlers.status({})).token.saved, rowsOf(await f.rpc.handlers.status({})).token.value], [true, 'saved']);
+});
+
+test('a settings file removed while AZPR runs: setup starts again, and what it saves waits for a restart', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  await saveSetup(f.context, f.path, f.args);
+  t.after(await f.setup({ environment }));
+  assert.equal((await f.rpc.handlers.status({})).state, 'ready');
+  await rm(f.path);
+  const gone = await f.rpc.handlers.status({});
+  assert.deepEqual([gone.state, gone.problem, gone.editable, gone.organization], ['required', '', true, '']);
+  const d = dialogs(f, ['fixture', '', FAKE_PAT, 'fixture/model', '', true]);
+  await d.setup.open();
+  assert.equal(d.left(), 0);
+  assert.equal(d.shown.at(-1).message, 'The settings are saved.\n\nRestart the OpenCode service (opencode service restart), then run /pr-check <PR URL>.');
+  assert.equal((await f.rpc.handlers.status({})).state, 'restart', 'The runtime keeps the settings it read.');
+  assert.deepEqual(f.rpc.events, [], 'Nothing was loaded a second time.');
+});
+
 test('the access check tells a refused token, an unknown organization and a network that needs a proxy or a CA file apart, and asks once', async t => {
   const f = await fixture(t), environment = environmentOf(f);
   let network = 'direct';
@@ -619,7 +660,7 @@ test('the access check tells a refused token, an unknown organization and a netw
   assert.deepEqual(await check({ organization: 'elsewhere', token: FAKE_PAT }), { ok: false, fix: 'organization', problem: 'Azure DevOps knows no organization named "elsewhere" (HTTP 404).' });
   assert.deepEqual(await check({ organization: 'fixture', token: 'short' }), { ok: false, fix: 'token', problem: 'That is not one token of 20 to 1024 printable characters.' });
   assert.deepEqual(await check({ organization: 'not a name', token: FAKE_PAT }), { ok: false, fix: '', problem: 'Use your Azure DevOps organization name (the <org> in https://dev.azure.com/<org>), or the URL of one of its pull requests.' });
-  assert.deepEqual(await check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved yet.' });
+  assert.deepEqual(await check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved for an organization yet.' });
   const asked = seen.length;
   for (const [situation, expected] of [
     ['refused', { fix: 'proxy', problem: 'Azure DevOps could not be reached (ECONNREFUSED). This network may need a proxy.' }],
@@ -750,11 +791,68 @@ test('one setting is saved at a time from the list; settings in use wait for a r
   assert.deepEqual([refused.ok, refused.problem], [false, 'outputLanguage must be a language tag such as en, zh-TW, zh-CN, or ja (not a language name or instruction).']);
 });
 
+test('what setup reports as waiting for a restart is what the runtime refuses new runs for, whoever changed it', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  await saveSetup(f.context, f.path, f.args);
+  const initial = await readFile(f.path, 'utf8');
+  t.after(await f.setup({ environment }));
+  const state = async () => (await f.rpc.handlers.status({})).state;
+  assert.equal(await state(), 'ready');
+  // Another instance of AZPR, another process or a person replaces the PAT file: this runtime has the token it read.
+  await writeFile(f.pat, NEW_TOKEN, { mode: 0o600 });
+  assert.equal(await state(), 'restart');
+  await writeFile(f.pat, `${FAKE_PAT}\n`, { mode: 0o600 });
+  assert.equal(await state(), 'ready', 'The token the runtime read, again: nothing waits.');
+  // A PAT file that can no longer be used is no longer what was loaded either.
+  await chmod(f.pat, 0o644);
+  assert.equal(await state(), 'restart');
+  await chmod(f.pat, 0o600);
+  assert.equal(await state(), 'ready');
+  // Any other text of the settings file is refused by the preflight, also one with the same values.
+  await writeFile(f.path, `${initial}\n`, { mode: 0o600 });
+  assert.equal(await state(), 'restart');
+  await f.invoke('pr-check', f.azure.prUrl());
+  for (let attempt = 0; attempt < 200 && !f.reports.some(report => /settings\.json changed since OpenCode loaded it/.test(report)); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(f.reports.at(-1), /settings\.json changed since OpenCode loaded it\. Restart the OpenCode service/, 'The runtime says the same.');
+  await writeFile(f.path, initial, { mode: 0o600 });
+  assert.equal(await state(), 'ready');
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+});
+
+test('two setups that save at the same moment never leave the organization of one with the token of the other', async t => {
+  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  // One settings file, loaded by OpenCode for two project directories: each has a server part of its own.
+  const g = await fixture(t);
+  g.context.options.settingsFile = f.path;
+  let other;
+  // The second setup saves while the first has written its token and is about to write its settings.
+  t.after(await f.setup({ environment, settingsPrepared: async () => {
+    other = await g.rpc.handlers.save({ changes: { organization: 'elsewhere', model: 'fixture/model' }, token: NEW_TOKEN });
+  } }));
+  t.after(await g.setup({ environment }));
+  const mine = await f.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
+  assert.equal(mine.ok, true);
+  assert.deepEqual(other, { ok: false, fix: '', problem: 'Another setup is active, or its lock was left behind (if none is running, delete settings.json.setup.lock beside the settings file). No settings changed.' });
+  const pair = async () => [JSON.parse(await readFile(f.path, 'utf8')).azure.organization, await readFile(tokenFile, 'utf8')];
+  assert.deepEqual(await pair(), ['fixture', FAKE_PAT], 'The refused setup wrote neither file, so the token is the one of this organization.');
+  // The first setup's settings are in use where it ran. The other project directory found none and did not make
+  // these usable: there they wait for the restart, also after its own save, which replaces both files together.
+  assert.deepEqual([(await f.rpc.handlers.status({})).state, (await g.rpc.handlers.status({})).state], ['ready', 'restart']);
+  const again = await g.rpc.handlers.save({ changes: { organization: 'elsewhere', model: 'fixture/model' }, token: NEW_TOKEN });
+  assert.deepEqual([again.ok, again.status.state], [true, 'restart']);
+  assert.deepEqual(await pair(), ['elsewhere', NEW_TOKEN]);
+  assert.equal((await f.rpc.handlers.status({})).state, 'restart', 'The runtime that was loaded has another organization and token than the files now.');
+  assert.equal(g.agents.size, 0);
+});
+
 test('a new token replaces the token file in one step and owner-only; a path that is not the user\'s own regular file is refused', async t => {
   const f = await fixture(t), environment = environmentOf(f);
   await saveSetup(f.context, f.path, f.args);
-  t.after(await f.setup({ environment }));
-  const { save, status, check } = f.rpc.handlers;
+  let prepared;
+  t.after(await f.setup({ environment, settingsPrepared: () => prepared?.() }));
+  const { status, check } = f.rpc.handlers;
+  // A token is saved for the organization it was checked for.
+  const save = input => f.rpc.handlers.save(input.token === undefined || input.organization !== undefined ? input : { ...input, organization: 'fixture' });
   const before = await readFile(f.path, 'utf8');
   const result = await save({ token: ` ${NEW_TOKEN}\n` });
   assert.deepEqual([result.ok, result.status.state], [true, 'restart']);
@@ -783,6 +881,37 @@ test('a new token replaces the token file in one step and owner-only; a path tha
   }
   for (const token of [null, 7, [FAKE_PAT], { token: FAKE_PAT }]) assert.deepEqual(await save({ token }), { ok: false, fix: '', problem: 'Setup takes each answer as text.' });
   assert.equal(await readFile(f.pat, 'utf8'), NEW_TOKEN, 'A refused token changes nothing.');
+  // The token and the settings are written under one lock: while another setup holds it, neither changes.
+  await writeFile(`${f.path}.setup.lock`, '');
+  assert.deepEqual(await save({ token: FAKE_PAT, changes: { language: 'ja' } }), { ok: false, fix: '',
+    problem: 'Another setup is active, or its lock was left behind (if none is running, delete settings.json.setup.lock beside the settings file). No settings changed.' });
+  await rm(`${f.path}.setup.lock`);
+  assert.equal(await readFile(f.pat, 'utf8'), NEW_TOKEN, 'The token file was not touched without the lock.');
+  // The lock keeps AZPR's writers apart, not an editor. Should the settings file change in the moment between
+  // the token and the settings, the answer says that the token was saved.
+  const current = await readFile(f.path, 'utf8');
+  prepared = () => writeFile(f.path, `${current}\n`);
+  assert.deepEqual(await save({ token: FAKE_PAT, changes: { language: 'ja' } }), { ok: false, fix: '',
+    problem: 'The token was saved, but the settings were not: Settings changed during setup; retry after reviewing the file.' });
+  prepared = undefined;
+  assert.equal(await readFile(f.pat, 'utf8'), FAKE_PAT);
+  assert.equal(await readFile(f.path, 'utf8'), `${current}\n`, 'What the editor saved is not overwritten.');
+  assert.deepEqual((await readdir(join(f.root, 'private config'))).sort(), ['settings.json'], 'Neither a lock nor a temporary file is left.');
+  assert.equal((await save({ token: NEW_TOKEN })).ok, true);
+  // A token names its organization: without one, or for another than the settings name, it is not saved.
+  assert.deepEqual(await f.rpc.handlers.save({ token: FAKE_PAT }), { ok: false, problem: 'A token is saved for an organization: name the one it was checked for.' });
+  assert.deepEqual(await f.rpc.handlers.save({ token: FAKE_PAT, organization: 'elsewhere' }),
+    { ok: false, problem: 'The token was checked for the organization "elsewhere", but the settings name "fixture" now. Nothing was saved; run /pr-setup again.' });
+  assert.deepEqual(await f.rpc.handlers.save({ token: FAKE_PAT, organization: 7 }), { ok: false, fix: '', problem: 'Setup takes each answer as text.' });
+  // Another organization does not inherit the saved token: it needs one of its own, saved with it.
+  assert.deepEqual(await f.rpc.handlers.save({ changes: { organization: 'elsewhere' } }),
+    { ok: false, problem: 'The saved token was saved for the organization "fixture". Another organization needs a token of its own: enter it together with the organization.' });
+  assert.equal((await f.rpc.handlers.save({ changes: { organization: 'FIXTURE' } })).ok, true, 'The same organization in other letters keeps its token.');
+  assert.equal((await f.rpc.handlers.save({ changes: { organization: 'fixture' } })).ok, true);
+  assert.equal(await readFile(f.pat, 'utf8'), NEW_TOKEN);
+  const both = await f.rpc.handlers.save({ changes: { organization: 'elsewhere' }, token: FAKE_PAT });
+  assert.deepEqual([both.ok, both.status.organization, await readFile(f.pat, 'utf8')], [true, 'elsewhere', FAKE_PAT]);
+  assert.equal((await f.rpc.handlers.save({ changes: { organization: 'fixture' }, token: NEW_TOKEN })).ok, true);
   // The token file is replaced only where it is a regular file of the user's own, in a directory no one else can write to.
   const elsewhere = join(f.root, 'elsewhere');
   await writeFile(elsewhere, 'not a token', { mode: 0o600 });
@@ -896,15 +1025,69 @@ test('a process that found no usable settings loads nothing by itself: settings 
   // someone writes the file: this process read no settings and reads none now. A restart loads them, as always.
   await saveSetup(f.context, f.path, f.args);
   assert.equal(await f.invoke('pr-check', f.azure.prUrl()),
-    `[AZPR] RESTART REQUIRED\nNo review or Azure request was started. The settings at ${f.path} can be used now, but this OpenCode process found none when it loaded AZPR and was not the one that saved them. To load them, restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process).`);
+    `[AZPR] RESTART REQUIRED\nNo review or Azure request was started. The settings at ${f.path} can be used now, but AZPR found no usable settings when OpenCode loaded it for this project directory, and these were saved elsewhere: by a setup in another project directory or another OpenCode process, or by hand. To load them, restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process).`);
   assert.equal(f.agents.size, 0);
   assert.deepEqual(f.rpc.events, [], 'Nothing was loaded, so nothing is announced.');
-  assert.equal((await f.rpc.handlers.status({})).state, 'required');
+  // Setup says the same: there are settings, and they wait for the restart. It gives no hint that AZPR is not set up.
+  assert.equal((await f.rpc.handlers.status({})).state, 'restart');
+  const d = dialogs(f, [undefined]);
+  await d.setup.hint();
+  await d.setup.open();
+  assert.deepEqual([d.toasts.length, d.shown.map(item => `${item.kind}: ${item.title}`)], [0, ['select: AZPR settings · restart needed']]);
+  // What this process's own setup saves now does not make them its to load: something else made them usable.
+  const changed = await f.rpc.handlers.save({ changes: { language: 'ja' } });
+  assert.deepEqual([changed.ok, changed.status.state], [true, 'restart']);
+  assert.equal((await f.rpc.handlers.save({ changes: {} })).status.state, 'restart', 'A save that changes nothing loads nothing either.');
+  assert.match(await f.invoke('pr-setup', '--language en'), /^\[AZPR\] SETTINGS SAVED\nSettings: .+\nChanged: Output language\nTo load them, restart the OpenCode service \(in a terminal: opencode service restart; if you run opencode serve yourself, restart that process\), then run \/pr-check <PR URL>\. No model or Azure request was made\.$/);
+  assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}" --replace`), /\nTo load them, restart the OpenCode service /);
+  assert.equal(f.agents.size, 0);
+  assert.deepEqual(f.rpc.events, []);
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n/);
   assert.equal(f.azure.state.calls.length, 0);
   await cleanup();
   t.after(await f.setup({ environment }));
   assert.ok(f.agents.has('azpr-review-functional'), 'After the restart the settings are in use.');
   assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+});
+
+test('a host call that fails while a first setup is loaded leaves the settings saved and the commands that say so', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  const original = f.context.command.list;
+  f.context.command.list = async () => { throw new Error('socket closed: host detail'); };
+  const receipt = await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`);
+  f.context.command.list = original;
+  assert.match(receipt, /^\[AZPR\] SETTINGS SAVED\n[\s\S]*\nAZPR could not load them: OpenCode did not answer while AZPR replaced its commands\. Repair that, then restart the OpenCode service /);
+  assert.ok(!receipt.includes('host detail'), 'The host\'s error text is not passed on.');
+  assert.equal(f.agents.size, 0);
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n[\s\S]*are saved, but AZPR could not load them: OpenCode did not answer while AZPR replaced its commands\./);
+  // The settings are this setup's own: its next save tries again.
+  const saved = await f.rpc.handlers.save({ changes: { language: 'ja' } });
+  assert.deepEqual([saved.ok, saved.status.state], [true, 'ready']);
+  assert.ok(f.agents.has('azpr-review-functional'));
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+});
+
+test('a review command name that another plugin took meanwhile stays its own when a first setup cannot be loaded', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  // Another plugin registers /pr-review after AZPR registered the commands that only say "setup required".
+  let ran = 0;
+  const theirs = { name: 'pr-review', description: 'Another plugin\'s review', async execute() { ran++; } };
+  f.commands.set('pr-review', theirs);
+  const receipt = await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`);
+  assert.match(receipt, /\nAZPR could not load them: Reserved command name conflict: pr-review Repair that, then restart the OpenCode service /);
+  assert.equal(f.commands.get('pr-review'), theirs, 'The command that stood in the way was not replaced.');
+  await f.commands.get('pr-review').execute({ sessionID: 'origin', prompt: { text: '' } });
+  assert.equal(ran, 1);
+  // The other review commands say what is wrong, as before.
+  assert.deepEqual([...f.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n[\s\S]*Reserved command name conflict: pr-review/);
+  assert.equal(f.agents.size, 0);
+  // Once that plugin is gone, setup's next save loads the settings, and the command is AZPR's.
+  f.commands.delete('pr-review');
+  assert.match(await f.invoke('pr-setup', '--language en'), /\nAZPR has loaded them: run \/pr-check <PR URL>\./);
+  assert.match(await f.invoke('pr-review', '--help'), /^\[AZPR\] \/pr-review <Azure DevOps PR URL>/);
 });
 
 test('a first setup that cannot be loaded is saved and says why; a host without the RPC keeps the options', async t => {
@@ -935,5 +1118,5 @@ test('a first setup that cannot be loaded is saved and says why; a host without 
   await unload();
   await writeFile(late.pat, FAKE_PAT, { mode: 0o600 });
   const result = await save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
-  assert.deepEqual([result.ok, result.status.state, late.agents.size, late.commands.size], [true, 'required', 0, 0]);
+  assert.deepEqual([result.ok, result.status.state, late.agents.size, late.commands.size], [true, 'restart', 0, 0]);
 });

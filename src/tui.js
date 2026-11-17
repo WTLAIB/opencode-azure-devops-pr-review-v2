@@ -879,11 +879,15 @@ function setupPart(context) {
   const rpc = context.client.rpc(SETUP_RPC);
   // Each project directory has a server part of its own. Setup talks to the one of the session on screen, where
   // the review commands that follow will run; without a session, to the one of the directory this TUI works in.
-  const place = () => {
+  const onScreen = () => {
     const route = context.ui.router?.current?.();
     const session = route?.type === "session" ? context.data.session?.get?.(route.sessionID) : undefined;
     return session?.location ?? context.location ?? context.data.location.default?.();
   };
+  // While a setup is open its place is fixed: another project's session may come on screen meanwhile, and what
+  // was checked for one project's server part must not be saved by another's.
+  let pinned;
+  const place = () => pinned ? pinned.at : onScreen();
   const call = (method, input = {}) => {
     const directory = place()?.directory;
     return rpc[method](input, directory ? {
@@ -922,7 +926,15 @@ function setupPart(context) {
       if (!disposed) context.ui.toast.show(options);
     },
     models,
-    loaded: commandsChanged
+    loaded: commandsChanged,
+    pin: () => {
+      const mine = pinned = {
+        at: onScreen()
+      };
+      return () => {
+        if (pinned === mine) pinned = undefined;
+      };
+    }
   });
   // Also when the settings were saved with options, or loaded by another command: the server part says so.
   let unsubscribe;

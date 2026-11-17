@@ -66,7 +66,7 @@ function server(start = {}) {
 
 /** Setup with dialogs that answer from a list, in order; every dialog, toast and RPC call is recorded. */
 function host(fake, answers, { models = MODELS } = {}) {
-  const calls = [], shown = [], toasts = [], loaded = [];
+  const calls = [], shown = [], toasts = [], loaded = [], pins = [];
   const queue = [...answers];
   const next = (kind, options) => {
     shown.push({ kind, ...options });
@@ -82,9 +82,11 @@ function host(fake, answers, { models = MODELS } = {}) {
     toast: options => toasts.push(options),
     models: async () => models,
     loaded: () => loaded.push(shown.length),
+    // How many calls had been made when the place was fixed, and when it was let go.
+    pin: () => { pins.push(`pin@${calls.length}`); return () => pins.push(`release@${calls.length}`); },
   });
   const said = () => JSON.stringify([shown, toasts]);
-  return { setup, calls, shown, toasts, said, loaded, left: () => queue.length, titles: () => shown.map(item => `${item.kind}: ${item.title}`) };
+  return { setup, calls, shown, toasts, said, loaded, pins, left: () => queue.length, titles: () => shown.map(item => `${item.kind}: ${item.title}`) };
 }
 const methods = h => h.calls.map(call => call.method);
 
@@ -290,12 +292,68 @@ test('a new token is checked for the saved organization before it is saved; an e
   assert.equal(h.shown[2].problem, 'Azure DevOps did not accept this token (HTTP 401).');
   // Checked with the saved network settings (none are sent), and only the accepted token is saved.
   assert.deepEqual(fake.checks, [{ organization: 'fixture', token: 'wrong-token-0123456789abcdefghij' }, { organization: 'fixture', token: TOKEN }, { organization: 'fixture' }]);
-  assert.deepEqual(h.calls.filter(call => call.method === 'save').map(call => call.input), [{ token: TOKEN }]);
+  assert.deepEqual(h.calls.filter(call => call.method === 'save').map(call => call.input), [{ token: TOKEN, organization: 'fixture' }],
+    'The token is saved for the organization it was checked for; the server part refuses it when the settings name another by then.');
   assert.ok(!h.said().includes(TOKEN));
   // Without an organization there is nothing to check a token for.
   const bare = host(server({ state: 'ready', reviewModel: 'fixture/fast' }), ['token', undefined]);
   await bare.setup.open();
   assert.deepEqual(bare.shown[1], { kind: 'alert', title: 'Personal access token', message: 'Set the organization first: a token is checked for it.' });
+});
+
+test('another organization needs a token of its own: both are saved together, or neither', async () => {
+  const fake = ready();
+  const h = host(fake, ['organization', 'other-org', TOKEN, undefined]);
+  await h.setup.open();
+  assert.deepEqual(h.titles(), ['select: AZPR settings', 'prompt: Azure DevOps organization', 'secret: Personal access token', 'select: AZPR settings · restart needed']);
+  assert.deepEqual([h.shown[2].optional, h.shown[2].problem, h.shown[2].description],
+    [false, 'The saved token was saved for fixture. Enter a token of other-org; without one the organization stays fixture.', 'Create one at https://dev.azure.com/other-org/_usersSettings/tokens.']);
+  assert.deepEqual(fake.checks, [{ organization: 'other-org', token: TOKEN }], 'The token is checked for the new organization.');
+  assert.deepEqual(h.calls.filter(call => call.method === 'save').map(call => call.input), [{ changes: { organization: 'other-org' }, token: TOKEN }]);
+  assert.ok(!h.said().includes(TOKEN));
+  // Leaving the token dialog leaves the organization as it was.
+  const left = host(ready(), ['organization', 'other-org', undefined, undefined]);
+  await left.setup.open();
+  assert.deepEqual(methods(left), ['status', 'validate']);
+  // An organization Azure DevOps does not know is reported, and nothing is saved.
+  const unknown = host(ready({ checkAnswers: [{ ok: false, fix: 'organization', problem: 'Azure DevOps knows no organization named "nope" (HTTP 404).' }] }), ['organization', 'nope', TOKEN, undefined]);
+  await unknown.setup.open();
+  assert.deepEqual(unknown.shown.at(-2), { kind: 'alert', title: 'Azure DevOps organization', message: 'Azure DevOps knows no organization named "nope" (HTTP 404).' });
+  assert.deepEqual(methods(unknown), ['status', 'validate', 'check']);
+  // The same organization in other letters, or an organization where no token is saved, asks for none.
+  const same = host(ready(), ['organization', 'FIXTURE', undefined]);
+  await same.setup.open();
+  assert.deepEqual(same.calls.at(-1), { method: 'save', input: { changes: { organization: 'FIXTURE' } } });
+  const bare = host(ready({ token: false }), ['organization', 'other-org', undefined]);
+  await bare.setup.open();
+  assert.deepEqual(bare.calls.at(-1), { method: 'save', input: { changes: { organization: 'other-org' } } });
+});
+
+test('a setup talks to one server part from its first question to its save, also when it fails or is left', async () => {
+  // The place is fixed before the first call and let go after the last one.
+  const h = host(server(), ['fixture', '', TOKEN, 'fixture/fast', true]);
+  await h.setup.open();
+  assert.deepEqual(h.pins, ['pin@0', `release@${h.calls.length}`]);
+  assert.equal(methods(h).at(-1), 'save');
+  const left = host(server(), ['fixture', undefined]);
+  await left.setup.open();
+  assert.deepEqual(left.pins, ['pin@0', `release@${left.calls.length}`]);
+  const failing = host({ ...server(), validate: async () => { throw new Error('connection lost'); } }, ['fixture']);
+  await failing.setup.open();
+  assert.deepEqual(failing.pins, ['pin@0', 'release@2']);
+  // The hint asks one question outside any setup: nothing is fixed for it, and a second open while one runs fixes nothing either.
+  const hinting = host(server(), []);
+  await hinting.setup.hint();
+  assert.deepEqual(hinting.pins, []);
+  let release;
+  const busy = host(ready(), [() => new Promise(resolve => { release = resolve; })]);
+  const first = busy.setup.open();
+  await new Promise(resolve => setImmediate(resolve));
+  await busy.setup.open();
+  assert.deepEqual(busy.pins, ['pin@0']);
+  release(undefined);
+  await first;
+  assert.deepEqual(busy.pins, ['pin@0', 'release@1']);
 });
 
 test('from the list, a failed check lets the proxy be changed and saved before the token is checked again', async () => {
@@ -304,7 +362,7 @@ test('from the list, a failed check lets the proxy be changed and saved before t
   await h.setup.open();
   assert.deepEqual(methods(h), ['status', 'check', 'validate', 'save', 'check', 'save']);
   assert.deepEqual(h.calls[3].input, { changes: { proxy: 'http://proxy.example:8080' } });
-  assert.deepEqual(h.calls[5].input, { token: TOKEN });
+  assert.deepEqual(h.calls[5].input, { token: TOKEN, organization: 'fixture' });
   assert.equal(h.shown.at(-1).options.find(option => option.value === 'proxy').footer, 'http://proxy.example:8080');
 });
 

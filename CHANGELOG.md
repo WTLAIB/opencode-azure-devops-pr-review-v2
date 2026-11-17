@@ -37,6 +37,9 @@ Setup in the terminal UI:
   change is saved at once. Posting comments without a preview asks once
   more, with "no" first. The command palette has the list too ("AZPR:
   settings").
+- A saved token belongs to the organization it was checked for: it is never
+  sent to another one, and another organization in the list asks for a token
+  of its own, which is checked and saved together with it.
 - When AZPR has no usable settings, the terminal UI says so once after it
   starts and names `/pr-setup`.
 - The dialogs only ask: the plugin's server part checks every answer, writes
