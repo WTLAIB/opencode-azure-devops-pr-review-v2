@@ -708,9 +708,13 @@ settings usable (the text it replaced could not be used, and it wrote
 something), `setupPlugin` removes those commands and loads the runtime:
 nothing was read before, so this is the one time the settings are read. Only
 that save does it, and a later save of the same setup tries again when
-loading them failed (the commands that say so come back meanwhile, except
-under a name that another plugin has taken by then, which is looked up
-again at that moment: adding a command would replace that plugin's).
+loading them failed, as long as the file has held nothing but texts this
+setup wrote: the file is compared with that text before the load, and what
+the runtime read with it afterwards. The commands that say so come back
+meanwhile, except under a name that another plugin has taken by then, which
+is looked up again at that moment (adding a command would replace that
+plugin's); where the host cannot list the commands, none is registered
+until the next `/pr-setup` can.
 Another OpenCode process, or another project directory
 of the same one, that had found no settings reads none either when they
 appear, whoever wrote them: its review commands answer `RESTART REQUIRED`,

@@ -1314,6 +1314,12 @@ test('a host call that fails while a first setup is loaded leaves the settings s
   assert.match(receipt, /^\[AZPR\] SETTINGS SAVED\n[\s\S]*\nAZPR could not load them: OpenCode did not answer while AZPR replaced its commands\. Repair that, then restart the OpenCode service /);
   assert.ok(!receipt.includes('host detail'), 'The host\'s error text is not passed on.');
   assert.equal(f.agents.size, 0);
+  // The commands that say so were taken away for the load, and the host could not tell which names are free:
+  // none is registered on a guess (it would replace a command that may be another plugin's by now).
+  assert.deepEqual([...f.commands.keys()], ['pr-setup']);
+  // The next /pr-setup finds the host answering again and puts them back.
+  assert.match(await f.invoke('pr-setup', '--help'), /^\[AZPR\] SETUP/);
+  assert.deepEqual([...f.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
   assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n[\s\S]*are saved, but AZPR could not load them: OpenCode did not answer while AZPR replaced its commands\./);
   // The settings are this setup's own: its next save tries again.
   const saved = await f.rpc.handlers.save({ changes: { language: 'ja' } });
@@ -1367,6 +1373,84 @@ test('a review command name that another plugin took meanwhile stays its own whe
   assert.equal(late.commands.get('pr-comment').description, 'Another plugin\'s review', 'The command that arrived late was not replaced either.');
   assert.deepEqual([...late.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
   assert.equal(late.commands.get('pr-review').description, 'AZPR setup required; run /pr-setup');
+
+  // And where the host cannot say which names are taken after the load failed, none is registered on what was
+  // known before: the next /pr-setup looks again.
+  const silent = await fixture(t);
+  t.after(await silent.setup({ environment: environmentOf(silent), releaseWaitMs: 50 }));
+  silent.commands.set('pr-review', theirs);
+  const listed = silent.context.command.list;
+  let asked = 0;
+  // Setup's look and the runtime's are answered; the look after the failure is not.
+  silent.context.command.list = async () => { if (++asked > 2) throw new Error('host went away'); return listed(); };
+  assert.match(await silent.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${silent.pat}"`), /\nAZPR could not load them: Reserved command name conflict: pr-review /);
+  assert.deepEqual([...silent.commands.keys()].sort(), ['pr-review', 'pr-setup'], 'Nothing was registered on a guess.');
+  assert.equal(silent.commands.get('pr-review'), theirs);
+  silent.context.command.list = listed;
+  assert.match(await silent.invoke('pr-setup', '--help'), /^\[AZPR\] SETUP/);
+  assert.deepEqual([...silent.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort(), 'The commands that say what is missing are back');
+  assert.equal(silent.commands.get('pr-review'), theirs, 'except under the name that is another plugin\'s.');
+});
+
+test('settings that replaced the ones this setup saved are not loaded by its next save: they wait for the restart', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  // This setup's first save makes the settings usable, but loading them fails (another plugin has a command name).
+  const original = f.context.command.list;
+  f.context.command.list = async () => ({ data: [...(await original()).data, { name: 'pr-review', description: 'Another plugin\'s review' }] });
+  assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`), /\nAZPR could not load them: Reserved command name conflict: pr-review /);
+  f.context.command.list = original;
+  // Another process then replaces the settings file, with settings this setup never saw.
+  const theirs = { ...JSON.parse(await readFile(f.path, 'utf8')), shell: 'ask', afterReview: { review: 'publish', deep: 'publish', quick: 'publish' } };
+  await writeFile(f.path, settingsText(theirs), { mode: 0o600 });
+  // A save of this setup on top of them does not make them its own: they are not loaded.
+  assert.match(await f.invoke('pr-setup', '--language ja'), /\nChanged: Output language\nTo load them, restart the OpenCode service /);
+  const saved = await f.rpc.handlers.save({ changes: { report: 'full' } });
+  assert.deepEqual([saved.ok, saved.status.state, f.agents.size], [true, 'restart', 0]);
+  assert.deepEqual(f.rpc.events, []);
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n.*can be used now, but AZPR found no usable settings when OpenCode loaded it for this project directory/);
+
+  // Also when they take the file's place in the moment between this setup's save and the load of what it saved.
+  const g = await fixture(t), shared = environmentOf(g);
+  t.after(await g.setup({ environment: shared, releaseWaitMs: 50 }));
+  const list = g.context.command.list;
+  let replaced = false;
+  g.context.command.list = async () => {
+    // Asked once the commands that say "setup required" are gone, right before the runtime reads the settings.
+    if (!replaced && await readFile(g.path, 'utf8').then(() => true, () => false)) {
+      replaced = true;
+      await writeFile(g.path, settingsText({ ...JSON.parse(await readFile(g.path, 'utf8')), shell: 'ask' }), { mode: 0o600 });
+    }
+    return list();
+  };
+  const receipt = await g.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${g.pat}"`);
+  g.context.command.list = list;
+  assert.equal(replaced, true);
+  assert.match(receipt, /\nTo load them, restart the OpenCode service /);
+  assert.equal(g.agents.size, 0, 'What the runtime read was not this setup\'s text: it was unloaded again.');
+  assert.deepEqual([...g.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort(), 'The commands that say so are back.');
+  assert.match(await g.invoke('pr-check', g.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n/);
+});
+
+test('a /pr-setup that runs while a first setup is being loaded puts no command in the way of the load', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  const list = f.context.command.list;
+  let help;
+  f.context.command.list = async () => {
+    // Asked while the commands that say "setup required" are away for the load: another /pr-setup runs right then.
+    if (!help) {
+      help = f.commands.get('pr-setup').execute({ sessionID: 'other', prompt: { text: '--help' } });
+      for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+    }
+    return list();
+  };
+  await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`);
+  await help;
+  f.context.command.list = list;
+  assert.ok(f.reports.some(report => /\nAZPR has loaded them: run \/pr-check <PR URL>\./.test(report)), f.reports.join('\n---\n'));
+  assert.ok(f.agents.has('azpr-review-functional'));
+  assert.match(await f.invoke('pr-review', '--help'), /^\[AZPR\] \/pr-review <Azure DevOps PR URL>/, 'The review command is the runtime\'s.');
 });
 
 test('a first setup that cannot be loaded is saved and says why; a host without the RPC keeps the options', async t => {

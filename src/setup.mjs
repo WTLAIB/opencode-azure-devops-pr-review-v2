@@ -279,8 +279,8 @@ async function readExisting(path) {
  * set those values again: without --pat-file, a replacement keeps the PAT file already set and a first
  * setup uses the default PAT file. Every other option changes the one setting it names in an existing
  * file. The file names every setting, those setup does not ask for at their defaults. Returns the saved
- * organization and PAT file, the labels of the single settings that were changed, and whether the settings
- * it replaced could not be used (`unusable`).
+ * organization and PAT file, the labels of the single settings that were changed, whether the settings it
+ * replaced could not be used (`unusable`), and the settings text it read (`previous`) and wrote (`written`).
  */
 export async function saveSetup(context, path, arguments_, environment = process.env) {
   const previous = await readExisting(path);
@@ -329,7 +329,7 @@ export async function saveSetup(context, path, arguments_, environment = process
   // Judged on the text this save replaces, not on a second read: whether it is this save that makes the settings usable.
   const unusable = Boolean((await settingsTextProblem(previous)).problem);
   await writeSettings(path, previous, settings);
-  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable };
+  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable, previous, written: settingsText(settings) };
 }
 
 const mine = info => typeof process.getuid !== 'function' || info.uid === process.getuid();
@@ -604,8 +604,9 @@ function accessProblem(error, organization, proxy) {
  * Setup for one settings file: what the RPC of the terminal UI's dialogs calls. `loaded()` says what this
  * process has in use: `blocked` (no usable settings were found), `problem` (why) and `drift()` (the loaded
  * runtime's own answer to whether the settings file and the PAT file are still what it read).
- * `saved(made)` is told after every save that succeeded, with whether it made unusable settings usable
- * (the settings it replaced could not be used, and it wrote something).
+ * `saved({ made, previous, written })` is told after every save that succeeded: whether it made unusable
+ * settings usable (the settings it replaced could not be used, and it wrote something), the settings text
+ * it read and the text that is in the file after it.
  * `options` are the runtime's test options (fetch, azureBaseUrl), `checkTimeoutMs` and, for offline tests,
  * `settingsPrepared` (runs when a save's new settings text is ready, before it replaces the file).
  */
@@ -826,7 +827,7 @@ function createSetupService({ context, path, environment, options, loaded, saved
       }
       let { settings } = withMissingSettings(next);
       valid(validateSettings, settings);
-      let written = settingsText(settings), wrote = false, made = '';
+      let written = settingsText(settings), wrote = false, made = '', onDisk = previous;
       if (token !== undefined || written !== previous) {
         await withSetupLock(path, async () => {
           // Once more, under the lock and before anything is written: the file still is what the answers were
@@ -844,7 +845,7 @@ function createSetupService({ context, path, environment, options, loaded, saved
               const differs = !(await readPatFile(settings.azure.patFile).then(kept => kept === token, () => false));
               if (differs) { await writeTokenFile(settings.azure.patFile, token); replaced = true; }
             }
-            if (written !== previous) await replaceSettings(path, previous, settings, options.settingsPrepared);
+            if (written !== previous) { await replaceSettings(path, previous, settings, options.settingsPrepared); onDisk = written; }
             wrote = Boolean(made) || replaced || written !== previous;
           } catch (error) {
             // The file this save made is named by nothing: it is taken away again, and the organization and its
@@ -857,7 +858,7 @@ function createSetupService({ context, path, environment, options, loaded, saved
           }
         });
       }
-      await saved(unusable && wrote);
+      await saved({ made: unusable && wrote, previous, written: onDisk });
       // The token these settings had before is still in its file: a person decides what becomes of it.
       const stays = made && source && resolve(source) !== resolve(made) && await readPatFile(source).then(() => true, () => false);
       return { ok: true, status: await status(),
@@ -888,24 +889,24 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   const catalog = listOf(await context.command.list());
   if (!catalog) throw new Error('[AZPR] Invalid OpenCode command catalog.');
   // What this process has in use: nothing while `blocked`, else a runtime, whose `drift()` says whether the
-  // settings file and the PAT file still are what it read. `own`: a save of this process's own setup made the
-  // settings usable, so they are its to load.
-  const use = { blocked: Boolean(first.problem), problem: first.problem, loadProblem: '', drift: undefined, own: false };
+  // settings file and the PAT file still are what it read. `ownText`: the settings text that is this process's
+  // to load, because a save of its own setup made the settings usable and every text since was one it wrote
+  // itself; undefined once anything else wrote the file.
+  const use = { blocked: Boolean(first.problem), problem: first.problem, loadProblem: '', drift: undefined, ownText: undefined };
   const reserved = ['pr-setup', ...(use.blocked ? Object.keys(COMMANDS) : [])];
   if (catalog.some(command => reserved.includes(command.name))) throw new Error('[AZPR] Reserved command name conflict; resolve it before loading AZPR.');
-  let pending = false, cleanup, placeholders, activating, rpc, closed = false;
-  let foreign = new Set(); // review command names that were another plugin's when they were last listed
+  let pending = false, cleanup, placeholders, activating, restoring, swapping = false, rpc, closed = false;
   /**
    * The review command names that another plugin has by now: what is listed under one of them and is not a
-   * command that only says "setup required". Asked right before those commands are registered again, since
-   * a plugin can take a name at any moment; where the host does not answer, what was known last.
+   * command that only says "setup required". Asked right before those commands are registered, since a
+   * plugin can take a name at any moment. Null where the host does not answer: nothing is known then, and
+   * what was known earlier is not.
    */
   const taken = async () => {
     try {
       const listed = listOf(await context.command.list());
-      if (listed) foreign = new Set(listed.filter(command => Object.hasOwn(COMMANDS, command?.name) && command.description !== PLACEHOLDER_DESCRIPTION).map(command => command.name));
-    } catch { /* What was known last stands. */ }
-    return foreign;
+      return listed && new Set(listed.filter(command => Object.hasOwn(COMMANDS, command?.name) && command.description !== PLACEHOLDER_DESCRIPTION).map(command => command.name));
+    } catch { return null; }
   };
 
   /** Load the runtime with the settings as they are now. */
@@ -944,26 +945,51 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
       try {
         const now = await settingsProblem(path);
         if (now.problem || now.disabled) { use.problem = now.problem || 'AZPR is switched off in its settings (enabled: false).'; return false; }
-        // The runtime refuses command names that exist: the commands that only said "setup required" go first.
-        await placeholders?.dispose();
-        placeholders = undefined;
-        // The host may list them a moment longer. What is listed under a review command's name and is not one
-        // of them is another plugin's command: the runtime will refuse to load beside it.
-        for (const until = Date.now() + releaseWaitMs; ; ) {
-          const listed = (listOf(await context.command.list()) ?? []).filter(command => Object.hasOwn(COMMANDS, command?.name));
-          if (listed.every(command => command.description !== PLACEHOLDER_DESCRIPTION) || Date.now() >= until) break;
-          await new Promise(done => setTimeout(done, 50));
-        }
-        try { cleanup = await load(); }
-        catch (error) {
-          use.problem = use.loadProblem = said(error, 'the settings could not be loaded.');
-          // The commands that say so come back, except under a name that is another plugin's by now; without
-          // them only /pr-setup is left until the restart.
-          placeholders = closed ? undefined : await registerPlaceholders(await taken()).catch(() => undefined);
+        // Only the text this setup saved is this process's to load. What took its place since (another
+        // process's setup, an editor) waits for the restart, like every change from elsewhere.
+        if (use.ownText === undefined || await readFile(path, 'utf8').catch(() => null) !== use.ownText) {
+          use.ownText = undefined;
+          use.loadProblem = '';
           return false;
         }
-        // Unloaded meanwhile: what was just loaded goes again.
-        if (closed) { const loaded = cleanup; cleanup = undefined; await loaded?.(); return false; }
+        // From here until the runtime is loaded or has failed to, the commands that say "setup required" are
+        // deliberately away: nothing puts them back meanwhile.
+        swapping = true;
+        let outcome; // 'loaded', 'failed' (use.loadProblem says why), 'replaced' or 'closed'
+        try {
+          // The runtime refuses command names that exist: the commands that only said "setup required" go first.
+          await placeholders?.dispose();
+          placeholders = undefined;
+          // The host may list them a moment longer. What is listed under a review command's name and is not one
+          // of them is another plugin's command: the runtime will refuse to load beside it.
+          for (const until = Date.now() + releaseWaitMs; ; ) {
+            const listed = (listOf(await context.command.list()) ?? []).filter(command => Object.hasOwn(COMMANDS, command?.name));
+            if (listed.every(command => command.description !== PLACEHOLDER_DESCRIPTION) || Date.now() >= until) break;
+            await new Promise(done => setTimeout(done, 50));
+          }
+          try {
+            cleanup = await load();
+            // The runtime read the file a moment after it was compared above: what it read must be this setup's text.
+            outcome = typeof cleanup?.settingsAre === 'function' && !cleanup.settingsAre(use.ownText) ? 'replaced' : closed ? 'closed' : 'loaded';
+          } catch (error) {
+            use.problem = use.loadProblem = said(error, 'the settings could not be loaded.');
+            outcome = 'failed';
+          }
+          // Someone else's settings by now, or unloaded meanwhile: what was just loaded goes again.
+          if (outcome === 'replaced' || outcome === 'closed') {
+            const loaded = cleanup;
+            cleanup = undefined;
+            use.drift = undefined;
+            if (outcome === 'replaced') { use.ownText = undefined; use.loadProblem = ''; }
+            await Promise.resolve(loaded?.()).catch(() => {});
+          }
+        } finally { swapping = false; }
+        if (outcome !== 'loaded') {
+          // The commands that say so come back, except under a name that is another plugin's by now; without
+          // them only /pr-setup is left until the restart.
+          await restorePlaceholders();
+          return false;
+        }
         use.blocked = false;
         use.problem = use.loadProblem = '';
         // OpenCode 2.3.0 announces commands that change after a plugin was loaded without their location, and
@@ -974,7 +1000,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
         // A host call failed on the way (removing the commands, listing them, unloading). What was saved stays
         // saved, and the commands that say what is missing stay too, or come back.
         use.problem = use.loadProblem = said(error, 'OpenCode did not answer while AZPR replaced its commands.');
-        if (use.blocked && !placeholders && !closed) placeholders = await registerPlaceholders(await taken()).catch(() => undefined);
+        await restorePlaceholders();
         return false;
       } finally { activating = undefined; }
     })();
@@ -982,33 +1008,55 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   }
 
   /**
-   * After a save of this process's own setup; `made`: the settings it replaced could not be used, and it
-   * wrote something. A process that found no usable settings loads them when its own save is what made them
-   * usable, and tries again with a later save when loading them failed. Settings that could be used before
-   * the save were made usable by something else (another process's setup, an editor, a tool): those wait
-   * for the restart, as every change does, whatever this save added. Returns whether the runtime is loaded
-   * afterwards (`ready`), and otherwise what stands in the way now (`problem`; '' when it is only the
-   * restart).
+   * Put the commands that say what is missing back where none are registered, except under a name another
+   * plugin has by now. Only with a list of the commands read at this moment: where the host does not answer
+   * they stay away (adding one would replace a command that may be someone's), and the next /pr-setup or save
+   * tries again. One at a time, and never while a load has taken them away on purpose.
    */
-  const afterSave = async made => {
+  const restorePlaceholders = () => restoring ??= (async () => {
+    // A turn later, so that `restoring` is set before this body can end and clear it.
+    await null;
+    try {
+      if (!use.blocked || placeholders || closed || swapping) return;
+      const names = await taken();
+      if (names && !placeholders && !closed && !swapping) placeholders = await registerPlaceholders(names).catch(() => undefined);
+    } finally { restoring = undefined; }
+  })();
+
+  /**
+   * After a save of this process's own setup: `made` (the settings it replaced could not be used, and it wrote
+   * something), `previous` (the settings text it read) and `written` (the text that is there after it). A
+   * process that found no usable settings loads them when its own save is what made them usable, and tries
+   * again with a later save when loading them failed, as long as the file held nothing but texts this setup
+   * wrote in between. Settings that could be used before the save, or that replaced this setup's text, were
+   * made by something else (another process's setup, an editor, a tool): those wait for the restart, as
+   * every change does, whatever this save added. Returns whether the runtime is loaded afterwards (`ready`),
+   * and otherwise what stands in the way now (`problem`; '' when it is only the restart).
+   */
+  const afterSave = async ({ made, previous, written }) => {
     if (!use.blocked) return { ready: true, problem: '' };
+    if (made) use.ownText = written;
+    else if (use.ownText !== undefined && previous === use.ownText) use.ownText = written;
+    // Not this setup's any more, or never: what a load of its own text failed on says nothing about these.
+    else { use.ownText = undefined; use.loadProblem = ''; }
     const now = await settingsProblem(path);
     // Still not usable: the problem of now takes the place of the one found at load.
-    if (now.problem) { use.problem = now.problem; return { ready: false, problem: now.problem }; }
-    if (made) use.own = true;
-    if (!use.own) return { ready: false, problem: '' };
+    if (now.problem) { use.problem = now.problem; await restorePlaceholders(); return { ready: false, problem: now.problem }; }
+    if (use.ownText === undefined) { await restorePlaceholders(); return { ready: false, problem: '' }; }
     const ready = await activate();
-    return { ready, problem: ready ? '' : use.problem };
+    return { ready, problem: ready ? '' : use.loadProblem };
   };
 
   const service = createSetupService({ context, path, environment, options: { ...runtimeOptions, checkTimeoutMs, settingsPrepared }, loaded: () => use,
-    saved: async made => { await afterSave(made); } });
+    saved: async result => { await afterSave(result); } });
   const registrations = [];
   const registration = await context.command.transform(editor => {
     editor.add({ name: 'pr-setup', description: SETUP_DESCRIPTION, async execute(event) {
       if (event.prompt.files?.length || event.prompt.agents?.length || event.prompt.skills?.length) throw new Error('[AZPR] Setup accepts literal options only.');
       const session = typeof context.session?.get === 'function' ? recordOf(await context.session.get({ sessionID: event.sessionID })) : null;
       if (privateAgent(session?.agent)) throw new Error('[AZPR] Private reviewers cannot configure AZPR.');
+      // Where the commands that say what is missing could not be registered earlier, they are now.
+      await restorePlaceholders();
       let text, metadata;
       try {
         const arguments_ = parseSetupArguments(event.prompt.text ?? '');
@@ -1023,7 +1071,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           const wasBlocked = use.blocked;
           try {
             saved = await saveSetup(context, path, arguments_, environment);
-            if (wasBlocked) after = await afterSave(saved.unusable);
+            if (wasBlocked) after = await afterSave({ made: saved.unusable, previous: saved.previous, written: saved.written });
           } finally { pending = false; }
           text = `[AZPR] SETTINGS SAVED\nSettings: ${path}\n` +
             (saved.first ? `Organization: ${saved.organization}; PAT file: ${saved.patFile}\n` : '') +
@@ -1044,13 +1092,14 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
     // The terminal UI's dialogs reach setup through the plugin's RPC; a host without it keeps the options.
     if (typeof context.rpc?.register === 'function') registrations.push(rpc = await context.rpc.register(SETUP_RPC, service));
     // A plugin may have taken a review command's name since the catalog was read above: that name stays its own.
-    if (use.blocked) placeholders = await registerPlaceholders(await taken());
+    if (use.blocked) await restorePlaceholders();
     else cleanup = await load();
   }
   catch (error) { await Promise.allSettled(registrations.map(item => item.dispose())); throw error; }
   return async () => {
     closed = true;
     await activating?.catch(() => {});
+    await restoring?.catch(() => {});
     await cleanup?.();
     await placeholders?.dispose();
     await Promise.allSettled(registrations.reverse().map(item => item.dispose()));

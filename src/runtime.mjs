@@ -124,7 +124,8 @@ function completedText(text) {
  * setup.mjs passes settingsPath and settingsCompletion (what it added to the
  * settings file before this read, for /pr-check).
  * Returns the function that unloads it; its `settingsDrift()` says whether the settings file and the PAT
- * file are still what was loaded (not for settings that are switched off, which load nothing).
+ * file are still what was loaded, and its `settingsAre(text)` whether a text is the settings text that was
+ * read (not for settings that are switched off, which load nothing).
  */
 export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, options = {}) {
   const settingsPath = options.settingsPath ?? join(baseDirectory, 'settings.json');
@@ -1822,7 +1823,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     openStores.clear();
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));
   };
-  // Setup asks with it whether the settings and the PAT file are still what is in use here (src/setup.mjs).
+  // Setup asks with it whether the settings and the PAT file are still what is in use here (src/setup.mjs),
+  // and whether a settings text is the one that was read.
   unload.settingsDrift = () => settingsDrift();
+  unload.settingsAre = text => text === state.raw;
   return unload;
 }

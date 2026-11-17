@@ -127,8 +127,11 @@ settings, backups and failure records. Never upload `.local/`.
   grant, not files or catalogs. A first setup is that one read, not an
   exception to it: a process that found no usable settings has read none, so
   it loads them when a save of its own setup makes them usable (the text
-  that save replaced could not be used, and it wrote something; it tries
-  again with that setup's next save when loading them failed). Settings
+  that save replaced could not be used, and it wrote something). It tries
+  again with that setup's next save when loading them failed, but only the
+  text this setup wrote is its own to load: compare the file with it before
+  the load and what the runtime read with it afterwards, and give way when
+  anything else has written the file since. Settings
   that anything else made usable (another process's setup, an editor, a
   tool) are read after a restart, as always, also by a process that had
   none, whatever its own setup saves afterwards; and settings that are in
@@ -399,7 +402,10 @@ settings, backups and failure records. Never upload `.local/`.
   They are AZPR's own: never register one under a name that another plugin
   has taken meanwhile, since adding a command replaces the one of that name.
   A plugin can take a name at any moment, so list the commands again right
-  before registering them, at startup as well.
+  before registering them, at startup as well; where the list cannot be
+  read, register none (what was known earlier is no longer known) and try
+  again with the next `/pr-setup` or save. While a load has taken them away
+  on purpose, nothing puts them back.
 - A setup that is open when the terminal part is unloaded ends at its next
   step: after `stop()` it asks nothing of the server part or the person and
   saves nothing, whatever answer arrives.
