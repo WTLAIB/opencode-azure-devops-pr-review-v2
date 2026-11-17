@@ -27,9 +27,12 @@ Setup in the terminal UI:
   the way there. When Azure DevOps cannot be reached, the proxy or the CA
   file can be set right there and the same token tried again; it can also be
   saved unchecked.
-- The token is saved alone in a file only you can read (mode 600; by default
-  `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`), created or replaced in one step,
-  and the settings name that file. It is in no conversation, notice or log.
+- The token is saved alone in a file only you can read (mode 600), created
+  or replaced in one step: the token file the settings name already, or else
+  `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`, which the settings
+  then name. It is in no conversation, notice or log. (The default PAT file
+  of setup with options, `azpr/pat`, is the same for every settings file a
+  person has, so the dialogs never choose it.)
 - With settings in place, `/pr-setup` lists them with their values:
   organization, token, proxy, CA certificate file, the review, quick and deep
   models, output language, what follows a review, the report in the
@@ -39,9 +42,9 @@ Setup in the terminal UI:
   settings").
 - A saved token belongs to the organization it was checked for: it is never
   sent to another one, and another organization in the list asks for a token
-  of its own, which is checked and saved together with it, in a file of its
-  own beside the first (`pat-<organization>`). The earlier token's file is
-  left as it is, and AZPR says where it is.
+  of its own, which is checked and saved together with it, in the file named
+  for that organization beside the first. The earlier token's file is left
+  as it is, and AZPR says where it is.
 - When AZPR has no usable settings, the terminal UI says so once after it
   starts and names `/pr-setup`.
 - The dialogs only ask: the plugin's server part checks every answer, writes

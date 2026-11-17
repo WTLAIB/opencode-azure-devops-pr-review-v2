@@ -970,6 +970,8 @@ function setupPart(context) {
   const timers = [1500, 6000].map(delay => setTimeout(() => !disposed && void setup.hint(), delay));
   return () => {
     disposed = true;
+    // A setup that is open ends at its next step: nothing is saved by a part that was unloaded.
+    setup.stop();
     timers.forEach(clearTimeout);
     stop?.();
     try {

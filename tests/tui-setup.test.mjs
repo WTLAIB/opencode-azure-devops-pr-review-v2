@@ -372,6 +372,28 @@ test('a setup talks to one server part from its first question to its save, also
   assert.deepEqual(busy.pins, ['pin@0', 'release@1']);
 });
 
+test('a setup that is stopped ends at its next step: nothing more is asked, shown or saved', async () => {
+  const fake = server();
+  let answer;
+  fake.check = () => new Promise(resolve => { answer = resolve; });
+  const h = host(fake, ['fixture', '', TOKEN]);
+  const open = h.setup.open();
+  for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(methods(h), ['status', 'validate', 'validate', 'check']);
+  // The terminal part is unloaded while Azure DevOps is asked; the answer arrives afterwards.
+  h.setup.stop();
+  const toasts = h.toasts.length;
+  answer({ ok: true, organization: 'fixture' });
+  await open;
+  assert.deepEqual(methods(h), ['status', 'validate', 'validate', 'check'], 'The token that was being checked is not saved.');
+  assert.deepEqual(h.titles(), ['prompt: Azure DevOps organization', 'prompt: Proxy for Azure DevOps (optional)', 'secret: Personal access token'], 'No further dialog opens.');
+  assert.equal(h.toasts.length, toasts, 'And nothing more is said.');
+  assert.deepEqual([h.setup.running, h.pins], [false, ['pin@0', 'release@4']]);
+  await h.setup.open();
+  await h.setup.hint();
+  assert.equal(h.calls.length, 4, 'Neither a setup nor the hint starts afterwards.');
+});
+
 test('from the list, a failed check lets the proxy be changed and saved before the token is checked again', async () => {
   const fake = ready({ checkAnswers: [{ ok: false, fix: 'proxy', problem: 'Azure DevOps could not be reached (ETIMEDOUT). This network may need a proxy.' }] });
   const h = host(fake, ['token', TOKEN, 'repair', 'http://proxy.example:8080', undefined]);

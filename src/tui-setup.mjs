@@ -64,8 +64,22 @@ const variantOf = value => text(value).includes('#') ? text(value).slice(text(va
  * @param {() => (() => void)} [host.pin] called when a setup opens: from then until the function it returns
  *   is called, `call`, `models` and `loaded` must reach the same server part, whatever is on screen meanwhile
  */
-export function createSetup({ call, dialog, secret, toast, models, loaded, pin }) {
-  let running = false, hinted = false;
+export function createSetup(host) {
+  let running = false, hinted = false, stopped = false;
+  // After stop() nothing more is asked of the server part or of the person: a setup that is under way ends
+  // at its next step, whatever answer arrives for the step it was waiting on, and saves nothing more.
+  const live = run => (...inputs) => {
+    if (stopped) throw new Error('AZPR setup was stopped.');
+    return run(...inputs);
+  };
+  const call = live((method, input) => host.call(method, input));
+  const dialog = { prompt: live(options => host.dialog.prompt(options)), select: live(options => host.dialog.select(options)),
+    confirm: live(options => host.dialog.confirm(options)), alert: live(options => host.dialog.alert(options)) };
+  const secret = live(options => host.secret(options));
+  const models = live(() => host.models());
+  const toast = options => { if (!stopped) host.toast(options); };
+  const loaded = () => { if (!stopped) host.loaded?.(); };
+  const pin = () => host.pin?.();
 
   /**
    * A text answer the server part accepts, or undefined when the person left: `value` is its saved form and
@@ -205,7 +219,7 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
     const saved = await call('save', { changes: { organization: answers.organization, proxy: answers.proxy, ...(answers.caFile === undefined ? {} : { caFile: answers.caFile }), model },
       ...(token === undefined ? {} : { token }) });
     if (!saved?.ok) { failed(saved); return true; }
-    if (saved.status?.state === 'ready') loaded?.();
+    if (saved.status?.state === 'ready') loaded();
     await dialog.alert({ title: 'AZPR is set up', message: (saved.status?.state === 'ready'
       ? 'Check access to a pull request, then review it:\n\n/pr-check <PR URL>\n/pr-review <PR URL>\n\n/pr-setup shows and changes these settings.'
       : `The settings are saved${text(saved.status?.problem) ? `, but AZPR could not load them: ${saved.status.problem.replace(/\.$/, '')}` : ''}.\n\nRestart the OpenCode service (opencode service restart), then run /pr-check <PR URL>.`) +
@@ -287,10 +301,10 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
   return {
     /** Ask what is missing, or show the settings. One at a time: a second call while one is open does nothing. */
     async open() {
-      if (running) return;
+      if (running || stopped) return;
       running = true;
       // One setup talks to one server part, from its first question to its save.
-      const release = pin?.();
+      const release = pin();
       try {
         let status;
         try { status = await call('status', {}); } catch { toast({ title: 'AZPR setup', message: UNAVAILABLE, variant: 'error', duration: 10000 }); return; }
@@ -311,7 +325,7 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
     },
     /** Say once, when AZPR has no usable settings, how to set it up. */
     async hint() {
-      if (hinted) return;
+      if (hinted || stopped) return;
       let status;
       try { status = await call('status', {}); } catch { return; }
       if (hinted || status?.state !== 'required') return;
@@ -319,5 +333,7 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
       toast({ message: NOT_SET_UP, variant: 'info', duration: 8000 });
     },
     get running() { return running; },
+    /** The terminal part is being unloaded: a setup that is open ends at its next step, and none opens after it. */
+    stop() { stopped = true; },
   };
 }

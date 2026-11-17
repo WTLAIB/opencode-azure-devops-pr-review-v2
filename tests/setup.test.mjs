@@ -566,7 +566,8 @@ const mode = async path => (await lstat(path)).mode & 0o777;
 const rowsOf = status => Object.fromEntries(status.rows.map(row => [row.id, row]));
 
 test('the dialogs and the server part set AZPR up together: the token is checked, files are owner-only, and AZPR is loaded at once', async t => {
-  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  // The token file is named for its organization: the default PAT file is the same for every settings file a person has.
+  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture');
   t.after(await f.setup({ environment }));
   assert.equal(f.rpc.definition, SETUP_RPC);
   const before = await f.rpc.handlers.status({});
@@ -597,7 +598,7 @@ test('the dialogs and the server part set AZPR up together: the token is checked
   assert.deepEqual(withMissingSettings(saved).added, [], 'The file names every setting.');
   assert.equal(await readFile(tokenFile, 'utf8'), FAKE_PAT, 'The token file holds the token alone.');
   assert.deepEqual([await mode(tokenFile), await mode(f.path), await mode(join(environment.XDG_CONFIG_HOME, 'azpr')), await mode(join(f.root, 'private config'))], [0o600, 0o600, 0o700, 0o700]);
-  assert.deepEqual((await readdir(join(environment.XDG_CONFIG_HOME, 'azpr'))), ['pat'], 'No temporary file is left beside the token.');
+  assert.deepEqual((await readdir(join(environment.XDG_CONFIG_HOME, 'azpr'))), ['pat-fixture'], 'No temporary file is left beside the token.');
 
   // Nothing was loaded before, so the settings are in use now: the review commands are the real ones, and the
   // server part said so once, for clients that would otherwise keep the commands they knew.
@@ -612,15 +613,15 @@ test('the dialogs and the server part set AZPR up together: the token is checked
   for (const text of [d.said(), JSON.stringify(f.notices), JSON.stringify(after), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(FAKE_PAT), 'The token is in the token file and nowhere else.');
 });
 
-test('a token saved without an organization is not offered: the dialogs ask for a token, and saving replaces the file', async t => {
-  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+test('a token saved without an organization is not offered or touched: the dialogs ask for a token, which gets a file of its own', async t => {
+  const f = await fixture(t), environment = environmentOf(f), handMade = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat'), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture');
   // Made by hand before any settings existed, as the quickstart for setup with options has it.
   await mkdir(join(environment.XDG_CONFIG_HOME, 'azpr'), { recursive: true, mode: 0o700 });
-  await writeFile(tokenFile, NEW_TOKEN, { mode: 0o600 });
+  await writeFile(handMade, NEW_TOKEN, { mode: 0o600 });
   t.after(await f.setup({ environment }));
   const before = rowsOf(await f.rpc.handlers.status({})).token;
   assert.deepEqual([before.saved, before.value], [false, 'saved without an organization']);
-  assert.ok(before.description.endsWith(` The token you enter replaces the one in ${tokenFile}, which was saved without an organization.`));
+  assert.ok(before.description.endsWith(` The token in ${handMade} was saved without an organization and is not used; the token you enter gets a file of its own.`));
   assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved for an organization yet.' });
   assert.equal(f.azure.state.calls.length, 0, 'The token in the file was sent nowhere.');
   const d = dialogs(f, ['fixture', '', FAKE_PAT, 'fixture/model', '', true]);
@@ -628,9 +629,25 @@ test('a token saved without an organization is not offered: the dialogs ask for 
   assert.equal(d.left(), 0);
   const asked = d.shown.find(item => item.kind === 'secret');
   assert.ok(asked.optional === false && !/Leave it empty/.test(asked.description), 'Keeping a saved token is not offered.');
-  assert.equal(await readFile(tokenFile, 'utf8'), FAKE_PAT);
-  assert.equal(await mode(tokenFile), 0o600);
+  assert.deepEqual([await readFile(tokenFile, 'utf8'), await mode(tokenFile), JSON.parse(await readFile(f.path, 'utf8')).azure.patFile], [FAKE_PAT, 0o600, tokenFile]);
+  assert.equal(await readFile(handMade, 'utf8'), NEW_TOKEN, 'The file a person made is left as it is: another settings file may name it.');
   assert.deepEqual([rowsOf(await f.rpc.handlers.status({})).token.saved, rowsOf(await f.rpc.handlers.status({})).token.value], [true, 'saved']);
+});
+
+test('settings files that share the directory of the default PAT file get a token file each, named for their organization', async t => {
+  // Two settings files of one person (plugin options name them), for two organizations; both first setups run.
+  const f = await fixture(t), environment = environmentOf(f);
+  const g = await fixture(t);
+  t.after(await f.setup({ environment }));
+  t.after(await g.setup({ environment }));
+  const first = await f.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
+  const second = await g.rpc.handlers.save({ changes: { organization: 'elsewhere', model: 'fixture/model' }, token: NEW_TOKEN });
+  assert.deepEqual([first.ok, second.ok], [true, true]);
+  const named = async fixture => { const { organization, patFile } = JSON.parse(await readFile(fixture.path, 'utf8')).azure; return [organization, patFile, await readFile(patFile, 'utf8')]; };
+  assert.deepEqual(await named(f), ['fixture', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture'), FAKE_PAT], 'The second setup did not write the first one\'s token file.');
+  assert.deepEqual(await named(g), ['elsewhere', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-elsewhere'), NEW_TOKEN]);
+  assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: true, organization: 'fixture' }, 'Each still sends its own token to its own organization.');
+  assert.deepEqual((await readdir(join(environment.XDG_CONFIG_HOME, 'azpr'))).sort(), ['pat-elsewhere', 'pat-fixture']);
 });
 
 test('a settings file removed while AZPR runs: setup starts again, and what it saves waits for a restart', async t => {
@@ -853,7 +870,7 @@ test('what setup reports as waiting for a restart is what the runtime refuses ne
 });
 
 test('two setups that save at the same moment never leave the organization of one with the token of the other', async t => {
-  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture');
   // One settings file, loaded by OpenCode for two project directories: each has a server part of its own.
   const g = await fixture(t);
   g.context.options.settingsFile = f.path;
@@ -1019,14 +1036,19 @@ test('a new token replaces the token file in one step and owner-only; a path tha
   assert.deepEqual(await save({ token: FAKE_PAT }), { ok: false, fix: '', problem: 'The token file must be a regular file owned by you, without hard links; it was left as it is.' });
   assert.equal(await readFile(elsewhere, 'utf8'), 'not a token', 'Nothing is written through a symbolic link.');
   await rm(f.pat);
-  // Settings can name any path: a file that holds something other than one token is not replaced.
-  for (const content of ['-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n', 'two words', 'x'.repeat(5000)]) {
+  // Settings can name any path: a file that holds something other than one token is not replaced. One token is
+  // one word of letters, digits, "-" and "_" that is as long as a token; one line of JSON, a KEY=VALUE pair, a
+  // path, an address or a short word is something else.
+  for (const content of ['-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n', 'two words', 'x'.repeat(5000),
+    '{"name":"real-package","version":"1.0.0"}', 'AZURE_DEVOPS_PAT=0123456789abcdefghijklmnop', '/home/someone/.ssh/id_ed25519.backup', 'https://dev.azure.com/fixture/project',
+    'someone@example.com:0123456789abcdef', 'production\n', '22.14.0']) {
     await writeFile(f.pat, content, { mode: 0o600 });
-    assert.deepEqual(await save({ token: FAKE_PAT }), { ok: false, fix: '', problem: 'The file that azure.patFile names holds something other than one token; it was left as it is. Name another file there, or remove this one.' });
+    assert.deepEqual(await save({ token: FAKE_PAT }), { ok: false, fix: '', problem: 'The file that azure.patFile names holds something other than one token; it was left as it is. Name another file there, or remove this one.' }, content.slice(0, 20));
     assert.equal(await readFile(f.pat, 'utf8'), content);
   }
-  // An empty file, or one that holds an unusable token, is one: it is replaced, owner-only.
-  for (const content of ['', 'expired-token\n']) {
+  // An empty file, or one that holds a token that is of no use any more (an expired one, a placeholder), is one:
+  // it is replaced, owner-only.
+  for (const content of ['', 'expired0123456789abcdefghijklmnopqrstuvwxyz0123456789\n', 'REPLACE_WITH_YOUR_TOKEN_0123456789']) {
     await writeFile(f.pat, content, { mode: 0o644 });
     assert.equal((await save({ token: NEW_TOKEN })).ok, true);
     assert.deepEqual([await readFile(f.pat, 'utf8'), await mode(f.pat)], [NEW_TOKEN, 0o600]);
@@ -1041,7 +1063,7 @@ test('a new token replaces the token file in one step and owner-only; a path tha
   assert.deepEqual([rowsOf(await status({})).token.value, rowsOf(await status({})).token.saved], ['in the settings file', true]);
   assert.equal((await save({ token: NEW_TOKEN })).ok, true);
   const moved = JSON.parse(await readFile(f.path, 'utf8')).azure;
-  assert.deepEqual([moved.pat, moved.patFile], ['', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat')]);
+  assert.deepEqual([moved.pat, moved.patFile], ['', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture')]);
   assert.equal(await readFile(moved.patFile, 'utf8'), NEW_TOKEN);
   for (const text of [JSON.stringify(await status({})), JSON.stringify(f.notices), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(NEW_TOKEN) && !text.includes(FAKE_PAT));
 });
@@ -1187,6 +1209,15 @@ test('a review command name that another plugin took meanwhile stays its own whe
   f.commands.delete('pr-review');
   assert.match(await f.invoke('pr-setup', '--language en'), /\nAZPR has loaded them: run \/pr-check <PR URL>\./);
   assert.match(await f.invoke('pr-review', '--help'), /^\[AZPR\] \/pr-review <Azure DevOps PR URL>/);
+
+  // Also while AZPR starts without settings: between its look at the commands and its own registration.
+  const starting = await fixture(t);
+  const register = starting.context.rpc.register;
+  starting.context.rpc.register = async (...inputs) => { starting.commands.set('pr-deep', { ...theirs, name: 'pr-deep' }); return register(...inputs); };
+  t.after(await starting.setup({ environment: environmentOf(starting) }));
+  assert.equal(starting.commands.get('pr-deep').description, 'Another plugin\'s review', 'The command registered meanwhile was not replaced.');
+  assert.equal(starting.commands.get('pr-review').description, 'AZPR setup required; run /pr-setup');
+  assert.deepEqual([...starting.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
 
   // A plugin can take the name at any moment, also after AZPR looked and before the runtime does: what is
   // listed is read again before the commands that say so come back.

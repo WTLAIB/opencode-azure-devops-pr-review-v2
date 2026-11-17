@@ -88,7 +88,8 @@ if (native) {
 }
 // Where setup writes: the package keeps its settings in the user's configuration, a source installation beside itself.
 const settingsFile = native ? join(fixture, 'xdg-config', 'azpr', 'settings.json') : join(dirs.config, 'plugins', 'azpr-v2', 'settings.json');
-const tokenFile = join(fixture, 'xdg-config', 'azpr', 'pat');
+// The token file is named for its organization: the default PAT file is the same for every settings file a person has.
+const tokenFile = join(fixture, 'xdg-config', 'azpr', 'pat-fixture');
 
 // ------------------------------------------------------------------ the terminal
 // A Unix socket's path is limited to about a hundred bytes, which a checkout in a long directory exceeds

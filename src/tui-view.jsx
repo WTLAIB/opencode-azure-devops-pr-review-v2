@@ -658,6 +658,8 @@ function setupPart(context) {
 
   return () => {
     disposed = true
+    // A setup that is open ends at its next step: nothing is saved by a part that was unloaded.
+    setup.stop()
     timers.forEach(clearTimeout)
     stop?.()
     try {
