@@ -270,14 +270,15 @@ export function createSetup(host) {
         if (answer.token === undefined) continue; // The saved token was checked, or left unchecked: nothing to save.
         // Saved for the organization it was checked for: the server part refuses it when the settings name another by now.
         input = { token: answer.token, organization };
-      } else if (row.id === 'organization' && tokenRow?.saved === true) {
+      } else if (row.id === 'organization' && (tokenRow?.bound ?? tokenRow?.saved) === true) {
         const answer = await askText(row);
         if (answer === undefined) continue;
         const previous = text(status.organization);
         if (answer.value.toLowerCase() === previous.toLowerCase()) input = { changes: { organization: answer.value } };
         else {
-          // The saved token was saved for the organization that is being replaced: the new one gets its own,
-          // checked for it, and both are saved together or not at all.
+          // The token these settings name was saved for the organization that is being replaced, whether it can
+          // be used at the moment or not: the new one gets its own, checked for it, and both are saved together
+          // or not at all.
           const token = await askToken({ ...tokenRow, saved: false }, { organization: answer.value, network: () => ({}), repair,
             problem: `The saved token was saved for ${previous}. Enter a token of ${answer.value}; without one the organization stays ${previous}.` });
           if (token === undefined) continue;

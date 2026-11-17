@@ -16,7 +16,7 @@ function server(start = {}) {
     settingsFile: '/home/user/.config/azpr/settings.json', settingsFileShown: '~/.config/azpr/settings.json', organization: state.organization,
     rows: [
       { id: 'organization', group: 'Azure DevOps', label: 'Organization', kind: 'text', title: 'Azure DevOps organization', description: 'The name in https://dev.azure.com/<organization>.', placeholder: 'my-organization', value: state.organization || 'not set', current: state.organization },
-      { id: 'token', group: 'Azure DevOps', label: 'Access token', kind: 'secret', title: 'Personal access token', description: 'Create one at https://dev.azure.com/{organization}/_usersSettings/tokens.', value: state.token ? 'saved in ~/.config/azpr/pat' : 'not set', saved: state.token },
+      { id: 'token', group: 'Azure DevOps', label: 'Access token', kind: 'secret', title: 'Personal access token', description: 'Create one at https://dev.azure.com/{organization}/_usersSettings/tokens.', value: state.token ? 'saved in ~/.config/azpr/pat' : 'not set', saved: state.token, bound: state.bound ?? state.token },
       { id: 'proxy', group: 'Azure DevOps', label: 'Proxy', kind: 'text', title: 'Proxy for Azure DevOps (optional)', description: 'Leave it empty and press Enter to skip.', placeholder: 'http://proxy.example.com:8080', value: state.proxy || 'none', current: state.proxy },
       { id: 'caFile', group: 'Azure DevOps', label: 'CA certificate file', kind: 'text', title: 'CA certificate file (optional)', description: 'Leave it empty and press Enter to skip.', value: state.caFile || 'none', current: state.caFile },
       { id: 'reviewModel', group: 'Models', label: 'Review model', kind: 'model', title: 'Model for /pr-review', value: state.reviewModel || 'not set', current: state.reviewModel },
@@ -343,6 +343,10 @@ test('another organization needs a token of its own: both are saved together, or
   const bare = host(ready({ token: false }), ['organization', 'other-org', undefined]);
   await bare.setup.open();
   assert.deepEqual(bare.calls.at(-1), { method: 'save', input: { changes: { organization: 'other-org' } } });
+  // A token the settings name but that cannot be used at the moment is still the earlier organization's: a new one is asked for.
+  const unusable = host(ready({ token: false, bound: true }), ['organization', 'other-org', TOKEN, undefined]);
+  await unusable.setup.open();
+  assert.deepEqual(unusable.calls.at(-1), { method: 'save', input: { changes: { organization: 'other-org' }, token: TOKEN } });
 });
 
 test('a setup talks to one server part from its first question to its save, also when it fails or is left', async () => {

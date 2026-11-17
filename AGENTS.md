@@ -351,8 +351,12 @@ settings, backups and failure records. Never upload `.local/`.
   that file and settings can be wrong: an existing file is replaced only when
   it is a regular file of the user's own that is empty or holds one token
   (one word of letters, digits, `-` and `_` as long as a token; a line of
-  JSON or a KEY=VALUE pair is something else).
-- A saved token is sent only for the organization it was saved for, like
+  JSON or a KEY=VALUE pair is something else). Setup takes as a token only
+  what passes that same test (`TOKEN_WORD`), so that it can replace what it
+  wrote.
+- A saved token is the one the settings name (`azure.patFile`, else
+  `azure.pat`), as the runtime reads it; the default PAT file is none unless
+  they name it. It is sent only for the organization it was saved for, like
   every other use of the PAT, and only the way the saved settings send it:
   a check for another organization, or through a proxy or with a CA file
   that the call names, needs a token that was entered with it (a proxy and
@@ -370,11 +374,14 @@ settings, backups and failure records. Never upload `.local/`.
   this organization: several settings files of one person share AZPR's
   directory and the default PAT file, their setup locks are not one lock,
   and a file's name proves nothing about whose it is. The RPC changes the
-  organization of settings that have a saved token only together with a
-  token of the new one. Whoever reads the settings and then the file they
-  name must have a pair that belongs together, also during a save and after
-  one that failed; a file a save made is removed when its settings are not
-  written, and no other file is. The earlier token's file is left to its
+  organization of settings that name a token, usable at the moment or not,
+  only together with a token of the new one. Whoever reads the settings and
+  then the file they name must have a pair that belongs together, also
+  during a save and after one that failed; a file a save made is removed
+  when its settings are not written, and no other file is. A write that
+  took place is not reported as failed for what could not be cleaned up
+  after it (a temporary file, the lock): a caller would undo what belongs
+  to it. The earlier token's file is left to its
   person, who is told where it is. (The options of `/pr-setup` keep their
   behaviour: there the person keeps the PAT file.)
 - Several server parts share one settings file (one per project directory,

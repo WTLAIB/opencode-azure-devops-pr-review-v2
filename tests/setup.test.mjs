@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readFile, writeFile, lstat, rm, symlink, readdir, cp, utimes } from 'node:fs/promises';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addMissingSettings, defaultPatFile, settingsFileFor, parseSetupArguments, saveSetup, setupPlugin } from '../src/setup.mjs';
@@ -613,15 +615,16 @@ test('the dialogs and the server part set AZPR up together: the token is checked
   for (const text of [d.said(), JSON.stringify(f.notices), JSON.stringify(after), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(FAKE_PAT), 'The token is in the token file and nowhere else.');
 });
 
-test('a token saved without an organization is not offered or touched: the dialogs ask for a token, which gets a file of its own', async t => {
+test('the default PAT file is no saved token unless settings name it: the dialogs ask for a token, which gets a file of its own', async t => {
   const f = await fixture(t), environment = environmentOf(f), handMade = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat'), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture');
   // Made by hand before any settings existed, as the quickstart for setup with options has it.
   await mkdir(join(environment.XDG_CONFIG_HOME, 'azpr'), { recursive: true, mode: 0o700 });
   await writeFile(handMade, NEW_TOKEN, { mode: 0o600 });
   t.after(await f.setup({ environment }));
+  // No settings name it, so it is no saved token of theirs: every settings file a person has may use that file.
   const before = rowsOf(await f.rpc.handlers.status({})).token;
-  assert.deepEqual([before.saved, before.value], [false, 'saved without an organization']);
-  assert.ok(before.description.endsWith(` The token in ${handMade} was saved without an organization and is not used; the token you enter gets a file of its own.`));
+  assert.deepEqual([before.saved, before.value], [false, 'not set']);
+  assert.ok(!before.description.includes(handMade));
   assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved for an organization yet.' });
   assert.equal(f.azure.state.calls.length, 0, 'The token in the file was sent nowhere.');
   const d = dialogs(f, ['fixture', '', FAKE_PAT, 'fixture/model', '', true]);
@@ -660,6 +663,26 @@ test('settings files that share the directory of the default PAT file get a toke
   assert.equal((await m.rpc.handlers.save({ changes: { organization: 'other', model: 'fixture/model' }, token: NEW_TOKEN })).ok, true);
   assert.deepEqual(await named(m), ['other', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-other-2'), NEW_TOKEN]);
   assert.deepEqual(await named(k), ['fixture', theirs, FAKE_PAT], 'The file other settings name was not written.');
+});
+
+test('settings that were written stay written when the cleanup after them fails: the token they name is not taken away', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment }));
+  // The temporary file of the settings cannot be removed any more once the settings are in place.
+  const unlink = fsPromises.unlink;
+  let failed = 0, result;
+  fsPromises.unlink = async path => {
+    if (/settings\.json\.[0-9a-f-]+\.tmp$/.test(String(path))) { failed++; throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' }); }
+    return unlink(path);
+  };
+  syncBuiltinESMExports();
+  try { result = await f.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT }); }
+  finally { fsPromises.unlink = unlink; syncBuiltinESMExports(); }
+  assert.equal(failed, 1, 'The cleanup failed after the settings were in place.');
+  assert.deepEqual([result.ok, result.status.state], [true, 'ready'], 'What was written is reported as written.');
+  const { organization, patFile } = JSON.parse(await readFile(f.path, 'utf8')).azure;
+  assert.deepEqual([organization, await readFile(patFile, 'utf8')], ['fixture', FAKE_PAT], 'The token the settings name is where they say.');
+  assert.ok(f.agents.has('azpr-review-functional'));
 });
 
 test('two first setups for one organization get a file each, and one that fails takes only its own away', async t => {
@@ -772,6 +795,16 @@ test('the access check tells a refused token, an unknown organization and a netw
     { ok: false, fix: 'token', problem: 'Azure DevOps did not accept this token for the organization "fixture" (HTTP 203). It may be mistyped or expired, or belong to another organization.' });
   assert.deepEqual(await check({ organization: 'elsewhere', token: FAKE_PAT }), { ok: false, fix: 'organization', problem: 'Azure DevOps knows no organization named "elsewhere" (HTTP 404).' });
   assert.deepEqual(await check({ organization: 'fixture', token: 'short' }), { ok: false, fix: 'token', problem: 'That is not one token of 20 to 1024 printable characters.' });
+  // What setup takes as a token is what it can replace later: a token with quotes around it, or other signs in it, is refused.
+  const sentBefore = f.azure.state.calls.length;
+  for (const token of [`"${FAKE_PAT}"`, `'${FAKE_PAT}'`, `${FAKE_PAT}.signature`, `Bearer:${FAKE_PAT}`, `PAT=${FAKE_PAT}`]) {
+    const refused = await check({ organization: 'fixture', token });
+    assert.deepEqual(refused, { ok: false, fix: 'token', problem: 'That is not an Azure DevOps token: it has characters other than letters, digits, "-" and "_" (quotes around it, perhaps).' });
+    assert.deepEqual(await f.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token }),
+      { ok: false, problem: 'The token is not an Azure DevOps token: it has characters other than letters, digits, "-" and "_" (quotes around it, perhaps).' });
+  }
+  assert.equal(f.azure.state.calls.length, sentBefore, 'Nothing was sent for them, and nothing saved.');
+  await assert.rejects(lstat(f.path), { code: 'ENOENT' });
   assert.deepEqual(await check({ organization: 'not a name', token: FAKE_PAT }), { ok: false, fix: '', problem: 'Use your Azure DevOps organization name (the <org> in https://dev.azure.com/<org>), or the URL of one of its pull requests.' });
   assert.deepEqual(await check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved for an organization yet.' });
   const asked = seen.length;
@@ -973,6 +1006,14 @@ test('another organization\'s token gets a file of its own, and the settings swi
   // Another organization does not inherit the saved token: it needs one of its own, saved with it.
   assert.deepEqual(await save({ changes: { organization: 'elsewhere' } }),
     { ok: false, problem: 'The saved token was saved for the organization "fixture". Another organization needs a token of its own: enter it together with the organization.' });
+  // Also while the token file cannot be used: the settings still name it, and it may be usable again later.
+  await chmod(f.pat, 0o644);
+  const unusable = rowsOf(await status({})).token;
+  assert.deepEqual([unusable.saved, unusable.value, unusable.bound], [false, 'cannot be used', true]);
+  assert.deepEqual(await save({ changes: { organization: 'elsewhere' } }),
+    { ok: false, problem: 'The saved token was saved for the organization "fixture". Another organization needs a token of its own: enter it together with the organization.' });
+  await chmod(f.pat, 0o600);
+  assert.deepEqual([(await azure()).organization, rowsOf(await status({})).token.bound], ['fixture', true]);
   assert.equal((await save({ changes: { organization: 'FIXTURE' } })).ok, true, 'The same organization in other letters keeps its token.');
   assert.equal((await save({ changes: { organization: 'fixture' } })).ok, true);
   // Should the settings not be written, the organization and its token are as they were: the other organization's
@@ -1006,23 +1047,25 @@ test('another organization\'s token gets a file of its own, and the settings swi
   for (const text of [JSON.stringify([both, rotated, back]), JSON.stringify(f.notices), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(NEW_TOKEN) && !text.includes(FAKE_PAT));
 });
 
-test('a token that is kept in the default file is named in the settings a first setup saves', async t => {
-  const f = await fixture(t), environment = environmentOf(f), tokenFile = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
-  // Settings that name an organization but no token and no token file, and a token in the default file.
+test('settings that name an organization but no token have none, whatever the default PAT file holds', async t => {
+  const f = await fixture(t), environment = environmentOf(f), common = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat');
+  // The default PAT file may be the token of other settings, for another organization.
   await mkdir(join(environment.XDG_CONFIG_HOME, 'azpr'), { recursive: true, mode: 0o700 });
-  await writeFile(tokenFile, FAKE_PAT, { mode: 0o600 });
+  await writeFile(common, NEW_TOKEN, { mode: 0o600 });
   await mkdir(join(f.root, 'private config'), { mode: 0o700 });
   await writeFile(f.path, JSON.stringify({ version: 2, azure: { organization: 'fixture' } }), { mode: 0o600 });
   t.after(await f.setup({ environment }));
   const before = await f.rpc.handlers.status({});
-  assert.deepEqual([before.state, rowsOf(before).token.saved, rowsOf(before).token.value], ['required', true, 'saved']);
-  const d = dialogs(f, ['fixture', '', '', 'fixture/model', '', true]);
+  assert.deepEqual([before.state, rowsOf(before).token.saved, rowsOf(before).token.value], ['required', false, 'not set']);
+  assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved yet.' });
+  assert.equal(f.azure.state.calls.length, 0, 'The token in the default file was sent nowhere.');
+  const d = dialogs(f, ['fixture', '', FAKE_PAT, 'fixture/model', '', true]);
   await d.setup.open();
   assert.equal(d.left(), 0);
-  assert.match(d.shown.at(-1).message, /^Check access to a pull request/, 'The token that was offered as saved could be kept: the settings are saved and loaded.');
+  assert.equal(d.shown.find(item => item.kind === 'secret').optional, false, 'There is no saved token to keep.');
   const saved = JSON.parse(await readFile(f.path, 'utf8')).azure;
-  assert.deepEqual([saved.pat, saved.patFile], ['', tokenFile]);
-  assert.equal(await readFile(tokenFile, 'utf8'), FAKE_PAT);
+  assert.deepEqual([saved.pat, saved.patFile, await readFile(saved.patFile, 'utf8')], ['', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-fixture'), FAKE_PAT]);
+  assert.equal(await readFile(common, 'utf8'), NEW_TOKEN);
   assert.ok(f.agents.has('azpr-review-functional'));
 });
 
