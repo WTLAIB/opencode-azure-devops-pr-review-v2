@@ -685,6 +685,25 @@ test('settings that were written stay written when the cleanup after them fails:
   assert.ok(f.agents.has('azpr-review-functional'));
 });
 
+test('a token that was replaced stays reported as replaced when the cleanup after it fails', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  await saveSetup(f.context, f.path, f.args);
+  t.after(await f.setup({ environment }));
+  // The temporary file of the token cannot be removed (or looked for) any more once the token is in place.
+  const unlink = fsPromises.unlink;
+  let failed = 0, result;
+  fsPromises.unlink = async path => {
+    if (String(path).startsWith(`${f.pat}.`) && String(path).endsWith('.tmp')) { failed++; throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' }); }
+    return unlink(path);
+  };
+  syncBuiltinESMExports();
+  try { result = await f.rpc.handlers.save({ token: NEW_TOKEN, organization: 'fixture', changes: { language: 'ja' } }); }
+  finally { fsPromises.unlink = unlink; syncBuiltinESMExports(); }
+  assert.equal(failed, 1);
+  assert.deepEqual([result.ok, result.status.state], [true, 'restart'], 'The token was replaced and the settings were written: that is what is reported.');
+  assert.deepEqual([await readFile(f.pat, 'utf8'), JSON.parse(await readFile(f.path, 'utf8')).outputLanguage], [NEW_TOKEN, 'ja']);
+});
+
 test('two first setups for one organization get a file each, and one that fails takes only its own away', async t => {
   const a = await fixture(t), environment = environmentOf(a), directory = join(environment.XDG_CONFIG_HOME, 'azpr');
   const b = await fixture(t);
@@ -713,6 +732,12 @@ test('a token file that settings name for no organization, or the default PAT fi
   const row = rowsOf(await f.rpc.handlers.status({})).token;
   assert.deepEqual([row.saved, row.value], [false, 'saved without an organization']);
   assert.ok(row.description.endsWith(` The token in ${f.pat} was saved without an organization and is not used; the token you enter gets a file of its own.`));
+  // Naming an organization does not make that token the organization's: it needs one of its own, saved with it.
+  assert.deepEqual([row.bound, await f.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' } })],
+    [true, { ok: false, problem: 'The token these settings name was saved without an organization. An organization needs a token of its own: enter it together with the organization.' }]);
+  assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: false, fix: 'token', problem: 'No token is saved for an organization yet.' });
+  assert.equal(f.azure.state.calls.length, 0);
+  assert.equal(await readFile(f.path, 'utf8'), JSON.stringify({ version: 2, azure: { patFile: f.pat } }), 'Nothing was saved.');
   f.azure.state.pat = NEW_TOKEN;
   const d = dialogs(f, ['fixture', '', NEW_TOKEN, 'fixture/model', '', true]);
   await d.setup.open();

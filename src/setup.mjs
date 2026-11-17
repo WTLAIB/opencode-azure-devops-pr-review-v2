@@ -377,10 +377,15 @@ async function writeTokenFile(path, token) {
     }
   }
   const temporary = `${path}.${randomUUID()}.tmp`;
+  let replaced = false;
   try {
     await writeTemporary(temporary, token);
     await rename(temporary, path);
-  } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+    replaced = true;
+  } finally {
+    // The token is in place: what cannot be cleaned up after that is no reason to report it as not replaced.
+    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT' && !replaced) throw error; });
+  }
 }
 
 /**
@@ -792,7 +797,8 @@ function createSetupService({ context, path, environment, options, loaded, saved
       let { next } = await apply(raw, input.changes ?? {});
       const before = withMissingSettings(raw).settings;
       const was = text(azureOf(before).organization), named = text(azureOf(next).organization);
-      const another = Boolean(was) && named.toLowerCase() !== was.toLowerCase();
+      // The organization these settings name changes: from one to another, or from none to one.
+      const changed = named.toLowerCase() !== was.toLowerCase(), another = changed && Boolean(was);
       // The file the token of these settings was in until now, where they named an organization and a token file.
       const source = was ? text(azureOf(before).patFile) : '';
       let token, directory = '';
@@ -812,10 +818,11 @@ function createSetupService({ context, path, environment, options, loaded, saved
         // the settings are checked with the name it will have if that name is free.
         if (!(kept && was && !another && resolve(kept) !== resolve(defaultPatFile(environment)))) directory = dirname(kept || defaultPatFile(environment));
         next = withAzure(next, { pat: '', patFile: directory ? join(directory, `pat-${named.toLowerCase()}`) : kept });
-      } else if (another && (text(azureOf(before).patFile) || text(azureOf(before).pat))) {
-        // Without a new token, the one these settings name would pass to an organization it was not saved for,
-        // also one that cannot be read at the moment: its file may be readable again later.
-        return { ok: false, problem: `The saved token was saved for the organization "${was}". Another organization needs a token of its own: enter it together with the organization.` };
+      } else if (changed && (text(azureOf(before).patFile) || text(azureOf(before).pat))) {
+        // Without a new token, the one these settings name would pass to an organization it was not saved for:
+        // also a token that cannot be read at the moment (its file may be readable again later), and also one
+        // that was saved for no organization.
+        return { ok: false, problem: `${was ? `The saved token was saved for the organization "${was}". Another organization` : 'The token these settings name was saved without an organization. An organization'} needs a token of its own: enter it together with the organization.` };
       }
       let { settings } = withMissingSettings(next);
       valid(validateSettings, settings);
@@ -826,22 +833,23 @@ function createSetupService({ context, path, environment, options, loaded, saved
           // checked against.
           if (await readExisting(path) !== previous) throw settingsChanged();
           let replaced = false;
-          if (directory) {
-            made = await createTokenFile(directory, named, token);
-            ({ settings } = withMissingSettings(withAzure(next, { patFile: made })));
-            valid(validateSettings, settings);
-            written = settingsText(settings);
-            wrote = true;
-          } else if (token !== undefined) {
-            // The token that is already there is left as it is: nothing changed, so nothing waits for a restart.
-            replaced = !(await readPatFile(settings.azure.patFile).then(kept => kept === token, () => false));
-            if (replaced) { await writeTokenFile(settings.azure.patFile, token); wrote = true; }
-          }
-          try { if (written !== previous) { await replaceSettings(path, previous, settings, options.settingsPrepared); wrote = true; } }
-          catch (error) {
+          try {
+            if (directory) {
+              made = await createTokenFile(directory, named, token);
+              ({ settings } = withMissingSettings(withAzure(next, { patFile: made })));
+              valid(validateSettings, settings);
+              written = settingsText(settings);
+            } else if (token !== undefined) {
+              // The token that is already there is left as it is: nothing changed, so nothing waits for a restart.
+              const differs = !(await readPatFile(settings.azure.patFile).then(kept => kept === token, () => false));
+              if (differs) { await writeTokenFile(settings.azure.patFile, token); replaced = true; }
+            }
+            if (written !== previous) await replaceSettings(path, previous, settings, options.settingsPrepared);
+            wrote = Boolean(made) || replaced || written !== previous;
+          } catch (error) {
             // The file this save made is named by nothing: it is taken away again, and the organization and its
             // token are as they were.
-            if (made) { await unlink(made).catch(() => {}); throw error; }
+            if (made) { await unlink(made).catch(() => {}); made = ''; throw error; }
             if (!replaced) throw error;
             // The token file the settings name has the new token by now: say so, since the answer otherwise
             // reads as if nothing had changed.

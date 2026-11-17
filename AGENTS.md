@@ -374,8 +374,9 @@ settings, backups and failure records. Never upload `.local/`.
   this organization: several settings files of one person share AZPR's
   directory and the default PAT file, their setup locks are not one lock,
   and a file's name proves nothing about whose it is. The RPC changes the
-  organization of settings that name a token, usable at the moment or not,
-  only together with a token of the new one. Whoever reads the settings and
+  organization of settings that name a token (usable at the moment or not;
+  also from no organization to one) only together with a token of the new
+  one. Whoever reads the settings and
   then the file they name must have a pair that belongs together, also
   during a save and after one that failed; a file a save made is removed
   when its settings are not written, and no other file is. A write that

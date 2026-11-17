@@ -343,6 +343,11 @@ test('another organization needs a token of its own: both are saved together, or
   const bare = host(ready({ token: false }), ['organization', 'other-org', undefined]);
   await bare.setup.open();
   assert.deepEqual(bare.calls.at(-1), { method: 'save', input: { changes: { organization: 'other-org' } } });
+  // Nor does a token that was saved without an organization become the organization's when one is named.
+  const unowned = host(ready({ organization: '', token: false, bound: true }), ['organization', 'other-org', TOKEN, undefined]);
+  await unowned.setup.open();
+  assert.equal(unowned.shown[2].problem, 'The token these settings name was saved without an organization. Enter a token of other-org; without one the organization is not saved.');
+  assert.deepEqual(unowned.calls.at(-1), { method: 'save', input: { changes: { organization: 'other-org' }, token: TOKEN } });
   // A token the settings name but that cannot be used at the moment is still the earlier organization's: a new one is asked for.
   const unusable = host(ready({ token: false, bound: true }), ['organization', 'other-org', TOKEN, undefined]);
   await unusable.setup.open();

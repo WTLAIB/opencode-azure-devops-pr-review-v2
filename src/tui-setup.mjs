@@ -280,7 +280,8 @@ export function createSetup(host) {
           // be used at the moment or not: the new one gets its own, checked for it, and both are saved together
           // or not at all.
           const token = await askToken({ ...tokenRow, saved: false }, { organization: answer.value, network: () => ({}), repair,
-            problem: `The saved token was saved for ${previous}. Enter a token of ${answer.value}; without one the organization stays ${previous}.` });
+            problem: previous ? `The saved token was saved for ${previous}. Enter a token of ${answer.value}; without one the organization stays ${previous}.`
+              : `The token these settings name was saved without an organization. Enter a token of ${answer.value}; without one the organization is not saved.` });
           if (token === undefined) continue;
           if (token.organization !== undefined) { await dialog.alert({ title: row.title, message: token.organization }); continue; }
           input = { changes: { organization: answer.value }, token: token.token };
