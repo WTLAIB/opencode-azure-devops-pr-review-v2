@@ -360,19 +360,23 @@ settings, backups and failure records. Never upload `.local/`.
 - Organization and token change in one step, the write of the settings
   file. A save names the organization its token was checked for, which must
   still be the one in the settings. A token of the organization the settings
-  named already replaces the token file they name; every other token gets a
-  file named for its organization (`pat-<organization>`, beside the file the
-  settings name or in AZPR's directory), which the settings name in the same
-  write. Setup never chooses the default PAT file (`azpr/pat`) or any other
-  file that settings may name for another organization: every settings file
-  a person has shares that default. The RPC changes the organization of
-  settings that have a saved token only together with a token of the new
-  one. Never write the token of one organization into a file that settings
-  name for another: whoever reads the settings and then the file they name
-  must have a pair that belongs together, also during a save and after one
-  that failed. The earlier token's file is left to its person, who is told
-  where it is. (The options of `/pr-setup` keep their behaviour: there the
-  person keeps the PAT file.)
+  named already replaces the token file they name. Every other token gets a
+  file that did not exist (`createTokenFile`: `pat-<organization>`, or that
+  name with the first free number, beside the file the settings name or in
+  AZPR's directory; the name is taken in one step that refuses an existing
+  one), which the settings name in the same write: a first setup's, another
+  organization's, and one for settings that name the default PAT file
+  (`azpr/pat`). Setup overwrites no file but the one these settings name for
+  this organization: several settings files of one person share AZPR's
+  directory and the default PAT file, their setup locks are not one lock,
+  and a file's name proves nothing about whose it is. The RPC changes the
+  organization of settings that have a saved token only together with a
+  token of the new one. Whoever reads the settings and then the file they
+  name must have a pair that belongs together, also during a save and after
+  one that failed; a file a save made is removed when its settings are not
+  written, and no other file is. The earlier token's file is left to its
+  person, who is told where it is. (The options of `/pr-setup` keep their
+  behaviour: there the person keeps the PAT file.)
 - Several server parts share one settings file (one per project directory,
   and other processes). The token file and the settings that name it are
   therefore written under the setup lock, the token first, after the

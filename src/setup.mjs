@@ -332,20 +332,24 @@ export async function saveSetup(context, path, arguments_, environment = process
   return { organization: text(settings.azure?.organization), patFile, changed, first, unusable };
 }
 
-/**
- * Replace the token file, or create it: one file that holds only the token, readable by its owner alone
- * (mode 600), in a directory no one else can write to. The new content takes the file's place in one step,
- * so a reader sees the old token or the new one. A path that is anything but a regular file of the user's
- * own is refused and left as it is.
- */
-async function writeTokenFile(path, token) {
-  const parent = dirname(path);
+const mine = info => typeof process.getuid !== 'function' || info.uid === process.getuid();
+/** The directory of a token file, made where it is missing: the user's own, and no one else may write to it. */
+async function tokenDirectory(parent) {
   await mkdir(parent, { recursive: true, mode: 0o700 });
-  const mine = info => typeof process.getuid !== 'function' || info.uid === process.getuid();
   const parentInfo = await lstat(parent);
   if (!parentInfo.isDirectory() || (parentInfo.mode & 0o022) || !mine(parentInfo)) {
     throw new Error('[AZPR] The directory of the token file must be a directory owned by you, not a symbolic link or writable by other users.');
   }
+}
+
+/**
+ * Replace the token file the settings name for this organization: one file that holds only the token,
+ * readable by its owner alone (mode 600), in a directory no one else can write to. The new content takes
+ * the file's place in one step, so a reader sees the old token or the new one. A path that is anything but
+ * a regular file of the user's own is refused and left as it is.
+ */
+async function writeTokenFile(path, token) {
+  await tokenDirectory(dirname(path));
   const existing = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (existing && (!existing.isFile() || existing.nlink !== 1 || !mine(existing))) {
     throw new Error('[AZPR] The token file must be a regular file owned by you, without hard links; it was left as it is.');
@@ -368,6 +372,27 @@ async function writeTokenFile(path, token) {
   try {
     await writeTemporary(temporary, token);
     await rename(temporary, path);
+  } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+}
+
+/**
+ * Make a token file that did not exist, and return its path: `pat-<organization>` in `directory`, or that
+ * name with the first number that is free (`pat-<organization>-2`). The name is taken in one step that
+ * refuses a name which exists, so no file is ever overwritten, and no two saves get the same file, whichever
+ * settings file each is for: several settings files of one person share AZPR's directory, and their setup
+ * locks are not the same lock. Owner-only (mode 600), in a directory no one else can write to.
+ */
+async function createTokenFile(directory, organization, token) {
+  await tokenDirectory(directory);
+  const temporary = join(directory, `pat.${randomUUID()}.tmp`);
+  try {
+    await writeTemporary(temporary, token);
+    for (let number = 1; number <= 999; number++) {
+      const file = join(directory, `pat-${organization.toLowerCase()}${number === 1 ? '' : `-${number}`}`);
+      try { await link(temporary, file); return file; }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    throw new Error('[AZPR] The directory of the token file has no free name for a token file of this organization; remove the ones that are no longer needed.');
   } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
@@ -584,27 +609,13 @@ function createSetupService({ context, path, environment, options, loaded, saved
   }
   /** Where a saved token is read: the file the settings name, else the default PAT file (which a person may have made). */
   const tokenFileOf = raw => text(azureOf(raw).patFile) || defaultPatFile(environment);
-  /**
-   * Where a new token of `organization` is written. The file the settings name, while it is that
-   * organization's (`another`: the settings named another organization before this save). Else a file named
-   * for the organization, beside the file the settings name or in AZPR's directory: the default PAT file is
-   * the same for every settings file a person has, so setup never chooses it, nor any other file that
-   * settings may name for another organization. A file named for an organization holds tokens of that one.
-   */
-  const tokenFileFor = (raw, organization, another = false) => {
-    const named = text(azureOf(raw).patFile);
-    if (named && !another) return named;
-    const file = join(dirname(named || defaultPatFile(environment)), `pat-${organization.toLowerCase()}`);
-    return named && resolve(file) === resolve(named) ? `${file}.1` : file;
-  };
   /** Whether a token is saved and can be used, how the list shows that, and what its dialog adds; never the token. */
   async function tokenState(raw) {
     // A token is saved for an organization. Where the settings name none, a token that is there belongs to none
     // yet: it is not offered, since a check would not send it.
-    const organization = text(azureOf(raw).organization), owned = Boolean(organization);
+    const owned = Boolean(text(azureOf(raw).organization));
     if (!text(azureOf(raw).patFile) && text(azureOf(raw).pat)) {
-      return { saved: owned && !patProblem(azureOf(raw).pat), shown: 'in the settings file',
-        note: `A new token is saved in ${owned ? shownPath(tokenFileFor(raw, organization)) : 'a file of its own'} instead of in the settings file.` };
+      return { saved: owned && !patProblem(azureOf(raw).pat), shown: 'in the settings file', note: 'A new token is saved in a file of its own instead of in the settings file.' };
     }
     const file = tokenFileOf(raw);
     try {
@@ -730,14 +741,16 @@ function createSetupService({ context, path, environment, options, loaded, saved
    *
    * A token is saved for an organization: the one this save sets, or the one it was checked for, which must
    * still be the one in the settings. Organization and token change in one step, the write of the settings
-   * file: a token of the organization the settings named already replaces the token file they name, and
-   * every other token gets a file named for its organization (`pat-<organization>`; see `tokenFileFor`),
-   * which the settings name in the same write. A file that settings name for one organization is never
-   * written with another's token, so whoever reads the settings and then the file they name has a token of
-   * that organization, also while a save is under way, and after one that failed or was cut short.
+   * file. A token of the organization the settings named already replaces the token file they name. Every
+   * other token gets a file that did not exist (`createTokenFile`), which the settings name in the same
+   * write: a first setup's, another organization's, and one for settings that name the default PAT file,
+   * which every settings file a person has may use. So setup overwrites no file but the one these settings
+   * name for this organization, and whoever reads the settings and then the file they name has a token of
+   * that organization, also while a save is under way and after one that failed or was cut short.
    *
    * Both files are written under the setup lock, the token first, and only while the settings file still
-   * is what the answers were checked against.
+   * is what the answers were checked against. A token file this save made is removed again when the
+   * settings are not written: nothing names it.
    */
   async function save(input) {
     if (saving) return { ok: false, problem: 'Another setup is being saved.' };
@@ -753,7 +766,9 @@ function createSetupService({ context, path, environment, options, loaded, saved
       const before = withMissingSettings(raw).settings;
       const was = text(azureOf(before).organization), named = text(azureOf(next).organization);
       const another = Boolean(was) && named.toLowerCase() !== was.toLowerCase();
-      let token, earlier = '';
+      // The file the token of these settings was in until now, where they had an organization and kept it in a file.
+      const source = !was ? '' : text(azureOf(before).patFile) || (text(azureOf(before).pat) ? '' : defaultPatFile(environment));
+      let token, directory = '';
       if (input.token !== undefined) {
         token = text(input.token).trim();
         const problem = patProblem(token);
@@ -764,12 +779,12 @@ function createSetupService({ context, path, environment, options, loaded, saved
           return { ok: false, problem: `The token was checked for the organization "${expected}", but the settings name ${named ? `"${named}"` : 'none'} now. Nothing was saved; run /pr-setup again.` };
         }
         const kept = text(azureOf(next).patFile);
-        if (kept && !isAbsolute(kept)) return { ok: false, problem: 'The token file must be an absolute path other than the settings file.' };
-        const file = tokenFileFor(next, named, another);
-        if (!isAbsolute(file) || resolve(file) === resolve(path)) return { ok: false, problem: 'The token file must be an absolute path other than the settings file.' };
-        // The file the earlier organization's token is in, where it was in a file.
-        if (another && (kept || !text(azureOf(before).pat))) earlier = tokenFileOf(before);
-        next = withAzure(next, { pat: '', patFile: file });
+        if (kept && (!isAbsolute(kept) || resolve(kept) === resolve(path))) return { ok: false, problem: 'The token file must be an absolute path other than the settings file.' };
+        // Replaced where it is only when these settings name the file for this very organization, and it is not
+        // the default PAT file. Otherwise a file is made beside it, or in AZPR's directory; until it is made,
+        // the settings are checked with the name it will have if that name is free.
+        if (!(kept && was && !another && resolve(kept) !== resolve(defaultPatFile(environment)))) directory = dirname(kept || defaultPatFile(environment));
+        next = withAzure(next, { pat: '', patFile: directory ? join(directory, `pat-${named.toLowerCase()}`) : kept });
       } else if (another && (await tokenState(before)).saved) {
         // Without a new token, the saved one would pass to an organization it was not saved for.
         return { ok: false, problem: `The saved token was saved for the organization "${was}". Another organization needs a token of its own: enter it together with the organization.` };
@@ -777,26 +792,32 @@ function createSetupService({ context, path, environment, options, loaded, saved
         // The token that is kept is in the default file, which settings without a token file do not name yet.
         next = withAzure(next, { patFile: tokenFileOf(next) });
       }
-      const { settings } = withMissingSettings(next);
+      let { settings } = withMissingSettings(next);
       valid(validateSettings, settings);
-      const written = settingsText(settings);
-      let wrote = false;
+      let written = settingsText(settings), wrote = false, made = '';
       if (token !== undefined || written !== previous) {
         await withSetupLock(path, async () => {
           // Once more, under the lock and before anything is written: the file still is what the answers were
           // checked against.
           if (await readExisting(path) !== previous) throw settingsChanged();
-          const file = settings.azure.patFile;
-          // The token that is already there is left as it is: nothing changed, so nothing waits for a restart.
-          const replaced = token !== undefined && !(await readPatFile(file).then(kept => kept === token, () => false));
-          const existed = replaced && await lstat(file).then(() => true, () => false);
-          if (replaced) { await writeTokenFile(file, token); wrote = true; }
+          let replaced = false;
+          if (directory) {
+            made = await createTokenFile(directory, named, token);
+            ({ settings } = withMissingSettings(withAzure(next, { patFile: made })));
+            valid(validateSettings, settings);
+            written = settingsText(settings);
+            wrote = true;
+          } else if (token !== undefined) {
+            // The token that is already there is left as it is: nothing changed, so nothing waits for a restart.
+            replaced = !(await readPatFile(settings.azure.patFile).then(kept => kept === token, () => false));
+            if (replaced) { await writeTokenFile(settings.azure.patFile, token); wrote = true; }
+          }
           try { if (written !== previous) { await replaceSettings(path, previous, settings, options.settingsPrepared); wrote = true; } }
           catch (error) {
+            // The file this save made is named by nothing: it is taken away again, and the organization and its
+            // token are as they were.
+            if (made) { await unlink(made).catch(() => {}); throw error; }
             if (!replaced) throw error;
-            // The token went to a file that the settings on disk do not name: the organization and its token
-            // are as they were. A file that this save created is taken away again.
-            if (file !== text(azureOf(before).patFile)) { if (!existed) await unlink(file).catch(() => {}); throw error; }
             // The token file the settings name has the new token by now: say so, since the answer otherwise
             // reads as if nothing had changed.
             throw new Error(`[AZPR] The token was saved, but the settings were not: ${said(error, 'the settings file could not be written.')}`);
@@ -804,9 +825,10 @@ function createSetupService({ context, path, environment, options, loaded, saved
         });
       }
       await saved(unusable && wrote);
-      // The earlier organization's token is still where it was: a person decides what becomes of it.
-      const stays = earlier && await readPatFile(earlier).then(() => true, () => false);
-      return { ok: true, status: await status(), ...(stays ? { note: `The token of "${was}" is still in ${shownPath(earlier)}. Delete that file if you no longer need it.` } : {}) };
+      // The token these settings had before is still in its file: a person decides what becomes of it.
+      const stays = made && source && resolve(source) !== resolve(made) && await readPatFile(source).then(() => true, () => false);
+      return { ok: true, status: await status(),
+        ...(stays ? { note: `The ${another ? `token of "${was}"` : 'earlier token'} is still in ${shownPath(source)}. Delete that file if you no longer need it.` } : {}) };
     } finally { saving = false; }
   }
 

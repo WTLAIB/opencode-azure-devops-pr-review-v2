@@ -74,9 +74,10 @@ and reopen OpenCode. Dialogs then ask for what a review cannot run without:
    reviewer and verifier roles and `/pr-quick`.
 
 After a summary, AZPR saves the token alone in a file only you can read
-(mode 600, `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`) and the
-settings beside it, and loads them at once: no restart is needed. The token
-is not shown again and is in no conversation, notice or log.
+(mode 600, `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`, a file
+it makes for this) and the settings beside it, and loads them at once: no
+restart is needed. The token is not shown again and is in no conversation,
+notice or log.
 
 Run `/pr-setup` again at any time to see the settings as a list and change
 one: a stronger model for `/pr-deep`, the output language, the proxy, a new

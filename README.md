@@ -606,9 +606,10 @@ command palette has them too ("AZPR: settings").
   the organization, or the way there. If Azure DevOps cannot be reached, you
   can set the proxy or the CA file right there and try the same token again,
   or save it unchecked. The token is then saved alone in a file only you can
-  read (mode 600): the token file your settings name already, or else
-  `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`. It is in no
-  conversation, notice or log, and is not shown again.
+  read (mode 600): a new file, `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`
+  (with a number where that name is taken), or the token file your settings
+  name already for that organization. Setup overwrites no other file. The
+  token is in no conversation, notice or log, and is not shown again.
 - **Afterwards** `/pr-setup` lists the settings with their values:
   organization, token, proxy, CA certificate file, the review, quick and deep
   models, output language, what follows a review, the report in the
@@ -617,8 +618,8 @@ command palette has them too ("AZPR: settings").
   needed. Posting comments without a preview asks once more, with "no" first.
   Another organization asks for a token of its own, since the saved one was
   saved for the organization it was checked for; the two are saved together,
-  the new token in the file named for its organization beside the first, and
-  AZPR says where the earlier token still is.
+  the new token in a new file beside the first, and AZPR says where the
+  earlier token still is.
   The other settings are in the settings file, which the list names.
 
 The dialogs only ask. The plugin's server part checks every answer, writes

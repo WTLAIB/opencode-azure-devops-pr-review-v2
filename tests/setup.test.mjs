@@ -648,6 +648,71 @@ test('settings files that share the directory of the default PAT file get a toke
   assert.deepEqual(await named(g), ['elsewhere', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-elsewhere'), NEW_TOKEN]);
   assert.deepEqual(await f.rpc.handlers.check({ organization: 'fixture' }), { ok: true, organization: 'fixture' }, 'Each still sends its own token to its own organization.');
   assert.deepEqual((await readdir(join(environment.XDG_CONFIG_HOME, 'azpr'))).sort(), ['pat-elsewhere', 'pat-fixture']);
+
+  // A name is no proof of whose file it is. Settings for "fixture" that a person pointed at a file called pat-other:
+  const theirs = join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-other');
+  await writeFile(theirs, FAKE_PAT, { mode: 0o600 });
+  const k = await fixture(t);
+  await saveSetup(k.context, k.path, parseSetupArguments(`--organization fixture --model fixture/model --pat-file "${theirs}"`), environment);
+  // A first setup for the organization "other" makes a file that did not exist, and leaves that one alone.
+  const m = await fixture(t);
+  t.after(await m.setup({ environment }));
+  assert.equal((await m.rpc.handlers.save({ changes: { organization: 'other', model: 'fixture/model' }, token: NEW_TOKEN })).ok, true);
+  assert.deepEqual(await named(m), ['other', join(environment.XDG_CONFIG_HOME, 'azpr', 'pat-other-2'), NEW_TOKEN]);
+  assert.deepEqual(await named(k), ['fixture', theirs, FAKE_PAT], 'The file other settings name was not written.');
+});
+
+test('two first setups for one organization get a file each, and one that fails takes only its own away', async t => {
+  const a = await fixture(t), environment = environmentOf(a), directory = join(environment.XDG_CONFIG_HOME, 'azpr');
+  const b = await fixture(t);
+  let other;
+  // While the first has made its token file and is about to write its settings, the second saves (its settings
+  // file is another one, and so is its lock); then the first one's settings file turns out to have changed.
+  t.after(await a.setup({ environment, settingsPrepared: async () => {
+    other = await b.rpc.handlers.save({ changes: { organization: 'shared', model: 'fixture/model' }, token: NEW_TOKEN });
+    await writeFile(a.path, '{}', { mode: 0o600 });
+  } }));
+  t.after(await b.setup({ environment }));
+  const mine = await a.rpc.handlers.save({ changes: { organization: 'shared', model: 'fixture/model' }, token: FAKE_PAT });
+  assert.deepEqual(mine, { ok: false, fix: '', problem: 'Settings changed during setup; retry after reviewing the file.' });
+  assert.equal(other.ok, true);
+  const { organization, patFile } = JSON.parse(await readFile(b.path, 'utf8')).azure;
+  assert.deepEqual([organization, patFile, await readFile(patFile, 'utf8')], ['shared', join(directory, 'pat-shared-2'), NEW_TOKEN], 'The second setup\'s token is where its settings say.');
+  assert.deepEqual(await readdir(directory), ['pat-shared-2'], 'The first took away the file it had made, and nothing else.');
+});
+
+test('a token file that settings name for no organization, or the default PAT file, is never written: the token gets a file of its own', async t => {
+  // Settings that name a token file but no organization, as a person may have left them.
+  const f = await fixture(t), environment = environmentOf(f);
+  await mkdir(join(f.root, 'private config'), { mode: 0o700 });
+  await writeFile(f.path, JSON.stringify({ version: 2, azure: { patFile: f.pat } }), { mode: 0o600 });
+  t.after(await f.setup({ environment }));
+  const row = rowsOf(await f.rpc.handlers.status({})).token;
+  assert.deepEqual([row.saved, row.value], [false, 'saved without an organization']);
+  assert.ok(row.description.endsWith(` The token in ${f.pat} was saved without an organization and is not used; the token you enter gets a file of its own.`));
+  f.azure.state.pat = NEW_TOKEN;
+  const d = dialogs(f, ['fixture', '', NEW_TOKEN, 'fixture/model', '', true]);
+  await d.setup.open();
+  assert.equal(d.left(), 0);
+  assert.equal(await readFile(f.pat, 'utf8'), FAKE_PAT, 'What the dialog said is what happened: that file was not written.');
+  const saved = JSON.parse(await readFile(f.path, 'utf8')).azure;
+  assert.deepEqual([saved.patFile, await readFile(saved.patFile, 'utf8'), await mode(saved.patFile)], [join(f.root, 'pat-fixture'), NEW_TOKEN, 0o600]);
+  assert.match(d.shown.at(-1).message, /\/pr-setup shows and changes these settings\.$/, 'No earlier token of these settings is left behind: nothing more is said.');
+
+  // Settings as setup with options leaves them: they name the default PAT file, which every settings file may use.
+  const g = await fixture(t), shared = environmentOf(g), common = join(shared.XDG_CONFIG_HOME, 'azpr', 'pat');
+  await mkdir(join(shared.XDG_CONFIG_HOME, 'azpr'), { recursive: true, mode: 0o700 });
+  await writeFile(common, FAKE_PAT, { mode: 0o600 });
+  await saveSetup(g.context, g.path, parseSetupArguments('--organization fixture --model fixture/model'), shared);
+  assert.equal(JSON.parse(await readFile(g.path, 'utf8')).azure.patFile, common);
+  t.after(await g.setup({ environment: shared }));
+  const rotated = await g.rpc.handlers.save({ token: NEW_TOKEN, organization: 'fixture' });
+  assert.deepEqual([rotated.ok, rotated.note], [true, `The earlier token is still in ${common}. Delete that file if you no longer need it.`]);
+  const now = JSON.parse(await readFile(g.path, 'utf8')).azure;
+  assert.deepEqual([now.patFile, await readFile(now.patFile, 'utf8'), await readFile(common, 'utf8')], [join(shared.XDG_CONFIG_HOME, 'azpr', 'pat-fixture'), NEW_TOKEN, FAKE_PAT]);
+  // From then on the file is these settings' own for this organization: the next token replaces it.
+  const again = await g.rpc.handlers.save({ token: `${NEW_TOKEN}3`, organization: 'fixture' });
+  assert.deepEqual([again.ok, again.note, await readFile(now.patFile, 'utf8'), JSON.parse(await readFile(g.path, 'utf8')).azure.patFile], [true, undefined, `${NEW_TOKEN}3`, now.patFile]);
 });
 
 test('a settings file removed while AZPR runs: setup starts again, and what it saves waits for a restart', async t => {
