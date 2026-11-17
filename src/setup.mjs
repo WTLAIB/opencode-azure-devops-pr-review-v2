@@ -281,7 +281,7 @@ async function readExisting(path) {
  * file. The file names every setting, those setup does not ask for at their defaults. Returns the saved
  * organization and PAT file, the labels of the single settings that were changed, whether the settings it
  * replaced could not be used (`unusable`), and what the settings and the token file they name held when it
- * read them (`before`) and hold after it (`after`; see `pairOf`).
+ * read them (`before`) and what it leaves (`after`: the text it wrote with the token it read; see `pairWith`).
  */
 export async function saveSetup(context, path, arguments_, environment = process.env) {
   const previous = await readExisting(path);
@@ -297,7 +297,10 @@ export async function saveSetup(context, path, arguments_, environment = process
   if (raw.models !== undefined && !object(raw.models) || raw.azure !== undefined && !object(raw.azure)) {
     throw new Error('[AZPR] Repair models and azure objects in settings.json before setup; existing data was preserved.');
   }
-  let next = raw, patFile = text(raw.azure?.patFile);
+  // The token that goes with the settings, as it is when they are read: what this save leaves is said from
+  // what it read and wrote, never from a later look, which could be at another writer's work.
+  const heldDigest = previous === null ? '' : await tokenDigest(previous);
+  let next = raw, patFile = text(raw.azure?.patFile), leftDigest = heldDigest;
   if (first) {
     const model = arguments_['--model'];
     const organization = organizationName(arguments_['--organization']);
@@ -310,7 +313,7 @@ export async function saveSetup(context, path, arguments_, environment = process
       azure: { ...raw.azure, organization, pat: '', patFile } };
     validateSettings(withMissingSettings(next).settings);
     await checkModel(context, model);
-    try { await readPatFile(patFile); }
+    try { leftDigest = digestOf(await readPatFile(patFile)); }
     catch (error) {
       if (arguments_['--pat-file'] !== undefined) throw error;
       // Name the file setup chose, so the reader knows where to put the PAT.
@@ -329,9 +332,9 @@ export async function saveSetup(context, path, arguments_, environment = process
   validateSettings(settings);
   // Judged on the text this save replaces, not on a second read: whether it is this save that makes the settings usable.
   const unusable = Boolean((await settingsTextProblem(previous)).problem);
-  const before = await pairOf(previous);
   await writeSettings(path, previous, settings);
-  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable, before, after: await pairOf(settingsText(settings)) };
+  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable,
+    before: previous === null ? undefined : pairWith(previous, heldDigest), after: pairWith(settingsText(settings), leftDigest) };
 }
 
 const mine = info => typeof process.getuid !== 'function' || info.uid === process.getuid();
@@ -581,19 +584,20 @@ async function settingsTextProblem(text) {
   }
 }
 
-/**
- * What a settings text and the token file it names hold, as one value to compare: the text, and a digest of
- * the token where the settings name a file that can be read. Never the token. Undefined for no settings file.
- */
-async function pairOf(text) {
-  if (typeof text !== 'string') return undefined;
-  let digest = '';
+/** A token as it may be compared and remembered: a digest, never the token. */
+const digestOf = token => createHash('sha256').update(token).digest('hex');
+/** The digest of the token in the file a settings text names; '' where it names none or the file cannot be read. */
+async function tokenDigest(text) {
   try {
     const file = settingsJSON(text).azure?.patFile;
-    if (typeof file === 'string' && file) digest = createHash('sha256').update(await readPatFile(file)).digest('hex');
+    if (typeof file === 'string' && file) return digestOf(await readPatFile(file));
   } catch { /* A text that is no settings, or a token file that cannot be read: no token to tell apart. */ }
-  return `${digest}\n${text}`;
+  return '';
 }
+/** A settings text and the token that goes with it (as its digest), as one value to compare. */
+const pairWith = (text, digest) => `${digest}\n${text}`;
+/** What a settings text and the token file it names hold at this moment; undefined for no settings file. */
+const pairOf = async text => typeof text === 'string' ? pairWith(text, await tokenDigest(text)) : undefined;
 
 /** What an error may say to the person who is setting AZPR up: AZPR's own words, and never an OS or parser message. */
 const said = (error, fallback) => typeof error?.message === 'string' && error.message.startsWith('[AZPR] ') ? error.message.slice(7) : fallback;
@@ -622,7 +626,8 @@ function accessProblem(error, organization, proxy) {
  * runtime's own answer to whether the settings file and the PAT file are still what it read).
  * `saved({ made, before, after })` is told after every save that succeeded: whether it made unusable
  * settings usable (the settings it replaced could not be used, and it wrote something), and what the
- * settings and the token file they name held when it read them and hold after it (`pairOf`).
+ * settings and the token file they name held when it read them and what it leaves (`pairWith`: the text
+ * in the file after it with the token it wrote, or else the one it found).
  * `options` are the runtime's test options (fetch, azureBaseUrl), `checkTimeoutMs` and, for offline tests,
  * `settingsPrepared` (runs when a save's new settings text is ready, before it replaces the file).
  */
@@ -675,7 +680,11 @@ function createSetupService({ context, path, environment, options, loaded, saved
   }
 
   /** Whether the loaded runtime refuses new runs because the settings file or the PAT file changed since it read them. */
-  const drifted = async use => { try { return Boolean(await use.drift?.()); } catch { return true; } };
+  const drifted = async use => {
+    // No answer is no "nothing changed": a runtime that loaded nothing (settings switched off) has read none.
+    if (typeof use.drift !== 'function') return true;
+    try { return Boolean(await use.drift()); } catch { return true; }
+  };
 
   async function status() {
     const { previous, raw, fileProblem } = await current();
@@ -811,10 +820,10 @@ function createSetupService({ context, path, environment, options, loaded, saved
       const { previous, raw, fileProblem } = await current();
       if (raw === null) return { ok: false, problem: fileProblem };
       // Whether it is this save that makes the settings usable, judged on the text it replaces: only then are
-      // they this setup's to load. And what the settings and their token file hold now, to tell later whether
-      // anything else wrote them in between.
+      // they this setup's to load. And the token that goes with them now, to tell later whether anything else
+      // wrote the settings or the token in between.
       const unusable = loaded().blocked && Boolean((await settingsTextProblem(previous)).problem);
-      const held = await pairOf(previous);
+      const heldDigest = typeof previous === 'string' ? await tokenDigest(previous) : '';
       let { next } = await apply(raw, input.changes ?? {});
       const before = withMissingSettings(raw).settings;
       const was = text(azureOf(before).organization), named = text(azureOf(next).organization);
@@ -878,7 +887,11 @@ function createSetupService({ context, path, environment, options, loaded, saved
           }
         });
       }
-      await saved({ made: unusable && wrote, before: held, after: await pairOf(onDisk) });
+      // What this save leaves is said from what it wrote: the text that is in the file after it, and the token
+      // it was given, or else the one that was there when it read the settings. Never from another look at the
+      // files, which could be at what another writer put there since.
+      await saved({ made: unusable && wrote, before: typeof previous === 'string' ? pairWith(previous, heldDigest) : undefined,
+        after: pairWith(onDisk, token !== undefined ? digestOf(token) : heldDigest) });
       // The token these settings had before is still in its file: a person decides what becomes of it.
       const stays = made && source && resolve(source) !== resolve(made) && await readPatFile(source).then(() => true, () => false);
       return { ok: true, status: await status(),

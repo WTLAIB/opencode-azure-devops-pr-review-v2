@@ -1462,6 +1462,17 @@ test('settings that replaced the ones this setup saved are not loaded by its nex
   assert.deepEqual([off.agents.size, off.rpc.events.length, (await off.rpc.handlers.status({})).state], [0, 0, 'restart'], 'Nothing was loaded, and setup does not say that anything is ready.');
   assert.deepEqual([...off.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
 
+  // Or written in the moment this setup's own save ends: what a save leaves is what it wrote, not what a later
+  // look at the token file finds.
+  const r = await fixture(t), raced = environmentOf(r);
+  t.after(await r.setup({ environment: raced, releaseWaitMs: 50, settingsPrepared: async () => {
+    // This setup has made its token file and is writing its settings; another writer replaces the token.
+    await writeFile(join(raced.XDG_CONFIG_HOME, 'azpr', 'pat-fixture'), NEW_TOKEN, { mode: 0o600 });
+  } }));
+  const mine = await r.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
+  assert.deepEqual([mine.ok, mine.status.state, r.agents.size, r.rpc.events.length], [true, 'restart', 0, 0], 'The token in the file is not the one this setup saved: nothing is loaded.');
+  assert.match(await r.invoke('pr-check', r.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n/);
+
   // Also when they take the file's place in the moment between this setup's save and the load of what it saved.
   const g = await fixture(t), shared = environmentOf(g);
   t.after(await g.setup({ environment: shared, releaseWaitMs: 50 }));

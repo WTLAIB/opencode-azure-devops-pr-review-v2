@@ -130,10 +130,12 @@ settings, backups and failure records. Never upload `.local/`.
   that save replaced could not be used, it wrote something, and they can be
   used after it). It tries again with that setup's next save when loading
   them failed, but only what this setup wrote is its own to load, the
-  settings text and the token (`pairOf`): compare both before the load, and
-  afterwards require that the runtime read what the files hold and that
-  they hold what was saved; give way when anything else has written either
-  since. A load that answers nothing (settings switched off meanwhile) is
+  settings text and the token (as a digest, `pairWith`). What a save leaves
+  is said from what it wrote, never from another look at the files, which
+  could be at another writer's work. Compare both with the files before the
+  load, and afterwards require that the runtime read what the files hold
+  and that they hold what was saved; give way when anything else has
+  written either since. A load that answers nothing (settings switched off meanwhile) is
   no load. Settings
   that anything else made usable (another process's setup, an editor, a
   tool) are read after a restart, as always, also by a process that had
