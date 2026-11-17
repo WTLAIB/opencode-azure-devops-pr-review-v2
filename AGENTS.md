@@ -126,7 +126,8 @@ settings, backups and failure records. Never upload `.local/`.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
   grant, not files or catalogs. A first setup is that one read, not an
   exception to it: a process that found no usable settings has read none, so
-  it loads them when a save of its own setup makes them usable (and tries
+  it loads them when a save of its own setup makes them usable (the text
+  that save replaced could not be used, and it wrote something; it tries
   again with that setup's next save when loading them failed). Settings
   that anything else made usable (another process's setup, an editor, a
   tool) are read after a restart, as always, also by a process that had
@@ -350,12 +351,23 @@ settings, backups and failure records. Never upload `.local/`.
   that file and settings can be wrong: an existing file is replaced only when
   it is a regular file of the user's own that is empty or holds one token.
 - A saved token is sent only for the organization it was saved for, like
-  every other use of the PAT; a check for another organization needs a token
-  that was entered for it. A save binds the two: a token is saved with the
-  organization it was checked for, which must still be the one in the
-  settings, and the RPC changes the organization of settings that have a
-  saved token only together with a token of the new one. (The options of
-  `/pr-setup` keep their behaviour: there the person keeps the PAT file.)
+  every other use of the PAT, and only the way the saved settings send it:
+  a check for another organization, or through a proxy or with a CA file
+  that the call names, needs a token that was entered with it (a proxy and
+  a CA file of the caller's choosing could read a token).
+- Organization and token change in one step, the write of the settings
+  file. A save names the organization its token was checked for, which must
+  still be the one in the settings; a token of the same organization
+  replaces the token file the settings name, and the token of another
+  organization gets a file of its own beside it (`pat-<organization>`),
+  which the settings name in the same write. The RPC changes the
+  organization of settings that have a saved token only together with a
+  token of the new one. Never write the token of one organization into the
+  file the settings name for another: whoever reads the settings and then
+  the file they name must have a pair that belongs together, also during a
+  save and after one that failed. The earlier token's file is left to its
+  person, who is told where it is. (The options of `/pr-setup` keep their
+  behaviour: there the person keeps the PAT file.)
 - Several server parts share one settings file (one per project directory,
   and other processes). The token file and the settings that name it are
   therefore written under the setup lock, the token first, after the
@@ -369,6 +381,8 @@ settings, backups and failure records. Never upload `.local/`.
 - A process without usable settings registers commands that only say so.
   They are AZPR's own: never register one under a name that another plugin
   has taken meanwhile, since adding a command replaces the one of that name.
+  A plugin can take a name at any moment, so list the commands again right
+  before registering them.
 - The RPC never throws and never quotes a refused value: its schemas are
   loose, the server part checks every answer itself, and what it returns
   holds neither the token nor a proxy's user name and password (a proxy that

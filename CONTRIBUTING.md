@@ -47,7 +47,9 @@ The terminal panel's view is written in `src/tui-view.jsx` and compiled to
 source, run `npm run build:tui` and commit both files; `npm run check` fails
 when they differ. What the panel shows is worked out in `src/tui-model.mjs`
 and what the setup dialogs ask in `src/tui-setup.mjs`; both import nothing
-and have ordinary unit tests.
+and have ordinary unit tests. `tests/tui-view.test.mjs` loads the compiled
+view itself, with stand-ins for what the host provides, for the wiring that
+draws nothing (which server part the dialogs talk to, when they open).
 
 Read [AGENTS.md](AGENTS.md) for the design rules and change-specific checks.
 Keep deterministic PR facts and Azure writes in the runtime; models supply

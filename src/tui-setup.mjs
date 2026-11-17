@@ -153,12 +153,10 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
         const next = await dialog.select({ title: 'What now?', options: [
           ...(fixable ? [{ title: result.fix === 'proxy' ? 'Set a proxy and try again' : 'Set the CA certificate file and try again', value: 'repair' }] : []),
           { title: 'Try again', value: 'again' },
-          { title: 'Save the token without checking it', value: 'unchecked', description: '/pr-check tells later whether it works' }] });
+          { title: token === undefined ? 'Keep the saved token without checking it' : 'Save the token without checking it', value: 'unchecked', description: '/pr-check tells later whether it works' }] });
         if (next === undefined) return undefined;
-        if (next === 'unchecked') {
-          // A token that was not entered cannot be saved unchecked: there is nothing to save.
-          return { token, unchecked: true };
-        }
+        // Unchecked: the token that was entered is saved as it is, and where none was entered the saved one stays.
+        if (next === 'unchecked') return { token, unchecked: true };
         if (next === 'repair' && !(await repair(result.fix))) return undefined;
       }
     }
@@ -208,9 +206,11 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
       ...(token === undefined ? {} : { token }) });
     if (!saved?.ok) { failed(saved); return true; }
     if (saved.status?.state === 'ready') loaded?.();
-    await dialog.alert({ title: 'AZPR is set up', message: saved.status?.state === 'ready'
+    await dialog.alert({ title: 'AZPR is set up', message: (saved.status?.state === 'ready'
       ? 'Check access to a pull request, then review it:\n\n/pr-check <PR URL>\n/pr-review <PR URL>\n\n/pr-setup shows and changes these settings.'
-      : `The settings are saved${text(saved.status?.problem) ? `, but AZPR could not load them: ${saved.status.problem.replace(/\.$/, '')}` : ''}.\n\nRestart the OpenCode service (opencode service restart), then run /pr-check <PR URL>.` });
+      : `The settings are saved${text(saved.status?.problem) ? `, but AZPR could not load them: ${saved.status.problem.replace(/\.$/, '')}` : ''}.\n\nRestart the OpenCode service (opencode service restart), then run /pr-check <PR URL>.`) +
+      // What the server part adds: where the token of an earlier organization still is.
+      (text(saved.note) ? `\n\n${saved.note}` : '') });
     return true;
   }
 
@@ -279,6 +279,8 @@ export function createSetup({ call, dialog, secret, toast, models, loaded, pin }
       if (!saved?.ok) { failed(saved); continue; }
       status = saved.status;
       toast({ message: `AZPR: ${restartNote(status)}`, variant: 'success', duration: status?.state === 'restart' ? 8000 : 2500 });
+      // What the server part adds: where the token of an earlier organization still is. It stays until it was read.
+      if (text(saved.note)) await dialog.alert({ title: 'An earlier token is still on disk', message: saved.note });
     }
   }
 

@@ -279,7 +279,8 @@ async function readExisting(path) {
  * set those values again: without --pat-file, a replacement keeps the PAT file already set and a first
  * setup uses the default PAT file. Every other option changes the one setting it names in an existing
  * file. The file names every setting, those setup does not ask for at their defaults. Returns the saved
- * organization and PAT file, and the labels of the single settings that were changed.
+ * organization and PAT file, the labels of the single settings that were changed, and whether the settings
+ * it replaced could not be used (`unusable`).
  */
 export async function saveSetup(context, path, arguments_, environment = process.env) {
   const previous = await readExisting(path);
@@ -325,8 +326,10 @@ export async function saveSetup(context, path, arguments_, environment = process
   }
   const { settings } = withMissingSettings(next);
   validateSettings(settings);
+  // Judged on the text this save replaces, not on a second read: whether it is this save that makes the settings usable.
+  const unusable = Boolean((await settingsTextProblem(previous)).problem);
   await writeSettings(path, previous, settings);
-  return { organization: text(settings.azure?.organization), patFile, changed, first };
+  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable };
 }
 
 /**
@@ -509,6 +512,11 @@ async function settingsProblem(path) {
   let text;
   try { text = await readFile(path, 'utf8'); }
   catch (error) { return { problem: error.code === 'ENOENT' ? 'there is no settings file yet.' : `the settings file could not be read (${error.code ?? 'unknown error'}).` }; }
+  return settingsTextProblem(text);
+}
+/** The same for a settings text that was read already (null: there is no file), so that a save judges the text it replaces. */
+async function settingsTextProblem(text) {
+  if (text === null) return { problem: 'there is no settings file yet.' };
   try {
     const raw = settingsJSON(text);
     if (raw.enabled === false) return { disabled: true, problem: '' };
@@ -545,8 +553,8 @@ function accessProblem(error, organization, proxy) {
  * Setup for one settings file: what the RPC of the terminal UI's dialogs calls. `loaded()` says what this
  * process has in use: `blocked` (no usable settings were found), `problem` (why) and `drift()` (the loaded
  * runtime's own answer to whether the settings file and the PAT file are still what it read).
- * `saved(unusable)` is told after every save that succeeded, with whether the settings could not be used
- * before it.
+ * `saved(made)` is told after every save that succeeded, with whether it made unusable settings usable
+ * (the settings it replaced could not be used, and it wrote something).
  * `options` are the runtime's test options (fetch, azureBaseUrl), `checkTimeoutMs` and, for offline tests,
  * `settingsPrepared` (runs when a save's new settings text is ready, before it replaces the file).
  */
@@ -657,8 +665,11 @@ function createSetupService({ context, path, environment, options, loaded, saved
   }
 
   /**
-   * Ask Azure DevOps once whether a token works for an organization: the token given, else the saved one;
-   * through the proxy and with the CA file given, else the saved ones.
+   * Ask Azure DevOps once whether a token works for an organization. A token that is given is checked
+   * through the proxy and with the CA file given, else the saved ones. Without a token the saved one is
+   * checked, and it goes only where the saved settings send it: to the organization it was saved for,
+   * through the saved proxy and with the saved CA file. (A proxy and a CA file that the caller chooses
+   * could otherwise read a token the caller does not have.)
    */
   async function check(input) {
     textual(input, ['organization', 'token', 'proxy', 'caFile']);
@@ -666,22 +677,25 @@ function createSetupService({ context, path, environment, options, loaded, saved
     if (raw === null) return { ok: false, fix: '', problem: fileProblem };
     const view = withMissingSettings(raw).settings;
     const organization = organizationOf(input.organization ?? azureOf(view).organization);
+    const savedProxy = text(azureOf(view).proxy), savedCaFile = text(azureOf(view).caFile);
+    const proxy = input.proxy !== undefined ? proxyOf(input.proxy, savedProxy) : savedProxy;
+    const caFile = input.caFile !== undefined ? await caFileOf(input.caFile) : savedCaFile;
     let token;
-    if (input?.token !== undefined) {
+    if (input.token !== undefined) {
       token = text(input.token).trim();
       const problem = patProblem(token);
       if (problem) return { ok: false, fix: 'token', problem: `That is ${problem}.` };
     } else {
-      // The saved token goes only to the organization it was saved for.
       const saved = text(azureOf(view).organization);
       if (organization.toLowerCase() !== saved.toLowerCase()) {
         return { ok: false, fix: 'token', problem: saved ? `The saved token was saved for the organization "${saved}". Enter a token of "${organization}".` : 'No token is saved for an organization yet.' };
       }
+      if (proxy !== savedProxy || caFile !== savedCaFile) {
+        return { ok: false, fix: 'token', problem: 'The saved token is checked only through the saved proxy and with the saved CA certificate file. Enter the token to check it with the ones given here.' };
+      }
       try { token = text(azureOf(view).patFile) || !text(azureOf(view).pat) ? await readPatFile(tokenFileOf(view)) : azureOf(view).pat; }
       catch (error) { return { ok: false, fix: 'token', problem: `The saved token cannot be used: ${said(error, 'its file is unreadable').replace(/^azure\.patFile /, 'its file ')}` }; }
     }
-    const proxy = input?.proxy !== undefined ? proxyOf(input.proxy, text(azureOf(view).proxy)) : text(azureOf(view).proxy);
-    const caFile = input?.caFile !== undefined ? await caFileOf(input.caFile) : text(azureOf(view).caFile);
     const transport = fetchTransport({ proxy, caCertificates: await readCaCertificates(caFile), verifyTls: azureOf(view).verifyTls !== false });
     if (Object.keys(transport).length && !options.fetch && !fetchTransportSupported()) {
       return { ok: false, fix: '', problem: 'A proxy and a CA file need OpenCode\'s own runtime; this one would ignore them.' };
@@ -695,25 +709,34 @@ function createSetupService({ context, path, environment, options, loaded, saved
   }
 
   /**
-   * Save answers and, when one was given, the token. A token is saved for an organization: the one this save
-   * sets, or the one it was checked for, which must still be the one in the settings. The token file and the
-   * settings that name it are written under the setup lock, the token first, and only while the settings
-   * file still is what the answers were checked against: two setups that save at the same moment never
-   * leave the organization of one with the token of the other.
+   * Save answers and, when one was given, the token.
+   *
+   * A token is saved for an organization: the one this save sets, or the one it was checked for, which must
+   * still be the one in the settings. Organization and token change in one step, the write of the settings
+   * file: a token of the same organization replaces the token file the settings name, but the token of
+   * another organization gets a file of its own beside it (`pat-<organization>`), which the settings name
+   * in the same write. The file that holds an earlier organization's token is never written with
+   * another's, so whoever reads the settings and then the file they name has a token of that organization,
+   * also while a save is under way, and after one that failed or was cut short.
+   *
+   * Both files are written under the setup lock, the token first, and only while the settings file still
+   * is what the answers were checked against.
    */
   async function save(input) {
     if (saving) return { ok: false, problem: 'Another setup is being saved.' };
     saving = true;
     try {
       textual(input, ['token', 'organization']);
-      // Whether this save is the one that makes the settings usable: only then are they this setup's to load.
-      const unusable = loaded().blocked && Boolean((await settingsProblem(path)).problem);
       const { previous, raw, fileProblem } = await current();
       if (raw === null) return { ok: false, problem: fileProblem };
+      // Whether it is this save that makes the settings usable, judged on the text it replaces: only then are
+      // they this setup's to load.
+      const unusable = loaded().blocked && Boolean((await settingsTextProblem(previous)).problem);
       let { next } = await apply(raw, input.changes ?? {});
       const before = withMissingSettings(raw).settings;
       const was = text(azureOf(before).organization), named = text(azureOf(next).organization);
-      let token;
+      const another = Boolean(was) && named.toLowerCase() !== was.toLowerCase();
+      let token, earlier = '';
       if (input.token !== undefined) {
         token = text(input.token).trim();
         const problem = patProblem(token);
@@ -723,34 +746,53 @@ function createSetupService({ context, path, environment, options, loaded, saved
         if (expected.toLowerCase() !== named.toLowerCase()) {
           return { ok: false, problem: `The token was checked for the organization "${expected}", but the settings name ${named ? `"${named}"` : 'none'} now. Nothing was saved; run /pr-setup again.` };
         }
-        const file = tokenFileOf(next);
-        if (!isAbsolute(file) || resolve(file) === resolve(path)) return { ok: false, problem: 'The token file must be an absolute path other than the settings file.' };
+        const kept = tokenFileOf(next);
+        if (!isAbsolute(kept)) return { ok: false, problem: 'The token file must be an absolute path other than the settings file.' };
+        let file = kept;
+        if (another) {
+          file = join(dirname(kept), `pat-${named.toLowerCase()}`);
+          if (resolve(file) === resolve(kept)) file = `${file}.1`;
+          if (text(azureOf(before).patFile) || !text(azureOf(before).pat)) earlier = kept;
+        }
+        if (resolve(file) === resolve(path)) return { ok: false, problem: 'The token file must be an absolute path other than the settings file.' };
         next = withAzure(next, { pat: '', patFile: file });
-      } else if (was && named.toLowerCase() !== was.toLowerCase() && (await tokenState(before)).saved) {
+      } else if (another && (await tokenState(before)).saved) {
         // Without a new token, the saved one would pass to an organization it was not saved for.
         return { ok: false, problem: `The saved token was saved for the organization "${was}". Another organization needs a token of its own: enter it together with the organization.` };
+      } else if (!text(azureOf(next).pat) && !text(azureOf(next).patFile) && (await tokenState(withMissingSettings(next).settings)).saved) {
+        // The token that is kept is in the default file, which settings without a token file do not name yet.
+        next = withAzure(next, { patFile: tokenFileOf(next) });
       }
       const { settings } = withMissingSettings(next);
       valid(validateSettings, settings);
       const written = settingsText(settings);
+      let wrote = false;
       if (token !== undefined || written !== previous) {
         await withSetupLock(path, async () => {
           // Once more, under the lock and before anything is written: the file still is what the answers were
-          // checked against, so this token cannot end up beside an organization another setup saved meanwhile.
+          // checked against.
           if (await readExisting(path) !== previous) throw settingsChanged();
+          const file = settings.azure.patFile;
           // The token that is already there is left as it is: nothing changed, so nothing waits for a restart.
-          const replaced = token !== undefined && !(await readPatFile(settings.azure.patFile).then(kept => kept === token, () => false));
-          if (replaced) await writeTokenFile(settings.azure.patFile, token);
-          try { if (written !== previous) await replaceSettings(path, previous, settings, options.settingsPrepared); }
+          const replaced = token !== undefined && !(await readPatFile(file).then(kept => kept === token, () => false));
+          const existed = replaced && await lstat(file).then(() => true, () => false);
+          if (replaced) { await writeTokenFile(file, token); wrote = true; }
+          try { if (written !== previous) { await replaceSettings(path, previous, settings, options.settingsPrepared); wrote = true; } }
           catch (error) {
-            // The token file has the new token by now: say so, since the answer otherwise reads as if nothing had changed.
             if (!replaced) throw error;
+            // Another organization's token went to a file of its own, which nothing names: the organization and
+            // its token are as they were. A file that this save created is taken away again.
+            if (another) { if (!existed) await unlink(file).catch(() => {}); throw error; }
+            // The token file the settings name has the new token by now: say so, since the answer otherwise
+            // reads as if nothing had changed.
             throw new Error(`[AZPR] The token was saved, but the settings were not: ${said(error, 'the settings file could not be written.')}`);
           }
         });
       }
-      await saved(unusable);
-      return { ok: true, status: await status() };
+      await saved(unusable && wrote);
+      // The earlier organization's token is still where it was: a person decides what becomes of it.
+      const stays = earlier && await readPatFile(earlier).then(() => true, () => false);
+      return { ok: true, status: await status(), ...(stays ? { note: `The token of "${was}" is still in ${shownPath(earlier)}. Delete that file if you no longer need it.` } : {}) };
     } finally { saving = false; }
   }
 
@@ -783,7 +825,19 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   const reserved = ['pr-setup', ...(use.blocked ? Object.keys(COMMANDS) : [])];
   if (catalog.some(command => reserved.includes(command.name))) throw new Error('[AZPR] Reserved command name conflict; resolve it before loading AZPR.');
   let pending = false, cleanup, placeholders, activating, rpc, closed = false;
-  let foreign = new Set(); // review command names that turned out to be another plugin's when a first setup was loaded
+  let foreign = new Set(); // review command names that were another plugin's when they were last listed
+  /**
+   * The review command names that another plugin has by now: what is listed under one of them and is not a
+   * command that only says "setup required". Asked right before those commands are registered again, since
+   * a plugin can take a name at any moment; where the host does not answer, what was known last.
+   */
+  const taken = async () => {
+    try {
+      const listed = listOf(await context.command.list());
+      if (listed) foreign = new Set(listed.filter(command => Object.hasOwn(COMMANDS, command?.name) && command.description !== PLACEHOLDER_DESCRIPTION).map(command => command.name));
+    } catch { /* What was known last stands. */ }
+    return foreign;
+  };
 
   /** Load the runtime with the settings as they are now. */
   const load = async () => {
@@ -828,8 +882,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
         // of them is another plugin's command: the runtime will refuse to load beside it.
         for (const until = Date.now() + releaseWaitMs; ; ) {
           const listed = (listOf(await context.command.list()) ?? []).filter(command => Object.hasOwn(COMMANDS, command?.name));
-          foreign = new Set(listed.filter(command => command.description !== PLACEHOLDER_DESCRIPTION).map(command => command.name));
-          if (listed.length === foreign.size || Date.now() >= until) break;
+          if (listed.every(command => command.description !== PLACEHOLDER_DESCRIPTION) || Date.now() >= until) break;
           await new Promise(done => setTimeout(done, 50));
         }
         try { cleanup = await load(); }
@@ -837,7 +890,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           use.problem = use.loadProblem = said(error, 'the settings could not be loaded.');
           // The commands that say so come back, except under a name that is another plugin's by now; without
           // them only /pr-setup is left until the restart.
-          placeholders = closed ? undefined : await registerPlaceholders(foreign).catch(() => undefined);
+          placeholders = closed ? undefined : await registerPlaceholders(await taken()).catch(() => undefined);
           return false;
         }
         // Unloaded meanwhile: what was just loaded goes again.
@@ -852,7 +905,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
         // A host call failed on the way (removing the commands, listing them, unloading). What was saved stays
         // saved, and the commands that say what is missing stay too, or come back.
         use.problem = use.loadProblem = said(error, 'OpenCode did not answer while AZPR replaced its commands.');
-        if (use.blocked && !placeholders && !closed) placeholders = await registerPlaceholders(foreign).catch(() => undefined);
+        if (use.blocked && !placeholders && !closed) placeholders = await registerPlaceholders(await taken()).catch(() => undefined);
         return false;
       } finally { activating = undefined; }
     })();
@@ -860,26 +913,27 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   }
 
   /**
-   * After a save of this process's own setup; `unusable`: the settings could not be used before it. A process
-   * that found no usable settings loads them when its own save is what made them usable, and tries again with
-   * a later save when loading them failed. Settings that could be used before the save were made usable by
-   * something else (another process's setup, an editor, a tool): those wait for the restart, as every change
-   * does, whatever this save added. Returns whether the runtime is loaded afterwards (`ready`), and
-   * otherwise what stands in the way now (`problem`; '' when it is only the restart).
+   * After a save of this process's own setup; `made`: the settings it replaced could not be used, and it
+   * wrote something. A process that found no usable settings loads them when its own save is what made them
+   * usable, and tries again with a later save when loading them failed. Settings that could be used before
+   * the save were made usable by something else (another process's setup, an editor, a tool): those wait
+   * for the restart, as every change does, whatever this save added. Returns whether the runtime is loaded
+   * afterwards (`ready`), and otherwise what stands in the way now (`problem`; '' when it is only the
+   * restart).
    */
-  const afterSave = async unusable => {
+  const afterSave = async made => {
     if (!use.blocked) return { ready: true, problem: '' };
     const now = await settingsProblem(path);
     // Still not usable: the problem of now takes the place of the one found at load.
     if (now.problem) { use.problem = now.problem; return { ready: false, problem: now.problem }; }
-    if (unusable) use.own = true;
+    if (made) use.own = true;
     if (!use.own) return { ready: false, problem: '' };
     const ready = await activate();
     return { ready, problem: ready ? '' : use.problem };
   };
 
   const service = createSetupService({ context, path, environment, options: { ...runtimeOptions, checkTimeoutMs, settingsPrepared }, loaded: () => use,
-    saved: async unusable => { await afterSave(unusable); } });
+    saved: async made => { await afterSave(made); } });
   const registrations = [];
   const registration = await context.command.transform(editor => {
     editor.add({ name: 'pr-setup', description: SETUP_DESCRIPTION, async execute(event) {
@@ -899,9 +953,8 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           let saved, after = { ready: false, problem: '' };
           const wasBlocked = use.blocked;
           try {
-            const unusable = wasBlocked && Boolean((await settingsProblem(path)).problem);
             saved = await saveSetup(context, path, arguments_, environment);
-            if (wasBlocked) after = await afterSave(unusable);
+            if (wasBlocked) after = await afterSave(saved.unusable);
           } finally { pending = false; }
           text = `[AZPR] SETTINGS SAVED\nSettings: ${path}\n` +
             (saved.first ? `Organization: ${saved.organization}; PAT file: ${saved.patFile}\n` : '') +

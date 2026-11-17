@@ -683,8 +683,8 @@ quote the input.
 | --- | --- |
 | `status` | The rows with their values, the settings file, and `state`: `required` (there are no usable settings), `ready`, or `restart`. For settings in use, `restart` is the loaded runtime's own answer, by the rule of its preflight: the settings text differs by more than the defaults a load wrote into it, or the PAT file holds another token, whoever changed them. For a process that found no usable settings, it means that there are usable ones now which it did not load. Never the token, and a proxy without its user name and password. |
 | `validate` | Whether answers can be used, their saved form and how they may be shown, without saving anything. |
-| `check` | Asks Azure DevOps once whether a token works for an organization (`access` in `azure.mjs`: at most one pull request of the organization; not repeated, since a person waits), with the token given or else the saved one, and the proxy and CA file given or else the saved ones. The saved token is sent only for the organization it was saved for. The answer says what was refused and which answer to ask for again: the token, the organization, the proxy or the CA file. |
-| `save` | Applies answers and, when one was given, the token. A token is saved with the organization it was checked for: the one this save sets, or the one the request names, which must still be the one in the settings; and the organization of settings that have a saved token changes only together with a token of the new one. Both files are written under the setup lock, after the settings file was compared once more with what the answers were checked against: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one token, since settings can name any path), then the settings that name it, through the same atomic, owner-only writer as before. A save that finds the lock held writes neither, so two setups that save at the same moment never leave the organization of one with the token of the other. |
+| `check` | Asks Azure DevOps once whether a token works for an organization (`access` in `azure.mjs`: at most one pull request of the organization; not repeated, since a person waits), with the token given or else the saved one, and the proxy and CA file given or else the saved ones. The saved token goes only where the saved settings send it: to the organization it was saved for, through the saved proxy and with the saved CA file; anything else needs the token entered with it. The answer says what was refused and which answer to ask for again: the token, the organization, the proxy or the CA file. |
+| `save` | Applies answers and, when one was given, the token. Organization and token change in one step, the write of the settings file. A token is saved with the organization it was checked for: the one this save sets, or the one the request names, which must still be the one in the settings; and the organization of settings that have a saved token changes only together with a token of the new one. A token of the same organization replaces the token file the settings name; the token of another organization gets a file of its own beside it (`pat-<organization>`), which the settings name in the same write, so the file of an earlier organization's token is never written with another's and a reader of the settings and the file they name always has a pair that belongs together. The answer then says where the earlier token still is. Both files are written under the setup lock, after the settings file was compared once more with what the answers were checked against: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one token, since settings can name any path), then the settings, through the same atomic, owner-only writer as before. A save that finds the lock held writes neither. A token that is kept in the default file is named in the settings that are saved. |
 
 A proxy that a dialog shows without its user name and password stands for
 the saved one when it comes back unchanged, so those never leave the server
@@ -702,12 +702,14 @@ confirmed in a list whose first row keeps the current setting.
 **A first setup is loaded at once.** A process that found no usable settings
 registered only `/pr-setup` and the commands that answer `SETUP REQUIRED`.
 Once a save of its own setup (the dialogs' or the command's) makes the
-settings usable, `setupPlugin` removes those commands and loads the runtime:
+settings usable (the text it replaced could not be used, and it wrote
+something), `setupPlugin` removes those commands and loads the runtime:
 nothing was read before, so this is the one time the settings are read. Only
 that save does it, and a later save of the same setup tries again when
 loading them failed (the commands that say so come back meanwhile, except
-under a name that another plugin has taken: adding a command would replace
-that plugin's). Another OpenCode process, or another project directory
+under a name that another plugin has taken by then, which is looked up
+again at that moment: adding a command would replace that plugin's).
+Another OpenCode process, or another project directory
 of the same one, that had found no settings reads none either when they
 appear, whoever wrote them: its review commands answer `RESTART REQUIRED`,
 its setup reports `state: restart`, and what that setup saves afterwards

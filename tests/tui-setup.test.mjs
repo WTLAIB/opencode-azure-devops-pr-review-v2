@@ -59,7 +59,7 @@ function server(start = {}) {
       }
       if (token !== undefined) state.token = true;
       state.state = state.state === 'required' ? (state.afterSave ?? 'ready') : 'restart';
-      return { ok: true, status: status() };
+      return { ok: true, status: status(), ...(state.saveNote ? { note: state.saveNote } : {}) };
     },
   };
 }
@@ -301,6 +301,15 @@ test('a new token is checked for the saved organization before it is saved; an e
   assert.deepEqual(bare.shown[1], { kind: 'alert', title: 'Personal access token', message: 'Set the organization first: a token is checked for it.' });
 });
 
+test('a saved token that cannot be checked is kept as it is, and nothing is saved for it', async () => {
+  const fake = ready({ checkAnswers: [{ ok: false, fix: '', problem: 'Azure DevOps answered with an error (HTTP 503). Try again in a moment.' }] });
+  const h = host(fake, ['token', '', 'unchecked', undefined]);
+  await h.setup.open();
+  assert.deepEqual(h.titles(), ['select: AZPR settings', 'secret: Personal access token', 'alert: The token could not be checked', 'select: What now?', 'select: AZPR settings']);
+  assert.deepEqual(h.shown[3].options.map(option => option.title), ['Try again', 'Keep the saved token without checking it']);
+  assert.deepEqual(methods(h), ['status', 'check'], 'No token was entered, so there is none to save.');
+});
+
 test('another organization needs a token of its own: both are saved together, or neither', async () => {
   const fake = ready();
   const h = host(fake, ['organization', 'other-org', TOKEN, undefined]);
@@ -311,6 +320,13 @@ test('another organization needs a token of its own: both are saved together, or
   assert.deepEqual(fake.checks, [{ organization: 'other-org', token: TOKEN }], 'The token is checked for the new organization.');
   assert.deepEqual(h.calls.filter(call => call.method === 'save').map(call => call.input), [{ changes: { organization: 'other-org' }, token: TOKEN }]);
   assert.ok(!h.said().includes(TOKEN));
+  // The token of the earlier organization stays in its file, and the server part says where: that is shown until read.
+  const noted = host(ready({ saveNote: 'The token of "fixture" is still in ~/.config/azpr/pat. Delete that file if you no longer need it.' }), ['organization', 'other-org', TOKEN, undefined]);
+  await noted.setup.open();
+  assert.deepEqual(noted.shown.at(-2), { kind: 'alert', title: 'An earlier token is still on disk', message: 'The token of "fixture" is still in ~/.config/azpr/pat. Delete that file if you no longer need it.' });
+  const first = host(server({ saveNote: 'The token of "earlier" is still in ~/.config/azpr/pat. Delete that file if you no longer need it.' }), ['fixture', '', TOKEN, 'fixture/fast', true]);
+  await first.setup.open();
+  assert.match(first.shown.at(-1).message, /^Check access to a pull request[\s\S]*\n\nThe token of "earlier" is still in ~\/\.config\/azpr\/pat\. Delete that file if you no longer need it\.$/);
   // Leaving the token dialog leaves the organization as it was.
   const left = host(ready(), ['organization', 'other-org', undefined, undefined]);
   await left.setup.open();

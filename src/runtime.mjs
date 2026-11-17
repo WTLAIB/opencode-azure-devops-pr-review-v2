@@ -72,12 +72,17 @@ export async function readPatFile(path) {
   if (problem) throw new Error(`[AZPR] azure.patFile must hold only the Azure DevOps PAT (${problem}).`);
   return text;
 }
-/** azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings. */
+/**
+ * azure.caFile: extra CA certificates (PEM), read and checked once at load like the settings, and by setup
+ * for a path a person names. Only a regular file is read: a device or a FIFO would never end.
+ */
 export async function readCaCertificates(path) {
   if (!path) return [];
   let raw;
   try {
-    if ((await stat(path)).size > CA_FILE_BYTES) throw new Error('larger than 1 MB');
+    const info = await stat(path);
+    if (!info.isFile()) throw new Error('not a regular file');
+    if (info.size > CA_FILE_BYTES) throw new Error('larger than 1 MB');
     raw = await readFile(path, 'utf8');
   } catch (error) { throw new Error(`[AZPR] azure.caFile could not be read (${error.code ?? error.message}).`); }
   const certificates = pemCertificates(raw);
