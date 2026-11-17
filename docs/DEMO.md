@@ -81,6 +81,60 @@ high: 0 · medium: 3 · low: 0
 
 </details>
 
+## The terminal panel
+
+![Real OpenCode terminal recording: a review starts and a panel opens beside the conversation, lists the reviewer sessions and the verifier, then shows the report and the comment preview rendered, scrolled to an inline comment.](assets/terminal-panel-teaser.gif)
+
+The 15-second teaser uses a **real OpenCode 2.3.0 session and real configured
+model calls**; nothing was posted to Azure DevOps. The PR is a dedicated test
+PR of 35 files: a snapshot of pydantic (MIT) as the base, the changes of the
+next 20 upstream commits as the source, and two deliberately seeded
+regressions. It demonstrates the workflow; it is not a benchmark of review
+accuracy or a promise about the time or cost of another PR.
+
+Recorded on **2026-11-17**, on Ubuntu 22.04 under WSL2, using
+`openai/gpt-6-luna` for the functional reviewer, risk reviewer, verifier and
+comment planner. OpenCode's plugin manager had installed the plugin from
+public Git commit [`74d450d`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/74d450d09f4db546a2c3fee6e012ca3e4adea258)
+of the 0.4.2 release candidate; the settings were `afterReview: preview`,
+`returnReport: full`, `outputLanguage: en` and no debug records. Model IDs
+identify the configured selection, not an independently attested provider
+backend.
+
+The recording follows one conversation, to which `/pr-review <test-pr-url>`
+was sent once:
+
+1. The review starts and the panel opens by itself beside the conversation.
+   It lists the four reviewer sessions (two roles, two shards) as they run and
+   end, and then the verifier.
+2. The review completes in 76 seconds. The four reviewers reported no
+   candidate; the verifier found one of the two seeded regressions itself
+   (medium, in `json_schema.py`). The panel shows the report rendered, names
+   the session that holds it and says that four sessions were deleted when
+   their run ended. The conversation shows the same report as Markdown
+   source, because this installation returns it in the receipt
+   (`returnReport: full`).
+3. The automatic preview follows 8 seconds later, with a summary and one
+   inline comment, and takes the report's place in the panel. Nothing is
+   posted.
+4. A click in the panel and Page Down scroll the preview to the inline
+   comment as it would be posted.
+
+![Actual review result in the panel: the run's status and sessions and the report with its summary table rendered, beside the receipt's Markdown source in the conversation.](assets/terminal-panel-report.png)
+
+![Actual comment preview in the panel: the inline comment with its summary, evidence and suggested fix, beside the preview's receipt in the conversation.](assets/terminal-panel-preview.png)
+
+These are faithful rendered frames from one terminal capture, **not Azure
+DevOps browser screenshots**. The command was submitted through OpenCode's
+native command API to the session shown in the attached TUI, so it appears as
+AZPR's notices and a segment caption rather than as typed input; the click and
+the keys were sent to the terminal itself. The bottom six rows (the empty
+input box with the conversation's chat model, and the status/path bar) are
+cropped, which also cuts the last rows of the panel. The panel was not
+scrolled as far as the report's scope section, which names the Azure DevOps
+organization, and no session row was opened, since a reviewer session names
+it too. The original private cast is unchanged.
+
 ## Adjust findings before publishing
 
 ![Real OpenCode terminal recording: a preview with three verified findings, the command that excludes F-3 and lowers F-2 to low, the new preview, and publication read back from Azure DevOps.](assets/adjust-findings-teaser.gif)

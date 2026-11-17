@@ -48,6 +48,17 @@ second time. Do not put passwords or tokens in this file.
 {"key":"submit"}
 ```
 
+A mouse click is terminal input as well: the press and the release of the left
+button at a column and row, counted from 1, as the terminal reports them.
+AZPR's terminal panel takes the keyboard when it is clicked; `page-down` and
+`page-up` then scroll it.
+
+```json
+{"text":"\u001b[<0;100;24M"}
+{"text":"\u001b[<0;100;24m"}
+{"key":"page-down"}
+```
+
 Capture the same conversation through this sequence, waiting for each receipt:
 
 1. `/pr-check <test-pr-url>` — configuration and access readiness.
@@ -66,8 +77,9 @@ Inspect every frame and remove sensitive content before publishing it.
 
 ## Edit timing, not findings
 
-The renderer needs optional installations of **Pillow**, **pyte**, and either
-**FFmpeg** or **imageio-ffmpeg**. For example, install them in a separate Python
+The renderer needs optional installations of **Pillow** and **pyte**. An MP4
+also needs **FFmpeg** or **imageio-ffmpeg**; a GIF is written with Pillow alone
+where neither is installed. For example, install them in a separate Python
 virtual environment; they must not be added to the plugin package. The default
 font is DejaVu Sans Mono. If it lacks the comment icons, provide an existing
 emoji-capable font with `--emoji-font /absolute/path/to/font.ttf`; fonts are not
@@ -84,12 +96,26 @@ segments you show by sending its toggle through the control file
 directory, which includes the local path; leave frames that show it out of the
 edit.
 
+With AZPR's terminal panel (OpenCode 2.3.0) there is more to look for. The
+panel takes the sidebar's place while it is open, so segments in which it is
+open need no toggle. A report's scope section names the Azure DevOps
+organization, and so does the first message of a reviewer session: do not
+scroll the panel that far and do not open a session row, or leave those frames
+out. With `returnReport: full` the receipt prints the whole report in the
+conversation too; check which part of it each frame shows. Read the text of
+every screen state of the cast for the organization, local paths and account
+names before choosing segments, not only the frames you expect to use.
+
 Create an edit manifest describing the portions of the original recording to
 show. `start` and `end` are seconds in the cast. `seconds` is the output duration.
 Use a 60–90 second walkthrough and a separate 10–15 second teaser. Keep the
 review, preview, publication, and repeat-publication results readable. Do not
 replace model text with hand-written findings. The renderer always labels the
-result as an edited terminal replay with shortened waiting time.
+result as an edited terminal replay with shortened waiting time. `--label`
+replaces the line above the title (`AZPR / REAL TERMINAL RECORDING`) and
+`--note` adds to the line under the terminal: a cast made against fixture
+services, to try the tools or a layout, must say so in both, and is not what
+this project publishes as a demonstration.
 
 ```json
 {

@@ -247,11 +247,12 @@ runs and their limits are under
 
 ## Watch the workflow
 
-[![Real OpenCode run: exclude one finding, lower another to low, inspect the new preview, then publish and read the comments back from Azure DevOps.](docs/assets/adjust-findings-teaser.gif)](docs/DEMO.md#adjust-findings-before-publishing)
+[![Real OpenCode run: a review starts, a panel beside the conversation lists its sessions, then shows the report and the comment preview rendered.](docs/assets/terminal-panel-teaser.gif)](docs/DEMO.md#the-terminal-panel)
 
-*A 15-second edit of a real OpenCode 2.1.4 session on a dedicated test PR.
+*A 15-second edit of a real OpenCode 2.3.0 session on a dedicated test PR.
 Waiting time is shortened, so the length is not the review duration.
-[Recording details and longer walkthrough](docs/DEMO.md).*
+[Recording details and other walkthroughs](docs/DEMO.md), among them
+[adjusting findings before publishing](docs/DEMO.md#adjust-findings-before-publishing).*
 
 ## Choose a review
 
@@ -837,7 +838,8 @@ OpenCode shows what a plugin tells a conversation as plain text, so a report
 or a comment preview appears there as Markdown source. In OpenCode's terminal
 UI, AZPR therefore adds a panel beside the conversation: it shows the newest
 report or preview rendered, and lists the sessions of the review so that you
-can open one.
+can open one. The [recording of a real review](docs/DEMO.md#the-terminal-panel)
+shows both side by side.
 
 - **It opens by itself** when a review or a comment run starts and when a
   report or preview arrives, in the conversation that is on screen. The

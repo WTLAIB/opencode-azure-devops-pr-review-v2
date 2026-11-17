@@ -53,8 +53,9 @@ Findings still vary between models and runs; see
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode 2.3.0 and
 tmux 3.2a, with isolated OpenCode profiles and the fake model and Azure DevOps
-services. No real model and no Azure DevOps organization was used, and nothing
-was posted.
+services. One review, described below as live, ran with a real model on the
+maintainer's OpenCode service and a test PR of an Azure DevOps organization;
+everything else used neither. Nothing was posted.
 
 0.4.2 adds the terminal panel (see [architecture](ARCHITECTURE.md#terminal-panel)),
 lets a completed or abandoned PR take comments, and writes the settings a
@@ -158,6 +159,27 @@ changes. What follows was run on the final tree unless it says otherwise.
   queued into a fixture conversation. The panel drew the table with the CJK
   text aligned and showed the escaped table cells (`&#96;reserve&#96;`) as
   their characters.
+- **A live review with the panel.** Commit `74d450d` of the candidate was
+  installed through the plugin manager on the maintainer's OpenCode 2.3.0
+  service, with every role on `openai/gpt-6-luna`, `afterReview: preview`,
+  `returnReport: full`, English output and no debug records. The TUI was
+  attached to a conversation in a recorded terminal of 132 by 38 cells, and
+  `/pr-review` of the 35-file test PR was sent to that conversation through
+  the host's command API.
+
+  | Moment | What the panel showed |
+  | --- | --- |
+  | The run starts | It opens by itself beside the conversation: the run as RUNNING, then the four reviewer sessions (two roles, two shards) as running and, one by one, as idle, and the verifier. |
+  | The review completes, after 76 seconds | The report rendered, with its summary table; the session that holds the report; "4 session(s) were deleted when their run ended". The four reviewers had reported no candidate; the verifier found the seeded regression in `json_schema.py` itself, one medium finding. |
+  | The automatic preview, 8 seconds later | The comment run with its planning session while it ran, then the preview in the report's place: a summary and one inline comment. Nothing was posted. |
+  | A click in the panel, Page Down, Home | The preview scrolled to the inline comment and back to its top. |
+
+  With `returnReport: full` the receipt encloses the report, so the panel
+  took it from there; reading it from the report session's inbox, the path
+  of the default setting, ran in the fixtures only. No session row was
+  opened. The [demonstration](DEMO.md#the-terminal-panel) is an edit of this
+  recording. The service's plugin entry and settings were then restored from
+  their backups, byte for byte.
 - **Package.** `npm pack --dry-run` lists 36 files (33 for 0.4.1); the three
   files of the terminal part are new. The native fixtures install that
   package. `package.json` has no dependency and no lifecycle script.
@@ -173,7 +195,8 @@ the code and described in the architecture page:
 | The host closes a panel when the screen leaves its session. | The panel opens again when the screen returns. |
 | A toast wraps at about fifty characters. | The panel's messages fit one line. |
 
-Not covered: a review with a real model and the panel open; terminal emulators
+Not covered: more than one review with a real model and the panel open, and
+such a review with the default `returnReport`; terminal emulators
 other than tmux, in particular their mouse reporting; a change of theme while
 the panel is open; a review with dozens of sessions in the panel; OpenCode
 versions other than 2.3.0; the desktop app, which does not load the panel;

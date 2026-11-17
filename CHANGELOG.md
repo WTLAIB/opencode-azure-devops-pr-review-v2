@@ -91,6 +91,16 @@ Package:
 - A source installation copies two more files, `tui-model.mjs` and `tui.js`;
   the manual-copy list in the README has 34 files.
 
+Documentation:
+
+- The README's 15-second recording is a real review on OpenCode 2.3.0 with
+  the panel beside the conversation; the
+  [demonstration page](docs/DEMO.md#the-terminal-panel) says how it was made.
+  The recording of adjusting findings before publishing stays on that page.
+- The recording tools write a GIF with Pillow alone where no FFmpeg is
+  installed, and the recording guide says what to look for in a cast before
+  publishing frames of the panel.
+
 ## 0.4.1 — 2026-11-16
 
 AZPR is tested with OpenCode 2.3.0 instead of 2.2.4, and two things that went
