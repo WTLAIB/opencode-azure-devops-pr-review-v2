@@ -120,6 +120,22 @@ settings, backups and failure records. Never upload `.local/`.
   mentioned, delegated, compacted or used for auxiliary requests.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
   grant, not files or catalogs.
+- Before that read, loading AZPR writes the settings a valid file leaves out
+  into it, at the defaults validation assumes anyway (`SETTING_DEFAULTS` in
+  `config.mjs`; the settings example and schema must match it), so a new
+  setting shows where its user edits the others. Give every new setting a
+  default there. The completion never changes how a file behaves, never
+  touches a file that is invalid, disabled, a symbolic link or not safely
+  replaceable, replaces the file as `/pr-setup` does (atomic, owner-only,
+  under the setup lock) and never fails a load: a file it cannot complete is
+  used as it is, and `/pr-check` says what it leaves out. The lock keeps
+  AZPR's own writers apart, not a person's editor: compare the file with the
+  text that was read once more, right before the new text replaces it, and
+  give way when it changed. Loads that happen together wait for the one that
+  writes, so each reads the finished file; a load that stopped waiting accepts
+  the completed text when it appears later (the preflight compares with the
+  completion of what it loaded), so its commands are never refused over
+  defaults another load wrote. Any other difference still blocks new runs.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,
@@ -143,8 +159,11 @@ settings, backups and failure records. Never upload `.local/`.
   for that save.
 
 **Publication is idempotent.**
-- Recheck the PR (active, unchanged head) before writing; skip existing markers;
-  save each result immediately; read markers back. Re-running is always safe.
+- Recheck the PR's head before writing; skip existing markers; save each
+  result immediately; read markers back. Re-running is always safe. The PR's
+  status stops nothing: a completed or abandoned PR (merged before its review
+  was commented on, say) is checked, reviewed and commented on like an active
+  one, and the check and the publication receipt name that status.
 - Automatic publication (`afterReview: publish` or `--publish` after the PR
   URL) follows only a COMPLETE review with findings to comment on that nothing
   stopped. It posts item by item: an item whose text has an `@<…>` mention,
@@ -213,12 +232,95 @@ settings, backups and failure records. Never upload `.local/`.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 
+**The terminal panel only reads.**
+- The package's terminal part (`src/tui-model.mjs` and `src/tui-view.jsx`,
+  compiled to `src/tui.js`) shows what the runtime already produced: AZPR's
+  notices in the conversation, the report queued to a review session and the
+  sessions' `metadata.azpr`. It sends no prompt, runs no command of the server
+  part, makes no Azure DevOps request, reads no settings file and keeps no
+  preference of its own. The one setting meant for it (`terminalPanel`)
+  reaches it in the metadata of the runtime's notices, sent only when it is
+  not the default, so default requests stay as they were.
+- `/pr-panel` is its only command. Add another only for what neither a
+  setting nor OpenCode's own UI (its session list, say) already does.
+- What names a session or a status is the runtime's own text only: a
+  receipt's lines before the report or preview it encloses, whose text a
+  model wrote. A session is listed, and a report read from it, only when its
+  own `metadata.azpr` says that it belongs to that run and conversation (a
+  session of 0.4.0 or earlier, which has none: when it is a child of the
+  conversation). Look a session up before reading anything it holds: an
+  inbox is read only of a session that proved to be ours, or of the
+  conversation that the session on screen itself names. A run's notice that
+  is neither its start, its progress nor its receipt (a status word followed
+  by `;`, a line break or the end) changes nothing shown, and does not make
+  its run the current one.
+- What the panel is about is what happened last: a run that started,
+  progressed or ended, or a saved preview shown again, which names its
+  review (`/pr-comment <review> --show` makes that review the current one,
+  so the panel shows that review's status and sessions). A status never
+  stands above another review's document: the report of the session on
+  screen is shown only for the review shown, or while nothing is known of
+  any run yet. A receipt that encloses nothing (a comment run that failed
+  before it had a preview) is no document: the review's report stays.
+- The panel in a review's own session reads the conversation's notices and
+  those of commands typed in that session, which the runtime answers there.
+  The host has another session's notices only while it is on screen or in a
+  tab: read them from the server, the inbox first and then the delivered
+  messages (a notice is delivered once its conversation's model runs, and
+  one delivered between the two reads must be in one of them), and keep with
+  the answer what arrives while it is under way. From the moment a session's
+  notices are asked for, every notice the host reports for it is kept,
+  whatever becomes of the requests; what the inbox answered is kept when the
+  messages cannot be read; a session is not let go, however many others are
+  read meanwhile, while a read of it is under way, and such a session takes
+  no place among the ones read last, so that what was read stays held while
+  other reads wait; one lookup of a session, or its wait for the next
+  attempt, exists at a time however often the panel asks. What was asked before a reconnection is dropped when it answers. This reading lives in
+  `createReader` (`tui-model.mjs`), not in the view, so that its order and
+  its races are tested with delayed answers; keep it there.
+- The Markdown shown is the Markdown saved: only the cells of the summary
+  table are decoded, each character escaped so that it stays literal as on
+  the PR, and only AZPR's marker lines are left out. Both only where the
+  runtime wrote them (a marker alone between blank lines; a table that
+  begins after a blank line with the summary's header and delimiter row),
+  never inside code, fenced or in a span over several lines. A preview on
+  screen must be the preview that publication posts.
+- A notice ends its block at the block's closing tag, so the runtime writes
+  that tag inside the block in an escaped form (`enclose` in
+  `attribution.mjs`), and the panel takes exactly that off again (`disclose`
+  in `tui-model.mjs`). The two are each other's inverse for any text,
+  including text that already holds the escaped form: change them together,
+  and write every block through `enclose`.
+- A session counts as deleted only when the server said so, and then it is
+  gone whatever the host still holds of it and whatever answers later, until
+  the server reconnects; a request that failed is tried again.
+- A step the panel takes a moment after it mounted (handing the keyboard
+  back, withdrawing) acts only while that panel is still the one open in
+  that session, and no timer outlives the panel.
+- The text of notices and receipts is therefore an interface. Change it
+  together with `tui-model.mjs`, whose tests run against `renderReceipt` and
+  against the notices of a whole run.
+- `src/tui.js` is generated: edit `tui-view.jsx`, run `npm run build:tui` and
+  commit both. OpenCode 2.3.0 compiles no JSX of an installed package, so the
+  package ships the compiled file; keep it free of JSX and importing only what
+  the host provides (`@opentui/solid`, `@opentui/core`, `solid-js`). The
+  compiler stays a development dependency at an exact version: the package
+  has no dependency, no lifecycle script and no build at installation.
+- A panel that opens by itself never keeps the keyboard, never takes a screen
+  too narrow for two panes and never replaces another plugin's panel; where it
+  cannot open like that, it says that something is ready.
+- The host drops the data of sessions that are neither on screen nor in a tab:
+  read another session's inbox from the server, not from the host's cache.
+
 **Compatibility.** Host response shapes and constants belong in `host.mjs`.
-Detect capabilities; do not assume them.
+Detect capabilities; do not assume them. The terminal part runs in the TUI's
+process: it checks the TUI plugin API it uses at setup and reads theme tokens
+through fallbacks.
 
 ## Verification and delivery
 
-Run `npm run check` and `npm test`. For changes touching hooks, sessions, tools, Azure access or
+Run `npm ci` once, then `npm run check` and `npm test`; `npm run check` compiles the
+terminal panel's source and fails when `src/tui.js` differs. For changes touching hooks, sessions, tools, Azure access or
 publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh and
 `--replace`), `node tests/host-v2-comment-scale.mjs <opencode binary>` and
 `node tests/host-v2-background-compaction.mjs <opencode binary>`, the last two
@@ -228,6 +330,9 @@ exercise the deletion of a run's sessions on a real host.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.
+For changes touching the terminal part, or the text of notices and receipts,
+also run `node tests/host-v2-tui-panel.mjs <opencode binary>` and the same with
+`--native`: they drive the real terminal UI in `tmux`, which they need.
 Installer tests must preserve unrelated files and private settings, reject
 conflicts and test rollback and archival uninstall. Keep the README manual-copy
 list exact.

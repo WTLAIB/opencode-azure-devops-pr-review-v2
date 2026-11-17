@@ -335,12 +335,17 @@ export async function interruptSession(context, { sessionID, signal }) {
   return { interrupted: result.interrupted, settled: true };
 }
 
-/** Queue report data without starting a formatting or ordinary-agent model call. */
-export async function appendReport(context, { sessionID, text, signal }) {
+/**
+ * Queue report data without starting a formatting or ordinary-agent model call.
+ * `metadata` is stored with the notice for clients that read it (the terminal panel); no model sees it,
+ * and a call without it is the request it always was.
+ */
+export async function appendReport(context, { sessionID, text, signal, metadata }) {
   const api = sessionApi(context, ['synthetic']);
   if (!textValue(sessionID) || !textValue(text)) throw new Error('[AZPR] Report destination and text are required.');
   const result = await cancellable(() => api.synthetic({
     sessionID, text, description: text,
+    ...(metadata ? { metadata } : {}),
     delivery: 'queue', resume: false,
   }), signal);
   if (!record(result) || !textValue(result.id) || result.sessionID !== sessionID || result.type !== 'synthetic' ||

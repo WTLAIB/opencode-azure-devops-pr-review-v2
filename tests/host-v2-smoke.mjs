@@ -342,7 +342,9 @@ try {
     assert.ok(saved.startsWith(`[AZPR] SETTINGS SAVED\nSettings: ${externalSettings}\nOrganization: fixture; PAT file: ${patFile}\nTo load them, restart the OpenCode service (in a terminal: opencode service restart;`), saved);
     const initial = JSON.parse(await readFile(externalSettings, 'utf8'));
     assert.equal((await stat(externalSettings)).mode & 0o777, 0o600);
-    assert.ok(Object.values(initial.models.review).every(model => model === 'fixture/fixture'));
+    assert.deepEqual(initial.models.review, { functional: 'fixture/fixture', risk: 'fixture/fixture', verifier: 'fixture/fixture', rater: '' });
+    // The file names every setting from the start, those setup does not ask for at their defaults.
+    assert.deepEqual([initial.terminalPanel, initial.afterReview, initial.workflow.shardFiles], ['auto', { quick: 'preview', review: 'preview', deep: 'preview' }, 25]);
     assert.equal(initial.models.quick.reviewer, 'fixture/fixture');
     assert.equal(initial.azure.pat, '');
     assert.equal(initial.azure.patFile, patFile);

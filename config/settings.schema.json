@@ -181,6 +181,11 @@
       "default": true,
       "description": "Delete AZPR's private reviewer sessions when a command ends, except the one holding the review's report or draft (a comment run keeps none; all are kept while debug is enabled). The kept session is deleted when its review is evicted (the newest 20 reviews are kept), or for an unfinished review within the same 20-run limit. false keeps every session."
     },
+    "terminalPanel": {
+      "enum": ["auto", "manual"],
+      "default": "auto",
+      "description": "The panel AZPR adds to OpenCode's terminal UI (the sessions of a run, and its report or comment preview as rendered Markdown). auto: it opens by itself in the conversation on screen when a review or comment command starts and when a report or preview arrives, and leaves the keyboard with the prompt. manual: it opens only with /pr-panel. Other OpenCode clients have no panel and ignore this."
+    },
     "afterReview": {
       "type": "object",
       "additionalProperties": false,

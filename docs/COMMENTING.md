@@ -336,8 +336,11 @@ system prompt, the saved review and the receipts are unchanged.
 Publication is deterministic runtime code using the Azure DevOps REST API
 (api-version 7.1; see [Azure DevOps access](AZURE_DEVOPS.md)):
 
-1. Read the PR and its iterations. Refuse if it is not active (INCOMPLETE) or if
-   its source commit differs from the reviewed head (STALE).
+1. Read the PR and its iterations. Refuse if its source commit differs from
+   the reviewed head (STALE). The PR's status stops nothing: a completed or
+   abandoned PR, such as one merged before its review was commented on, takes
+   the comments like an active one, and the receipt names that status
+   (`Publication (…); the PR is completed:`).
 2. List every thread (one request returns all of them) and collect AZPR markers
    from live comments.
 3. For each saved item: skip it when its marker exists (`ALREADY_PRESENT`),

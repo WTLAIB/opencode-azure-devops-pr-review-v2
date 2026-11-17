@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.4.2 — 2026-11-17
+
+A panel in OpenCode's terminal UI shows the report and the comment preview
+rendered instead of as Markdown source, and lists the sessions of the review
+so that you can open one. A PR that was completed or abandoned takes comments
+like an active one, and a new version writes the settings it brings into your
+settings file. The reviewer, verifier and comment-planning instructions are
+those of 0.4.1. One setting is new: `terminalPanel`.
+
+Terminal panel (OpenCode's terminal UI only):
+
+- OpenCode shows what a plugin tells a conversation as plain text, so a report
+  or a comment preview appeared as Markdown source. A panel beside the
+  conversation now shows the newest one rendered: headings, emphasis, lists,
+  code and tables. A check's table is shown there too.
+- The panel lists the sessions of the review with their state while they run,
+  and afterwards those that still exist, first the one that holds the report.
+  A click opens the session in a tab. Until now a reviewer session had to be
+  picked from OpenCode's session list.
+- It opens by itself when a review or a comment run starts and when a report
+  or preview arrives, in the conversation on screen, and leaves the keyboard
+  with the prompt. `/pr-panel`, its only command, shows and hides it.
+- New setting `terminalPanel`: `auto` (the default) as above; `manual` opens
+  the panel only with `/pr-panel`. The panel reads no settings file, so the
+  runtime sends this setting along with its notices, as metadata no model
+  sees; with the default nothing is added to them.
+- A click inside the panel gives it the keyboard: the arrow keys or `j` and
+  `k`, Page Up and Page Down, Home and End scroll, and Escape or `q` closes it.
+- In a terminal with fewer than 108 columns, where OpenCode shows a panel in
+  place of the conversation, it does not open by itself and says that
+  something is ready; `/pr-panel` shows it full screen.
+- The panel only reads: AZPR's notices in the conversation, the report queued
+  to the review's session, and which sessions belong to the run. It sends no
+  prompt, starts nothing and posts nothing.
+- A report or preview that a notice encloses is shown exactly as it was
+  written, also when it quotes the tag that ends the notice's block. For
+  that, text which already holds the escaped form of that tag
+  (`&lt;/azpr_report_data&gt;`, `&lt;/azpr_comment_data&gt;`) is now enclosed
+  with one more `&amp;`; the tag itself is written as before.
+- Other OpenCode clients, such as the desktop app, do not load the panel and
+  show AZPR's notices as before.
+
+Comments on a PR that is no longer active:
+
+- `/pr-comment --publish` refused a PR that was completed or abandoned
+  (`INCOMPLETE`, "The PR is completed; nothing was posted"), so a PR merged
+  before its review was commented on could be reviewed but not commented on.
+  The PR's status no longer stops a publication, typed or automatic: such a
+  PR takes the comments like an active one, and the receipt names the status
+  (`Publication (VERIFIED=3); the PR is completed:`). A changed source commit
+  is still refused (`STALE`), and nothing is posted twice.
+- `/pr-check` no longer reports `NOT_READY` for such a PR: its `PR metadata`
+  row is a WARNING that names the status.
+
+Settings:
+
+- A version that brings a new setting now writes it into your settings file,
+  at its default, when OpenCode first loads that version. Until now only a
+  source installation added new settings; a settings file of the native
+  package kept what `/pr-setup` once wrote, and a new setting had to be
+  looked up and typed in. The defaults written are the ones that applied
+  anyway, so nothing changes in how AZPR behaves. Your values and their
+  order stay, the file is written with two-space indentation and readable by
+  its owner only (mode 600), and `/pr-check` lists what was added (a
+  `Settings` row).
+- The file is replaced as `/pr-setup` replaces it: atomically, owner-only and
+  only when it is a regular file of your own in a directory no one else can
+  write to. What you save in an editor at that moment is kept. A settings
+  file that is a symbolic link, invalid or switched off (`enabled: false`) is
+  left as it is; where settings are missing and could not be added, the
+  `Settings` row of `/pr-check` is a WARNING that names them and the reason.
+- A setup lock that a process left behind is now named: the message says
+  which file to delete when no setup is running.
+- `/pr-setup` writes every setting from the start, those it does not ask for
+  at their defaults.
+- Going back to an earlier version after 0.4.2 completed the file needs one
+  edit: remove `terminalPanel`, which earlier versions refuse as an unknown
+  setting.
+
+Package:
+
+- The package has a second entry, `./tui`, which OpenCode's terminal UI loads
+  by itself when the plugin is active. Installing and upgrading are as before;
+  the package still has no dependency and runs nothing at installation.
+- OpenCode 2.3.0 does not compile the JSX of a package it installed (restored
+  in OpenTUI 0.9.0, which OpenCode has not shipped yet), so the package
+  carries the compiled view next to its source. Building it needs a
+  development dependency in the repository only.
+- A source installation copies two more files, `tui-model.mjs` and `tui.js`;
+  the manual-copy list in the README has 34 files.
+
+Documentation:
+
+- The README's 15-second recording is a real review on OpenCode 2.3.0 with
+  the panel beside the conversation; the
+  [demonstration page](docs/DEMO.md#the-terminal-panel) says how it was made.
+  The recording of adjusting findings before publishing stays on that page.
+- The recording tools write a GIF with Pillow alone where no FFmpeg is
+  installed, and the recording guide says what to look for in a cast before
+  publishing frames of the panel.
+
 ## 0.4.1 — 2026-11-16
 
 AZPR is tested with OpenCode 2.3.0 instead of 2.2.4, and two things that went

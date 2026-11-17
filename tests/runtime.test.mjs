@@ -12,6 +12,7 @@ import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES } from '../src/config.mjs';
 import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
+import { buildPanel, opensPanel } from '../src/tui-model.mjs';
 import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -826,6 +827,40 @@ test('direct --publish plans and posts in one command; a failed write is retried
   const done = await f.command('pr-comment', '--publish');
   assert.match(done, /\] POSTED/);
   assert.equal(f.azure.state.threads.length, 3);
+});
+
+test('a PR that is completed or abandoned is checked, reviewed and commented on like an active one; its status is named', async t => {
+  // Merged before it was reviewed: the review and its comments still belong on the PR.
+  const f = await fixture(t);
+  f.azure.state.status = 'completed';
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/, 'A status is no reason to call the PR unreadable.');
+  assert.match(check, /\| PR metadata \| WARNING \| PR #123 is completed; head bbbbbbbbbbbb, base aaaaaaaaaaaa\. Reviews and comments work on it as on an active PR \|/);
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  assert.equal(f.azure.state.threads.length, 0);
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, /\] POSTED/);
+  assert.match(posted, /\nPublication \(VERIFIED=3\); the PR is completed:\n/, 'The receipt says which kind of PR took the comments.');
+  assert.equal(f.azure.state.threads.length, 3);
+  // Abandoned after the review: the same.
+  const g = await fixture(t);
+  await g.command();
+  g.azure.state.status = 'abandoned';
+  const abandoned = await g.command('pr-comment', '--publish');
+  assert.match(abandoned, /\] POSTED[\s\S]*\nPublication \(VERIFIED=3\); the PR is abandoned:\n/);
+  // The automatic step follows a review of such a PR as it follows any other.
+  const h = await fixture(t, { settings: s => { s.afterReview = { review: 'publish' }; } });
+  h.azure.state.status = 'completed';
+  const step = await commentStep(h, await h.command());
+  assert.match(step.receipt, /\] POSTED; source review=[a-f0-9]{8}\n[\s\S]*Publication \(VERIFIED=3\); the PR is completed:\n/);
+  // An active PR: the check row and the publication line are what they were.
+  const i = await fixture(t);
+  assert.match(await i.command('pr-check'), /\| PR metadata \| ok \| PR #123 is active; head bbbbbbbbbbbb, base aaaaaaaaaaaa \|/);
+  await i.command();
+  assert.match(await i.command('pr-comment', '--publish'), /\nPublication \(VERIFIED=3\):\n/);
 });
 
 test('comment commands only see reviews from their own conversation; report sessions route to it', async t => {
@@ -3201,4 +3236,201 @@ test('flags belong to the review commands: /pr-check refuses them and unknown op
   await assert.rejects(g.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: '' } }), /Usage: \/pr-review <Azure PR URL> \[--preview\|--publish\|--no-comment\] \[your context\]/);
   assert.equal(g.prompts().length, 0);
   assert.equal(g.azure.state.calls.length, calls, 'A refused command makes no Azure DevOps call.');
+});
+
+test('terminalPanel: manual travels with every notice, for the terminal panel; the default sends notices as before', async t => {
+  // The panel runs in the TUI's process and reads no settings file: the runtime marks its notices instead.
+  const f = await fixture(t, { settings: s => { s.terminalPanel = 'manual'; } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE\n/);
+  await f.command('pr-comment', '');
+  await f.command('pr-comment', '--show');
+  await f.command('pr-check');
+  const kinds = ['STARTED /pr-review', 'PROGRESS', 'COMPLETE', '# AZPR', 'STARTED /pr-comment', 'PREVIEW', '[AZPR] Saved preview', 'READY'];
+  for (const kind of kinds) assert.ok(f.notices.some(n => n.text.includes(kind)), kind);
+  assert.ok(f.notices.length >= kinds.length);
+  for (const n of f.notices) assert.deepEqual(n.metadata, { azpr: { panel: 'manual' } }, n.text.slice(0, 60));
+  // Nothing of it opens the panel; the same texts without the mark do.
+  for (const n of f.notices) assert.equal(opensPanel(n.text, n.metadata), false);
+  assert.equal(f.notices.filter(n => opensPanel(n.text)).length, 6, 'Two STARTED notices, the receipt of the review, the preview, the saved preview shown again and the table of checks.');
+  // The default: no metadata at all, so every request to the host is the one earlier versions made.
+  const g = await fixture(t);
+  await g.command();
+  await g.command('pr-comment', '');
+  assert.ok(g.notices.length >= 5 && g.notices.every(n => !Object.hasOwn(n, 'metadata')));
+  assert.deepEqual(Object.keys(g.notices[0]).sort(), ['delivery', 'description', 'resume', 'sessionID', 'text']);
+  assert.equal(g.notices.filter(n => opensPanel(n.text, n.metadata)).length, 4);
+});
+
+// What the TUI has loaded of a run: every notice waits in its session's inbox.
+const panelSource = f => ({
+  session: id => (f.sessions.get(id) ?? (f.notices.some(notice => notice.sessionID === id) ? { id } : undefined)),
+  sessions: () => [...f.sessions.values()],
+  status: () => 'idle',
+  messages: () => [],
+  pending: id => f.notices.flatMap((notice, index) => (notice.sessionID === id ? [{ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic', payload: { text: notice.text } }] : [])),
+});
+
+test('the terminal panel keeps a review\'s result when the run says afterwards that no preview follows', async t => {
+  // The default path of a review without findings: the receipt, then one more notice of the same run.
+  const empty = ({ role, packet }) => {
+    if (ROLES[role].format === 'initial') return { status: 'COMPLETE', coverage: { files: packet.assignment.files, gaps: [] }, additionalFiles: [], findings: [], report: 'No defects.' };
+    if (ROLES[role].format === 'final') return { status: 'COMPLETE', confirmed: [], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Nothing to confirm.' };
+    return undefined;
+  };
+  const f = await fixture(t, { answer: empty, settings: s => { s.afterReview = { review: 'preview' }; } });
+  const receipt = await f.command();
+  const step = await commentStep(f, receipt);
+  assert.match(step.skipped, /^\[AZPR [a-f0-9]{8}\] Automatic preview skipped: /);
+  assert.equal(f.notices.filter(n => n.sessionID === 'ordinary').at(-1).text, step.skipped, 'The note is the run\'s last word in the conversation.');
+  assert.equal(opensPanel(step.skipped), false);
+  const panel = buildPanel(panelSource(f), 'ordinary');
+  const verifier = f.sessionsFor('azpr-review-verifier')[0];
+  assert.deepEqual([panel.run, panel.status], [reviewId(receipt), 'COMPLETE'], 'The receipt still says how the run ended.');
+  assert.deepEqual(panel.rows.filter(row => row.report).map(row => [row.id, row.state]), [[verifier.id, 'complete']]);
+  assert.match(panel.markdown, new RegExp(`^# AZPR ${panel.run} — COMPLETE\\n`));
+});
+
+test('the terminal panel in a review\'s own session shows the comment run typed there; an enclosed report names no session', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'], settings: s => { s.returnReport = 'full'; } });
+  const receipt = await f.command();
+  const verifier = f.sessionsFor('azpr-review-verifier')[0];
+  // returnReport: full: the receipt encloses the report. Its stage lines are the runtime's; the report's text is not.
+  assert.match(receipt, /<azpr_report_data>/);
+  const review = buildPanel(panelSource(f), 'ordinary');
+  const stageSessions = [...receipt.split('<azpr_report_data>')[0].matchAll(/^- azpr-[^\n]*session=(ses_[A-Za-z0-9]+)/gm)].map(match => match[1]);
+  assert.deepEqual(review.rows.map(row => row.id).sort(), [...stageSessions].sort());
+  // /pr-comment typed in the session that holds the report: the runtime answers there, not in the conversation.
+  const before = f.notices.filter(n => n.sessionID === 'ordinary').length;
+  const preview = await f.command('pr-comment', '', verifier.id);
+  assert.match(preview, /\] PREVIEW/);
+  assert.equal(f.notices.filter(n => n.sessionID === 'ordinary').length, before, 'Nothing more was told to the conversation.');
+  const inReport = buildPanel(panelSource(f), verifier.id);
+  assert.deepEqual([inReport.conversation, inReport.run, inReport.status], ['ordinary', reviewId(preview), 'PREVIEW']);
+  assert.match(inReport.markdown, /PR Review Summary/);
+  assert.doesNotMatch(inReport.markdown, /^# AZPR /, 'The preview took the report\'s place.');
+  assert.match(inReport.documentHead, new RegExp(`^\\[AZPR ${inReport.run}\\] PREVIEW; source review=${reviewId(receipt)}$`));
+  assert.ok(inReport.rows.some(row => row.id === verifier.id && row.report));
+  // The conversation was told about the review only, and shows that.
+  const inConversation = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual([inConversation.run, inConversation.status], [reviewId(receipt), 'COMPLETE']);
+  // --show typed there as well.
+  const shown = await f.command('pr-comment', '--show', verifier.id);
+  assert.match(shown, /^\[AZPR\] Saved preview of review /);
+  const again = buildPanel(panelSource(f), verifier.id);
+  assert.match(again.documentHead, /^\[AZPR\] Saved preview of review /);
+  assert.ok(again.markdown.length > 100 && inReport.markdown.startsWith(again.markdown));
+});
+
+test('the terminal panel keeps the review\'s report in view when a comment run fails before it has a preview', async t => {
+  let failPlanning = true;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    answer: ({ role }) => failPlanning && ROLES[role].format === 'comment-plan' ? { $provider: 401 } : undefined });
+  const receipt = await f.command();
+  const verifier = f.sessionsFor('azpr-review-verifier')[0];
+  const failed = await f.command('pr-comment', '');
+  assert.match(failed, /\] INCOMPLETE; source review=/);
+  assert.match(failed, /<azpr_comment_data>\n\n<\/azpr_comment_data>/, 'The receipt has the block for a preview, and nothing in it.');
+  assert.equal(opensPanel(failed), false);
+  for (const sessionID of ['ordinary', verifier.id]) {
+    const panel = buildPanel(panelSource(f), sessionID);
+    assert.deepEqual([panel.run, panel.status], [reviewId(failed), 'INCOMPLETE'], sessionID);
+    assert.match(panel.markdown, new RegExp(`^# AZPR ${reviewId(receipt)} — COMPLETE\\n`), 'The report of the review the run acted on is still shown.');
+    assert.ok(panel.rows.some(row => row.id === verifier.id && row.report));
+  }
+  // The cause fixed, the next run's preview takes the report's place.
+  failPlanning = false;
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW; source review=/);
+  assert.match(buildPanel(panelSource(f), 'ordinary').markdown, /PR Review Summary/);
+});
+
+test('a comment that quotes the closing tag of AZPR\'s own notice is shown in the panel as it is posted', async t => {
+  // A review of code that writes such notices: the planned comment quotes the tag and the form it is written in.
+  const quote = "The writer appends the tag itself:\n\n```js\nbody += '\\n</azpr_comment_data>\\n'; // inside a block: &lt;/azpr_comment_data&gt;\n```\n\nEscape `</azpr_comment_data>` before enclosing the preview.";
+  const f = await fixture(t, { files: ['/src/Main.java'], answer: input => {
+    if (ROLES[input.role].format !== 'comment-plan') return undefined;
+    const plan = defaultAnswer(input);
+    return { ...plan, comments: plan.comments.map(comment => ({ ...comment, body: `${comment.body}\n\n${quote}` })) };
+  } });
+  const review = reviewId(await f.command());
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW; source review=/);
+  // The notice ends its block once, where the runtime put the tag; the conversation's model reads the quote escaped.
+  assert.equal(preview.split('</azpr_comment_data>').length, 2);
+  assert.ok(commentData(preview).includes("body += '\\n&lt;/azpr_comment_data&gt;\\n'; // inside a block: &amp;lt;/azpr_comment_data&amp;gt;"));
+  const planned = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual([planned.run, planned.status], [reviewId(preview), 'PREVIEW']);
+  assert.ok(planned.markdown.includes(quote), 'The panel shows the comment as it was planned.');
+  // --show: the saved preview, enclosed the same way.
+  const shown = await f.command('pr-comment', '--show');
+  assert.match(shown, new RegExp(`^\\[AZPR\\] Saved preview of review ${review}\\b`));
+  assert.equal(shown.split('</azpr_comment_data>').length, 2);
+  assert.ok(buildPanel(panelSource(f), 'ordinary').markdown.includes(quote));
+  // Publication posts that text.
+  assert.match(await f.command('pr-comment', '--publish'), /\] POSTED/);
+  const posted = f.azure.state.threads.flatMap(thread => thread.comments.map(comment => comment.content)).filter(content => content.includes('azpr_comment_data'));
+  assert.ok(posted.length >= 1 && posted.every(content => content.includes(quote)), 'What was posted is what the panel showed.');
+});
+
+// The terminal panel (src/tui-model.mjs) reads these notices as text: their form is part of what a run tells the user.
+test('the terminal panel reads what a review, its report and its preview tell the conversation', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java', '/src/Util.java'] });
+  // The host as a TUI has it loaded: every notice waits in its session's inbox.
+  const source = () => ({
+    session: id => (id === 'ordinary' ? { id } : f.sessions.get(id)),
+    sessions: () => [...f.sessions.values()],
+    status: () => 'idle',
+    messages: () => [],
+    pending: id => f.notices.flatMap((notice, index) => (notice.sessionID === id ? [{ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic', payload: { text: notice.text } }] : [])),
+  });
+  const receipt = await f.command();
+  const texts = f.notices.filter(n => n.sessionID === 'ordinary').map(n => n.text);
+  assert.equal(opensPanel(texts[0]), true, 'The STARTED notice of a review opens the panel.');
+  const progressNotices = texts.filter(text => /\] PROGRESS — /.test(text));
+  assert.ok(progressNotices.length >= 2 && progressNotices.every(text => !opensPanel(text)), 'Progress notices leave the panel as it is.');
+  assert.equal(opensPanel(receipt), true, 'The receipt names the session that holds the report.');
+  const review = buildPanel(source(), 'ordinary');
+  assert.deepEqual([review.run, review.status, review.progress], [reviewId(receipt), 'COMPLETE', undefined]);
+  const stageSessions = [...receipt.matchAll(/^- azpr-[^\n]*session=(ses_[A-Za-z0-9]+)/gm)].map(match => match[1]);
+  assert.ok(stageSessions.length >= 3);
+  assert.deepEqual(review.rows.map(row => row.id).sort(), [...stageSessions].sort(), 'Every stage the receipt names is a row.');
+  const verifier = f.sessionsFor('azpr-review-verifier')[0];
+  assert.deepEqual(review.rows.filter(row => row.report).map(row => row.id), [verifier.id], 'The verifier session holds the report.');
+  assert.ok(review.rows.every(row => row.state === 'complete' && !/^azpr-/.test(row.label)), 'Rows carry the sessions\' titles and the stages\' results.');
+  assert.match(review.markdown, new RegExp(`^# AZPR ${review.run} — COMPLETE\\n\\n[\\s\\S]*FINAL_REPORT`), 'The report queued to the verifier session is the document.');
+  assert.deepEqual([review.needs, review.inbox, review.deleted], [[], undefined, 0]);
+  const inReport = buildPanel(source(), verifier.id);
+  assert.deepEqual([inReport.conversation, inReport.run, inReport.markdown], ['ordinary', review.run, review.markdown], 'In the report session the panel shows the same run.');
+  // A preview: its STARTED notice opens the panel, and its receipt encloses the document.
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  assert.equal(opensPanel(f.notices.find(n => /\] STARTED \/pr-comment/.test(n.text)).text), true);
+  assert.equal(opensPanel(preview), true);
+  const planned = buildPanel(source(), 'ordinary');
+  assert.deepEqual([planned.run, planned.status], [reviewId(preview), 'PREVIEW']);
+  // While the comments were planned, the STARTED notice already named the review: its report and sessions stayed in view.
+  const upTo = f.notices.findIndex(n => /\] STARTED \/pr-comment/.test(n.text));
+  const planning = buildPanel({ ...source(), pending: id => source().pending(id).filter(entry => Number(entry.id.slice(4)) <= upTo) }, 'ordinary');
+  assert.deepEqual([planning.run, planning.status, planning.markdown], [reviewId(preview), 'RUNNING', review.markdown]);
+  assert.ok(planning.rows.some(row => row.id === verifier.id && row.report));
+  assert.match(planned.markdown, /PR Review Summary/);
+  assert.doesNotMatch(planned.markdown, /azpr_comment_data|<!-- azpr-comment:/, 'The enclosing tags and the comment markers are not part of what is shown.');
+  assert.match(planned.documentHead, new RegExp(`^\\[AZPR ${planned.run}\\] PREVIEW; source review=${review.run}$`));
+  assert.ok(planned.rows.some(row => row.id === verifier.id && row.report), 'The review\'s report session stays listed next to the comment run.');
+  // --show answers at once with the saved preview; a check has nothing for the panel.
+  const shown = await f.command('pr-comment', '--show');
+  assert.match(shown, /^\[AZPR\] Saved preview of review /);
+  assert.equal(opensPanel(shown), true);
+  const again = buildPanel(source(), 'ordinary');
+  assert.ok(again.markdown.length > 100 && planned.markdown.startsWith(again.markdown), 'The saved preview shown again is the same document, without the line about posting it.');
+  assert.match(again.documentHead, /^\[AZPR\] Saved preview of review /);
+  // A check starts no session; its receipt encloses the table of checks, and the review before it is not its business.
+  const before = f.notices.length;
+  const check = await f.command('pr-check');
+  assert.match(check, /\] READY/);
+  assert.deepEqual(f.notices.slice(before).map(n => opensPanel(n.text)), [false, true], 'The STARTED notice of a check leaves the panel alone; its receipt opens it.');
+  const checked = buildPanel(source(), 'ordinary');
+  assert.deepEqual([checked.run, checked.status, checked.rows], [reviewId(check), 'READY', []]);
+  assert.match(checked.markdown, /^## Source readiness\n[\s\S]*\n\| Check \| Result \| Detail \|\n/, 'The check\'s table is the document.');
 });

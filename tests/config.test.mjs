@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   BLOCKED_NATIVE_TOOLS, NATIVE_TOOL_PERMISSIONS, PROMPTS, ROLES, allowedTools, buildAgents,
   nativeToolPermissions, patProblem, validateSettings, stageModel, configuredOptionalSlots,
+  SETTING_DEFAULTS, withMissingSettings,
 } from '../src/config.mjs';
 
 const example = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
@@ -28,6 +29,71 @@ test('settings reject removed transports and unknown keys', () => {
   assert.throws(() => validateSettings({ ...input(), mcp: { server: 'x' } }), /settings\.mcp is no longer used/);
   assert.throws(() => validateSettings({ ...input(), azure: { ...input().azure, server: 'x' } }), /Unknown setting azure\.server/);
   assert.throws(() => validateSettings({ ...input(), workflow: { shards: 2 } }), /Unknown setting workflow\.shards/);
+});
+
+test('terminalPanel: the panel opens by itself by default, or only with /pr-panel', () => {
+  assert.equal(example.terminalPanel, 'auto');
+  assert.deepEqual(schema.properties.terminalPanel.enum, ['auto', 'manual']);
+  assert.equal(schema.properties.terminalPanel.default, 'auto');
+  const raw = input();
+  delete raw.terminalPanel;
+  assert.equal(validateSettings(raw).terminalPanel, 'auto');
+  assert.equal(validateSettings({ ...input(), terminalPanel: 'manual' }).terminalPanel, 'manual');
+  for (const value of ['off', true, '', null]) assert.throws(() => validateSettings({ ...input(), terminalPanel: value }), /^Error: terminalPanel must be auto or manual\.$/);
+});
+
+test('every setting with a default is in the example, the schema and the completion of a settings file', () => {
+  // What a person must choose has no default: the review models and the organization.
+  const chosen = { version: 2, models: { review: { functional: 'provider/a', risk: 'provider/b', verifier: 'provider/c' } }, azure: { organization: 'org', patFile: '/private/pat' } };
+  const { settings, added } = withMissingSettings(chosen);
+  // The example is the completed file, with placeholders where a person chooses.
+  const { $schema, ...documented } = structuredClone(example);
+  Object.assign(documented.models.review, chosen.models.review);
+  Object.assign(documented.azure, chosen.azure);
+  assert.equal($schema, './settings.schema.json');
+  assert.deepEqual(settings, documented, 'config/settings.example.json and SETTING_DEFAULTS name the same settings with the same values.');
+  // New names follow the ones a file has, in the order of the example.
+  assert.deepEqual(Object.keys(settings), ['version', 'models', 'azure', ...Object.keys(example).filter(key => !['$schema', 'version', 'models', 'azure'].includes(key))]);
+  assert.deepEqual(added, ['models.review.rater', 'models.deep', 'models.quick', 'enabled', 'returnReport', 'debug', 'outputLanguage', 'runTimeoutSeconds', 'shell',
+    'progressNotices', 'deletePrivateSessions', 'terminalPanel', 'afterReview', 'azure.pat', 'azure.concurrency', 'azure.callTimeoutSeconds', 'azure.archiveMegabytes',
+    'azure.proxy', 'azure.caFile', 'azure.verifyTls', 'workflow'], 'A group added as a whole is named once.');
+  // Every default has a schema entry with the same default.
+  const defaultsOf = (node, at) => Object.entries(node).flatMap(([key, value]) => value !== null && typeof value === 'object' ? defaultsOf(value, [...at, key]) : [[[...at, key], value]]);
+  for (const [path, value] of defaultsOf(SETTING_DEFAULTS, [])) {
+    const entry = path.reduce((node, key) => node?.properties?.[key], schema);
+    assert.ok(entry, `settings.schema.json describes ${path.join('.')}`);
+    if (Object.hasOwn(entry, 'default')) assert.deepEqual(entry.default, value, `The schema's default of ${path.join('.')}`);
+  }
+  assert.equal(schema.properties.terminalPanel.default, SETTING_DEFAULTS.terminalPanel);
+  assert.throws(() => { SETTING_DEFAULTS.afterReview.review = 'publish'; }, TypeError, 'The defaults cannot be changed at runtime.');
+});
+
+test('completing a settings file changes nothing about how it behaves, keeps what is there and is done once', () => {
+  const files = [
+    { version: 2, models: { review: { functional: 'provider/a', risk: 'provider/b', verifier: 'provider/c' }, quick: { reviewer: 'provider/q' } }, azure: { organization: 'org', pat: PAT } },
+    { version: 2, enabled: false, models: { review: { functional: 'provider/a', risk: 'provider/b', verifier: 'provider/c', rater: 'provider/r' }, deep: { functional: 'provider/d' } },
+      debug: { enabled: true }, afterReview: { review: 'publish' }, workflow: { parallelSessions: 2 }, runTimeoutSeconds: 600, terminalPanel: 'manual',
+      azure: { organization: 'org', pat: '', patFile: '/private/pat', verifyTls: false } },
+    { ...input(), models: { ...input().models, _help: { functional: 'What it reviews.' } } },
+    withMissingSettings(input()).settings,
+  ];
+  for (const raw of files) {
+    const before = structuredClone(raw);
+    const { settings, added } = withMissingSettings(raw);
+    assert.deepEqual(raw, before, 'The input is not changed.');
+    assert.deepEqual(validateSettings(settings), validateSettings(raw), 'A default written into the file is the default validation assumed.');
+    // Every value that was there is there, under the same name.
+    const kept = (from, to, at) => { for (const [key, value] of Object.entries(from)) {
+      if (value !== null && typeof value === 'object') kept(value, to[key], `${at}${key}.`); else assert.deepEqual(to[key], value, `${at}${key}`);
+    } };
+    kept(raw, settings, '');
+    assert.deepEqual(Object.keys(settings).slice(0, Object.keys(raw).length), Object.keys(raw), 'Existing names keep their order; new ones follow.');
+    assert.deepEqual(withMissingSettings(settings), { settings, added: [] }, 'A completed file lacks nothing.');
+    assert.equal(added.length === 0, raw === files[3], 'Only the full example lacks nothing.');
+  }
+  // A value of the wrong kind is left for validation to name; nothing is put in its place.
+  assert.deepEqual(withMissingSettings({ version: 2, debug: 'yes', workflow: null }).settings.debug, 'yes');
+  assert.equal(withMissingSettings({ version: 2, debug: 'yes', workflow: null }).settings.workflow, null);
 });
 
 test('afterReview: a preview for every mode by default, none or publish per mode; errors name the setting, never its value', () => {
