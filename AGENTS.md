@@ -127,11 +127,14 @@ settings, backups and failure records. Never upload `.local/`.
   grant, not files or catalogs. A first setup is that one read, not an
   exception to it: a process that found no usable settings has read none, so
   it loads them when a save of its own setup makes them usable (the text
-  that save replaced could not be used, and it wrote something). It tries
-  again with that setup's next save when loading them failed, but only the
-  text this setup wrote is its own to load: compare the file with it before
-  the load and what the runtime read with it afterwards, and give way when
-  anything else has written the file since. Settings
+  that save replaced could not be used, it wrote something, and they can be
+  used after it). It tries again with that setup's next save when loading
+  them failed, but only what this setup wrote is its own to load, the
+  settings text and the token (`pairOf`): compare both before the load, and
+  afterwards require that the runtime read what the files hold and that
+  they hold what was saved; give way when anything else has written either
+  since. A load that answers nothing (settings switched off meanwhile) is
+  no load. Settings
   that anything else made usable (another process's setup, an editor, a
   tool) are read after a restart, as always, also by a process that had
   none, whatever its own setup saves afterwards; and settings that are in
@@ -412,7 +415,8 @@ settings, backups and failure records. Never upload `.local/`.
 - The RPC never throws and never quotes a refused value: its schemas are
   loose, the server part checks every answer itself, and what it returns
   holds neither the token nor a proxy's user name and password (a proxy that
-  comes back as it was shown stands for the saved one).
+  comes back as it was shown stands for the saved one; for a proxy typed
+  with them nothing comes back, and the dialog keeps what was typed).
 - A token is checked before it is saved: one request through `azure.mjs`
   (`access`), not repeated, since a person waits. It runs in a queue of
   setup's own with one slot, because it must work before settings, and so

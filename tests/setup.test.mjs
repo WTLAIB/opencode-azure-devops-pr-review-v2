@@ -870,8 +870,13 @@ test('answers are checked without being saved; a saved proxy\'s user name and pa
   const { validate, save, status } = f.rpc.handlers;
   assert.deepEqual(await validate({ changes: { organization: 'https://fixture.visualstudio.com/DefaultCollection/project' } }), { ok: true, values: { organization: 'fixture' }, shown: { organization: 'fixture' } });
   assert.deepEqual(await validate({ changes: { proxy: ' none ' } }), { ok: true, values: { proxy: '' }, shown: { proxy: 'none' } });
+  // A proxy's user name and password are in no answer, also not those of a proxy that was just typed: nothing
+  // comes back for it but how it may be shown, and the dialog keeps what was typed.
   assert.deepEqual(await validate({ changes: { proxy: 'http://user:pw-secret@proxy.example:8080' } }),
-    { ok: true, values: { proxy: 'http://user:pw-secret@proxy.example:8080' }, shown: { proxy: 'http://proxy.example:8080 (with credentials)' } });
+    { ok: true, values: {}, shown: { proxy: 'http://proxy.example:8080 (with credentials)' } });
+  assert.deepEqual(await validate({ changes: { organization: 'fixture', proxy: ' http://user:pw-secret@proxy.example:8080 ' } }),
+    { ok: true, values: { organization: 'fixture' }, shown: { organization: 'fixture', proxy: 'http://proxy.example:8080 (with credentials)' } });
+  assert.deepEqual(await validate({ changes: { proxy: ' http://proxy.example:8080 ' } }), { ok: true, values: { proxy: 'http://proxy.example:8080' }, shown: { proxy: 'http://proxy.example:8080' } });
   for (const [changes, problem] of [
     [{ organization: 'https://example.com/fixture' }, /^Only dev\.azure\.com and <organization>\.visualstudio\.com URLs name an organization\.$/],
     [{ organization: '' }, /^Use your Azure DevOps organization name/],
@@ -1409,6 +1414,53 @@ test('settings that replaced the ones this setup saved are not loaded by its nex
   assert.deepEqual([saved.ok, saved.status.state, f.agents.size], [true, 'restart', 0]);
   assert.deepEqual(f.rpc.events, []);
   assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n.*can be used now, but AZPR found no usable settings when OpenCode loaded it for this project directory/);
+
+  // The token is part of what a setup saved: another one in the file these settings name, written by something
+  // else after a load that failed, is not loaded by this setup's next save either.
+  const h = await fixture(t), own = environmentOf(h);
+  t.after(await h.setup({ environment: own, releaseWaitMs: 50 }));
+  const before = h.context.command.list;
+  h.context.command.list = async () => ({ data: [...(await before()).data, { name: 'pr-review', description: 'Another plugin\'s review' }] });
+  const first = await h.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
+  assert.deepEqual([first.ok, first.status.state], [true, 'restart']);
+  h.context.command.list = before;
+  await writeFile(JSON.parse(await readFile(h.path, 'utf8')).azure.patFile, NEW_TOKEN, { mode: 0o600 });
+  const next = await h.rpc.handlers.save({ changes: { language: 'ja' } });
+  assert.deepEqual([next.ok, next.status.state, h.agents.size], [true, 'restart', 0], 'The settings text is this setup\'s, the token is not.');
+
+  // Nor is anything this setup's to load while its save leaves the settings unusable: here they name a token
+  // file that is not there, and this setup changes one setting.
+  const k = await fixture(t), bare = environmentOf(k);
+  await mkdir(join(k.root, 'private config'), { mode: 0o700 });
+  const missing = join(k.root, 'token to come');
+  await writeFile(k.path, settingsText(withMissingSettings({ version: 2, models: { review: { functional: 'fixture/model', risk: 'fixture/model', verifier: 'fixture/model' } }, azure: { organization: 'fixture', pat: '', patFile: missing } }).settings), { mode: 0o600 });
+  t.after(await k.setup({ environment: bare, releaseWaitMs: 50 }));
+  const changed = await k.rpc.handlers.save({ changes: { language: 'ja' } });
+  assert.deepEqual([changed.ok, changed.status.state], [true, 'required']);
+  // Someone else then puts the token there, which makes them usable; a save of this setup changes nothing about whose they are.
+  await writeFile(missing, FAKE_PAT, { mode: 0o600 });
+  const later = await k.rpc.handlers.save({ changes: { language: 'ja' } });
+  const again = await k.rpc.handlers.save({ changes: { report: 'full' } });
+  assert.deepEqual([later.status.state, again.status.state, k.agents.size, k.rpc.events.length], ['restart', 'restart', 0, 0]);
+
+  // Settings that are switched off while this setup's save is being loaded load nothing, and that is no load.
+  const off = await fixture(t), quiet = environmentOf(off);
+  t.after(await off.setup({ environment: quiet, releaseWaitMs: 50 }));
+  const asked = off.context.command.list;
+  let switched = false;
+  off.context.command.list = async () => {
+    if (!switched && await readFile(off.path, 'utf8').then(() => true, () => false)) {
+      switched = true;
+      await writeFile(off.path, settingsText({ ...JSON.parse(await readFile(off.path, 'utf8')), enabled: false }), { mode: 0o600 });
+    }
+    return asked();
+  };
+  const answer = await off.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${off.pat}"`);
+  off.context.command.list = asked;
+  assert.equal(switched, true);
+  assert.match(answer, /\nTo load them, restart the OpenCode service /);
+  assert.deepEqual([off.agents.size, off.rpc.events.length, (await off.rpc.handlers.status({})).state], [0, 0, 'restart'], 'Nothing was loaded, and setup does not say that anything is ready.');
+  assert.deepEqual([...off.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
 
   // Also when they take the file's place in the moment between this setup's save and the load of what it saved.
   const g = await fixture(t), shared = environmentOf(g);

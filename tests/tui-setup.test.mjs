@@ -44,7 +44,10 @@ function server(start = {}) {
     validate: async ({ changes }) => {
       try {
         const values = Object.fromEntries(Object.entries(changes).map(([id, answer]) => [id, accept(id, answer)]));
-        return { ok: true, values, shown: Object.fromEntries(Object.entries(values).map(([id, value]) => [id, id === 'proxy' ? value.replace(/\/\/[^@/]*@/, '//') : value])) };
+        const shown = Object.fromEntries(Object.entries(values).map(([id, value]) => [id, id === 'proxy' ? value.replace(/\/\/[^@/]*@/, '//') : value]));
+        // Like the server part: a proxy with a user name and password does not come back, only how it may be shown.
+        if (/\/\/[^@/]*@/.test(values.proxy ?? '')) delete values.proxy;
+        return { ok: true, values, shown };
       } catch (error) { return { ok: false, problem: error.message }; }
     },
     check: async input => {
@@ -128,6 +131,8 @@ test('a proxy is followed by the CA file question; both are used for the check a
   const summary = h.shown.find(item => item.kind === 'confirm').message;
   assert.match(summary, /Proxy: http:\/\/proxy\.example:8080\nCA certificate file: \/etc\/ssl\/company\.pem/);
   assert.ok(!summary.includes('secret'), 'The summary shows the proxy without its user name and password.');
+  // The server part sent nothing back for that proxy: what is checked and saved is what was typed.
+  assert.ok(!JSON.stringify(h.shown).includes('user:secret'), 'No dialog shows them either, beyond the field they were typed into.');
 });
 
 test('leaving a first setup at any step saves nothing and says so', async () => {

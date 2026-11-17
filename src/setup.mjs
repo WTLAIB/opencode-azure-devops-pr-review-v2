@@ -11,7 +11,7 @@ import { open, readFile, lstat, mkdir, link, rename, stat, unlink } from 'node:f
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { COMMANDS, MODES, SETTING_CHECKS, modelRef, modelSlots, patProblem, privateAgent, settingsText, validateSettings, withMissingSettings } from './config.mjs';
 import { parseUniqueJSON } from './output.mjs';
 import { appendReport } from './session.mjs';
@@ -280,7 +280,8 @@ async function readExisting(path) {
  * setup uses the default PAT file. Every other option changes the one setting it names in an existing
  * file. The file names every setting, those setup does not ask for at their defaults. Returns the saved
  * organization and PAT file, the labels of the single settings that were changed, whether the settings it
- * replaced could not be used (`unusable`), and the settings text it read (`previous`) and wrote (`written`).
+ * replaced could not be used (`unusable`), and what the settings and the token file they name held when it
+ * read them (`before`) and hold after it (`after`; see `pairOf`).
  */
 export async function saveSetup(context, path, arguments_, environment = process.env) {
   const previous = await readExisting(path);
@@ -328,8 +329,9 @@ export async function saveSetup(context, path, arguments_, environment = process
   validateSettings(settings);
   // Judged on the text this save replaces, not on a second read: whether it is this save that makes the settings usable.
   const unusable = Boolean((await settingsTextProblem(previous)).problem);
+  const before = await pairOf(previous);
   await writeSettings(path, previous, settings);
-  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable, previous, written: settingsText(settings) };
+  return { organization: text(settings.azure?.organization), patFile, changed, first, unusable, before, after: await pairOf(settingsText(settings)) };
 }
 
 const mine = info => typeof process.getuid !== 'function' || info.uid === process.getuid();
@@ -579,6 +581,20 @@ async function settingsTextProblem(text) {
   }
 }
 
+/**
+ * What a settings text and the token file it names hold, as one value to compare: the text, and a digest of
+ * the token where the settings name a file that can be read. Never the token. Undefined for no settings file.
+ */
+async function pairOf(text) {
+  if (typeof text !== 'string') return undefined;
+  let digest = '';
+  try {
+    const file = settingsJSON(text).azure?.patFile;
+    if (typeof file === 'string' && file) digest = createHash('sha256').update(await readPatFile(file)).digest('hex');
+  } catch { /* A text that is no settings, or a token file that cannot be read: no token to tell apart. */ }
+  return `${digest}\n${text}`;
+}
+
 /** What an error may say to the person who is setting AZPR up: AZPR's own words, and never an OS or parser message. */
 const said = (error, fallback) => typeof error?.message === 'string' && error.message.startsWith('[AZPR] ') ? error.message.slice(7) : fallback;
 
@@ -604,9 +620,9 @@ function accessProblem(error, organization, proxy) {
  * Setup for one settings file: what the RPC of the terminal UI's dialogs calls. `loaded()` says what this
  * process has in use: `blocked` (no usable settings were found), `problem` (why) and `drift()` (the loaded
  * runtime's own answer to whether the settings file and the PAT file are still what it read).
- * `saved({ made, previous, written })` is told after every save that succeeded: whether it made unusable
- * settings usable (the settings it replaced could not be used, and it wrote something), the settings text
- * it read and the text that is in the file after it.
+ * `saved({ made, before, after })` is told after every save that succeeded: whether it made unusable
+ * settings usable (the settings it replaced could not be used, and it wrote something), and what the
+ * settings and the token file they name held when it read them and hold after it (`pairOf`).
  * `options` are the runtime's test options (fetch, azureBaseUrl), `checkTimeoutMs` and, for offline tests,
  * `settingsPrepared` (runs when a save's new settings text is ready, before it replaces the file).
  */
@@ -705,10 +721,12 @@ function createSetupService({ context, path, environment, options, loaded, saved
       for (const row of rows) {
         const value = await row.accept(context, answer, next, row);
         next = row.set(next, value);
-        // What goes back to the dialog is what the person gave, in its saved form. A proxy left as the dialog showed
-        // it stands for the saved one, whose user name and password never leave this process.
-        values[id] = row.kind === 'choice' && typeof value === 'boolean' ? (value ? 'on' : 'off')
-          : row.id === 'proxy' && value && text(answer).trim() !== value ? text(answer).trim() : value;
+        // What goes back to the dialog is the answer in its saved form, but never a proxy's user name and
+        // password: not the saved one's (a proxy left as the dialog showed it stands for the saved one), and
+        // not those of a proxy that was just typed either. For such a proxy nothing goes back, and the dialog
+        // keeps what was typed.
+        if (row.id === 'proxy' && value && shownProxy(value).endsWith(')')) { if (text(answer).trim() !== value) values[id] = text(answer).trim(); }
+        else values[id] = row.kind === 'choice' && typeof value === 'boolean' ? (value ? 'on' : 'off') : value;
         shown[id] = row.show(row.get(withMissingSettings(next).settings));
       }
     }
@@ -793,8 +811,10 @@ function createSetupService({ context, path, environment, options, loaded, saved
       const { previous, raw, fileProblem } = await current();
       if (raw === null) return { ok: false, problem: fileProblem };
       // Whether it is this save that makes the settings usable, judged on the text it replaces: only then are
-      // they this setup's to load.
+      // they this setup's to load. And what the settings and their token file hold now, to tell later whether
+      // anything else wrote them in between.
       const unusable = loaded().blocked && Boolean((await settingsTextProblem(previous)).problem);
+      const held = await pairOf(previous);
       let { next } = await apply(raw, input.changes ?? {});
       const before = withMissingSettings(raw).settings;
       const was = text(azureOf(before).organization), named = text(azureOf(next).organization);
@@ -858,7 +878,7 @@ function createSetupService({ context, path, environment, options, loaded, saved
           }
         });
       }
-      await saved({ made: unusable && wrote, previous, written: onDisk });
+      await saved({ made: unusable && wrote, before: held, after: await pairOf(onDisk) });
       // The token these settings had before is still in its file: a person decides what becomes of it.
       const stays = made && source && resolve(source) !== resolve(made) && await readPatFile(source).then(() => true, () => false);
       return { ok: true, status: await status(),
@@ -889,10 +909,13 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   const catalog = listOf(await context.command.list());
   if (!catalog) throw new Error('[AZPR] Invalid OpenCode command catalog.');
   // What this process has in use: nothing while `blocked`, else a runtime, whose `drift()` says whether the
-  // settings file and the PAT file still are what it read. `ownText`: the settings text that is this process's
-  // to load, because a save of its own setup made the settings usable and every text since was one it wrote
-  // itself; undefined once anything else wrote the file.
-  const use = { blocked: Boolean(first.problem), problem: first.problem, loadProblem: '', drift: undefined, ownText: undefined };
+  // settings file and the PAT file still are what it read. `own`: what the settings and the token file they
+  // name hold (`pairOf`) while they are this process's to load, because a save of its own setup made the
+  // settings usable and everything since was written by a save of that setup; undefined once anything else
+  // wrote either file.
+  const use = { blocked: Boolean(first.problem), problem: first.problem, loadProblem: '', drift: undefined, own: undefined };
+  /** What the settings file and the token file it names hold at this moment. */
+  const pairNow = async () => pairOf(await readFile(path, 'utf8').catch(() => null));
   const reserved = ['pr-setup', ...(use.blocked ? Object.keys(COMMANDS) : [])];
   if (catalog.some(command => reserved.includes(command.name))) throw new Error('[AZPR] Reserved command name conflict; resolve it before loading AZPR.');
   let pending = false, cleanup, placeholders, activating, restoring, swapping = false, rpc, closed = false;
@@ -945,10 +968,10 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
       try {
         const now = await settingsProblem(path);
         if (now.problem || now.disabled) { use.problem = now.problem || 'AZPR is switched off in its settings (enabled: false).'; return false; }
-        // Only the text this setup saved is this process's to load. What took its place since (another
-        // process's setup, an editor) waits for the restart, like every change from elsewhere.
-        if (use.ownText === undefined || await readFile(path, 'utf8').catch(() => null) !== use.ownText) {
-          use.ownText = undefined;
+        // Only what this setup saved is this process's to load. What took its place since (another process's
+        // setup, an editor; the settings or the token) waits for the restart, like every change from elsewhere.
+        if (use.own === undefined || await pairNow() !== use.own) {
+          use.own = undefined;
           use.loadProblem = '';
           return false;
         }
@@ -969,8 +992,11 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           }
           try {
             cleanup = await load();
-            // The runtime read the file a moment after it was compared above: what it read must be this setup's text.
-            outcome = typeof cleanup?.settingsAre === 'function' && !cleanup.settingsAre(use.ownText) ? 'replaced' : closed ? 'closed' : 'loaded';
+            // The runtime read the files a moment after they were compared above. What it read is what they hold
+            // now (its own answer), and what they hold now must be what this setup saved.
+            // A load that answers neither (settings switched off meanwhile load nothing) is no load of them.
+            const same = typeof use.drift === 'function' && await use.drift().then(drift => !drift, () => false) && await pairNow() === use.own;
+            outcome = !same ? 'replaced' : closed ? 'closed' : 'loaded';
           } catch (error) {
             use.problem = use.loadProblem = said(error, 'the settings could not be loaded.');
             outcome = 'failed';
@@ -980,7 +1006,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
             const loaded = cleanup;
             cleanup = undefined;
             use.drift = undefined;
-            if (outcome === 'replaced') { use.ownText = undefined; use.loadProblem = ''; }
+            if (outcome === 'replaced') { use.own = undefined; use.loadProblem = ''; }
             await Promise.resolve(loaded?.()).catch(() => {});
           }
         } finally { swapping = false; }
@@ -1025,24 +1051,32 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
 
   /**
    * After a save of this process's own setup: `made` (the settings it replaced could not be used, and it wrote
-   * something), `previous` (the settings text it read) and `written` (the text that is there after it). A
-   * process that found no usable settings loads them when its own save is what made them usable, and tries
-   * again with a later save when loading them failed, as long as the file held nothing but texts this setup
-   * wrote in between. Settings that could be used before the save, or that replaced this setup's text, were
-   * made by something else (another process's setup, an editor, a tool): those wait for the restart, as
-   * every change does, whatever this save added. Returns whether the runtime is loaded afterwards (`ready`),
-   * and otherwise what stands in the way now (`problem`; '' when it is only the restart).
+   * something), and what the settings and their token file held when it read them (`before`) and hold after
+   * it (`after`). A process that found no usable settings loads them when its own save is what made them
+   * usable, and tries again with a later save when loading them failed, as long as the two files held
+   * nothing but what this setup wrote in between. Settings that could be used before the save, or that
+   * took the place of what this setup saved, were made by something else (another process's setup, an
+   * editor, a tool): those wait for the restart, as every change does, whatever this save added. Returns
+   * whether the runtime is loaded afterwards (`ready`), and otherwise what stands in the way now
+   * (`problem`; '' when it is only the restart).
    */
-  const afterSave = async ({ made, previous, written }) => {
+  const afterSave = async ({ made, before, after }) => {
     if (!use.blocked) return { ready: true, problem: '' };
-    if (made) use.ownText = written;
-    else if (use.ownText !== undefined && previous === use.ownText) use.ownText = written;
-    // Not this setup's any more, or never: what a load of its own text failed on says nothing about these.
-    else { use.ownText = undefined; use.loadProblem = ''; }
     const now = await settingsProblem(path);
-    // Still not usable: the problem of now takes the place of the one found at load.
-    if (now.problem) { use.problem = now.problem; await restorePlaceholders(); return { ready: false, problem: now.problem }; }
-    if (use.ownText === undefined) { await restorePlaceholders(); return { ready: false, problem: '' }; }
+    // Still not usable: nothing is this setup's to load yet (what makes them usable later may be someone
+    // else's doing), and the problem of now takes the place of the one found at load.
+    if (now.problem) {
+      use.own = undefined;
+      use.problem = now.problem;
+      use.loadProblem = '';
+      await restorePlaceholders();
+      return { ready: false, problem: now.problem };
+    }
+    if (made) use.own = after;
+    else if (use.own !== undefined && before === use.own) use.own = after;
+    // Not this setup's any more, or never: what a load of its own settings failed on says nothing about these.
+    else { use.own = undefined; use.loadProblem = ''; }
+    if (use.own === undefined) { await restorePlaceholders(); return { ready: false, problem: '' }; }
     const ready = await activate();
     return { ready, problem: ready ? '' : use.loadProblem };
   };
@@ -1071,7 +1105,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           const wasBlocked = use.blocked;
           try {
             saved = await saveSetup(context, path, arguments_, environment);
-            if (wasBlocked) after = await afterSave({ made: saved.unusable, previous: saved.previous, written: saved.written });
+            if (wasBlocked) after = await afterSave({ made: saved.unusable, before: saved.before, after: saved.after });
           } finally { pending = false; }
           text = `[AZPR] SETTINGS SAVED\nSettings: ${path}\n` +
             (saved.first ? `Organization: ${saved.organization}; PAT file: ${saved.patFile}\n` : '') +

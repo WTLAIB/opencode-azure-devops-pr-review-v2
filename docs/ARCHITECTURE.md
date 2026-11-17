@@ -684,7 +684,7 @@ quote the input.
 | Method | What it does |
 | --- | --- |
 | `status` | The rows with their values, the settings file, and `state`: `required` (there are no usable settings), `ready`, or `restart`. For settings in use, `restart` is the loaded runtime's own answer, by the rule of its preflight: the settings text differs by more than the defaults a load wrote into it, or the PAT file holds another token, whoever changed them. For a process that found no usable settings, it means that there are usable ones now which it did not load. Never the token, and a proxy without its user name and password. |
-| `validate` | Whether answers can be used, their saved form and how they may be shown, without saving anything. |
+| `validate` | Whether answers can be used, their saved form and how they may be shown, without saving anything. For a proxy with a user name and password only how it may be shown comes back; the dialog keeps what was typed. |
 | `check` | Asks Azure DevOps once whether a token works for an organization (`access` in `azure.mjs`: at most one pull request of the organization; not repeated, since a person waits), with the token given or else the saved one, and the proxy and CA file given or else the saved ones. The saved token is the one the settings name (`azure.patFile`, else `azure.pat`), as the runtime reads it; the default PAT file is none unless they name it. It goes only where the saved settings send it: to the organization it was saved for, through the saved proxy and with the saved CA file; anything else needs the token entered with it. The answer says what was refused and which answer to ask for again: the token, the organization, the proxy or the CA file. |
 | `save` | Applies answers and, when one was given, the token. Organization and token change in one step, the write of the settings file. A token is saved with the organization it was checked for: the one this save sets, or the one the request names, which must still be the one in the settings; and the organization of settings that name a token (usable at the moment or not; also from no organization to one) changes only together with a token of the new one. Setup takes as a token one word of letters, digits, `-` and `_` of 20 to 1,024 characters, which is also what it requires of a token file before it replaces it, so that it can replace what it wrote. A token of the organization the settings named already replaces the token file they name. Every other token (a first setup's, another organization's, and one for settings that name the default PAT file of setup with options, which every settings file a person has may use) gets a file that did not exist: `pat-<organization>`, or that name with the first free number, beside the file the settings name or in AZPR's directory, taken in one step that refuses a name which exists; the settings name it in the same write. Setup thus overwrites no file but the one these settings name for this organization, whatever other settings files share the directory, and a reader of the settings and the file they name always has a pair that belongs together. A file a save made is removed again when its settings are not written, and only then: a settings file that is in place stays reported as written when a temporary file or the lock cannot be removed after it. Where the token these settings had before stays in its file, the answer says where. Both files are written under the setup lock, after the settings file was compared once more with what the answers were checked against: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one such token, since settings can name any path), then the settings, through the same atomic, owner-only writer as before. A save that finds the lock held writes neither. |
 
@@ -704,13 +704,16 @@ confirmed in a list whose first row keeps the current setting.
 **A first setup is loaded at once.** A process that found no usable settings
 registered only `/pr-setup` and the commands that answer `SETUP REQUIRED`.
 Once a save of its own setup (the dialogs' or the command's) makes the
-settings usable (the text it replaced could not be used, and it wrote
-something), `setupPlugin` removes those commands and loads the runtime:
+settings usable (the text it replaced could not be used, it wrote
+something, and they can be used after it), `setupPlugin` removes those
+commands and loads the runtime:
 nothing was read before, so this is the one time the settings are read. Only
 that save does it, and a later save of the same setup tries again when
-loading them failed, as long as the file has held nothing but texts this
-setup wrote: the file is compared with that text before the load, and what
-the runtime read with it afterwards. The commands that say so come back
+loading them failed, as long as the settings file and the token file it
+names have held nothing but what this setup wrote: both are compared with
+that before the load, and afterwards the runtime must have read what the
+files hold and they must hold what was saved (settings that were switched
+off meanwhile load nothing, which is no load). The commands that say so come back
 meanwhile, except under a name that another plugin has taken by then, which
 is looked up again at that moment (adding a command would replace that
 plugin's); where the host cannot list the commands, none is registered

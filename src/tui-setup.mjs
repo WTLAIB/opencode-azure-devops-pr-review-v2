@@ -91,7 +91,9 @@ export function createSetup(host) {
       const answer = await dialog.prompt({ title: row.title, description: withProblem(problem, row.description), placeholder: row.placeholder, value });
       if (answer === undefined) return undefined;
       const result = await call('validate', { changes: { [row.id]: answer } });
-      if (result?.ok) return { value: text(result.values?.[row.id]), shown: text(result.shown?.[row.id]) };
+      // The saved form of the answer, where the server part sends one back: it sends none for a proxy with a
+      // user name and password, and what was typed is then what is checked and saved.
+      if (result?.ok) return { value: Object.hasOwn(result.values ?? {}, row.id) ? text(result.values[row.id]) : answer, shown: text(result.shown?.[row.id]) };
       problem = text(result?.problem) || 'That value cannot be used.';
       value = answer;
     }
