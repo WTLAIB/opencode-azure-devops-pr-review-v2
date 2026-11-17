@@ -122,7 +122,8 @@ export function createSetup(host) {
   /** A model of the host's list, with its variant when it has some; '' when the row may be off; undefined when left. */
   async function askModel(row) {
     const list = await models();
-    if (!list.length) {
+    // A row that may be off can still be switched off when OpenCode offers no model; a row that needs one cannot be answered.
+    if (!list.length && !row.optional) {
       await dialog.alert({ title: 'No model available', message: 'OpenCode offers no model that can call tools. Connect a model provider first (/connect), then run /pr-setup again.' });
       return undefined;
     }

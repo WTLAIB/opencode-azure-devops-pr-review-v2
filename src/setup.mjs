@@ -297,9 +297,11 @@ export async function saveSetup(context, path, arguments_, environment = process
   if (raw.models !== undefined && !object(raw.models) || raw.azure !== undefined && !object(raw.azure)) {
     throw new Error('[AZPR] Repair models and azure objects in settings.json before setup; existing data was preserved.');
   }
-  // The token that goes with the settings, as it is when they are read: what this save leaves is said from
-  // what it read and wrote, never from a later look, which could be at another writer's work.
-  const heldDigest = previous === null ? '' : await tokenDigest(previous);
+  // Whether the settings this save replaces could be used, and the token that goes with them, from one look at
+  // them when they are read: what this save leaves is said from what it read and wrote, never from a later
+  // look, which could be at another writer's work.
+  const held = await settingsTextProblem(previous);
+  const heldDigest = held.digest;
   let next = raw, patFile = text(raw.azure?.patFile), leftDigest = heldDigest;
   if (first) {
     const model = arguments_['--model'];
@@ -331,7 +333,7 @@ export async function saveSetup(context, path, arguments_, environment = process
   const { settings } = withMissingSettings(next);
   validateSettings(settings);
   // Judged on the text this save replaces, not on a second read: whether it is this save that makes the settings usable.
-  const unusable = Boolean((await settingsTextProblem(previous)).problem);
+  const unusable = Boolean(held.problem);
   await writeSettings(path, previous, settings);
   return { organization: text(settings.azure?.organization), patFile, changed, first, unusable,
     before: previous === null ? undefined : pairWith(previous, heldDigest), after: pairWith(settingsText(settings), leftDigest) };
@@ -570,18 +572,25 @@ async function settingsProblem(path) {
   catch (error) { return { problem: error.code === 'ENOENT' ? 'there is no settings file yet.' : `the settings file could not be read (${error.code ?? 'unknown error'}).` }; }
   return settingsTextProblem(text);
 }
-/** The same for a settings text that was read already (null: there is no file), so that a save judges the text it replaces. */
+/**
+ * The same for a settings text that was read already (null: there is no file), so that a save judges the text
+ * it replaces; with `digest`, the digest of the token in the file the text names ('' where it names none or
+ * the file cannot be read). Both come from one read of that file: whether the settings can be used and which
+ * token goes with them are then said of the same moment.
+ */
 async function settingsTextProblem(text) {
-  if (text === null) return { problem: 'there is no settings file yet.' };
+  if (text === null) return { problem: 'there is no settings file yet.', digest: '' };
+  let settings;
   try {
     const raw = settingsJSON(text);
-    if (raw.enabled === false) return { disabled: true, problem: '' };
-    const settings = validateSettings(raw);
-    if (settings.azure.patFile) await readPatFile(settings.azure.patFile);
-    return { problem: '' };
+    if (raw.enabled === false) return { disabled: true, problem: '', digest: await tokenDigest(text) };
+    settings = validateSettings(raw);
   } catch (error) {
-    return { problem: error instanceof Error && error.message ? error.message.replace(/^\[AZPR\] /, '') : 'the settings could not be loaded.' };
+    return { problem: error instanceof Error && error.message ? error.message.replace(/^\[AZPR\] /, '') : 'the settings could not be loaded.', digest: await tokenDigest(text) };
   }
+  if (!settings.azure.patFile) return { problem: '', digest: '' };
+  try { return { problem: '', digest: digestOf(await readPatFile(settings.azure.patFile)) }; }
+  catch (error) { return { problem: error instanceof Error && error.message ? error.message.replace(/^\[AZPR\] /, '') : 'the settings could not be loaded.', digest: '' }; }
 }
 
 /** A token as it may be compared and remembered: a digest, never the token. */
@@ -820,10 +829,10 @@ function createSetupService({ context, path, environment, options, loaded, saved
       const { previous, raw, fileProblem } = await current();
       if (raw === null) return { ok: false, problem: fileProblem };
       // Whether it is this save that makes the settings usable, judged on the text it replaces: only then are
-      // they this setup's to load. And the token that goes with them now, to tell later whether anything else
-      // wrote the settings or the token in between.
-      const unusable = loaded().blocked && Boolean((await settingsTextProblem(previous)).problem);
-      const heldDigest = typeof previous === 'string' ? await tokenDigest(previous) : '';
+      // they this setup's to load. And the token that goes with them, from the same look, to tell later
+      // whether anything else wrote the settings or the token in between.
+      const held = await settingsTextProblem(previous);
+      const unusable = loaded().blocked && Boolean(held.problem), heldDigest = held.digest;
       let { next } = await apply(raw, input.changes ?? {});
       const before = withMissingSettings(raw).settings;
       const was = text(azureOf(before).organization), named = text(azureOf(next).organization);

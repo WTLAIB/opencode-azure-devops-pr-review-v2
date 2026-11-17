@@ -132,8 +132,9 @@ settings, backups and failure records. Never upload `.local/`.
   them failed, but only what this setup wrote is its own to load, the
   settings text and the token (as a digest, `pairWith`). What a save leaves
   is said from what it wrote, never from another look at the files, which
-  could be at another writer's work. Compare both with the files before the
-  load, and afterwards require that the runtime read what the files hold
+  could be at another writer's work; whether the settings could be used
+  before it and which token went with them come from one look at the token
+  file. Compare both with the files before the load, and afterwards require that the runtime read what the files hold
   and that they hold what was saved; give way when anything else has
   written either since. A load that answers nothing (settings switched off meanwhile) is
   no load. Settings

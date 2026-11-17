@@ -286,6 +286,12 @@ test('a model is picked from the host\'s list with its variant; a row that may b
   const none = host(ready(), ['reviewModel', undefined], { models: [] });
   await none.setup.open();
   assert.deepEqual(none.titles(), ['select: AZPR settings', 'alert: No model available', 'select: AZPR settings']);
+  // Without any model, a row that may be off can still be switched off.
+  const off = host(ready({ deepModel: 'fixture/strong' }), ['deepModel', '', undefined], { models: [] });
+  await off.setup.open();
+  assert.deepEqual(off.titles(), ['select: AZPR settings', 'select: Stronger model for /pr-deep', 'select: AZPR settings · restart needed']);
+  assert.deepEqual(off.shown[1].options, [{ title: 'Off', value: '', description: '/pr-deep stays off', category: 'Off' }]);
+  assert.deepEqual(off.calls.at(-1), { method: 'save', input: { changes: { deepModel: '' } } });
 });
 
 test('a new token is checked for the saved organization before it is saved; an empty one keeps the saved token', async () => {

@@ -1443,6 +1443,27 @@ test('settings that replaced the ones this setup saved are not loaded by its nex
   const again = await k.rpc.handlers.save({ changes: { report: 'full' } });
   assert.deepEqual([later.status.state, again.status.state, k.agents.size, k.rpc.events.length], ['restart', 'restart', 0, 0]);
 
+  // Whether the settings could be used and which token goes with them is said from one look at the token file:
+  // a token that someone else puts there right after that look is not this setup's, whatever it saves.
+  const once = await fixture(t), single = environmentOf(once);
+  await mkdir(join(once.root, 'private config'), { mode: 0o700 });
+  const awaited = join(once.root, 'token that arrives');
+  await writeFile(once.path, settingsText(withMissingSettings({ version: 2, models: { review: { functional: 'fixture/model', risk: 'fixture/model', verifier: 'fixture/model' } }, azure: { organization: 'fixture', pat: '', patFile: awaited } }).settings), { mode: 0o600 });
+  t.after(await once.setup({ environment: single, releaseWaitMs: 50 }));
+  const open = fsPromises.open;
+  let looks = 0, arrived = false, outcome;
+  fsPromises.open = async (file, ...rest) => {
+    if (String(file) !== awaited || arrived) return open(file, ...rest);
+    looks++;
+    // The look finds no token; the other writer's token is there a moment later.
+    try { return await open(file, ...rest); }
+    finally { arrived = true; await writeFile(awaited, FAKE_PAT, { mode: 0o600 }); }
+  };
+  syncBuiltinESMExports();
+  try { outcome = await once.rpc.handlers.save({ changes: { language: 'ja' } }); }
+  finally { fsPromises.open = open; syncBuiltinESMExports(); }
+  assert.deepEqual([looks, outcome.ok, outcome.status.state, once.agents.size, once.rpc.events.length], [1, true, 'restart', 0, 0]);
+
   // Settings that are switched off while this setup's save is being loaded load nothing, and that is no load.
   const off = await fixture(t), quiet = environmentOf(off);
   t.after(await off.setup({ environment: quiet, releaseWaitMs: 50 }));
