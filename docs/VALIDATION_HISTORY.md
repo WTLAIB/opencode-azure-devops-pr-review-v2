@@ -116,8 +116,9 @@ MCP with persistent thread state. Both passed:
 
 ### Live runs (Azure DevOps, real model)
 
-PR kevin888y/OpenCode #2 (one changed file), `openai/gpt-5.6-luna` for all three
-roles, `zh-TW`, through the user's OpenCode service with the installed package.
+Test PR 2 of the maintainer's Azure DevOps test project (one changed file),
+`openai/gpt-5.6-luna` for all three roles, `zh-TW`, through the user's OpenCode
+service with the installed package.
 
 | Run | `/pr-check` | `/pr-review` | `/pr-comment --publish` | Second publish |
 | --- | --- | --- | --- | --- |
