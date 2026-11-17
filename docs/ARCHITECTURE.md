@@ -712,7 +712,9 @@ that save does it, and a later save of the same setup tries again when
 loading them failed, as long as the settings file and the token file it
 names have held nothing but what this setup wrote (remembered from what each
 save wrote, the token as a digest, not from a later look at the files): both
-are compared with that before the load, and afterwards the runtime must have read what the
+are compared with that before the load (one save has the turn at a time,
+through the RPC or `/pr-setup` with options, until the load that follows it
+has ended), and afterwards the runtime must have read what the
 files hold and they must hold what was saved (settings that were switched
 off meanwhile load nothing, which is no load). The commands that say so come back
 meanwhile, except under a name that another plugin has taken by then, which

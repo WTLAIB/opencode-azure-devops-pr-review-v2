@@ -315,7 +315,12 @@ export async function saveSetup(context, path, arguments_, environment = process
       azure: { ...raw.azure, organization, pat: '', patFile } };
     validateSettings(withMissingSettings(next).settings);
     await checkModel(context, model);
-    try { leftDigest = digestOf(await readPatFile(patFile)); }
+    // The PAT file must be usable. Its token goes with what this save leaves when the settings name the file
+    // anew; for a file they named already, the token is the one of the look above, whatever is there by now.
+    try {
+      const digest = digestOf(await readPatFile(patFile));
+      if (resolve(patFile) !== resolve(text(raw.azure?.patFile) || '/')) leftDigest = digest;
+    }
     catch (error) {
       if (arguments_['--pat-file'] !== undefined) throw error;
       // Name the file setup chose, so the reader knows where to put the PAT.
@@ -639,12 +644,13 @@ function accessProblem(error, organization, proxy) {
  * in the file after it with the token it wrote, or else the one it found).
  * `options` are the runtime's test options (fetch, azureBaseUrl), `checkTimeoutMs` and, for offline tests,
  * `settingsPrepared` (runs when a save's new settings text is ready, before it replaces the file).
+ * `turn.busy` is the one turn of this server part's setup: a save takes it from its first read to the end
+ * of what follows it (the load of a first setup), and so does /pr-setup with options.
  */
-function createSetupService({ context, path, environment, options, loaded, saved }) {
+function createSetupService({ context, path, environment, options, loaded, saved, turn }) {
   // One request at a time, and none of them waits long: this queue is setup's own, since it must work before
   // there are settings, and so before the runtime and its queue exist.
   const queue = createToolQueue({ concurrency: 1, timeoutMs: options.checkTimeoutMs ?? CHECK_TIMEOUT_MS });
-  let saving = false;
   const home = environment.HOME || homedir();
   const shownPath = value => home && value.startsWith(`${home}/`) ? `~/${value.slice(home.length + 1)}` : value;
 
@@ -822,8 +828,8 @@ function createSetupService({ context, path, environment, options, loaded, saved
    * settings are not written: nothing names it.
    */
   async function save(input) {
-    if (saving) return { ok: false, problem: 'Another setup is being saved.' };
-    saving = true;
+    if (turn.busy) return { ok: false, problem: 'Another setup is being saved.' };
+    turn.busy = true;
     try {
       textual(input, ['token', 'organization']);
       const { previous, raw, fileProblem } = await current();
@@ -905,7 +911,7 @@ function createSetupService({ context, path, environment, options, loaded, saved
       const stays = made && source && resolve(source) !== resolve(made) && await readPatFile(source).then(() => true, () => false);
       return { ok: true, status: await status(),
         ...(stays ? { note: `The ${another ? `token of "${was}"` : 'earlier token'} is still in ${shownPath(source)}. Delete that file if you no longer need it.` } : {}) };
-    } finally { saving = false; }
+    } finally { turn.busy = false; }
   }
 
   /** An RPC handler never throws: what went wrong is an answer, in AZPR's own words, and holds no value it was given. */
@@ -940,7 +946,10 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   const pairNow = async () => pairOf(await readFile(path, 'utf8').catch(() => null));
   const reserved = ['pr-setup', ...(use.blocked ? Object.keys(COMMANDS) : [])];
   if (catalog.some(command => reserved.includes(command.name))) throw new Error('[AZPR] Reserved command name conflict; resolve it before loading AZPR.');
-  let pending = false, cleanup, placeholders, activating, restoring, swapping = false, rpc, closed = false;
+  let cleanup, placeholders, activating, restoring, swapping = false, rpc, closed = false;
+  // One save at a time, whichever way it comes in (the dialogs' RPC or /pr-setup with options), until what
+  // follows it has ended: a second save during the load of a first setup would change what is being loaded.
+  const turn = { busy: false };
   /**
    * The review command names that another plugin has by now: what is listed under one of them and is not a
    * command that only says "setup required". Asked right before those commands are registered, since a
@@ -1103,7 +1112,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
     return { ready, problem: ready ? '' : use.loadProblem };
   };
 
-  const service = createSetupService({ context, path, environment, options: { ...runtimeOptions, checkTimeoutMs, settingsPrepared }, loaded: () => use,
+  const service = createSetupService({ context, path, environment, options: { ...runtimeOptions, checkTimeoutMs, settingsPrepared }, loaded: () => use, turn,
     saved: async result => { await afterSave(result); } });
   const registrations = [];
   const registration = await context.command.transform(editor => {
@@ -1121,14 +1130,14 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           // /pr-setup alone: the terminal UI opens its dialogs when it sees this notice. --help only explains.
           if (!(event.prompt.text ?? '').trim()) metadata = { azpr: { setup: true } };
         } else {
-          if (pending) throw new Error('[AZPR] Another setup is active.');
-          pending = true;
+          if (turn.busy) throw new Error('[AZPR] Another setup is active.');
+          turn.busy = true;
           let saved, after = { ready: false, problem: '' };
           const wasBlocked = use.blocked;
           try {
             saved = await saveSetup(context, path, arguments_, environment);
             if (wasBlocked) after = await afterSave({ made: saved.unusable, before: saved.before, after: saved.after });
-          } finally { pending = false; }
+          } finally { turn.busy = false; }
           text = `[AZPR] SETTINGS SAVED\nSettings: ${path}\n` +
             (saved.first ? `Organization: ${saved.organization}; PAT file: ${saved.patFile}\n` : '') +
             (saved.changed.length ? `Changed: ${saved.changed.join(', ')}\n` : '') +

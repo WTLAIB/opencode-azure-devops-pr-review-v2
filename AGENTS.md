@@ -134,7 +134,9 @@ settings, backups and failure records. Never upload `.local/`.
   is said from what it wrote, never from another look at the files, which
   could be at another writer's work; whether the settings could be used
   before it and which token went with them come from one look at the token
-  file. Compare both with the files before the load, and afterwards require that the runtime read what the files hold
+  file. One save has the turn at a time, whichever way it comes in (the
+  RPC or `/pr-setup` with options), until the load that follows it has
+  ended. Compare both with the files before the load, and afterwards require that the runtime read what the files hold
   and that they hold what was saved; give way when anything else has
   written either since. A load that answers nothing (settings switched off meanwhile) is
   no load. Settings

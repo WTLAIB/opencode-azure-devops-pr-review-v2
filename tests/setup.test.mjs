@@ -1516,6 +1516,45 @@ test('settings that replaced the ones this setup saved are not loaded by its nex
   assert.match(await g.invoke('pr-check', g.azure.prUrl()), /^\[AZPR\] RESTART REQUIRED\n/);
 });
 
+test('one setup saves at a time, whichever way it comes in, until the load that follows it has ended', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  const list = f.context.command.list;
+  let held, release;
+  // The load of the first setup waits on the host; meanwhile other saves arrive.
+  f.context.command.list = async () => { if (!held) { held = new Promise(resolve => { release = resolve; }); await held; } return list(); };
+  const first = f.rpc.handlers.save({ changes: { organization: 'fixture', model: 'fixture/model' }, token: FAKE_PAT });
+  for (let turn = 0; turn < 200 && !release; turn++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(typeof release, 'function', 'The first save is loading what it saved.');
+  const text = await readFile(f.path, 'utf8');
+  assert.equal(await f.invoke('pr-setup', '--language ja'), '[AZPR] Another setup is active.');
+  assert.deepEqual(await f.rpc.handlers.save({ changes: { language: 'ja' } }), { ok: false, problem: 'Another setup is being saved.' });
+  assert.equal(await readFile(f.path, 'utf8'), text, 'Neither changed what is being loaded.');
+  release();
+  const saved = await first;
+  f.context.command.list = list;
+  assert.deepEqual([saved.ok, saved.status.state, f.agents.has('azpr-review-functional')], [true, 'ready', true], 'The first setup is loaded as it was saved.');
+  // Afterwards the next save has its turn; the settings are in use by then, so it waits for the restart.
+  assert.match(await f.invoke('pr-setup', '--language ja'), /\nChanged: Output language\nTo load them, restart the OpenCode service /);
+  assert.equal((await f.rpc.handlers.status({})).state, 'restart');
+});
+
+test('a token that arrives while /pr-setup --replace checks the model is not that setup\'s own', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  // Settings that are complete but name a token file that is not there: no usable settings when AZPR is loaded.
+  await saveSetup(f.context, f.path, f.args);
+  await rm(f.pat);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  assert.equal((await f.rpc.handlers.status({})).state, 'required');
+  const models = f.context.model.list;
+  // Another writer supplies the token after this save looked at the file and before it checks it once more.
+  f.context.model.list = async () => { await writeFile(f.pat, NEW_TOKEN, { mode: 0o600 }); return models(); };
+  const receipt = await f.invoke('pr-setup', '--organization fixture --model fixture/model --replace');
+  f.context.model.list = models;
+  assert.match(receipt, /^\[AZPR\] SETTINGS SAVED\n[\s\S]*\nTo load them, restart the OpenCode service /);
+  assert.deepEqual([f.agents.size, f.rpc.events.length, (await f.rpc.handlers.status({})).state], [0, 0, 'restart'], 'The token is someone else\'s: it waits for the restart.');
+});
+
 test('a /pr-setup that runs while a first setup is being loaded puts no command in the way of the load', async t => {
   const f = await fixture(t), environment = environmentOf(f);
   t.after(await f.setup({ environment, releaseWaitMs: 50 }));
