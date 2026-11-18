@@ -95,7 +95,11 @@ list says so. What the list does not hold is in the settings file it names;
 [all settings and defaults](../README.md#all-settings-and-defaults) describes
 each one.
 
-![/pr-setup lists the settings in groups with their values: organization, access token, proxy and CA certificate file; the review, quick and deep models, each with what it is for; output language, what follows a review, the report in the conversation and progress notices.](assets/setup-settings.png)
+![OpenCode's terminal UI with the list of AZPR's settings open: the organization, the access token, the proxy and the CA certificate file, then the review, quick and deep models, each with what it is for and its value.](assets/setup-settings.png)
+
+*The list goes on below what is shown: the settings of reviews, of the terminal
+UI and of diagnostics, and the settings file. Recorded like the picture above,
+with test values.*
 
 ## 4. Check access without a model request (OpenCode)
 
