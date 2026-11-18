@@ -612,6 +612,11 @@ test('the dialogs and the server part set AZPR up together: the token is checked
     ['ready', '', 'fixture', true, 'saved', 'fixture/model', 'fixture/model', 'off']);
   assert.ok(rowsOf(after).token.description.endsWith(` The saved token is in ${tokenFile}.`), 'The token\'s dialog says where the saved token is.');
   assert.match(after.settingsFileShown, /^…\/private config\/settings\.json$/);
+  // What the list says beside a row whose name does not: what each model is used for, and what makes a deep model one.
+  assert.equal(after.settingsReference, 'the README\'s section "All settings and defaults" (https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2#all-settings-and-defaults)');
+  assert.deepEqual([rowsOf(after).reviewModel.hint, rowsOf(after).quickModel.hint, rowsOf(after).deepModel.hint], ['for /pr-review', 'for /pr-quick', 'for /pr-deep'], 'Short: the list shows it between a name and a value.');
+  assert.deepEqual([rowsOf(after).deepModel.title, rowsOf(after).deepModel.prompt, rowsOf(after).deepModel.variantPrompt], ['Model for /pr-deep', 'Stronger than the review model, or a higher variant', 'A higher variant reasons longer']);
+  assert.deepEqual([rowsOf(after).organization.hint, rowsOf(after).reviewModel.prompt, rowsOf(after).reviewModel.variantPrompt, rowsOf(after).language.hint], [undefined, undefined, undefined, undefined]);
   for (const text of [d.said(), JSON.stringify(f.notices), JSON.stringify(after), await readFile(f.path, 'utf8')]) assert.ok(!text.includes(FAKE_PAT), 'The token is in the token file and nowhere else.');
 });
 
@@ -1248,6 +1253,8 @@ test('/pr-setup alone tells the terminal UI to ask; options change one setting e
   await f.invoke('pr-setup', '--help');
   assert.equal(f.notices.at(-1).metadata, undefined, '--help only explains.');
   assert.match(f.notices.at(-1).text, /One setting of existing settings is changed without --replace: --proxy URL\|none, --ca-file PATH\|none, --review-model PROVIDER\/MODEL, --quick-model PROVIDER\/MODEL\|off, --deep-model PROVIDER\/MODEL\|off, --language [^,]+, --after-review preview\|none\|publish, --report receipt\|full, --progress on\|off, --panel auto\|manual, --debug on\|off\./);
+  // What a deep model is for, how a variant is written, and where every setting is described: the README is long.
+  assert.match(f.notices.at(-1).text, /A model takes a variant as PROVIDER\/MODEL#VARIANT\. --deep-model sets the models of \/pr-deep, which runs the same review: choose a stronger model than the review model, or the same model with a higher variant\. Every setting is described in the README's section "All settings and defaults" \(https:\/\/github\.com\/WTLAIB\/opencode-azure-devops-pr-review-v2#all-settings-and-defaults\)\.\n/);
   assert.match(await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}" --language ja --deep-model fixture/model#high`),
     /^\[AZPR\] SETTINGS SAVED\nSettings: .+\nOrganization: fixture; PAT file: .+\nChanged: Deep model, Output language\nAZPR has loaded them: run \/pr-check <PR URL>\./);
   assert.equal(f.notices.at(-1).metadata, undefined);
@@ -1360,7 +1367,7 @@ test('a review command name that another plugin took meanwhile stays its own whe
   starting.context.rpc.register = async (...inputs) => { starting.commands.set('pr-deep', { ...theirs, name: 'pr-deep' }); return register(...inputs); };
   t.after(await starting.setup({ environment: environmentOf(starting) }));
   assert.equal(starting.commands.get('pr-deep').description, 'Another plugin\'s review', 'The command registered meanwhile was not replaced.');
-  assert.equal(starting.commands.get('pr-review').description, 'AZPR setup required; run /pr-setup');
+  assert.equal(starting.commands.get('pr-review').description, 'AZPR is not ready here; run /pr-setup to see what it needs');
   assert.deepEqual([...starting.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
 
   // A plugin can take the name at any moment, also after AZPR looked and before the runtime does: what is
@@ -1377,7 +1384,7 @@ test('a review command name that another plugin took meanwhile stays its own whe
   assert.match(await late.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${late.pat}"`), /\nAZPR could not load them: Reserved command name conflict: pr-comment /);
   assert.equal(late.commands.get('pr-comment').description, 'Another plugin\'s review', 'The command that arrived late was not replaced either.');
   assert.deepEqual([...late.commands.keys()].sort(), ['pr-setup', ...Object.keys(COMMANDS)].sort());
-  assert.equal(late.commands.get('pr-review').description, 'AZPR setup required; run /pr-setup');
+  assert.equal(late.commands.get('pr-review').description, 'AZPR is not ready here; run /pr-setup to see what it needs');
 
   // And where the host cannot say which names are taken after the load failed, none is registered on what was
   // known before: the next /pr-setup looks again.

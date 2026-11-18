@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.4.4 — 2026-11-19
+
+After a comment preview, the terminal panel lists what you can do next, and
+picking a row does it: post the comments, leave findings out or change a
+level, undo that. A conversation used for a review is named after its PR, and
+several texts of setup say more exactly what they mean. The reviewer, verifier
+and comment-planning instructions are those of 0.4.3, and no setting is new.
+
+The terminal panel:
+
+- A receipt ends with the commands for the next step, but the panel shows the
+  document a receipt encloses, so those commands had to be found in the
+  conversation and typed. After a comment preview the panel now lists them as
+  rows under **Next**: **Post the comments**, **Leave findings out or change a
+  level**, and **Undo your adjustments** once there are some. A row is
+  clicked, or picked with its key (`p`, `a`, `u`) while the panel has the
+  keyboard; where the panel is wide enough, the command it stands for is
+  shown beside it.
+- Posting asks once more, in a list whose first row is "No, post nothing":
+  a key pressed twice posts nothing.
+- Adjusting opens the findings as a list with how each is published now.
+  Pick one to leave it out or to choose its level; the first row applies
+  every change with one command and plans the preview again.
+- After a review that no preview follows by itself (`afterReview: none`, a
+  review that was stopped, or one without findings to comment on) the panel
+  offers **Preview the comments** (`c`), and the findings can be adjusted
+  before that first preview.
+- A row sends the `/pr-comment` command you would type, with the ID of the
+  review the panel shows, to the session on screen; AZPR takes it like a
+  typed command, so its checks, its `STARTED` notice and its receipt are the
+  same. The panel sends nothing by itself and never a prompt. The rows are
+  there only for the notice that happened last: once a run starts or another
+  receipt arrives, they are gone.
+- What a row offers comes from the runtime, in the metadata of the notice
+  that offers it (which no model reads), not from the text on screen: which
+  review, whether its preview can be posted, and each finding with its level
+  and whether it is left out. The text of every notice is unchanged, and so
+  is every notice that offers nothing. A review with more than 200 findings
+  offers no rows.
+- A session whose model has answered is shown as `finished` until its run's
+  receipt names its result (`complete`, `failed`). It was shown as `idle`,
+  OpenCode's word for a session at rest, which read like a fault while the
+  verifier was still working.
+
+Conversations:
+
+- OpenCode names a conversation when its own model first runs there, which an
+  AZPR command never makes it do, so a conversation used only for reviews
+  stayed "New session" in the session list. A check or a review now names a
+  conversation nobody named after the PR its URL names, for example
+  `AZPR: PR #123 (repository)`. A name that is there is never replaced, and
+  the PR's own title is not used.
+
+Setup:
+
+- Without usable settings, OpenCode's command list described every review
+  command as "AZPR setup required; run /pr-setup", also in a project
+  directory that only needed a restart because the settings had been saved
+  from another one. It now says "AZPR is not ready here; run /pr-setup to see
+  what it needs", which holds for both, and `/pr-setup` says which it is.
+- The settings list says what each model is for (`for /pr-review`,
+  `for /pr-quick`, `for /pr-deep`). The dialog of the deep model says what
+  makes one: a model stronger than the review model, or the same model with a
+  higher variant, which reasons longer; `/pr-setup --help`, the **Deep
+  models** rows of `/pr-check` and the settings schema say the same.
+- "Settings file" in the list, and `/pr-setup --help`, name the section of
+  the README that describes every setting, with its address:
+  [all settings and defaults](README.md#all-settings-and-defaults).
+
+Documentation:
+
+- The README shows the result and a recording first, then the first review,
+  and keeps its reference part in sections that are named in one table;
+  detail that is looked up, not read through, is folded. The settings
+  reference is no longer folded.
+- The quickstart shows a recording of the setup dialogs, and the README the
+  list of settings.
+- A source installation has one more file, `src/tui-actions.mjs`: 36 in all
+  for manual copying.
+
 ## 0.4.3 — 2026-11-18
 
 `/pr-setup` sets AZPR up in OpenCode's terminal UI: dialogs ask for the

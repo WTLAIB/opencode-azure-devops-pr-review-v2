@@ -311,7 +311,7 @@ try {
     do {
       const commands = (await rawApi('/api/command')).data;
       if (['pr-setup', 'pr-check', 'pr-review', 'pr-deep', 'pr-quick', 'pr-stop', 'pr-comment'].every(name =>
-        commands.some(command => command.name === name && (!configured || !command.description?.includes('setup required'))))) return;
+        commands.some(command => command.name === name && (!configured || !command.description?.includes('not ready here'))))) return;
       await new Promise(resolveReady => setTimeout(resolveReady, 100));
     } while (Date.now() < end);
     throw new Error('Fixture AZPR command catalog did not finish loading.');
@@ -352,7 +352,7 @@ try {
     // Without a restart the private roles are registered and the review commands are the real ones.
     for (let attempt = 0; attempt < 50 && !(await rawApi('/api/agent')).data.some(agent => agent.name.startsWith('azpr-')); attempt++) await new Promise(resolveReady => setTimeout(resolveReady, 100));
     assert.ok((await rawApi('/api/agent')).data.some(agent => agent.name === 'azpr-review-functional'), 'The first setup loaded the runtime.');
-    assert.ok((await rawApi('/api/command')).data.filter(command => command.name.startsWith('pr-')).every(command => !/setup required/.test(command.description ?? '')));
+    assert.ok((await rawApi('/api/command')).data.filter(command => command.name.startsWith('pr-')).every(command => !/not ready here/.test(command.description ?? '')));
     assert.match(await invoke('pr-review', '--help'), /^\[AZPR\] \/pr-review <Azure DevOps PR URL>/, 'The review command itself answers.');
     assert.equal(requests.length, 0);
     assert.equal(azure.state.calls.length, 0);
@@ -429,6 +429,18 @@ try {
   assert.equal(requests.length, beforeCheck, '/pr-check must not call a model.');
   assert.ok(check.includes(`| AZPR | ok | Running ${native ? nativePackage : 'a local source installation'}`), check);
   results.check = 'READY without model requests; names the running installation';
+  // A conversation nobody named: its first command with a PR names it after that PR, since an AZPR command never
+  // makes the conversation's own model run, which is what names a conversation otherwise. One that has a name keeps it.
+  const unnamed = (await api('/api/session', { location: { directory: directories.work } })).data.id;
+  assert.ok(!(await rawApi(`/api/session/${unnamed}`)).data.title, 'OpenCode leaves a new conversation without a title.');
+  await api(`/api/session/${unnamed}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
+  assert.match(await latest(unnamed), /\] READY/);
+  let named;
+  for (const end = Date.now() + 10000; !(named = (await rawApi(`/api/session/${unnamed}`)).data.title) && Date.now() < end;) await new Promise(resolveWait => setTimeout(resolveWait, 100));
+  assert.equal(named, 'AZPR: PR #123 (repository)');
+  assert.equal((await rawApi(`/api/session/${checkOrigin}`)).data.title, 'Check', 'A conversation that has a name keeps it.');
+  assert.equal(requests.length, beforeCheck, 'Naming a conversation asks no model.');
+  results.title = 'an unnamed conversation is named after the PR; a named one keeps its name';
   if (native && !publishedPackage) {
     // A second AZPR entry (the same package without its commit): OpenCode runs the first and lists the second as a duplicate.
     const configPath = join(directories.config, 'opencode.json');

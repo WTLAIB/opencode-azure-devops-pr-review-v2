@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, isSessionNotFound, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -111,6 +111,14 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(hostCapabilities({}).version, 'unknown');
   assert.equal(hostCapabilities({}).pluginList, false);
   assert.equal(hostCapabilities({ plugin: { list() {} } }).pluginList, true);
+  assert.equal(hostCapabilities({}).sessionUpdate, false);
+  assert.equal(hostCapabilities({ session: { update() {} } }).sessionUpdate, true);
+  // A conversation nobody named: OpenCode 2.3.0 leaves its title out and shows "New session"; earlier releases
+  // stored those words with the time. A name a person or the host's model gave is a title.
+  for (const session of [{}, { title: undefined }, { title: null }, { title: '' }, { title: 'New session - 2026-11-18T16:05:20.644Z' }, undefined]) assert.equal(isUntitledSession(session), true, JSON.stringify(session));
+  for (const title of ['Fix the parser', 'New session', 'New session - custom', 'Child session - 2026-11-18T16:05:20.644Z', 'AZPR: PR #2 (repo)', 'New session - 2026-11-18T16:05:20.644Z again', 7]) {
+    assert.equal(isUntitledSession({ title }), false, String(title));
+  }
   const errored = { type: 'assistant', error: { type: 'provider.api' }, retry: { attempt: 1 } };
   assert.equal(isHostContinuation({ type: 'synthetic', text: HOST_CONTINUATION_TEXT }), true);
   assert.equal(isHostContinuation({ type: 'synthetic', text: 'Stream interrupted, continue please.' }, errored), true);

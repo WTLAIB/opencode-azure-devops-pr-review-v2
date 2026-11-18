@@ -29,7 +29,7 @@ test('the terminal part is shipped compiled and binds only what OpenCode provide
   const imports = [...compiled.matchAll(/^import\s+(?:\{([^}]*)\}|[\w$]+)\s+from\s+"([^"]+)";?$/gm)].map(([, names = '', source]) => ({ source, names: names.split(',').map(name => name.trim().split(/\s+as\s+/)[0]).filter(Boolean) }));
   assert.equal(imports.length, [...compiled.matchAll(/^import\b/gm)].length, 'Every import has the plain form the host rewrites to its own modules.');
   // The host hands a plugin its own copies of these; a copy of its own would be a second renderer.
-  assert.deepEqual([...new Set(imports.map(item => item.source))].sort(), ['./tui-model.mjs', './tui-setup.mjs', '@opentui/core', '@opentui/solid', 'solid-js']);
+  assert.deepEqual([...new Set(imports.map(item => item.source))].sort(), ['./tui-actions.mjs', './tui-model.mjs', './tui-setup.mjs', '@opentui/core', '@opentui/solid', 'solid-js']);
   const helpers = new Set(['createComponent', 'createElement', 'createTextNode', 'effect', 'insert', 'insertNode', 'memo', 'mergeProps', 'setProp', 'spread', 'use']);
   for (const name of imports.filter(item => item.source === '@opentui/solid').flatMap(item => item.names)) assert.ok(helpers.has(name), `@opentui/solid: ${name} is one of the universal renderer's helpers`);
   // Solid's control flow comes from solid-js: the compiler would otherwise expect it from the renderer.
@@ -37,9 +37,16 @@ test('the terminal part is shipped compiled and binds only what OpenCode provide
   for (const name of ['For', 'Show']) assert.ok(solid.includes(name), `${name} is imported from solid-js`);
   assert.doesNotMatch(read('src/tui-model.mjs'), /^import\b|\bimport\(/m, 'What the panel shows is worked out without any import.');
   assert.doesNotMatch(read('src/tui-setup.mjs'), /^import\b|\bimport\(/m, 'What setup asks is worked out without any import.');
-  assert.doesNotMatch(compiled + read('src/tui-model.mjs') + read('src/tui-setup.mjs'), /settings\.json|node:fs|process\.env/, 'The terminal part reads no file and no environment.');
-  // Setup's dialogs talk to the server part only, over AZPR's own RPC: no request of their own, and no command.
-  assert.doesNotMatch(compiled + read('src/tui-setup.mjs'), /\bfetch\(|dev\.azure\.com\/[^{<]|session\.(?:command|prompt|synthetic)\b/, 'The terminal part asks Azure DevOps nothing and runs no command.');
+  assert.doesNotMatch(read('src/tui-actions.mjs'), /^import\b|\bimport\(/m, 'What the panel\'s rows do is worked out without any import.');
+  const parts = compiled + read('src/tui-model.mjs') + read('src/tui-setup.mjs') + read('src/tui-actions.mjs');
+  assert.doesNotMatch(parts, /settings\.json|node:fs|process\.env/, 'The terminal part reads no file and no environment.');
+  // Setup's dialogs talk to the server part only, over AZPR's own RPC, and nothing asks Azure DevOps anything.
+  assert.doesNotMatch(parts, /\bfetch\(|dev\.azure\.com\/[^{<]|session\.(?:prompt|synthetic)\b/, 'The terminal part asks Azure DevOps nothing and sends no prompt or notice.');
+  // One place sends a command of the server part: the rows of what a preview offers, which a person picks. What
+  // they send is made in tui-actions.mjs, of /pr-comment alone; setup and the model of the panel send nothing.
+  assert.equal([...compiled.matchAll(/session\.command\(/g)].length, 1, 'The view sends a command in one place.');
+  assert.doesNotMatch(read('src/tui-model.mjs') + read('src/tui-setup.mjs') + read('src/tui-actions.mjs'), /session\.command\b/);
+  assert.deepEqual([...new Set([...read('src/tui-actions.mjs').matchAll(/name: '([^']+)'/g)].map(match => match[1]))], ['pr-comment'], 'The rows send /pr-comment and nothing else.');
   // One command of its own, to show or hide the panel. Whether the panel opens by itself is a setting of AZPR
   // (terminalPanel), which reaches it with the notices: it keeps no preference of its own.
   assert.deepEqual([...compiled.matchAll(/slash:\s*\{\s*name:\s*"([^"]+)"/g)].map(match => match[1]), ['pr-panel']);
@@ -66,4 +73,14 @@ test('release notes link only absolute URLs, since they become the GitHub Releas
     const targets = [...text.matchAll(/\]\(([^)\s]+)/g), ...text.matchAll(/^\[[^\]]+\]:\s*(\S+)/gm)].map(match => match[1]);
     for (const target of targets) assert.match(target, /^https:\/\//, `${name} links ${target}`);
   }
+});
+
+test('what the runtime says of the README names sections that are there', () => {
+  // The settings dialog and /pr-setup --help send a person to one section of a long README, by name and by anchor.
+  const headings = [...read('README.md').matchAll(/^#{2,4} (.+)$/gm)].map(match => match[1]);
+  assert.ok(headings.includes('All settings and defaults'));
+  assert.match(read('src/setup.mjs'), /section "All settings and defaults" \(https:\/\/github\.com\/\$\{REPOSITORY\}#all-settings-and-defaults\)/);
+  // /pr-check sends a person with two AZPR entries to another.
+  assert.ok(headings.includes('Upgrading'));
+  assert.match(read('src/runtime.mjs'), /see Upgrading in the README/);
 });

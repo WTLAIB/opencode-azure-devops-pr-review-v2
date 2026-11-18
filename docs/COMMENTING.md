@@ -28,6 +28,19 @@ project/repository`), and a preview ends with the commands for the next step,
 written with that review's finding IDs. `--list` and `--help` use no model
 and make no Azure DevOps request.
 
+In OpenCode's terminal UI the same next steps are rows of the
+[terminal panel](../README.md#terminal-panel): **Post the comments**, **Leave
+findings out or change a level** and **Undo your adjustments**, and **Preview
+the comments** after a review that no preview follows by itself. A row is
+clicked, or picked with its key while the panel has the keyboard, and sends
+the command described here for the review the panel shows, with that review's
+ID, so the rules below hold for it unchanged. Posting asks once more, with "No,
+post nothing" first; adjusting lists the findings, lets you choose for each
+whether it is left out or which level it is published at, and applies all of
+it with one command. What the rows offer comes from the runtime with the
+notice (which review, whether its preview can be posted, each finding and how
+it is adjusted), not from the text on screen.
+
 Only reviews started in the same conversation are accepted; commands from one
 of the review's own sessions route to that conversation. Reviews are
 persisted, so this also works after an OpenCode restart. A preview is

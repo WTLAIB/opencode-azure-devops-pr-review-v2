@@ -14,13 +14,15 @@ function server(start = {}) {
   const checks = [];
   const status = () => ({ version: 1, state: state.state, problem: state.state === 'required' ? 'there is no settings file yet.' : '', editable: state.editable, fileProblem: state.editable ? '' : 'The settings file is not valid JSON.',
     settingsFile: '/home/user/.config/azpr/settings.json', settingsFileShown: '~/.config/azpr/settings.json', organization: state.organization,
+    settingsReference: 'the README\'s section "All settings and defaults" (https://github.com/owner/repository#all-settings-and-defaults)',
     rows: [
       { id: 'organization', group: 'Azure DevOps', label: 'Organization', kind: 'text', title: 'Azure DevOps organization', description: 'The name in https://dev.azure.com/<organization>.', placeholder: 'my-organization', value: state.organization || 'not set', current: state.organization },
       { id: 'token', group: 'Azure DevOps', label: 'Access token', kind: 'secret', title: 'Personal access token', description: 'Create one at https://dev.azure.com/{organization}/_usersSettings/tokens.', value: state.token ? 'saved in ~/.config/azpr/pat' : 'not set', saved: state.token, bound: state.bound ?? state.token },
       { id: 'proxy', group: 'Azure DevOps', label: 'Proxy', kind: 'text', title: 'Proxy for Azure DevOps (optional)', description: 'Leave it empty and press Enter to skip.', placeholder: 'http://proxy.example.com:8080', value: state.proxy || 'none', current: state.proxy },
       { id: 'caFile', group: 'Azure DevOps', label: 'CA certificate file', kind: 'text', title: 'CA certificate file (optional)', description: 'Leave it empty and press Enter to skip.', value: state.caFile || 'none', current: state.caFile },
-      { id: 'reviewModel', group: 'Models', label: 'Review model', kind: 'model', title: 'Model for /pr-review', value: state.reviewModel || 'not set', current: state.reviewModel },
-      { id: 'deepModel', group: 'Models', label: 'Deep model', kind: 'model', title: 'Stronger model for /pr-deep', optional: { label: 'Off', description: '/pr-deep stays off' }, value: state.deepModel || 'off', current: state.deepModel },
+      { id: 'reviewModel', group: 'Models', label: 'Review model', kind: 'model', title: 'Model for /pr-review', hint: 'for /pr-review', value: state.reviewModel || 'not set', current: state.reviewModel },
+      { id: 'deepModel', group: 'Models', label: 'Deep model', kind: 'model', title: 'Model for /pr-deep', hint: 'for /pr-deep',
+        prompt: 'Stronger than the review model, or a higher variant', variantPrompt: 'A higher variant reasons longer', optional: { label: 'Off', description: '/pr-deep stays off' }, value: state.deepModel || 'off', current: state.deepModel },
       { id: 'language', group: 'Reviews', label: 'Output language', kind: 'choice', title: 'Language of reports and comments', value: state.language, current: state.language,
         choices: [{ value: 'en', label: 'English' }, { value: 'zh-TW', label: '繁體中文' }], other: { label: 'Another language', title: 'Language of reports and comments', description: 'A language tag.', placeholder: 'pt-BR' } },
       { id: 'afterReview', group: 'Reviews', label: 'After a review', kind: 'choice', title: 'After a completed review', value: state.afterReview, current: state.afterReview,
@@ -229,6 +231,8 @@ test('with settings in place, the settings are one list: grouped rows with their
     ['Azure DevOps', 'Organization', 'fixture'], ['Azure DevOps', 'Access token', 'saved in ~/.config/azpr/pat'], ['Azure DevOps', 'Proxy', 'none'], ['Azure DevOps', 'CA certificate file', 'none'],
     ['Models', 'Review model', 'fixture/fast'], ['Models', 'Deep model', 'off'], ['Reviews', 'Output language', 'en'], ['Reviews', 'After a review', 'preview'],
     ['More', 'Settings file', '~/.config/azpr/settings.json']]);
+  // A row whose name does not say what it is for carries a few words, which the list shows between name and value.
+  assert.deepEqual(list.options.map(option => option.description), [undefined, undefined, undefined, undefined, 'for /pr-review', 'for /pr-deep', undefined, undefined, undefined]);
   assert.equal(h.toasts.length, 0, 'Leaving the list is no cancelled setup.');
 });
 
@@ -247,7 +251,8 @@ test('a choice is saved at once, the list returns on that row with the new value
   assert.deepEqual(h.toasts, [{ message: 'AZPR: Saved. It takes effect after the OpenCode service restarts: opencode service restart', variant: 'success', duration: 8000 }]);
   assert.deepEqual(h.loaded, [], 'A change to settings that are in use loads nothing.');
   assert.match(h.shown[3].message, /opencode service restart/);
-  assert.match(h.shown[5].message, /^\/home\/user\/\.config\/azpr\/settings\.json\n/);
+  assert.equal(h.shown[5].message, '/home/user/.config/azpr/settings.json\n\nSettings that are not in this list are changed in this file. Each one is described in the README\'s section "All settings and defaults" (https://github.com/owner/repository#all-settings-and-defaults).',
+    'The README is long: its section is named, with its address.');
 });
 
 test('a language that is not listed is typed; posting without a preview is confirmed with the safe answer first', async () => {
@@ -277,7 +282,8 @@ test('a model is picked from the host\'s list with its variant; a row that may b
   assert.deepEqual([h.shown[1].current, h.shown[1].placeholder], ['fixture/fast', 'Search models']);
   assert.deepEqual(h.shown[2].options.map(option => option.value), ['', 'low', 'high']);
   assert.equal(h.shown[2].title, 'Variant of fixture/strong');
-  const deep = h.shown.find(item => item.title === 'Stronger model for /pr-deep');
+  const deep = h.shown.find(item => item.title === 'Model for /pr-deep');
+  assert.equal(deep.placeholder, 'Stronger than the review model, or a higher variant', 'What makes a deep model one is said where there is room: in the search line.');
   assert.deepEqual(deep.options[0], { title: 'Off', value: '', description: '/pr-deep stays off', category: 'Off' });
   assert.equal(deep.current, 'fixture/strong', 'The current model is marked without its variant.');
   assert.deepEqual(h.calls.filter(call => call.method === 'save').map(call => call.input.changes), [{ reviewModel: 'fixture/strong#high' }, { deepModel: '' }, { reviewModel: 'fixture/strong' }]);
@@ -289,9 +295,23 @@ test('a model is picked from the host\'s list with its variant; a row that may b
   // Without any model, a row that may be off can still be switched off.
   const off = host(ready({ deepModel: 'fixture/strong' }), ['deepModel', '', undefined], { models: [] });
   await off.setup.open();
-  assert.deepEqual(off.titles(), ['select: AZPR settings', 'select: Stronger model for /pr-deep', 'select: AZPR settings · restart needed']);
+  assert.deepEqual(off.titles(), ['select: AZPR settings', 'select: Model for /pr-deep', 'select: AZPR settings · restart needed']);
   assert.deepEqual(off.shown[1].options, [{ title: 'Off', value: '', description: '/pr-deep stays off', category: 'Off' }]);
   assert.deepEqual(off.calls.at(-1), { method: 'save', input: { changes: { deepModel: '' } } });
+  // The deep model's variant is asked with what a higher one does: another way to a stronger /pr-deep than another model.
+  const higher = host(ready({ reviewModel: 'fixture/strong' }), ['deepModel', 'fixture/strong', 'high', undefined]);
+  await higher.setup.open();
+  assert.deepEqual(higher.titles().slice(1, 3), ['select: Model for /pr-deep', 'select: Variant of fixture/strong']);
+  assert.equal(higher.shown[2].placeholder, 'A higher variant reasons longer');
+  assert.equal(Object.hasOwn(h.shown[2], 'placeholder'), false, 'The variants of a review model are listed as before.');
+  assert.deepEqual(higher.calls.at(-1), { method: 'save', input: { changes: { deepModel: 'fixture/strong#high' } } });
+  // A server part that names no section (an earlier version's) leaves the README as a whole.
+  const plain = ready();
+  const status = plain.status;
+  plain.status = async () => { const { settingsReference, ...rest } = await status(); return rest; };
+  const earlier = host(plain, ['@file', undefined]);
+  await earlier.setup.open();
+  assert.match(earlier.shown[1].message, /Each one is described in the README\.$/);
 });
 
 test('a new token is checked for the saved organization before it is saved; an empty one keeps the saved token', async () => {

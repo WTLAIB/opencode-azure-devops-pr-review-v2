@@ -115,7 +115,13 @@ result as an edited terminal replay with shortened waiting time. `--label`
 replaces the line above the title (`AZPR / REAL TERMINAL RECORDING`) and
 `--note` adds to the line under the terminal: a cast made against fixture
 services, to try the tools or a layout, must say so in both, and is not what
-this project publishes as a demonstration.
+this project publishes as a demonstration of a review. The one exception is
+the pictures of the setup dialogs (`setup-dialogs.gif`, `setup-settings.png`):
+a live recording of them would show an organization, so they are recorded
+with a test organization and token and a stand-in for Azure DevOps, say so in
+both lines, and show no finding. Open the dialogs from the command palette for
+such a recording: `/pr-setup` typed in the conversation leaves a notice there
+that names paths of the recording machine.
 
 ```json
 {

@@ -159,8 +159,8 @@ try {
   assert.deepEqual((await loaded())?.features, { server: true, tui: true });
   const commands = async () => (await api('/api/command')).data.filter(item => item.name.startsWith('pr-')).map(item => `${item.name}: ${item.description}`);
   for (let attempt = 0; attempt < 50 && (await commands()).length < 7; attempt++) await sleep(200);
-  // Without usable settings every review command only says that setup is required.
-  assert.deepEqual((await commands()).filter(line => !line.startsWith('pr-setup')).map(line => line.split(': ')[1]), Array(6).fill('AZPR setup required; run /pr-setup'));
+  // Without usable settings every review command only says that AZPR is not ready here, and where to find out why.
+  assert.deepEqual((await commands()).filter(line => !line.startsWith('pr-setup')).map(line => line.split(': ')[1]), Array(6).fill('AZPR is not ready here; run /pr-setup to see what it needs'));
   const status = async () => (await api(`/api/rpc/azpr.setup/status?location=${encodeURIComponent(JSON.stringify({ directory: dirs.work }))}`, { input: {} }).catch(() => api('/api/rpc/azpr.setup/status', { input: {} }))).output;
   const first = await status();
   assert.deepEqual([first.state, first.editable, first.settingsFile], ['required', true, settingsFile]);
@@ -247,7 +247,7 @@ try {
 
   // 7. No restart: the review commands are the real ones now, and /pr-check reads the PR with the saved token.
   assert.equal((await status()).state, 'ready');
-  assert.ok((await commands()).every(line => !line.includes('setup required')), 'The commands that only said "setup required" are gone.');
+  assert.ok((await commands()).every(line => !line.includes('not ready here')), 'The commands that only said that AZPR is not ready are gone.');
   await command('pr-check', 'Azure DevOps PR access check', prUrl);
   await see(/AZPR [a-f0-9]{8} · READY/, 'After a first setup /pr-check did not answer READY without a restart.', 90000);
   assert.ok(azure.callsTo('pr').length >= 1, 'The check read the pull request with the saved token.');
@@ -259,7 +259,24 @@ try {
   await see(/AZPR settings/, '/pr-setup did not list the settings once AZPR was set up.');
   await see(/Organization +fixture/, 'The list does not show the organization.');
   await see(/Access token +saved\b/, 'The list does not show that a token is saved.');
-  await see(/Review model +fixture\/reviewer/, 'The list does not show the review model.');
+  await see(/Review model for \/pr-review +fixture\/reviewer/, 'The list does not show the review model and what it is for.');
+  await see(/Deep model for \/pr-deep +off/, 'The list does not show the deep model and what it is for.');
+  // The deep model's dialog says what makes a model one, where there is room for it: a stronger model, or a higher
+  // variant of the same one. Leaving the dialog saves nothing.
+  type('deep');
+  await see(shown => /Deep model for \/pr-deep +off/.test(shown) && !/Organization +fixture/.test(shown), 'Typing does not filter the settings.');
+  key('Enter');
+  await see(/Model for \/pr-deep/, 'The deep model dialog did not open.');
+  await see(/Stronger than the review model, or a higher variant/, 'The dialog does not say what makes a deep model one.');
+  await see(/\/pr-deep stays off/, 'Switching /pr-deep off is not offered first.');
+  type('strong');
+  await see(shown => /Review Strong +fixture\/reviewer/.test(shown) && !/Stronger than the review model/.test(shown), 'Typing does not filter the models.');
+  key('Enter');
+  await see(/Variant of fixture\/reviewer/, 'The variants of the chosen model were not offered.');
+  await see(/A higher variant reasons longer/, 'The variant dialog does not say what a higher variant does.');
+  await escape();
+  await see(/Deep model for \/pr-deep +off/, 'Leaving the variant dialog did not return to the list unchanged.');
+  assert.deepEqual(JSON.parse(await readFile(settingsFile, 'utf8')).models.deep, { functional: '', risk: '', verifier: '', rater: '' });
   type('language');
   await see(shown => /Output language +en/.test(shown) && !/Organization +fixture/.test(shown), 'Typing does not filter the settings.');
   key('Enter');
@@ -270,10 +287,19 @@ try {
   await see(wrapped('Saved. It takes effect after the OpenCode service restarts'), 'A change to settings that are in use does not name the restart.');
   await see(/AZPR settings · restart needed/, 'The list does not say that a restart is needed.');
   await see(/Output language +zh-TW/, 'The list does not show the new value.');
+  // The settings file: where it is, and which section of the README describes every setting.
+  type('Settings file');
+  await sleep(400);
+  key('Enter');
+  await see(wrapped('Each one is described in the README\'s section "All settings and defaults"'), 'The settings file dialog does not name the README\'s section.');
+  // The address is longer than the dialog is wide, so it is wrapped: its start and its end are on the screen.
+  await see(shown => /\(https:\/\/github\.com\//.test(shown) && /settings-and-defaults\)\./.test(shown), 'It does not give the section\'s address.');
+  key('Enter');
+  await see(/AZPR settings · restart needed/, 'The list did not return after the settings file dialog.');
   await escape();
   assert.equal(JSON.parse(await readFile(settingsFile, 'utf8')).outputLanguage, 'zh-TW');
   assert.equal((await status()).state, 'restart');
-  result.list = 'settings listed with their values; a change saved at once, marked as waiting for a restart';
+  result.list = 'settings listed with their values and what the models are for; the deep model\'s dialogs say what makes one; a change saved at once, marked as waiting for a restart; the settings file names the README\'s section';
 
   // 9. After the restart the change is in use: no hint, and /pr-check is READY again.
   tmux('kill-server');

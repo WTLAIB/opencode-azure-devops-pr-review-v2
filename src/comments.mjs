@@ -1,6 +1,6 @@
 // Comment plans: per-item validation, stable markers and saved publication text.
 import { createHash } from 'node:crypto';
-import { renderReviewSummary } from './attribution.mjs';
+import { renderReviewSummary, describeReview } from './attribution.mjs';
 import { targetKey } from './azure.mjs';
 import { parseModelJSON, canonicalKey, parseRepairPrompt } from './output.mjs';
 
@@ -175,6 +175,44 @@ export function previewNextSteps(review, { held = false } = {}) {
   const width = Math.max(...rows.map(([command]) => command.length));
   return `Next (no review ID is needed while ${review.id} is this conversation's current review):\n${rows.map(([command, effect]) => `  ${command.padEnd(width)}  ${effect}`).join('\n')}\n` +
     `Each --exclude or --severity list replaces the saved one. For another review add its ID; /pr-comment --list shows them.`;
+}
+
+// What the terminal panel can list of one review; a review with more findings is adjusted with typed commands.
+const ACTION_FINDINGS = 200;
+
+/**
+ * After a preview, or after a review that no preview follows by itself: the next steps as data, for the
+ * terminal panel, which offers them as rows a person picks instead of typing. It travels in the metadata of
+ * that notice, which no model reads.
+ * `plan` says that the review has no preview yet: planning one comes first, so nothing can be posted.
+ * `publish` says whether the preview can be posted as it is (`held` leaves that out, as the text does),
+ * `posts` how many comment items it holds, `target` which review and PR it is, in the runtime's words, and
+ * `adjust` whether its findings can still be adjusted (not once its publication has started).
+ * `findings` are the findings this review can publish: each with the level it is published at, the level the
+ * review gave it where a person changed that (`original`), whether a person left it out (`excluded`), and its
+ * summary, which is the review's text and is only ever shown. Undefined for a review with more findings than
+ * the panel lists: half a list would let a person replace adjustments they cannot see.
+ */
+export function previewActions(review, { held = false } = {}) {
+  const findings = publishableFindings(review);
+  if (findings.length > ACTION_FINDINGS) return undefined;
+  const { excluded, severity } = adjustmentsOf(review);
+  const left = new Set(excluded);
+  return {
+    review: review.id,
+    target: describeReview(review),
+    plan: !review.plan,
+    publish: Boolean(review.plan) && !held && !everyFindingExcluded(review),
+    posts: publicationItems(review.plan).length,
+    adjust: !publicationStarted(review),
+    findings: findings.map(finding => ({
+      id: finding.id,
+      severity: Object.hasOwn(severity, finding.id) ? severity[finding.id] : finding.severity,
+      ...(Object.hasOwn(severity, finding.id) ? { original: finding.severity } : {}),
+      ...(left.has(finding.id) ? { excluded: true } : {}),
+      summary: String(finding.summary ?? '').replace(/\s+/g, ' ').trim().slice(0, 160),
+    })),
+  };
 }
 
 /**

@@ -32,7 +32,7 @@ opencode models
 ## 2. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.3
+opencode plugin add opencode-azure-devops-pr-review@0.4.4
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -41,7 +41,7 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.3'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.4'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -56,6 +56,14 @@ says once that AZPR is not set up yet. Type:
 
 If `/pr-setup` is not listed, run `opencode service restart` in your terminal
 and reopen OpenCode. Dialogs then ask for what a review cannot run without:
+
+![The dialogs of a first setup in OpenCode's terminal UI, one after another: the organization, a proxy that Enter skips, the token in a field that shows only bullets and a count, a model from OpenCode's list, what will be saved, and "AZPR is set up".](assets/setup-dialogs.gif)
+
+*AZPR's dialogs in OpenCode 2.3.0's terminal UI, recorded with a test
+organization and token and a stand-in for Azure DevOps; waiting time is
+shortened, and the model list is the one of the OpenCode that was recorded.
+The command palette (`ctrl+p`) opens the same dialogs with "AZPR: settings",
+which is how this recording starts.*
 
 1. **Organization.** The name from `https://dev.azure.com/<organization>`, or
    paste the URL of your PR.
@@ -80,10 +88,14 @@ restart is needed. The token is not shown again and is in no conversation,
 notice or log.
 
 Run `/pr-setup` again at any time to see the settings as a list and change
-one: a stronger model for `/pr-deep`, the output language, the proxy, a new
-token and others (see [setup](../README.md#setup-in-the-terminal-ui)). A
-change to settings that are in use takes effect after
-`opencode service restart`; the list says so.
+one: a model for `/pr-deep`, the output language, the proxy, a new token and
+others (see [setup](../README.md#setup-in-the-terminal-ui)). A change to
+settings that are in use takes effect after `opencode service restart`; the
+list says so. What the list does not hold is in the settings file it names;
+[all settings and defaults](../README.md#all-settings-and-defaults) describes
+each one.
+
+![/pr-setup lists the settings in groups with their values: organization, access token, proxy and CA certificate file; the review, quick and deep models, each with what it is for; output language, what follows a review, the report in the conversation and progress notices.](assets/setup-settings.png)
 
 ## 4. Check access without a model request (OpenCode)
 
@@ -123,7 +135,10 @@ without running a model.
 
 In the terminal UI a panel opens beside the conversation: it lists the
 review's sessions while they run, and then shows the report and the comment
-preview rendered instead of as Markdown source (see the
+preview rendered instead of as Markdown source. After the preview it also
+lists what you can do next (post the comments, leave findings out or change a
+level) as rows to click, so the commands of the next two sections need not be
+typed; posting asks once more before anything is sent (see the
 [terminal panel](../README.md#terminal-panel)).
 
 Follow the progress notices and wait for the review receipt. If the COMPLETE
@@ -154,8 +169,10 @@ cost cap is configured by default.
 
 ## Optional: adjust findings before publishing
 
-Use the finding IDs of the preview and the report to leave findings out or
-change their severity. Several IDs go in one list, separated by commas:
+In the terminal panel, pick **Leave findings out or change a level**: the
+findings are listed, you choose what happens to each, and one row applies it
+all. With commands, use the finding IDs of the preview and the report; several
+IDs go in one list, separated by commas:
 
 ```text
 /pr-comment --exclude F-1,R-2                     leave F-1 and R-2 out
@@ -177,6 +194,8 @@ request. See [adjusting findings](COMMENTING.md#adjusting-findings-after-a-previ
 for the full rules.
 
 ## Optional: publish after inspecting the preview
+
+In the terminal panel, pick **Post the comments** and confirm; or type:
 
 ```text
 /pr-comment --publish
@@ -203,9 +222,10 @@ exists; use `/pr-comment` to prepare and inspect a preview first. See
 
 For important changes, `/pr-deep` runs the same review as `/pr-review` with
 the models of `models.deep`. Put stronger (usually slower and costlier) models
-in all three deep slots and keep it for changes that justify the cost; with
-the review's models it would only repeat `/pr-review`, and `/pr-check` warns
-about that. All modes produce AI findings that require human judgment; see
+in all three deep slots, or the review's model with a higher variant
+(`provider/model#high`), which reasons longer, and keep it for changes that
+justify the cost; with the review's models as they are it would only repeat
+`/pr-review`, and `/pr-check` warns about that. All modes produce AI findings that require human judgment; see
 [commands](../README.md#commands).
 
 ## Without the terminal UI
@@ -300,7 +320,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.4.3 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.3.tar.gz),
+[v0.4.4 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.4.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings: `/pr-setup` in the terminal UI

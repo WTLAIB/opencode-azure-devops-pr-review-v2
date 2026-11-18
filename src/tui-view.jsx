@@ -6,10 +6,12 @@
 // the session on screen and leaves the keyboard with the prompt; with the setting
 // terminalPanel: manual it opens only with /pr-panel, its one command.
 //
-// The panel only reads: AZPR's own notices in the conversation, the report queued to a review
-// session, and the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It sends
-// no prompt, runs no command of the server part and reads no settings file: the server part writes
-// that setting into the metadata of its notices.
+// The panel reads AZPR's own notices in the conversation, the report queued to a review session, and
+// the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It reads no settings file:
+// the server part writes that setting into the metadata of its notices. After a comment preview it
+// lists what can be done next, as rows a person picks instead of typing: each sends the /pr-comment
+// command a person would type, to the session on screen, after asking what is needed
+// (src/tui-actions.mjs). It sends nothing by itself, and never a prompt.
 //
 // The dialogs of /pr-setup ask for AZPR's settings (src/tui-setup.mjs says what and in which order) and
 // hand every answer to the server part over the plugin's RPC. They read and write no file and make no
@@ -20,6 +22,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core"
 import { PANEL, buildPanel, conversationOf, createReader, opensPanel } from "./tui-model.mjs"
+import { actionRows, createActions } from "./tui-actions.mjs"
 import { SETUP_RPC, createSetup, isSetupNotice } from "./tui-setup.mjs"
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
@@ -107,6 +110,37 @@ function Row(props) {
   )
 }
 
+/** One thing that can be done next: a row that is clicked, or picked with its key while the panel has the keyboard. */
+function Action(props) {
+  const [hover, setHover] = createSignal(false)
+  return (
+    <box
+      flexDirection="row"
+      gap={1}
+      backgroundColor={hover() ? props.colors.hover : undefined}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      onMouseUp={(event) => {
+        if (event.button !== MouseButton.LEFT) return
+        event.stopPropagation()
+        props.run(props.item.id)
+      }}
+    >
+      <text fg={props.colors.link} flexShrink={0} selectable={false}>
+        {props.item.key}
+      </text>
+      <text fg={props.colors.base} flexShrink={0} selectable={false}>
+        {props.wide ? props.item.label.padEnd(props.pad) : props.item.label}
+      </text>
+      <Show when={props.wide}>
+        <text fg={props.colors.muted} wrapMode="none" selectable={false}>
+          {props.item.command}
+        </text>
+      </Show>
+    </box>
+  )
+}
+
 function Panel(props) {
   const context = props.context
   const state = props.state
@@ -131,6 +165,13 @@ function Panel(props) {
     props.panel.close()
   }
   const open = (sessionID) => context.ui.router.navigate({ type: "session", sessionID })
+  // What a preview offers next, where this host lets the panel send a command; picking a row asks first.
+  const offered = createMemo(() => (state.actions ? actionRows(model().next) : []))
+  const offers = (id) => offered().some((item) => item.id === id)
+  const act = (id) => {
+    const next = model().next
+    if (next && offers(id)) void state.actions.run(id, next, props.panel.sessionID)
+  }
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
   // driven by commands, so the panel hands the keyboard back to the prompt: the next command can be typed
@@ -194,6 +235,11 @@ function Panel(props) {
       { id: "azpr.panel.page.down", title: "AZPR panel: page down", group: "AZPR", bind: "pagedown", run: () => scroll?.scrollBy(page()) },
       { id: "azpr.panel.top", title: "AZPR panel: go to the top", group: "AZPR", bind: "home", run: () => scroll?.scrollTo(0) },
       { id: "azpr.panel.bottom", title: "AZPR panel: go to the end", group: "AZPR", bind: "end", run: () => scroll?.scrollTo(scroll.scrollHeight) },
+      // What a review or a preview offers; each is there only while the panel lists it.
+      { id: "azpr.panel.plan", title: "AZPR panel: preview the comments", group: "AZPR", bind: "c", enabled: () => offers("plan"), run: () => act("plan") },
+      { id: "azpr.panel.publish", title: "AZPR panel: post the previewed comments", group: "AZPR", bind: "p", enabled: () => offers("publish"), run: () => act("publish") },
+      { id: "azpr.panel.adjust", title: "AZPR panel: leave findings out or change a level", group: "AZPR", bind: "a", enabled: () => offers("adjust"), run: () => act("adjust") },
+      { id: "azpr.panel.reset", title: "AZPR panel: undo your adjustments", group: "AZPR", bind: "u", enabled: () => offers("reset"), run: () => act("reset") },
     ],
   }))
 
@@ -231,6 +277,16 @@ function Panel(props) {
         <text fg={palette().muted} flexShrink={0}>
           {model().progress}
         </text>
+      </Show>
+      <Show when={offered().length > 0}>
+        <box flexDirection="column" flexShrink={0} paddingTop={1}>
+          <text fg={palette().muted} selectable={false}>
+            Next (click a line{props.panel.focused ? ", or press its key" : ""})
+          </text>
+          <For each={offered()}>
+            {(item) => <Action item={item} colors={palette()} wide={props.panel.width >= 72} pad={Math.max(...offered().map((row) => row.label.length))} run={act} />}
+          </For>
+        </box>
       </Show>
       <scrollbox ref={(element) => (scroll = element)} flexGrow={1} minHeight={0} paddingTop={1} verticalScrollbarOptions={{ visible: false }} contentOptions={{ minHeight: 0 }}>
         <Show when={ids().length > 0 || model().deleted > 0}>
@@ -272,7 +328,7 @@ function Panel(props) {
   )
 }
 
-/** The review panel: opens by itself or with /pr-panel, and only reads. Returns its cleanup, or nothing on a host without a place for it. */
+/** The review panel: opens by itself or with /pr-panel. Returns its cleanup, or nothing on a host without a place for it. */
 function panelPart(context) {
   // A host without these parts of the plugin API has no place for the panel: stay out of its way.
   const needed = [context?.ui?.slot, context?.ui?.panel?.open, context?.ui?.router?.navigate, context?.keymap?.layer, context?.data?.listen, context?.data?.session?.pending?.list]
@@ -311,10 +367,23 @@ function panelPart(context) {
   let unasked
   // The session in which another plugin's panel is open; the host shows one panel at a time.
   let occupied
+  // The rows of what a preview offers send a command of the server part, as the host's own prompt does for one
+  // that is typed. A host without that, or without the dialogs that ask first, shows no such rows.
+  const actions =
+    typeof context.client?.session?.command === "function" && typeof context.ui?.dialog?.select === "function" && typeof context.ui?.toast?.show === "function"
+      ? createActions({
+          dialog: context.ui.dialog,
+          toast: (options) => {
+            if (!disposed) context.ui.toast.show(options)
+          },
+          send: (sessionID, command) => context.client.session.command({ sessionID, name: command.name, text: command.text }),
+        })
+      : undefined
   const state = {
     source,
     known,
     read,
+    actions,
     titles: new Map(),
     lookup: reader.lookup,
     readInbox: reader.readInbox,
@@ -435,6 +504,8 @@ function panelPart(context) {
 
   return () => {
     disposed = true
+    // An action that is open ends at its next step: nothing is sent by a part that was unloaded.
+    actions?.stop()
     reader.dispose()
     stop?.()
   }

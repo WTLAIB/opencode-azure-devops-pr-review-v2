@@ -55,6 +55,16 @@ terminal UI, not by the service, and only when the terminal UI starts.
   report was deleted or its report could not be read; the receipt in the
   conversation still names it, and `/pr-comment --show` shows a saved preview
   again.
+- **No rows under "Next".** They are offered by the notice that happened
+  last, and only by a comment preview or by a review that no preview follows:
+  once a run starts or another receipt arrives, they are gone. A preview that
+  an earlier version left in the conversation offers none; `/pr-comment
+  --show` shows it again with them. A review with more than 200 findings
+  offers none either; type the commands its receipt names.
+- **A row answers "was not started".** The reason follows, as for a typed
+  command: another AZPR command is running in the conversation or on the PR,
+  the review is no longer kept, or the terminal UI could not reach the
+  OpenCode server.
 - **Other clients.** The desktop app and other OpenCode clients do not load
   the panel.
 
@@ -177,6 +187,7 @@ Common receipts:
 | `Automatic … skipped: another AZPR command is running in this conversation or on this PR` | Wait for that command, then run the `/pr-comment` command the notice names. |
 | `Automatic comments are off for this review (stopped: …)` on a COMPLETE receipt | `/pr-stop`, a timeout or an unload arrived while the finished review's report was delivered. The review is kept; no comment step started. Run `/pr-comment <id>` to preview it. |
 | `Unknown option after the PR URL` / `Use at most one of --preview, --publish or --no-comment` | Only these flags may follow the URL, at most one; start your context with a word. Nothing was started. |
+| The command list describes the review commands as `AZPR is not ready here; run /pr-setup to see what it needs` | This OpenCode process found no usable settings for this project directory when it loaded AZPR: none yet, settings it cannot use, or settings that were saved from another project directory since. `/pr-setup` says which, and running a review command answers with one of the next rows. |
 | `SETUP REQUIRED` … `could not be used when OpenCode loaded AZPR: …` | The reason names the problem (no file yet, an unreadable file, invalid JSON, a setting that fails validation or an unusable PAT file) without its value. Fix it, then restart the OpenCode service. |
 | `No --pat-file was given, and the default PAT file … could not be used` | `/pr-setup` looked for the PAT in `${XDG_CONFIG_HOME:-~/.config}/azpr/pat` (or, with `--replace`, the PAT file already set). Create it as the [quickstart](QUICKSTART.md#save-the-pat-in-a-private-file-terminal) shows, or name your file with `--pat-file`. Nothing was saved. |
 | `RESTART REQUIRED` … `can be used now, but AZPR found no usable settings when OpenCode loaded it for this project directory` | Settings were saved after this OpenCode process loaded AZPR, by a setup in another project directory or by hand. A first setup is loaded at once only where it ran; restart the OpenCode service here. |
