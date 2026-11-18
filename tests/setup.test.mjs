@@ -1555,6 +1555,31 @@ test('a token that arrives while /pr-setup --replace checks the model is not tha
   assert.deepEqual([f.agents.size, f.rpc.events.length, (await f.rpc.handlers.status({})).state], [0, 0, 'restart'], 'The token is someone else\'s: it waits for the restart.');
 });
 
+test('putting the commands that say "setup required" back never comes after a load it did not see', async t => {
+  const f = await fixture(t), environment = environmentOf(f);
+  t.after(await f.setup({ environment, releaseWaitMs: 50 }));
+  const list = f.context.command.list;
+  // A first setup is saved, but the host does not answer while it is loaded: no command is left but /pr-setup.
+  f.context.command.list = async () => { throw new Error('host away'); };
+  await f.invoke('pr-setup', `--organization fixture --model fixture/model --pat-file "${f.pat}"`);
+  assert.deepEqual([...f.commands.keys()], ['pr-setup']);
+  // The host answers again, slowly. /pr-setup --help asks it which names are taken, to put the commands back;
+  let answer, asked = 0;
+  f.context.command.list = async () => { if (++asked === 1) await new Promise(resolve => { answer = resolve; }); return list(); };
+  const help = f.commands.get('pr-setup').execute({ sessionID: 'origin', prompt: { text: '--help' } });
+  for (let turn = 0; turn < 200 && !answer; turn++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(typeof answer, 'function');
+  // meanwhile a save of the same setup tries the load again.
+  const saving = f.rpc.handlers.save({ changes: { language: 'ja' } });
+  for (let turn = 0; turn < 20; turn++) await new Promise(resolve => setImmediate(resolve));
+  answer();
+  const [saved] = await Promise.all([saving, help]);
+  f.context.command.list = list;
+  assert.deepEqual([saved.ok, saved.status.state, f.agents.has('azpr-review-functional')], [true, 'ready', true]);
+  assert.match(await f.invoke('pr-review', '--help'), /^\[AZPR\] \/pr-review <Azure DevOps PR URL>/, 'The review command is the runtime\'s, not one that says "setup required".');
+  assert.match(await f.invoke('pr-check', f.azure.prUrl()), /^\[AZPR [a-f0-9]{8}\] STARTED/);
+});
+
 test('a /pr-setup that runs while a first setup is being loaded puts no command in the way of the load', async t => {
   const f = await fixture(t), environment = environmentOf(f);
   t.after(await f.setup({ environment, releaseWaitMs: 50 }));

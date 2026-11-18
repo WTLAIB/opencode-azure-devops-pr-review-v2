@@ -412,8 +412,10 @@ settings, backups and failure records. Never upload `.local/`.
   A plugin can take a name at any moment, so list the commands again right
   before registering them, at startup as well; where the list cannot be
   read, register none (what was known earlier is no longer known) and try
-  again with the next `/pr-setup` or save. While a load has taken them away
-  on purpose, nothing puts them back.
+  again with the next `/pr-setup` or save. A load and putting them back run
+  one after another, never interleaved (`inLane` in `setup.mjs`): a load
+  must not find them half back, and what was listed for putting them back
+  must not be older than a load.
 - A setup that is open when the terminal part is unloaded ends at its next
   step: after `stop()` it asks nothing of the server part or the person and
   saves nothing, whatever answer arrives.

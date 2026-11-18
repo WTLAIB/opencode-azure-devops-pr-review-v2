@@ -720,7 +720,8 @@ off meanwhile load nothing, which is no load). The commands that say so come bac
 meanwhile, except under a name that another plugin has taken by then, which
 is looked up again at that moment (adding a command would replace that
 plugin's); where the host cannot list the commands, none is registered
-until the next `/pr-setup` can.
+until the next `/pr-setup` can. A load and this putting back run one after
+another, never interleaved.
 Another OpenCode process, or another project directory
 of the same one, that had found no settings reads none either when they
 appear, whoever wrote them: its review commands answer `RESTART REQUIRED`,

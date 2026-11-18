@@ -946,7 +946,16 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   const pairNow = async () => pairOf(await readFile(path, 'utf8').catch(() => null));
   const reserved = ['pr-setup', ...(use.blocked ? Object.keys(COMMANDS) : [])];
   if (catalog.some(command => reserved.includes(command.name))) throw new Error('[AZPR] Reserved command name conflict; resolve it before loading AZPR.');
-  let cleanup, placeholders, activating, restoring, swapping = false, rpc, closed = false;
+  let cleanup, placeholders, activating, rpc, closed = false;
+  // What changes this plugin's review commands runs one after another: the load of a first setup, which
+  // takes the commands that say "setup required" away and registers the runtime's, and putting those commands
+  // back. Neither sees the other half done, and what one read of the host is not older than the other's work.
+  let lane = Promise.resolve();
+  const inLane = job => {
+    const run = lane.then(job, job);
+    lane = run.catch(() => {});
+    return run;
+  };
   // One save at a time, whichever way it comes in (the dialogs' RPC or /pr-setup with options), until what
   // follows it has ended: a second save during the load of a first setup would change what is being loaded.
   const turn = { busy: false };
@@ -995,7 +1004,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   function activate() {
     if (!use.blocked) return Promise.resolve(true);
     if (closed) return Promise.resolve(false);
-    activating ??= (async () => {
+    activating ??= inLane(async () => {
       try {
         const now = await settingsProblem(path);
         if (now.problem || now.disabled) { use.problem = now.problem || 'AZPR is switched off in its settings (enabled: false).'; return false; }
@@ -1006,45 +1015,40 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           use.loadProblem = '';
           return false;
         }
-        // From here until the runtime is loaded or has failed to, the commands that say "setup required" are
-        // deliberately away: nothing puts them back meanwhile.
-        swapping = true;
+        // The runtime refuses command names that exist: the commands that only said "setup required" go first.
+        await placeholders?.dispose();
+        placeholders = undefined;
+        // The host may list them a moment longer. What is listed under a review command's name and is not one
+        // of them is another plugin's command: the runtime will refuse to load beside it.
+        for (const until = Date.now() + releaseWaitMs; ; ) {
+          const listed = (listOf(await context.command.list()) ?? []).filter(command => Object.hasOwn(COMMANDS, command?.name));
+          if (listed.every(command => command.description !== PLACEHOLDER_DESCRIPTION) || Date.now() >= until) break;
+          await new Promise(done => setTimeout(done, 50));
+        }
         let outcome; // 'loaded', 'failed' (use.loadProblem says why), 'replaced' or 'closed'
         try {
-          // The runtime refuses command names that exist: the commands that only said "setup required" go first.
-          await placeholders?.dispose();
-          placeholders = undefined;
-          // The host may list them a moment longer. What is listed under a review command's name and is not one
-          // of them is another plugin's command: the runtime will refuse to load beside it.
-          for (const until = Date.now() + releaseWaitMs; ; ) {
-            const listed = (listOf(await context.command.list()) ?? []).filter(command => Object.hasOwn(COMMANDS, command?.name));
-            if (listed.every(command => command.description !== PLACEHOLDER_DESCRIPTION) || Date.now() >= until) break;
-            await new Promise(done => setTimeout(done, 50));
-          }
-          try {
-            cleanup = await load();
-            // The runtime read the files a moment after they were compared above. What it read is what they hold
-            // now (its own answer), and what they hold now must be what this setup saved.
-            // A load that answers neither (settings switched off meanwhile load nothing) is no load of them.
-            const same = typeof use.drift === 'function' && await use.drift().then(drift => !drift, () => false) && await pairNow() === use.own;
-            outcome = !same ? 'replaced' : closed ? 'closed' : 'loaded';
-          } catch (error) {
-            use.problem = use.loadProblem = said(error, 'the settings could not be loaded.');
-            outcome = 'failed';
-          }
-          // Someone else's settings by now, or unloaded meanwhile: what was just loaded goes again.
-          if (outcome === 'replaced' || outcome === 'closed') {
-            const loaded = cleanup;
-            cleanup = undefined;
-            use.drift = undefined;
-            if (outcome === 'replaced') { use.own = undefined; use.loadProblem = ''; }
-            await Promise.resolve(loaded?.()).catch(() => {});
-          }
-        } finally { swapping = false; }
+          cleanup = await load();
+          // The runtime read the files a moment after they were compared above. What it read is what they hold
+          // now (its own answer), and what they hold now must be what this setup saved.
+          // A load that answers neither (settings switched off meanwhile load nothing) is no load of them.
+          const same = typeof use.drift === 'function' && await use.drift().then(drift => !drift, () => false) && await pairNow() === use.own;
+          outcome = !same ? 'replaced' : closed ? 'closed' : 'loaded';
+        } catch (error) {
+          use.problem = use.loadProblem = said(error, 'the settings could not be loaded.');
+          outcome = 'failed';
+        }
+        // Someone else's settings by now, or unloaded meanwhile: what was just loaded goes again.
+        if (outcome === 'replaced' || outcome === 'closed') {
+          const loaded = cleanup;
+          cleanup = undefined;
+          use.drift = undefined;
+          if (outcome === 'replaced') { use.own = undefined; use.loadProblem = ''; }
+          await Promise.resolve(loaded?.()).catch(() => {});
+        }
         if (outcome !== 'loaded') {
           // The commands that say so come back, except under a name that is another plugin's by now; without
           // them only /pr-setup is left until the restart.
-          await restorePlaceholders();
+          await restoreNow();
           return false;
         }
         use.blocked = false;
@@ -1057,10 +1061,10 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
         // A host call failed on the way (removing the commands, listing them, unloading). What was saved stays
         // saved, and the commands that say what is missing stay too, or come back.
         use.problem = use.loadProblem = said(error, 'OpenCode did not answer while AZPR replaced its commands.');
-        await restorePlaceholders();
+        await restoreNow();
         return false;
       } finally { activating = undefined; }
-    })();
+    });
     return activating;
   }
 
@@ -1068,17 +1072,16 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
    * Put the commands that say what is missing back where none are registered, except under a name another
    * plugin has by now. Only with a list of the commands read at this moment: where the host does not answer
    * they stay away (adding one would replace a command that may be someone's), and the next /pr-setup or save
-   * tries again. One at a time, and never while a load has taken them away on purpose.
+   * tries again. `restoreNow` is the step itself, for what already runs in the lane (a load that failed);
+   * everything else asks through `restorePlaceholders`, which waits for its turn there, so that the list it
+   * reads is never older than a load, and a load never finds this half done.
    */
-  const restorePlaceholders = () => restoring ??= (async () => {
-    // A turn later, so that `restoring` is set before this body can end and clear it.
-    await null;
-    try {
-      if (!use.blocked || placeholders || closed || swapping) return;
-      const names = await taken();
-      if (names && !placeholders && !closed && !swapping) placeholders = await registerPlaceholders(names).catch(() => undefined);
-    } finally { restoring = undefined; }
-  })();
+  const restoreNow = async () => {
+    if (!use.blocked || placeholders || closed) return;
+    const names = await taken();
+    if (names && !closed) placeholders = await registerPlaceholders(names).catch(() => undefined);
+  };
+  const restorePlaceholders = () => inLane(restoreNow);
 
   /**
    * After a save of this process's own setup: `made` (the settings it replaced could not be used, and it wrote
@@ -1120,8 +1123,9 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
       if (event.prompt.files?.length || event.prompt.agents?.length || event.prompt.skills?.length) throw new Error('[AZPR] Setup accepts literal options only.');
       const session = typeof context.session?.get === 'function' ? recordOf(await context.session.get({ sessionID: event.sessionID })) : null;
       if (privateAgent(session?.agent)) throw new Error('[AZPR] Private reviewers cannot configure AZPR.');
-      // Where the commands that say what is missing could not be registered earlier, they are now.
-      await restorePlaceholders();
+      // Where the commands that say what is missing could not be registered earlier, they are now. Not while a
+      // load is under way: it sees to them itself when it ends, and this command does not wait for it.
+      if (!activating) await restorePlaceholders();
       let text, metadata;
       try {
         const arguments_ = parseSetupArguments(event.prompt.text ?? '');
@@ -1164,7 +1168,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   return async () => {
     closed = true;
     await activating?.catch(() => {});
-    await restoring?.catch(() => {});
+    await lane;
     await cleanup?.();
     await placeholders?.dispose();
     await Promise.allSettled(registrations.reverse().map(item => item.dispose()));
