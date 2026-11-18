@@ -51,6 +51,37 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.4.3 after publication (2026-11-18)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.0 and tmux 3.2a, in isolated OpenCode profiles with the fake model and
+Azure DevOps services.
+
+- **The merged tree.** The pull request was merged with a merge commit whose
+  tree is that of the candidate's last commit. CI passed on that commit, on
+  `main` and on the tag.
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. Both passed the clean-directory installation check: 22 runtime
+  modules, 9 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.3`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (110 model and 187 Azure DevOps requests), the terminal panel's fixture
+  (15 and 31, with one request of the conversation's model) and the setup
+  fixture (no model request, 16 Azure DevOps requests): the dialogs set AZPR
+  up from a profile without settings, and the review commands worked without
+  a restart.
+- **The npm package.** The registry's integrity and shasum for 0.4.3 equal
+  those of the package built from the tag (37 files), and the tarball
+  downloaded from the registry is byte-identical to it. Installed from the
+  registry, the package passed the same three fixtures with the same request
+  counts.
+
+No review with a real model ran on 0.4.3, and its dialogs were not used
+against a live Azure DevOps organization; see the acceptance below for what
+was probed live.
+
 ## 0.4.3 release candidate acceptance (2026-11-18)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode 2.3.0 and
