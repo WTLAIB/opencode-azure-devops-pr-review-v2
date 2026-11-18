@@ -204,12 +204,14 @@ async function fixture(t, opts = {}) {
       },
       // Only where a test asks for it (`titles`): the fixture's other tests count the host's calls. Like
       // OpenCode, the host reports a rename to whoever follows its events (`renames: false` leaves that out).
+      // `updating` runs while the host works on a rename, `updated` in the turn in which it answers one.
       ...(opts.titles ? { async update(input) {
         calls.push({ kind: 'update', ...clone(input) });
         await opts.updating?.(input);
         if (input.title === undefined) return;
         opts.titles.set(input.sessionID, input.title);
         if (opts.renames !== false) publish({ type: 'session.renamed', data: { sessionID: input.sessionID, title: input.title } });
+        opts.updated?.(input);
       } } : {}),
       async wait({ sessionID }) { await sessions.get(sessionID).running; },
       async context({ sessionID }) { return clone(sessions.get(sessionID).history); },
@@ -3615,155 +3617,194 @@ test('naming a conversation never holds a command up: a host that cannot, fails 
   }
 });
 
+/**
+ * The naming of a conversation is followed by its own events, never by how long a command takes or by a clock
+ * that a busy machine outruns: `answered(n)` resolves in the turn in which the host has answered the n-th write
+ * of a name (the fixture's `updated`), and `closed(f)` once the watch has given its subscription up. What has
+ * to happen is waited for, with a limit that only a fault reaches; what must not happen is given a pause in
+ * which it would have happened.
+ */
+const NAMING_LIMIT = 15000;
+function renames() {
+  let count = 0;
+  const waiting = [];
+  return {
+    updated() { count++; for (const resolve of waiting.splice(0)) resolve(); },
+    async answered(goal) {
+      let timer;
+      const late = new Promise(resolve => { timer = setTimeout(resolve, NAMING_LIMIT, 'late'); });
+      try { while (count < goal) assert.notEqual(await Promise.race([new Promise(resolve => waiting.push(resolve)), late]), 'late', `The host answered ${count} of ${goal} write(s) of a name within ${NAMING_LIMIT} ms.`); }
+      finally { clearTimeout(timer); }
+    },
+  };
+}
+/** Waits until `met()` holds, looking every few milliseconds; fails when it does not within the limit. */
+async function until(met, what) {
+  for (const end = Date.now() + NAMING_LIMIT; !met(); await sleep(5)) assert.ok(Date.now() < end, `${what} within ${NAMING_LIMIT} ms.`);
+}
+const namingClosed = f => until(() => f.subscriptions.length > 0 && f.feeds.size === 0, 'The watch closed');
+const namesWritten = f => f.calls.filter(call => call.kind === 'update').map(call => call.title);
+
 test('a name that anyone else gives a conversation around that moment stands: one given first stops the naming, one it may have replaced is written back', async t => {
   const settled = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
-  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const written = f => f.calls.filter(call => call.kind === 'update').map(call => call.title);
+  const pause = sleep, written = namesWritten, closed = namingClosed;
   // The record is written when the naming has ended, which nothing waits for: it is read once it is there.
   const outcome = async receipt => {
     const file = join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'conversation-name.json');
     for (let attempt = 0; ; attempt++) {
       try { return JSON.parse(await readFile(file, 'utf8')); }
-      catch (error) { if (attempt >= 100) throw error; await pause(20); }
+      catch (error) { if (attempt >= 500) throw error; await pause(20); }
     }
   };
   const renamed = (f, sessionID, title, titles) => { titles?.set(sessionID, title); f.publish({ type: 'session.renamed', data: { sessionID, title } }); };
   const own = 'AZPR: PR #123 (repo)';
-  // The watch stays open for a while after the host answered a write (`namingMs` here), since an earlier name can
-  // be reported after AZPR's own.
-  // Before a name is written back the watch waits a moment for what else the host reports (50 ms), three times
-  // at most; CLOSED is long after all of that.
-  const WATCH = 60, MOMENT = 90, CLOSED = 700;
-  // Named, and the host reported it. The watch asked for renames alone, is still open, and then closes by itself.
+  // The watch stays open for a while after the host answered a write (`namingMs`), since an earlier name can be
+  // reported after AZPR's own: WATCH where it is to close by itself, LONG where a case goes on reporting (it
+  // ends by unloading then). Before a name is written back the watch waits a moment for what else the host
+  // reports (50 ms); QUIET is longer than that, for what must not be written.
+  const WATCH = 60, LONG = 60000, QUIET = 250;
+  // Named, and the host reported it. The watch asked for renames alone, is still open in the turn in which the
+  // host answered, and then closes by itself.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles, namingMs: WATCH });
-    const receipt = await f.command('pr-check');
-    await settled();
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated });
+    const check = f.command('pr-check');
+    await host.answered(1);
     assert.deepEqual([written(f), titles.get('ordinary'), f.subscriptions, f.feeds.size], [[own], own, [{ types: ['session.renamed'] }], 1]);
     // A name given afterwards stands by itself: nothing is written again.
     renamed(f, 'ordinary', 'Renamed later', titles);
-    await pause(CLOSED);
-    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(receipt), f.feeds.size], [[own], 'Renamed later', { outcome: 'named', title: own }, 0]);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own], 'Renamed later', { outcome: 'named', title: own }, 0]);
   }
   // A person names it between AZPR's read and AZPR's write. The host reports that name before AZPR's, which
   // therefore replaced it: it is written back, and the record does not hold it.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let named = false;
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => { if (!named) { named = true; renamed(f, input.sessionID, 'Parser work', titles); } } });
-    const receipt = await f.command('pr-check');
-    await pause(CLOSED);
-    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(receipt), f.feeds.size], [[own, 'Parser work'], 'Parser work', { outcome: 'restored' }, 0]);
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => { if (!named) { named = true; renamed(f, input.sessionID, 'Parser work', titles); } } });
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Parser work'], 'Parser work', { outcome: 'restored' }, 0]);
   }
   // Named again while it was written back: the name given last is the one that stays.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     const given = ['First name', 'Second name'];
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => { if (given.length) renamed(f, input.sessionID, given.shift(), titles); } });
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => { if (given.length) renamed(f, input.sessionID, given.shift(), titles); } });
     await f.command('pr-check');
-    await pause(CLOSED);
+    await host.answered(3);
+    await closed(f);
     assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'First name', 'Second name'], 'Second name', 0]);
   }
   // Nothing ties a rename that the host reports to the call that made it. While AZPR's write is under way,
   // someone gives the conversation AZPR's very words and then another name; AZPR's write lands last. The first
   // report with AZPR's words is not taken for AZPR's write: the other name is written back.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let first = true;
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => {
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => {
       if (!first) return;
       first = false;
       renamed(f, input.sessionID, own, titles);
       renamed(f, input.sessionID, 'Chosen after all', titles);
     } });
-    const receipt = await f.command('pr-check');
-    await pause(CLOSED);
-    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(receipt), f.feeds.size], [[own, 'Chosen after all'], 'Chosen after all', { outcome: 'restored' }, 0]);
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Chosen after all'], 'Chosen after all', { outcome: 'restored' }, 0]);
   }
   // The same when the host reports all of it a little later, after it answered AZPR's write: the watch has not
   // closed on the first report with AZPR's words.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles, namingMs: WATCH, renames: false });
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: LONG, renames: false, updated: host.updated });
     await f.command('pr-check');
-    await settled();
+    await host.answered(1);
     assert.deepEqual(written(f), [own]);
     f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: own } });
     await pause(10);
     f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: 'Reported a little later' } });
     await pause(10);
     f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: own } });
-    await pause(CLOSED);
+    await host.answered(2);
+    await f.cleanup();
     assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'Reported a little later'], 'Reported a little later', 0]);
   }
   // AZPR's own words are never written back as someone's name. While AZPR's first write is under way, someone
   // gives a name, then AZPR's very words, then another name; AZPR's write lands last. The name given last is
   // written back, in one write when the host has reported all of it by then.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let first = true;
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => {
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => {
       if (!first) return;
       first = false;
       for (const title of ['Name A', own, 'Name B']) renamed(f, input.sessionID, title, titles);
     } });
-    const receipt = await f.command('pr-check');
-    await pause(CLOSED);
-    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(receipt), f.feeds.size], [[own, 'Name B'], 'Name B', { outcome: 'restored' }, 0]);
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Name B'], 'Name B', { outcome: 'restored' }, 0]);
   }
   // The same when the host reports them one by one, so that AZPR writes the first name back before it hears of
   // the second: the report of AZPR's first write, which comes after, is not taken for someone's name.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles, namingMs: 1000, renames: false });
-    const report = async title => { f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title } }); await pause(MOMENT); };
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: LONG, renames: false, updated: host.updated });
+    const report = title => f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title } });
     await f.command('pr-check');
-    await settled();
-    await report('Name A');
-    await report(own);
+    await host.answered(1);
+    report('Name A');
+    report(own);
+    await host.answered(2);
     assert.deepEqual(written(f), [own, 'Name A'], 'AZPR\'s words after a name: the name is written back.');
-    await report('Name B');
-    await report(own);
+    report('Name B');
+    report(own);
+    await pause(QUIET);
     assert.deepEqual(written(f), [own, 'Name A'], 'AZPR\'s first write, reported late: nothing is written for it.');
-    await report('Name A');
+    report('Name A');
+    await host.answered(3);
     assert.deepEqual(written(f), [own, 'Name A', 'Name B'], 'The write of the first name landed after the second one, which is written back.');
-    await report('Name B');
-    await pause(1300);
+    report('Name B');
+    await f.cleanup();
     assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'Name A', 'Name B'], 'Name B', 0]);
   }
   // Once the host has reported the name that AZPR wrote back, AZPR's first words can only be someone's own
   // choice: it stands.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let first = true;
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => { if (first) { first = false; renamed(f, input.sessionID, 'A name first', titles); } } });
+    const f = await fixture(t, { titles, namingMs: LONG, updated: host.updated, updating: async input => { if (first) { first = false; renamed(f, input.sessionID, 'A name first', titles); } } });
     await f.command('pr-check');
-    await pause(MOMENT);
+    await host.answered(2);
     assert.deepEqual([written(f), titles.get('ordinary')], [[own, 'A name first'], 'A name first']);
     renamed(f, 'ordinary', own, titles);
-    await pause(CLOSED);
+    await pause(QUIET);
+    await f.cleanup();
     assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'A name first'], own, 0]);
   }
   // In doubt the name that is not AZPR's stays. Someone gives a name and then AZPR's very words, after AZPR's
   // write: that cannot be told from AZPR's write replacing the name, so the name is written back.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles, namingMs: WATCH });
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated });
     await f.command('pr-check');
-    await settled();
+    await host.answered(1);
     renamed(f, 'ordinary', 'A name', titles);
     renamed(f, 'ordinary', own, titles);
-    await pause(CLOSED);
+    await host.answered(2);
+    await closed(f);
     assert.deepEqual([written(f), titles.get('ordinary')], [[own, 'A name'], 'A name']);
   }
   // Someone who goes on renaming in step with AZPR does not make it write without end.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let count = 0;
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => { renamed(f, input.sessionID, `Name ${++count}`, titles); } });
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => { renamed(f, input.sessionID, `Name ${++count}`, titles); } });
     await f.command('pr-check');
-    await pause(CLOSED);
+    await host.answered(4);
+    await closed(f);
     assert.deepEqual([written(f), f.feeds.size], [[own, 'Name 1', 'Name 2', 'Name 3'], 0], 'Its own name and three written back: no more.');
   }
   // The host reports a name while the conversation is read: it is named already, and nothing is written.
@@ -3771,7 +3812,7 @@ test('a name that anyone else gives a conversation around that moment stands: on
     const titles = new Map();
     const f = await fixture(t, { titles, namingMs: WATCH, conversation: id => { renamed(f, id, 'Named meanwhile'); return { id, location: { directory: f.directory } }; } });
     const receipt = await f.command('pr-check');
-    await settled();
+    await closed(f);
     assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[], { outcome: 'kept' }, 0]);
   }
   // The same when the host reported another conversation's name before it: everything it has reported by then
@@ -3785,31 +3826,31 @@ test('a name that anyone else gives a conversation around that moment stands: on
       return { id, location: { directory: f.directory } };
     } });
     const receipt = await f.command('pr-check');
-    await settled();
+    await closed(f);
     assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[], { outcome: 'kept' }, 0]);
   }
   // Another conversation's name is nothing to this one.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles, namingMs: WATCH, conversation: id => { renamed(f, 'ses_another', 'Not this one'); return { id, location: { directory: f.directory } }; } });
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, conversation: id => { renamed(f, 'ses_another', 'Not this one'); return { id, location: { directory: f.directory } }; } });
     await f.command('pr-check');
-    await pause(CLOSED);
+    await host.answered(1);
+    await closed(f);
     assert.deepEqual([written(f), titles.get('ordinary')], [[own], own]);
   }
   // Nor does it put a write-back off: the moment AZPR waits before one is a moment without a name of this
-  // conversation, whatever the host reports of others meanwhile.
+  // conversation, however often the host reports names of others meanwhile.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles, namingMs: 1000, renames: false });
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: LONG, renames: false, updated: host.updated });
     await f.command('pr-check');
-    await settled();
+    await host.answered(1);
     f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: 'A name' } });
     f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: own } });
-    for (let count = 1; count <= 8; count++) {
-      f.publish({ type: 'session.renamed', data: { sessionID: 'ses_another', title: `Name ${count}` } });
-      await pause(20);
-    }
+    const others = setInterval(() => f.publish({ type: 'session.renamed', data: { sessionID: 'ses_another', title: 'Not this one' } }), 10);
+    try { await host.answered(2); } finally { clearInterval(others); }
     assert.deepEqual(written(f), [own, 'A name']);
+    await f.cleanup();
   }
   // A host that reports no renames could have a name replaced unseen: no conversation is named there.
   {
@@ -3820,16 +3861,18 @@ test('a name that anyone else gives a conversation around that moment stands: on
   }
   // A host that does not report AZPR's own rename: the watch ends by itself, and the record says that it cannot tell.
   {
-    const f = await fixture(t, { titles: new Map(), renames: false, namingMs: WATCH });
+    const host = renames();
+    const f = await fixture(t, { titles: new Map(), renames: false, namingMs: WATCH, updated: host.updated });
     const receipt = await f.command('pr-check');
-    await pause(CLOSED);
+    await host.answered(1);
+    await closed(f);
     assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[own], { outcome: 'unconfirmed' }, 0]);
   }
   // The host refuses the write and reports nothing: the record says so.
   {
     const f = await fixture(t, { titles: new Map(), namingMs: WATCH, updating: async () => { throw new Error('fixture update failed'); } });
     const receipt = await f.command('pr-check');
-    await pause(CLOSED);
+    await closed(f);
     assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[own], { outcome: 'failed' }, 0]);
   }
   // A feed that fails while the conversation is still being read: no rejection is left without a handler, which
@@ -3852,49 +3895,51 @@ test('a name that anyone else gives a conversation around that moment stands: on
   // One conversation is named by one watch at a time. A check ends while its rename is still under way; the next
   // command would otherwise watch as well, and one watch would take the other's write for someone's choice.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let release;
     const slow = new Promise(resolve => { release = resolve; });
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: () => slow });
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: () => slow });
     await f.command('pr-check');
-    await settled();
+    await until(() => written(f).length > 0, 'The first rename began');
     assert.deepEqual([written(f), f.subscriptions.length], [[own], 1], 'The first rename is under way.');
     await f.command('pr-check');
     await settled();
     assert.deepEqual([written(f), f.subscriptions.length], [[own], 1], 'The second check starts no watch of its own.');
     release();
-    await settled();
+    await host.answered(1);
     renamed(f, 'ordinary', 'A person\'s name', titles);
-    await pause(CLOSED);
+    await closed(f);
     assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own], 'A person\'s name', 0]);
     // Once that watch has ended, a later command may name a conversation that still has no name.
     titles.delete('ordinary');
     await f.command('pr-check');
-    await pause(CLOSED);
+    await host.answered(2);
+    await closed(f);
     assert.deepEqual([written(f), titles.get('ordinary')], [[own, own], own]);
   }
   // A write that the host answers long after the watch would have closed: a person names the conversation while
   // it is under way, and it lands afterwards. The watch is not closed during a write of its own, so the name it
   // replaced is still written back.
   {
-    const titles = new Map();
+    const titles = new Map(), host = renames();
     let first = true;
-    const f = await fixture(t, { titles, namingMs: WATCH, updating: async input => {
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => {
       if (!first) return;
       first = false;
       await pause(20);
       renamed(f, input.sessionID, 'Named while AZPR wrote', titles);
       await pause(WATCH * 3);
     } });
-    const receipt = await f.command('pr-check');
-    await pause(WATCH * 3 + CLOSED);
-    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(receipt), f.feeds.size], [[own, 'Named while AZPR wrote'], 'Named while AZPR wrote', { outcome: 'restored' }, 0]);
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Named while AZPR wrote'], 'Named while AZPR wrote', { outcome: 'restored' }, 0]);
   }
 });
 
 test('unloading the plugin ends a naming that is under way: its write is waited for, and a name it replaced is written back', async t => {
   const settled = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
-  const written = f => f.calls.filter(call => call.kind === 'update').map(call => call.title);
+  const written = namesWritten;
   const renamed = (f, sessionID, title, titles) => { titles?.set(sessionID, title); f.publish({ type: 'session.renamed', data: { sessionID, title } }); };
   const own = 'AZPR: PR #123 (repo)';
   // The command has ended; its rename is still under way when a person names the conversation, and then the
@@ -3903,9 +3948,9 @@ test('unloading the plugin ends a naming that is under way: its write is waited 
     const titles = new Map();
     let release, first = true;
     const slow = new Promise(resolve => { release = resolve; });
-    const f = await fixture(t, { titles, updating: async () => { if (first) { first = false; await slow; } } });
+    const f = await fixture(t, { titles, namingUnloadMs: 60000, updating: async () => { if (first) { first = false; await slow; } } });
     await f.command('pr-check');
-    await settled();
+    await until(() => written(f).length > 0, 'The rename began');
     assert.deepEqual(written(f), [own]);
     renamed(f, 'ordinary', 'Mine', titles);
     const unloaded = f.cleanup();
@@ -3917,25 +3962,25 @@ test('unloading the plugin ends a naming that is under way: its write is waited 
   }
   // A watch that only waits for the host's reports ends within a moment, and no command names anything afterwards.
   {
-    const titles = new Map();
-    const f = await fixture(t, { titles });
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: 60000, updated: host.updated });
     await f.command('pr-check');
-    await settled();
+    await host.answered(1);
     assert.equal(f.feeds.size, 1);
     const before = Date.now();
     await f.cleanup();
-    assert.ok(Date.now() - before < 2000, 'Unloading does not wait out the whole watch.');
+    assert.ok(Date.now() - before < 30000, 'Unloading does not wait out the whole watch.');
     assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own], own, 0]);
   }
   // A host that never answers the write is not waited for without end; nothing more can be done there.
   {
     const f = await fixture(t, { titles: new Map(), namingUnloadMs: 300, updating: () => new Promise(() => {}) });
     await f.command('pr-check');
-    await settled();
+    await until(() => written(f).length > 0, 'The rename began');
     const before = Date.now();
     await f.cleanup();
     const waited = Date.now() - before;
-    assert.ok(waited >= 250 && waited < 3000, `Unloading waited ${waited} ms.`);
+    assert.ok(waited >= 250 && waited < 10000, `Unloading waited ${waited} ms.`);
     assert.equal(f.feeds.size, 0);
   }
 });

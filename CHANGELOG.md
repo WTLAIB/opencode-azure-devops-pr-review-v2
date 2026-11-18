@@ -42,6 +42,10 @@ The terminal panel:
 - A click on one of them leaves the keyboard with the prompt: the host gives
   a panel the keyboard on a click, and a key of the panel would then act on
   what is typed next.
+- Letting go of the mouse button at the end of a selection of text is no
+  click. Text selected down the panel and let go over a session's row opened
+  that session, and over `close` closed the panel (since 0.4.2); neither
+  happens now, and a step at the panel's foot is not picked that way either.
 - An answer is acted on only while the panel still shows what it was given
   for. If the preview is planned again, another session comes on screen or
   the panel is closed while a question is open, nothing is sent, and the
@@ -97,7 +101,9 @@ Conversations:
   write, is not closed while a write is under way, and is ended properly
   when the plugin is unloaded. A host that reports no renames gets no name
   from AZPR. With debug records on, `conversation-name.json` says how naming
-  ended.
+  ended. What this cannot rule out (a person who gives a name and then
+  exactly the words AZPR wrote, both in that moment, keeps the name given
+  first) is said in `docs/ARCHITECTURE.md`, "Authorization and isolation".
 
 Setup:
 

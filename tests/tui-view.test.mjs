@@ -410,6 +410,13 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   publish.props.onMouseUp({ button: 2, stopPropagation() {} });
   await settle();
   assert.equal(ui.log.shown.length, 0, 'Only the left button picks a row.');
+  // Nor does the release that ends a selection of text: dragged from the preview above, it ends wherever the
+  // button is let go, and OpenTUI sends it to what lies there, marked as dragging. Nothing is asked, and the
+  // step that asks nothing sends nothing.
+  let stopped = 0;
+  for (const item of ui.rows) item.element.props.onMouseUp({ button: 0, isDragging: true, stopPropagation() { stopped++; } });
+  await settle();
+  assert.deepEqual([ui.log.shown.length, ui.log.sent, stopped], [0, [], 0], 'The end of a selection picks nothing, and goes on to whoever copies it.');
   // A click is a button pressed: the host gives a panel the keyboard on mouse down, which the left button stops here.
   let kept = 0;
   publish.props.onMouseDown({ button: 2, stopPropagation() { kept++; } });

@@ -171,6 +171,28 @@ async function click(text) {
   for (const action of ['M', 'm']) tmux('send-keys', '-t', 'azpr', '-l', `\x1b[<0;${column};${row + 1}${action}`);
 }
 /**
+ * A selection dragged with the left button inside the panel, from the middle of `from` to the middle of `to`:
+ * pressed, moved in a few steps, let go. Both are looked for from the panel's left edge on, since the
+ * conversation beside it can show the same words.
+ */
+async function dragInPanel(from, to) {
+  const lines = (await see(shown => panelOpen(shown) && shown, 'The panel is not open to select text in.')).split('\n');
+  const edge = lines.find(line => panelOpen(line)).search(/AZPR [a-f0-9]{8} · /);
+  const place = text => {
+    const row = lines.findIndex(line => line.indexOf(text, edge) >= 0);
+    assert.ok(row >= 0, `"${text}" is not in the panel.\n--- screen ---\n${lines.join('\n')}`);
+    return [columns(lines[row].slice(0, lines[row].indexOf(text, edge))) + Math.max(1, Math.floor(columns(text) / 2)), row + 1];
+  };
+  const [fromColumn, fromRow] = place(from), [toColumn, toRow] = place(to);
+  const send = (code, column, row, action) => tmux('send-keys', '-t', 'azpr', '-l', `\x1b[<${code};${column};${row}${action}`);
+  send(0, fromColumn, fromRow, 'M');
+  for (let step = 1; step <= 4; step++) {
+    send(32, Math.round(fromColumn + (toColumn - fromColumn) * step / 4), Math.round(fromRow + (toRow - fromRow) * step / 4), 'M');
+    await sleep(50);
+  }
+  send(0, toColumn, toRow, 'm');
+}
+/**
  * Type a slash command the way a person does: wait for its suggestion, then send it. AZPR's server commands take
  * arguments, so Enter right after the name only completes it: they are typed with the space that follows the name.
  * The panel's own commands take none and run at once.
@@ -464,6 +486,13 @@ try {
   type('still-with-the-prompt');
   await see(/┃\s+still-with-the-prompt/, 'A click on the row took the keyboard from the prompt.');
   key('C-u');
+  // Text is selected with the mouse, from the preview down to the row, and let go over a step. The release ends
+  // the selection and is no click: `Reset adjustments` asks nothing, so a click there would have started a run.
+  const toldBefore = (await own()).length;
+  await dragInPanel('PR Review Summary', 'Reset adjustments');
+  await sleep(2000);
+  assert.equal((await own()).length, toldBefore, 'The end of a selection over a step sent that step\'s command.');
+  assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'The end of a selection over a step changed what the panel shows.');
   // With the keyboard, the panel's keys do the same: `a` opens the list, and the key at its foot applies.
   await click('Sessions (click one to open it)');
   key('a');

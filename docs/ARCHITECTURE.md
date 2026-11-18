@@ -927,7 +927,11 @@ decided several things in it:
   foot is a button pressed, not the keyboard asked for: the host gives a panel
   the keyboard on mouse down, so the step stops that event, and what is typed
   next still goes to the prompt (a key of the panel typed there would
-  otherwise act instead of being a letter). A panel that
+  otherwise act instead of being a letter). The release of the mouse button
+  that ends a selection of text is no click: text selected down the panel
+  can be let go over a step, a session's row or `close`, OpenTUI sends that
+  release to what lies there, marked as dragging, and none of them acts on
+  it. A panel that
   opened by itself and cannot hand the keyboard back closes again and shows a
   toast instead: in a terminal too narrow for two panes, where the host shows
   the panel alone, and while a dialog is open. Nor does it open by itself

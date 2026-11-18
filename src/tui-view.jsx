@@ -77,6 +77,13 @@ function markdownStyle(context) {
   return SyntaxStyle.fromStyles(styles, context.renderer.nativeScene)
 }
 
+/**
+ * Whether the release of a mouse button is a click: the left button, and not the end of a selection. A
+ * selection of text that is dragged across the panel ends where the button is released, and OpenTUI sends that
+ * release to whatever lies under the pointer, marked as dragging: it picks nothing.
+ */
+const clicked = (event) => event.button === MouseButton.LEFT && !event.isDragging
+
 function Row(props) {
   const [hover, setHover] = createSignal(false)
   const mark = () => (props.row.state === "running" ? props.colors.running : props.row.state === "failed" ? props.colors.failed : props.colors.done)
@@ -88,7 +95,7 @@ function Row(props) {
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={(event) => {
-        if (event.button !== MouseButton.LEFT) return
+        if (!clicked(event)) return
         event.stopPropagation()
         props.open(props.row.id)
       }}
@@ -133,7 +140,7 @@ function Button(props) {
         if (event.button === MouseButton.LEFT) event.stopPropagation()
       }}
       onMouseUp={(event) => {
-        if (event.button !== MouseButton.LEFT) return
+        if (!clicked(event)) return
         event.stopPropagation()
         props.run(props.item.id)
       }}
@@ -291,7 +298,7 @@ function Panel(props) {
             flexShrink={0}
             selectable={false}
             onMouseUp={(event) => {
-              if (event.button !== MouseButton.LEFT) return
+              if (!clicked(event)) return
               event.stopPropagation()
               close()
             }}

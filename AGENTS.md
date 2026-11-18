@@ -350,16 +350,21 @@ settings, backups and failure records. Never upload `.local/`.
   whatever answer arrives. An answer counts only for what the panel still
   offers (`still`): the same panel, drawn and the one the host shows in that
   session, with the same notice offering (`offer`, the notice's ID). A
-  dialog stays open for any time, so check it right before a command is
-  sent, say when nothing was sent, and never post a preview that was planned
-  again while its question was open.
+  dialog stays open for any time, so check it whenever a dialog answers,
+  before another one is opened, and right before a command is sent; say
+  when nothing was sent, and never post a preview that was planned again
+  while its question was open.
 - The steps are one row at the panel's foot, on the panel's own ground under
   a line, in place while the text scrolls: where reading ends. A label that
   ends in "…" asks before anything is sent, and one that does not is sent at
   once. A key is drawn in its colour only while it works, which is while the
   panel has the keyboard. A click on a step is a button pressed: stop its
   mouse-down event, since the host gives a panel the keyboard on it, and a
-  key of the panel would then act on what a person means to type. What
+  key of the panel would then act on what a person means to type. The
+  release that ends a selection of text is no click (`clicked` in
+  `tui-view.jsx`): OpenTUI sends it to whatever lies under the pointer,
+  marked as dragging, and a step, a session's row or `close` there must not
+  act on it. What
   applies a list of adjustments stays in view however long the list is (the
   foot of its dialog), and is also the list's last row, for a host that
   draws no such foot. The foot's action closes its dialog itself, since the

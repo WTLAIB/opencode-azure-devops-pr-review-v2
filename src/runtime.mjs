@@ -1167,7 +1167,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    *   write or someone's choice of the same words; the two cannot be told apart. Where it follows someone
    *   else's name, that name may have been replaced by AZPR's write, so it is written back: in doubt the name
    *   that is not AZPR's stays. (The one case this decides wrongly: a person who gives a name and then exactly
-   *   AZPR's words, both in that moment, keeps the name given first.)
+   *   the words AZPR wrote last, both in that moment, keeps the name given first.)
    * - What is written back is the last name reported, once the host has reported no name of this conversation
    *   for NAMING_SETTLE_MS, and never AZPR's own first words (`take`).
    * - The watch stays open for NAMING_MS after the host answered AZPR's last write, however promptly a report

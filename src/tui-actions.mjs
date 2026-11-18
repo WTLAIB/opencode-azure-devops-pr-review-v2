@@ -167,6 +167,9 @@ export function createActions(host) {
         ...(foot ? { actions: foot } : {}) })]);
       listed = false;
       if (choice === undefined || stopped) return;
+      // The list was open for any time. What it was opened for may be gone by now: nothing more is asked then,
+      // and nothing is applied.
+      if (!still()) return changed();
       if (choice === APPLY) { await dispatch(sessionID, command, still); return; }
       const finding = next.findings.find(item => item.id === choice);
       if (!finding) return;

@@ -221,7 +221,14 @@ test('an answer for what the panel no longer offers sends nothing, and says so',
   const post = host([options => { offered = false; return value(options, 'Yes'); }]);
   await post.actions.run('publish', offer(), SESSION, () => offered);
   assert.deepEqual([post.sent, post.toasts.map(toast => [toast.variant, toast.message])], [[], [['warning', CHANGED]]]);
-  // While the list of findings is open: the next step is not asked, and nothing is applied.
+  // While the list of findings is open: the finding that was picked is not asked about, the action has ended
+  // (another one can run), and nothing is applied.
+  offered = true;
+  const open = host([() => { offered = false; return 'F-1'; }, 'high', options => value(options, 'Apply')]);
+  await open.actions.run('adjust', offer(), SESSION, () => offered);
+  assert.deepEqual([open.titles(), open.sent, open.left(), open.toasts.map(toast => toast.message), open.actions.running],
+    [['Adjust the findings before posting'], [], 2, [CHANGED], false]);
+  // While the question about one finding is open: the list is not shown again, and nothing is applied.
   offered = true;
   const list = host(['F-1', () => { offered = false; return 'high'; }, options => value(options, 'Apply')]);
   await list.actions.run('adjust', offer(), SESSION, () => offered);

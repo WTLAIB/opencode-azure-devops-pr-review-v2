@@ -1217,8 +1217,9 @@ named after the PR when its first check or review starts
 own model run, which is what names a conversation otherwise. A conversation
 that has a name keeps it. OpenCode has no rename that applies only to an
 unnamed conversation, so AZPR follows the renames OpenCode reports: a name
-that you or OpenCode's model give in that very moment stands, and is written
-back where AZPR's own may have replaced it.
+that you or OpenCode's model give in that very moment is written back where
+AZPR's own may have replaced it. What that cannot rule out is said in
+[the architecture](docs/ARCHITECTURE.md#authorization-and-isolation).
 In the terminal UI you need not look for these sessions in the list: the
 [terminal panel](#terminal-panel) names those of the latest review and opens
 the one you click.
