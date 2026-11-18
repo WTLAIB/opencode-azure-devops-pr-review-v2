@@ -66,7 +66,9 @@ server part, `setup.mjs` was largely rewritten (the table of rows, the RPC,
 the access check, the token file, the loading of a first setup),
 `azure.mjs` gained `access` and an option of `request` (how often a read is
 repeated), `config.mjs` exports its single-value checks, `runtime.mjs`
-exports the reading of the CA file, and `session.mjs` leaves notices steered.
+exports the reading of the CA file (a regular file only, now) and says with
+the rule of its preflight whether the settings and the PAT file are still
+what it loaded, and `session.mjs` leaves notices steered.
 The terminal part gained `src/tui-setup.mjs`, and `tui-view.jsx` the token
 field and the wiring of the dialogs. `install.sh` copies one more file. No
 prompt and no setting changed.
@@ -183,10 +185,80 @@ loaded runtime: its answer says so, the private roles are registered and
 new. The native fixtures install that package. `package.json` has no
 dependency and no lifecycle script.
 
+### Reviews by a second model
+
+Thirteen reviews of the pull request followed (GPT-6 Astra at its highest
+reasoning effort through the Codex CLI, in a read-only sandbox on a clean
+clone), each of the tree as corrected after the one before. The reviewer ran
+the build check and the tests that write nothing, and reproduced what it
+found in memory; the tests that write files and the host fixtures ran here,
+on every corrected tree. The first twelve reviews reported 33 defects (5, 5,
+4, 3, 3, 2, 2, 3, 1, 2, 2 and 1), each confirmed against the code and
+corrected with a regression test; the thirteenth, of the code described
+above, found nothing to change. All 33 were in setup, which is new in this
+release, and none in the notices:
+
+- **Which token belongs to which organization, and which file holds it**
+  (11). Token and settings were not written under one lock. A token checked
+  for one organization could be saved under another, and a check could read
+  organization and token on either side of a save. A change of organization
+  overwrote the earlier organization's token file before the settings were
+  written. A first setup wrote the default PAT file, which several settings
+  files of one person share, then a file of a name that other settings
+  could already use, and two first setups for one organization chose one
+  file, of which the failing one deleted the other's token. A token file
+  that settings named without an organization was overwritten, and an
+  organization could be given to such settings without a token of its own.
+  Whether another organization needed its own token was decided by whether
+  the token file could be read at that moment. A token in the default file
+  was offered as saved although the save then failed.
+- **Loading a first setup, and what setup reports as loaded** (9). `status`
+  said ready where the runtime's preflight refuses new runs. Whether a save
+  made the settings usable was judged on an earlier read; a save that left
+  them unusable still made them the setup's own; what a save left was read
+  from the files afterwards, and whether the settings could be used and
+  which token went with them came from two looks at the token file (in the
+  dialogs' save and in `/pr-setup --replace`). After a load that failed, a
+  later save loaded whatever the settings file held by then. A load that
+  loaded nothing (settings switched off meanwhile) counted as a load. A
+  save through the dialogs and one through the options could overlap.
+- **Other plugins' commands** (5). The commands that say "setup required"
+  replaced a command that another plugin had registered under a review
+  command's name: after a failed load, between AZPR's look and the
+  runtime's, at startup, where the host could not list the commands, and
+  after a load that succeeded while they were being put back.
+- **What a save takes, reports and replaces** (4). One line of JSON passed
+  for a token file and was replaced. A token with quotes around it was
+  written and could then not be replaced. A settings write and a token
+  replacement that had taken place were reported as failed when a
+  temporary file could not be removed afterwards; in one case the token
+  file was then deleted.
+- **The terminal part** (3). The server part to talk to was chosen anew for
+  every call, so a session of another project that came on screen got the
+  save. A setup that was open when the part was unloaded went on to save. A
+  model that may be off could not be switched off when OpenCode offered no
+  model.
+- **The answers of the RPC** (1). `validate` returned a newly typed proxy
+  with its user name and password.
+
+Between the reviews, a reread of the same code by its author changed
+fourteen more things. The weightiest: a check without a token goes only
+through the saved proxy and with the saved CA file, since a proxy and a CA
+file of the caller's choosing could otherwise read the saved token; a CA
+file must be a regular file; the default PAT file is no saved token unless
+the settings name it; and a process loads only settings that a save of its
+own setup made usable, where the first version loaded whatever was usable
+after any save of its own. `tests/tui-view.test.mjs` came out of the second
+finding about the terminal part: it loads the compiled view with stand-ins
+for what the host provides, so that the wiring of the dialogs and the token
+field are tested without a terminal.
+
 Not covered: the dialogs against a live Azure DevOps organization (only the
 request they send was probed); a real model's answer to a prompt that arrives
 together with notices; terminal emulators other than tmux, and their way of
-pasting; other OpenCode versions.
+pasting; several settings files and several OpenCode processes on a real
+host (the unit tests run them against the real handlers and file system);
+other OpenCode versions.
 
 ## 0.4.2 after publication (2026-11-17)
 
