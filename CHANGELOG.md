@@ -74,9 +74,11 @@ Comments:
 - A run's receipt is written after its sessions were cleaned up, when another
   `/pr-comment` command may already have run. A preview that another command
   adjusted, planned again or posted in that moment was still shown in its
-  run's receipt as the preview to post. Such a run now says
-  `[AZPR <run>] Preview replaced before its receipt: …` in one line instead,
-  shows nothing of it, and the other command's receipt is the one to read.
+  run's receipt as the preview to post. Such a run now ends with a receipt of
+  a status of its own, `REPLACED`, which shows nothing of that preview,
+  offers nothing and does not make its review the current one; the other
+  command's receipt is the one to read. The terminal panel takes it for the
+  end of that run, not for what happened last.
 
 Conversations:
 

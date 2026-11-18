@@ -29,6 +29,9 @@ const RUN_STARTED = /^\[AZPR [a-f0-9]{8}\] STARTED \/pr-(?:review|quick|deep|com
 // A run's receipt: its status, then `;`, a line break or the end. Text follows STARTED and PROGRESS, and a run
 // also says things that are neither (`[AZPR <run>] Automatic preview skipped: …`).
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
+// The receipt of a comment run whose preview another command replaced before it could be shown: the run has
+// ended, but what it planned is not what happened last.
+const REPLACED = 'REPLACED';
 const REPORT_HEAD = '# AZPR ';
 // `/pr-comment [review] --show` answers at once with a review's saved preview, and names the review.
 const SAVED_PREVIEW = /^\[AZPR\] Saved preview of review ([a-f0-9]{8})\b/;
@@ -494,7 +497,9 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // What the panel is about is what happened last: a run that started, progressed or ended, or a saved preview
   // shown again, which names its review. What a run says besides (a review's note that no preview follows can
   // arrive after the next run started) changes nothing, and neither does an answer without a document.
-  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && encloses(notice.text)));
+  // A run that ended REPLACED has a receipt, so that a panel which shows it running sees it end, but that
+  // receipt is not what happened last: the command that replaced its preview is, wherever it was answered.
+  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE' && notice.status !== REPLACED) || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && encloses(notice.text)));
   const answered = subject?.kind === 'ANSWER' ? SAVED_PREVIEW.exec(subject.text)[1] : undefined;
   // What can be done next is said by the notice that happened last: the receipt of a preview, the saved preview
   // shown again, or the receipt of a review that no preview follows by itself. Once anything follows it (a run

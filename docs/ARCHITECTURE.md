@@ -517,13 +517,22 @@ gives way wherever it can tell, and also where it cannot:
 
 - It names a conversation only where the host reports renames
   (`session.renamed`), and follows them from before it reads the conversation.
-  A rename reported during that read stops the naming.
+  A rename reported during that read stops the naming; everything the host
+  has reported by then is looked at, also behind another conversation's
+  rename.
 - A report with other words than AZPR wrote is someone else's name. A report
   with AZPR's words is AZPR's write or someone's choice of the same words,
   which cannot be told apart. Where it follows someone else's name, that name
   may have been replaced by AZPR's write, so it is written back: in doubt, the
   name that is not AZPR's stays. A name given after AZPR's write stands by
   itself.
+- What is written back is the last name reported once the host has reported no
+  name of that conversation for a moment (50 ms, whatever it reports of other
+  conversations meanwhile), so that several renames in a row end with the last
+  one. AZPR's own first words are never written back as someone's name: after
+  AZPR wrote a name back, a report of those words is AZPR's first write
+  reported late, which the name written back follows, or, once that write-back
+  was reported, someone's own choice of them, which stands.
 - The watch stays open for three seconds after the host answered AZPR's last
   write, however promptly a report came, since an earlier name can be reported
   after it. It is never closed while a write is under way, which could still
@@ -988,12 +997,18 @@ review from its STARTED notice while its sessions are still cleaned up). A
 preview's receipt offers what is done with that preview. The command locks
 are released before a run's sessions are cleaned up, so another `/pr-comment`
 command may have adjusted the review, planned its preview again or posted it
-by the time the receipt is written (`commentState` in `runtime.mjs`: the plan
+by the time the receipt is written (`previewState` in `runtime.mjs`: the plan
 and the adjustments, each of which a command replaces with another object,
 and whether posting began). Such a preview is no longer what would be
-posted: the run then says `[AZPR <run>] Preview replaced before its receipt:
-…`, which is no receipt, encloses nothing and offers nothing, so the panel
-goes on showing the other command's preview and offer.
+posted: the run then ends with a receipt of a status of its own,
+`[AZPR <run>] REPLACED; source review=<id>`, which encloses nothing and
+offers nothing. It does not make its review the conversation's current one,
+since it says nothing a person acts on. The panel's model takes it for the end
+of that run, so that a panel which showed the run as running sees it end, but
+not for what happened last: where the other command was answered in the same
+conversation, the panel goes on showing that command's preview and offer, and
+where it was answered elsewhere (typed in the review's own session), the
+review's report stays in view.
 
 The panel's model (`nextOf`) checks every value, since commands are made of
 them: the review and each finding by the form of their IDs, each level by

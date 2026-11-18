@@ -104,6 +104,9 @@ const scoped = (operation, signal) => signal ? bounded(operation, signal) : oper
 // answered its last write, how many names it writes at most (its own, and names it writes back), how long it
 // still watches once the plugin is being unloaded, and how long the unloading waits for all of that.
 const NAMING_MS = 3000, NAMING_WRITES = 4, NAMING_FINISH_MS = 250, NAMING_UNLOAD_MS = 5000;
+// Before a name is written back, how long the host must have reported no name of that conversation: the name
+// written is the last one.
+const NAMING_SETTLE_MS = 50;
 async function deadline(operation, milliseconds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('Timed out.')), milliseconds);
@@ -1158,12 +1161,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * in between, and no plugin can rule that out. What AZPR does instead: it names a conversation only where
    * the host reports renames (`session.renamed`), follows them from before its read, and lets a name that
    * anyone else gave stand wherever it can tell, and also where it cannot:
-   * - A rename reported while the conversation is read stops the naming.
+   * - A rename reported while the conversation is read stops the naming: everything the feed holds by then
+   *   is looked at.
    * - A report with other words than AZPR wrote is someone else's name. A report with AZPR's words is AZPR's
    *   write or someone's choice of the same words; the two cannot be told apart. Where it follows someone
    *   else's name, that name may have been replaced by AZPR's write, so it is written back: in doubt the name
    *   that is not AZPR's stays. (The one case this decides wrongly: a person who gives a name and then exactly
    *   AZPR's words, both in that moment, keeps the name given first.)
+   * - What is written back is the last name reported, once the host has reported no name of this conversation
+   *   for NAMING_SETTLE_MS, and never AZPR's own first words (`take`).
    * - The watch stays open for NAMING_MS after the host answered AZPR's last write, however promptly a report
    *   came, since an earlier name can be reported after it; and it is never closed while a write is under way,
    *   which could still replace a name. It writes NAMING_WRITES times at most.
@@ -1178,7 +1184,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const sessionID = run.origin, own = conversationTitle(target);
     if (namings.has(sessionID)) return;
     const ENDED = Object.freeze({ done: true });
-    let feed, timer, stop, outcome = 'kept', writing = false, finishing = false;
+    let feed, timer, stop, outcome = 'kept', busy = false, finishing = false;
     const stopped = new Promise(resolve => { stop = resolve; });
     const watch = {};
     const close = () => {
@@ -1189,10 +1195,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       feed = undefined;
       if (ended) void Promise.resolve().then(() => ended.return?.()).catch(() => {});
     };
-    // The watch closes this long after now, unless a write begins before that.
+    // The watch closes this long after now, unless it gets busy before that: with a write, or with the moment
+    // it waits before one.
     const arm = () => {
       clearTimeout(timer);
-      if (!feed) return;
+      if (!feed || busy) return;
       timer = setTimeout(close, finishing ? NAMING_FINISH_MS : options.namingMs ?? NAMING_MS);
       timer.unref?.();
     };
@@ -1205,8 +1212,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // One write of a name; whether the host took it. The watch is not closed while it is under way.
     const write = async title => {
       clearTimeout(timer);
-      writing = true;
-      try { await context.session.update({ sessionID, title }); return true; } catch { return false; } finally { writing = false; arm(); }
+      busy = true;
+      try { await context.session.update({ sessionID, title }); return true; } catch { return false; } finally { busy = false; arm(); }
     };
     // On record before anything can end it, so that a watch that ends at once leaves none behind.
     namings.set(sessionID, watch);
@@ -1215,7 +1222,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // has reported by a moment after it is still acted on, so that a name it replaced is written back.
     watch.finish = () => {
       finishing = true;
-      if (!writing) arm();
+      arm();
       return watch.done;
     };
     watch.done = (async () => {
@@ -1226,31 +1233,82 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         let pending = read();
         const conversation = recordOf(await Promise.race([context.session.get({ sessionID }), stopped.then(() => undefined)]));
         if (!feed || !conversation || conversation.parentID || !isUntitledSession(conversation)) return;
-        // What the feed reported while the conversation was read: it was named meanwhile.
+        // What the feed reported while the conversation was read: it was named meanwhile. Everything the feed
+        // holds by now is looked at, also behind another conversation's event: a read of the feed takes some
+        // turns of its own, so each one is given until the event loop comes round, not just until this turn ends.
         const NOTHING = Symbol('nothing has arrived');
         for (;;) {
-          const arrived = await Promise.race([pending, Promise.resolve(NOTHING)]);
+          let round;
+          const arrived = await Promise.race([pending, stopped, new Promise(resolve => { round = setImmediate(resolve, NOTHING); })]);
+          clearImmediate(round);
           if (arrived === NOTHING) break;
           if (arrived.done || !feed) return;
           pending = read();
           if (renamed(arrived.value) !== undefined) return;
         }
         if (disposed) return;
-        // `mine` is what AZPR wrote last; `theirs` is the last name with other words that the feed reported
-        // since. A report with the words of `mine` after `theirs` may be the write that replaced it.
-        let mine = own, theirs, writes = 1;
+        // `mine` is what AZPR wrote last, and `awaited` whether the report of that write may still be to come.
+        // `theirs` is the last name with words of someone's own that the feed reported since, and `due` whether
+        // AZPR's words were reported after it, so that it may have been replaced.
+        let mine = own, awaited = true, theirs, due = false, writes = 1, named = false, back = false;
+        const take = title => {
+          if (title === mine) {
+            // AZPR's last write, or someone's choice of the same words.
+            awaited = false;
+            if (mine === own) named = true;
+            due = theirs !== undefined;
+          } else if (title === own) {
+            // AZPR's first words, reported after AZPR wrote a name back. While that write's report is still to
+            // come, this may be AZPR's first write, reported late: the name written back lands after it either
+            // way. Afterwards it can only be someone's choice of these words, which stands.
+            if (!awaited) { theirs = undefined; due = false; }
+          } else {
+            // Someone else's name: it is in place unless AZPR's words are reported after it.
+            theirs = title;
+            due = false;
+          }
+        };
         outcome = await write(mine) ? 'unconfirmed' : 'failed';
+        const QUIET = Symbol('the host reported nothing more');
         for (;;) {
           const next = await Promise.race([pending, stopped]);
           if (next.done || !feed) return;
           pending = read();
           const title = renamed(next.value);
-          if (title === undefined) continue;
-          if (title !== mine) { theirs = title; continue; }
-          if (theirs === undefined) { if (outcome === 'unconfirmed' || outcome === 'failed') outcome = mine === own ? 'named' : 'restored'; continue; }
+          if (title !== undefined) take(title);
+          if (named && !back) outcome = 'named';
+          if (back && !awaited) outcome = 'restored';
+          if (!due) continue;
+          // A name is to be written back. What the host reports of this conversation within a moment is taken
+          // first, so that the name written is the last one reported; the moment begins again with each such
+          // report, and with nothing else (another conversation's renames do not put the write off). The watch
+          // is not closed meanwhile.
+          clearTimeout(timer);
+          busy = true;
+          let quiet;
+          const silence = () => new Promise(resolve => { quiet = setTimeout(resolve, NAMING_SETTLE_MS, QUIET); });
+          try {
+            let hush = silence();
+            for (;;) {
+              const more = await Promise.race([pending, stopped, hush]);
+              if (more === QUIET) break;
+              if (more.done || !feed) return;
+              pending = read();
+              const other = renamed(more.value);
+              if (other === undefined) continue;
+              take(other);
+              clearTimeout(quiet);
+              hush = silence();
+            }
+          } finally { clearTimeout(quiet); busy = false; }
+          // A name reported after AZPR's words is in place by itself.
+          if (!due) { arm(); continue; }
           if (writes >= NAMING_WRITES) return;
           mine = theirs;
           theirs = undefined;
+          due = false;
+          awaited = true;
+          back = true;
           writes++;
           outcome = await write(mine) ? 'unconfirmed' : 'failed';
         }
@@ -1614,20 +1672,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const obsolete = scheduleCleanup(run, review);
     await persistReview(review);
     await finishCleanup(run, review, obsolete);
+    // The command locks were released before the cleanup, so another command may have adjusted this review,
+    // planned its preview again or posted it since. What this run planned is then not what a person would post
+    // or adjust now: it is neither enclosed nor offered, and the run ends with a receipt of a status of its own,
+    // REPLACED, which the terminal panel takes for the end of this run but not for what happened last. The
+    // other command's receipt says what is next; it may have gone to another session of the review.
+    const now = previewState(review);
+    const replaced = status === 'PREVIEW' && shown && (now.plan !== shown.plan || now.adjustments !== shown.adjustments || now.posting !== shown.posting);
     // The review whose receipt arrives last is the current one, as a preview's next steps say; this holds for
     // the automatic step too, which no command selected. The cleanup may have waited for OpenCode while a
-    // person used another review here, so the choice is made now, next to the receipt.
-    review.usedAt = stamp();
+    // person used another review here, so the choice is made now, next to the receipt. A run whose preview was
+    // replaced says nothing a person acts on: it leaves the choice as it is.
+    if (!replaced) review.usedAt = stamp();
     await persistReview(review);
     // What an earlier cleanup could not delete is tried again.
     void releaseExpired();
-    // The command locks were released before the cleanup, so another command may have adjusted this review,
-    // planned its preview again or posted it since. What this run planned is then not what a person would post
-    // or adjust now: it is neither enclosed nor offered, and the run says so in a notice that is no receipt, so
-    // that the terminal panel goes on showing the other command's. That command's receipt says what is next.
-    const now = previewState(review);
-    if (status === 'PREVIEW' && shown && (now.plan !== shown.plan || now.adjustments !== shown.adjustments || now.posting !== shown.posting)) {
-      output.text = `[AZPR ${run.id}] Preview replaced before its receipt: while this run ended, another /pr-comment command changed or posted the preview of ${describeReview(review)}, so what this run planned is not shown. The receipt of that command says what can be done next.\n${renderDiagnosticNotices(run, settings)}All grants are revoked.`;
+    if (replaced) {
+      output.text = `[AZPR ${run.id}] REPLACED; source review=${review.id}\nActed on ${describeReview(review)}.\nThis run's preview was replaced before its receipt: while the run ended, another /pr-comment command changed or posted the preview of this review, so what this run planned is not shown. The receipt of that command says what can be done next, and /pr-comment ${review.id} --show shows the saved preview.\n${renderDiagnosticNotices(run, settings)}All grants are revoked.`;
       return;
     }
     const safe = enclose('comment', report);

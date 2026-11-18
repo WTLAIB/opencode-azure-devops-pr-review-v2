@@ -128,14 +128,18 @@ settings, backups and failure records. Never upload `.local/`.
   from before the read. A rename reported during the read stops the naming.
   A report with other words than AZPR wrote is someone else's name; one with
   AZPR's words that follows it may be the write that replaced it, so that
-  name is written back: in doubt, the name that is not AZPR's stays. Keep
+  name is written back: in doubt, the name that is not AZPR's stays. Write
+  back the last name reported, after the host has reported no name of that
+  conversation for a moment, and never AZPR's own words: once AZPR has
+  written a name back, a report of its first words is that first write
+  reported late, or someone's choice, and neither is a name to restore. Keep
   the watch open for a while after the host answered AZPR's last write,
-  never close it while a write is under way, bound the number of writes,
-  let one watch name a conversation at a time, and let unloading end what
-  is under way first. No read of the feed may be left without a handler: a
-  feed that fails has ended. A host without that feed names nothing, and a
-  name that is not AZPR's own is never recorded. Say this limit where the
-  naming is described; never write "never replaced".
+  never close it while a write is under way or due, bound the number of
+  writes, let one watch name a conversation at a time, and let unloading end
+  what is under way first. No read of the feed may be left without a
+  handler: a feed that fails has ended. A host without that feed names
+  nothing, and a name that is not AZPR's own is never recorded. Say this
+  limit where the naming is described; never write "never replaced".
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -313,15 +317,17 @@ settings, backups and failure records. Never upload `.local/`.
 - An offer belongs to the document its notice encloses: it is true of the
   review as that document was rendered. Read both before anything is
   awaited, or check first that the review's preview is still the one that
-  was rendered (`commentState` in `runtime.mjs`: the plan, the adjustments,
+  was rendered (`previewState` in `runtime.mjs`: the plan, the adjustments,
   whether posting began). Under a report a preview is planned, never posted,
   and only while nothing has acted on that review since; a preview offers
   what is done with that preview. The command locks are released before a
   run's sessions are cleaned up: a preview that another command adjusted,
   planned again or posted before its receipt is neither enclosed nor
-  offered, and its run says so in a notice that is no receipt, so that the
-  panel goes on showing the other command's. `buildPanel` holds an offer to
-  its kind of document as well.
+  offered. Its run ends with a receipt of a status of its own (`REPLACED`),
+  which does not make its review the current one, and which the panel takes
+  for the end of that run but not for what happened last: the other
+  command's receipt is, wherever it was answered. `buildPanel` holds an
+  offer to its kind of document as well.
 - A step's command names its review and, with `--seen`, what that review's
   comments were when the step was offered (`commentToken` in `comments.mjs`:
   the saved preview and the adjustments), so that what is on screen is what

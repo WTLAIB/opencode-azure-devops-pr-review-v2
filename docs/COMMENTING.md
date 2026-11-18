@@ -56,10 +56,11 @@ steps. A command you type names no preview and acts on the review as it is.
 Commands for one pull request run one after another, but a run's receipt
 arrives after its sessions were cleaned up, when the next command may already
 have run. A preview that another `/pr-comment` command adjusted, planned again
-or posted in that moment is no longer what would be posted: its run says so
-in one line (`[AZPR <run>] Preview replaced before its receipt: …`) instead of
-a receipt, shows nothing of it and offers nothing, and the other command's
-receipt is the one to read.
+or posted in that moment is no longer what would be posted: its run ends with
+the status `REPLACED` (`[AZPR <run>] REPLACED; source review=<id>`), shows
+nothing of it, offers nothing and leaves the conversation's current review as
+it is. The other command's receipt is the one to read, in the session it was
+typed in; `/pr-comment --show` shows the saved preview anywhere.
 
 Only reviews started in the same conversation are accepted; commands from one
 of the review's own sessions route to that conversation. Reviews are
