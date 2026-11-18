@@ -1,6 +1,6 @@
 // Offline stand-in for the Azure DevOps Services REST API (api-version 7.1):
-// pull request, iterations, iteration changes, commits, threads and items
-// (including a repository zip). The same
+// pull request, iterations, iteration changes, commits, threads, items
+// (including a repository zip) and the organization's pull request list. The same
 // handler serves in-process tests (as a fetch function) and exact-host
 // fixtures (as a loopback HTTP server).
 import { Buffer } from 'node:buffer';
@@ -58,6 +58,8 @@ export function fakeAzure(options = {}) {
   const moved = () => { if (state.snapshotTaken && state.afterVersions) { Object.assign(state, state.afterVersions); state.afterVersions = null; } };
 
   const routes = [
+    // Setup's access check: at most one pull request of the organization, whatever its project.
+    ['access', 'GET', /^\/([^/]+)\/_apis\/git\/pullrequests$/i, () => json(200, { value: [pr()], count: 1 })],
     ['pr', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)$/i, () => { moved(); return json(200, pr()); }],
     ['iterations', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/iterations$/i, () => { moved(); return json(200, { value: iterations(), count: state.iteration }); }],
     ['changes', 'GET', /^\/([^/]+)\/([^/]+)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/iterations\/(\d+)\/changes$/i, request => {

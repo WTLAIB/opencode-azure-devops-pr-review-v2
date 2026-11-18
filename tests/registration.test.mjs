@@ -57,7 +57,7 @@ async function fixture(t, existingCommands = []) {
       interrupt: async () => ({ interrupted: false }),
       synthetic: async input => {
         calls.reports.push(input.text);
-        return { id: 'queued', sessionID: input.sessionID, type: 'synthetic', payload: { text: input.text }, delivery: 'queue' };
+        return { id: 'queued', sessionID: input.sessionID, type: 'synthetic', payload: { text: input.text }, delivery: input.delivery };
       },
     },
     tool: { hook: async () => registration(), transform: tools.transform, list: tools.list },

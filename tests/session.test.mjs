@@ -357,10 +357,13 @@ test('V2 local cancellation releases a pending wait without adding timers or ano
   assert.deepEqual(calls.map(call => call.name), ['prompt', 'wait']);
 });
 
-test('V2 report delivery queues the exact report without starting a model call', async () => {
+test('V2 report delivery leaves the exact report in the inbox, steered, without starting a model call', async () => {
   const { context, calls } = host();
   assert.deepEqual(await appendReport(context, { sessionID: 'ses_origin', text: 'Final report' }), { queued: true, id: 'msg_report' });
-  assert.deepEqual(calls, [{ name: 'synthetic', args: [{ sessionID: 'ses_origin', text: 'Final report', description: 'Final report', delivery: 'queue', resume: false }] }]);
+  assert.deepEqual(calls, [{ name: 'synthetic', args: [{ sessionID: 'ses_origin', text: 'Final report', description: 'Final report', delivery: 'steer', resume: false }] }]);
+  // A host that stores the notice as a queued item would give it a turn of the conversation's model: refuse it.
+  const queueing = host({ synthetic: async value => ({ id: 'msg_report', sessionID: value.sessionID, type: 'synthetic', payload: { text: value.text }, delivery: 'queue' }) });
+  await assert.rejects(appendReport(queueing.context, { sessionID: 'ses_origin', text: 'Final report' }), /did not acknowledge the report/);
 });
 
 const continuationText = 'The previous response was interrupted. Continue from where you left off without repeating completed content.';

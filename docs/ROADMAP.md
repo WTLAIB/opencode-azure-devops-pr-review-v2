@@ -185,9 +185,33 @@ includes it, the package can export `src/tui-view.jsx` itself and drop the
 compiled file, the build script and the development dependency. Until then
 the compiled file is the only form that loads from an npm or Git package.
 
-The panel is for OpenCode's terminal UI. The desktop app has a plugin entry of
-its own, which OpenCode still marks as experimental; a panel there waits for
-that interface to settle.
+The panel and the setup dialogs are for OpenCode's terminal UI. The desktop
+app has a plugin entry of its own, which OpenCode still marks as experimental;
+a panel and dialogs there wait for that interface to settle. Until then the
+desktop app shows AZPR's notices as text and takes `/pr-setup` with options.
+
+### Settings changes without a restart
+
+A first setup is loaded at once, because nothing was loaded before it. A
+change to settings that are in use still takes effect when the OpenCode
+service restarts, and `/pr-setup` says so where the change is made. Loading
+such a change in place would give up a property of today's rule: settings are
+read once, so a settings file that something other than its owner edited
+(an agent with file tools, say) changes nothing until a person restarts the
+service. A reload would need its own answer to that, for example only for
+changes that came through setup, and would have to wait for running reviews.
+It is not planned until that restart proves to be in the way.
+
+### The token in OpenCode's own credential store
+
+OpenCode lets a plugin register a service for `/connect`, which then asks for
+the key and keeps it. AZPR does not use it for the PAT. The token would live
+in OpenCode's database beside the model keys, which `opencode auth export`
+prints and every copy of the database carries, instead of alone in a file
+that names its one purpose; setups that provision that file would have two
+places to look; and `/connect` continues into a model choice after it. The
+dialogs of `/pr-setup` give the same ease in the terminal UI and write the
+same file as before.
 
 ### Default whole-run timeout and per-stage step cap
 

@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.4.2, the move to OpenCode 2.3.0, a run of Martian's public code review
+0.4.3, the move to OpenCode 2.3.0, a run of Martian's public code review
 benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
 of 0.3.7 run on ReviewBench's test set. Host
@@ -15,15 +15,16 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  nine runs on the real OpenCode 2.3.0 host with isolated profiles and fake
+  eleven runs on the real OpenCode 2.3.0 host with isolated profiles and fake
   model and Azure DevOps services: fresh, replacement and native installation
   (including an authenticating proxy, a custom CA certificate, a foreign MCP
   server behind CodeMode and an image model), a 120-file
   review in shards with a context-overflow split and idempotent publication,
   a refused background summary followed by a permanent failure, the last
   two once more with debug off, where a run deletes its sessions when it ends,
-  and the terminal panel in the real terminal UI, installed from source and
-  as OpenCode's plugin manager installs the package.
+  and, in the real terminal UI, the review panel and a setup from a profile
+  without settings, each installed from source and as OpenCode's plugin
+  manager installs the package.
 - **Live, with real models on Azure DevOps Services.** Reviews, comment
   previews and publication on three test PRs with 1, 35 and 316 changed
   files. On OpenCode 2.1.4 with gpt-6-luna, all six quick and review runs
@@ -49,6 +50,215 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.3 release candidate acceptance (2026-11-18)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, OpenCode 2.3.0 and
+tmux 3.2a, with isolated OpenCode profiles and the fake model and Azure DevOps
+services. One read-only probe, described below as live, sent a few `GET`
+requests to the maintainer's Azure DevOps test organization; everything else
+used neither a real model nor Azure DevOps. Nothing was posted.
+
+0.4.3 brings setup into OpenCode's terminal UI and changes how AZPR leaves
+its notices in a session's inbox (see [architecture](ARCHITECTURE.md#setup)
+and [commands and workflows](ARCHITECTURE.md#commands-and-workflows)). Of the
+server part, `setup.mjs` was largely rewritten (the table of rows, the RPC,
+the access check, the token file, the loading of a first setup),
+`azure.mjs` gained `access` and an option of `request` (how often a read is
+repeated), `config.mjs` exports its single-value checks, `runtime.mjs`
+exports the reading of the CA file (a regular file only, now) and says with
+the rule of its preflight whether the settings and the PAT file are still
+what it loaded, and `session.mjs` leaves notices steered.
+The terminal part gained `src/tui-setup.mjs`, and `tui-view.jsx` the token
+field and the wiring of the dialogs. `install.sh` copies one more file. No
+prompt and no setting changed.
+
+### Setup in the terminal UI
+
+**What the terminal UI offers a plugin.** Read from OpenCode 2.3.0's source
+and then used on the real host: the TUI plugin API has the host's own dialogs
+(a searchable list with groups, a one-line text prompt, a confirmation, an
+alert), a plugin's terminal part can call RPC methods its server part
+registered, and a plugin's own dialog can take keys and pastes itself. The
+host's text prompt shows what is typed, and OpenTUI 0.8.4's text fields have
+no hidden mode: OpenCode's own `/connect` shows a pasted API key. A token
+field that draws only bullets and a count is therefore AZPR's own.
+
+**The request that checks a token, live.** `GET
+https://dev.azure.com/{organization}/_apis/git/pullrequests?$top=1&api-version=7.1`
+with a PAT that has only Code (Read) and Pull Request Threads (Read & write):
+
+| Sent | Answer |
+| --- | --- |
+| The valid PAT | 200, JSON with a list of at most one pull request (2.6 KB) |
+| A token Azure DevOps does not know | 401, no content, with Azure DevOps's own response header |
+| The same, for an organization that does not exist | 404, `text/plain`, with that header |
+
+`_apis/git/repositories` answered the same way but ignores `$top`, so its
+answer grows with the organization. `_apis/connectionData`, which names the
+token's owner, answered `api-version=7.1` with 400
+(`VssInvalidPreviewVersionException`): it exists only as a preview version,
+so AZPR does not use it and names no account. The valid PAT was sent only to
+its own organization.
+
+**Offline.** `npm run check` and 612 tests (554 before this work). New:
+
+| Tests | What they establish |
+| --- | --- |
+| 21 | What the dialogs ask and in which order (`tests/tui-setup.test.mjs`), with scripted answers and a stand-in for the server part: organization, proxy, token, model, one save; the CA file only after a proxy; leaving at any step saves nothing; a refused answer is asked again with its reason and the text typed; a refused token and an unknown organization; an unreachable Azure DevOps offers the proxy or the CA file and checks the same token again; unchecked saving, and a saved token kept unchecked; the settings list, its values and the restart note; the confirmation of posting without a preview, with the safe answer first; models with variants, and a model that may be off switched off also where OpenCode offers none; a token saved with the organization it was checked for, and another organization asking for a token of its own, both saved together or neither, with the place of the earlier token shown; one server part for a setup from its first question to its save; a setup that is stopped ending at its next step without saving; one setup at a time; the hint once. No dialog text and no toast holds a token. |
+| 28 | The server part (`tests/setup.test.mjs`): the dialogs against the real handlers, ending in an owner-only token file named for its organization, complete owner-only settings and a loaded runtime; the access check for each kind of refusal, each one request, and nothing sent for an answer that is not text or for a token with quotes or other signs in it, which setup could not replace later; the saved token sent only to its organization, through the saved proxy and with the saved CA file; answers checked without being saved, a CA file that is no regular file refused, and a proxy's user name and password in no answer, the saved one's or a newly typed one's; one setting saved at a time and the restart state, and a value that is chosen again writing nothing; the restart state following the runtime's own rule (another token in the PAT file, any other settings text, defaults another load wrote in), whoever made the change; the token file these settings name for their organization replaced in one step, and refused for a symbolic link, a directory others can write to and a file that holds something other than one token (a private key, a line of JSON, a KEY=VALUE pair, a path, a short word); the token and the settings written under one lock, so that two setups saving at the same moment leave no organization with the other's token; every other token in a file that did not exist: two settings files that share AZPR's directory, also for one organization, a name another settings file already uses, a token file named without an organization, the default PAT file of setup with options, and another organization, with the settings switching organization and token in one write, the earlier pair intact when that write fails, a failed save taking away only the file it made, and settings and a token that are in place staying reported as written when the cleanup after them fails; a token saved only for the organization it names, and an organization asked for a token of its own also while the earlier token's file cannot be read, and where the settings named a token but no organization; the default PAT file neither taken for a saved token nor written unless the settings name it; a settings file removed while AZPR runs; a settings file setup cannot change; the options of `/pr-setup`; a process that found no settings loading none when another process saves them, also after a save of its own, and settings or a token that took the place of the ones this setup saved (after a load that failed, in the moment its save ended, or in the moment before the load), settings its save left unusable (also where the token arrives right after the one look at its file, in the dialogs' save and in `/pr-setup --replace`), and settings switched off during the load, all left for the restart; one save at a time through the RPC and the options, until the load that follows it has ended; a first setup that cannot be loaded, a host call that fails on the way, a command name another plugin took (while AZPR starts, before a load, or at the last moment) left to that plugin, no command registered where the host cannot say which names are taken, a `/pr-setup` during a load putting nothing in its way, the commands that say "setup required" never put back over a runtime that was loaded meanwhile, and a save that ends after the plugin was unloaded. |
+| 8 | The view itself (`tests/tui-view.test.mjs`, which loads the compiled `src/tui.js` with stand-ins for what the host provides). The wiring of the dialogs: the dialogs of one setup talk to the server part of the project whose session was on screen when they opened, also when a session of another project comes on screen before the save; they open only for the marked notice in the session on screen; a setup that is open when the part is unloaded saves nothing afterwards; a loaded first setup makes the terminal UI read that project's commands again; the hint's timers end with the part; and on a host without the dialogs or the RPC the part does nothing. The token field: typed characters, a paste with blanks and line breaks, keys that are no characters, backspace and ctrl+u; nothing it shows holds four characters of what was entered in a row, only bullets and a count; Enter hands the value on once; at most 2,048 characters are kept; an empty value is given only where a saved token may be kept; and the field forgets the value when it is unmounted. |
+| 1 | `access` in the REST client: its request, one attempt also for transient failures, and the kind of each refusal, including the answers the live probe saw. |
+
+**In the real terminal UI** (`tests/host-v2-tui-setup.mjs`, new). OpenCode's
+TUI runs in a detached tmux session of 150 by 44 cells, and the fixture reads
+its screen and types and pastes into it. AZPR starts without usable settings:
+from source the installer's placeholder file, as the package no settings
+file at all. Both installations passed every step:
+
+| Step | Seen on the screen and on disk |
+| --- | --- |
+| The TUI starts | It says once that AZPR is not set up and names `/pr-setup`; every review command is described as "setup required". |
+| `/pr-setup` | The organization dialog opens. An answer that names no organization is refused in the dialog; the URL of a pull request is taken. |
+| Proxy | Asked next, with the note that Enter skips it; skipped. |
+| Token | The dialog names where to create one for this organization. A pasted token appears as 16 bullets and its length. A token the fake Azure DevOps refuses is reported there and asked for again. |
+| Azure DevOps unreachable | With every connection dropped, the dialogs report that Azure DevOps could not be reached, offer the proxy, and after it check the same token again, which is accepted. |
+| Model | The host's models under their provider's name; typing filters them; the model's variants follow, with its own default first. |
+| Saving | A summary, then the result with the next commands. The token file, made for it and named for the organization (`pat-fixture` in AZPR's directory), holds the token alone with mode 600 in a directory of mode 700; the settings file is complete, mode 600, and names it. Azure DevOps was asked twice: for the refused token and for the accepted one. |
+| No restart | The review commands are the real ones, in the server's list and in the TUI's suggestions, and `/pr-check` answers READY. |
+| `/pr-setup` again | The settings as a list with their values; typing filters them. The output language is changed: it is saved, a toast and the list's title name the restart, and `status` says `restart`. |
+| After a restart | The change is in use, `/pr-check` is READY, and the TUI gives no hint. |
+
+Setup asked no model. Neither token is on any screen the fixture read, in the
+host's log, or in the conversation's inbox or messages; of everything the
+fixture's OpenCode wrote (configuration, data, cache, state and home), only
+the token file holds the accepted token, and nothing holds the refused one.
+
+Two things about the host surfaced while this fixture was written. A change
+of commands that a plugin makes after it was loaded is announced without a
+location, and the terminal UI then keeps the suggestions it has: the server
+part now publishes an event of its own, and the terminal part reads the
+commands again. And the runtime's `fetch` tries a dropped connection again by
+itself, so a fixture must drop every connection to be unreachable.
+
+### Notices and the conversation's own model
+
+**How OpenCode 2.3.0 hands waiting notices to a conversation's model.**
+Measured on the real host without any plugin, with a fake model that records
+each request: synthetic notices admitted through the HTTP API with
+`resume: false`, queued or steered, then the conversation's model made to
+run.
+
+| Situation | Queued notices | Steered notices |
+| --- | --- | --- |
+| Idle conversation, 3 notices, before any prompt | 0 requests | 0 requests |
+| The same, then one prompt | 4 requests: the prompt, then one per notice | 1 request: the 3 notices and the prompt together |
+| The same, the prompt itself sent queued | 4 requests | 2 requests: the notices, then the prompt |
+| 2 notices arrive while the model answers (one step) | 2 further requests after the answer, without a prompt | 1 further request |
+| 2 notices arrive while the model is between tool calls | 2 further requests after the turn | none: both notices are in the turn's next request |
+| Idle conversation, 2 notices, interrupted with `resume: true` | 0 requests; the notices wait | 0 requests; the notices wait |
+| Idle conversation, 2 steered notices, the host restarted | — | 0 requests after the restart; 1 with the next prompt |
+
+So a notice starts no model response only in an idle conversation, queued or
+steered; that was already so before 0.4.3. What the change removes is the
+request per notice. The terminal panel's fixture now requires it: after a
+review, a comment run and the saved preview shown again, 16 notices wait in
+the conversation's inbox; the fixture's one prompt then makes exactly 1
+request of the conversation's model (17 with 0.4.2), and the inbox is empty
+afterwards. The panel reads the same notices as before, from the inbox and
+from the delivered messages.
+
+### The host fixtures
+
+The eleven host fixture runs passed on one tree (the hash of the code and
+tests was the same before and after), the nine that existed with the request
+counts of 0.4.2: fresh 110 model and 187 Azure DevOps requests, replace 92
+and 157, native 110 and 194, comment scale 34 and 75, and with debug off 34
+and 71, background compaction 8 and 8, and the terminal panel 15 model
+requests by AZPR's sessions and 31 Azure DevOps requests, from source and as
+the package. The two new setup runs made no model request and 16 Azure DevOps
+requests each. In the native smoke run `/pr-setup` with options now ends in a
+loaded runtime: its answer says so, the private roles are registered and
+`/pr-review --help` answers, before the host is restarted.
+
+`npm pack --dry-run` lists 37 files (36 for 0.4.2); `src/tui-setup.mjs` is
+new. The native fixtures install that package. `package.json` has no
+dependency and no lifecycle script.
+
+### Reviews by a second model
+
+Thirteen reviews of the pull request followed (GPT-6 Astra at its highest
+reasoning effort through the Codex CLI, in a read-only sandbox on a clean
+clone), each of the tree as corrected after the one before. The reviewer ran
+the build check and the tests that write nothing, and reproduced what it
+found in memory; the tests that write files and the host fixtures ran here,
+on every corrected tree. The first twelve reviews reported 33 defects (5, 5,
+4, 3, 3, 2, 2, 3, 1, 2, 2 and 1), each confirmed against the code and
+corrected with a regression test; the thirteenth, of the code described
+above, found nothing to change. All 33 were in setup, which is new in this
+release, and none in the notices:
+
+- **Which token belongs to which organization, and which file holds it**
+  (11). Token and settings were not written under one lock. A token checked
+  for one organization could be saved under another, and a check could read
+  organization and token on either side of a save. A change of organization
+  overwrote the earlier organization's token file before the settings were
+  written. A first setup wrote the default PAT file, which several settings
+  files of one person share, then a file of a name that other settings
+  could already use, and two first setups for one organization chose one
+  file, of which the failing one deleted the other's token. A token file
+  that settings named without an organization was overwritten, and an
+  organization could be given to such settings without a token of its own.
+  Whether another organization needed its own token was decided by whether
+  the token file could be read at that moment. A token in the default file
+  was offered as saved although the save then failed.
+- **Loading a first setup, and what setup reports as loaded** (9). `status`
+  said ready where the runtime's preflight refuses new runs. Whether a save
+  made the settings usable was judged on an earlier read; a save that left
+  them unusable still made them the setup's own; what a save left was read
+  from the files afterwards, and whether the settings could be used and
+  which token went with them came from two looks at the token file (in the
+  dialogs' save and in `/pr-setup --replace`). After a load that failed, a
+  later save loaded whatever the settings file held by then. A load that
+  loaded nothing (settings switched off meanwhile) counted as a load. A
+  save through the dialogs and one through the options could overlap.
+- **Other plugins' commands** (5). The commands that say "setup required"
+  replaced a command that another plugin had registered under a review
+  command's name: after a failed load, between AZPR's look and the
+  runtime's, at startup, where the host could not list the commands, and
+  after a load that succeeded while they were being put back.
+- **What a save takes, reports and replaces** (4). One line of JSON passed
+  for a token file and was replaced. A token with quotes around it was
+  written and could then not be replaced. A settings write and a token
+  replacement that had taken place were reported as failed when a
+  temporary file could not be removed afterwards; in one case the token
+  file was then deleted.
+- **The terminal part** (3). The server part to talk to was chosen anew for
+  every call, so a session of another project that came on screen got the
+  save. A setup that was open when the part was unloaded went on to save. A
+  model that may be off could not be switched off when OpenCode offered no
+  model.
+- **The answers of the RPC** (1). `validate` returned a newly typed proxy
+  with its user name and password.
+
+Between the reviews, a reread of the same code by its author changed
+fourteen more things. The weightiest: a check without a token goes only
+through the saved proxy and with the saved CA file, since a proxy and a CA
+file of the caller's choosing could otherwise read the saved token; a CA
+file must be a regular file; the default PAT file is no saved token unless
+the settings name it; and a process loads only settings that a save of its
+own setup made usable, where the first version loaded whatever was usable
+after any save of its own. `tests/tui-view.test.mjs` came out of the second
+finding about the terminal part: it loads the compiled view with stand-ins
+for what the host provides, so that the wiring of the dialogs and the token
+field are tested without a terminal.
+
+Not covered: the dialogs against a live Azure DevOps organization (only the
+request they send was probed); a real model's answer to a prompt that arrives
+together with notices; terminal emulators other than tmux, and their way of
+pasting; several settings files and several OpenCode processes on a real
+host (the unit tests run them against the real handlers and file system);
+other OpenCode versions.
 
 ## 0.4.2 after publication (2026-11-17)
 
@@ -3658,17 +3868,38 @@ transient failure, and its error names the last activity.
   package it installed; an OpenCode with OpenTUI 0.9 changes that and also
   the Markdown element the panel uses, so the panel must be checked again
   before that OpenCode becomes the tested one.
-- **Notices and the conversation's own model.** AZPR queues its notices to
-  the conversation without waking it, so a review costs the conversation's
-  model nothing. When a person later prompts that same conversation,
-  OpenCode 2.3.0 answers the prompt and then hands each notice still waiting
-  in the inbox to the conversation's model, one turn per notice (observed
-  with the fake services while the terminal fixture was extended: three
-  queued notices and one prompt made four requests). A conversation that is
-  used for other work after a review therefore spends one turn of its model
-  per notice; one that is used only for AZPR's commands spends none.
-  `progressNotices: false` leaves fewer notices. Nothing in AZPR changes
-  this yet.
+- **Setup in the terminal UI.** The dialogs of `/pr-setup` exist in
+  OpenCode's terminal UI only; the desktop app and other clients get the
+  instructions and the options. They were exercised on OpenCode 2.3.0 inside
+  tmux with fake services (see
+  [the record](#043-release-candidate-acceptance-2026-11-18)): pasting and
+  typing in other terminal emulators are untested, and the dialogs have not
+  been used against a live Azure DevOps organization, only the one request
+  they make was. The check tells that Azure DevOps accepts the token for the
+  organization and lets it read code; it cannot tell whether the token may
+  write pull request threads or reach a particular repository, which
+  `/pr-check` and the first publication show. A first setup is loaded at once
+  in the project directory where it ran; a change to settings that are in
+  use, and another project directory that the OpenCode service had already
+  opened without settings, still need a restart of the OpenCode service. After a first setup, a client other than the terminal UI
+  with AZPR's part may go on suggesting the review commands as "setup
+  required" until it reconnects, because OpenCode 2.3.0 announces that change
+  of commands without a location; the commands themselves work. The token
+  passes through the terminal UI's memory and its connection to the OpenCode
+  server on its way to the token file.
+- **Notices and the conversation's own model.** AZPR leaves its notices in
+  the conversation's inbox without waking it, so a review costs the
+  conversation's model nothing while the conversation is idle. When a person
+  later prompts that same conversation, its model reads the notices that
+  wait together with the prompt, in one request (until 0.4.2 each notice
+  took a request of its own; see
+  [0.4.3](#043-release-candidate-acceptance-2026-11-18)). The text of the
+  notices still enters that conversation's context once; a conversation used
+  only for AZPR's commands never sends it to a model. A notice that arrives
+  while the conversation's model is working is handed to it during that
+  work, or in one request right after it, without a prompt: OpenCode offers
+  a plugin no notice that a session's model never reads.
+  `progressNotices: false` leaves fewer notices.
 - **Private sessions in the session list.** OpenCode lists AZPR's private
   sessions next to conversations, and its plugin API cannot archive them.
   AZPR deletes all but the report session when a run ends; with debug enabled

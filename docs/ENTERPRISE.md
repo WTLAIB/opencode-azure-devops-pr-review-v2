@@ -34,6 +34,19 @@ every read AZPR makes, including repository archives, and thread creation (see
 The PAT owner also needs access to the project and repository. AZPR does not
 need permission to push code or merge PRs.
 
+In OpenCode's terminal UI, `/pr-setup` takes the PAT in a dialog whose field
+shows only its length. The terminal UI hands it once to AZPR's server part
+over its connection to the OpenCode server (the plugin's RPC), which asks
+Azure DevOps whether the token works (one `GET` for at most one pull request
+of the organization) and then writes it to the PAT file: created or replaced
+in one step, mode `600`, in a directory only its owner can write to. A path
+that exists is replaced only when it is a regular file of that user that is
+empty or holds one token, so settings that name another file cannot make
+setup overwrite it. The PAT
+is not kept by the terminal UI and appears in no conversation, notice, log or
+answer of that RPC. Where PATs are provisioned by other means, keep doing so:
+`/pr-setup` with options takes only the path of an existing PAT file.
+
 `/pr-check <PR URL>` makes read requests and checks configured models without
 calling a model. A successful check confirms read access, not permission to
 publish. Test publication separately on a suitable PR when you intend to post.
@@ -47,7 +60,8 @@ it is a regular file owned by the OpenCode user with no group or other access,
 and it reads the file at start and before each command, so a replaced PAT
 needs a restart of the OpenCode service. The installer and `/pr-setup` create
 `settings.json` with mode `600`, and source replacement preserves it. AZPR
-itself writes to the file in two cases only: `/pr-setup`, and the first time
+itself writes to the file in two cases only: `/pr-setup` (its options or its
+dialogs), and the first time
 OpenCode loads a version that brings a setting the file leaves out, which is
 then added at its default (the file is replaced atomically, with mode `600`).
 A settings file that configuration management owns can stay untouched: keep
@@ -202,7 +216,11 @@ OpenCode server that terminal UI is connected to, and keeps what it read in
 memory only; it stores nothing. It sends nothing to a model, to Azure DevOps
 or anywhere else, and reads neither AZPR's settings file nor the PAT: the one
 setting meant for it, `terminalPanel`, reaches it as metadata of AZPR's
-notices.
+notices. The [setup dialogs](../README.md#setup-in-the-terminal-ui) of the
+same terminal part talk to AZPR's server part only: they read and write no
+file, contact neither Azure DevOps nor a model, and store nothing. What they
+are told of the settings never includes the PAT or a proxy's user name and
+password.
 
 Diagnostics are off by default (`debug.enabled: false`). When enabled, they
 can include source, PR details, prompts, answers and secrets echoed in them.

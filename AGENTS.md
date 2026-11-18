@@ -118,8 +118,32 @@ settings, backups and failure records. Never upload `.local/`.
   posts nothing; publication is never a default. Every private prompt is the
   exact runtime-pending text with a fresh nonce; private agents cannot be
   mentioned, delegated, compacted or used for auxiliary requests.
+- A notice never wakes a model: leave it in the session's inbox with
+  `resume: false`, steered, as the host leaves its own notices about
+  background shells. The host hands the steered items that wait to the
+  session's own model together with its next input, in one request; it gives
+  each queued item a turn of its own, so never queue a notice.
 - Settings are read once; a changed file blocks new runs only. Hooks check the
-  grant, not files or catalogs.
+  grant, not files or catalogs. A first setup is that one read, not an
+  exception to it: a process that found no usable settings has read none, so
+  it loads them when a save of its own setup makes them usable (the text
+  that save replaced could not be used, it wrote something, and they can be
+  used after it). It tries again with that setup's next save when loading
+  them failed, but only what this setup wrote is its own to load, the
+  settings text and the token (as a digest, `pairWith`). What a save leaves
+  is said from what it wrote, never from another look at the files, which
+  could be at another writer's work; whether the settings could be used
+  before it and which token went with them come from one look at the token
+  file. One save has the turn at a time, whichever way it comes in (the
+  RPC or `/pr-setup` with options), until the load that follows it has
+  ended. Compare both with the files before the load, and afterwards require that the runtime read what the files hold
+  and that they hold what was saved; give way when anything else has
+  written either since. A load that answers nothing (settings switched off meanwhile) is
+  no load. Settings
+  that anything else made usable (another process's setup, an editor, a
+  tool) are read after a restart, as always, also by a process that had
+  none, whatever its own setup saves afterwards; and settings that are in
+  use wait for the restart, which setup says where the change is made.
 - Before that read, loading AZPR writes the settings a valid file leaves out
   into it, at the defaults validation assumes anyway (`SETTING_DEFAULTS` in
   `config.mjs`; the settings example and schema must match it), so a new
@@ -233,16 +257,19 @@ settings, backups and failure records. Never upload `.local/`.
   configuration.
 
 **The terminal panel only reads.**
-- The package's terminal part (`src/tui-model.mjs` and `src/tui-view.jsx`,
-  compiled to `src/tui.js`) shows what the runtime already produced: AZPR's
+- The panel of the package's terminal part (`src/tui-model.mjs` and
+  `src/tui-view.jsx`, compiled to `src/tui.js`) shows what the runtime already
+  produced: AZPR's
   notices in the conversation, the report queued to a review session and the
   sessions' `metadata.azpr`. It sends no prompt, runs no command of the server
   part, makes no Azure DevOps request, reads no settings file and keeps no
   preference of its own. The one setting meant for it (`terminalPanel`)
   reaches it in the metadata of the runtime's notices, sent only when it is
   not the default, so default requests stay as they were.
-- `/pr-panel` is its only command. Add another only for what neither a
-  setting nor OpenCode's own UI (its session list, say) already does.
+- `/pr-panel` is the terminal part's only slash command. Add another only for
+  what neither a setting nor OpenCode's own UI (its session list, say)
+  already does; setup is reached through the server part's `/pr-setup` and
+  an entry of the command palette.
 - What names a session or a status is the runtime's own text only: a
   receipt's lines before the report or preview it encloses, whose text a
   model wrote. A session is listed, and a report read from it, only when its
@@ -312,6 +339,106 @@ settings, backups and failure records. Never upload `.local/`.
 - The host drops the data of sessions that are neither on screen nor in a tab:
   read another session's inbox from the server, not from the host's cache.
 
+**Setup has one writer; its dialogs only ask.**
+- `/pr-setup` is the one way to set AZPR up: with options, or in the terminal
+  UI with dialogs, which open when the command's notice arrives marked
+  `metadata.azpr.setup` in the session on screen. Both end in `setup.mjs`,
+  which checks every value, is the only writer of the settings file and the
+  token file, and is the only one to ask Azure DevOps whether a token works.
+- What setup can set is one table (`ROWS` in `setup.mjs`): a row reads, shows,
+  accepts and writes its value, and its option of `/pr-setup` and its dialog
+  are the same row. Give a setting people change a row; leave the rest to the
+  settings file. `shell` and `azure.verifyTls` get none.
+- The dialogs (`src/tui-setup.mjs`, which imports nothing so that its order
+  is tested with scripted answers, and the token field in `tui-view.jsx`) use
+  the host's own dialogs and hand every answer to the server part over the
+  plugin's RPC. They read and write no file, contact neither Azure DevOps nor
+  a model, run no command and store nothing.
+- A token is typed into AZPR's own field, which takes keys and pastes itself
+  and draws only bullets and a count: the host's text prompt shows what is
+  typed. The terminal part passes it on once and keeps it nowhere, not in a
+  toast, a dialog text, a log or a store. The server part writes it to the
+  token file in one step, owner-only, and empties `azure.pat`. Settings name
+  that file and settings can be wrong: an existing file is replaced only when
+  it is a regular file of the user's own that is empty or holds one token
+  (one word of letters, digits, `-` and `_` as long as a token; a line of
+  JSON or a KEY=VALUE pair is something else). Setup takes as a token only
+  what passes that same test (`TOKEN_WORD`), so that it can replace what it
+  wrote.
+- A saved token is the one the settings name (`azure.patFile`, else
+  `azure.pat`), as the runtime reads it; the default PAT file is none unless
+  they name it. It is sent only for the organization it was saved for, like
+  every other use of the PAT, and only the way the saved settings send it:
+  a check for another organization, or through a proxy or with a CA file
+  that the call names, needs a token that was entered with it (a proxy and
+  a CA file of the caller's choosing could read a token).
+- Organization and token change in one step, the write of the settings
+  file. A save names the organization its token was checked for, which must
+  still be the one in the settings. A token of the organization the settings
+  named already replaces the token file they name. Every other token gets a
+  file that did not exist (`createTokenFile`: `pat-<organization>`, or that
+  name with the first free number, beside the file the settings name or in
+  AZPR's directory; the name is taken in one step that refuses an existing
+  one), which the settings name in the same write: a first setup's, another
+  organization's, and one for settings that name the default PAT file
+  (`azpr/pat`). Setup overwrites no file but the one these settings name for
+  this organization: several settings files of one person share AZPR's
+  directory and the default PAT file, their setup locks are not one lock,
+  and a file's name proves nothing about whose it is. The RPC changes the
+  organization of settings that name a token (usable at the moment or not;
+  also from no organization to one) only together with a token of the new
+  one. Whoever reads the settings and
+  then the file they name must have a pair that belongs together, also
+  during a save and after one that failed; a file a save made is removed
+  when its settings are not written, and no other file is. A write that
+  took place is not reported as failed for what could not be cleaned up
+  after it (a temporary file, the lock): a caller would undo what belongs
+  to it. The earlier token's file is left to its
+  person, who is told where it is. (The options of `/pr-setup` keep their
+  behaviour: there the person keeps the PAT file.)
+- Several server parts share one settings file (one per project directory,
+  and other processes). The token file and the settings that name it are
+  therefore written under the setup lock, the token first, after the
+  settings were compared once more under the lock with what the answers were
+  checked against; a save that finds the lock held writes neither.
+- The dialogs of one setup talk to one server part: the place is fixed when
+  they open, since the session on screen can change while they are open.
+- What setup reports as waiting for a restart is the loaded runtime's own
+  answer (`settingsDrift` in `runtime.mjs`, the rule of its preflight), so
+  that the two never disagree; do not compare texts in `setup.mjs`.
+- A process without usable settings registers commands that only say so.
+  They are AZPR's own: never register one under a name that another plugin
+  has taken meanwhile, since adding a command replaces the one of that name.
+  A plugin can take a name at any moment, so list the commands again right
+  before registering them, at startup as well; where the list cannot be
+  read, register none (what was known earlier is no longer known) and try
+  again with the next `/pr-setup` or save. A load and putting them back run
+  one after another, never interleaved (`inLane` in `setup.mjs`): a load
+  must not find them half back, and what was listed for putting them back
+  must not be older than a load.
+- A setup that is open when the terminal part is unloaded ends at its next
+  step: after `stop()` it asks nothing of the server part or the person and
+  saves nothing, whatever answer arrives.
+- The RPC never throws and never quotes a refused value: its schemas are
+  loose, the server part checks every answer itself, and what it returns
+  holds neither the token nor a proxy's user name and password (a proxy that
+  comes back as it was shown stands for the saved one; for a proxy typed
+  with them nothing comes back, and the dialog keeps what was typed).
+- A token is checked before it is saved: one request through `azure.mjs`
+  (`access`), not repeated, since a person waits. It runs in a queue of
+  setup's own with one slot, because it must work before settings, and so
+  the runtime and its queue, exist. A check that fails says what was
+  refused; the token can still be saved unchecked.
+- Ask first for what can make a later step fail, and let it be skipped: the
+  proxy before the token is checked, the CA file after a proxy. Offer them
+  again when the check cannot reach Azure DevOps.
+- A dangerous value is confirmed in a list whose first row keeps the current
+  setting, never with the host's confirm dialog, whose default is to confirm.
+- OpenCode 2.3.0 announces commands that change after a plugin was loaded
+  without their location, and its clients ignore that event: when a first
+  setup is loaded the server part publishes the RPC event `loaded`, and the
+  terminal part reads the commands again.
+
 **Compatibility.** Host response shapes and constants belong in `host.mjs`.
 Detect capabilities; do not assume them. The terminal part runs in the TUI's
 process: it checks the TUI plugin API it uses at setup and reads theme tokens
@@ -332,7 +459,9 @@ For package entry points, first-run setup or settings-path changes, also run
 packed artifact through OpenCode's plugin manager in an isolated profile.
 For changes touching the terminal part, or the text of notices and receipts,
 also run `node tests/host-v2-tui-panel.mjs <opencode binary>` and the same with
-`--native`: they drive the real terminal UI in `tmux`, which they need.
+`--native`; for changes touching setup, the terminal part or the settings
+path, also `node tests/host-v2-tui-setup.mjs <opencode binary>` and the same
+with `--native`. They drive the real terminal UI in `tmux`, which they need.
 Installer tests must preserve unrelated files and private settings, reject
 conflicts and test rollback and archival uninstall. Keep the README manual-copy
 list exact.

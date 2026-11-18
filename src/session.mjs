@@ -336,9 +336,12 @@ export async function interruptSession(context, { sessionID, signal }) {
 }
 
 /**
- * Queue report data without starting a formatting or ordinary-agent model call.
+ * Leave report data in the session's inbox without starting a formatting or ordinary-agent model call.
+ * `steer` decides what happens when that session's own model runs next: the host hands every steered item
+ * that waits to the model at once, together with the prompt that woke it, while it gives each queued item
+ * a turn of its own (one model request per notice, each with the whole conversation).
  * `metadata` is stored with the notice for clients that read it (the terminal panel); no model sees it,
- * and a call without it is the request it always was.
+ * and a call without it carries none.
  */
 export async function appendReport(context, { sessionID, text, signal, metadata }) {
   const api = sessionApi(context, ['synthetic']);
@@ -346,11 +349,11 @@ export async function appendReport(context, { sessionID, text, signal, metadata 
   const result = await cancellable(() => api.synthetic({
     sessionID, text, description: text,
     ...(metadata ? { metadata } : {}),
-    delivery: 'queue', resume: false,
+    delivery: 'steer', resume: false,
   }), signal);
   if (!record(result) || !textValue(result.id) || result.sessionID !== sessionID || result.type !== 'synthetic' ||
-      result.payload?.text !== text || result.delivery !== 'queue') {
-    throw new Error('[AZPR] OpenCode V2 did not acknowledge the queued report.');
+      result.payload?.text !== text || result.delivery !== 'steer') {
+    throw new Error('[AZPR] OpenCode V2 did not acknowledge the report.');
   }
   return { queued: true, id: result.id };
 }

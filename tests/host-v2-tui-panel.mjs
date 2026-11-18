@@ -364,14 +364,16 @@ try {
   assert.deepEqual(kept.map(session => session.metadata.azpr.role), ['azpr-review-verifier'], 'The review keeps the session that holds its report.');
   tmux('kill-server');
   // A person talks to the conversation's own model: every notice that waited in its inbox is delivered, so the
-  // inbox is empty and what AZPR told the conversation is among its messages. (The host gives each queued notice
-  // a turn of that model; only this prompt of the fixture's makes the conversation's model run at all.)
+  // inbox is empty and what AZPR told the conversation is among its messages. The notices are steered, so the
+  // host hands them to that model together with the prompt, in one request (it would give each queued notice a
+  // turn of its own); only this prompt of the fixture's makes the conversation's model run at all.
   const asked = requests.length;
   assert.ok(requests.every(request => request.model !== 'chat'), 'Until here the conversation\'s own model was never asked.');
   await api(`/api/session/${origin}/prompt`, { text: 'Thanks. Anything else?' });
   await api(`/api/experimental/session/${origin}/wait`, {});
   const turns = requests.slice(asked);
-  assert.ok(turns.length >= 1 && turns.every(request => request.model === 'chat' && request.sessionID === origin), 'Only the conversation\'s own model ran, in the conversation.');
+  assert.ok(turns.every(request => request.model === 'chat' && request.sessionID === origin), 'Only the conversation\'s own model ran, in the conversation.');
+  assert.equal(turns.length, 1, 'The prompt and every notice that waited reached the conversation\'s model in one request.');
   assert.deepEqual(await inbox(), [], 'The notices were delivered: none waits in the conversation\'s inbox.');
   const told = (await api(`/api/session/${origin}/context`)).data.filter(message => message.type === 'synthetic').length;
   assert.ok(told >= 10, 'They are among the conversation\'s messages.');

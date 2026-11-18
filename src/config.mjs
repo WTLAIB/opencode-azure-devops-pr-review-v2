@@ -197,6 +197,9 @@ function languageTag(value) {
   try { return Intl.getCanonicalLocales(value)[0]; } catch { throw new Error(message); }
 }
 
+/** The checks of single values that setup also applies to an answer; each throws what is wrong, never the value. */
+export const SETTING_CHECKS = Object.freeze({ model, proxy: proxyUrl, language: languageTag });
+
 /** Why a value cannot be the PAT ('' when it can); it never contains the value. */
 export const patProblem = value => typeof value !== 'string' || !/^[\x21-\x7e]{20,1024}$/.test(value)
   ? 'not one token of 20 to 1024 printable characters' : /REPLACE|YOUR_/i.test(value) ? 'still a placeholder' : '';

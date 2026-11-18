@@ -16,8 +16,11 @@ other component's configuration.
    Global PATs ("All accessible organizations") stop working on 2026-12-01; use
    an organization-scoped token. `Code: Read & write` also works but allows
    pushing code, which AZPR never needs.
-2. Put the PAT alone in a file only you can read, as the
-   [quickstart](QUICKSTART.md#2-save-the-pat-in-a-private-file-terminal) shows,
+2. In OpenCode's terminal UI, run `/pr-setup` and paste the PAT into its
+   dialog: AZPR asks Azure DevOps whether it works, then saves it alone in a
+   file only you can read and names that file in the settings. Without the
+   terminal UI, put the PAT in such a file yourself, as the
+   [quickstart](QUICKSTART.md#save-the-pat-in-a-private-file-terminal) shows,
    then run `/pr-setup --organization YOUR_ORGANIZATION --model PROVIDER/MODEL`
    (add `--pat-file` for a file other than `${XDG_CONFIG_HOME:-~/.config}/azpr/pat`).
    To edit the settings by hand instead, use the file `/pr-setup` names: an
@@ -31,7 +34,8 @@ other component's configuration.
 
    `"pat": "YOUR_PAT"` in place of `patFile` also works but keeps the secret in
    `settings.json`; set one of the two, not both. Restart the OpenCode service
-   (`opencode service restart`) after saving.
+   (`opencode service restart`) after editing the file; a first setup by
+   `/pr-setup` is loaded at once.
 
 3. Run `/pr-check <PR URL>`; it reads the PR, its changes, one HEAD and one BASE
    file and the discussions without any model request.
@@ -122,6 +126,20 @@ Paths are relative to
 | Summary and inline comments | `POST pullRequests/{id}/threads` | Pull Request Threads (Read & write) or Code (Read & write) |
 | File content and folder listings at a commit | `GET items?path=…` / `GET items?scopePath=…&recursionLevel=…` with `versionDescriptor.versionType=commit` | Code (Read) |
 | The whole repository at a commit as a zip, for content search | `GET items?scopePath=/&recursionLevel=Full&$format=zip` with `versionDescriptor.versionType=commit` | Code (Read) |
+
+One request has no project or repository: the access check of `/pr-setup` in
+the terminal UI, relative to `https://dev.azure.com/{organization}/_apis/git/`.
+
+| Use | Request | Scope |
+| --- | --- | --- |
+| Whether the PAT is accepted for the organization and may read code, before setup saves it | `GET pullrequests?$top=1` | Code (Read) |
+
+It asks for at most one pull request of the organization and reads nothing
+of the answer but that it is a list. It is sent once, without the retries of
+other reads, since a person waits for it. On 2026-11-18 a live organization
+answered a valid PAT with 200, an unknown token with 401 and no content, and
+an unknown organization with 404; `_apis/connectionData`, which would name
+the token's owner, exists only as a preview version and is not used.
 
 Azure DevOps Server (on-premises) supports 7.1 from Azure DevOps Server 2022.1,
 but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and

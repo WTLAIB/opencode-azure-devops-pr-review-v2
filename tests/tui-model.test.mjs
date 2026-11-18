@@ -18,7 +18,7 @@ const queuedReport = (run = RUN, body = '## PR Review Summary\n\nhigh: 0 · medi
 /** A host as the TUI has it loaded: what each session's inbox holds, and the sessions it knows. */
 function host({ notices = [], inboxes = {}, sessions = [], running = [] } = {}) {
   let sequence = 0;
-  const entry = text => ({ id: `msg_${String(++sequence).padStart(6, '0')}`, type: 'synthetic', payload: { text, description: text }, delivery: 'queue' });
+  const entry = text => ({ id: `msg_${String(++sequence).padStart(6, '0')}`, type: 'synthetic', payload: { text, description: text }, delivery: 'steer' });
   const pending = new Map([[CONVERSATION, notices.map(entry)], ...Object.entries(inboxes).map(([id, texts]) => [id, texts.map(entry)])]);
   const known = new Map([[CONVERSATION, { id: CONVERSATION, title: 'My conversation' }], ...sessions.map(session => [session.id, session])]);
   return {
@@ -591,7 +591,7 @@ test('the panel reads the receipt the runtime writes', () => {
 // The reader: what the panel asks the server of other sessions. Its requests are answered here when the test says so.
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const settle = async () => { for (let turn = 0; turn < 20; turn++) await Promise.resolve(); };
-const pendingItem = (id, text) => ({ id, type: 'synthetic', payload: { text }, delivery: 'queue' });
+const pendingItem = (id, text) => ({ id, type: 'synthetic', payload: { text }, delivery: 'steer' });
 const toldMessage = (id, text) => ({ id, type: 'synthetic', text });
 const networkError = () => new Error('fetch failed: ECONNRESET');
 const goneError = () => Object.assign(new Error('Session not found'), { name: 'Session.NotFoundError' });

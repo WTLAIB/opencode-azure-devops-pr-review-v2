@@ -1,8 +1,10 @@
 # Your first review
 
 This guide gets you from a clean installation to a private comment preview.
-Use a small, active Azure DevOps Services PR for the first run. Steps 1–3 and
-5 run in a terminal; steps 4, 6 and 7 run in OpenCode.
+Use a small, active Azure DevOps Services PR for the first run. Steps 1 and 2
+run in a terminal; the rest runs in OpenCode's terminal UI. Without the
+terminal UI (the desktop app, a script), set AZPR up as
+[without the terminal UI](#without-the-terminal-ui) shows instead of step 3.
 
 Already using an earlier version? Follow [upgrading](../README.md#upgrading)
 instead, to keep your configuration and one AZPR installation.
@@ -12,9 +14,8 @@ instead, to keep your configuration and one AZPR installation.
 - **OpenCode CLI 2.3.0** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
   22.04.5 LTS (WSL2)**. Other host versions and operating systems are not
   validated; see [validation](VALIDATION.md). OpenCode 1.x is not supported.
-- An authenticated OpenCode model with tool support, and its exact
-  `provider/model` ID from `opencode models` or your host's model selection.
-  AZPR uses your existing provider account.
+- An authenticated OpenCode model with tool support. AZPR uses your existing
+  provider account; setup lists the models to choose from.
 - Your Azure DevOps organization (the `<org>` in `https://dev.azure.com/<org>`)
   and an organization-scoped PAT. The recommended scopes are **Code: Read** and
   **Pull Request Threads: Read & write**; see
@@ -28,34 +29,10 @@ opencode --version
 opencode models
 ```
 
-## 2. Save the PAT in a private file (terminal)
-
-Put the PAT alone in a file only you can read. The following **Bash** example
-creates a new file and refuses to overwrite an existing one. Input is hidden
-and is not added to shell history:
+## 2. Install the package (terminal)
 
 ```sh
-AZPR_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/azpr"
-mkdir -p "$AZPR_USER_DIR"
-(
-  umask 077
-  set -o noclobber
-  read -rs -p 'Azure DevOps PAT: ' AZPR_PAT
-  printf '\n'
-  test -n "$AZPR_PAT" && printf '%s' "$AZPR_PAT" > "$AZPR_USER_DIR/pat"
-)
-printf 'PAT file: %s\n' "$AZPR_USER_DIR/pat"
-```
-
-This is the default PAT file that `/pr-setup` uses. If the file already
-exists, reuse your existing owner-only PAT file, or choose another unused path
-and name it with `--pat-file` in step 4. Do not paste a PAT into a
-conversation or command argument.
-
-## 3. Install the package (terminal)
-
-```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.2
+opencode plugin add opencode-azure-devops-pr-review@0.4.3
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -64,65 +41,51 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.2'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.3'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
-## 4. Configure one model and your Azure organization (OpenCode)
+## 3. Set AZPR up (OpenCode's terminal UI)
 
-Open OpenCode and start an ordinary conversation. If `/pr-setup` is not
-listed, run `opencode service restart` in your terminal and reopen OpenCode.
-
-Run `/pr-setup` alone to see the settings path, the default PAT file and the
-available model IDs. Then replace both placeholders in this command:
+Open OpenCode in your terminal and start an ordinary conversation. OpenCode
+says once that AZPR is not set up yet. Type:
 
 ```text
-/pr-setup --organization YOUR_ORGANIZATION --model YOUR_PROVIDER/YOUR_MODEL
+/pr-setup
 ```
 
-Use the organization name from `https://dev.azure.com/<organization>`;
-`--organization` also accepts your PR's URL. Add
-`--pat-file "/absolute/path/to/pat"` when your PAT file is not the default one
-from step 2. The command checks the model catalog and the PAT file, then saves
-configuration with owner-only permissions. It makes no model request and does
-not contact Azure.
+If `/pr-setup` is not listed, run `opencode service restart` in your terminal
+and reopen OpenCode. Dialogs then ask for what a review cannot run without:
 
-One model selection configures the quick reviewer and all three review roles.
-`/pr-quick` still runs only its own reviewer; `/pr-review` uses separate reviewer
-and verifier sessions. Deep models remain unset until you choose stronger
-models for that mode. Setup preserves other settings when explicitly replacing
-an existing file with `--replace`, and then keeps the PAT file already set
-unless you name another one.
+1. **Organization.** The name from `https://dev.azure.com/<organization>`, or
+   paste the URL of your PR.
+2. **Proxy.** Only if your network reaches `dev.azure.com` through one; press
+   Enter to skip it. It is asked first because the next step needs the
+   network. With a proxy, the next dialog takes the CA certificate file of a
+   company that inspects HTTPS; Enter skips that too. See
+   [company networks](ENTERPRISE.md#company-networks).
+3. **Token.** Create a PAT at the address the dialog shows, with **Code: Read**
+   and **Pull Request Threads: Read & write**, and paste it. The field shows
+   only how many characters it holds. AZPR asks Azure DevOps once whether the
+   token works for your organization. A refused token is asked for again with
+   the reason. If Azure DevOps cannot be reached, you can set the proxy or the
+   CA file there and try the same token again.
+4. **Model.** Pick one from OpenCode's list (type to search). It fills the
+   reviewer and verifier roles and `/pr-quick`.
 
-Native installations save settings outside the package cache at
-`${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`. Source installations keep
-`plugins/azpr-v2/settings.json`; `/pr-setup` shows the exact path. An explicit
-`options.settingsFile` can select a different absolute path; see
-[configuration](../README.md#configuration).
+After a summary, AZPR saves the token alone in a file only you can read
+(mode 600, `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`, a file
+it makes for this) and the settings beside it, and loads them at once: no
+restart is needed. The token is not shown again and is in no conversation,
+notice or log.
 
-Make any other changes to that settings file now, before the restart in step 5:
-behind a company proxy, AZPR's Azure DevOps requests need `azure.proxy` (and
-`azure.caFile` for a company CA) as described in
-[company networks](ENTERPRISE.md#company-networks); leave `shell: "deny"` and TLS
-verification enabled. See [all settings](../README.md#all-settings-and-defaults)
-for output language and other options, and
-[model configuration](../README.md#configuration) for model variants and
-separate models for each role.
+Run `/pr-setup` again at any time to see the settings as a list and change
+one: a stronger model for `/pr-deep`, the output language, the proxy, a new
+token and others (see [setup](../README.md#setup-in-the-terminal-ui)). A
+change to settings that are in use takes effect after
+`opencode service restart`; the list says so.
 
-## 5. Restart the OpenCode service (terminal)
-
-Settings are read when OpenCode loads AZPR, so restart the service once after
-saving them:
-
-```sh
-opencode service restart
-```
-
-If you run `opencode serve` yourself, restart that process instead. Closing a
-conversation or reopening the terminal UI alone does not reload a running
-background service.
-
-## 6. Check access without a model request (OpenCode)
+## 4. Check access without a model request (OpenCode)
 
 In OpenCode, replace this sample with your PR's URL:
 
@@ -145,7 +108,7 @@ host's own permission rules control where native read tools can read; reviews
 remain available. The tested OpenCode 2.3.0 host has that hook. `READY` is an
 access check, not a security audit or an approval of the PR.
 
-## 7. Run a review and preview its comments (OpenCode)
+## 5. Run a review and preview its comments (OpenCode)
 
 ```text
 /pr-review https://dev.azure.com/YOUR_ORGANIZATION/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
@@ -245,6 +208,91 @@ the review's models it would only repeat `/pr-review`, and `/pr-check` warns
 about that. All modes produce AI findings that require human judgment; see
 [commands](../README.md#commands).
 
+## Without the terminal UI
+
+The desktop app and other clients have no dialogs. There, and in scripts,
+`/pr-setup` takes options, and the token goes into its file by hand.
+
+### Save the PAT in a private file (terminal)
+
+Put the PAT alone in a file only you can read. The following **Bash** example
+creates a new file and refuses to overwrite an existing one. Input is hidden
+and is not added to shell history:
+
+```sh
+AZPR_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/azpr"
+mkdir -p "$AZPR_USER_DIR"
+(
+  umask 077
+  set -o noclobber
+  read -rs -p 'Azure DevOps PAT: ' AZPR_PAT
+  printf '\n'
+  test -n "$AZPR_PAT" && printf '%s' "$AZPR_PAT" > "$AZPR_USER_DIR/pat"
+)
+printf 'PAT file: %s\n' "$AZPR_USER_DIR/pat"
+```
+
+This is the default PAT file that `/pr-setup` uses. If the file already
+exists, reuse your existing owner-only PAT file, or choose another unused path
+and name it with `--pat-file` below. Do not paste a PAT into a
+conversation or command argument.
+
+### Configure one model and your Azure organization (OpenCode)
+
+Open OpenCode and start an ordinary conversation. If `/pr-setup` is not
+listed, run `opencode service restart` in your terminal and reopen OpenCode.
+
+Run `/pr-setup` alone to see the settings path, the default PAT file and the
+available model IDs. Then replace both placeholders in this command:
+
+```text
+/pr-setup --organization YOUR_ORGANIZATION --model YOUR_PROVIDER/YOUR_MODEL
+```
+
+Use the organization name from `https://dev.azure.com/<organization>`;
+`--organization` also accepts your PR's URL. Add
+`--pat-file "/absolute/path/to/pat"` when your PAT file is not the default one
+created above. The command checks the model catalog and the PAT file, then saves
+configuration with owner-only permissions. It makes no model request and does
+not contact Azure.
+
+One model selection configures the quick reviewer and all three review roles.
+`/pr-quick` still runs only its own reviewer; `/pr-review` uses separate reviewer
+and verifier sessions. Deep models remain unset until you choose stronger
+models for that mode. Setup preserves other settings when explicitly replacing
+an existing file with `--replace`, and then keeps the PAT file already set
+unless you name another one.
+
+Native installations save settings outside the package cache at
+`${XDG_CONFIG_HOME:-~/.config}/azpr/settings.json`. Source installations keep
+`plugins/azpr-v2/settings.json`; `/pr-setup` shows the exact path. An explicit
+`options.settingsFile` can select a different absolute path; see
+[configuration](../README.md#configuration).
+
+A first setup is loaded at once. Behind a company proxy, add the proxy to the
+same command, so that the settings are complete when they are loaded:
+`--proxy http://proxy.example.com:8080` (and `--ca-file /absolute/path.pem`
+for a company CA), as described in
+[company networks](ENTERPRISE.md#company-networks). Other options change one
+setting each, such as `--language zh-TW` or `--deep-model PROVIDER/MODEL`; see
+[setup with options](../README.md#setup-with-options). Leave `shell: "deny"`
+and TLS verification enabled, and see
+[all settings](../README.md#all-settings-and-defaults) for what the settings
+file holds beyond these.
+
+### After a later change: restart the OpenCode service (terminal)
+
+Settings are read when OpenCode loads AZPR. A first setup is that reading; a
+change to settings that are in use takes effect after a restart:
+
+```sh
+opencode service restart
+```
+
+If you run `opencode serve` yourself, restart that process instead. Closing a
+conversation or reopening the terminal UI alone does not reload a running
+background service.
+
 ## Other installation methods
 
 For an existing source installation, keep using `install.sh --replace`, or
@@ -252,8 +300,8 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.4.2 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.2.tar.gz),
+[v0.4.3 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.3.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
-source installer creates starter settings, so add `--replace` to the setup
-command in step 4, then restart the OpenCode service as in step 5.
+source installer creates starter settings: `/pr-setup` in the terminal UI
+completes them, and the command with options needs `--replace`.

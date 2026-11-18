@@ -436,8 +436,9 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
    * because publication resolves uncertainty by reading markers back.
    * `signal` also ends a call that only its caller waits for (a tool call
    * the host stopped); a call whose result several callers share takes none.
+   * `retries` is how often a read is repeated: none where a person waits for the answer.
    */
-  async function request(run, { method = 'GET', path, query = {}, body, accept = 'json', maxBytes, label, record = {}, signal }) {
+  async function request(run, { method = 'GET', path, query = {}, body, accept = 'json', maxBytes, label, record = {}, signal, retries = READ_RETRIES }) {
     const url = new URL(`${root}/${path}`);
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
     url.searchParams.set('api-version', API_VERSION);
@@ -457,7 +458,7 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
         const error = caught instanceof AzureError ? caught : caught?.timeout
           ? new AzureError(`Azure DevOps ${label} did not finish within the per-call timeout.`, { kind: 'timeout', transient: true, uncertain: method !== 'GET', cause: caught })
           : new AzureError(`Azure DevOps ${label} failed: ${clean(caught?.message ?? caught)}`, { kind: 'unexpected', cause: caught });
-        const again = retry && error.transient && attempt <= READ_RETRIES;
+        const again = retry && error.transient && attempt <= retries;
         onCall?.(run, { ...entry, ok: false, durationMs: Math.round(performance.now() - started), status: error.status, kind: error.kind,
           error: error.message.slice(0, 300), transient: error.transient, willRetry: again });
         if (again) {
@@ -534,6 +535,15 @@ export function createAzureClient({ organization, pat, baseUrl = DEFAULT_BASE_UR
   return {
     organization,
     request,
+    /**
+     * Whether Azure DevOps accepts the PAT for this organization and lets it read code: one small read that
+     * needs no project (at most one pull request of the organization), for setup. It is sent once, since a
+     * person waits for the answer; an AzureError says by its kind what was refused.
+     */
+    async access(run) {
+      const result = await request(run, { path: '_apis/git/pullrequests', query: { $top: 1 }, label: 'pull request list', retries: 0 });
+      if (!Array.isArray(result?.value)) throw new AzureError('Azure DevOps returned no pull request list.');
+    },
     /** Read the PR, its latest iteration and every changed file into a runtime-owned snapshot. */
     async snapshot(run, target) {
       const pr = await request(run, { path: `${encodeURIComponent(target.project)}/_apis/git/repositories/${encodeURIComponent(target.repository)}/pullRequests/${target.pullRequestId}`, label: 'PR' });

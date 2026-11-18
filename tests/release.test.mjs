@@ -29,14 +29,17 @@ test('the terminal part is shipped compiled and binds only what OpenCode provide
   const imports = [...compiled.matchAll(/^import\s+(?:\{([^}]*)\}|[\w$]+)\s+from\s+"([^"]+)";?$/gm)].map(([, names = '', source]) => ({ source, names: names.split(',').map(name => name.trim().split(/\s+as\s+/)[0]).filter(Boolean) }));
   assert.equal(imports.length, [...compiled.matchAll(/^import\b/gm)].length, 'Every import has the plain form the host rewrites to its own modules.');
   // The host hands a plugin its own copies of these; a copy of its own would be a second renderer.
-  assert.deepEqual([...new Set(imports.map(item => item.source))].sort(), ['./tui-model.mjs', '@opentui/core', '@opentui/solid', 'solid-js']);
+  assert.deepEqual([...new Set(imports.map(item => item.source))].sort(), ['./tui-model.mjs', './tui-setup.mjs', '@opentui/core', '@opentui/solid', 'solid-js']);
   const helpers = new Set(['createComponent', 'createElement', 'createTextNode', 'effect', 'insert', 'insertNode', 'memo', 'mergeProps', 'setProp', 'spread', 'use']);
   for (const name of imports.filter(item => item.source === '@opentui/solid').flatMap(item => item.names)) assert.ok(helpers.has(name), `@opentui/solid: ${name} is one of the universal renderer's helpers`);
   // Solid's control flow comes from solid-js: the compiler would otherwise expect it from the renderer.
   const solid = imports.filter(item => item.source === 'solid-js').flatMap(item => item.names);
   for (const name of ['For', 'Show']) assert.ok(solid.includes(name), `${name} is imported from solid-js`);
   assert.doesNotMatch(read('src/tui-model.mjs'), /^import\b|\bimport\(/m, 'What the panel shows is worked out without any import.');
-  assert.doesNotMatch(compiled + read('src/tui-model.mjs'), /settings\.json|node:fs|process\.env/, 'The terminal part reads no file and no environment.');
+  assert.doesNotMatch(read('src/tui-setup.mjs'), /^import\b|\bimport\(/m, 'What setup asks is worked out without any import.');
+  assert.doesNotMatch(compiled + read('src/tui-model.mjs') + read('src/tui-setup.mjs'), /settings\.json|node:fs|process\.env/, 'The terminal part reads no file and no environment.');
+  // Setup's dialogs talk to the server part only, over AZPR's own RPC: no request of their own, and no command.
+  assert.doesNotMatch(compiled + read('src/tui-setup.mjs'), /\bfetch\(|dev\.azure\.com\/[^{<]|session\.(?:command|prompt|synthetic)\b/, 'The terminal part asks Azure DevOps nothing and runs no command.');
   // One command of its own, to show or hide the panel. Whether the panel opens by itself is a setting of AZPR
   // (terminalPanel), which reaches it with the notices: it keeps no preference of its own.
   assert.deepEqual([...compiled.matchAll(/slash:\s*\{\s*name:\s*"([^"]+)"/g)].map(match => match[1]), ['pr-panel']);
