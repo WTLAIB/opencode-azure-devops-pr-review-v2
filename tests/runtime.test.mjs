@@ -3390,7 +3390,10 @@ test('a review that a preview follows by itself offers nothing of its own; one w
 });
 
 test('a preview that another command replaced or posted while its run ended is neither enclosed nor offered', async t => {
-  for (const [name, second, expected] of [['adjusted and planned again', ids => `--exclude ${ids[1]}`, /\] PREVIEW; source review=/], ['posted', () => '--publish', /\] POSTED; source review=/]]) {
+  // The last case: a publication had begun before the preview was planned again, so "posting has begun" is no
+  // news; that the preview was posted since is.
+  for (const [name, second, expected, publishedBefore] of [['adjusted and planned again', ids => `--exclude ${ids[1]}`, /\] PREVIEW; source review=/],
+    ['posted', () => '--publish', /\] POSTED; source review=/], ['posted, after an earlier publication', () => '--publish', /\] POSTED; source review=/, true]]) {
     // The deletion of one session waits for OpenCode: the run's command locks are released by then.
     let armed = false, entered, release;
     const waiting = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
@@ -3398,6 +3401,7 @@ test('a preview that another command replaced or posted while its run ended is n
       remove: async () => { if (!armed) return; armed = false; entered(); await held; } });
     const review = reviewId(await f.command());
     const ids = f.notices.find(notice => /\] COMPLETE\n/.test(notice.text)).metadata.azpr.next.findings.map(finding => finding.id);
+    if (publishedBefore) assert.match(await f.command('pr-comment', '--publish'), /\] POSTED; source review=/, name);
     armed = true;
     const before = f.notices.length;
     await f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: '' }, delivery: 'steer' });
@@ -3456,6 +3460,77 @@ test('a run whose preview was replaced does not make its review the current one,
   const alone = { ...panelSource(f), pending: id => panelSource(f).pending(id).filter(entry => entry.payload.text.includes(first) || entry.payload.text.startsWith(`[AZPR ${review}]`)) };
   const ended = buildPanel(alone, 'ordinary');
   assert.deepEqual([ended.run, ended.status, Object.hasOwn(ended, 'next'), ended.progress], [first, 'REPLACED', false, undefined]);
+});
+
+test('a preview\'s receipt offers the preview it shows, also when that preview is planned again while the record is saved after it', async t => {
+  const original = fsPromises.writeFile, entered = deferred(), gate = deferred();
+  const restore = () => { fsPromises.writeFile = original; syncBuiltinESMExports(); };
+  t.after(() => { restore(); gate.resolve(); });
+  let watching = false, cleaned = false, held = false, planned = 0;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove: () => { if (watching) cleaned = true; },
+    async during({ role }) { if (ROLES[role].format === 'comment-plan') planned++; } });
+  const review = reviewId(await f.command());
+  // The save of the review's record that follows the cleanup of the preview run's sessions stalls: it is the last
+  // thing that run waits for before its receipt is delivered.
+  fsPromises.writeFile = async (file, data, ...rest) => {
+    if (cleaned && !held && String(file).includes(`${review}.json`)) { held = true; entered.resolve(); await gate.promise; }
+    return original(file, data, ...rest);
+  };
+  syncBuiltinESMExports();
+  watching = true;
+  const first = f.command('pr-comment', '');
+  assert.equal(await within(entered.promise.then(() => true), 5000), true, 'The save after the cleanup was reached.');
+  watching = false;
+  // Meanwhile the preview is planned again from the review's own session, up to its own save of the record,
+  // which waits behind that one with the new preview already in place.
+  const own = [...f.sessions.values()].find(session => session.title === `[AZPR ${review}] Verification`).id;
+  const before = planned;
+  const second = f.command('pr-comment', '', own);
+  for (let turn = 0; planned === before && turn < 500; turn++) await sleep(10);
+  assert.ok(planned > before, 'The second preview was planned while the first run\'s save waited.');
+  await sleep(200);
+  restore();
+  gate.resolve();
+  const [shown, again] = await Promise.all([first, second]);
+  assert.match(shown, /\] PREVIEW; source review=/);
+  assert.match(again, /\] PREVIEW; source review=/);
+  // The first receipt encloses the first preview, and what it offers is that preview: the word it carries is not
+  // the word of the preview planned since. Its steps are therefore refused, and nothing is posted unseen.
+  const offerOf = text => f.notices.find(notice => notice.text === text).metadata.azpr.next;
+  assert.notEqual(offerOf(shown).state, offerOf(again).state, 'The receipt of the first preview does not offer the second.');
+  const threads = f.azure.state.threads.length;
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: publishCommand(offerOf(shown)).text }, delivery: 'steer' }), /is no longer as it was shown/);
+  assert.equal(f.azure.state.threads.length, threads);
+  // The receipt of the second preview offers what is saved, and its step is taken.
+  assert.match(await f.command('pr-comment', publishCommand(offerOf(again)).text, own), /\] POSTED; source review=/);
+});
+
+test('a step of the panel that is refused for its word changes nothing: the current review stays as it is, also on disk', async t => {
+  const { azure, url, posted } = twoPullRequests();
+  const f = await fixture(t, { azure });
+  const other = reviewId(await f.command('pr-review', url(456)));
+  await f.command('pr-comment', '');
+  const review = reviewId(await f.command('pr-review', url(123)));
+  await f.command('pr-comment', '');
+  // What the conversation's panel shows: the preview of the review that was used there last.
+  const shown = buildPanel(panelSource(f), 'ordinary').next;
+  assert.equal(shown.review, review);
+  const sessionOf = id => [...f.sessions.values()].find(session => session.title === `[AZPR ${id}] Verification`).id;
+  // That preview is planned again from the review's own session, and then the other review is looked at from its
+  // own. Both are answered there: the conversation's panel goes on offering the first preview.
+  assert.match(await f.command('pr-comment', '', sessionOf(review)), /\] PREVIEW; source review=/);
+  assert.match(await f.command('pr-comment', '--show', sessionOf(other)), new RegExp(`^\\[AZPR\\] Saved preview of review ${other}`));
+  assert.deepEqual(buildPanel(panelSource(f), 'ordinary').next, shown);
+  const used = (await savedReview(f, review)).usedAt;
+  // Its step is refused, and nothing was done: the review does not become the current one by it, in this process
+  // or on disk, so a command without an ID still acts on the review that was used last, and on its PR.
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: publishCommand(shown).text }, delivery: 'steer' }), /is no longer as it was shown/);
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${other} \\(/pr-review\\) of PR #456 [^\\n]*; current\\n`));
+  const publication = await f.command('pr-comment', '--publish');
+  assert.match(publication, new RegExp(`^\\[AZPR [a-f0-9]{8}\\] POSTED; source review=${other}\\n`));
+  assert.ok(posted().length > 0 && posted().every(pr => pr === 456), `Comments went to PR ${[...new Set(posted())].join(', ')}.`);
+  assert.equal((await savedReview(f, review)).usedAt, used, 'The refused step saved nothing.');
 });
 
 test('a review\'s receipt offers a preview only of a review that nothing has acted on since', async t => {

@@ -318,7 +318,10 @@ settings, backups and failure records. Never upload `.local/`.
   review as that document was rendered. Read both before anything is
   awaited, or check first that the review's preview is still the one that
   was rendered (`previewState` in `runtime.mjs`: the plan, the adjustments,
-  whether posting began). Under a report a preview is planned, never posted,
+  and what publication has recorded, which every publication writes anew)
+  and await nothing between that check and the receipt's text and offer:
+  whatever is saved then is saved after them.
+  Under a report a preview is planned, never posted,
   and only while nothing has acted on that review since; a preview offers
   what is done with that preview. The command locks are released before a
   run's sessions are cleaned up: a preview that another command adjusted,
@@ -334,8 +337,10 @@ settings, backups and failure records. Never upload `.local/`.
   is acted on. A panel knows only what its own conversation was told; a
   command typed in a review's own session, or another client, changes the
   review without a notice there. The runtime refuses a command whose word
-  is no longer the review's, when it arrives and again under the comment
-  lock, before anything is planned, saved or posted. Make the word of
+  is no longer the review's: when it arrives, before the review becomes
+  the current one (a step refused there changes nothing, also not which
+  review the next command without an ID acts on), and again under the
+  comment lock, before anything is planned, saved or posted. Make the word of
   nothing but what the review's record holds, and never of whether posting
   began: what was shown can be posted again. A typed command carries none
   and keeps its behaviour. Posting asks first, in a list whose first row

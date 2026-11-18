@@ -546,9 +546,10 @@ gives way wherever it can tell, and also where it cannot:
 - A read of the feed never rejects, also while nobody awaits it yet: a feed
   that fails has ended, and nothing is written that could not be watched.
 
-What this cannot do: a person who gives a name and then exactly AZPR's words,
-both in that moment, keeps the name given first; and a host that reported
-renames in another order than they took place would mislead it. With debug
+What this cannot do: a person who gives a name and then exactly the words
+AZPR wrote last (its own name, or a name it had just written back), both in
+that moment, keeps the name given first; and a host that reported renames in
+another order than they took place would mislead it. With debug
 records on, `conversation-name.json` says how the naming ended (`named`,
 `kept`, `restored`, `unconfirmed` when the host did not report a write in
 time, `failed` when it refused one), never with a name that is not AZPR's
@@ -999,8 +1000,13 @@ are released before a run's sessions are cleaned up, so another `/pr-comment`
 command may have adjusted the review, planned its preview again or posted it
 by the time the receipt is written (`previewState` in `runtime.mjs`: the plan
 and the adjustments, each of which a command replaces with another object,
-and whether posting began). Such a preview is no longer what would be
-posted: the run then ends with a receipt of a status of its own,
+and what publication has recorded, which every publication writes anew, also
+one that follows an earlier publication; nothing is awaited between that look
+at the review and the receipt's text and offer, and the record is saved after
+them, so the document, the offer and its word are of one moment). Such a
+preview is no
+longer what would be posted: the run then ends with a receipt of a status of
+its own,
 `[AZPR <run>] REPLACED; source review=<id>`, which encloses nothing and
 offers nothing. It does not make its review the conversation's current one,
 since it says nothing a person acts on. The panel's model takes it for the end
@@ -1056,11 +1062,14 @@ offer also carries one word for the review's comments as they are
 (`commentToken` in `comments.mjs`: the review, the moment its saved preview
 was planned, or none, and the adjustments; the record holds all of it, so the
 word is the same after a restart), and every command the panel sends hands
-the word back as `--seen`. The runtime compares it when the command arrives
-and again under the comment lock, and refuses a command whose review is no
-longer as it was shown, before anything is planned, saved or posted. Posting
-does not change the word, since what was shown can be posted again. A
-command a person types carries none and acts on the review as it is. One action runs at a time; a command
+the word back as `--seen`. The runtime compares it when the command arrives,
+before the review becomes the conversation's current one, and again under the
+comment lock, and refuses a command whose review is no longer as it was
+shown, before anything is planned, saved or posted: a step refused when it
+arrives changes nothing, also not which review a command without an ID acts
+on next. Posting does not change the word, since what was shown can be posted
+again. A command a person types carries none and acts on the review as it is.
+One action runs at a time; a command
 that the server part refuses, or that does not get there, is said with the
 reason given, as the host says it for a typed command; after the terminal part
 was unloaded nothing is asked or sent. A host without that client call or
