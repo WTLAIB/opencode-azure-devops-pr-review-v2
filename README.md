@@ -1215,9 +1215,10 @@ A conversation nobody named yet, which OpenCode lists as **New session**, is
 named after the PR when its first check or review starts
 (`AZPR: PR #123 (repository)`): an AZPR command never makes the conversation's
 own model run, which is what names a conversation otherwise. A conversation
-that has a name keeps it, and a name that you or OpenCode's model give it in
-that very moment stands: AZPR follows the renames OpenCode reports and writes
-such a name back if its own replaced it.
+that has a name keeps it. OpenCode has no rename that applies only to an
+unnamed conversation, so AZPR follows the renames OpenCode reports: a name
+that you or OpenCode's model give in that very moment stands, and is written
+back where AZPR's own may have replaced it.
 In the terminal UI you need not look for these sessions in the list: the
 [terminal panel](#terminal-panel) names those of the latest review and opens
 the one you click.

@@ -118,19 +118,24 @@ settings, backups and failure records. Never upload `.local/`.
   person typed (`conversationTitle`): no model runs there to name it, and the
   session list would go on calling it "New session". Never put text from the
   PR into a title, and never let a command wait for the update or fail on
-  it. Never leave a title replaced: OpenCode has no rename that applies only
-  to an unnamed conversation, so a read followed by a write would replace a
-  name given in between. Name a conversation only where the host reports
-  renames (`session.renamed`), follow them from before the read, and let
-  their order decide (`nameConversation` in `runtime.mjs`): a name anyone
-  else gave first stops the naming, one that AZPR's write replaced is
-  written back, and one given afterwards stands. One watch names a
-  conversation at a time, since a second one would take the first one's
-  rename for its own. The watch gives up when the host has been silent for
-  a while, but never while a write of its own is under way, which could
-  still replace a name; it ends with the plugin. No read of the feed may be
-  left without a handler: a feed that fails has ended. A host without that
-  feed names nothing, and a name that is not AZPR's own is never recorded.
+  it.
+- OpenCode has no rename that applies only to an unnamed conversation, and
+  nothing ties a rename it reports to the call that made it: a read followed
+  by a write can replace a name given in between, and no plugin can rule
+  that out. So AZPR's own name must give way wherever it can tell, and also
+  where it cannot (`nameConversation` in `runtime.mjs`). Name a conversation
+  only where the host reports renames (`session.renamed`), and follow them
+  from before the read. A rename reported during the read stops the naming.
+  A report with other words than AZPR wrote is someone else's name; one with
+  AZPR's words that follows it may be the write that replaced it, so that
+  name is written back: in doubt, the name that is not AZPR's stays. Keep
+  the watch open for a while after the host answered AZPR's last write,
+  never close it while a write is under way, bound the number of writes,
+  let one watch name a conversation at a time, and let unloading end what
+  is under way first. No read of the feed may be left without a handler: a
+  feed that fails has ended. A host without that feed names nothing, and a
+  name that is not AZPR's own is never recorded. Say this limit where the
+  naming is described; never write "never replaced".
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a

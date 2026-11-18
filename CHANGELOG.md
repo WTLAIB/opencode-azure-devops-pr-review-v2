@@ -85,13 +85,17 @@ Conversations:
   stayed "New session" in the session list. A check or a review now names a
   conversation nobody named after the PR its URL names, for example
   `AZPR: PR #123 (repository)`. The PR's own title is not used.
-- A name that is there stays, also one that a person or OpenCode's model
-  gives in the same moment: OpenCode has no rename that applies only to an
-  unnamed conversation, so AZPR follows the renames the host reports and
-  writes back a name that its own replaced. One conversation is named by one
-  watch at a time, and the watch does not give up while a write of its own
-  is under way. A host that reports no renames gets no name from AZPR. With
-  debug records on, `conversation-name.json` says how naming ended.
+- A name that is there stays. OpenCode has no rename that applies only to an
+  unnamed conversation, and nothing ties a rename it reports to the call
+  that made it, so AZPR's own name gives way wherever it can tell and also
+  where it cannot: it follows the renames the host reports, and a name that
+  a person or OpenCode's model gives in the same moment is written back
+  where AZPR's write may have replaced it. One conversation is named by one
+  watch at a time; the watch stays open for a few seconds after AZPR's
+  write, is not closed while a write is under way, and is ended properly
+  when the plugin is unloaded. A host that reports no renames gets no name
+  from AZPR. With debug records on, `conversation-name.json` says how naming
+  ended.
 
 Setup:
 

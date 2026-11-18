@@ -506,32 +506,44 @@ there, which an AZPR command never makes it do, so the session list would go
 on showing "New session". Nothing waits for it, and a host without
 `session.update` is left as it is.
 
-A title that a person or the host's model gave is never left replaced
-(`isUntitledSession` in `host.mjs` says what counts as none: no title, or the
-dated placeholder of earlier releases). OpenCode has no rename that applies
-only to a conversation without a name: the host's own naming guards itself
-with the sequence of the session's events, which a plugin cannot use. A read
-followed by a write would replace a name given in between. So
-`nameConversation` gives a name only where the host reports renames
-(`session.renamed`, which it follows from before it reads the conversation,
-in the order the renames took place), and lets that report decide. A name
-that anyone else gave before AZPR's is written stops it. A name that AZPR's
-write replaced, because it was reported before AZPR's own, is written back,
-and so on until a write of AZPR's is reported with nothing before it; a name
-given after it stands by itself.
+Whether a conversation has a name is `isUntitledSession` in `host.mjs`: no
+title, or the dated placeholder of earlier releases. OpenCode has no rename
+that applies only to a conversation without a name (its own naming guards
+itself with the sequence of the session's events, which a plugin cannot use),
+and nothing ties a rename it reports to the call that made it. A read followed
+by a write can therefore replace a name that was given in between, and no
+plugin can rule that out. `nameConversation` is built so that AZPR's own name
+gives way wherever it can tell, and also where it cannot:
 
-Three things keep that sound. One conversation is named by one watch at a
-time: a check can end while its rename is still under way, and a second watch
-would take the first one's rename for its own. The watch gives up when the
-host has reported nothing for ten seconds, but never while a write of its own
-is under way: a write that the host answers late can still replace a name,
-which can only be written back while the watch is open. And a read of the
-feed never rejects, also while nobody awaits it yet: a feed that fails has
-ended, and nothing is written that could not be watched. The watch also ends
-when the plugin is unloaded. With debug records on, `conversation-name.json`
-says how it ended (`named`, `kept`, `restored`, `unconfirmed` when the host
-did not report a write in time, `failed` when it refused one), never with a
-name that is not AZPR's own. A host without the event feed names nothing.
+- It names a conversation only where the host reports renames
+  (`session.renamed`), and follows them from before it reads the conversation.
+  A rename reported during that read stops the naming.
+- A report with other words than AZPR wrote is someone else's name. A report
+  with AZPR's words is AZPR's write or someone's choice of the same words,
+  which cannot be told apart. Where it follows someone else's name, that name
+  may have been replaced by AZPR's write, so it is written back: in doubt, the
+  name that is not AZPR's stays. A name given after AZPR's write stands by
+  itself.
+- The watch stays open for three seconds after the host answered AZPR's last
+  write, however promptly a report came, since an earlier name can be reported
+  after it. It is never closed while a write is under way, which could still
+  replace a name, and it writes four times at most: AZPR's name, and three
+  names written back.
+- One conversation is named by one watch at a time: a check can end while its
+  rename is still under way, and a second watch would take the first one's
+  write for someone's choice. When the plugin is unloaded, a watch first ends
+  what it is doing: a write is waited for (five seconds at most on a host that
+  does not answer), and a name it replaced is still written back.
+- A read of the feed never rejects, also while nobody awaits it yet: a feed
+  that fails has ended, and nothing is written that could not be watched.
+
+What this cannot do: a person who gives a name and then exactly AZPR's words,
+both in that moment, keeps the name given first; and a host that reported
+renames in another order than they took place would mislead it. With debug
+records on, `conversation-name.json` says how the naming ended (`named`,
+`kept`, `restored`, `unconfirmed` when the host did not report a write in
+time, `failed` when it refused one), never with a name that is not AZPR's
+own. A host without the event feed names nothing.
 
 A private session is a session of its own, never a child of the conversation.
 OpenCode 2.3.0 and later hand every answer of a child session to its parent as

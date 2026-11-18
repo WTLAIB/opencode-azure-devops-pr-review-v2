@@ -171,7 +171,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   its own model first runs there, which an AZPR command never makes it do, so
   a conversation used only for reviews stayed "New session" in the list. A
   check or a review now names an unnamed conversation after the PR; a name
-  that is there stays, also one given in the same moment.
+  that is there stays, and AZPR's own gives way to one given in the same
+  moment.
 
 ## Planned
 

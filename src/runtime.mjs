@@ -100,8 +100,10 @@ async function bounded(operation, signal) {
   try { return await Promise.race([operation(), stopped]); } finally { signal.removeEventListener('abort', onAbort); }
 }
 const scoped = (operation, signal) => signal ? bounded(operation, signal) : operation();
-// How long naming a conversation waits for the host to report a rename before it gives up; see `nameConversation`.
-const NAMING_MS = 10000;
+// Naming a conversation (`nameConversation`): how long its watch of the host's renames stays open after the host
+// answered its last write, how many names it writes at most (its own, and names it writes back), how long it
+// still watches once the plugin is being unloaded, and how long the unloading waits for all of that.
+const NAMING_MS = 3000, NAMING_WRITES = 4, NAMING_FINISH_MS = 250, NAMING_UNLOAD_MS = 5000;
 async function deadline(operation, milliseconds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('Timed out.')), milliseconds);
@@ -121,7 +123,7 @@ function completedText(text) {
 /**
  * Session/command-scoped integration.
  * `options` (offline tests only): stateDirectory, azureTimeoutMs, retryDelayMs,
- * removeTimeoutMs, stageIdleMs, namingMs, azureBaseUrl and fetch. A base URL override (also
+ * removeTimeoutMs, stageIdleMs, namingMs, namingUnloadMs, azureBaseUrl and fetch. A base URL override (also
  * AZPR_TEST_AZURE_BASE_URL for exact-host fixtures) must be a loopback test server.
  * setup.mjs passes settingsPath and settingsCompletion (what it added to the
  * settings file before this read, for /pr-check).
@@ -1151,54 +1153,72 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * conversation when its own model first runs there, which an AZPR command never makes it do: the session
    * list would go on calling it "New session", as if it were unused.
    *
-   * A name that a person or the host's model gave is never left replaced. OpenCode has no rename that applies
-   * only to a conversation without a name, so one is given only where the host reports renames
-   * (`session.renamed`, in the order they took place), and the report decides: a name anyone else gave before
-   * this one is written stops it, and a name that this write replaced, because it was given between the read
-   * and the write, is written back. A name given after it stands by itself.
-   *
-   * One conversation is named by one watch at a time: a second one would take the first one's rename for its
-   * own. The watch gives up when the host has been silent for NAMING_MS, but never while a write of its own is
-   * under way: a write that the host answers late may still replace a name, which can only be put back while
-   * the watch is open. It also ends with the plugin. Nothing waits for it and a failure changes nothing: a
-   * feed that fails has ended. With debug records on, the run's record says how it ended
-   * (`conversation-name.json`), never with a name that is not AZPR's own.
+   * OpenCode has no rename that applies only to a conversation without a name, and nothing ties a rename it
+   * reports to the call that made it. A read followed by a write can therefore replace a name that was given
+   * in between, and no plugin can rule that out. What AZPR does instead: it names a conversation only where
+   * the host reports renames (`session.renamed`), follows them from before its read, and lets a name that
+   * anyone else gave stand wherever it can tell, and also where it cannot:
+   * - A rename reported while the conversation is read stops the naming.
+   * - A report with other words than AZPR wrote is someone else's name. A report with AZPR's words is AZPR's
+   *   write or someone's choice of the same words; the two cannot be told apart. Where it follows someone
+   *   else's name, that name may have been replaced by AZPR's write, so it is written back: in doubt the name
+   *   that is not AZPR's stays. (The one case this decides wrongly: a person who gives a name and then exactly
+   *   AZPR's words, both in that moment, keeps the name given first.)
+   * - The watch stays open for NAMING_MS after the host answered AZPR's last write, however promptly a report
+   *   came, since an earlier name can be reported after it; and it is never closed while a write is under way,
+   *   which could still replace a name. It writes NAMING_WRITES times at most.
+   * - One conversation is named by one watch at a time: a second one would take the first one's write for
+   *   someone's choice. When the plugin is unloaded, a watch first ends what it is doing (`finish`).
+   * Nothing waits for it and a failure changes nothing: a feed that fails has ended. With debug records on,
+   * the run's record says how it ended (`conversation-name.json`), never with a name that is not AZPR's own.
    */
-  const namings = new Map();   // conversation → what ends the watch that is naming it
+  const namings = new Map();   // conversation → the watch that is naming it: { end(), finish() }
   function nameConversation(run, target) {
     if (disposed || !capabilities.sessionUpdate || !capabilities.eventSubscribe) return;
     const sessionID = run.origin, own = conversationTitle(target);
     if (namings.has(sessionID)) return;
     const ENDED = Object.freeze({ done: true });
-    let feed, timer, stop, outcome = 'kept';
+    let feed, timer, stop, outcome = 'kept', writing = false, finishing = false;
     const stopped = new Promise(resolve => { stop = resolve; });
+    const watch = {};
     const close = () => {
       clearTimeout(timer);
-      if (namings.get(sessionID) === close) namings.delete(sessionID);
+      if (namings.get(sessionID) === watch) namings.delete(sessionID);
       stop(ENDED);
       const ended = feed;
       feed = undefined;
       if (ended) void Promise.resolve().then(() => ended.return?.()).catch(() => {});
     };
-    namings.set(sessionID, close);
+    // The watch closes this long after now, unless a write begins before that.
     const arm = () => {
       clearTimeout(timer);
       if (!feed) return;
-      timer = setTimeout(close, options.namingMs ?? NAMING_MS);
+      timer = setTimeout(close, finishing ? NAMING_FINISH_MS : options.namingMs ?? NAMING_MS);
       timer.unref?.();
     };
     // One read of the feed. It never rejects, also while nobody awaits it yet: a feed that fails has ended.
     const read = () => {
       try { return Promise.resolve(feed.next()).then(result => result ?? ENDED, () => ENDED); } catch { return Promise.resolve(ENDED); }
     };
-    // Another name for this conversation that the feed reports, or undefined for any other event.
+    // A name for this conversation that the feed reports, or undefined for any other event.
     const renamed = event => event?.type === 'session.renamed' && event.data?.sessionID === sessionID && typeof event.data.title === 'string' ? event.data.title : undefined;
-    // One write of a title; whether the host took it. The watch does not give up while it is under way.
+    // One write of a name; whether the host took it. The watch is not closed while it is under way.
     const write = async title => {
       clearTimeout(timer);
-      try { await context.session.update({ sessionID, title }); return true; } catch { return false; } finally { arm(); }
+      writing = true;
+      try { await context.session.update({ sessionID, title }); return true; } catch { return false; } finally { writing = false; arm(); }
     };
-    void (async () => {
+    // On record before anything can end it, so that a watch that ends at once leaves none behind.
+    namings.set(sessionID, watch);
+    watch.end = close;
+    // The plugin is being unloaded: what is under way is ended first. A write is waited for, and what the feed
+    // has reported by a moment after it is still acted on, so that a name it replaced is written back.
+    watch.finish = () => {
+      finishing = true;
+      if (!writing) arm();
+      return watch.done;
+    };
+    watch.done = (async () => {
       try {
         feed = context.event.subscribe({ types: ['session.renamed'] })[Symbol.asyncIterator]();
         arm();
@@ -1216,24 +1236,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           if (renamed(arrived.value) !== undefined) return;
         }
         if (disposed) return;
-        // `awaited` is the name AZPR wrote that the feed has not reported yet; `theirs` is the last name anyone
-        // else gave since. When the feed reports AZPR's write after `theirs`, that write replaced it.
-        // Until the feed reports a write, the record says only whether the host took it.
-        let awaited = own, theirs, restoring = false;
-        outcome = await write(own) ? 'unconfirmed' : 'failed';
+        // `mine` is what AZPR wrote last; `theirs` is the last name with other words that the feed reported
+        // since. A report with the words of `mine` after `theirs` may be the write that replaced it.
+        let mine = own, theirs, writes = 1;
+        outcome = await write(mine) ? 'unconfirmed' : 'failed';
         for (;;) {
           const next = await Promise.race([pending, stopped]);
           if (next.done || !feed) return;
           pending = read();
           const title = renamed(next.value);
           if (title === undefined) continue;
-          if (title !== awaited) { theirs = title; continue; }
-          if (theirs === undefined) { outcome = restoring ? 'restored' : 'named'; return; }
-          if (disposed) return;
-          awaited = theirs;
+          if (title !== mine) { theirs = title; continue; }
+          if (theirs === undefined) { if (outcome === 'unconfirmed' || outcome === 'failed') outcome = mine === own ? 'named' : 'restored'; continue; }
+          if (writes >= NAMING_WRITES) return;
+          mine = theirs;
           theirs = undefined;
-          restoring = true;
-          outcome = await write(awaited) ? 'unconfirmed' : 'failed';
+          writes++;
+          outcome = await write(mine) ? 'unconfirmed' : 'failed';
         }
       } catch { /* Naming is a convenience: the command goes on, and the conversation keeps the name it has. */ }
       finally {
@@ -1971,7 +1990,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await Promise.allSettled([...runs.values()].map(run => abortRun(run, 'OpenCode V2 plugin unloaded.')));
     await Promise.allSettled([...jobs]);
     closeEvents();
-    for (const end of [...namings.values()]) end();
+    // A naming that is under way ends what it is doing: its write is waited for, and a name that the write
+    // replaced is still written back. A host that does not answer is not waited for without end.
+    if (namings.size) {
+      const waited = new AbortController();
+      await Promise.race([Promise.allSettled([...namings.values()].map(watch => watch.finish())), sleep(options.namingUnloadMs ?? NAMING_UNLOAD_MS, waited.signal).catch(() => {})]);
+      waited.abort();
+      for (const watch of [...namings.values()]) watch.end();
+    }
     completed.clear();
     openStores.clear();
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));
