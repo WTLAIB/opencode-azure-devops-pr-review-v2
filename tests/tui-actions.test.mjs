@@ -5,12 +5,14 @@ import { nextOf } from '../src/tui-model.mjs';
 import { parseCommentRequest } from '../src/output.mjs';
 
 const REVIEW = 'bb6a8570', SESSION = 'ses_conversation0000000000001';
+// The word for the review's comments as they were offered; every command hands it back.
+const STATE = '0f1e2d3c4b5a', SEEN = `--seen ${STATE}`;
 // What a preview offers, as the panel's model hands it on after checking it (`nextOf`).
 const offer = (extra = {}, findings = [
   { id: 'F-1', severity: 'medium', summary: 'reserve can leave stock decremented' },
   { id: 'R-2', severity: 'high', summary: 'snapshot returns live state' },
   { id: 'F-3', severity: 'low', summary: 'ordering uses local time' }]) =>
-  nextOf({ azpr: { next: { review: REVIEW, target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 4, findings, ...extra } } }, REVIEW);
+  nextOf({ azpr: { next: { review: REVIEW, state: STATE, target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 4, findings, ...extra } } }, REVIEW);
 
 /**
  * The actions with dialogs that answer from a list, in order; every dialog, toast and command is recorded.
@@ -74,18 +76,18 @@ test('a label that ends in "…" asks before anything is sent, and one that does
 
 test('a command names its review and is made only of checked IDs and level names', () => {
   const next = offer();
-  assert.deepEqual(publishCommand(next), { name: 'pr-comment', text: `${REVIEW} --publish` });
-  assert.deepEqual(resetCommand(next), { name: 'pr-comment', text: `${REVIEW} --reset` });
-  assert.deepEqual(parsed(publishCommand(next)), { reviewId: REVIEW, publish: true, show: false });
-  assert.deepEqual([planCommand(next), parsed(planCommand(next))], [{ name: 'pr-comment', text: REVIEW }, { reviewId: REVIEW, publish: false, show: false }]);
-  assert.deepEqual(parsed(resetCommand(next)), { reviewId: REVIEW, publish: false, show: false, adjust: { reset: true } });
+  assert.deepEqual(publishCommand(next), { name: 'pr-comment', text: `${REVIEW} --publish ${SEEN}` });
+  assert.deepEqual(resetCommand(next), { name: 'pr-comment', text: `${REVIEW} --reset ${SEEN}` });
+  assert.deepEqual(parsed(publishCommand(next)), { reviewId: REVIEW, publish: true, show: false, seen: STATE });
+  assert.deepEqual([planCommand(next), parsed(planCommand(next))], [{ name: 'pr-comment', text: `${REVIEW} ${SEEN}` }, { reviewId: REVIEW, publish: false, show: false, seen: STATE }]);
+  assert.deepEqual(parsed(resetCommand(next)), { reviewId: REVIEW, publish: false, show: false, seen: STATE, adjust: { reset: true } });
   // Both lists in full, in the order of the findings: each list of /pr-comment replaces the saved one.
   const command = adjustCommand(next, { excluded: new Set(['F-3', 'F-1']), levels: new Map([['R-2', 'low']]) });
-  assert.deepEqual(command, { name: 'pr-comment', text: `${REVIEW} --exclude F-1,F-3 --severity R-2=low` });
-  assert.deepEqual(parsed(command), { reviewId: REVIEW, publish: false, show: false, adjust: { exclude: ['F-1', 'F-3'], severity: { 'R-2': 'low' } } });
+  assert.deepEqual(command, { name: 'pr-comment', text: `${REVIEW} --exclude F-1,F-3 --severity R-2=low ${SEEN}` });
+  assert.deepEqual(parsed(command), { reviewId: REVIEW, publish: false, show: false, seen: STATE, adjust: { exclude: ['F-1', 'F-3'], severity: { 'R-2': 'low' } } });
   // An empty list is said as such; a finding that is left out has no level; a level that is the review's own is none.
-  assert.equal(adjustCommand(next, { excluded: new Set(['R-2']), levels: new Map([['R-2', 'low'], ['F-1', 'medium']]) }).text, `${REVIEW} --exclude R-2 --severity none`);
-  assert.equal(adjustCommand(next, { excluded: new Set(), levels: new Map([['F-3', 'high']]) }).text, `${REVIEW} --exclude none --severity F-3=high`);
+  assert.equal(adjustCommand(next, { excluded: new Set(['R-2']), levels: new Map([['R-2', 'low'], ['F-1', 'medium']]) }).text, `${REVIEW} --exclude R-2 --severity none ${SEEN}`);
+  assert.equal(adjustCommand(next, { excluded: new Set(), levels: new Map([['F-3', 'high']]) }).text, `${REVIEW} --exclude none --severity F-3=high ${SEEN}`);
   assert.equal(adjustCommand(next, { excluded: new Set(), levels: new Map() }), undefined, 'Nothing changed: nothing is sent.');
   assert.equal(adjustCommand(next, { excluded: new Set(), levels: new Map([['F-1', 'medium']]) }), undefined);
   // What a preview was planned with is where a person starts; undoing all of it is --reset.
@@ -94,7 +96,7 @@ test('a command names its review and is made only of checked IDs and level names
   assert.deepEqual([[...saved.excluded], [...saved.levels]], [['R-2'], [['F-1', 'low']]]);
   assert.equal(adjustCommand(adjusted, saved), undefined);
   assert.deepEqual(adjustCommand(adjusted, { excluded: new Set(), levels: new Map() }), resetCommand(adjusted));
-  assert.equal(adjustCommand(adjusted, { excluded: new Set(['R-2']), levels: new Map() }).text, `${REVIEW} --exclude R-2 --severity none`);
+  assert.equal(adjustCommand(adjusted, { excluded: new Set(['R-2']), levels: new Map() }).text, `${REVIEW} --exclude R-2 --severity none ${SEEN}`);
 });
 
 test('posting asks once more, with "no" first, and sends nothing unless a person says yes', async () => {
@@ -104,7 +106,7 @@ test('posting asks once more, with "no" first, and sends nothing unless a person
   assert.deepEqual(yes.titles(), ['Post these comments on the pull request?']);
   assert.deepEqual(yes.shown[0].options.map(option => [option.title, option.value]), [['No, post nothing', 'keep'], ['Yes, post 4 comments', 'post']], 'A key pressed twice chooses the first row.');
   assert.equal(yes.shown[0].options[0].description, `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, 'Which review and PR, in the runtime\'s words.');
-  assert.deepEqual(yes.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --publish` }]);
+  assert.deepEqual(yes.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --publish ${SEEN}` }]);
   for (const answer of ['keep', undefined]) {
     const no = host([answer]);
     await no.actions.run('publish', next, SESSION);
@@ -135,7 +137,7 @@ test('findings are adjusted in a list: each pick says what happens to one, and i
   // One finding: its levels, the review's own marked, then leaving it out; the dialog starts on what holds now.
   assert.deepEqual(h.shown[1].options.map(option => [option.title, option.description]), [['As high', undefined], ['As medium', 'The level the review gave it'], ['As low', undefined], ['Leave it out', 'Not posted, and named in no comment']]);
   assert.equal(h.shown[1].current, 'medium');
-  assert.deepEqual(h.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude F-1 --severity R-2=low` }]);
+  assert.deepEqual(h.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude F-1 --severity R-2=low ${SEEN}` }]);
   assert.equal(h.left(), 0);
 });
 
@@ -150,26 +152,26 @@ test('leaving the list, or a finding, sends nothing; a finding that was left out
   await h.actions.run('adjust', adjusted, SESSION);
   assert.equal(h.shown[1].current, h.shown[1].options.at(-1).value, 'A finding that is left out starts on that row.');
   assert.equal(h.shown.at(-1).options.at(-1).description, 'F-1 published as high, R-2 as high');
-  assert.deepEqual(h.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude none --severity F-1=high` }]);
+  assert.deepEqual(h.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude none --severity F-1=high ${SEEN}` }]);
   // Everything back as the review had it: that is --reset.
   const back = host(['F-1', 'medium', 'R-2', 'high', options => value(options, 'Apply')]);
   await back.actions.run('adjust', adjusted, SESSION);
-  assert.deepEqual(back.sent.map(command => command.text), [`${REVIEW} --reset`]);
+  assert.deepEqual(back.sent.map(command => command.text), [`${REVIEW} --reset ${SEEN}`]);
   // Previewing the comments of a review asks nothing either: a model plans them and nothing is posted.
   const plan = host([options => value(options, 'Apply')]);
   const unplanned = offer({ plan: true, publish: false, posts: 0 });
   await plan.actions.run('plan', unplanned, SESSION);
-  assert.deepEqual([plan.shown.length, plan.sent.map(command => command.text)], [0, [REVIEW]]);
+  assert.deepEqual([plan.shown.length, plan.sent.map(command => command.text)], [0, [`${REVIEW} ${SEEN}`]]);
   await plan.actions.run('publish', unplanned, SESSION);
   assert.equal(plan.sent.length, 1, 'Nothing is posted before a preview.');
   // Adjusted before the first preview, the row that applies it says so.
   const early = host(['F-1', 'low', options => value(options, 'Apply')]);
   await early.actions.run('adjust', unplanned, SESSION);
   assert.equal(early.shown.at(-1).options.at(-1).title, 'Apply, and plan the preview');
-  assert.deepEqual(early.sent.map(command => command.text), [`${REVIEW} --exclude none --severity F-1=low`]);
+  assert.deepEqual(early.sent.map(command => command.text), [`${REVIEW} --exclude none --severity F-1=low ${SEEN}`]);
   const undo = host([]);
   await undo.actions.run('reset', adjusted, SESSION);
-  assert.deepEqual([undo.shown.length, undo.sent.map(command => command.text)], [0, [`${REVIEW} --reset`]], 'Resetting asks nothing: it posts nothing and can be done again.');
+  assert.deepEqual([undo.shown.length, undo.sent.map(command => command.text)], [0, [`${REVIEW} --reset ${SEEN}`]], 'Resetting asks nothing: it posts nothing and can be done again.');
 });
 
 test('the adjustments are applied from the foot of the list, which stays in view: with its key or a click', async () => {
@@ -182,15 +184,15 @@ test('the adjustments are applied from the foot of the list, which stays in view
   assert.equal('actions' in first, false, 'Nothing to apply yet.');
   assert.deepEqual(last.actions.map(({ onTrigger, ...action }) => action), [{ bind: 'ctrl+s', title: 'apply', side: 'right', selection: 'none' }]);
   assert.equal(last.options.at(-1).title, 'Apply, and plan the preview again', 'The row is there as well.');
-  assert.deepEqual([h.sent, h.log.cleared, h.left()], [[{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude R-2 --severity none` }], 1, 0]);
+  assert.deepEqual([h.sent, h.log.cleared, h.left()], [[{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude R-2 --severity none ${SEEN}` }], 1, 0]);
   // A dialog that never answers once it was closed changes nothing: the foot's answer is the one that counts.
   const silent = host(['R-2', 'low', options => { options.actions[0].onTrigger(); return new Promise(() => {}); }], { clear: true });
   await silent.actions.run('adjust', offer(), SESSION);
-  assert.deepEqual(silent.sent.map(command => command.text), [`${REVIEW} --exclude none --severity R-2=low`]);
+  assert.deepEqual(silent.sent.map(command => command.text), [`${REVIEW} --exclude none --severity R-2=low ${SEEN}`]);
   // The row still applies where the foot is there, and leaving the list still sends nothing.
   const row = host(['F-3', 'high', options => value(options, 'Apply')], { clear: true });
   await row.actions.run('adjust', offer(), SESSION);
-  assert.deepEqual([row.sent.map(command => command.text), row.log.cleared], [[`${REVIEW} --exclude none --severity F-3=high`], 0]);
+  assert.deepEqual([row.sent.map(command => command.text), row.log.cleared], [[`${REVIEW} --exclude none --severity F-3=high ${SEEN}`], 0]);
   const left = host(['F-3', 'high', undefined], { clear: true });
   await left.actions.run('adjust', offer(), SESSION);
   assert.deepEqual([left.sent, left.log.cleared], [[], 0]);

@@ -21,7 +21,7 @@ import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStage
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewVerification,
-  everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions } from './comments.mjs';
+  everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
@@ -100,7 +100,7 @@ async function bounded(operation, signal) {
   try { return await Promise.race([operation(), stopped]); } finally { signal.removeEventListener('abort', onAbort); }
 }
 const scoped = (operation, signal) => signal ? bounded(operation, signal) : operation();
-// How long naming a conversation watches the host's renames before it gives up; see `nameConversation`.
+// How long naming a conversation waits for the host to report a rename before it gives up; see `nameConversation`.
 const NAMING_MS = 10000;
 async function deadline(operation, milliseconds) {
   const controller = new AbortController();
@@ -271,7 +271,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       '  /pr-comment --publish                        post the saved preview as the PAT owner; safe to repeat\n' +
       '  /pr-comment --list                           the reviews saved for this conversation, with their IDs (no model)\n' +
       '  /pr-comment 1a2b3c4d --publish               a review ID first acts on that review\n\n' +
-      'Finding IDs are those of the report and the preview (f1 reads as F-1). Each --exclude or --severity list replaces the saved one, so name every finding you want in it.',
+      'Finding IDs are those of the report and the preview (f1 reads as F-1). Each --exclude or --severity list replaces the saved one, so name every finding you want in it.\n\n' +
+      'The terminal panel adds --seen WORD to the commands it sends: the word names the preview and the adjustments its step was offered for, and the command is refused when they have changed since. A typed command needs none.',
   };
   const HELP_ARGUMENT = /^(?:--help|-h)$/;
   const commandDescription = name => COMMAND_DESCRIPTIONS[name];
@@ -1154,70 +1155,85 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * only to a conversation without a name, so one is given only where the host reports renames
    * (`session.renamed`, in the order they took place), and the report decides: a name anyone else gave before
    * this one is written stops it, and a name that this write replaced, because it was given between the read
-   * and the write, is put back. A name given after it stands by itself. Nothing waits for this, a failure
-   * changes nothing, and it ends by itself (`NAMING_MS`). With debug records on, the run's record says how it
-   * ended (`conversation-name.json`), never with a name that is not AZPR's own.
+   * and the write, is written back. A name given after it stands by itself.
+   *
+   * One conversation is named by one watch at a time: a second one would take the first one's rename for its
+   * own. The watch gives up when the host has been silent for NAMING_MS, but never while a write of its own is
+   * under way: a write that the host answers late may still replace a name, which can only be put back while
+   * the watch is open. It also ends with the plugin. Nothing waits for it and a failure changes nothing: a
+   * feed that fails has ended. With debug records on, the run's record says how it ended
+   * (`conversation-name.json`), never with a name that is not AZPR's own.
    */
-  const namings = new Set();   // what ends each watch that is open, for the moment the plugin is unloaded
+  const namings = new Map();   // conversation → what ends the watch that is naming it
   function nameConversation(run, target) {
     if (disposed || !capabilities.sessionUpdate || !capabilities.eventSubscribe) return;
     const sessionID = run.origin, own = conversationTitle(target);
+    if (namings.has(sessionID)) return;
+    const ENDED = Object.freeze({ done: true });
+    let feed, timer, stop, outcome = 'kept';
+    const stopped = new Promise(resolve => { stop = resolve; });
+    const close = () => {
+      clearTimeout(timer);
+      if (namings.get(sessionID) === close) namings.delete(sessionID);
+      stop(ENDED);
+      const ended = feed;
+      feed = undefined;
+      if (ended) void Promise.resolve().then(() => ended.return?.()).catch(() => {});
+    };
+    namings.set(sessionID, close);
+    const arm = () => {
+      clearTimeout(timer);
+      if (!feed) return;
+      timer = setTimeout(close, options.namingMs ?? NAMING_MS);
+      timer.unref?.();
+    };
+    // One read of the feed. It never rejects, also while nobody awaits it yet: a feed that fails has ended.
+    const read = () => {
+      try { return Promise.resolve(feed.next()).then(result => result ?? ENDED, () => ENDED); } catch { return Promise.resolve(ENDED); }
+    };
+    // Another name for this conversation that the feed reports, or undefined for any other event.
+    const renamed = event => event?.type === 'session.renamed' && event.data?.sessionID === sessionID && typeof event.data.title === 'string' ? event.data.title : undefined;
+    // One write of a title; whether the host took it. The watch does not give up while it is under way.
+    const write = async title => {
+      clearTimeout(timer);
+      try { await context.session.update({ sessionID, title }); return true; } catch { return false; } finally { arm(); }
+    };
     void (async () => {
-      let feed, timer, stop, outcome = 'kept';
-      const stopped = new Promise(resolve => { stop = resolve; });
-      // Ends the watch: by itself after NAMING_MS, when naming is over, and when the plugin is unloaded. Whatever
-      // still waits then gives up.
-      const close = () => {
-        clearTimeout(timer);
-        namings.delete(close);
-        stop();
-        const ended = feed;
-        feed = undefined;
-        if (ended) void Promise.resolve().then(() => ended.return?.()).catch(() => {});
-      };
-      namings.add(close);
-      const within = promise => Promise.race([promise, stopped.then(() => { throw new Error('Naming the conversation took too long.'); })]);
       try {
         feed = context.event.subscribe({ types: ['session.renamed'] })[Symbol.asyncIterator]();
-        timer = setTimeout(close, options.namingMs ?? NAMING_MS);
-        timer.unref?.();
+        arm();
         // Listening begins with the first read of the feed, before the conversation is read.
-        let pending = feed.next();
-        // Another name for this conversation that the feed reports, or undefined for any other event.
-        const renamed = event => event?.type === 'session.renamed' && event.data?.sessionID === sessionID && typeof event.data.title === 'string' ? event.data.title : undefined;
-        const NOTHING = Symbol('nothing has arrived');
-        const conversation = recordOf(await within(context.session.get({ sessionID })));
-        if (!conversation || conversation.parentID || !isUntitledSession(conversation)) return;
+        let pending = read();
+        const conversation = recordOf(await Promise.race([context.session.get({ sessionID }), stopped.then(() => undefined)]));
+        if (!feed || !conversation || conversation.parentID || !isUntitledSession(conversation)) return;
         // What the feed reported while the conversation was read: it was named meanwhile.
+        const NOTHING = Symbol('nothing has arrived');
         for (;;) {
           const arrived = await Promise.race([pending, Promise.resolve(NOTHING)]);
           if (arrived === NOTHING) break;
           if (arrived.done || !feed) return;
-          pending = feed.next();
+          pending = read();
           if (renamed(arrived.value) !== undefined) return;
         }
         if (disposed) return;
-        // `written` are the names AZPR wrote that the feed has not reported yet; `theirs` is the last name anyone
-        // else gave since. A write of AZPR's that the feed reports after `theirs` replaced it: it is put back.
-        const written = [own];
-        let theirs;
-        await within(context.session.update({ sessionID, title: own }));
-        outcome = 'unconfirmed';
-        while (written.length) {
-          const next = await within(pending);
+        // `awaited` is the name AZPR wrote that the feed has not reported yet; `theirs` is the last name anyone
+        // else gave since. When the feed reports AZPR's write after `theirs`, that write replaced it.
+        // Until the feed reports a write, the record says only whether the host took it.
+        let awaited = own, theirs, restoring = false;
+        outcome = await write(own) ? 'unconfirmed' : 'failed';
+        for (;;) {
+          const next = await Promise.race([pending, stopped]);
           if (next.done || !feed) return;
-          pending = feed.next();
+          pending = read();
           const title = renamed(next.value);
           if (title === undefined) continue;
-          if (title !== written[0]) { theirs = title; continue; }
-          written.shift();
-          if (theirs === undefined) { if (outcome === 'unconfirmed') outcome = 'named'; continue; }
+          if (title !== awaited) { theirs = title; continue; }
+          if (theirs === undefined) { outcome = restoring ? 'restored' : 'named'; return; }
           if (disposed) return;
-          const back = theirs;
+          awaited = theirs;
           theirs = undefined;
-          written.push(back);
-          outcome = 'restored';
-          await within(context.session.update({ sessionID, title: back }));
+          restoring = true;
+          outcome = await write(awaited) ? 'unconfirmed' : 'failed';
         }
       } catch { /* Naming is a convenience: the command goes on, and the conversation keeps the name it has. */ }
       finally {
@@ -1322,7 +1338,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * command that plans or adjusts puts another object in the place of the plan or of the adjustments, so the
    * same objects, and posting as it was, mean the same preview.
    */
-  const commentState = review => ({ plan: review.plan, adjustments: review.adjustments, posting: publicationStarted(review) });
+  const previewState = review => ({ plan: review.plan, adjustments: review.adjustments, posting: publicationStarted(review) });
+  /** Said to a command that was picked for comments the review no longer has (`--seen`, `commentToken`). */
+  const changedSince = review => `[AZPR] Review ${review.id} is no longer as it was shown: its preview was planned again or its findings were adjusted since, in another session or by another command. Nothing was done. /pr-comment ${review.id} --show shows the saved preview.`;
 
   function renderPlan(review) {
     const plan = review.plan;
@@ -1428,6 +1446,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (next) output.extra = { next };
       return;
     }
+    // A step picked in the terminal panel says what the review's comments were when it was offered. A command
+    // typed in another session of the review, or another client, may have planned or adjusted since, which
+    // that panel was not told: what is acted on is what was on screen, or nothing. Checked here to answer at
+    // once, and again under the comment lock before anything is planned, saved or posted.
+    if (request.seen && request.seen !== commentToken(review)) throw new Error(changedSince(review));
     if (request.adjust) {
       // Checked here to answer at once, and again under the comment lock before anything is saved.
       if (publicationStarted(review)) throw new Error(adjustmentsClosed(review));
@@ -1435,7 +1458,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         output.text = `[AZPR] Review ${review.id} already has these adjustments; nothing was planned. /pr-comment ${review.id} --show shows the saved preview, and /pr-comment ${review.id} plans it again.${await kept ? '' : UNSAVED_CHOICE}`;
         return;
       }
-      return commentOn(review, { publish: false, notifySession: input.sessionID, adjust: request.adjust }, output, dispatch);
+      return commentOn(review, { publish: false, notifySession: input.sessionID, adjust: request.adjust, seen: request.seen }, output, dispatch);
     }
     // A review a person adjusted (also one reset since) is posted only from a preview planned after
     // its latest adjustment, as the person read it: never planned and posted in one step, and once
@@ -1448,7 +1471,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         throw new Error(`[AZPR] Publication of review ${review.id}'s adjusted preview has started, so it is not planned again. /pr-comment ${review.id} --publish retries the saved preview and /pr-comment ${review.id} --show shows it; run a new review to change what is posted.`);
       }
     }
-    return commentOn(review, { publish: request.publish, notifySession: input.sessionID }, output, dispatch);
+    return commentOn(review, { publish: request.publish, notifySession: input.sessionID, seen: request.seen }, output, dispatch);
   }
 
   /**
@@ -1469,7 +1492,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (!others) await saveSelection(review);
     }
   }
-  async function commentRun(review, { publish, notifySession, auto, adjust }, output, dispatch) {
+  async function commentRun(review, { publish, notifySession, auto, adjust, seen }, output, dispatch) {
     // A saved review whose verification cannot be established is never commented on.
     const verification = reviewVerification(review);
     if (!verification) throw new Error(`[AZPR] Review ${review.id} does not say whether its findings were verified; run a new review before commenting.`);
@@ -1480,6 +1503,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       profile: review.profile, review, lockKey: targetKey(review.target), startNote: ` It acts on ${describeReview(review)}.`,
       ...(auto ? { auto, startLabel: step } : adjust ? { startLabel: `(adjusting the findings of review ${review.id})` } : {}) }, async run => {
       run.snapshot = review.snapshot;
+      // Under the comment lock, where no other comment command of this PR runs: the review's comments are still
+      // the ones this command was picked for.
+      if (seen && seen !== commentToken(review)) throw new Error(changedSince(review));
       if (adjust) {
         // Under the comment lock: a publication that began since the request closes the adjustments.
         if (publicationStarted(review)) throw new Error(adjustmentsClosed(review));
@@ -1529,7 +1555,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       const preview = renderPlan(review);
       // What the receipt says and offers is true of the review as it is here, under the command's lock.
-      shown = commentState(review);
+      shown = previewState(review);
       if (everyFindingExcluded(review)) {
         return { status: 'NOTHING_TO_POST', report: `${preview}\n\nA person excluded every finding of review ${review.id}, so nothing will be posted. /pr-comment ${review.id} --exclude none restores them.` };
       }
@@ -1580,7 +1606,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // planned its preview again or posted it since. What this run planned is then not what a person would post
     // or adjust now: it is neither enclosed nor offered, and the run says so in a notice that is no receipt, so
     // that the terminal panel goes on showing the other command's. That command's receipt says what is next.
-    const now = commentState(review);
+    const now = previewState(review);
     if (status === 'PREVIEW' && shown && (now.plan !== shown.plan || now.adjustments !== shown.adjustments || now.posting !== shown.posting)) {
       output.text = `[AZPR ${run.id}] Preview replaced before its receipt: while this run ended, another /pr-comment command changed or posted the preview of ${describeReview(review)}, so what this run planned is not shown. The receipt of that command says what can be done next.\n${renderDiagnosticNotices(run, settings)}All grants are revoked.`;
       return;
@@ -1945,7 +1971,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     await Promise.allSettled([...runs.values()].map(run => abortRun(run, 'OpenCode V2 plugin unloaded.')));
     await Promise.allSettled([...jobs]);
     closeEvents();
-    for (const end of [...namings]) end();
+    for (const end of [...namings.values()]) end();
     completed.clear();
     openStores.clear();
     await Promise.allSettled(registrations.reverse().map(r => r.dispose()));

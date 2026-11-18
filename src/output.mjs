@@ -730,7 +730,9 @@ export function normalizeFindingId(value) {
 }
 
 const COMMENT_USAGE = '[AZPR] Usage: /pr-comment [review-id] [--publish | --show], or with --exclude <IDs|none> and/or --severity <ID=high|medium|low,…|none>, or --reset; /pr-comment --list shows the saved reviews. Without an ID the command acts on this conversation\'s current review. /pr-comment --help has examples.';
-const COMMENT_OPTIONS = ['publish', 'show', 'list', 'exclude', 'severity', 'reset'];
+const COMMENT_OPTIONS = ['publish', 'show', 'list', 'exclude', 'severity', 'reset', 'seen'];
+// The word for what a review's comments were when a step was offered (`commentToken` in comments.mjs).
+const SEEN = /^[a-f0-9]{12}$/;
 
 /**
  * /pr-comment's arguments: an optional review ID, then at most one of
@@ -739,6 +741,10 @@ const COMMENT_OPTIONS = ['publish', 'show', 'list', 'exclude', 'severity', 'rese
  * for an empty one) or --reset alone. List items are separated by commas or
  * spaces. --list stands alone and names no review. Anything else is refused.
  * Without an ID the runtime picks the conversation's current review.
+ * --seen <word> goes with any of them but --show and --list: it names what the
+ * review's preview and adjustments were when the step was offered, and the
+ * runtime refuses the command when they are something else by now. The
+ * terminal panel adds it to the commands it sends; a typed command needs none.
  */
 export function parseCommentRequest(raw) {
   const args = String(raw ?? '').trim().split(/\s+/).filter(Boolean);
@@ -749,7 +755,7 @@ export function parseCommentRequest(raw) {
     const option = /^--([a-z]+)(?:=([\s\S]*))?$/.exec(token);
     if (option) {
       if (!COMMENT_OPTIONS.includes(option[1]) || values.has(option[1])) throw new Error(COMMENT_USAGE);
-      open = ['exclude', 'severity'].includes(option[1]) ? option[1] : null;
+      open = ['exclude', 'severity', 'seen'].includes(option[1]) ? option[1] : null;
       if (option[2] !== undefined && !open) throw new Error(COMMENT_USAGE);
       values.set(option[1], option[2] === undefined ? [] : [option[2]]);
       continue;
@@ -757,8 +763,13 @@ export function parseCommentRequest(raw) {
     if (!open) throw new Error(COMMENT_USAGE);
     values.get(open).push(token);
   }
+  const seen = values.get('seen');
+  if (seen && (seen.length !== 1 || !SEEN.test(seen[0]) || values.has('show') || values.has('list'))) {
+    throw new Error('[AZPR] --seen takes the one word the terminal panel adds to its commands, and goes with neither --show nor --list; a typed command needs none.');
+  }
+  values.delete('seen');
   const named = [...values.keys()];
-  const request = { ...(reviewId ? { reviewId } : {}), publish: values.has('publish'), show: values.has('show') };
+  const request = { ...(reviewId ? { reviewId } : {}), publish: values.has('publish'), show: values.has('show'), ...(seen ? { seen: seen[0] } : {}) };
   if (values.has('list')) {
     if (named.length > 1 || reviewId) throw new Error(COMMENT_USAGE);
     return { list: true };

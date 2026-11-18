@@ -70,7 +70,10 @@ terminal UI, not by the service, and only when the terminal UI starts.
 - **"/pr-comment was not started".** The reason follows, as for a typed
   command: another AZPR command is running in the conversation or on the PR,
   the review is no longer kept, or the terminal UI could not reach the
-  OpenCode server.
+  OpenCode server. "Review … is no longer as it was shown" means that the
+  preview was planned again or the findings were adjusted somewhere the
+  panel was not told of (the review's own session, another client): run
+  `/pr-comment --show` and pick from what it shows.
 - **Other clients.** The desktop app and other OpenCode clients do not load
   the panel.
 
@@ -114,7 +117,7 @@ session holding the report or draft stays.
 | `azure-calls.jsonl` | Every Azure DevOps REST call, from the runtime and the reviewers' AZPR tools: method, call, file path or change page, attempt, HTTP status or error kind, duration, bytes, and whether it will be retried. Never credentials or comment bodies. |
 | `result.json` | Final status, every stage record, Azure call and retry counts, the run's token totals with `cachedInputShare`, and warnings; `searchUnavailable` lists why content search could not run, when it could not. A review records the comment step it hands on (`afterReview`: mode and source, when a step or `--no-comment` applies); an automatic comment run records `automatic` (mode, source, `sourceReview` and the reasons in `heldBack`). |
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
-| `conversation-name.json` | For a check or a review: how naming the conversation ended. `named` (with AZPR's own name for it), `kept` (it had a name, or got one meanwhile), `restored` (a name given in that moment was put back) or `unconfirmed` (the name was written, but OpenCode did not report the rename in time). A name that is not AZPR's own is never recorded. |
+| `conversation-name.json` | For a check or a review: how naming the conversation ended. `named` (with AZPR's own name for it), `kept` (it had a name, or got one meanwhile), `restored` (a name given in that moment was written back), `unconfirmed` (a name was written, but OpenCode did not report the rename in time) or `failed` (OpenCode refused the write and reported no rename). A name that is not AZPR's own is never recorded. |
 
 The numeric prefix is stage creation order; shards and verification sessions run
 in parallel.

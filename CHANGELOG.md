@@ -46,6 +46,14 @@ The terminal panel:
   for. If the preview is planned again, another session comes on screen or
   the panel is closed while a question is open, nothing is sent, and the
   panel says so: a preview is not posted unread.
+- A panel knows only what its own conversation was told, and a command typed
+  in a review's own session, or in another client, changes the review without
+  a notice there. Each command the panel sends therefore ends with
+  `--seen <word>`, which names the saved preview and the adjustments its step
+  was offered for; AZPR refuses the command when they are others by now
+  (`Review <id> is no longer as it was shown: …`), and `/pr-comment --show`
+  shows the saved preview again with its steps. A command you type needs no
+  such word and acts on the review as it is.
 - What can be picked comes from the runtime, in the metadata of the notice
   that offers it (which no model reads), not from the text on screen: which
   review, whether its preview can be posted, and each finding with its level
@@ -80,9 +88,10 @@ Conversations:
 - A name that is there stays, also one that a person or OpenCode's model
   gives in the same moment: OpenCode has no rename that applies only to an
   unnamed conversation, so AZPR follows the renames the host reports and
-  writes back a name that its own replaced. A host that reports no renames
-  gets no name from AZPR. With debug records on, `conversation-name.json`
-  says how naming ended.
+  writes back a name that its own replaced. One conversation is named by one
+  watch at a time, and the watch does not give up while a write of its own
+  is under way. A host that reports no renames gets no name from AZPR. With
+  debug records on, `conversation-name.json` says how naming ended.
 
 Setup:
 

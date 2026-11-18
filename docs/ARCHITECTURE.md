@@ -518,12 +518,20 @@ in the order the renames took place), and lets that report decide. A name
 that anyone else gave before AZPR's is written stops it. A name that AZPR's
 write replaced, because it was reported before AZPR's own, is written back,
 and so on until a write of AZPR's is reported with nothing before it; a name
-given after it stands by itself. The watch ends by itself after ten seconds,
-and when the plugin is unloaded.
-With debug records on, `conversation-name.json` says how it ended (`named`,
-`kept`, `restored`, or `unconfirmed` when the host did not report AZPR's own
-rename in time), never with a name that is not AZPR's own. A host without the
-event feed names nothing.
+given after it stands by itself.
+
+Three things keep that sound. One conversation is named by one watch at a
+time: a check can end while its rename is still under way, and a second watch
+would take the first one's rename for its own. The watch gives up when the
+host has reported nothing for ten seconds, but never while a write of its own
+is under way: a write that the host answers late can still replace a name,
+which can only be written back while the watch is open. And a read of the
+feed never rejects, also while nobody awaits it yet: a feed that fails has
+ended, and nothing is written that could not be watched. The watch also ends
+when the plugin is unloaded. With debug records on, `conversation-name.json`
+says how it ended (`named`, `kept`, `restored`, `unconfirmed` when the host
+did not report a write in time, `failed` when it refused one), never with a
+name that is not AZPR's own. A host without the event feed names nothing.
 
 A private session is a session of its own, never a child of the conversation.
 OpenCode 2.3.0 and later hand every answer of a child session to its parent as
@@ -1012,7 +1020,20 @@ actions a way to ask whether the step is still what the panel offers
 session, with the same notice offering. An answer that comes back for
 anything else sends nothing and says so in a toast: a preview that was
 planned again while the question was open is not posted unread, and nothing
-goes to a session that left the screen. One action runs at a time; a command
+goes to a session that left the screen.
+
+That check knows only what this conversation was told. A command typed in a
+review's own session is answered there, and another client's panel may have
+its own question open: the review changes, and no notice arrives here. So an
+offer also carries one word for the review's comments as they are
+(`commentToken` in `comments.mjs`: the review, the moment its saved preview
+was planned, or none, and the adjustments; the record holds all of it, so the
+word is the same after a restart), and every command the panel sends hands
+the word back as `--seen`. The runtime compares it when the command arrives
+and again under the comment lock, and refuses a command whose review is no
+longer as it was shown, before anything is planned, saved or posted. Posting
+does not change the word, since what was shown can be posted again. A
+command a person types carries none and acts on the review as it is. One action runs at a time; a command
 that the server part refuses, or that does not get there, is said with the
 reason given, as the host says it for a typed command; after the terminal part
 was unloaded nothing is asked or sent. A host without that client call or

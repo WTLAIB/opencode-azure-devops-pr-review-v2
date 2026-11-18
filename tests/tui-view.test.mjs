@@ -326,7 +326,7 @@ test('the token field keeps at most what a token can be, and an empty one is giv
 // ------------------------------------------------------------------------------------------- the panel's rows
 const REVIEW = 'bb6a8570', RUN = '36ed1562', CONVERSATION = 'ses_conversation0000000000001';
 const previewNotice = { text: `[AZPR ${RUN}] PREVIEW; source review=${REVIEW}\nActed on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository.\n\n<azpr_comment_data>\n## PR Review Summary\n</azpr_comment_data>\nNext (no review ID is needed while ${REVIEW} is this conversation's current review):\n  /pr-comment --publish`,
-  metadata: { azpr: { next: { review: REVIEW, target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 2,
+  metadata: { azpr: { next: { review: REVIEW, state: '0f1e2d3c4b5a', target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 2,
     findings: [{ id: 'F-1', severity: 'medium', summary: 'a defect' }, { id: 'R-2', severity: 'low', original: 'high', summary: 'another' }] } } } };
 
 /**
@@ -419,7 +419,7 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   publish.props.onMouseUp({ button: 0, stopPropagation() {} });
   await settle();
   assert.deepEqual(ui.log.shown.map(dialog => [dialog.title, dialog.options[0].title]), [['Post these comments on the pull request?', 'No, post nothing']]);
-  assert.deepEqual(ui.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --publish` }]);
+  assert.deepEqual(ui.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --publish --seen 0f1e2d3c4b5a` }]);
   // A key that would only type a letter into the prompt is drawn dim: its colour says that it works.
   const prompt = panelTui([previewNotice], [], { focused: false });
   t.after(prompt.stop);
@@ -431,7 +431,7 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   await settle();
   keys.command('azpr.panel.reset').run();
   await settle();
-  assert.deepEqual(keys.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --reset` }], 'Posting was declined; resetting asks nothing.');
+  assert.deepEqual(keys.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --reset --seen 0f1e2d3c4b5a` }], 'Posting was declined; resetting asks nothing.');
   assert.equal(keys.left(), 0);
 });
 
@@ -469,7 +469,7 @@ test('an answer counts only while the panel still shows that offer there: not af
   t.after(same.stop);
   same.command('azpr.panel.publish').run();
   await settle();
-  assert.deepEqual([same.log.sent.map(command => command.text), same.log.toasts], [[`${REVIEW} --publish`], []]);
+  assert.deepEqual([same.log.sent.map(command => command.text), same.log.toasts], [[`${REVIEW} --publish --seen 0f1e2d3c4b5a`], []]);
 });
 
 test('nothing is offered while a run is under way, for a preview without that data, or on a host that cannot send a command', async t => {

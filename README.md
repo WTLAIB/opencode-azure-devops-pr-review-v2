@@ -909,6 +909,7 @@ troubleshooting.
 | `/pr-comment [review-id] --show` | Show the saved preview again; no model or Azure DevOps request. |
 | `/pr-comment [review-id] --exclude <IDs>` / `--severity <ID=level,…>` / `--reset` | Leave findings out or change their severity after reading the preview, then preview again, for example `--exclude F-1,R-2` (see [adjusting findings](docs/COMMENTING.md#adjusting-findings-after-a-preview)). |
 | `/pr-comment --list` | The reviews saved for this conversation, with their IDs, PRs and state; no model or Azure DevOps request. |
+| `/pr-comment … --seen <word>` | What the terminal panel adds to the commands it sends: the word names the preview and the adjustments its step was offered for, and the command is refused when they have changed since. A typed command needs none. |
 | `/<command> --help` | The command's usage and examples; no model or Azure DevOps request. |
 
 A `/pr-comment` command without a review ID acts on the conversation's
@@ -1019,8 +1020,11 @@ and the conversation side by side.
   the review shown, and its STARTED notice and receipt follow as always. A
   click there leaves the keyboard with the prompt. If the preview is planned
   again, or another session comes on screen, while a question is open, the
-  answer is not acted on and the panel says so: nothing is posted that you
-  have not read.
+  answer is not acted on and the panel says so. Each command also says which
+  preview and adjustments it was picked for (`--seen`), and AZPR refuses it
+  when they are others by now, for instance after a command typed in the
+  review's own session or in another client: nothing is posted that you have
+  not read.
 - **Keys.** `/pr-panel` shows and hides the panel; it is the panel's only
   command. A click inside its text gives it the keyboard: the arrow keys or
   `j` and `k`, Page Up and Page Down, Home and End scroll, `p`, `a`, `u` and
@@ -1212,7 +1216,7 @@ named after the PR when its first check or review starts
 (`AZPR: PR #123 (repository)`): an AZPR command never makes the conversation's
 own model run, which is what names a conversation otherwise. A conversation
 that has a name keeps it, and a name that you or OpenCode's model give it in
-that very moment stands: AZPR watches the renames OpenCode reports and puts
+that very moment stands: AZPR follows the renames OpenCode reports and writes
 such a name back if its own replaced it.
 In the terminal UI you need not look for these sessions in the list: the
 [terminal panel](#terminal-panel) names those of the latest review and opens

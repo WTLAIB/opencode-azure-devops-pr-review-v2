@@ -124,9 +124,13 @@ settings, backups and failure records. Never upload `.local/`.
   renames (`session.renamed`), follow them from before the read, and let
   their order decide (`nameConversation` in `runtime.mjs`): a name anyone
   else gave first stops the naming, one that AZPR's write replaced is
-  written back, and one given afterwards stands. A host without that feed
-  names nothing, the watch ends by itself and with the plugin, and a name
-  that is not AZPR's own is never recorded.
+  written back, and one given afterwards stands. One watch names a
+  conversation at a time, since a second one would take the first one's
+  rename for its own. The watch gives up when the host has been silent for
+  a while, but never while a write of its own is under way, which could
+  still replace a name; it ends with the plugin. No read of the feed may be
+  left without a handler: a feed that fails has ended. A host without that
+  feed names nothing, and a name that is not AZPR's own is never recorded.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -313,9 +317,19 @@ settings, backups and failure records. Never upload `.local/`.
   offered, and its run says so in a notice that is no receipt, so that the
   panel goes on showing the other command's. `buildPanel` holds an offer to
   its kind of document as well.
-- A step's command names its review, so that what is on screen is what is
-  acted on. Posting asks first, in a list whose first row posts nothing; an
-  adjustment gives both lists in full, since each replaces the saved one.
+- A step's command names its review and, with `--seen`, what that review's
+  comments were when the step was offered (`commentToken` in `comments.mjs`:
+  the saved preview and the adjustments), so that what is on screen is what
+  is acted on. A panel knows only what its own conversation was told; a
+  command typed in a review's own session, or another client, changes the
+  review without a notice there. The runtime refuses a command whose word
+  is no longer the review's, when it arrives and again under the comment
+  lock, before anything is planned, saved or posted. Make the word of
+  nothing but what the review's record holds, and never of whether posting
+  began: what was shown can be posted again. A typed command carries none
+  and keeps its behaviour. Posting asks first, in a list whose first row
+  posts nothing; an adjustment gives both lists in full, since each
+  replaces the saved one.
   One action runs at a time, and after `stop()` nothing is asked or sent,
   whatever answer arrives. An answer counts only for what the panel still
   offers (`still`): the same panel, drawn and the one the host shows in that

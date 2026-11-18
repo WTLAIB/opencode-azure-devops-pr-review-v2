@@ -181,6 +181,21 @@ export function previewNextSteps(review, { held = false } = {}) {
 const ACTION_FINDINGS = 200;
 
 /**
+ * What a review's comments are at this moment, as one short word: its saved preview (by the moment it was
+ * planned; none while there is no preview) and a person's adjustments. A step that the terminal panel offers
+ * carries the word of that moment, and so does the command the panel sends for it (`--seen`): the runtime
+ * refuses the command when the word is another one by then. A notice shows what its own conversation was told,
+ * and a command typed in another session of the review, or in another client, changes the review without
+ * telling it: what is acted on must still be what was on screen. The word survives a restart, since the
+ * review's record holds what it is made of.
+ */
+export function commentToken(review) {
+  const { excluded, severity } = adjustmentsOf(review);
+  const levels = Object.keys(severity).sort().map(id => [id, severity[id]]);
+  return createHash('sha256').update(JSON.stringify([review.id, review.plan ? String(review.planCreatedAt ?? '') : null, [...excluded].sort(), levels])).digest('hex').slice(0, 12);
+}
+
+/**
  * After a preview, or after a review that no preview follows by itself: the next steps as data, for the
  * terminal panel, which offers them as rows a person picks instead of typing. It travels in the metadata of
  * that notice, which no model reads.
@@ -190,8 +205,9 @@ const ACTION_FINDINGS = 200;
  * `adjust` whether its findings can still be adjusted (not once its publication has started).
  * `findings` are the findings this review can publish: each with the level it is published at, the level the
  * review gave it where a person changed that (`original`), whether a person left it out (`excluded`), and its
- * summary, which is the review's text and is only ever shown. Undefined for a review with more findings than
- * the panel lists: half a list would let a person replace adjustments they cannot see.
+ * summary, which is the review's text and is only ever shown. `state` is the word for the review's comments as
+ * they are now (`commentToken`), which a command picked from this offer hands back. Undefined for a review
+ * with more findings than the panel lists: half a list would let a person replace adjustments they cannot see.
  */
 export function previewActions(review, { held = false } = {}) {
   const findings = publishableFindings(review);
@@ -200,6 +216,7 @@ export function previewActions(review, { held = false } = {}) {
   const left = new Set(excluded);
   return {
     review: review.id,
+    state: commentToken(review),
     target: describeReview(review),
     plan: !review.plan,
     publish: Boolean(review.plan) && !held && !everyFindingExcluded(review),

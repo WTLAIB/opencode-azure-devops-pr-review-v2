@@ -163,19 +163,22 @@ export function readable(markdown) {
 }
 
 const REVIEW_ID = /^[a-f0-9]{8}$/;
+// The word for what the review's comments were when the step was offered; the commands hand it back (--seen).
+const STATE = /^[a-f0-9]{12}$/;
 const FINDING_ID = /^[A-Z]+-\d+$/;
 const LEVELS = ['high', 'medium', 'low'];
 
 /**
  * What a preview's notice offers next, as the runtime stored it with the notice (`azpr.next`; see
  * `previewActions` in comments.mjs), or undefined. Every value is checked here, since commands are made of
- * them: the review and each finding by the form of their IDs, each level by name. A summary is the review's
- * own text and is only ever shown. Anything that is not as expected makes the whole of it nothing: a person
- * then types the commands, as the receipt says them.
+ * them: the review, the word for its comments (`state`) and each finding by their form, each level by name. A
+ * summary is the review's own text and is only ever shown. Anything that is not as expected makes the whole of
+ * it nothing: a person then types the commands, as the receipt says them. That includes an offer without the
+ * word, which an earlier version left: its commands could not say what they were picked for.
  */
 export function nextOf(metadata, review) {
   const next = metadata?.azpr?.next;
-  if (next === null || typeof next !== 'object' || !REVIEW_ID.test(next.review ?? '') || next.review !== review || !Array.isArray(next.findings)) return undefined;
+  if (next === null || typeof next !== 'object' || !REVIEW_ID.test(next.review ?? '') || next.review !== review || !STATE.test(next.state ?? '') || !Array.isArray(next.findings)) return undefined;
   const findings = [];
   for (const finding of next.findings) {
     if (finding === null || typeof finding !== 'object' || !FINDING_ID.test(finding.id ?? '') || !LEVELS.includes(finding.severity) ||
@@ -183,7 +186,7 @@ export function nextOf(metadata, review) {
     findings.push({ id: finding.id, severity: finding.severity, ...(finding.original === undefined || finding.original === finding.severity ? {} : { original: finding.original }),
       excluded: finding.excluded === true, summary: typeof finding.summary === 'string' ? finding.summary.replace(/\s+/g, ' ').trim().slice(0, 160) : '' });
   }
-  return { review: next.review, target: typeof next.target === 'string' ? next.target.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
+  return { review: next.review, state: next.state, target: typeof next.target === 'string' ? next.target.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
     plan: next.plan === true, publish: next.publish === true && next.plan !== true, adjust: next.adjust === true, posts: Number.isInteger(next.posts) && next.posts >= 0 ? next.posts : 0, findings };
 }
 

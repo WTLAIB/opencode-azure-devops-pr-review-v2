@@ -7,7 +7,9 @@
 //
 // What is offered comes from the runtime (`previewActions` in comments.mjs), in the metadata of the notice
 // that offers it, and is checked before it gets here (`nextOf` in tui-model.mjs): a command is made only of
-// a review ID, finding IDs and level names of the checked forms, never of a text.
+// a review ID, finding IDs, level names and the word for the review's comments, all of the checked forms,
+// never of a text. Every command hands that word back (`--seen`): a notice shows what its own conversation was
+// told, and the runtime refuses a command whose review was planned or adjusted since, from wherever.
 //
 // Nothing here imports anything, so that the order of the dialogs is tested with scripted answers
 // (tests/tui-actions.test.mjs); src/tui-view.jsx supplies the dialogs and the sending.
@@ -54,12 +56,17 @@ export function savedAdjustments(next) {
 const sameAdjustments = (a, b) => a.excluded.size === b.excluded.size && [...a.excluded].every(id => b.excluded.has(id)) &&
   a.levels.size === b.levels.size && [...a.levels].every(([id, level]) => b.levels.get(id) === level);
 
+/** What every command ends with: the word for the review's comments as they were offered. */
+const seen = next => `--seen ${next.state}`;
 /** The command that plans a preview of a review's comments; a model runs and nothing is posted. */
-export const planCommand = next => ({ name: 'pr-comment', text: next.review });
-/** The command that posts a preview. It names its review: what is on screen is what is posted, whatever is current by then. */
-export const publishCommand = next => ({ name: 'pr-comment', text: `${next.review} --publish` });
+export const planCommand = next => ({ name: 'pr-comment', text: `${next.review} ${seen(next)}` });
+/**
+ * The command that posts a preview. It names its review and the preview that was shown: what is on screen is
+ * what is posted, whatever is current by then and whatever was planned since.
+ */
+export const publishCommand = next => ({ name: 'pr-comment', text: `${next.review} --publish ${seen(next)}` });
 /** The command that clears a person's adjustments. */
-export const resetCommand = next => ({ name: 'pr-comment', text: `${next.review} --reset` });
+export const resetCommand = next => ({ name: 'pr-comment', text: `${next.review} --reset ${seen(next)}` });
 
 /**
  * The command that saves `adjustments` for a preview's review, or undefined when they are the saved ones.
@@ -74,7 +81,7 @@ export function adjustCommand(next, adjustments) {
     .map(finding => [finding.id, adjustments.levels.get(finding.id)]);
   if (sameAdjustments({ excluded: new Set(excluded), levels: new Map(levels) }, savedAdjustments(next))) return undefined;
   if (!excluded.length && !levels.length) return resetCommand(next);
-  return { name: 'pr-comment', text: `${next.review} --exclude ${excluded.join(',') || 'none'} --severity ${levels.map(([id, level]) => `${id}=${level}`).join(',') || 'none'}` };
+  return { name: 'pr-comment', text: `${next.review} --exclude ${excluded.join(',') || 'none'} --severity ${levels.map(([id, level]) => `${id}=${level}`).join(',') || 'none'} ${seen(next)}` };
 }
 
 /** What changes, in a few words, for the row that applies it. */

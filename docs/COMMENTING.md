@@ -43,6 +43,16 @@ text on screen, and it is acted on only while the panel still shows that
 notice: an answer to a question that was open while the preview was planned
 again sends nothing.
 
+A panel shows what its own conversation was told. A command typed in a
+review's own session, or in another client, can plan the preview again or
+adjust the findings without that conversation hearing of it. Every command
+the panel sends therefore ends with `--seen <word>`: the word names the
+review's saved preview and adjustments as they were when the step was
+offered, and the runtime refuses the command, before anything is planned,
+saved or posted, when they are others by now (`Review <id> is no longer as it
+was shown: …`). `/pr-comment --show` shows the saved preview again, with its
+steps. A command you type names no preview and acts on the review as it is.
+
 Commands for one pull request run one after another, but a run's receipt
 arrives after its sessions were cleaned up, when the next command may already
 have run. A preview that another `/pr-comment` command adjusted, planned again

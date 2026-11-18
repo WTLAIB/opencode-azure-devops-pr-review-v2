@@ -231,18 +231,21 @@ test('a session no receipt names stays finished: the planner of a comment run th
 });
 
 // What a preview's notice carries for the panel's rows, as `previewActions` in comments.mjs makes it.
-const offer = (extra = {}) => ({ azpr: { next: { review: RUN, target: `review ${RUN} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 3,
+const offer = (extra = {}) => ({ azpr: { next: { review: RUN, state: '0f1e2d3c4b5a', target: `review ${RUN} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 3,
   findings: [{ id: 'F-1', severity: 'medium', summary: 'reserve can leave stock decremented' }, { id: 'R-2', severity: 'low', original: 'high', summary: 'snapshot is live' }, { id: 'F-3', severity: 'medium', excluded: true, summary: 'left out' }], ...extra } } });
 
 test('a preview offers its next steps from what the runtime stored with its notice, each value checked', () => {
   const next = nextOf(offer(), RUN);
-  assert.deepEqual(next, { review: RUN, target: `review ${RUN} (/pr-review) of PR #4 in Project/Repository`, plan: false, publish: true, adjust: true, posts: 3, findings: [
+  assert.deepEqual(next, { review: RUN, state: '0f1e2d3c4b5a', target: `review ${RUN} (/pr-review) of PR #4 in Project/Repository`, plan: false, publish: true, adjust: true, posts: 3, findings: [
     { id: 'F-1', severity: 'medium', excluded: false, summary: 'reserve can leave stock decremented' },
     { id: 'R-2', severity: 'low', original: 'high', excluded: false, summary: 'snapshot is live' },
     { id: 'F-3', severity: 'medium', excluded: true, summary: 'left out' }] });
   // Commands are made of these values: anything that is not of the expected form offers nothing at all.
   assert.equal(nextOf(offer(), '7d23e170'), undefined, 'Another review than the one shown.');
   assert.equal(nextOf(offer({ review: 'bb6a8570 --publish' }), RUN), undefined);
+  // The word for the review's comments goes into every command: one of another form, or none (an offer that an
+  // earlier version left), offers nothing.
+  for (const state of [undefined, '', '0f1e2d3c4b5', '0f1e2d3c4b5a0', '0F1E2D3C4B5A', '0f1e2d3c4b5a --publish', 12, null]) assert.equal(nextOf(offer({ state }), RUN), undefined, String(state));
   for (const findings of [undefined, 'F-1', [{ id: 'F-1 --publish', severity: 'low' }], [{ id: 'f-1', severity: 'low' }], [{ id: 'F-1', severity: 'critical' }], [{ id: 'F-1', severity: 'low', original: 'none' }],
     [{ id: 'F-1', severity: 'low' }, { id: 'F-1', severity: 'high' }], [null], [{ id: 'F-1' }]]) {
     assert.equal(nextOf(offer({ findings }), RUN), undefined, JSON.stringify(findings));
