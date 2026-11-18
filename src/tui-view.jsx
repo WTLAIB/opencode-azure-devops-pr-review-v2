@@ -8,9 +8,9 @@
 //
 // The panel reads AZPR's own notices in the conversation, the report queued to a review session, and
 // the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It reads no settings file:
-// the server part writes that setting into the metadata of its notices. After a comment preview it
-// lists what can be done next, as rows a person picks instead of typing: each sends the /pr-comment
-// command a person would type, to the session on screen, after asking what is needed
+// the server part writes that setting into the metadata of its notices. After a review or a comment
+// preview it lists what can be done next in one row at its foot, picked instead of typed: each sends
+// the /pr-comment command a person would type, to the session on screen, after asking what is needed
 // (src/tui-actions.mjs). It sends nothing by itself, and never a prompt.
 //
 // The dialogs of /pr-setup ask for AZPR's settings (src/tui-setup.mjs says what and in which order) and
@@ -37,9 +37,11 @@ const token = (theme, ...paths) => {
 }
 const colors = (theme) => {
   const base = token(theme, "text.base", "text.default")
+  const muted = token(theme, "text.muted", "text.subdued") ?? base
   return {
     base,
-    muted: token(theme, "text.muted", "text.subdued") ?? base,
+    muted,
+    rule: token(theme, "border.base", "border.default") ?? muted,
     running: token(theme, "text.feedback.info.base") ?? base,
     failed: token(theme, "text.feedback.error.base") ?? base,
     done: token(theme, "text.feedback.success.base") ?? base,
@@ -110,33 +112,38 @@ function Row(props) {
   )
 }
 
-/** One thing that can be done next: a row that is clicked, or picked with its key while the panel has the keyboard. */
-function Action(props) {
+/**
+ * One thing that can be done next, in the row at the panel's foot: its key and a word or two. It is clicked,
+ * or picked with the key while the panel has the keyboard, which is when the key has its colour: a key that
+ * would only type a letter into the prompt is drawn dim.
+ * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
+ * down, so that is stopped here: what is typed next still goes to the prompt.
+ */
+function Button(props) {
   const [hover, setHover] = createSignal(false)
   return (
     <box
       flexDirection="row"
+      flexShrink={0}
       gap={1}
       backgroundColor={hover() ? props.colors.hover : undefined}
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
+      onMouseDown={(event) => {
+        if (event.button === MouseButton.LEFT) event.stopPropagation()
+      }}
       onMouseUp={(event) => {
         if (event.button !== MouseButton.LEFT) return
         event.stopPropagation()
         props.run(props.item.id)
       }}
     >
-      <text fg={props.colors.link} flexShrink={0} selectable={false}>
-        {props.item.key}
+      <text fg={props.live ? props.colors.link : props.colors.muted} flexShrink={0} selectable={false}>
+        {`[${props.item.key}]`}
       </text>
-      <text fg={props.colors.base} flexShrink={0} selectable={false}>
-        {props.wide ? props.item.label.padEnd(props.pad) : props.item.label}
+      <text fg={props.item.primary ? props.colors.base : props.colors.text} attributes={props.item.primary ? TextAttributes.BOLD : 0} flexShrink={0} selectable={false}>
+        {props.item.label}
       </text>
-      <Show when={props.wide}>
-        <text fg={props.colors.muted} wrapMode="none" selectable={false}>
-          {props.item.command}
-        </text>
-      </Show>
     </box>
   )
 }
@@ -165,12 +172,20 @@ function Panel(props) {
     props.panel.close()
   }
   const open = (sessionID) => context.ui.router.navigate({ type: "session", sessionID })
-  // What a preview offers next, where this host lets the panel send a command; picking a row asks first.
+  // What a notice offers next, where this host lets the panel send a command; picking one asks first.
   const offered = createMemo(() => (state.actions ? actionRows(model().next) : []))
   const offers = (id) => offered().some((item) => item.id === id)
+  let drawn = true
+  onCleanup(() => (drawn = false))
   const act = (id) => {
     const next = model().next
-    if (next && offers(id)) void state.actions.run(id, next, props.panel.sessionID)
+    if (!next || !offers(id)) return
+    const sessionID = props.panel.sessionID
+    // A dialog can stay open for any time. Its answer counts only while this panel still shows that notice's
+    // offer in that session: not for a preview planned again meanwhile, for another session on screen, or
+    // once the panel was closed.
+    const still = () => drawn && mine() && props.panel.sessionID === sessionID && model().next?.offer === next.offer
+    void state.actions.run(id, next, sessionID, still)
   }
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
@@ -224,6 +239,16 @@ function Panel(props) {
     if (notices) state.readInbox(notices.sessionID, notices.token, false)
   })
 
+  // Another document (a preview planned again, a report after a preview) is read from its beginning, wherever
+  // the one before it was left.
+  let shownBefore
+  createEffect(() => {
+    const markdown = model().markdown
+    if (!markdown) return
+    if (shownBefore !== undefined && markdown !== shownBefore) scroll?.scrollTo(0)
+    shownBefore = markdown
+  })
+
   // Active only while the panel has the keyboard; the IDs let a user bind other keys in the TUI's configuration.
   const page = () => Math.max(4, (scroll?.viewport?.height ?? scroll?.height ?? 10) - 2)
   context.keymap.layer(() => ({
@@ -239,7 +264,7 @@ function Panel(props) {
       { id: "azpr.panel.plan", title: "AZPR panel: preview the comments", group: "AZPR", bind: "c", enabled: () => offers("plan"), run: () => act("plan") },
       { id: "azpr.panel.publish", title: "AZPR panel: post the previewed comments", group: "AZPR", bind: "p", enabled: () => offers("publish"), run: () => act("publish") },
       { id: "azpr.panel.adjust", title: "AZPR panel: leave findings out or change a level", group: "AZPR", bind: "a", enabled: () => offers("adjust"), run: () => act("adjust") },
-      { id: "azpr.panel.reset", title: "AZPR panel: undo your adjustments", group: "AZPR", bind: "u", enabled: () => offers("reset"), run: () => act("reset") },
+      { id: "azpr.panel.reset", title: "AZPR panel: reset your adjustments", group: "AZPR", bind: "u", enabled: () => offers("reset"), run: () => act("reset") },
     ],
   }))
 
@@ -248,82 +273,92 @@ function Panel(props) {
   const row = (id) => model().rows.find((item) => item.id === id) ?? { id, label: "", state: "", report: false }
 
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <box flexDirection="row" flexShrink={0}>
-        <text fg={palette().base} flexShrink={0}>
-          <b>AZPR</b>
-          <Show when={model().run}>
-            <span> {model().run}</span>
-          </Show>
-          <Show when={model().status}>
-            <span style={{ fg: palette().muted }}> · {model().status}</span>
-          </Show>
-        </text>
-        <box flexGrow={1} />
-        <text
-          fg={palette().muted}
-          flexShrink={0}
-          selectable={false}
-          onMouseUp={(event) => {
-            if (event.button !== MouseButton.LEFT) return
-            event.stopPropagation()
-            close()
-          }}
-        >
-          close
-        </text>
-      </box>
-      <Show when={model().progress}>
-        <text fg={palette().muted} flexShrink={0}>
-          {model().progress}
-        </text>
-      </Show>
-      <Show when={offered().length > 0}>
-        <box flexDirection="column" flexShrink={0} paddingTop={1}>
-          <text fg={palette().muted} selectable={false}>
-            Next (click a line{props.panel.focused ? ", or press its key" : ""})
+    <box flexDirection="column" flexGrow={1} minHeight={0}>
+      <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <box flexDirection="row" flexShrink={0}>
+          <text fg={palette().base} flexShrink={0}>
+            <b>AZPR</b>
+            <Show when={model().run}>
+              <span> {model().run}</span>
+            </Show>
+            <Show when={model().status}>
+              <span style={{ fg: palette().muted }}> · {model().status}</span>
+            </Show>
           </text>
-          <For each={offered()}>
-            {(item) => <Action item={item} colors={palette()} wide={props.panel.width >= 72} pad={Math.max(...offered().map((row) => row.label.length))} run={act} />}
-          </For>
+          <box flexGrow={1} />
+          <text
+            fg={palette().muted}
+            flexShrink={0}
+            selectable={false}
+            onMouseUp={(event) => {
+              if (event.button !== MouseButton.LEFT) return
+              event.stopPropagation()
+              close()
+            }}
+          >
+            close
+          </text>
         </box>
-      </Show>
-      <scrollbox ref={(element) => (scroll = element)} flexGrow={1} minHeight={0} paddingTop={1} verticalScrollbarOptions={{ visible: false }} contentOptions={{ minHeight: 0 }}>
-        <Show when={ids().length > 0 || model().deleted > 0}>
-          <box flexDirection="column" flexShrink={0} paddingBottom={1}>
-            <Show when={ids().length > 0}>
-              <text fg={palette().muted} selectable={false}>
-                Sessions (click one to open it)
+        <Show when={model().progress}>
+          <text fg={palette().muted} flexShrink={0}>
+            {model().progress}
+          </text>
+        </Show>
+        {/* One empty row stays under the header: the text that scrolls below never touches it. */}
+        <box height={1} flexShrink={0} />
+        <scrollbox ref={(element) => (scroll = element)} flexGrow={1} minHeight={0} verticalScrollbarOptions={{ visible: false }} contentOptions={{ minHeight: 0 }}>
+          <Show when={ids().length > 0 || model().deleted > 0}>
+            <box flexDirection="column" flexShrink={0} paddingBottom={1}>
+              <Show when={ids().length > 0}>
+                <text fg={palette().muted} selectable={false}>
+                  Sessions (click one to open it)
+                </text>
+              </Show>
+              <For each={ids()}>{(id) => <Row row={row(id)} colors={palette()} wide={props.panel.width >= 64} open={open} />}</For>
+              <Show when={model().deleted > 0}>
+                <text fg={palette().muted}>{model().deleted} session(s) were deleted when their run ended.</text>
+              </Show>
+            </box>
+          </Show>
+          <Show
+            when={model().markdown}
+            fallback={
+              <text fg={palette().muted}>
+                {model().loading
+                  ? "Loading the report…"
+                  : model().inbox
+                    ? "The report is in its session: open it above."
+                    : model().run
+                      ? "No report or preview yet."
+                      : "No AZPR run in this conversation yet."}
+              </text>
+            }
+          >
+            <Show when={model().documentHead}>
+              <text fg={palette().muted} flexShrink={0} paddingBottom={1}>
+                {model().documentHead}
               </text>
             </Show>
-            <For each={ids()}>{(id) => <Row row={row(id)} colors={palette()} wide={props.panel.width >= 64} open={open} />}</For>
-            <Show when={model().deleted > 0}>
-              <text fg={palette().muted}>{model().deleted} session(s) were deleted when their run ended.</text>
-            </Show>
-          </box>
-        </Show>
-        <Show
-          when={model().markdown}
-          fallback={
-            <text fg={palette().muted}>
-              {model().loading
-                ? "Loading the report…"
-                : model().inbox
-                  ? "The report is in its session: open it above."
-                  : model().run
-                    ? "No report or preview yet."
-                    : "No AZPR run in this conversation yet."}
-            </text>
-          }
-        >
-          <Show when={model().documentHead}>
-            <text fg={palette().muted} flexShrink={0} paddingBottom={1}>
-              {model().documentHead}
-            </text>
+            <markdown syntaxStyle={syntax()} content={model().markdown} conceal tableOptions={{ style: "grid", cellPaddingX: 1 }} fg={palette().text} bg={palette().surface} />
           </Show>
-          <markdown syntaxStyle={syntax()} content={model().markdown} conceal tableOptions={{ style: "grid", cellPaddingX: 1 }} fg={palette().text} bg={palette().surface} />
-        </Show>
-      </scrollbox>
+        </scrollbox>
+      </box>
+      {/* What can be done next belongs to what is read above it: on the same ground, under a line that crosses
+          the panel, and in its place while the text scrolls. It is where reading ends, and beside the
+          conversation it is level with the host's status bar (the row under it is empty there as well), with
+          the line level with the lower edge of the prompt. Keys and labels that do not fit in one row go on
+          to the next one together. */}
+      <Show when={offered().length > 0}>
+        <box flexDirection="column" flexShrink={0}>
+          <box height={1} flexShrink={0} border={["top"]} borderColor={palette().rule} />
+          <box flexDirection="row" flexWrap="wrap" columnGap={3} flexShrink={0} paddingLeft={2} paddingRight={2}>
+            <For each={offered()}>{(item) => <Button item={item} colors={palette()} live={props.panel.focused} run={act} />}</For>
+          </box>
+          <Show when={props.panel.presentation !== "fullscreen"}>
+            <box height={1} flexShrink={0} />
+          </Show>
+        </box>
+      </Show>
     </box>
   )
 }

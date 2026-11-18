@@ -2,47 +2,73 @@
 
 ## 0.4.4 — 2026-11-19
 
-After a comment preview, the terminal panel lists what you can do next, and
-picking a row does it: post the comments, leave findings out or change a
-level, undo that. A conversation used for a review is named after its PR, and
-several texts of setup say more exactly what they mean. The reviewer, verifier
-and comment-planning instructions are those of 0.4.3, and no setting is new.
+After a comment preview, the terminal panel lists what you can do next at its
+foot, and picking one does it: post the comments, leave findings out or change
+a level, reset that. A conversation used for a review is named after its PR,
+and several texts of setup say more exactly what they mean. The reviewer,
+verifier and comment-planning instructions are those of 0.4.3, and no setting
+is new.
 
 The terminal panel:
 
 - A receipt ends with the commands for the next step, but the panel shows the
   document a receipt encloses, so those commands had to be found in the
-  conversation and typed. After a comment preview the panel now lists them as
-  rows under **Next**: **Post the comments**, **Leave findings out or change a
-  level**, and **Undo your adjustments** once there are some. A row is
-  clicked, or picked with its key (`p`, `a`, `u`) while the panel has the
-  keyboard; where the panel is wide enough, the command it stands for is
-  shown beside it.
+  conversation and typed. After a comment preview the panel now lists them in
+  one row at its foot, where reading ends: **Post N comments…**, **Adjust
+  findings…**, and **Reset adjustments** once there are some. The row is on
+  the panel's own ground under a line, stays in place while the text scrolls,
+  is level with OpenCode's status bar, and wraps as whole items in a narrow
+  panel. One of them is clicked, or picked with its key (`p`, `a`, `u`) while
+  the panel has the keyboard; the keys are drawn dim while they would only
+  type a letter into the prompt. A label that ends in `…` asks before
+  anything is sent.
 - Posting asks once more, in a list whose first row is "No, post nothing":
   a key pressed twice posts nothing.
 - Adjusting opens the findings as a list with how each is published now.
-  Pick one to leave it out or to choose its level; the first row applies
-  every change with one command and plans the preview again.
+  Pick one to leave it out or to choose its level; every change is applied
+  with one command from the foot of the list (**apply**, `ctrl+s`), which
+  stays in view however long the list is, or from the list's last row, and
+  the preview is planned again.
 - After a review that no preview follows by itself (`afterReview: none`, a
-  review that was stopped, or one without findings to comment on) the panel
-  offers **Preview the comments** (`c`), and the findings can be adjusted
-  before that first preview.
-- A row sends the `/pr-comment` command you would type, with the ID of the
-  review the panel shows, to the session on screen; AZPR takes it like a
+  review that was stopped, or one without findings to comment on) the row
+  offers **Preview comments** (`c`) instead of posting, and the findings can
+  be adjusted before that first preview.
+- Each of them sends the `/pr-comment` command you would type, with the ID of
+  the review the panel shows, to the session on screen; AZPR takes it like a
   typed command, so its checks, its `STARTED` notice and its receipt are the
-  same. The panel sends nothing by itself and never a prompt. The rows are
+  same. The panel sends nothing by itself and never a prompt. The steps are
   there only for the notice that happened last: once a run starts or another
   receipt arrives, they are gone.
-- What a row offers comes from the runtime, in the metadata of the notice
+- A click on one of them leaves the keyboard with the prompt: the host gives
+  a panel the keyboard on a click, and a key of the panel would then act on
+  what is typed next.
+- An answer is acted on only while the panel still shows what it was given
+  for. If the preview is planned again, another session comes on screen or
+  the panel is closed while a question is open, nothing is sent, and the
+  panel says so: a preview is not posted unread.
+- What can be picked comes from the runtime, in the metadata of the notice
   that offers it (which no model reads), not from the text on screen: which
   review, whether its preview can be posted, and each finding with its level
-  and whether it is left out. The text of every notice is unchanged, and so
-  is every notice that offers nothing. A review with more than 200 findings
-  offers no rows.
+  and whether it is left out. It goes with the document that notice encloses:
+  under a report a preview is planned, never posted. The text of every other
+  notice is unchanged. A review with more than 200 findings offers nothing
+  to pick.
+- A preview that is planned again is shown from its beginning, wherever the
+  one before it was left, and the text that scrolls no longer touches the
+  panel's header.
 - A session whose model has answered is shown as `finished` until its run's
   receipt names its result (`complete`, `failed`). It was shown as `idle`,
   OpenCode's word for a session at rest, which read like a fault while the
   verifier was still working.
+
+Comments:
+
+- A run's receipt is written after its sessions were cleaned up, when another
+  `/pr-comment` command may already have run. A preview that another command
+  adjusted, planned again or posted in that moment was still shown in its
+  run's receipt as the preview to post. Such a run now says
+  `[AZPR <run>] Preview replaced before its receipt: …` in one line instead,
+  shows nothing of it, and the other command's receipt is the one to read.
 
 Conversations:
 
@@ -50,8 +76,13 @@ Conversations:
   AZPR command never makes it do, so a conversation used only for reviews
   stayed "New session" in the session list. A check or a review now names a
   conversation nobody named after the PR its URL names, for example
-  `AZPR: PR #123 (repository)`. A name that is there is never replaced, and
-  the PR's own title is not used.
+  `AZPR: PR #123 (repository)`. The PR's own title is not used.
+- A name that is there stays, also one that a person or OpenCode's model
+  gives in the same moment: OpenCode has no rename that applies only to an
+  unnamed conversation, so AZPR follows the renames the host reports and
+  writes back a name that its own replaced. A host that reports no renames
+  gets no name from AZPR. With debug records on, `conversation-name.json`
+  says how naming ended.
 
 Setup:
 

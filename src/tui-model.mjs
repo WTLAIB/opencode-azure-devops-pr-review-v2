@@ -553,7 +553,11 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     const azpr = session?.metadata?.azpr;
     if (azpr?.conversation === conversation && azpr.run !== undefined && runs.has(azpr.run)) candidates.add(session.id);
   }
-  const offered = offering ? nextOf(offering.metadata, answered ?? reviewRun) : undefined;
+  // What a notice offers goes with the document it encloses: a review's receipt encloses a report and offers a
+  // preview of it, a preview's receipt and a saved preview shown again offer what is done with that preview.
+  // `offer` names the notice, so that a row that was picked is acted on only while that notice still offers.
+  const checked = offering ? nextOf(offering.metadata, answered ?? reviewRun) : undefined;
+  const offered = checked && checked.plan === (offering.kind === 'RECEIPT' && offering.status === 'COMPLETE') ? { ...checked, offer: offering.id } : undefined;
   const rows = [];
   let deleted = 0;
   for (const id of candidates) {

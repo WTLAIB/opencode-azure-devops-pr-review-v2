@@ -116,9 +116,17 @@ settings, backups and failure records. Never upload `.local/`.
   (`isUntitledSession` in `host.mjs`) gets a name when a check or a review
   starts in it, made of the PR's number and repository from the URL the
   person typed (`conversationTitle`): no model runs there to name it, and the
-  session list would go on calling it "New session". Never replace a title,
-  never put text from the PR into one, and never let a command wait for the
-  update or fail on it.
+  session list would go on calling it "New session". Never put text from the
+  PR into a title, and never let a command wait for the update or fail on
+  it. Never leave a title replaced: OpenCode has no rename that applies only
+  to an unnamed conversation, so a read followed by a write would replace a
+  name given in between. Name a conversation only where the host reports
+  renames (`session.renamed`), follow them from before the read, and let
+  their order decide (`nameConversation` in `runtime.mjs`): a name anyone
+  else gave first stops the naming, one that AZPR's write replaced is
+  written back, and one given afterwards stands. A host without that feed
+  names nothing, the watch ends by itself and with the plugin, and a name
+  that is not AZPR's own is never recorded.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -275,17 +283,17 @@ settings, backups and failure records. Never upload `.local/`.
   runtime's notices, sent only when it is not the default; a notice that
   offers a next step carries that offer there as well (`azpr.next`), and
   every other notice stays as it was.
-- The one thing the panel sends is the `/pr-comment` command of a row a
-  person picked, with a click or with the row's key while the panel has the
+- The one thing the panel sends is the `/pr-comment` command of a step a
+  person picked, with a click or with its key while the panel has the
   keyboard. Nothing is sent by itself: not on a notice, not on a timer. The
   command is made in `tui-actions.mjs`, which imports nothing so that its
   dialogs are tested with scripted answers, and is sent in one place of the
   view, with the host's `client.session.command`, to the session on screen.
   The server part takes it like a typed one: its checks, its STARTED notice
-  and its receipt are the same. Add a row only for a step a receipt names,
+  and its receipt are the same. Add a step only for one a receipt names,
   and none that sends another command without changing this rule and the
   test that holds it (`tests/release.test.mjs`).
-- What a row offers is the runtime's word, never worked out from a document:
+- What can be picked is the runtime's word, never worked out from a document:
   `previewActions` (`comments.mjs`) writes it into the metadata of the notice
   that offers it (a preview's receipt, the saved preview shown again, the
   receipt of a COMPLETE review that no preview follows by itself), and
@@ -293,11 +301,40 @@ settings, backups and failure records. Never upload `.local/`.
   it: IDs by their form, levels by name, the review against the one shown.
   Anything unexpected offers nothing, and only the notice that happened last
   offers.
-- A row's command names its review, so that what is on screen is what is
+- An offer belongs to the document its notice encloses: it is true of the
+  review as that document was rendered. Read both before anything is
+  awaited, or check first that the review's preview is still the one that
+  was rendered (`commentState` in `runtime.mjs`: the plan, the adjustments,
+  whether posting began). Under a report a preview is planned, never posted,
+  and only while nothing has acted on that review since; a preview offers
+  what is done with that preview. The command locks are released before a
+  run's sessions are cleaned up: a preview that another command adjusted,
+  planned again or posted before its receipt is neither enclosed nor
+  offered, and its run says so in a notice that is no receipt, so that the
+  panel goes on showing the other command's. `buildPanel` holds an offer to
+  its kind of document as well.
+- A step's command names its review, so that what is on screen is what is
   acted on. Posting asks first, in a list whose first row posts nothing; an
   adjustment gives both lists in full, since each replaces the saved one.
   One action runs at a time, and after `stop()` nothing is asked or sent,
-  whatever answer arrives.
+  whatever answer arrives. An answer counts only for what the panel still
+  offers (`still`): the same panel, drawn and the one the host shows in that
+  session, with the same notice offering (`offer`, the notice's ID). A
+  dialog stays open for any time, so check it right before a command is
+  sent, say when nothing was sent, and never post a preview that was planned
+  again while its question was open.
+- The steps are one row at the panel's foot, on the panel's own ground under
+  a line, in place while the text scrolls: where reading ends. A label that
+  ends in "…" asks before anything is sent, and one that does not is sent at
+  once. A key is drawn in its colour only while it works, which is while the
+  panel has the keyboard. A click on a step is a button pressed: stop its
+  mouse-down event, since the host gives a panel the keyboard on it, and a
+  key of the panel would then act on what a person means to type. What
+  applies a list of adjustments stays in view however long the list is (the
+  foot of its dialog), and is also the list's last row, for a host that
+  draws no such foot. The foot's action closes its dialog itself, since the
+  host does not: let it act once, and only while that list is the dialog
+  that is open.
 - A row of a session says `running` while the host says so, then what the
   run's receipt says of its stage, and `finished` until a receipt names it:
   never the host's word for a session at rest, which reads like a fault for

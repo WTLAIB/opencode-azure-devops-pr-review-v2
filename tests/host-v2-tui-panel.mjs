@@ -6,9 +6,12 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * held until the panel was seen with them running. Checked on the screen: the panel opens by itself
  * and leaves the keyboard with the prompt; a click on a row opens that session, and the panel is
  * back with the conversation; the report and the comment preview are rendered Markdown; /pr-panel,
- * the panel's one command; a terminal too narrow for two panes is not taken over; after a preview
- * the panel lists what can be done next, and a row that is picked asks first and then sends the
- * command: findings are left out and the comments posted without typing a command. The host is then
+ * the panel's one command; a terminal too narrow for two panes is not taken over; after a review or
+ * a preview the panel lists what can be done next in one row at its foot, level with the host's
+ * status bar, and one that is picked asks first and then sends the command: findings are left out
+ * (applied from the foot of their list, with a click and with its key) and the comments posted
+ * without typing a command; a click there leaves the keyboard with the prompt, and a preview that
+ * is planned again is shown from its beginning. The host is then
  * restarted with terminalPanel: manual: the notices carry the setting, and the panel opens only when
  * asked. The settings file starts without the settings newer versions brought: loading AZPR adds
  * them, and commands start all the same.
@@ -272,9 +275,8 @@ try {
   await see(/4 session\(s\) were deleted when their run ended\./, 'The panel does not say that the reviewer sessions were deleted.');
   // No preview follows this review by itself (afterReview is none in this fixture), so the panel offers one, and
   // the findings to adjust before it; nothing can be posted before a preview was read.
-  await see(/c Preview the comments \(nothing is posted\)/, 'After a review that no preview follows the panel does not offer one.');
-  await see(/a Leave findings out or change a level…/, 'Nor the findings to adjust before it.');
-  assert.doesNotMatch(screen(), /p Post the \d+ comments? on the PR/);
+  await see(/\[c\] Preview comments\s+\[a\] Adjust findings…/, 'After a review that no preview follows the panel does not offer one, and the findings to adjust before it.');
+  assert.doesNotMatch(screen(), /\[p\] Post \d+ comments?/);
   const receipt = (await inbox()).findLast(text => text.startsWith(`[AZPR ${review}] COMPLETE`));
   assert.doesNotMatch(receipt, /<azpr_report_data>/, 'With returnReport: receipt the report is only in its session; the panel read it there.');
   result.report = 'rendered from the report session\'s inbox; deleted sessions counted';
@@ -292,10 +294,15 @@ try {
   assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
   // What the preview offers next, as the receipt names it, is listed in the panel: the summary and four comments
   // can be posted, and the findings adjusted. Nothing was adjusted yet, so there is nothing to undo.
-  await see(/Next \(click a line\)/, 'The panel does not list what the preview offers next.');
-  await see(/p Post the 5 comments on the PR…/, 'The panel does not offer to post the preview.');
-  await see(/a Leave findings out or change a level…/, 'The panel does not offer to adjust the findings.');
-  assert.doesNotMatch(screen(), /u Undo your adjustments/);
+  await see(/\[p\] Post 5 comments…\s+\[a\] Adjust findings…/, 'The panel does not list what the preview offers, posting first.');
+  assert.doesNotMatch(screen(), /\[u\] Reset adjustments/);
+  // They are one row at the panel's foot: on the line of the host's status bar, under a line that is level with
+  // the lower edge of the prompt, with the last row of the screen empty on both sides.
+  const foot = screen().split('\n');
+  const offered = foot.findIndex(line => /\[p\] Post 5 comments…/.test(line));
+  assert.match(foot[offered], /ctrl\+p\s+commands\s+\[p\] Post 5 comments…/, 'The row is not level with the status bar.');
+  assert.match(foot[offered - 1], /▀\s+─{40,}/, 'No line separates the row from the preview, level with the lower edge of the prompt.');
+  assert.equal(foot.slice(offered + 1).join('').trim(), '', 'Something is drawn under the row.');
   result.preview = 'opens the panel and replaces the report; its next steps are listed';
 
   // 5. Keyboard: the panel scrolls and closes with Escape once it has the keyboard.
@@ -416,37 +423,69 @@ try {
   assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
   result.ownSession = 'started in the report session: the conversation\'s run is read from the server; a command typed there is shown';
 
-  // 10. The rows of what the preview offers: picked instead of typed. A click on a row opens the list of findings;
-  // one is left out, and the first row applies it: the command goes to the session on screen like a typed one.
-  await see(/Next \(click a line/, 'The panel does not list what the preview offers next.');
-  await click('Leave findings out or change a level…');
-  await see(/Adjust the findings before posting/, 'A click on the row did not open the list of findings.');
-  await see(/Close: nothing was changed/, 'The list does not start with what it would do.');
-  // Typing filters the list (the row that closes it is gone); the finding typed in full comes first.
+  // 10. What the preview offers is picked instead of typed. The panel is read to its end first, and the prompt
+  // has the keyboard, as it has for a person who reads with the mouse: a key of the panel is a letter there.
+  await see(/\[p\] Post 5 comments…\s+\[a\] Adjust findings…/, 'The panel does not list what the preview offers next.');
+  await click('Sessions (click one to open it)');
+  key('End');
+  await see(shown => panelOpen(shown) && !/Sessions \(click one to open it\)/.test(shown) && /\[a\] Adjust findings…/.test(shown), 'The row did not stay in its place while the preview scrolled to its end.');
+  key('C-x'); key('Left');
+  type('p');
+  await see(/┃\s+p\s/, 'The prompt did not get the keyboard back.');
+  assert.doesNotMatch(screen(), /Post these comments on the pull request\?/, 'A key of the panel acted while the prompt had the keyboard.');
+  key('C-u');
+  // A click on one of them opens the list of findings: the findings come first, and nothing is to apply yet.
+  await click('Adjust findings…');
+  await see(/Adjust the findings before posting/, 'A click did not open the list of findings.');
+  assert.doesNotMatch(screen(), /Apply, and plan the preview|apply ctrl\+s/, 'Something is to apply before anything was changed.');
+  // Typing filters the list; the finding typed in full comes first.
   type('R-1');
-  await see(shown => !/Close: nothing was changed/.test(shown) && /Findings\s+R-1 — `invoice` drops the guard\b.* high\n/.test(shown), 'Typing does not filter the findings.');
+  await see(/Findings\s+R-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings.');
   key('Enter');
   await see(/R-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
   await see(/The level the review gave it/, 'The review\'s own level is not marked.');
   type('Leave');
   await sleep(400);
   key('Enter');
+  // The list is back: its last row applies the change and says what changes, and so does the foot of the dialog,
+  // which stays in view however long the list is. A click there applies it.
   await see(/Apply, and plan the preview again/, 'The list did not come back with the row that applies the change.');
   await see(/R-1 left out/, 'The row that applies the change does not say what changes.');
-  type('Apply');
-  await sleep(400);
-  key('Enter');
+  await click('apply ctrl+s');
   const adjustedRun = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · PREVIEW/.exec(shown); return match && match[1] !== typedHere && match; }, 'The adjustment picked in the panel did not plan a new preview.', 120000))[1];
+  // The preview that was planned again is shown from its beginning, though the one before it was read to its end.
+  await see(/Sessions \(click one to open it\)/, 'The new preview is not shown from its beginning.');
   await see(/Excluded from publication: R-1/, 'The new preview does not say what a person left out.');
   await see(/high: 3 · medium: 0 · low: 2/, 'The new preview still counts the finding that was left out.');
-  await see(/p Post the 4 comments on the PR…/, 'The row that posts does not count what is left.');
-  await see(/u Undo your adjustments/, 'Once a finding is left out, undoing that is not offered.');
+  await see(/\[p\] Post 4 comments…\s+\[a\] Adjust findings…\s+\[u\] Reset adjustments/, 'The row does not count what is left, or does not offer to reset the adjustment.');
   assert.ok((await own()).some(text => text.startsWith(`[AZPR ${adjustedRun}] PREVIEW; source review=${review}`) && /Adjusted by a person: excluded R-1\./.test(text)), 'The runtime took the command as a typed one, in the session on screen.');
   assert.equal(azure.state.threads.length, 0, 'An adjustment posts nothing.');
-  // Posting asks first, with "no" first: Enter alone posts nothing. The row's key works while the panel has the keyboard.
+  // The clicks were buttons pressed: the prompt still has the keyboard.
+  type('still-with-the-prompt');
+  await see(/┃\s+still-with-the-prompt/, 'A click on the row took the keyboard from the prompt.');
+  key('C-u');
+  // With the keyboard, the panel's keys do the same: `a` opens the list, and the key at its foot applies.
+  await click('Sessions (click one to open it)');
+  key('a');
+  await see(/Adjust the findings before posting/, 'The key did not open the list of findings.');
+  type('R-2');
+  await sleep(400);
+  key('Enter');
+  await see(/R-2: how is it published\?/, 'Picking the second finding did not ask what happens to it.');
+  type('Leave');
+  await sleep(400);
+  key('Enter');
+  await see(/apply ctrl\+s/, 'The foot of the list does not offer to apply the change.');
+  key('C-s');
+  const secondRun = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · PREVIEW/.exec(shown); return match && match[1] !== adjustedRun && match[1] !== typedHere && match; }, 'The key at the foot of the list did not apply the adjustment.', 120000))[1];
+  await see(/Excluded from publication: R-1, R-2/, 'The second adjustment did not keep the first.');
+  await see(/\[p\] Post 3 comments…/, 'The row does not count what is left after the second adjustment.');
+  assert.ok((await own()).some(text => text.startsWith(`[AZPR ${secondRun}] PREVIEW; source review=${review}`)), 'The second adjustment has no receipt in the session on screen.');
+  assert.equal(azure.state.threads.length, 0, 'An adjustment posts nothing.');
+  // Posting asks first, with "no" first: Enter alone posts nothing. The key works while the panel has the keyboard.
   await click('Sessions (click one to open it)');
   key('p');
-  await see(/Post these comments on the pull request\?/, 'The key of the row did not ask before posting.');
+  await see(/Post these comments on the pull request\?/, 'The key did not ask before posting.');
   await see(/No, post nothing/, 'Declining is not offered.');
   key('Enter');
   await see(shown => !/Post these comments on the pull request\?/.test(shown), 'The question did not close.');
@@ -454,15 +493,15 @@ try {
   assert.equal(azure.state.threads.length, 0, 'Declined: nothing was posted.');
   await click('Sessions (click one to open it)');
   key('p');
-  await see(/Post these comments on the pull request\?/, 'The key of the row did not ask again.');
+  await see(/Post these comments on the pull request\?/, 'The key did not ask again.');
   type('Yes');
   await sleep(400);
   key('Enter');
-  const postedRun = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · ([A-Z_]+)/.exec(shown); return match && match[1] !== adjustedRun && match[2] !== 'RUNNING' && match; }, 'Posting picked in the panel did not end with a receipt.', 120000));
+  const postedRun = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · ([A-Z_]+)/.exec(shown); return match && match[1] !== secondRun && match[2] !== 'RUNNING' && match; }, 'Posting picked in the panel did not end with a receipt.', 120000));
   assert.equal(postedRun[2], 'POSTED', `The publication ended as ${postedRun[2]}.`);
-  assert.equal(azure.state.threads.length, 4, 'The summary and the three comments that were not left out are on the PR.');
-  await see(shown => !/Next \(click a line/.test(shown), 'After posting the panel still offers the preview\'s steps.');
-  result.rows = `${result.rows}; after a preview its next steps are rows: a finding left out and the comments posted without typing`;
+  assert.equal(azure.state.threads.length, 3, 'The summary and the two comments that were not left out are on the PR.');
+  await see(shown => !/\[p\] Post \d+ comments?…/.test(shown), 'After posting the panel still offers the preview\'s steps.');
+  result.rows = `${result.rows}; after a preview its next steps are one row at the panel's foot: findings left out from their list (applied with a click and with the key at its foot) and the comments posted without typing; a click leaves the keyboard with the prompt`;
 
   // What the panel must never do: ask a model, or fail to load.
   const conversationTurns = requests.filter(request => request.model === 'chat');

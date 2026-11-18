@@ -91,15 +91,16 @@ independently verified. Every command answers `--help` with its options,
 without a model.
 
 In OpenCode's terminal UI a [panel](#terminal-panel) opens beside the
-conversation: it shows the report and the preview rendered, and lists what you
-can do next. Pick **Post the comments** there, or leave findings out first,
-without typing a command; posting always asks once more.
+conversation: it shows the report and the preview rendered, and at its foot
+what you can do next. Pick **Post N comments…** there, or leave findings out
+first with **Adjust findings…**, without typing a command; posting always asks
+once more.
 
 <details>
 <summary>Optional: adjust findings and publish after reading the preview</summary>
 
 Read the preview; it ends with the commands for the next step, and the
-terminal panel lists the same steps as rows you can pick. Before publishing,
+terminal panel lists the same steps at its foot, to pick. Before publishing,
 you can leave findings out or change their severity, using the finding IDs the
 preview and the report show:
 
@@ -993,23 +994,37 @@ and the conversation side by side.
   the rows are the sessions that still exist (see
   [retention](#retention-and-privacy)), first the one that holds the report.
   OpenCode's own session list has them too.
-- **Next.** After a comment preview the panel lists what the preview's receipt
-  names as next steps, as rows: **Post the comments**, **Leave findings out or
-  change a level**, and **Undo your adjustments** once there are some. Click a
-  row, or press its key (`p`, `a`, `u`) while the panel has the keyboard.
-  Posting asks once more, with "No, post nothing" first. Adjusting opens the
-  findings as a list: pick one to leave it out or to choose its level, then
-  apply everything at once. Each row sends the `/pr-comment` command you would
-  type, for the review shown, and its STARTED notice and receipt follow as
-  always. After a review that no preview follows by itself
-  (`afterReview: none`), the panel offers **Preview the comments** (`c`).
 - **Report or preview.** Below the sessions: the report of the review, then
   the comment preview once one is planned, and the saved preview again after
-  `/pr-comment --show`. A check (`/pr-check`) shows its table there too.
+  `/pr-comment --show`. A check (`/pr-check`) shows its table there too. A
+  preview that is planned again is shown from its beginning.
+- **What you can do next** is one row at the foot of the panel, where reading
+  ends. It stays in place while the text scrolls and is level with OpenCode's
+  status bar:
+
+  ```text
+  [p] Post 4 comments…   [a] Adjust findings…   [u] Reset adjustments
+  ```
+
+  Click one, or press its key while the panel has the keyboard; the keys are
+  drawn dim while they would only type a letter into the prompt. A label that
+  ends in `…` asks before anything is sent: posting asks once more, with "No,
+  post nothing" first, and adjusting opens the findings as a list, where you
+  pick one to leave it out or to choose its level and then apply everything
+  at once (**apply** at the foot of the list, `ctrl+s`, or the list's last
+  row). **Reset adjustments** is there once you have adjusted something and
+  clears all of it. After a review that no preview follows by itself
+  (`afterReview: none`), the row offers **Preview comments** (`c`) instead of
+  posting. Each of them sends the `/pr-comment` command you would type, for
+  the review shown, and its STARTED notice and receipt follow as always. A
+  click there leaves the keyboard with the prompt. If the preview is planned
+  again, or another session comes on screen, while a question is open, the
+  answer is not acted on and the panel says so: nothing is posted that you
+  have not read.
 - **Keys.** `/pr-panel` shows and hides the panel; it is the panel's only
-  command. A click inside it gives it the keyboard: the arrow keys or `j` and
-  `k`, Page Up and Page Down, Home and End scroll, the keys of the rows under
-  **Next** pick them, and Escape or `q` closes it.
+  command. A click inside its text gives it the keyboard: the arrow keys or
+  `j` and `k`, Page Up and Page Down, Home and End scroll, `p`, `a`, `u` and
+  `c` pick what the foot offers, and Escape or `q` closes it.
 - **A narrow terminal** (fewer than 108 columns) has no room for two panes,
   and OpenCode would show the panel in place of the conversation. There the
   panel does not open by itself; it says that something is ready, and
@@ -1017,7 +1032,7 @@ and the conversation side by side.
 
 The panel shows what AZPR already put into your conversation and into the
 session that holds a report. It sends nothing by itself and never a prompt:
-the one thing it sends is the `/pr-comment` command of a row you pick, which
+the one thing it sends is the `/pr-comment` command of a step you pick, which
 AZPR takes like a typed one, and posting always asks first. It comes with
 the package and needs no setup; `terminalPanel` is its one setting. Other
 OpenCode clients, such as the desktop app, do not load it and show AZPR's
@@ -1044,9 +1059,9 @@ them into one comment under fixed rules (see [commenting](docs/COMMENTING.md)).
 ### Adjusting findings after a preview
 
 When a preview contains findings you disagree with, leave them out or change
-their severity, then read the new preview. In the terminal UI, the panel's row
-**Leave findings out or change a level** does this from a list of the
-findings. With commands, several IDs go in one list, separated by commas:
+their severity, then read the new preview. In the terminal UI, **Adjust
+findings…** at the foot of the panel does this from a list of the findings.
+With commands, several IDs go in one list, separated by commas:
 
 ```text
 /pr-comment --exclude F-1,R-2                     leave F-1 and R-2 out
@@ -1196,7 +1211,9 @@ A conversation nobody named yet, which OpenCode lists as **New session**, is
 named after the PR when its first check or review starts
 (`AZPR: PR #123 (repository)`): an AZPR command never makes the conversation's
 own model run, which is what names a conversation otherwise. A conversation
-that has a name keeps it.
+that has a name keeps it, and a name that you or OpenCode's model give it in
+that very moment stands: AZPR watches the renames OpenCode reports and puts
+such a name back if its own replaced it.
 In the terminal UI you need not look for these sessions in the list: the
 [terminal panel](#terminal-panel) names those of the latest review and opens
 the one you click.

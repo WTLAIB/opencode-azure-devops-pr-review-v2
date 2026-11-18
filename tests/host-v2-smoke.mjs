@@ -434,13 +434,27 @@ try {
   const unnamed = (await api('/api/session', { location: { directory: directories.work } })).data.id;
   assert.ok(!(await rawApi(`/api/session/${unnamed}`)).data.title, 'OpenCode leaves a new conversation without a title.');
   await api(`/api/session/${unnamed}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
-  assert.match(await latest(unnamed), /\] READY/);
+  const unnamedCheck = await latest(unnamed);
+  assert.match(unnamedCheck, /\] READY/);
   let named;
   for (const end = Date.now() + 10000; !(named = (await rawApi(`/api/session/${unnamed}`)).data.title) && Date.now() < end;) await new Promise(resolveWait => setTimeout(resolveWait, 100));
   assert.equal(named, 'AZPR: PR #123 (repository)');
   assert.equal((await rawApi(`/api/session/${checkOrigin}`)).data.title, 'Check', 'A conversation that has a name keeps it.');
   assert.equal(requests.length, beforeCheck, 'Naming a conversation asks no model.');
-  results.title = 'an unnamed conversation is named after the PR; a named one keeps its name';
+  // OpenCode has no rename that applies only to an unnamed conversation, so AZPR watches the renames the host
+  // reports and lets a name that anyone else gave stand. That depends on this host reporting them to a plugin:
+  // the run's debug record says that AZPR's own rename came back in the feed, and that a named one was left alone.
+  const nameRecord = async receipt => {
+    const directory = /Private debug directory: ([^\n]+)/.exec(receipt)?.[1];
+    assert.ok(directory, 'The check\'s receipt names its debug directory.');
+    for (const end = Date.now() + 10000; Date.now() < end;) {
+      try { return JSON.parse(await readFile(join(directory, 'conversation-name.json'), 'utf8')); } catch { await new Promise(resolveWait => setTimeout(resolveWait, 100)); }
+    }
+    return undefined;
+  };
+  assert.deepEqual(await nameRecord(unnamedCheck), { outcome: 'named', title: 'AZPR: PR #123 (repository)' }, 'The host reported AZPR\'s rename of the conversation.');
+  assert.deepEqual(await nameRecord(check), { outcome: 'kept' });
+  results.title = 'an unnamed conversation is named after the PR, and the host reports the rename; a named one keeps its name';
   if (native && !publishedPackage) {
     // A second AZPR entry (the same package without its commit): OpenCode runs the first and lists the second as a duplicate.
     const configPath = join(directories.config, 'opencode.json');

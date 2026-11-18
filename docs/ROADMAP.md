@@ -160,18 +160,18 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   and changed there; until then only a source installation did.
 - **The next step in the panel.** A receipt ends with the commands for the
   next step, but the panel showed only the document, so they had to be found
-  in the conversation and typed. After a preview the panel lists them as rows:
-  posting the comments (asked once more, "no" first), leaving findings out or
-  changing a level from a list of the findings, and undoing that. A row sends
-  the `/pr-comment` command a person would type, for the review shown; the
-  panel sends nothing by itself. A session that has answered is `finished`
+  in the conversation and typed. After a preview the panel lists them in one
+  row at its foot, where reading ends: posting the comments (asked once more,
+  "no" first), leaving findings out or changing a level from a list of the
+  findings, and resetting that. Each sends the `/pr-comment` command a person
+  would type, for the review shown; the panel sends nothing by itself. A session that has answered is `finished`
   until its run's receipt names its result, where the host's word, idle, read
   like a fault.
 - **A conversation is named after its PR.** OpenCode names a conversation when
   its own model first runs there, which an AZPR command never makes it do, so
   a conversation used only for reviews stayed "New session" in the list. A
   check or a review now names an unnamed conversation after the PR; a name
-  that is there stays.
+  that is there stays, also one given in the same moment.
 
 ## Planned
 

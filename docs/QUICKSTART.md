@@ -139,10 +139,10 @@ without running a model.
 
 In the terminal UI a panel opens beside the conversation: it lists the
 review's sessions while they run, and then shows the report and the comment
-preview rendered instead of as Markdown source. After the preview it also
-lists what you can do next (post the comments, leave findings out or change a
-level) as rows to click, so the commands of the next two sections need not be
-typed; posting asks once more before anything is sent (see the
+preview rendered instead of as Markdown source. After the preview its foot
+lists what you can do next, where reading ends (`[p] Post 4 comments…`,
+`[a] Adjust findings…`), to click, so the commands of the next two sections
+need not be typed; posting asks once more before anything is sent (see the
 [terminal panel](../README.md#terminal-panel)).
 
 Follow the progress notices and wait for the review receipt. If the COMPLETE
@@ -173,9 +173,9 @@ cost cap is configured by default.
 
 ## Optional: adjust findings before publishing
 
-In the terminal panel, pick **Leave findings out or change a level**: the
-findings are listed, you choose what happens to each, and one row applies it
-all. With commands, use the finding IDs of the preview and the report; several
+In the terminal panel, pick **Adjust findings…**: the findings are listed,
+you choose what happens to each (leave it out, or publish it at another
+level), and **apply** at the foot of the list applies it all. With commands, use the finding IDs of the preview and the report; several
 IDs go in one list, separated by commas:
 
 ```text
@@ -199,7 +199,7 @@ for the full rules.
 
 ## Optional: publish after inspecting the preview
 
-In the terminal panel, pick **Post the comments** and confirm; or type:
+In the terminal panel, pick **Post N comments…** and confirm; or type:
 
 ```text
 /pr-comment --publish

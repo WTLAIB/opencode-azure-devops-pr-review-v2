@@ -62,28 +62,29 @@ Azure DevOps services. Nothing here used a real model or Azure DevOps; what
 0.4.3 showed with both, the day before, is in the next section.
 
 0.4.4 lets the terminal panel offer the next step after a review or a preview
-as rows that send the command, names a conversation nobody named after its
-PR, and changes several texts of setup (see
+in one row at its foot, whose steps send the command, names a conversation
+nobody named after its PR, and changes several texts of setup (see
 [what can be done next](ARCHITECTURE.md#what-can-be-done-next)). Of the
-server part, `comments.mjs` gained `previewActions`, `runtime.mjs` sends that
-with the notices that offer a step and names an unnamed conversation,
-`host.mjs` tells an unnamed conversation, `attribution.mjs` writes its name,
-and `setup.mjs` describes what each model is for and where every setting is
-described. The terminal part gained `src/tui-actions.mjs`; `tui-model.mjs`
-reads the offer and checks it, and `tui-view.jsx` draws the rows. `install.sh`
-copies one more file. No prompt and no setting changed.
+server part, `comments.mjs` gained `previewActions`; `runtime.mjs` sends that
+with the notices that offer a step, holds it to the preview its notice shows,
+and names an unnamed conversation while it follows the renames the host
+reports; `host.mjs` tells an unnamed conversation, `attribution.mjs` writes
+its name, and `setup.mjs` describes what each model is for and where every
+setting is described. The terminal part gained `src/tui-actions.mjs`;
+`tui-model.mjs` reads the offer and checks it, and `tui-view.jsx` draws the
+row. `install.sh` copies one more file. No prompt and no setting changed.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 633 tests (612 for 0.4.3), all
-passing.
+`npm run check` passes, and `npm test` runs 640 tests (612 for 0.4.3),
+all passing.
 
 | Tests | What they establish |
 | ---: | --- |
-| 7 | What the rows do (`tests/tui-actions.test.mjs`, new), with scripted dialogs: the rows a notice offers, each with its key and the command it stands for; a command is made only of a review ID, finding IDs and level names, and is read by the same parser as a typed one; posting asks first with "no" first and sends nothing otherwise; findings are adjusted in a list, one row applies every change with both lists in full, and what is saved is where a person starts; a command that was refused or did not get there is said with its reason, on one line; one action at a time; nothing is asked or sent after the part was unloaded. |
-| 3 | What the panel shows of it (`tests/tui-model.test.mjs`): every value of an offer is checked, and anything unexpected offers nothing; the offer is taken from the notice that happened last, for the review shown, from the inbox and from a delivered message alike, and is gone once a run starts or another receipt arrives; a session at rest is `finished` until a receipt names it, and stays so where none does. |
-| 3 | The view (`tests/tui-view.test.mjs`): a click on a row and the row's key ask first and then send `/pr-comment` with the review's ID to the session on screen; nothing is offered while a run is under way, for a notice without the data, or on a host that cannot send a command or has no list dialog; a row that is open when the part is unloaded sends nothing. |
-| 5 | The runtime (`tests/runtime.test.mjs`): a preview's notice, the saved preview shown again, and the receipt of a review that no preview follows carry the offer as the review is at that moment (after an adjustment, after publication started, held, or with nothing left to post), and a review that a preview follows carries none; the commands of the rows adjust and post like typed ones; a conversation nobody named is named after the PR by a check or a review, a name that is there stays, a refused command names nothing, and a host that cannot rename, fails or does not answer holds no command up. |
+| 10 | What the steps do (`tests/tui-actions.test.mjs`, new), with scripted dialogs: what a notice offers, each with its key, and the step the others lead to; a label that ends in "…" asks before anything is sent, and one that does not is sent at once; a command is made only of a review ID, finding IDs and level names, and is read by the same parser as a typed one; posting asks first with "no" first and sends nothing otherwise; findings are adjusted in a list whose last row applies every change with both lists in full, and what is saved is where a person starts; the same from the foot of the list, also where a dialog that was closed answers nothing; an answer for what the panel no longer offers sends nothing and says so, for every step; a command that was refused or did not get there is said with its reason, on one line; one action at a time; nothing is asked or sent after the part was unloaded. |
+| 3 | What the panel shows of it (`tests/tui-model.test.mjs`): every value of an offer is checked, and anything unexpected offers nothing; the offer is taken from the notice that happened last, for the review shown, from the inbox and from a delivered message alike, goes with its kind of document (a preview is planned under a report and never posted from there), names its notice, and is gone once a run starts or another receipt arrives; a run's line that its preview was replaced changes nothing shown; a session at rest is `finished` until a receipt names it, and stays so where none does. |
+| 4 | The view (`tests/tui-view.test.mjs`): the steps are one row at the foot, each with its key in brackets and the main one bold, wrapping as whole items under a line; a click and the key ask first and then send `/pr-comment` with the review's ID to the session on screen; a left mouse-down on a step is stopped, so the keyboard stays where it was, and a key is dim while the prompt has the keyboard; an answer counts only while the panel still shows that offer there (not after another notice, a run that started, a closed panel, another session, another plugin's panel or a panel no longer drawn); nothing is offered while a run is under way, for a notice without the data, or on a host that cannot send a command or has no list dialog; an action that is open when the part is unloaded sends nothing. |
+| 8 | The runtime (`tests/runtime.test.mjs`): a preview's notice, the saved preview shown again, and the receipt of a review that no preview follows carry the offer as the review is at that moment (after an adjustment, after publication started, held, or with nothing left to post), and a review that a preview follows carries none; the commands of the steps adjust and post like typed ones; a preview that another command adjusted or posted while its run's sessions were deleted is neither enclosed nor offered, its run says so in a line that is no receipt, and the panel's model is the same before and after that line; a review's receipt offers nothing once a preview of that review was planned during its cleanup; a conversation nobody named is named after the PR by a check or a review, a name that is there stays, a refused command names nothing, and a host that cannot rename, fails or does not answer holds no command up; and the renames the host reports decide: a name given between the read and the write is put back, also when it is given twice, one reported during the read stops the naming, another conversation's rename is ignored, a host without the feed gets no name, and one that never reports AZPR's own rename ends the watch by itself. In each case the subscription is closed. |
 | 1 | `previewActions` itself (`tests/comments.test.mjs`): the offer for an unadjusted, an adjusted, a held, an unplanned and a published review, a summary cut to 160 characters, and no offer beyond 200 findings. |
 | 2 | The name a conversation gets, from the URL alone, without the organization or the PR's own title (`tests/attribution.test.mjs`); and that the sections of the README which the runtime names are there (`tests/release.test.mjs`). |
 
@@ -101,22 +102,30 @@ part sends a command in one place, `/pr-comment` alone
 The eleven host fixture runs passed on one tree (the hash of the code and
 tests was the same before and after).
 
-- **The panel's rows** (`tests/host-v2-tui-panel.mjs`, from source and as the
-  package). After a review that no preview follows, the panel lists
-  **Preview the comments** and the adjustment, and no posting. After a
-  preview it lists **Post the 5 comments on the PR…** and the adjustment, and
-  nothing to undo. A click on the adjustment opens the list of findings;
-  typing filters it; one finding is left out and the first row applies it:
-  the runtime answers in the session on screen with a new preview that says
-  what a person left out, and the panel then offers 4 comments and the undo.
-  The key `p` asks before posting with "No, post nothing" first: Enter posts
-  nothing, and "Yes" ends in `POSTED` with the summary and three comments on
-  the fake PR, after which no rows are offered. With the default setting only
-  the notices that offer a step carry metadata, and only that offer; with
-  `terminalPanel: manual` they carry both. The runs made 17 model requests by
-  AZPR's sessions (15 for 0.4.3; the two more plan the adjusted preview) and
-  45 Azure DevOps requests (31), and still exactly 1 request of the
-  conversation's own model.
+- **The steps at the panel's foot** (`tests/host-v2-tui-panel.mjs`, from
+  source and as the package, in a terminal of 170 by 46). After a review that
+  no preview follows, the row offers **Preview comments** and the adjustment,
+  and no posting. After a preview it offers **Post 5 comments…** and the
+  adjustment, and nothing to reset; the row is on the line of OpenCode's
+  status bar, the line above it is level with the lower edge of the prompt,
+  and nothing is drawn under it. The panel is then read to its end, where the
+  row is still in its place, and the keyboard is given back to the prompt: a
+  `p` typed there is a letter and asks nothing. A click on the adjustment
+  opens the list of findings, with nothing to apply yet; typing filters it;
+  one finding is left out, and a click on **apply** at the foot of the list
+  applies it: the runtime answers in the session on screen with a new preview
+  that says what a person left out, the panel shows it from its beginning and
+  offers 4 comments and the reset, and what is typed next still goes to the
+  prompt. With the keyboard in the panel, `a` opens the list again, a second
+  finding is left out, and `ctrl+s` applies it. The key `p` asks before
+  posting with "No, post nothing" first: Enter posts nothing, and "Yes" ends
+  in `POSTED` with the summary and two comments on the fake PR, after which
+  nothing is offered. With the default setting only the notices that offer a
+  step carry metadata, and only that offer; with `terminalPanel: manual` they
+  carry both. The runs made 18 model requests by AZPR's sessions
+  (15 for 0.4.3; the others plan the two adjusted previews) and
+  49 Azure DevOps requests (31), and still exactly 1 request of
+  the conversation's own model.
 - **Setup** (`tests/host-v2-tui-setup.mjs`, from source and as the package).
   Without settings the command list describes the six review commands as
   "AZPR is not ready here; run /pr-setup to see what it needs". The settings
@@ -130,13 +139,35 @@ tests was the same before and after).
   and native). A conversation created without a title has none on OpenCode
   2.3.0; after `/pr-check` in it its title is `AZPR: PR #123 (repository)`,
   the conversation that was created with a title keeps it, and no model was
-  asked. That check adds 7 Azure DevOps requests to each run: fresh 110 model
-  and 194 Azure DevOps requests, replacement 92 and 164, native 110 and 201.
-- **Unchanged**: comment scale 34 and 75, with debug off 34 and 71, and
-  background compaction 8 model requests in both runs, as for 0.4.3.
+  asked. The check's debug record says `named`: OpenCode 2.3.0 reported
+  AZPR's rename to the plugin's subscription, which is what the guard against
+  replacing a name given in the same moment rests on; the record of the check
+  in the named conversation says `kept`. That check adds 7 Azure DevOps
+  requests to each run: fresh 110 model and 194 Azure DevOps requests,
+  replacement 92 and 164, native 110 and 201.
+- **Unchanged**: comment scale 34 and 75, with debug off 34 and 71,
+  and background compaction 8 model requests in both runs, as
+  for 0.4.3.
 
 `npm pack --dry-run` lists 38 files (37 for 0.4.3); `src/tui-actions.mjs` is
 new. `package.json` has no dependency and no lifecycle script.
+
+### How the row got its place
+
+The first candidate drew the steps as rows of full sentences under the
+panel's header, each with the command it sends beside it. The maintainer
+installed that candidate (the pull request's commit, as a Git package) and
+used it: after a preview was read to its end, what could be done with it was
+at the other end of the panel. Three layouts were then recorded in the real
+terminal UI with stand-in services and read as text, row by row, before one
+was chosen: the same block at the foot of the panel, a band as tall as the
+prompt area beside it (at 150 by 42, 120 by 32 and 200 by 50), and one row on
+the panel's own ground (at 150 by 42 and 120 by 32). The row is what this
+candidate has. The same
+recordings showed three things the fixtures now check: a click on a step
+gave the panel the keyboard, so that the next key typed was taken for the
+panel's; a preview that was planned again arrived scrolled to where the one
+before it was left; and text that scrolled touched the panel's header.
 
 ### The pictures of setup
 
@@ -155,13 +186,44 @@ the command palette, so that the conversation holds no notice with a path of
 the recording machine; every frame shown was read as text for paths and
 names before it was used.
 
+### Reviews by a second model
+
+The pull request was reviewed by a second model (GPT-6 Astra at its highest
+reasoning effort through the Codex CLI, in a read-only sandbox on a clean
+clone). It ran the build check and the tests that write nothing, and
+reproduced what it found with probes of its own; the tests that write files
+and the host fixtures ran here, on the corrected tree. The first review, of
+the first candidate, reported three defects, each confirmed against the code
+and corrected with a regression test:
+
+- **An answer for what the panel no longer offered was acted on.** A dialog
+  can stay open for any time. When the preview was planned again meanwhile,
+  "Yes" still sent the command, which would have posted a preview nobody had
+  read; a panel that was closed, or another session on screen, changed
+  nothing either. Each step now comes with a check that the panel still
+  shows that notice's offer in that session.
+- **A late receipt showed one preview and offered another.** The command
+  locks are released before a run's sessions are cleaned up, and the offer
+  was read after that. It is read with the text it goes with now, and a
+  preview that another command replaced or posted before its receipt is
+  neither shown nor offered.
+- **Naming a conversation could replace a name given in the same moment.**
+  The title was read and then written. The host has no rename that applies
+  only to an unnamed conversation, so the renames it reports now decide.
+
 ### Not verified
 
-- The rows of the panel were not used against a live Azure DevOps
-  organization or after a review by a real model.
+- The steps at the panel's foot were not used against a live Azure DevOps
+  organization or after a review by a real model. The candidate the
+  maintainer used at home was the first one, with the rows under the header.
+- That a name given in the very moment AZPR names a conversation is put back
+  was shown with scripted orders of renames; on the real host only that the
+  renames are reported was checked.
+- The recording at the top of the README predates the row; it shows the panel
+  of 0.4.2.
 - The pictures of setup show stand-in services, as said above.
 - Other OpenCode clients (the desktop app) were not run; they load no
-  terminal part, and the notices' text is unchanged.
+  terminal part.
 
 ## 0.4.3 in use: a first setup and a review with a real model (2026-11-19)
 

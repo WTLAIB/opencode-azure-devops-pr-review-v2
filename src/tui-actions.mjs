@@ -1,7 +1,7 @@
 // What a person can do from AZPR's terminal panel after a review or a comment preview: have the comments
-// previewed, post the preview, leave findings out or change a level, undo those adjustments. The panel lists
-// these as rows; picking one asks what is needed in the host's own dialogs and then sends the same
-// /pr-comment command a person would type, to the session on screen. Nothing else is ever sent from the
+// previewed, post the preview, leave findings out or change a level, reset those adjustments. The panel lists
+// these in one row at its foot; picking one asks what is needed in the host's own dialogs and then sends the
+// same /pr-comment command a person would type, to the session on screen. Nothing else is ever sent from the
 // terminal part, and nothing is decided here: the server part takes the command as it takes a typed one,
 // with its own checks, its STARTED notice and its receipt.
 //
@@ -13,26 +13,33 @@
 // (tests/tui-actions.test.mjs); src/tui-view.jsx supplies the dialogs and the sending.
 
 const LEVELS = ['high', 'medium', 'low'];
-const APPLY = '\u0000apply', CLOSE = '\u0000close', EXCLUDE = '\u0000exclude';
+const APPLY = '\u0000apply', EXCLUDE = '\u0000exclude';
+// The key that applies the adjustments from the list of findings, at the foot of that dialog. Letters go to the
+// dialog's search line, so it is a chord; OpenCode binds nothing to this one.
+const APPLY_KEY = 'ctrl+s';
+// Said when a person's answer comes back for something the panel no longer offers.
+const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
 
 /** The level the review itself gave a finding. */
 const own = finding => finding.original ?? finding.severity;
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 /**
- * The rows the panel lists for what a preview offers; none without an offer. `key` works while the panel
- * has the keyboard, `command` is what a person would type instead (shown beside the row where there is room),
- * and a label that ends in "…" asks before anything is sent.
+ * What the panel lists for what a notice offers, in the order it is shown; nothing without an offer. `key`
+ * picks one while the panel has the keyboard. A label that ends in "…" asks before anything is sent; one that
+ * does not is sent at once. `primary` marks the step the others lead to.
  */
 export function actionRows(next) {
   if (!next) return [];
   const adjusted = next.findings.some(finding => finding.excluded || finding.original !== undefined);
   return [
-    // A review without a preview yet: one is planned first, so that what is posted was read.
-    ...(next.plan ? [{ id: 'plan', key: 'c', label: 'Preview the comments (nothing is posted)', command: '/pr-comment' }] : []),
-    ...(next.publish ? [{ id: 'publish', key: 'p', label: `Post the ${plural(next.posts, 'comment')} on the PR…`, command: '/pr-comment --publish' }] : []),
-    ...(next.adjust && next.findings.length ? [{ id: 'adjust', key: 'a', label: 'Leave findings out or change a level…', command: '/pr-comment --exclude … --severity …' }] : []),
-    ...(next.adjust && adjusted ? [{ id: 'reset', key: 'u', label: 'Undo your adjustments', command: '/pr-comment --reset' }] : []),
+    // A review without a preview yet: one is planned first, so that what is posted was read. A model runs,
+    // and nothing is posted.
+    ...(next.plan ? [{ id: 'plan', key: 'c', label: 'Preview comments', primary: true }] : []),
+    ...(next.publish ? [{ id: 'publish', key: 'p', label: `Post ${plural(next.posts, 'comment')}…`, primary: true }] : []),
+    ...(next.adjust && next.findings.length ? [{ id: 'adjust', key: 'a', label: 'Adjust findings…' }] : []),
+    // Both lists are cleared at once, which is more than the last step undone.
+    ...(next.adjust && adjusted ? [{ id: 'reset', key: 'u', label: 'Reset adjustments' }] : []),
   ];
 }
 
@@ -51,7 +58,7 @@ const sameAdjustments = (a, b) => a.excluded.size === b.excluded.size && [...a.e
 export const planCommand = next => ({ name: 'pr-comment', text: next.review });
 /** The command that posts a preview. It names its review: what is on screen is what is posted, whatever is current by then. */
 export const publishCommand = next => ({ name: 'pr-comment', text: `${next.review} --publish` });
-/** The command that undoes a person's adjustments. */
+/** The command that clears a person's adjustments. */
 export const resetCommand = next => ({ name: 'pr-comment', text: `${next.review} --reset` });
 
 /**
@@ -87,18 +94,25 @@ function describeChanges(next, adjustments) {
  * The panel's actions. `host.dialog` is the host's dialogs, `host.toast` its toasts and `host.send(sessionID,
  * command)` sends one command, `{ name, text }`, to a session and resolves when the server took it.
  * One action runs at a time; after `stop()` nothing is asked or sent, whatever answer arrives.
+ *
+ * An action is for what the panel offered when it was picked. `still()`, which the panel gives with each one,
+ * says whether that is still so: the same panel, open in the same session, showing the same notice's offer. A
+ * dialog can stay open for any time, and a preview can be planned again meanwhile: an answer that comes back
+ * for something else is said, and nothing is sent.
  */
 export function createActions(host) {
   const { dialog, toast, send } = host;
   let running = false, stopped = false;
+  const changed = () => { if (!stopped) toast({ title: 'AZPR', message: CHANGED, variant: 'warning', duration: 8000 }); };
 
   /**
    * Send one command. One that the server part refuses (another command is running, the review is no longer
    * kept) or that does not get there is said with the reason given, as the host says it for a typed command:
    * nothing else would tell. The reason is the server's own text, on one line and cut to what a toast holds.
    */
-  async function dispatch(sessionID, command) {
+  async function dispatch(sessionID, command, still) {
     if (stopped) return false;
+    if (!still()) { changed(); return false; }
     try { await send(sessionID, command); return true; }
     catch (error) {
       const reason = String(error?.message ?? error ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -108,31 +122,45 @@ export function createActions(host) {
   }
 
   /** Posting is asked once more, with "no" first: a key pressed twice posts nothing. */
-  async function publish(next, sessionID) {
+  async function publish(next, sessionID, still) {
     const answer = await dialog.select({ title: 'Post these comments on the pull request?', options: [
       { title: 'No, post nothing', value: 'keep', description: next.target || undefined },
       { title: `Yes, post ${plural(next.posts, 'comment')}`, value: 'post', description: 'As the PAT owner; what is on the PR already is skipped' }] });
     if (answer !== 'post' || stopped) return;
-    await dispatch(sessionID, publishCommand(next));
+    await dispatch(sessionID, publishCommand(next), still);
   }
 
-  /** The findings as a list: picking one says what happens to it, and the first row applies everything at once. */
-  async function adjust(next, sessionID) {
+  /**
+   * The findings as a list: picking one says what happens to it. Once something differs from what is saved, it is
+   * applied at once from the foot of the dialog, which stays in view however long the list is (clicked there, or
+   * with its key), and from the list's last row, for a host that draws no such foot. Escape leaves everything as
+   * it was.
+   */
+  async function adjust(next, sessionID, still) {
     const adjustments = savedAdjustments(next);
     let last;
     for (;;) {
       if (stopped) return;
+      if (!still()) return changed();
       const command = adjustCommand(next, adjustments);
-      const choice = await dialog.select({ title: 'Adjust the findings before posting', placeholder: 'Search findings', current: last, options: [
-        command ? { title: next.plan ? 'Apply, and plan the preview' : 'Apply, and plan the preview again', value: APPLY, description: describeChanges(next, adjustments), category: 'Then' }
-          : { title: 'Close: nothing was changed', value: CLOSE, category: 'Then' },
+      // The foot's action does not close the dialog, so it is closed here; its answer is this promise's, since
+      // a dialog that is closed answers nothing. It acts once, and only while this list is the dialog that is
+      // open: `clear` closes whatever dialog is open at that moment.
+      let apply, listed = true;
+      const applied = new Promise(resolve => { apply = resolve; });
+      const foot = command && typeof dialog.clear === 'function'
+        ? [{ bind: APPLY_KEY, title: 'apply', side: 'right', selection: 'none', onTrigger: () => { if (!listed) return; listed = false; apply(APPLY); dialog.clear(); } }] : undefined;
+      const choice = await Promise.race([applied, dialog.select({ title: 'Adjust the findings before posting', placeholder: 'Search findings', current: last, options: [
         ...next.findings.map(finding => {
           const level = adjustments.levels.get(finding.id) ?? own(finding);
           return { title: `${finding.id}${finding.summary ? ` — ${finding.summary}` : ''}`, value: finding.id, category: 'Findings',
             footer: adjustments.excluded.has(finding.id) ? 'left out' : level === own(finding) ? level : `${level} (was ${own(finding)})` };
-        })] });
-      if (choice === undefined || choice === CLOSE || stopped) return;
-      if (choice === APPLY) { await dispatch(sessionID, command); return; }
+        }),
+        ...(command ? [{ title: next.plan ? 'Apply, and plan the preview' : 'Apply, and plan the preview again', value: APPLY, description: describeChanges(next, adjustments), category: 'Then' }] : [])],
+        ...(foot ? { actions: foot } : {}) })]);
+      listed = false;
+      if (choice === undefined || stopped) return;
+      if (choice === APPLY) { await dispatch(sessionID, command, still); return; }
       const finding = next.findings.find(item => item.id === choice);
       if (!finding) return;
       last = choice;
@@ -149,15 +177,18 @@ export function createActions(host) {
   }
 
   return {
-    /** Run the action of a row (`plan`, `publish`, `adjust` or `reset`) for what a notice offers, in the session on screen. */
-    async run(id, next, sessionID) {
+    /**
+     * Run one action (`plan`, `publish`, `adjust` or `reset`) for what a notice offers, in the session on
+     * screen. `still` says whether the panel still offers it there; without one it is taken to.
+     */
+    async run(id, next, sessionID, still = () => true) {
       if (running || stopped || !next || typeof sessionID !== 'string' || !actionRows(next).some(row => row.id === id)) return;
       running = true;
       try {
-        if (id === 'plan') await dispatch(sessionID, planCommand(next));
-        else if (id === 'publish') await publish(next, sessionID);
-        else if (id === 'adjust') await adjust(next, sessionID);
-        else if (id === 'reset') await dispatch(sessionID, resetCommand(next));
+        if (id === 'plan') await dispatch(sessionID, planCommand(next), still);
+        else if (id === 'publish') await publish(next, sessionID, still);
+        else if (id === 'adjust') await adjust(next, sessionID, still);
+        else if (id === 'reset') await dispatch(sessionID, resetCommand(next), still);
       } catch {
         // A dialog the host could not show: nothing was sent, and the commands can still be typed.
         if (!stopped) toast({ title: 'AZPR', message: 'That could not be done here. Type the command in the conversation instead.', variant: 'error', duration: 8000 });

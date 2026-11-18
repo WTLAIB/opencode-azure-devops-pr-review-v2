@@ -12,9 +12,12 @@ const offer = (extra = {}, findings = [
   { id: 'F-3', severity: 'low', summary: 'ordering uses local time' }]) =>
   nextOf({ azpr: { next: { review: REVIEW, target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 4, findings, ...extra } } }, REVIEW);
 
-/** The actions with dialogs that answer from a list, in order; every dialog, toast and command is recorded. */
-function host(answers, { send } = {}) {
-  const shown = [], toasts = [], sent = [];
+/**
+ * The actions with dialogs that answer from a list, in order; every dialog, toast and command is recorded.
+ * `clear` gives the dialogs the host's way to close the one that is open, which a dialog's foot needs.
+ */
+function host(answers, { send, clear = false } = {}) {
+  const shown = [], toasts = [], sent = [], log = { cleared: 0 };
   const queue = [...answers];
   const actions = createActions({
     dialog: { select: async options => {
@@ -22,36 +25,51 @@ function host(answers, { send } = {}) {
       if (!queue.length) throw new Error(`No answer was scripted for "${options.title}".`);
       const answer = queue.shift();
       return typeof answer === 'function' ? answer(options) : answer;
-    } },
+    }, ...(clear ? { clear() { log.cleared++; } } : {}) },
     toast: options => toasts.push(options),
     send: send ?? (async (sessionID, command) => { sent.push({ sessionID, ...command }); }),
   });
-  return { actions, shown, toasts, sent, left: () => queue.length, titles: () => shown.map(item => item.title) };
+  return { actions, shown, toasts, sent, log, left: () => queue.length, titles: () => shown.map(item => item.title) };
 }
 const value = (options, title) => options.options.find(option => option.title.startsWith(title)).value;
 /** What the server part makes of a command the panel sends: the same parser as for a typed one. */
 const parsed = command => parseCommentRequest(command.text);
 
-test('the panel lists what a preview offers, each row with its key and the command it stands for', () => {
+test('the panel lists what a notice offers, each with its key; the step the others lead to is marked', () => {
   assert.deepEqual(actionRows(undefined), []);
   assert.deepEqual(actionRows(offer()), [
-    { id: 'publish', key: 'p', label: 'Post the 4 comments on the PR…', command: '/pr-comment --publish' },
-    { id: 'adjust', key: 'a', label: 'Leave findings out or change a level…', command: '/pr-comment --exclude … --severity …' }]);
-  // Undoing is offered once there is something to undo.
+    { id: 'publish', key: 'p', label: 'Post 4 comments…', primary: true },
+    { id: 'adjust', key: 'a', label: 'Adjust findings…' }]);
+  // Resetting is offered once there is something to reset.
   const adjusted = offer({}, [{ id: 'F-1', severity: 'low', original: 'medium', summary: 'a' }, { id: 'R-2', severity: 'high', excluded: true, summary: 'b' }]);
-  assert.deepEqual(actionRows(adjusted).map(row => [row.id, row.key]), [['publish', 'p'], ['adjust', 'a'], ['reset', 'u']]);
-  assert.equal(actionRows(adjusted).at(-1).command, '/pr-comment --reset');
+  assert.deepEqual(actionRows(adjusted).map(row => [row.id, row.key, row.label]), [['publish', 'p', 'Post 4 comments…'], ['adjust', 'a', 'Adjust findings…'], ['reset', 'u', 'Reset adjustments']]);
   // A preview that is held, or whose every finding was left out, cannot be posted; one whose publication started is not adjusted.
   assert.deepEqual(actionRows(offer({ publish: false })).map(row => row.id), ['adjust']);
   assert.deepEqual(actionRows(offer({ adjust: false })).map(row => row.id), ['publish']);
-  assert.deepEqual(actionRows(offer({ adjust: false }, [{ id: 'F-1', severity: 'low', original: 'high', summary: 'a' }])).map(row => row.id), ['publish'], 'Nothing is undone once publication started.');
+  assert.deepEqual(actionRows(offer({ adjust: false }, [{ id: 'F-1', severity: 'low', original: 'high', summary: 'a' }])).map(row => row.id), ['publish'], 'Nothing is reset once publication started.');
   assert.deepEqual(actionRows(offer({}, [])).map(row => row.id), ['publish'], 'A review without findings has nothing to adjust.');
-  assert.equal(actionRows(offer({ posts: 1 }))[0].label, 'Post the 1 comment on the PR…');
+  assert.equal(actionRows(offer({ posts: 1 }))[0].label, 'Post 1 comment…');
   // A review without a preview yet: one is planned first, and the findings can be adjusted before it; nothing is posted unread.
   assert.deepEqual(actionRows(offer({ plan: true, publish: false, posts: 0 })), [
-    { id: 'plan', key: 'c', label: 'Preview the comments (nothing is posted)', command: '/pr-comment' },
-    { id: 'adjust', key: 'a', label: 'Leave findings out or change a level…', command: '/pr-comment --exclude … --severity …' }]);
+    { id: 'plan', key: 'c', label: 'Preview comments', primary: true },
+    { id: 'adjust', key: 'a', label: 'Adjust findings…' }]);
   assert.deepEqual(actionRows(offer({ plan: true, publish: true })).map(row => row.id), ['plan', 'adjust'], 'Whatever a notice says.');
+});
+
+test('a label that ends in "…" asks before anything is sent, and one that does not is sent at once', async () => {
+  const adjusted = offer({}, [{ id: 'F-1', severity: 'low', original: 'medium', summary: 'a' }, { id: 'R-2', severity: 'high', summary: 'b' }]);
+  const unplanned = offer({ plan: true, publish: false, posts: 0 });
+  const seen = [];
+  for (const [next, rows] of [[adjusted, actionRows(adjusted)], [unplanned, actionRows(unplanned).filter(row => row.id === 'plan')]]) {
+    for (const row of rows) {
+      // One answer is there for a dialog: leaving it.
+      const h = host([undefined]);
+      await h.actions.run(row.id, next, SESSION);
+      assert.deepEqual([h.shown.length > 0, h.sent.length > 0], [row.label.endsWith('…'), !row.label.endsWith('…')], row.label);
+      seen.push(row.id);
+    }
+  }
+  assert.deepEqual(seen, ['publish', 'adjust', 'reset', 'plan']);
 });
 
 test('a command names its review and is made only of checked IDs and level names', () => {
@@ -98,20 +116,22 @@ test('posting asks once more, with "no" first, and sends nothing unless a person
   assert.deepEqual([held.shown, held.sent], [[], []]);
 });
 
-test('findings are adjusted in a list: each pick says what happens to one, and one row applies them all', async () => {
+test('findings are adjusted in a list: each pick says what happens to one, and its last row applies them all', async () => {
   const next = offer();
   const h = host(['F-1', options => value(options, 'Leave it out'), 'R-2', 'low', 'F-3', 'low', options => value(options, 'Apply')]);
   await h.actions.run('adjust', next, SESSION);
   assert.deepEqual(h.titles(), ['Adjust the findings before posting', 'F-1: how is it published?', 'Adjust the findings before posting', 'R-2: how is it published?',
     'Adjust the findings before posting', 'F-3: how is it published?', 'Adjust the findings before posting']);
-  // The list: what it would do, then every finding with how it is published now.
+  // The list: every finding with how it is published now and, once something differs, what applying would do,
+  // after them: where the list was read to.
   const [first, , second, , , , last] = h.shown;
-  assert.deepEqual(first.options.map(option => [option.title, option.footer]), [['Close: nothing was changed', undefined], ['F-1 — reserve can leave stock decremented', 'medium'],
-    ['R-2 — snapshot returns live state', 'high'], ['F-3 — ordering uses local time', 'low']]);
-  assert.deepEqual([second.current, second.options[0].title, second.options[0].description, second.options[1].footer], ['F-1', 'Apply, and plan the preview again', 'F-1 left out', 'left out'],
-    'The list comes back on the finding that was changed.');
-  assert.deepEqual([last.options[0].description, last.options.slice(1).map(option => option.footer)], ['F-1 left out, R-2 as low', ['left out', 'low (was high)', 'low']],
+  assert.deepEqual(first.options.map(option => [option.title, option.footer, option.category]), [['F-1 — reserve can leave stock decremented', 'medium', 'Findings'],
+    ['R-2 — snapshot returns live state', 'high', 'Findings'], ['F-3 — ordering uses local time', 'low', 'Findings']], 'Nothing to apply yet: Escape leaves the list.');
+  assert.deepEqual([second.current, second.options.at(-1).title, second.options.at(-1).description, second.options.at(-1).category, second.options[0].footer],
+    ['F-1', 'Apply, and plan the preview again', 'F-1 left out', 'Then', 'left out'], 'The list comes back on the finding that was changed.');
+  assert.deepEqual([last.options.at(-1).description, last.options.slice(0, -1).map(option => option.footer)], ['F-1 left out, R-2 as low', ['left out', 'low (was high)', 'low']],
     'A level that is the review\'s own is no change.');
+  assert.deepEqual(h.shown.filter(dialog => 'actions' in dialog), [], 'A host that cannot close a dialog gets no action at its foot.');
   // One finding: its levels, the review's own marked, then leaving it out; the dialog starts on what holds now.
   assert.deepEqual(h.shown[1].options.map(option => [option.title, option.description]), [['As high', undefined], ['As medium', 'The level the review gave it'], ['As low', undefined], ['Leave it out', 'Not posted, and named in no comment']]);
   assert.equal(h.shown[1].current, 'medium');
@@ -120,7 +140,7 @@ test('findings are adjusted in a list: each pick says what happens to one, and o
 });
 
 test('leaving the list, or a finding, sends nothing; a finding that was left out can be published after all', async () => {
-  for (const answers of [[undefined], [options => value(options, 'Close')], ['F-1', undefined, undefined]]) {
+  for (const answers of [[undefined], ['F-1', undefined, undefined], ['F-1', 'low', undefined]]) {
     const h = host(answers);
     await h.actions.run('adjust', offer(), SESSION);
     assert.deepEqual([h.sent, h.left()], [[], 0]);
@@ -129,7 +149,7 @@ test('leaving the list, or a finding, sends nothing; a finding that was left out
   const h = host(['F-1', 'high', 'R-2', 'high', options => value(options, 'Apply')]);
   await h.actions.run('adjust', adjusted, SESSION);
   assert.equal(h.shown[1].current, h.shown[1].options.at(-1).value, 'A finding that is left out starts on that row.');
-  assert.equal(h.shown.at(-1).options[0].description, 'F-1 published as high, R-2 as high');
+  assert.equal(h.shown.at(-1).options.at(-1).description, 'F-1 published as high, R-2 as high');
   assert.deepEqual(h.sent, [{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude none --severity F-1=high` }]);
   // Everything back as the review had it: that is --reset.
   const back = host(['F-1', 'medium', 'R-2', 'high', options => value(options, 'Apply')]);
@@ -145,11 +165,83 @@ test('leaving the list, or a finding, sends nothing; a finding that was left out
   // Adjusted before the first preview, the row that applies it says so.
   const early = host(['F-1', 'low', options => value(options, 'Apply')]);
   await early.actions.run('adjust', unplanned, SESSION);
-  assert.equal(early.shown.at(-1).options[0].title, 'Apply, and plan the preview');
+  assert.equal(early.shown.at(-1).options.at(-1).title, 'Apply, and plan the preview');
   assert.deepEqual(early.sent.map(command => command.text), [`${REVIEW} --exclude none --severity F-1=low`]);
   const undo = host([]);
   await undo.actions.run('reset', adjusted, SESSION);
-  assert.deepEqual([undo.shown.length, undo.sent.map(command => command.text)], [0, [`${REVIEW} --reset`]], 'Undoing asks nothing: it posts nothing and can be done again.');
+  assert.deepEqual([undo.shown.length, undo.sent.map(command => command.text)], [0, [`${REVIEW} --reset`]], 'Resetting asks nothing: it posts nothing and can be done again.');
+});
+
+test('the adjustments are applied from the foot of the list, which stays in view: with its key or a click', async () => {
+  // As OpenCode shows it: an action at a dialog's foot does not close the dialog, so the action closes it, and
+  // the dialog then answers nothing.
+  const trigger = options => { options.actions[0].onTrigger(); return undefined; };
+  const h = host(['R-2', options => value(options, 'Leave it out'), trigger], { clear: true });
+  await h.actions.run('adjust', offer(), SESSION);
+  const [first, last] = h.shown.filter(dialog => dialog.title === 'Adjust the findings before posting');
+  assert.equal('actions' in first, false, 'Nothing to apply yet.');
+  assert.deepEqual(last.actions.map(({ onTrigger, ...action }) => action), [{ bind: 'ctrl+s', title: 'apply', side: 'right', selection: 'none' }]);
+  assert.equal(last.options.at(-1).title, 'Apply, and plan the preview again', 'The row is there as well.');
+  assert.deepEqual([h.sent, h.log.cleared, h.left()], [[{ sessionID: SESSION, name: 'pr-comment', text: `${REVIEW} --exclude R-2 --severity none` }], 1, 0]);
+  // A dialog that never answers once it was closed changes nothing: the foot's answer is the one that counts.
+  const silent = host(['R-2', 'low', options => { options.actions[0].onTrigger(); return new Promise(() => {}); }], { clear: true });
+  await silent.actions.run('adjust', offer(), SESSION);
+  assert.deepEqual(silent.sent.map(command => command.text), [`${REVIEW} --exclude none --severity R-2=low`]);
+  // The row still applies where the foot is there, and leaving the list still sends nothing.
+  const row = host(['F-3', 'high', options => value(options, 'Apply')], { clear: true });
+  await row.actions.run('adjust', offer(), SESSION);
+  assert.deepEqual([row.sent.map(command => command.text), row.log.cleared], [[`${REVIEW} --exclude none --severity F-3=high`], 0]);
+  const left = host(['F-3', 'high', undefined], { clear: true });
+  await left.actions.run('adjust', offer(), SESSION);
+  assert.deepEqual([left.sent, left.log.cleared], [[], 0]);
+  // The foot acts once, and only while its list is the dialog that is open: `clear` closes whatever dialog is
+  // open at that moment, which later is another one.
+  let foot;
+  const twice = host(['F-3', 'high', options => { foot = options.actions[0].onTrigger; foot(); foot(); }], { clear: true });
+  await twice.actions.run('adjust', offer(), SESSION);
+  foot();
+  assert.deepEqual([twice.sent.length, twice.log.cleared], [1, 1]);
+  const gone = host(['F-3', 'high', options => { foot = options.actions[0].onTrigger; return undefined; }], { clear: true });
+  await gone.actions.run('adjust', offer(), SESSION);
+  foot();
+  await Promise.resolve();
+  assert.deepEqual([gone.sent, gone.log.cleared], [[], 0], 'The list was left: its foot does nothing any more.');
+  const picked = host(['F-3', 'high', options => { foot = options.actions[0].onTrigger; return 'R-2'; }, () => { foot(); return 'low'; }, undefined], { clear: true });
+  await picked.actions.run('adjust', offer(), SESSION);
+  assert.deepEqual([picked.sent, picked.log.cleared], [[], 0], 'Another dialog is open by then: the dialog of one finding.');
+});
+
+test('an answer for what the panel no longer offers sends nothing, and says so', async () => {
+  const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
+  const adjusted = offer({}, [{ id: 'F-1', severity: 'low', original: 'medium', summary: 'a' }]);
+  // The preview was planned again, another session came on screen or the panel was closed while the question was open.
+  let offered = true;
+  const post = host([options => { offered = false; return value(options, 'Yes'); }]);
+  await post.actions.run('publish', offer(), SESSION, () => offered);
+  assert.deepEqual([post.sent, post.toasts.map(toast => [toast.variant, toast.message])], [[], [['warning', CHANGED]]]);
+  // While the list of findings is open: the next step is not asked, and nothing is applied.
+  offered = true;
+  const list = host(['F-1', () => { offered = false; return 'high'; }, options => value(options, 'Apply')]);
+  await list.actions.run('adjust', offer(), SESSION, () => offered);
+  assert.deepEqual([list.sent, list.left(), list.toasts.map(toast => toast.message)], [[], 1, [CHANGED]]);
+  // Right before it is sent, also from the foot of the list.
+  offered = true;
+  const foot = host(['F-1', 'high', options => { offered = false; options.actions[0].onTrigger(); }], { clear: true });
+  await foot.actions.run('adjust', offer(), SESSION, () => offered);
+  assert.deepEqual([foot.sent, foot.toasts.map(toast => toast.message)], [[], [CHANGED]]);
+  // What asks nothing is checked as well: a key can be pressed in the moment the offer goes.
+  for (const [id, next] of [['reset', adjusted], ['plan', offer({ plan: true, publish: false, posts: 0 })]]) {
+    const gone = host([]);
+    await gone.actions.run(id, next, SESSION, () => false);
+    assert.deepEqual([gone.sent, gone.toasts.map(toast => toast.message)], [[], [CHANGED]], id);
+  }
+  // While it is still offered, it is sent; after the part was unloaded nothing is said either.
+  const kept = host([options => value(options, 'Yes')]);
+  await kept.actions.run('publish', offer(), SESSION, () => true);
+  assert.equal(kept.sent.length, 1);
+  const unloaded = host([options => { unloaded.actions.stop(); return value(options, 'Yes'); }]);
+  await unloaded.actions.run('publish', offer(), SESSION, () => false);
+  assert.deepEqual([unloaded.sent, unloaded.toasts], [[], []]);
 });
 
 test('a command that was refused or did not get there is said with its reason; one action runs at a time', async () => {

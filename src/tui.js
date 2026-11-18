@@ -19,9 +19,9 @@ import { createElement as _$createElement } from "@opentui/solid";
 //
 // The panel reads AZPR's own notices in the conversation, the report queued to a review session, and
 // the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It reads no settings file:
-// the server part writes that setting into the metadata of its notices. After a comment preview it
-// lists what can be done next, as rows a person picks instead of typing: each sends the /pr-comment
-// command a person would type, to the session on screen, after asking what is needed
+// the server part writes that setting into the metadata of its notices. After a review or a comment
+// preview it lists what can be done next in one row at its foot, picked instead of typed: each sends
+// the /pr-comment command a person would type, to the session on screen, after asking what is needed
 // (src/tui-actions.mjs). It sends nothing by itself, and never a prompt.
 //
 // The dialogs of /pr-setup ask for AZPR's settings (src/tui-setup.mjs says what and in which order) and
@@ -48,9 +48,11 @@ const token = (theme, ...paths) => {
 };
 const colors = theme => {
   const base = token(theme, "text.base", "text.default");
+  const muted = token(theme, "text.muted", "text.subdued") ?? base;
   return {
     base,
-    muted: token(theme, "text.muted", "text.subdued") ?? base,
+    muted,
+    rule: token(theme, "border.base", "border.default") ?? muted,
     running: token(theme, "text.feedback.info.base") ?? base,
     failed: token(theme, "text.feedback.error.base") ?? base,
     done: token(theme, "text.feedback.success.base") ?? base,
@@ -197,8 +199,14 @@ function Row(props) {
   })();
 }
 
-/** One thing that can be done next: a row that is clicked, or picked with its key while the panel has the keyboard. */
-function Action(props) {
+/**
+ * One thing that can be done next, in the row at the panel's foot: its key and a word or two. It is clicked,
+ * or picked with the key while the panel has the keyboard, which is when the key has its colour: a key that
+ * would only type a letter into the prompt is drawn dim.
+ * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
+ * down, so that is stopped here: what is typed next still goes to the prompt.
+ */
+function Button(props) {
   const [hover, setHover] = createSignal(false);
   return (() => {
     var _el$6 = _$createElement("box"),
@@ -207,9 +215,13 @@ function Action(props) {
     _$insertNode(_el$6, _el$7);
     _$insertNode(_el$6, _el$8);
     _$setProp(_el$6, "flexDirection", "row");
+    _$setProp(_el$6, "flexShrink", 0);
     _$setProp(_el$6, "gap", 1);
     _$setProp(_el$6, "onMouseOver", () => setHover(true));
     _$setProp(_el$6, "onMouseOut", () => setHover(false));
+    _$setProp(_el$6, "onMouseDown", event => {
+      if (event.button === MouseButton.LEFT) event.stopPropagation();
+    });
     _$setProp(_el$6, "onMouseUp", event => {
       if (event.button !== MouseButton.LEFT) return;
       event.stopPropagation();
@@ -217,38 +229,25 @@ function Action(props) {
     });
     _$setProp(_el$7, "flexShrink", 0);
     _$setProp(_el$7, "selectable", false);
-    _$insert(_el$7, () => props.item.key);
+    _$insert(_el$7, () => `[${props.item.key}]`);
     _$setProp(_el$8, "flexShrink", 0);
     _$setProp(_el$8, "selectable", false);
-    _$insert(_el$8, (() => {
-      var _c$ = _$memo(() => !!props.wide);
-      return () => _c$() ? props.item.label.padEnd(props.pad) : props.item.label;
-    })());
-    _$insert(_el$6, _$createComponent(Show, {
-      get when() {
-        return props.wide;
-      },
-      get children() {
-        var _el$9 = _$createElement("text");
-        _$setProp(_el$9, "wrapMode", "none");
-        _$setProp(_el$9, "selectable", false);
-        _$insert(_el$9, () => props.item.command);
-        _$effect(_$p => _$setProp(_el$9, "fg", props.colors.muted, _$p));
-        return _el$9;
-      }
-    }), null);
+    _$insert(_el$8, () => props.item.label);
     _$effect(_p$ => {
       var _v$7 = hover() ? props.colors.hover : undefined,
-        _v$8 = props.colors.link,
-        _v$9 = props.colors.base;
+        _v$8 = props.live ? props.colors.link : props.colors.muted,
+        _v$9 = props.item.primary ? props.colors.base : props.colors.text,
+        _v$0 = props.item.primary ? TextAttributes.BOLD : 0;
       _v$7 !== _p$.e && (_p$.e = _$setProp(_el$6, "backgroundColor", _v$7, _p$.e));
       _v$8 !== _p$.t && (_p$.t = _$setProp(_el$7, "fg", _v$8, _p$.t));
       _v$9 !== _p$.a && (_p$.a = _$setProp(_el$8, "fg", _v$9, _p$.a));
+      _v$0 !== _p$.o && (_p$.o = _$setProp(_el$8, "attributes", _v$0, _p$.o));
       return _p$;
     }, {
       e: undefined,
       t: undefined,
-      a: undefined
+      a: undefined,
+      o: undefined
     });
     return _el$6;
   })();
@@ -280,12 +279,20 @@ function Panel(props) {
     type: "session",
     sessionID
   });
-  // What a preview offers next, where this host lets the panel send a command; picking a row asks first.
+  // What a notice offers next, where this host lets the panel send a command; picking one asks first.
   const offered = createMemo(() => state.actions ? actionRows(model().next) : []);
   const offers = id => offered().some(item => item.id === id);
+  let drawn = true;
+  onCleanup(() => drawn = false);
   const act = id => {
     const next = model().next;
-    if (next && offers(id)) void state.actions.run(id, next, props.panel.sessionID);
+    if (!next || !offers(id)) return;
+    const sessionID = props.panel.sessionID;
+    // A dialog can stay open for any time. Its answer counts only while this panel still shows that notice's
+    // offer in that session: not for a preview planned again meanwhile, for another session on screen, or
+    // once the panel was closed.
+    const still = () => drawn && mine() && props.panel.sessionID === sessionID && model().next?.offer === next.offer;
+    void state.actions.run(id, next, sessionID, still);
   };
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
@@ -340,6 +347,16 @@ function Panel(props) {
     if (inbox) state.readInbox(inbox.sessionID, inbox.token, true);
     const notices = model().notices;
     if (notices) state.readInbox(notices.sessionID, notices.token, false);
+  });
+
+  // Another document (a preview planned again, a report after a preview) is read from its beginning, wherever
+  // the one before it was left.
+  let shownBefore;
+  createEffect(() => {
+    const markdown = model().markdown;
+    if (!markdown) return;
+    if (shownBefore !== undefined && markdown !== shownBefore) scroll?.scrollTo(0);
+    shownBefore = markdown;
   });
 
   // Active only while the panel has the keyboard; the IDs let a user bind other keys in the TUI's configuration.
@@ -412,7 +429,7 @@ function Panel(props) {
       run: () => act("adjust")
     }, {
       id: "azpr.panel.reset",
-      title: "AZPR panel: undo your adjustments",
+      title: "AZPR panel: reset your adjustments",
       group: "AZPR",
       bind: "u",
       enabled: () => offers("reset"),
@@ -431,15 +448,22 @@ function Panel(props) {
     report: false
   };
   return (() => {
-    var _el$0 = _$createElement("box"),
+    var _el$9 = _$createElement("box"),
+      _el$0 = _$createElement("box"),
       _el$1 = _$createElement("box"),
       _el$10 = _$createElement("text"),
       _el$11 = _$createElement("b"),
       _el$17 = _$createElement("box"),
       _el$18 = _$createElement("text"),
-      _el$25 = _$createElement("scrollbox");
+      _el$21 = _$createElement("box"),
+      _el$22 = _$createElement("scrollbox");
+    _$insertNode(_el$9, _el$0);
+    _$setProp(_el$9, "flexDirection", "column");
+    _$setProp(_el$9, "flexGrow", 1);
+    _$setProp(_el$9, "minHeight", 0);
     _$insertNode(_el$0, _el$1);
-    _$insertNode(_el$0, _el$25);
+    _$insertNode(_el$0, _el$21);
+    _$insertNode(_el$0, _el$22);
     _$setProp(_el$0, "flexDirection", "column");
     _$setProp(_el$0, "flexGrow", 1);
     _$setProp(_el$0, "minHeight", 0);
@@ -501,78 +525,40 @@ function Panel(props) {
         _$effect(_$p => _$setProp(_el$20, "fg", palette().muted, _$p));
         return _el$20;
       }
-    }), _el$25);
-    _$insert(_el$0, _$createComponent(Show, {
-      get when() {
-        return offered().length > 0;
-      },
-      get children() {
-        var _el$21 = _$createElement("box"),
-          _el$22 = _$createElement("text"),
-          _el$23 = _$createTextNode(`Next (click a line`),
-          _el$24 = _$createTextNode(`)`);
-        _$insertNode(_el$21, _el$22);
-        _$setProp(_el$21, "flexDirection", "column");
-        _$setProp(_el$21, "flexShrink", 0);
-        _$setProp(_el$21, "paddingTop", 1);
-        _$insertNode(_el$22, _el$23);
-        _$insertNode(_el$22, _el$24);
-        _$setProp(_el$22, "selectable", false);
-        _$insert(_el$22, () => props.panel.focused ? ", or press its key" : "", _el$24);
-        _$insert(_el$21, _$createComponent(For, {
-          get each() {
-            return offered();
-          },
-          children: item => _$createComponent(Action, {
-            item: item,
-            get colors() {
-              return palette();
-            },
-            get wide() {
-              return props.panel.width >= 72;
-            },
-            get pad() {
-              return Math.max(...offered().map(row => row.label.length));
-            },
-            run: act
-          })
-        }), null);
-        _$effect(_$p => _$setProp(_el$22, "fg", palette().muted, _$p));
-        return _el$21;
-      }
-    }), _el$25);
-    _$use(element => scroll = element, _el$25);
-    _$setProp(_el$25, "flexGrow", 1);
-    _$setProp(_el$25, "minHeight", 0);
-    _$setProp(_el$25, "paddingTop", 1);
-    _$setProp(_el$25, "verticalScrollbarOptions", {
+    }), _el$21);
+    _$setProp(_el$21, "height", 1);
+    _$setProp(_el$21, "flexShrink", 0);
+    _$use(element => scroll = element, _el$22);
+    _$setProp(_el$22, "flexGrow", 1);
+    _$setProp(_el$22, "minHeight", 0);
+    _$setProp(_el$22, "verticalScrollbarOptions", {
       visible: false
     });
-    _$setProp(_el$25, "contentOptions", {
+    _$setProp(_el$22, "contentOptions", {
       minHeight: 0
     });
-    _$insert(_el$25, _$createComponent(Show, {
+    _$insert(_el$22, _$createComponent(Show, {
       get when() {
         return ids().length > 0 || model().deleted > 0;
       },
       get children() {
-        var _el$26 = _$createElement("box");
-        _$setProp(_el$26, "flexDirection", "column");
-        _$setProp(_el$26, "flexShrink", 0);
-        _$setProp(_el$26, "paddingBottom", 1);
-        _$insert(_el$26, _$createComponent(Show, {
+        var _el$23 = _$createElement("box");
+        _$setProp(_el$23, "flexDirection", "column");
+        _$setProp(_el$23, "flexShrink", 0);
+        _$setProp(_el$23, "paddingBottom", 1);
+        _$insert(_el$23, _$createComponent(Show, {
           get when() {
             return ids().length > 0;
           },
           get children() {
-            var _el$27 = _$createElement("text");
-            _$insertNode(_el$27, _$createTextNode(`Sessions (click one to open it)`));
-            _$setProp(_el$27, "selectable", false);
-            _$effect(_$p => _$setProp(_el$27, "fg", palette().muted, _$p));
-            return _el$27;
+            var _el$24 = _$createElement("text");
+            _$insertNode(_el$24, _$createTextNode(`Sessions (click one to open it)`));
+            _$setProp(_el$24, "selectable", false);
+            _$effect(_$p => _$setProp(_el$24, "fg", palette().muted, _$p));
+            return _el$24;
           }
         }), null);
-        _$insert(_el$26, _$createComponent(For, {
+        _$insert(_el$23, _$createComponent(For, {
           get each() {
             return ids();
           },
@@ -589,35 +575,35 @@ function Panel(props) {
             open: open
           })
         }), null);
-        _$insert(_el$26, _$createComponent(Show, {
+        _$insert(_el$23, _$createComponent(Show, {
           get when() {
             return model().deleted > 0;
           },
           get children() {
-            var _el$29 = _$createElement("text"),
-              _el$30 = _$createTextNode(` session(s) were deleted when their run ended.`);
-            _$insertNode(_el$29, _el$30);
-            _$insert(_el$29, () => model().deleted, _el$30);
-            _$effect(_$p => _$setProp(_el$29, "fg", palette().muted, _$p));
-            return _el$29;
+            var _el$26 = _$createElement("text"),
+              _el$27 = _$createTextNode(` session(s) were deleted when their run ended.`);
+            _$insertNode(_el$26, _el$27);
+            _$insert(_el$26, () => model().deleted, _el$27);
+            _$effect(_$p => _$setProp(_el$26, "fg", palette().muted, _$p));
+            return _el$26;
           }
         }), null);
-        return _el$26;
+        return _el$23;
       }
     }), null);
-    _$insert(_el$25, _$createComponent(Show, {
+    _$insert(_el$22, _$createComponent(Show, {
       get when() {
         return model().markdown;
       },
       get fallback() {
         return (() => {
-          var _el$33 = _$createElement("text");
-          _$insert(_el$33, (() => {
-            var _c$2 = _$memo(() => !!model().loading);
-            return () => _c$2() ? "Loading the report…" : _$memo(() => !!model().inbox)() ? "The report is in its session: open it above." : model().run ? "No report or preview yet." : "No AZPR run in this conversation yet.";
+          var _el$34 = _$createElement("text");
+          _$insert(_el$34, (() => {
+            var _c$ = _$memo(() => !!model().loading);
+            return () => _c$() ? "Loading the report…" : _$memo(() => !!model().inbox)() ? "The report is in its session: open it above." : model().run ? "No report or preview yet." : "No AZPR run in this conversation yet.";
           })());
-          _$effect(_$p => _$setProp(_el$33, "fg", palette().muted, _$p));
-          return _el$33;
+          _$effect(_$p => _$setProp(_el$34, "fg", palette().muted, _$p));
+          return _el$34;
         })();
       },
       get children() {
@@ -626,29 +612,29 @@ function Panel(props) {
             return model().documentHead;
           },
           get children() {
-            var _el$31 = _$createElement("text");
-            _$setProp(_el$31, "flexShrink", 0);
-            _$setProp(_el$31, "paddingBottom", 1);
-            _$insert(_el$31, () => model().documentHead);
-            _$effect(_$p => _$setProp(_el$31, "fg", palette().muted, _$p));
-            return _el$31;
+            var _el$28 = _$createElement("text");
+            _$setProp(_el$28, "flexShrink", 0);
+            _$setProp(_el$28, "paddingBottom", 1);
+            _$insert(_el$28, () => model().documentHead);
+            _$effect(_$p => _$setProp(_el$28, "fg", palette().muted, _$p));
+            return _el$28;
           }
         }), (() => {
-          var _el$32 = _$createElement("markdown");
-          _$setProp(_el$32, "conceal", true);
-          _$setProp(_el$32, "tableOptions", {
+          var _el$29 = _$createElement("markdown");
+          _$setProp(_el$29, "conceal", true);
+          _$setProp(_el$29, "tableOptions", {
             style: "grid",
             cellPaddingX: 1
           });
           _$effect(_p$ => {
-            var _v$0 = syntax(),
-              _v$1 = model().markdown,
-              _v$10 = palette().text,
-              _v$11 = palette().surface;
-            _v$0 !== _p$.e && (_p$.e = _$setProp(_el$32, "syntaxStyle", _v$0, _p$.e));
-            _v$1 !== _p$.t && (_p$.t = _$setProp(_el$32, "content", _v$1, _p$.t));
-            _v$10 !== _p$.a && (_p$.a = _$setProp(_el$32, "fg", _v$10, _p$.a));
-            _v$11 !== _p$.o && (_p$.o = _$setProp(_el$32, "bg", _v$11, _p$.o));
+            var _v$1 = syntax(),
+              _v$10 = model().markdown,
+              _v$11 = palette().text,
+              _v$12 = palette().surface;
+            _v$1 !== _p$.e && (_p$.e = _$setProp(_el$29, "syntaxStyle", _v$1, _p$.e));
+            _v$10 !== _p$.t && (_p$.t = _$setProp(_el$29, "content", _v$10, _p$.t));
+            _v$11 !== _p$.a && (_p$.a = _$setProp(_el$29, "fg", _v$11, _p$.a));
+            _v$12 !== _p$.o && (_p$.o = _$setProp(_el$29, "bg", _v$12, _p$.o));
             return _p$;
           }, {
             e: undefined,
@@ -656,21 +642,72 @@ function Panel(props) {
             a: undefined,
             o: undefined
           });
-          return _el$32;
+          return _el$29;
         })()];
       }
     }), null);
+    _$insert(_el$9, _$createComponent(Show, {
+      get when() {
+        return offered().length > 0;
+      },
+      get children() {
+        var _el$30 = _$createElement("box"),
+          _el$31 = _$createElement("box"),
+          _el$32 = _$createElement("box");
+        _$insertNode(_el$30, _el$31);
+        _$insertNode(_el$30, _el$32);
+        _$setProp(_el$30, "flexDirection", "column");
+        _$setProp(_el$30, "flexShrink", 0);
+        _$setProp(_el$31, "height", 1);
+        _$setProp(_el$31, "flexShrink", 0);
+        _$setProp(_el$31, "border", ["top"]);
+        _$setProp(_el$32, "flexDirection", "row");
+        _$setProp(_el$32, "flexWrap", "wrap");
+        _$setProp(_el$32, "columnGap", 3);
+        _$setProp(_el$32, "flexShrink", 0);
+        _$setProp(_el$32, "paddingLeft", 2);
+        _$setProp(_el$32, "paddingRight", 2);
+        _$insert(_el$32, _$createComponent(For, {
+          get each() {
+            return offered();
+          },
+          children: item => _$createComponent(Button, {
+            item: item,
+            get colors() {
+              return palette();
+            },
+            get live() {
+              return props.panel.focused;
+            },
+            run: act
+          })
+        }));
+        _$insert(_el$30, _$createComponent(Show, {
+          get when() {
+            return props.panel.presentation !== "fullscreen";
+          },
+          get children() {
+            var _el$33 = _$createElement("box");
+            _$setProp(_el$33, "height", 1);
+            _$setProp(_el$33, "flexShrink", 0);
+            return _el$33;
+          }
+        }), null);
+        _$effect(_$p => _$setProp(_el$31, "borderColor", palette().rule, _$p));
+        return _el$30;
+      }
+    }), null);
     _$effect(_p$ => {
-      var _v$12 = palette().base,
-        _v$13 = palette().muted;
-      _v$12 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$12, _p$.e));
-      _v$13 !== _p$.t && (_p$.t = _$setProp(_el$18, "fg", _v$13, _p$.t));
+      var _v$13 = palette().base,
+        _v$14 = palette().muted;
+      _v$13 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$13, _p$.e));
+      _v$14 !== _p$.t && (_p$.t = _$setProp(_el$18, "fg", _v$14, _p$.t));
       return _p$;
     }, {
       e: undefined,
       t: undefined
     });
-    return _el$0;
+    return _el$9;
   })();
 }
 
@@ -948,66 +985,66 @@ function Secret(props) {
     value = "";
   });
   return (() => {
-    var _el$34 = _$createElement("box"),
-      _el$35 = _$createElement("text"),
-      _el$36 = _$createElement("b"),
-      _el$38 = _$createElement("text"),
-      _el$39 = _$createElement("box"),
-      _el$40 = _$createElement("text"),
-      _el$41 = _$createElement("text");
-    _$insertNode(_el$34, _el$35);
-    _$insertNode(_el$34, _el$38);
-    _$insertNode(_el$34, _el$39);
-    _$insertNode(_el$34, _el$41);
-    _$setProp(_el$34, "flexDirection", "column");
-    _$setProp(_el$34, "paddingLeft", 2);
-    _$setProp(_el$34, "paddingRight", 2);
-    _$setProp(_el$34, "paddingTop", 1);
-    _$setProp(_el$34, "paddingBottom", 1);
-    _$setProp(_el$34, "gap", 1);
+    var _el$35 = _$createElement("box"),
+      _el$36 = _$createElement("text"),
+      _el$37 = _$createElement("b"),
+      _el$39 = _$createElement("text"),
+      _el$40 = _$createElement("box"),
+      _el$41 = _$createElement("text"),
+      _el$42 = _$createElement("text");
     _$insertNode(_el$35, _el$36);
-    _$insert(_el$36, () => props.options.title);
-    _$insert(_el$34, _$createComponent(Show, {
+    _$insertNode(_el$35, _el$39);
+    _$insertNode(_el$35, _el$40);
+    _$insertNode(_el$35, _el$42);
+    _$setProp(_el$35, "flexDirection", "column");
+    _$setProp(_el$35, "paddingLeft", 2);
+    _$setProp(_el$35, "paddingRight", 2);
+    _$setProp(_el$35, "paddingTop", 1);
+    _$setProp(_el$35, "paddingBottom", 1);
+    _$setProp(_el$35, "gap", 1);
+    _$insertNode(_el$36, _el$37);
+    _$insert(_el$37, () => props.options.title);
+    _$insert(_el$35, _$createComponent(Show, {
       get when() {
         return props.options.problem;
       },
       get children() {
-        var _el$37 = _$createElement("text");
-        _$insert(_el$37, () => props.options.problem);
-        _$effect(_$p => _$setProp(_el$37, "fg", palette().failed, _$p));
-        return _el$37;
+        var _el$38 = _$createElement("text");
+        _$insert(_el$38, () => props.options.problem);
+        _$effect(_$p => _$setProp(_el$38, "fg", palette().failed, _$p));
+        return _el$38;
       }
-    }), _el$38);
-    _$insert(_el$38, () => props.options.description);
-    _$insertNode(_el$39, _el$40);
+    }), _el$39);
+    _$insert(_el$39, () => props.options.description);
+    _$insertNode(_el$40, _el$41);
     _$use(node => {
       field = node;
-    }, _el$39);
-    _$setProp(_el$39, "focusable", true);
-    _$setProp(_el$39, "onKeyDown", key);
-    _$setProp(_el$39, "onPaste", paste);
-    _$setProp(_el$39, "onMouseDown", () => {
+    }, _el$40);
+    _$setProp(_el$40, "focusable", true);
+    _$setProp(_el$40, "onKeyDown", key);
+    _$setProp(_el$40, "onPaste", paste);
+    _$setProp(_el$40, "onMouseDown", () => {
       if (field && !field.isDestroyed) field.focus();
     });
-    _$setProp(_el$39, "height", 1);
-    _$setProp(_el$39, "paddingLeft", 1);
-    _$setProp(_el$39, "flexShrink", 0);
-    _$insert(_el$40, (() => {
-      var _c$3 = _$memo(() => !!length());
-      return () => _c$3() ? `${"•".repeat(Math.min(length(), 16))}  (${length()} characters, hidden)` : "Paste the token here; it is not shown";
+    _$setProp(_el$40, "height", 1);
+    _$setProp(_el$40, "paddingLeft", 1);
+    _$setProp(_el$40, "flexShrink", 0);
+    _$insert(_el$41, (() => {
+      var _c$2 = _$memo(() => !!length());
+      return () => _c$2() ? `${"•".repeat(Math.min(length(), 16))}  (${length()} characters, hidden)` : "Paste the token here; it is not shown";
     })());
-    _$insertNode(_el$41, _$createTextNode(`enter save · ctrl+u clear · esc leave`));
+    _$insertNode(_el$42, _$createTextNode(`enter save · ctrl+u clear · esc leave`));
     _$effect(_p$ => {
-      var _v$14 = palette().base,
-        _v$15 = palette().muted,
-        _v$16 = palette().hover ?? palette().surface,
-        _v$17 = length() ? palette().base : palette().muted,
-        _v$18 = palette().muted;
-      _v$14 !== _p$.e && (_p$.e = _$setProp(_el$35, "fg", _v$14, _p$.e));
-      _v$15 !== _p$.t && (_p$.t = _$setProp(_el$38, "fg", _v$15, _p$.t));
-      _v$16 !== _p$.a && (_p$.a = _$setProp(_el$39, "backgroundColor", _v$16, _p$.a));
-      _v$17 !== _p$.o && (_p$.o = _$setProp(_el$40, "fg", _v$17, _p$.o));
-      _v$18 !== _p$.i && (_p$.i = _$setProp(_el$41, "fg", _v$18, _p$.i));
+      var _v$15 = palette().base,
+        _v$16 = palette().muted,
+        _v$17 = palette().hover ?? palette().surface,
+        _v$18 = length() ? palette().base : palette().muted,
+        _v$19 = palette().muted;
+      _v$15 !== _p$.e && (_p$.e = _$setProp(_el$36, "fg", _v$15, _p$.e));
+      _v$16 !== _p$.t && (_p$.t = _$setProp(_el$39, "fg", _v$16, _p$.t));
+      _v$17 !== _p$.a && (_p$.a = _$setProp(_el$40, "backgroundColor", _v$17, _p$.a));
+      _v$18 !== _p$.o && (_p$.o = _$setProp(_el$41, "fg", _v$18, _p$.o));
+      _v$19 !== _p$.i && (_p$.i = _$setProp(_el$42, "fg", _v$19, _p$.i));
       return _p$;
     }, {
       e: undefined,
@@ -1016,7 +1053,7 @@ function Secret(props) {
       o: undefined,
       i: undefined
     });
-    return _el$34;
+    return _el$35;
   })();
 }
 
