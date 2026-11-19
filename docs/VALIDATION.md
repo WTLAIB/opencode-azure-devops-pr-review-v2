@@ -38,6 +38,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   a first setup in the dialogs against the live organization, and a
   gpt-6-luna review and preview of the 1-file PR whose ten notices reached
   the conversation's own model together with one prompt, in one request.
+  With AZPR 0.4.4, a gpt-6-luna review of the 1-file PR in the terminal UI,
+  whose preview was adjusted (one finding lowered to low) and then posted: a
+  summary and two inline comments, read back.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -53,6 +56,53 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.4 in use: a review, an adjusted preview and its publication with a real model (2026-11-19)
+
+Environment: the maintainer's everyday OpenCode 2.3.0 background service on
+Ubuntu 22.04.5 under WSL2, with `opencode-azure-devops-pr-review@0.4.4` from
+npm, the maintainer's Azure DevOps test organization and `openai/gpt-6-luna`
+for every review role; a preview after each review (the default), debug on,
+`outputLanguage: zh-TW`. 0.4.4 was released without a review by a real model
+and without its steps used against a live organization (see
+[its acceptance](#044-release-candidate-acceptance-2026-11-19)). The
+maintainer did both in the terminal UI on the evening of the day it was
+published, and reported that lowering a level and posting the comments from
+the steps at the panel's foot worked without a problem.
+
+What was on screen was not recorded. What follows was read afterwards from
+the conversation's notices and from the debug records of the four runs, on
+Test PR 2 of the maintainer's Azure DevOps test project (a draft PR with 1
+changed file):
+
+| Step | Result | Time |
+| --- | --- | ---: |
+| `/pr-review <URL>` | `COMPLETE`: 2 reviewer sessions, 6 candidate findings, 3 confirmed (the other 3 merged into them), all medium | 72 s |
+| The preview that follows | `PREVIEW`: a summary and 3 inline comments; nothing posted | 15 s |
+| An adjustment, three minutes later: one finding from medium to low | `PREVIEW` again: a summary and 2 inline comments, the lowered finding in the summary only; nothing posted | 22 s |
+| Posting that preview, four minutes later | `POSTED`: the summary and the 2 inline comments (lines 29 and 37 of the changed file), then the PR's threads read back; 7 Azure DevOps requests, none retried | 2 s |
+
+- **The offer.** The notice of each preview carried what can be done next in
+  its metadata (`azpr.next`), as the panel reads it: after the first preview,
+  posting 4 items and adjusting 3 findings, all medium; after the second,
+  posting 3 items, with one finding low that was medium. No other notice
+  carried one.
+- **The adjustment.** The planner's input of the second preview holds the
+  adjustment (one severity change, with the rule that it is final) and the
+  finding at its new level; the first preview's input holds none. The saved
+  review still holds that finding at medium, with the adjustment beside it.
+- **The name.** The conversation was new and nobody had named it; the review
+  that started in it named it after the PR, `AZPR: PR #2 (<repository>)`.
+- **The conversation's own model** never ran: the conversation has no
+  message, and the 14 notices of the four runs are in its inbox, each
+  steered.
+
+**Limits.** One review of a 1-file PR, with one model. The run records keep
+no arguments of a command, so they do not tell a step picked in the panel
+from the same command typed: that the adjustment and the publication were
+picked there is the maintainer's report, not something the records show.
+What the findings and the comments say was not judged here. The comments are
+on the test PR.
 
 ## 0.4.4 after publication (2026-11-19)
 
