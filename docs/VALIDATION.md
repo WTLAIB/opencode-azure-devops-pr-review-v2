@@ -197,14 +197,15 @@ names before it was used.
 
 ### Reviews by a second model
 
-The pull request was reviewed by a second model (GPT-6 Astra at its highest
+Nine reviews of the pull request followed (GPT-6 Astra at its highest
 reasoning effort through the Codex CLI, in a read-only sandbox on a clean
-clone), each time the tree as corrected after the review before. It ran the
-build check and the tests that write nothing, and reproduced what it found
-with probes of its own; the tests that write files and the host fixtures ran
-here, on every corrected tree. The first eight reviews reported nineteen
-defects (3, 4, 2, 3, 2, 2, 2 and 1), each confirmed against the code and
-corrected, with a regression test where the defect was in the code:
+clone), each of the tree as corrected after the one before. The reviewer ran
+the build check and the tests that write nothing, and reproduced what it
+found with probes of its own; the tests that write files and the host
+fixtures ran here, on every corrected tree. The first eight reviews reported
+nineteen defects (3, 4, 2, 3, 2, 2, 2 and 1), each confirmed against the code
+and corrected, with a regression test where the defect was in the code; the
+ninth, of the code described above, found nothing to change:
 
 - **An answer for what the panel no longer offered was acted on** (first
   review; one more step in the sixth, and the mouse in the seventh and the
