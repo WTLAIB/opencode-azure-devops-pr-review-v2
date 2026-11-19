@@ -43,6 +43,14 @@ The terminal panel:
   that came before the next frame went nowhere. Each step now keeps its
   element, as the session rows do, and its highlight under the pointer.
 
+Documentation:
+
+- The recording at the top of the README and the pictures of the panel in
+  the demonstration are new: a real review with the row at the panel's foot
+  (the step that stops a run, then posting and adjusting), a review stopped
+  from the panel, and the whole terminal in every frame. They showed the
+  panel of 0.4.2.
+
 ## 0.4.4 — 2026-11-19
 
 After a comment preview, the terminal panel lists what you can do next at its

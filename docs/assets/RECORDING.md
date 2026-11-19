@@ -106,6 +106,16 @@ conversation too; check which part of it each frame shows. Read the text of
 every screen state of the cast for the organization, local paths and account
 names before choosing segments, not only the frames you expect to use.
 
+The steps at the panel's foot (stopping a run, posting or adjusting a
+preview) stand on the row of the host's status bar, so a recording that shows
+them cannot crop that row: render it with `--crop-bottom 0` and show the whole
+terminal. The status bar names the directory of the conversation, and the
+input box the conversation's model. Create the conversation in a directory
+made for the recording, whose name may be shown, and set the conversation's
+model to the one the review uses, so that the picture names no model that did
+not run. Send the review command through OpenCode's command API where its URL
+names the organization.
+
 Create an edit manifest describing the portions of the original recording to
 show. `start` and `end` are seconds in the cast. `seconds` is the output duration.
 Use a 60–90 second walkthrough and a separate 10–15 second teaser. Keep the

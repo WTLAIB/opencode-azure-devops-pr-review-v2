@@ -40,7 +40,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   the conversation's own model together with one prompt, in one request.
   With AZPR 0.4.4, a gpt-6-luna review of the 1-file PR in the terminal UI,
   whose preview was adjusted (one finding lowered to low) and then posted: a
-  summary and two inline comments, read back.
+  summary and two inline comments, read back. With the 0.4.5 candidate, a
+  gpt-6-luna review of the 35-file PR stopped from the terminal panel, and a
+  second one to its preview.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -61,8 +63,9 @@ Findings still vary between models and runs; see
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
 2.3.0 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
-Azure DevOps services. Nothing here used a real model or Azure DevOps; what
-0.4.4 showed with both is in the next section.
+Azure DevOps services, except where a real model is named
+([the recording](#with-a-real-model-a-review-stopped-from-the-panel-and-the-recording));
+what 0.4.4 showed with a real model is in the next section.
 
 0.4.5 lets the terminal panel offer to stop the run under way (see
 [what can be done next](ARCHITECTURE.md#what-can-be-done-next)). Of the
@@ -83,7 +86,7 @@ all passing.
 | ---: | --- |
 | 3 | The step (`tests/tui-actions.test.mjs`), with scripted dialogs: a run under way offers one step, with its key, which is not the step anything leads to; its command is `/pr-stop` with the run's ID and nothing else; stopping asks first with "No, let it run" first, names the run and its command, and sends nothing unless a person says yes; a review or a preview does not offer it, and a run under way offers nothing else; an answer for a run that ended while the question was open sends nothing and says so; a stop the server part refused is said with its reason; one action at a time; nothing is asked or sent after the part was unloaded. And what is typed into the question finds a row by the beginning of its title: with nothing typed both rows, the one that keeps the run first; `s`, typed once or more, and other stray letters find none; `y` and `n` find their rows; the question before posting answers the same way, and the lists of findings are searched as the host searches. |
 | 1 | What the panel shows of it (`tests/tui-model.test.mjs`): the ID is taken only in its form and as the ID of the run the very notice starts; the offer holds from the STARTED notice until the run's receipt, whatever progress follows, with the same notice offering; every command that starts a run is named, and one the panel does not know is not; a notice of an earlier version, one that names another run and one that carries a preview's offer offer nothing; what the runtime answers to a stop is not the run's end; after any receipt nothing is stopped, and a review that no preview follows then offers its own steps; the comment run that follows a review is another run with a notice of its own; a run that starts after a preview takes the preview's steps away; in one of AZPR's own sessions the conversation's run and a run typed there are both offered to be stopped. |
-| 3 | The view (`tests/tui-view.test.mjs`): the step is alone in the row at the foot, with its key in brackets and not bold; its key and a click ask first and then send `/pr-stop` for that run to the session on screen, and the left button's press is stopped, so the keyboard stays where it was; the end of a selection of text and the right button pick nothing; an answer is not acted on once the run's receipt arrived or the next run started; a release picks nothing when the run ended while the button was held, and still picks after progress of the same run; an action that is open when the part is unloaded sends nothing. And in place of a document the panel says "No report or preview yet." of a run under way and "This run ended with no report or preview to show." of one that has its receipt. And the row is drawn from the steps' names, which stay the same values when the panel's content is worked out again, while what a step shows is read when it is drawn: a preview planned again with another count is said by the element that is there. |
+| 3 | The view (`tests/tui-view.test.mjs`): the step is alone in the row at the foot, with its key in brackets and not bold; its key and a click ask first and then send `/pr-stop` for that run to the session on screen, and the left button's press is stopped, so the keyboard stays where it was; the end of a selection of text and the right button pick nothing; an answer is not acted on once the run's receipt arrived or the next run started; a release picks nothing when the run ended while the button was held, also when the next run's step, which the same element draws, is there by then, and still picks after progress of the same run; an action that is open when the part is unloaded sends nothing. And in place of a document the panel says "No report or preview yet." of a run under way and "This run ended with no report or preview to show." of one that has its receipt. And the row is drawn from the steps' names, which stay the same values when the panel's content is worked out again, while what a step shows is read when it is drawn: a preview planned again with another count is said by the element that is there. |
 | 1 | The runtime (`tests/runtime.test.mjs`): the STARTED notice of a run carries that run's ID as the one thing it offers, and its progress notices carry nothing; the panel's model offers the step while the run is under way, and the command the step makes stops the run when it is sent to the conversation and nothing when it is sent from another one; the run ends `CANCELLED` and offers nothing; the same command sent after its run has ended stops nothing, and the run that started since goes on. |
 
 The other changed expectations are in existing tests: which notices carry
@@ -161,18 +164,40 @@ The candidate draws them from their names, as it already drew the session
 rows from their IDs. This is no test of the package: the copies exist only
 for it, and the offline test holds that the row is drawn from names.
 
+### With a real model: a review stopped from the panel, and the recording
+
+The recording at the top of the README and the pictures of the panel in
+[the demonstration](DEMO.md#the-terminal-panel) were made with the candidate
+(the public Git commit `4427f75`, installed by OpenCode's plugin manager) on
+the maintainer's everyday OpenCode 2.3.0 service, with `openai/gpt-6-luna`
+for every review role, on Test PR 4 of the maintainer's Azure DevOps test
+project (35 changed files). The settings were changed for it
+(`outputLanguage: en`, no debug records) and put back afterwards, byte for
+byte, with the released plugin. Nothing was posted.
+
+| Step | Result | Time |
+| --- | --- | ---: |
+| `/pr-review <URL>`, then **Stop this run…** clicked in the panel and "Yes, stop it" | `CANCELLED`: the four reviewer sessions were stopped and deleted, and the panel said that the run left nothing to show | under 1 s from the answer |
+| `/pr-review <URL>` again | `COMPLETE`: 4 reviewer sessions, 2 candidate findings, 1 confirmed (medium); the panel offered to stop the run throughout | about 70 s |
+| The preview that follows | `PREVIEW`: a summary and 1 inline comment; the panel offered to stop that run as well, then **Post 2 comments…** and **Adjust findings…** | 7 s |
+| **Adjust findings…** clicked | The list of findings, left with Escape; nothing changed | |
+
+The commands were sent through OpenCode's command API and the clicks to a
+terminal UI attached to that conversation, which the recording shows; every
+screen state of the cast was read for the organization's name, addresses of
+Azure DevOps, local paths and account names, and none is on screen. This is
+one stop of one run, with one model.
+
 ### Not verified
 
-- The step was not used on a run of a real model or against a live Azure
-  DevOps organization. `/pr-stop` itself is the command earlier versions
-  have, and what the step adds is the notice's metadata and the terminal
-  part.
+- The step was used on one run of a real model, above. A stop while comments
+  are posted, and a stop from one of a review's own sessions, were not tried
+  with a real model; the runtime's side of both is the `/pr-stop` command
+  earlier versions have.
 - A run that the panel shows as running after the OpenCode process that ran
   it was restarted cannot be stopped, since nothing runs; that the runtime
   then answers that no active review matches was read in the code and is
   what the test of a step that arrives late shows, not a restart.
-- The recording at the top of the README predates the row at the panel's
-  foot; it shows the panel of 0.4.2.
 - Other OpenCode clients (the desktop app) were not run; they load no
   terminal part.
 

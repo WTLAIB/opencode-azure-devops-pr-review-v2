@@ -47,7 +47,7 @@ is an actual capture excerpt with identifying UI removed and its text unchanged.
 
 ## Watch the workflow
 
-[![Real OpenCode run: a review starts, a panel beside the conversation lists its sessions, then shows the report and the comment preview rendered.](docs/assets/terminal-panel-teaser.gif)](docs/DEMO.md#the-terminal-panel)
+[![Real OpenCode run: a review starts and a panel beside the conversation lists its sessions, with a step at its foot that stops the run; the panel then shows the report and the comment preview rendered, with the next step at its foot, and the findings as a list.](docs/assets/terminal-panel-teaser.gif)](docs/DEMO.md#the-terminal-panel)
 
 *A 15-second edit of a real OpenCode 2.3.0 session on a dedicated test PR.
 Waiting time is shortened, so the length is not the review duration.

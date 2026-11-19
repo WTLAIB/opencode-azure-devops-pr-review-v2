@@ -623,6 +623,22 @@ test('a run under way offers one step at the panel\'s foot: stopping it, asked f
   held.rows[0].element.props.onMouseUp(event());
   await settle();
   assert.deepEqual([held.log.sent.length, held.log.shown.length], [1, 1], 'The offer changed while the button was held.');
+  // The step of the run that follows is drawn by the same element, since it has the same name. A press on the
+  // step of the run that ended is not a press on the step of the next one: the release picks nothing, and a
+  // press and a release under the next run ask about that run.
+  const next = panelTui([startedNotice], [options => options.options[1].value]);
+  t.after(next.stop);
+  const retained = next.rows[0].element;
+  retained.props.onMouseDown(event());
+  next.arrive({ text: `[AZPR ${STARTED_RUN}] CANCELLED` });
+  next.arrive({ text: startedNotice.text.replaceAll(STARTED_RUN, '1234abcd'), metadata: { azpr: { next: { stop: '1234abcd' } } } });
+  retained.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([next.log.sent, next.log.shown.length], [[], 0], 'A press under one run and a release under the next.');
+  retained.props.onMouseDown(event());
+  retained.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([next.log.shown.map(dialog => dialog.options[0].description), next.log.sent], [['AZPR 1234abcd (/pr-comment)'], [{ sessionID: CONVERSATION, name: 'pr-stop', text: '1234abcd' }]]);
   // A key that would only type a letter into the prompt is drawn dim.
   const prompt = panelTui([startedNotice], [], { focused: false });
   t.after(prompt.stop);
