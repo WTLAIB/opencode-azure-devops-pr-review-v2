@@ -128,13 +128,14 @@ export function createSetup(host) {
       return undefined;
     }
     const current = baseModel(row.current);
-    const picked = await dialog.select({ title: row.title, placeholder: 'Search models', current: row.optional && !current ? '' : current || undefined,
+    // Where a row says what to look for (the deep model: a stronger one, or a higher variant), the search line says it.
+    const picked = await dialog.select({ title: row.title, placeholder: text(row.prompt) || 'Search models', current: row.optional && !current ? '' : current || undefined,
       options: [...(row.optional ? [{ title: row.optional.label, value: '', description: row.optional.description, category: 'Off' }] : []),
         ...list.map(model => ({ title: model.name, value: model.id, description: model.id, category: model.provider }))] });
     if (picked === undefined || picked === '') return picked;
     const variants = list.find(model => model.id === picked)?.variants ?? [];
     if (!variants.length) return picked;
-    const variant = await dialog.select({ title: `Variant of ${picked}`, current: picked === current ? variantOf(row.current) : '',
+    const variant = await dialog.select({ title: `Variant of ${picked}`, ...(text(row.variantPrompt) ? { placeholder: row.variantPrompt } : {}), current: picked === current ? variantOf(row.current) : '',
       options: [{ title: 'Default', value: '', description: 'The model\'s own default' }, ...variants.map(name => ({ title: name, value: name }))] });
     return variant === undefined ? undefined : variant ? `${picked}#${variant}` : picked;
   }
@@ -248,7 +249,8 @@ export function createSetup(host) {
       // The list comes back on the row that was changed, which may be far from its top: the title says what is pending.
       const choice = await dialog.select({ title: status.state === 'restart' ? 'AZPR settings · restart needed' : 'AZPR settings', placeholder: 'Search settings', current: last, options: [
         ...(status.state === 'restart' ? [{ title: 'Restart needed', value: '@restart', footer: 'opencode service restart', category: 'Status' }] : []),
-        ...rows.map(row => ({ title: row.label, value: row.id, footer: text(row.value), category: row.group })),
+        // A row whose name does not say what it is for carries a few words about it, between its name and its value.
+        ...rows.map(row => ({ title: row.label, value: row.id, ...(text(row.hint) ? { description: row.hint } : {}), footer: text(row.value), category: row.group })),
         { title: 'Settings file', value: '@file', footer: text(status.settingsFileShown) || text(status.settingsFile), category: 'More' }] });
       if (choice === undefined) return;
       last = choice;
@@ -257,7 +259,8 @@ export function createSetup(host) {
         continue;
       }
       if (choice === '@file') {
-        await dialog.alert({ title: 'Settings file', message: `${text(status.settingsFile)}\n\nSettings that are not in this list are changed in this file; the README lists them all.` });
+        // The README is long: the server part names the section that describes every setting, with its address.
+        await dialog.alert({ title: 'Settings file', message: `${text(status.settingsFile)}\n\nSettings that are not in this list are changed in this file. Each one is described in ${text(status.settingsReference) || 'the README'}.` });
         continue;
       }
       const row = rows.find(item => item.id === choice);

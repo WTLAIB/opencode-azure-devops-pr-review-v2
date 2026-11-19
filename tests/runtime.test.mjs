@@ -12,7 +12,8 @@ import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES } from '../src/config.mjs';
 import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
-import { buildPanel, opensPanel } from '../src/tui-model.mjs';
+import { buildPanel, nextOf, opensPanel } from '../src/tui-model.mjs';
+import { actionRows, adjustCommand, planCommand, publishCommand, savedAdjustments } from '../src/tui-actions.mjs';
 import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -102,7 +103,9 @@ async function fixture(t, opts = {}) {
       feeds.add(feed);
       const done = { value: undefined, done: true };
       return { [Symbol.asyncIterator]: () => ({
-        next: () => queue.length ? Promise.resolve({ value: queue.shift(), done: false }) : feeds.has(feed) ? new Promise(resolve => waiting.push(resolve)) : Promise.resolve(done),
+        // `feedFailure` makes every read of the feed reject, as a subscription does that the host ended with an error.
+        next: () => opts.feedFailure ? Promise.reject(new Error('Fixture feed failed'))
+          : queue.length ? Promise.resolve({ value: queue.shift(), done: false }) : feeds.has(feed) ? new Promise(resolve => waiting.push(resolve)) : Promise.resolve(done),
         return: () => { feeds.delete(feed); for (const resolve of waiting.splice(0)) resolve(done); return Promise.resolve(done); },
       }) };
     } } }),
@@ -134,9 +137,13 @@ async function fixture(t, opts = {}) {
         sessions.set(id, session);
         return { ...clone(placed), id, ...(session.model ? { model: clone(session.model) } : {}) };
       },
-      // A conversation is not one of the fixture's sessions; like every session it has a location.
+      // A conversation is not one of the fixture's sessions; like every session it has a location. Like OpenCode
+      // 2.3.0, one that nobody named has no title.
       async get({ sessionID }) {
-        if (!sessions.has(sessionID)) return opts.conversation ? opts.conversation(sessionID) : { id: sessionID, location: { directory } };
+        if (!sessions.has(sessionID)) {
+          if (opts.conversation) return opts.conversation(sessionID);
+          return { id: sessionID, location: { directory }, ...(opts.titles?.has(sessionID) ? { title: opts.titles.get(sessionID) } : {}) };
+        }
         const { history, running, packet, ...info } = sessions.get(sessionID);
         return clone(info);
       },
@@ -195,6 +202,17 @@ async function fixture(t, opts = {}) {
         })();
         return { id: messageID, type: 'user', sessionID: session.id, payload: { text: input.text, ...(input.metadata ? { metadata: input.metadata } : {}) }, delivery: input.delivery };
       },
+      // Only where a test asks for it (`titles`): the fixture's other tests count the host's calls. Like
+      // OpenCode, the host reports a rename to whoever follows its events (`renames: false` leaves that out).
+      // `updating` runs while the host works on a rename, `updated` in the turn in which it answers one.
+      ...(opts.titles ? { async update(input) {
+        calls.push({ kind: 'update', ...clone(input) });
+        await opts.updating?.(input);
+        if (input.title === undefined) return;
+        opts.titles.set(input.sessionID, input.title);
+        if (opts.renames !== false) publish({ type: 'session.renamed', data: { sessionID: input.sessionID, title: input.title } });
+        opts.updated?.(input);
+      } } : {}),
       async wait({ sessionID }) { await sessions.get(sessionID).running; },
       async context({ sessionID }) { return clone(sessions.get(sessionID).history); },
       async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); await opts.remove?.(sessionID); sessions.delete(sessionID); },
@@ -209,7 +227,7 @@ async function fixture(t, opts = {}) {
     },
   };
   const stateDirectory = join(directory, 'state');
-  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, stageIdleMs: opts.stageIdleMs, retryDelayMs: 5, fetch: azure.fetch });
+  const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, stageIdleMs: opts.stageIdleMs, namingMs: opts.namingMs, namingUnloadMs: opts.namingUnloadMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
   return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, subscriptions, publish,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
@@ -1411,12 +1429,14 @@ test('/pr-check reports whether /pr-deep is off, would repeat /pr-review or lack
   assert.match(configured, /Also checked for \/pr-deep: functional, risk, verifier \(profile deep\)\./);
   assert.doesNotMatch(configured, /\| Deep models? \|/);
   const unset = await checkWith(t, s => { s.models.deep = { functional: '', risk: '', verifier: '' }; });
-  assert.match(unset, /\| Deep models \| ok \| Not set: \/pr-deep stays off until all three models\.deep roles name models stronger than models\.review\. \|/);
+  assert.match(unset, /\| Deep models \| ok \| Not set: \/pr-deep stays off until all three models\.deep roles name models stronger than models\.review: another model, or the same one with a higher variant\. \|/);
   assert.doesNotMatch(unset, /Also checked for \/pr-deep/);
   assert.match(await checkWith(t, s => { s.models.deep.verifier = ''; }), /\| Deep models \| WARNING \| Only some models\.deep roles are set; \/pr-deep needs all three\. \|/);
   const repeated = await checkWith(t, s => { s.models.deep = { ...s.models.review }; });
   assert.match(repeated, /\] READY/);
-  assert.match(repeated, /\| Deep models \| WARNING \| models\.deep repeats models\.review, so \/pr-deep would only repeat \/pr-review; set stronger models there/);
+  assert.match(repeated, /\| Deep models \| WARNING \| models\.deep repeats models\.review, so \/pr-deep would only repeat \/pr-review; set stronger models there \(another model, or a higher variant\) for the PRs that need them\. \|/);
+  // The same model with a higher variant is a stronger setting, not a repeat.
+  assert.doesNotMatch(await checkWith(t, s => { s.models.deep = Object.fromEntries(Object.entries(s.models.review).map(([role, model]) => [role, model && `${model}#high`])); }), /\| Deep models? \|/);
   // One deep model that differs is not a repeat.
   assert.doesNotMatch(await checkWith(t, s => { s.models.deep = { ...s.models.review, verifier: 'fixture/deep-verifier' }; }), /\| Deep models? \|/);
   const g = await fixture(t);
@@ -3249,7 +3269,15 @@ test('terminalPanel: manual travels with every notice, for the terminal panel; t
   const kinds = ['STARTED /pr-review', 'PROGRESS', 'COMPLETE', '# AZPR', 'STARTED /pr-comment', 'PREVIEW', '[AZPR] Saved preview', 'READY'];
   for (const kind of kinds) assert.ok(f.notices.some(n => n.text.includes(kind)), kind);
   assert.ok(f.notices.length >= kinds.length);
-  for (const n of f.notices) assert.deepEqual(n.metadata, { azpr: { panel: 'manual' } }, n.text.slice(0, 60));
+  // A notice that offers a next step also carries it, under the same key: the receipt of a review that no preview
+  // follows by itself (afterReview is none in this fixture), a preview, and the saved preview shown again. Every
+  // other notice carries only the mark.
+  const offers = n => /^\[AZPR [a-f0-9]{8}\] (?:PREVIEW;|COMPLETE\n)|^\[AZPR\] Saved preview /.test(n.text);
+  for (const n of f.notices) {
+    assert.equal(n.metadata?.azpr?.panel, 'manual', n.text.slice(0, 60));
+    assert.deepEqual(Object.keys(n.metadata.azpr).sort(), offers(n) ? ['next', 'panel'] : ['panel'], n.text.slice(0, 60));
+  }
+  assert.equal(f.notices.filter(offers).length, 3);
   // Nothing of it opens the panel; the same texts without the mark do.
   for (const n of f.notices) assert.equal(opensPanel(n.text, n.metadata), false);
   assert.equal(f.notices.filter(n => opensPanel(n.text)).length, 6, 'Two STARTED notices, the receipt of the review, the preview, the saved preview shown again and the table of checks.');
@@ -3257,9 +3285,706 @@ test('terminalPanel: manual travels with every notice, for the terminal panel; t
   const g = await fixture(t);
   await g.command();
   await g.command('pr-comment', '');
-  assert.ok(g.notices.length >= 5 && g.notices.every(n => !Object.hasOwn(n, 'metadata')));
+  assert.ok(g.notices.length >= 5 && g.notices.every(n => !Object.hasOwn(n, 'metadata') || offers(n)));
+  assert.deepEqual(g.notices.filter(n => Object.hasOwn(n, 'metadata')).map(n => Object.keys(n.metadata.azpr)), [['next'], ['next']], 'Only the notices that offer a next step carry metadata, and only that.');
   assert.deepEqual(Object.keys(g.notices[0]).sort(), ['delivery', 'description', 'resume', 'sessionID', 'text']);
   assert.equal(g.notices.filter(n => opensPanel(n.text, n.metadata)).length, 4);
+});
+
+test('a preview carries what it offers next for the terminal panel, as the review is at that moment', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const noticeOf = text => f.notices.findLast(notice => notice.text === text);
+  // No preview follows this review by itself (afterReview: none here), so its receipt offers one, and the findings
+  // to adjust before it; nothing can be posted before a preview was planned.
+  const reviewed = f.notices.find(notice => /\] COMPLETE\n/.test(notice.text)).metadata.azpr.next;
+  assert.deepEqual([reviewed.review, reviewed.plan, reviewed.publish, reviewed.posts, reviewed.adjust, reviewed.findings.length], [review, true, false, 0, true, 2]);
+  assert.deepEqual(actionRows(buildPanel(panelSource(f), 'ordinary').next).map(row => row.id), ['plan', 'adjust']);
+  assert.deepEqual(planCommand(buildPanel(panelSource(f), 'ordinary').next), { name: 'pr-comment', text: `${review} --seen ${reviewed.state}` });
+  const preview = await f.command('pr-comment', '');
+  const [first, second] = previewIds(preview);
+  const offered = noticeOf(preview).metadata.azpr.next;
+  assert.match(offered.state, /^[a-f0-9]{12}$/);
+  assert.notEqual(offered.state, reviewed.state, 'A preview was planned: the review\'s comments are something else now.');
+  assert.deepEqual({ ...offered, findings: offered.findings.map(finding => finding.id) }, { review, state: offered.state, target: `review ${review} (/pr-review) of PR #123 in proj/repo`, plan: false, publish: true, posts: 3, adjust: true, findings: [first, second] });
+  assert.deepEqual(offered.findings[0], { id: first, severity: 'high', summary: `Fixture defect ${first}` });
+  // The panel shows it for this review, names the notice that offers it, and lists the steps the receipt names.
+  const offerOf = ({ offer, ...rest }) => rest;
+  const panel = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual(offerOf(panel.next), nextOf(noticeOf(preview).metadata, review));
+  assert.match(panel.next.offer, /^msg_/);
+  assert.deepEqual(actionRows(panel.next).map(row => [row.id, row.label]), [['publish', 'Post 3 comments…'], ['adjust', 'Adjust findings…']]);
+  for (const command of ['/pr-comment --publish', '/pr-comment --exclude ', '/pr-comment --severity ']) assert.ok(preview.includes(`\n  ${command}`), command);
+  // What a row sends is a command like a typed one: it adjusts the review, and the new preview says so.
+  const command = adjustCommand(panel.next, { excluded: new Set([second]), levels: new Map([[first, 'low']]) });
+  assert.equal(command.text, `${review} --exclude ${second} --severity ${first}=low --seen ${offered.state}`);
+  const adjusted = await f.command(command.name, command.text);
+  assert.match(adjusted, /\] PREVIEW; source review=/);
+  const next = buildPanel(panelSource(f), 'ordinary').next;
+  assert.notEqual(next.offer, panel.next.offer, 'Another notice offers now.');
+  assert.deepEqual(next.findings.map(({ id, severity, original, excluded }) => [id, severity, original, excluded]), [[first, 'low', 'high', false], [second, 'high', undefined, true]]);
+  assert.deepEqual(actionRows(next).map(row => [row.id, row.label]), [['publish', 'Post 1 comment…'], ['adjust', 'Adjust findings…'], ['reset', 'Reset adjustments']]);
+  assert.equal(adjustCommand(next, savedAdjustments(next)), undefined, 'What the panel starts from is what is saved.');
+  // The saved preview shown again offers the same, without a model.
+  const prompts = f.prompts().length;
+  const shown = await f.command('pr-comment', '--show');
+  assert.deepEqual(noticeOf(shown).metadata.azpr.next, noticeOf(adjusted).metadata.azpr.next);
+  assert.deepEqual(offerOf(buildPanel(panelSource(f), 'ordinary').next), offerOf(next));
+  assert.equal(f.prompts().length, prompts);
+  // Posted with the command of its row: the receipt of a publication offers nothing more.
+  const posted = await f.command(publishCommand(next).name, publishCommand(next).text);
+  assert.match(posted, /\] (?:POSTED|PUBLISHED|COMPLETE)[;\n]/);
+  assert.equal(Object.hasOwn(noticeOf(posted), 'metadata'), false);
+  assert.equal(Object.hasOwn(buildPanel(panelSource(f), 'ordinary'), 'next'), false);
+  // Shown again after that, the preview can be posted again (what is there is skipped) but is adjusted no more.
+  const after = noticeOf(await f.command('pr-comment', '--show')).metadata.azpr.next;
+  assert.deepEqual([after.publish, after.adjust], [true, false]);
+  assert.deepEqual(actionRows(nextOf({ azpr: { next: after } }, review)).map(row => row.id), ['publish']);
+  assert.equal(after.state, next.state, 'Posting does not make it another preview: what was shown can be posted again.');
+});
+
+test('a step picked for a preview that was planned or adjusted since, in another session or by another client, is refused', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const [first, second] = previewIds(await f.command('pr-comment', ''));
+  // What the conversation's panel shows, and the commands of its steps.
+  const shown = buildPanel(panelSource(f), 'ordinary').next;
+  const refused = { message: `[AZPR] Review ${review} is no longer as it was shown: its preview was planned again or its findings were adjusted since, in another session or by another command. Nothing was done. /pr-comment ${review} --show shows the saved preview.` };
+  const run = command => f.commands.get(command.name).execute({ sessionID: 'ordinary', prompt: { text: command.text }, delivery: 'steer' });
+  // A command typed in the review's own session adjusts the review and plans again. It is answered there, so the
+  // conversation is told nothing, and its panel goes on offering the first preview.
+  const own = [...f.sessions.values()].find(session => /Verification/.test(session.title ?? '')).id;
+  assert.match(await f.command('pr-comment', `--exclude ${second}`, own), /\] PREVIEW; source review=/);
+  assert.deepEqual(buildPanel(panelSource(f), 'ordinary').next, shown, 'The conversation\'s panel shows what it showed.');
+  // Its steps are refused, each of them, before anything runs: nothing is posted, adjusted or planned.
+  const before = [f.notices.length, f.prompts().length, f.azure.state.threads.length];
+  for (const command of [publishCommand(shown), adjustCommand(shown, { excluded: new Set([first]), levels: new Map() }), planCommand({ ...shown, plan: true })]) {
+    await assert.rejects(run(command), refused, command.text);
+  }
+  assert.deepEqual([f.notices.length, f.prompts().length, f.azure.state.threads.length], before);
+  // The saved preview shown again in the conversation is the one that would be posted: its steps are taken.
+  const again = await f.command('pr-comment', '--show');
+  const current = buildPanel(panelSource(f), 'ordinary').next;
+  assert.notEqual(current.state, shown.state);
+  assert.match(again, new RegExp(`Excluded from publication: ${second}`));
+  const posted = await f.command(publishCommand(current).name, publishCommand(current).text);
+  assert.match(posted, /\] POSTED; source review=/);
+  // A typed command names no preview and acts on the review as it is, as before; the word itself is checked.
+  await assert.rejects(run({ name: 'pr-comment', text: `${review} --publish --seen nothex` }), /--seen takes the one word/);
+  assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED; source review=/);
+});
+
+test('a review that a preview follows by itself offers nothing of its own; one without findings offers a preview', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.afterReview.review = 'preview'; } });
+  const receipt = await f.command();
+  const preview = await f.waitFor(notices => notices.find(notice => /\] PREVIEW; source review=/.test(notice.text)));
+  assert.equal(Object.hasOwn(f.notices.find(notice => notice.text === receipt), 'metadata'), false, 'The preview that follows is what happens next.');
+  assert.deepEqual([preview.metadata.azpr.next.plan, preview.metadata.azpr.next.publish], [false, true]);
+  // Without findings the automatic preview is skipped, and says so after the receipt: the panel offers the preview
+  // of a summary alone, as that notice names it.
+  const none = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.afterReview.review = 'preview'; },
+    answer: ({ role }) => ROLES[role].format === 'initial' ? { status: 'COMPLETE', coverage: { files: ['/src/Main.java'], gaps: [] }, additionalFiles: [], report: 'Nothing found.', findings: [] } : undefined });
+  const clean = await none.command();
+  await none.waitFor(notices => notices.find(notice => /Automatic preview skipped: the review has no findings/.test(notice.text)));
+  const offered = none.notices.find(notice => notice.text === clean).metadata.azpr.next;
+  assert.deepEqual([offered.plan, offered.publish, offered.findings], [true, false, []]);
+  assert.deepEqual(actionRows(buildPanel(panelSource(none), 'ordinary').next).map(row => row.id), ['plan']);
+});
+
+test('a preview that another command replaced or posted while its run ended is neither enclosed nor offered', async t => {
+  // The last case: a publication had begun before the preview was planned again, so "posting has begun" is no
+  // news; that the preview was posted since is.
+  for (const [name, second, expected, publishedBefore] of [['adjusted and planned again', ids => `--exclude ${ids[1]}`, /\] PREVIEW; source review=/],
+    ['posted', () => '--publish', /\] POSTED; source review=/], ['posted, after an earlier publication', () => '--publish', /\] POSTED; source review=/, true]]) {
+    // The deletion of one session waits for OpenCode: the run's command locks are released by then.
+    let armed = false, entered, release;
+    const waiting = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+    const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+      remove: async () => { if (!armed) return; armed = false; entered(); await held; } });
+    const review = reviewId(await f.command());
+    const ids = f.notices.find(notice => /\] COMPLETE\n/.test(notice.text)).metadata.azpr.next.findings.map(finding => finding.id);
+    if (publishedBefore) assert.match(await f.command('pr-comment', '--publish'), /\] POSTED; source review=/, name);
+    armed = true;
+    const before = f.notices.length;
+    await f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: '' }, delivery: 'steer' });
+    await waiting;
+    const first = /\[AZPR ([a-f0-9]{8})\] STARTED/.exec(f.notices.slice(before).find(notice => /\] STARTED /.test(notice.text)).text)[1];
+    // Another command acts on the same review meanwhile, and has its receipt.
+    assert.match(await f.command('pr-comment', second(ids)), expected, name);
+    const shown = buildPanel(panelSource(f), 'ordinary');
+    // The first run ends now. What it planned is not what would be posted or adjusted any more: its receipt has
+    // a status of its own, encloses nothing and offers nothing.
+    release();
+    const late = await f.waitFor(notices => notices.find(notice => notice.text.startsWith(`[AZPR ${first}] `) && !/^\[AZPR [a-f0-9]{8}\] (?:STARTED|PROGRESS)\b/.test(notice.text)));
+    assert.ok(late.text.startsWith(`[AZPR ${first}] REPLACED; source review=${review}\nActed on review ${review} (/pr-review) of PR #123 in proj/repo.\nThis run's preview was replaced before its receipt: while the run ended, another /pr-comment command changed or posted the preview of this review, so what this run planned is not shown. The receipt of that command says what can be done next, and /pr-comment ${review} --show shows the saved preview.\n`), late.text);
+    assert.match(late.text, /All grants are revoked\.$/);
+    assert.match(late.text, RECEIPT, 'It ends its run as a receipt does.');
+    assert.doesNotMatch(late.text, /<azpr_comment_data>|--publish|Next \(no review ID/);
+    assert.equal(Object.hasOwn(late, 'metadata'), false, name);
+    // The panel goes on showing what the other command said, with what that one offers.
+    assert.deepEqual(buildPanel(panelSource(f), 'ordinary'), shown, name);
+  }
+});
+
+test('a run whose preview was replaced does not make its review the current one, and ends in a panel that showed it running', async t => {
+  // Review A's preview run ends while the deletion of its session waits; its preview is planned again from A's
+  // own session, which is answered there; then another review of the conversation is used. When A's first run
+  // ends, its receipt says REPLACED and changes nothing a person acts on.
+  let armed = false, entered, release;
+  const waiting = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove: async () => { if (!armed) return; armed = false; entered(); await held; } });
+  const other = reviewId(await f.command());
+  await f.command('pr-comment', '');
+  const review = reviewId(await f.command());
+  armed = true;
+  const before = f.notices.length;
+  await f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: '' }, delivery: 'steer' });
+  await waiting;
+  const first = /\[AZPR ([a-f0-9]{8})\] STARTED/.exec(f.notices.slice(before).find(notice => /\] STARTED /.test(notice.text)).text)[1];
+  // The conversation's panel shows that run as running.
+  assert.deepEqual([buildPanel(panelSource(f), 'ordinary').run, buildPanel(panelSource(f), 'ordinary').status], [first, 'RUNNING']);
+  // Planned again from the review's own session: the conversation hears nothing of it.
+  const own = [...f.sessions.values()].find(session => session.title === `[AZPR ${review}] Verification`).id;
+  assert.match(await f.command('pr-comment', '', own), /\] PREVIEW; source review=/);
+  assert.equal(buildPanel(panelSource(f), 'ordinary').status, 'RUNNING');
+  // Another review is used in the conversation: it is the current one, and its saved preview is what the panel shows.
+  assert.match(await f.command('pr-comment', `${other} --show`), new RegExp(`^\\[AZPR\\] Saved preview of review ${other}`));
+  release();
+  await f.waitFor(notices => notices.find(notice => notice.text.startsWith(`[AZPR ${first}] REPLACED; source review=${review}\n`)));
+  const panel = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual([panel.run, panel.next.review], [other, other], 'The panel shows what happened last: the other review\'s preview.');
+  // A command without a review ID acts on that one, not on the review of the run that ended last.
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, new RegExp(`\\] POSTED; source review=${other}\\n`));
+  // Without anything else in the conversation, the run that was replaced has simply ended: the panel no longer
+  // shows it running, and shows the review's report, not a preview.
+  const alone = { ...panelSource(f), pending: id => panelSource(f).pending(id).filter(entry => entry.payload.text.includes(first) || entry.payload.text.startsWith(`[AZPR ${review}]`)) };
+  const ended = buildPanel(alone, 'ordinary');
+  assert.deepEqual([ended.run, ended.status, Object.hasOwn(ended, 'next'), ended.progress], [first, 'REPLACED', false, undefined]);
+});
+
+test('a preview\'s receipt offers the preview it shows, also when that preview is planned again while the record is saved after it', async t => {
+  const original = fsPromises.writeFile, entered = deferred(), gate = deferred();
+  const restore = () => { fsPromises.writeFile = original; syncBuiltinESMExports(); };
+  t.after(() => { restore(); gate.resolve(); });
+  let watching = false, cleaned = false, held = false, planned = 0;
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove: () => { if (watching) cleaned = true; },
+    async during({ role }) { if (ROLES[role].format === 'comment-plan') planned++; } });
+  const review = reviewId(await f.command());
+  // The save of the review's record that follows the cleanup of the preview run's sessions stalls: it is the last
+  // thing that run waits for before its receipt is delivered.
+  fsPromises.writeFile = async (file, data, ...rest) => {
+    if (cleaned && !held && String(file).includes(`${review}.json`)) { held = true; entered.resolve(); await gate.promise; }
+    return original(file, data, ...rest);
+  };
+  syncBuiltinESMExports();
+  watching = true;
+  const first = f.command('pr-comment', '');
+  assert.equal(await within(entered.promise.then(() => true), 5000), true, 'The save after the cleanup was reached.');
+  watching = false;
+  // Meanwhile the preview is planned again from the review's own session, up to its own save of the record,
+  // which waits behind that one with the new preview already in place.
+  const own = [...f.sessions.values()].find(session => session.title === `[AZPR ${review}] Verification`).id;
+  const before = planned;
+  const second = f.command('pr-comment', '', own);
+  for (let turn = 0; planned === before && turn < 500; turn++) await sleep(10);
+  assert.ok(planned > before, 'The second preview was planned while the first run\'s save waited.');
+  await sleep(200);
+  restore();
+  gate.resolve();
+  const [shown, again] = await Promise.all([first, second]);
+  assert.match(shown, /\] PREVIEW; source review=/);
+  assert.match(again, /\] PREVIEW; source review=/);
+  // The first receipt encloses the first preview, and what it offers is that preview: the word it carries is not
+  // the word of the preview planned since. Its steps are therefore refused, and nothing is posted unseen.
+  const offerOf = text => f.notices.find(notice => notice.text === text).metadata.azpr.next;
+  assert.notEqual(offerOf(shown).state, offerOf(again).state, 'The receipt of the first preview does not offer the second.');
+  const threads = f.azure.state.threads.length;
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: publishCommand(offerOf(shown)).text }, delivery: 'steer' }), /is no longer as it was shown/);
+  assert.equal(f.azure.state.threads.length, threads);
+  // The receipt of the second preview offers what is saved, and its step is taken.
+  assert.match(await f.command('pr-comment', publishCommand(offerOf(again)).text, own), /\] POSTED; source review=/);
+});
+
+test('a step of the panel that is refused for its word changes nothing: the current review stays as it is, also on disk', async t => {
+  const { azure, url, posted } = twoPullRequests();
+  const f = await fixture(t, { azure });
+  const other = reviewId(await f.command('pr-review', url(456)));
+  await f.command('pr-comment', '');
+  const review = reviewId(await f.command('pr-review', url(123)));
+  await f.command('pr-comment', '');
+  // What the conversation's panel shows: the preview of the review that was used there last.
+  const shown = buildPanel(panelSource(f), 'ordinary').next;
+  assert.equal(shown.review, review);
+  const sessionOf = id => [...f.sessions.values()].find(session => session.title === `[AZPR ${id}] Verification`).id;
+  // That preview is planned again from the review's own session, and then the other review is looked at from its
+  // own. Both are answered there: the conversation's panel goes on offering the first preview.
+  assert.match(await f.command('pr-comment', '', sessionOf(review)), /\] PREVIEW; source review=/);
+  assert.match(await f.command('pr-comment', '--show', sessionOf(other)), new RegExp(`^\\[AZPR\\] Saved preview of review ${other}`));
+  assert.deepEqual(buildPanel(panelSource(f), 'ordinary').next, shown);
+  const used = (await savedReview(f, review)).usedAt;
+  // Its step is refused, and nothing was done: the review does not become the current one by it, in this process
+  // or on disk, so a command without an ID still acts on the review that was used last, and on its PR.
+  await assert.rejects(f.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: publishCommand(shown).text }, delivery: 'steer' }), /is no longer as it was shown/);
+  assert.match(await f.command('pr-comment', '--list'), new RegExp(`- review ${other} \\(/pr-review\\) of PR #456 [^\\n]*; current\\n`));
+  const publication = await f.command('pr-comment', '--publish');
+  assert.match(publication, new RegExp(`^\\[AZPR [a-f0-9]{8}\\] POSTED; source review=${other}\\n`));
+  assert.ok(posted().length > 0 && posted().every(pr => pr === 456), `Comments went to PR ${[...new Set(posted())].join(', ')}.`);
+  assert.equal((await savedReview(f, review)).usedAt, used, 'The refused step saved nothing.');
+});
+
+test('a review\'s receipt offers a preview only of a review that nothing has acted on since', async t => {
+  let armed = true, entered, release;
+  const waiting = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.debug.enabled = false; },
+    remove: async () => { if (!armed) return; armed = false; entered(); await held; } });
+  await f.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() }, delivery: 'steer' });
+  await waiting;
+  // The review is kept already and its STARTED notice names it: a preview is planned before its receipt arrives.
+  const review = /\[AZPR ([a-f0-9]{8})\] STARTED \/pr-review/.exec(f.notices.find(notice => /\] STARTED \/pr-review/.test(notice.text)).text)[1];
+  assert.match(await f.command('pr-comment', review), /\] PREVIEW; source review=/);
+  release();
+  const receipt = await f.waitFor(notices => notices.find(notice => notice.text.startsWith(`[AZPR ${review}] COMPLETE`)));
+  assert.equal(Object.hasOwn(receipt, 'metadata'), false, 'It encloses the report, and a preview exists by now: nothing is offered under it.');
+  assert.equal(Object.hasOwn(buildPanel(panelSource(f), 'ordinary'), 'next'), false);
+});
+
+test('a preview that is held, or has nothing left to post, offers no publication', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'] });
+  const review = reviewId(await f.command());
+  const [first, second] = previewIds(await f.command('pr-comment', ''));
+  const nothing = await f.command('pr-comment', `--exclude ${first},${second}`);
+  assert.match(nothing, /\] NOTHING_TO_POST/);
+  assert.equal(Object.hasOwn(f.notices.findLast(notice => notice.text === nothing), 'metadata'), false, 'Only a preview offers steps.');
+  const again = await f.command('pr-comment', '--show');
+  const offered = f.notices.findLast(notice => notice.text === again).metadata.azpr.next;
+  assert.deepEqual([offered.review, offered.publish, offered.adjust, offered.findings.map(finding => finding.excluded)], [review, false, true, [true, true]]);
+  assert.deepEqual(actionRows(nextOf({ azpr: { next: offered } }, review)).map(row => row.id), ['adjust', 'reset']);
+});
+
+test('a conversation nobody named is named after the PR when a check or a review starts; a name that is there stays', async t => {
+  const settled = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
+  const updates = f => f.calls.filter(call => call.kind === 'update');
+  const titles = new Map();
+  const f = await fixture(t, { titles });
+  assert.match(await f.command('pr-check'), /\] READY/);
+  await settled();
+  assert.deepEqual(updates(f), [{ kind: 'update', sessionID: 'ordinary', title: 'AZPR: PR #123 (repo)' }], 'From the URL the person typed: the PR and its repository, not its title or organization.');
+  // It has a name now: the review that follows leaves it, and so does a comment command.
+  await f.command();
+  await f.command('pr-comment', '');
+  await settled();
+  assert.equal(updates(f).length, 1);
+  // Another conversation, by a review; one that a person or the host's model named keeps its name.
+  await f.command('pr-review', f.azure.prUrl(), 'second');
+  await settled();
+  assert.deepEqual(updates(f).map(call => [call.sessionID, call.title]), [['ordinary', 'AZPR: PR #123 (repo)'], ['second', 'AZPR: PR #123 (repo)']]);
+  titles.set('third', 'Fix the parser');
+  await f.command('pr-check', f.azure.prUrl(), 'third');
+  await settled();
+  assert.equal(titles.get('third'), 'Fix the parser');
+  assert.equal(updates(f).length, 2);
+  // A command that is refused names nothing.
+  await assert.rejects(f.commands.get('pr-review').execute({ sessionID: 'fourth', prompt: { text: 'https://dev.azure.com/other/proj/_git/repo/pullrequest/1' }, delivery: 'steer' }), /belongs to organization/);
+  await settled();
+  assert.equal(titles.has('fourth'), false);
+});
+
+test('naming a conversation never holds a command up: a host that cannot, fails or does not answer changes nothing', async t => {
+  const settled = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
+  // No session.update on this host: nothing is asked of it.
+  const plain = await fixture(t);
+  assert.match(await plain.command('pr-check'), /\] READY/);
+  assert.equal(plain.calls.some(call => call.kind === 'update'), false);
+  // The update fails, or does not answer while the command runs: the command has its receipt all the same.
+  let answer;
+  for (const updating of [async () => { throw new Error('fixture update failed'); }, () => new Promise(resolve => { answer = resolve; })]) {
+    const f = await fixture(t, { titles: new Map(), updating });
+    assert.match(await f.command('pr-check'), /\] READY/);
+    await settled();
+    assert.equal(f.calls.filter(call => call.kind === 'update').length, 1);
+    assert.doesNotMatch(JSON.stringify(f.notices), /fixture update failed/);
+  }
+  answer();
+  // A session of another session (a child), or one the host cannot find, is left alone.
+  for (const conversation of [id => ({ id, parentID: 'ses_parent', location: { directory: '/x' } }), async () => { throw new Error('fixture get failed'); }]) {
+    const f = await fixture(t, { titles: new Map(), conversation });
+    await f.command('pr-check').catch(() => {});
+    await settled();
+    assert.equal(f.calls.some(call => call.kind === 'update'), false);
+  }
+});
+
+/**
+ * The naming of a conversation is followed by its own events, never by how long a command takes or by a clock
+ * that a busy machine outruns: `answered(n)` resolves in the turn in which the host has answered the n-th write
+ * of a name (the fixture's `updated`), and `closed(f)` once the watch has given its subscription up. What has
+ * to happen is waited for, with a limit that only a fault reaches; what must not happen is given a pause in
+ * which it would have happened.
+ */
+const NAMING_LIMIT = 15000;
+function renames() {
+  let count = 0;
+  const waiting = [];
+  return {
+    updated() { count++; for (const resolve of waiting.splice(0)) resolve(); },
+    async answered(goal) {
+      let timer;
+      const late = new Promise(resolve => { timer = setTimeout(resolve, NAMING_LIMIT, 'late'); });
+      try { while (count < goal) assert.notEqual(await Promise.race([new Promise(resolve => waiting.push(resolve)), late]), 'late', `The host answered ${count} of ${goal} write(s) of a name within ${NAMING_LIMIT} ms.`); }
+      finally { clearTimeout(timer); }
+    },
+  };
+}
+/** Waits until `met()` holds, looking every few milliseconds; fails when it does not within the limit. */
+async function until(met, what) {
+  for (const end = Date.now() + NAMING_LIMIT; !met(); await sleep(5)) assert.ok(Date.now() < end, `${what} within ${NAMING_LIMIT} ms.`);
+}
+const namingClosed = f => until(() => f.subscriptions.length > 0 && f.feeds.size === 0, 'The watch closed');
+const namesWritten = f => f.calls.filter(call => call.kind === 'update').map(call => call.title);
+
+test('a name that anyone else gives a conversation around that moment stands: one given first stops the naming, one it may have replaced is written back', async t => {
+  const settled = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
+  const pause = sleep, written = namesWritten, closed = namingClosed;
+  // The record is written when the naming has ended, which nothing waits for: it is read once it is there.
+  const outcome = async receipt => {
+    const file = join(/Private debug directory: ([^\n]+)/.exec(receipt)[1], 'conversation-name.json');
+    for (let attempt = 0; ; attempt++) {
+      try { return JSON.parse(await readFile(file, 'utf8')); }
+      catch (error) { if (attempt >= 500) throw error; await pause(20); }
+    }
+  };
+  const renamed = (f, sessionID, title, titles) => { titles?.set(sessionID, title); f.publish({ type: 'session.renamed', data: { sessionID, title } }); };
+  const own = 'AZPR: PR #123 (repo)';
+  // The watch stays open for a while after the host answered a write (`namingMs`), since an earlier name can be
+  // reported after AZPR's own: WATCH where it is to close by itself, LONG where a case goes on reporting (it
+  // ends by unloading then). Before a name is written back the watch waits a moment for what else the host
+  // reports (50 ms); QUIET is longer than that, for what must not be written.
+  const WATCH = 60, LONG = 60000, QUIET = 250;
+  // Named, and the host reported it. The watch asked for renames alone, is still open in the turn in which the
+  // host answered, and then closes by itself.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated });
+    const check = f.command('pr-check');
+    await host.answered(1);
+    assert.deepEqual([written(f), titles.get('ordinary'), f.subscriptions, f.feeds.size], [[own], own, [{ types: ['session.renamed'] }], 1]);
+    // A name given afterwards stands by itself: nothing is written again.
+    renamed(f, 'ordinary', 'Renamed later', titles);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own], 'Renamed later', { outcome: 'named', title: own }, 0]);
+  }
+  // A person names it between AZPR's read and AZPR's write. The host reports that name before AZPR's, which
+  // therefore replaced it: it is written back, and the record does not hold it.
+  {
+    const titles = new Map(), host = renames();
+    let named = false;
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => { if (!named) { named = true; renamed(f, input.sessionID, 'Parser work', titles); } } });
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Parser work'], 'Parser work', { outcome: 'restored' }, 0]);
+  }
+  // Named again while it was written back: the name given last is the one that stays.
+  {
+    const titles = new Map(), host = renames();
+    const given = ['First name', 'Second name'];
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => { if (given.length) renamed(f, input.sessionID, given.shift(), titles); } });
+    await f.command('pr-check');
+    await host.answered(3);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'First name', 'Second name'], 'Second name', 0]);
+  }
+  // Nothing ties a rename that the host reports to the call that made it. While AZPR's write is under way,
+  // someone gives the conversation AZPR's very words and then another name; AZPR's write lands last. The first
+  // report with AZPR's words is not taken for AZPR's write: the other name is written back.
+  {
+    const titles = new Map(), host = renames();
+    let first = true;
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => {
+      if (!first) return;
+      first = false;
+      renamed(f, input.sessionID, own, titles);
+      renamed(f, input.sessionID, 'Chosen after all', titles);
+    } });
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Chosen after all'], 'Chosen after all', { outcome: 'restored' }, 0]);
+  }
+  // The same when the host reports all of it a little later, after it answered AZPR's write: the watch has not
+  // closed on the first report with AZPR's words.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: LONG, renames: false, updated: host.updated });
+    await f.command('pr-check');
+    await host.answered(1);
+    assert.deepEqual(written(f), [own]);
+    f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: own } });
+    await pause(10);
+    f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: 'Reported a little later' } });
+    await pause(10);
+    f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: own } });
+    await host.answered(2);
+    await f.cleanup();
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'Reported a little later'], 'Reported a little later', 0]);
+  }
+  // AZPR's own words are never written back as someone's name. While AZPR's first write is under way, someone
+  // gives a name, then AZPR's very words, then another name; AZPR's write lands last. The name given last is
+  // written back, in one write when the host has reported all of it by then.
+  {
+    const titles = new Map(), host = renames();
+    let first = true;
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => {
+      if (!first) return;
+      first = false;
+      for (const title of ['Name A', own, 'Name B']) renamed(f, input.sessionID, title, titles);
+    } });
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Name B'], 'Name B', { outcome: 'restored' }, 0]);
+  }
+  // The same when the host reports them one by one, so that AZPR writes the first name back before it hears of
+  // the second: the report of AZPR's first write, which comes after, is not taken for someone's name.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: LONG, renames: false, updated: host.updated });
+    const report = title => f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title } });
+    await f.command('pr-check');
+    await host.answered(1);
+    report('Name A');
+    report(own);
+    await host.answered(2);
+    assert.deepEqual(written(f), [own, 'Name A'], 'AZPR\'s words after a name: the name is written back.');
+    report('Name B');
+    report(own);
+    await pause(QUIET);
+    assert.deepEqual(written(f), [own, 'Name A'], 'AZPR\'s first write, reported late: nothing is written for it.');
+    report('Name A');
+    await host.answered(3);
+    assert.deepEqual(written(f), [own, 'Name A', 'Name B'], 'The write of the first name landed after the second one, which is written back.');
+    report('Name B');
+    await f.cleanup();
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'Name A', 'Name B'], 'Name B', 0]);
+  }
+  // Once the host has reported the name that AZPR wrote back, AZPR's first words can only be someone's own
+  // choice: it stands.
+  {
+    const titles = new Map(), host = renames();
+    let first = true;
+    const f = await fixture(t, { titles, namingMs: LONG, updated: host.updated, updating: async input => { if (first) { first = false; renamed(f, input.sessionID, 'A name first', titles); } } });
+    await f.command('pr-check');
+    await host.answered(2);
+    assert.deepEqual([written(f), titles.get('ordinary')], [[own, 'A name first'], 'A name first']);
+    renamed(f, 'ordinary', own, titles);
+    await pause(QUIET);
+    await f.cleanup();
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'A name first'], own, 0]);
+  }
+  // In doubt the name that is not AZPR's stays. Someone gives a name and then AZPR's very words, after AZPR's
+  // write: that cannot be told from AZPR's write replacing the name, so the name is written back.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated });
+    // The check is not waited for before the names are given: the watch stays open for WATCH only.
+    const check = f.command('pr-check');
+    await host.answered(1);
+    renamed(f, 'ordinary', 'A name', titles);
+    renamed(f, 'ordinary', own, titles);
+    await host.answered(2);
+    await closed(f);
+    await check;
+    assert.deepEqual([written(f), titles.get('ordinary')], [[own, 'A name'], 'A name']);
+  }
+  // Someone who goes on renaming in step with AZPR does not make it write without end.
+  {
+    const titles = new Map(), host = renames();
+    let count = 0;
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => { renamed(f, input.sessionID, `Name ${++count}`, titles); } });
+    await f.command('pr-check');
+    await host.answered(4);
+    await closed(f);
+    assert.deepEqual([written(f), f.feeds.size], [[own, 'Name 1', 'Name 2', 'Name 3'], 0], 'Its own name and three written back: no more.');
+  }
+  // The host reports a name while the conversation is read: it is named already, and nothing is written.
+  {
+    const titles = new Map();
+    const f = await fixture(t, { titles, namingMs: WATCH, conversation: id => { renamed(f, id, 'Named meanwhile'); return { id, location: { directory: f.directory } }; } });
+    const receipt = await f.command('pr-check');
+    await closed(f);
+    assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[], { outcome: 'kept' }, 0]);
+  }
+  // The same when the host reported another conversation's name before it: everything it has reported by then
+  // is looked at, not only what came first.
+  {
+    const titles = new Map();
+    const f = await fixture(t, { titles, namingMs: WATCH, conversation: id => {
+      renamed(f, 'ses_another', 'Not this one');
+      renamed(f, 'ses_a_third', 'Nor this one');
+      renamed(f, id, 'Named meanwhile');
+      return { id, location: { directory: f.directory } };
+    } });
+    const receipt = await f.command('pr-check');
+    await closed(f);
+    assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[], { outcome: 'kept' }, 0]);
+  }
+  // Another conversation's name is nothing to this one.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, conversation: id => { renamed(f, 'ses_another', 'Not this one'); return { id, location: { directory: f.directory } }; } });
+    await f.command('pr-check');
+    await host.answered(1);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary')], [[own], own]);
+  }
+  // Nor does it put a write-back off: the moment AZPR waits before one is a moment without a name of this
+  // conversation, however often the host reports names of others meanwhile.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: LONG, renames: false, updated: host.updated });
+    await f.command('pr-check');
+    await host.answered(1);
+    f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: 'A name' } });
+    f.publish({ type: 'session.renamed', data: { sessionID: 'ordinary', title: own } });
+    const others = setInterval(() => f.publish({ type: 'session.renamed', data: { sessionID: 'ses_another', title: 'Not this one' } }), 10);
+    try { await host.answered(2); } finally { clearInterval(others); }
+    assert.deepEqual(written(f), [own, 'A name']);
+    await f.cleanup();
+  }
+  // A host that reports no renames could have a name replaced unseen: no conversation is named there.
+  {
+    const f = await fixture(t, { titles: new Map(), events: false });
+    assert.match(await f.command('pr-check'), /\] READY/);
+    await settled();
+    assert.deepEqual(written(f), []);
+  }
+  // A host that does not report AZPR's own rename: the watch ends by itself, and the record says that it cannot tell.
+  {
+    const host = renames();
+    const f = await fixture(t, { titles: new Map(), renames: false, namingMs: WATCH, updated: host.updated });
+    const receipt = await f.command('pr-check');
+    await host.answered(1);
+    await closed(f);
+    assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[own], { outcome: 'unconfirmed' }, 0]);
+  }
+  // The host refuses the write and reports nothing: the record says so.
+  {
+    const f = await fixture(t, { titles: new Map(), namingMs: WATCH, updating: async () => { throw new Error('fixture update failed'); } });
+    const receipt = await f.command('pr-check');
+    await closed(f);
+    assert.deepEqual([written(f), await outcome(receipt), f.feeds.size], [[own], { outcome: 'failed' }, 0]);
+  }
+  // A feed that fails while the conversation is still being read: no rejection is left without a handler, which
+  // would end a process that treats one as fatal, and nothing is written, since nothing could be seen.
+  {
+    const unhandled = [];
+    const note = reason => unhandled.push(String(reason));
+    process.on('unhandledRejection', note);
+    t.after(() => process.off('unhandledRejection', note));
+    let answer;
+    const f = await fixture(t, { titles: new Map(), feedFailure: true, conversation: id => new Promise(resolve => { answer = () => resolve({ id, location: { directory: f.directory } }); }) });
+    await f.commands.get('pr-check').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() }, delivery: 'steer' });
+    await settled();
+    await pause(30);
+    answer?.();
+    await settled();
+    await pause(30);
+    assert.deepEqual([unhandled, written(f)], [[], []]);
+  }
+  // One conversation is named by one watch at a time. A check ends while its rename is still under way; the next
+  // command would otherwise watch as well, and one watch would take the other's write for someone's choice.
+  {
+    const titles = new Map(), host = renames();
+    let release;
+    const slow = new Promise(resolve => { release = resolve; });
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: () => slow });
+    await f.command('pr-check');
+    await until(() => written(f).length > 0, 'The first rename began');
+    assert.deepEqual([written(f), f.subscriptions.length], [[own], 1], 'The first rename is under way.');
+    await f.command('pr-check');
+    await settled();
+    assert.deepEqual([written(f), f.subscriptions.length], [[own], 1], 'The second check starts no watch of its own.');
+    release();
+    await host.answered(1);
+    renamed(f, 'ordinary', 'A person\'s name', titles);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own], 'A person\'s name', 0]);
+    // Once that watch has ended, a later command may name a conversation that still has no name.
+    titles.delete('ordinary');
+    await f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary')], [[own, own], own]);
+  }
+  // A write that the host answers long after the watch would have closed: a person names the conversation while
+  // it is under way, and it lands afterwards. The watch is not closed during a write of its own, so the name it
+  // replaced is still written back.
+  {
+    const titles = new Map(), host = renames();
+    let first = true;
+    const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated, updating: async input => {
+      if (!first) return;
+      first = false;
+      await pause(20);
+      renamed(f, input.sessionID, 'Named while AZPR wrote', titles);
+      await pause(WATCH * 3);
+    } });
+    const check = f.command('pr-check');
+    await host.answered(2);
+    await closed(f);
+    assert.deepEqual([written(f), titles.get('ordinary'), await outcome(await check), f.feeds.size], [[own, 'Named while AZPR wrote'], 'Named while AZPR wrote', { outcome: 'restored' }, 0]);
+  }
+});
+
+test('unloading the plugin ends a naming that is under way: its write is waited for, and a name it replaced is written back', async t => {
+  const settled = async () => { for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve)); };
+  const written = namesWritten;
+  const renamed = (f, sessionID, title, titles) => { titles?.set(sessionID, title); f.publish({ type: 'session.renamed', data: { sessionID, title } }); };
+  const own = 'AZPR: PR #123 (repo)';
+  // The command has ended; its rename is still under way when a person names the conversation, and then the
+  // plugin is unloaded. Unloading waits for the write, which lands over the person's name, and writes it back.
+  {
+    const titles = new Map();
+    let release, first = true;
+    const slow = new Promise(resolve => { release = resolve; });
+    const f = await fixture(t, { titles, namingUnloadMs: 60000, updating: async () => { if (first) { first = false; await slow; } } });
+    await f.command('pr-check');
+    await until(() => written(f).length > 0, 'The rename began');
+    assert.deepEqual(written(f), [own]);
+    renamed(f, 'ordinary', 'Mine', titles);
+    const unloaded = f.cleanup();
+    await settled();
+    assert.equal(f.feeds.size, 1, 'The watch is still open: its write has not been answered.');
+    release();
+    await unloaded;
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own, 'Mine'], 'Mine', 0]);
+  }
+  // A watch that only waits for the host's reports ends within a moment, and no command names anything afterwards.
+  {
+    const titles = new Map(), host = renames();
+    const f = await fixture(t, { titles, namingMs: 60000, updated: host.updated });
+    await f.command('pr-check');
+    await host.answered(1);
+    assert.equal(f.feeds.size, 1);
+    const before = Date.now();
+    await f.cleanup();
+    assert.ok(Date.now() - before < 30000, 'Unloading does not wait out the whole watch.');
+    assert.deepEqual([written(f), titles.get('ordinary'), f.feeds.size], [[own], own, 0]);
+  }
+  // A host that never answers the write is not waited for without end; nothing more can be done there.
+  {
+    const f = await fixture(t, { titles: new Map(), namingUnloadMs: 300, updating: () => new Promise(() => {}) });
+    await f.command('pr-check');
+    await until(() => written(f).length > 0, 'The rename began');
+    const before = Date.now();
+    await f.cleanup();
+    const waited = Date.now() - before;
+    assert.ok(waited >= 250 && waited < 10000, `Unloading waited ${waited} ms.`);
+    assert.equal(f.feeds.size, 0);
+  }
 });
 
 // What the TUI has loaded of a run: every notice waits in its session's inbox.
@@ -3268,7 +3993,8 @@ const panelSource = f => ({
   sessions: () => [...f.sessions.values()],
   status: () => 'idle',
   messages: () => [],
-  pending: id => f.notices.flatMap((notice, index) => (notice.sessionID === id ? [{ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic', payload: { text: notice.text } }] : [])),
+  pending: id => f.notices.flatMap((notice, index) => (notice.sessionID === id ? [{ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic',
+    payload: { text: notice.text, ...(notice.metadata ? { metadata: notice.metadata } : {}) } }] : [])),
 });
 
 test('the terminal panel keeps a review\'s result when the run says afterwards that no preview follows', async t => {

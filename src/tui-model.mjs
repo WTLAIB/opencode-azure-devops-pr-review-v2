@@ -6,9 +6,10 @@
  *
  * The panel never sends a prompt, never reads AZPR's settings file and never
  * decides anything about a review. It only reads texts whose form the runtime
- * owns (attribution.mjs, runtime.mjs) and the one setting meant for it, which
- * the runtime sends along with its notices; tests/tui-model.test.mjs holds
- * that form.
+ * owns (attribution.mjs, runtime.mjs) and what the runtime sends along with
+ * its notices: the one setting meant for it, and what a notice offers as a
+ * next step (`nextOf`), which the rows of tui-actions.mjs turn into the
+ * command a person picks. tests/tui-model.test.mjs holds that form.
  */
 
 /** The panel's name in the host's `session.panel` slot; names are shared between plugins. */
@@ -28,6 +29,9 @@ const RUN_STARTED = /^\[AZPR [a-f0-9]{8}\] STARTED \/pr-(?:review|quick|deep|com
 // A run's receipt: its status, then `;`, a line break or the end. Text follows STARTED and PROGRESS, and a run
 // also says things that are neither (`[AZPR <run>] Automatic preview skipped: …`).
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
+// The receipt of a comment run whose preview another command replaced before it could be shown: the run has
+// ended, but what it planned is not what happened last.
+const REPLACED = 'REPLACED';
 const REPORT_HEAD = '# AZPR ';
 // `/pr-comment [review] --show` answers at once with a review's saved preview, and names the review.
 const SAVED_PREVIEW = /^\[AZPR\] Saved preview of review ([a-f0-9]{8})\b/;
@@ -74,6 +78,8 @@ const enclosedIn = text => {
 /** The text of a delivered message, or of a notice that still waits in a session's inbox. */
 export const textOf = entry =>
   typeof entry?.text === 'string' ? entry.text : typeof entry?.payload?.text === 'string' ? entry.payload.text : typeof entry?.description === 'string' ? entry.description : '';
+/** What the runtime stored with a notice for clients that read it; a message has it itself, an inbox item in its payload. */
+const metadataOf = entry => entry?.metadata ?? entry?.payload?.metadata;
 
 /**
  * A session's synthetic entries, oldest first: delivered messages and what its
@@ -84,21 +90,21 @@ export const textOf = entry =>
 export function syntheticOf(messages, pending) {
   const entries = new Map();
   for (const entry of [...(messages ?? []), ...(pending ?? [])]) {
-    if (entry?.type === 'synthetic' && typeof entry.id === 'string') entries.set(entry.id, textOf(entry));
+    if (entry?.type === 'synthetic' && typeof entry.id === 'string') entries.set(entry.id, { text: textOf(entry), ...(metadataOf(entry) === undefined ? {} : { metadata: metadataOf(entry) }) });
   }
   // Message and inbox IDs sort by creation time.
-  return [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, text]) => ({ id, text }));
+  return [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, entry]) => ({ id, ...entry }));
 }
 
 /** AZPR's notices among a session's synthetic entries. */
 export function noticesOf(entries) {
-  return entries.flatMap(({ id, text }) => {
+  return entries.flatMap(({ id, text, metadata }) => {
     const head = HEAD.exec(text);
     if (!head) return [];
     const [, run, status = ''] = head;
     // NOTE: something a run says besides its start, its progress and its receipt; it changes nothing shown.
     const kind = !run ? 'ANSWER' : status === 'STARTED' ? 'STARTED' : status === 'PROGRESS' ? 'PROGRESS' : RECEIPT.test(text) ? 'RECEIPT' : 'NOTE';
-    return [{ id, run, kind, status: kind === 'NOTE' ? '' : status, text }];
+    return [{ id, run, kind, status: kind === 'NOTE' ? '' : status, text, ...(metadata === undefined ? {} : { metadata }) }];
   });
 }
 
@@ -157,6 +163,34 @@ export function readable(markdown) {
     }));
   }
   return shown.join('\n');
+}
+
+const REVIEW_ID = /^[a-f0-9]{8}$/;
+// The word for what the review's comments were when the step was offered; the commands hand it back (--seen).
+const STATE = /^[a-f0-9]{12}$/;
+const FINDING_ID = /^[A-Z]+-\d+$/;
+const LEVELS = ['high', 'medium', 'low'];
+
+/**
+ * What a preview's notice offers next, as the runtime stored it with the notice (`azpr.next`; see
+ * `previewActions` in comments.mjs), or undefined. Every value is checked here, since commands are made of
+ * them: the review, the word for its comments (`state`) and each finding by their form, each level by name. A
+ * summary is the review's own text and is only ever shown. Anything that is not as expected makes the whole of
+ * it nothing: a person then types the commands, as the receipt says them. That includes an offer without the
+ * word, which an earlier version left: its commands could not say what they were picked for.
+ */
+export function nextOf(metadata, review) {
+  const next = metadata?.azpr?.next;
+  if (next === null || typeof next !== 'object' || !REVIEW_ID.test(next.review ?? '') || next.review !== review || !STATE.test(next.state ?? '') || !Array.isArray(next.findings)) return undefined;
+  const findings = [];
+  for (const finding of next.findings) {
+    if (finding === null || typeof finding !== 'object' || !FINDING_ID.test(finding.id ?? '') || !LEVELS.includes(finding.severity) ||
+        (finding.original !== undefined && !LEVELS.includes(finding.original)) || findings.some(other => other.id === finding.id)) return undefined;
+    findings.push({ id: finding.id, severity: finding.severity, ...(finding.original === undefined || finding.original === finding.severity ? {} : { original: finding.original }),
+      excluded: finding.excluded === true, summary: typeof finding.summary === 'string' ? finding.summary.replace(/\s+/g, ' ').trim().slice(0, 160) : '' });
+  }
+  return { review: next.review, state: next.state, target: typeof next.target === 'string' ? next.target.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
+    plan: next.plan === true, publish: next.publish === true && next.plan !== true, adjust: next.adjust === true, posts: Number.isInteger(next.posts) && next.posts >= 0 ? next.posts : 0, findings };
 }
 
 /** Whether a failed request says that the session is not there, as opposed to a request that did not get through. */
@@ -463,8 +497,14 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // What the panel is about is what happened last: a run that started, progressed or ended, or a saved preview
   // shown again, which names its review. What a run says besides (a review's note that no preview follows can
   // arrive after the next run started) changes nothing, and neither does an answer without a document.
-  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE') || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && encloses(notice.text)));
+  // A run that ended REPLACED has a receipt, so that a panel which shows it running sees it end, but that
+  // receipt is not what happened last: the command that replaced its preview is, wherever it was answered.
+  const subject = notices.findLast(notice => (notice.run && notice.kind !== 'NOTE' && notice.status !== REPLACED) || (notice.kind === 'ANSWER' && SAVED_PREVIEW.test(notice.text) && encloses(notice.text)));
   const answered = subject?.kind === 'ANSWER' ? SAVED_PREVIEW.exec(subject.text)[1] : undefined;
+  // What can be done next is said by the notice that happened last: the receipt of a preview, the saved preview
+  // shown again, or the receipt of a review that no preview follows by itself. Once anything follows it (a run
+  // that starts, another receipt) it is offered no more.
+  const offering = subject?.kind === 'ANSWER' || (subject?.kind === 'RECEIPT' && ['PREVIEW', 'COMPLETE'].includes(subject.status)) ? subject : undefined;
   // A saved preview shown again is about its review: that review's status, sessions and report session.
   const run = answered ?? subject?.run;
   const ofRun = notices.filter(notice => notice.run === run && notice.kind !== 'NOTE');
@@ -521,6 +561,11 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     const azpr = session?.metadata?.azpr;
     if (azpr?.conversation === conversation && azpr.run !== undefined && runs.has(azpr.run)) candidates.add(session.id);
   }
+  // What a notice offers goes with the document it encloses: a review's receipt encloses a report and offers a
+  // preview of it, a preview's receipt and a saved preview shown again offer what is done with that preview.
+  // `offer` names the notice, so that a row that was picked is acted on only while that notice still offers.
+  const checked = offering ? nextOf(offering.metadata, answered ?? reviewRun) : undefined;
+  const offered = checked && checked.plan === (offering.kind === 'RECEIPT' && offering.status === 'COMPLETE') ? { ...checked, offer: offering.id } : undefined;
   const rows = [];
   let deleted = 0;
   for (const id of candidates) {
@@ -540,7 +585,10 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     rows.push({
       id,
       label: titles.get(id) ?? (stage ? `${stage.role}${stage.label ? ` ${stage.label}` : ''}` : azpr?.role ?? id),
-      state: source.status(id) === 'running' ? 'running' : stage ? stage.state.toLowerCase() : 'idle',
+      // What a receipt says of a stage is its result. Until the run's receipt names it, a session whose model is
+      // not at work has finished what it was asked: the host calls that idle, which reads like a fault. (A session
+      // a receipt does not name stays "finished": one of a comment run, kept by debug.enabled.)
+      state: source.status(id) === 'running' ? 'running' : stage ? stage.state.toLowerCase() : 'finished',
       report: id === reportSession && belongs(info, conversation, reviewRun),
       current: azpr?.run === run,
     });
@@ -558,6 +606,8 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     // A report read from its session says its run and status in its own first line; an enclosed document is named by
     // the notice that encloses it.
     documentHead: own || document?.session ? '' : document?.head ?? '',
+    // The steps a preview offers, for the review shown; absent while a run is under way or after another notice.
+    ...(offered ? { next: offered } : {}),
     inbox,
     notices: notes,
     loading,

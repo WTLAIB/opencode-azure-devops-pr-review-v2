@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.4.3, the move to OpenCode 2.3.0, a run of Martian's public code review
+0.4.4, the move to OpenCode 2.3.0, a run of Martian's public code review
 benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
 of 0.3.7 run on ReviewBench's test set. Host
@@ -34,7 +34,10 @@ acceptance runs, including the MCP-based runs, are preserved in
   read back its comments, and a second run on the unchanged PR wrote nothing.
   On OpenCode 2.3.0 with AZPR 0.4.1, a gpt-6-luna review and its preview
   completed on the 1-file and the 35-file PR, and with the 0.4.2 candidate
-  one more on the 35-file PR, with the terminal panel open.
+  one more on the 35-file PR, with the terminal panel open. With AZPR 0.4.3,
+  a first setup in the dialogs against the live organization, and a
+  gpt-6-luna review and preview of the 1-file PR whose ten notices reached
+  the conversation's own model together with one prompt, in one request.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -50,6 +53,337 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.4 release candidate acceptance (2026-11-19)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.0 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
+Azure DevOps services. Nothing here used a real model or Azure DevOps; what
+0.4.3 showed with both, the day before, is in the next section.
+
+0.4.4 lets the terminal panel offer the next step after a review or a preview
+in one row at its foot, whose steps send the command, names a conversation
+nobody named after its PR, and changes several texts of setup (see
+[what can be done next](ARCHITECTURE.md#what-can-be-done-next)). Of the
+server part, `comments.mjs` gained `previewActions`; `runtime.mjs` sends that
+with the notices that offer a step, holds it to the preview its notice shows,
+and names an unnamed conversation while it follows the renames the host
+reports; `host.mjs` tells an unnamed conversation, `attribution.mjs` writes
+its name, and `setup.mjs` describes what each model is for and where every
+setting is described. The terminal part gained `src/tui-actions.mjs`;
+`tui-model.mjs` reads the offer and checks it, and `tui-view.jsx` draws the
+row. `install.sh` copies one more file. No prompt and no setting changed.
+
+### Offline
+
+`npm run check` passes, and `npm test` runs 646 tests (612 for 0.4.3),
+all passing.
+
+| Tests | What they establish |
+| ---: | --- |
+| 10 | What the steps do (`tests/tui-actions.test.mjs`, new), with scripted dialogs: what a notice offers, each with its key, and the step the others lead to; a label that ends in "…" asks before anything is sent, and one that does not is sent at once; a command is made only of a review ID, finding IDs, level names and the word for the review's comments, and is read by the same parser as a typed one; posting asks first with "no" first and sends nothing otherwise; findings are adjusted in a list whose last row applies every change with both lists in full, and what is saved is where a person starts; the same from the foot of the list, which acts once and only while that list is open, also where a dialog that was closed answers nothing; an answer for what the panel no longer offers sends nothing and says so, for every step, and a finding picked from the list of an offer that is gone is not asked about; a command that was refused or did not get there is said with its reason, on one line; one action at a time; nothing is asked or sent after the part was unloaded. |
+| 3 | What the panel shows of it (`tests/tui-model.test.mjs`): every value of an offer is checked, and anything unexpected, or an offer without the word for the review's comments, offers nothing; the offer is taken from the notice that happened last, for the review shown, from the inbox and from a delivered message alike, goes with its kind of document (a preview is planned under a report and never posted from there), names its notice, and is gone once a run starts or another receipt arrives; the receipt of a run whose preview was replaced (`REPLACED`) ends that run in a panel that showed it running, with no progress and nothing offered, but is not what happened last, so another command's preview stays in view; a session at rest is `finished` until a receipt names it, and stays so where none does. |
+| 4 | The view (`tests/tui-view.test.mjs`): the steps are one row at the foot, each with its key in brackets and the main one bold, wrapping as whole items under a line; a click and the key ask first and then send `/pr-comment` with the review's ID and the word to the session on screen; a left mouse-down on a step is stopped, so the keyboard stays where it was, and a key is dim while the prompt has the keyboard; the release that ends a selection of text picks no step, also not the one that asks nothing, and neither does a release without its press on that step, one for an offer that changed while the button was held, one after the pointer left the step, or one whose press was given up (by the release of a selection, another button, or a press or release elsewhere in the panel); an answer counts only while the panel still shows that offer there (not after another notice, a run that started, a closed panel, another session, another plugin's panel or a panel no longer drawn); nothing is offered while a run is under way, for a notice without the data, or on a host that cannot send a command or has no list dialog; an action that is open when the part is unloaded sends nothing. |
+| 13 | The runtime (`tests/runtime.test.mjs`): a preview's notice, the saved preview shown again, and the receipt of a review that no preview follows carry the offer as the review is at that moment (after an adjustment, after publication started, held, or with nothing left to post), and a review that a preview follows carries none; the commands of the steps adjust and post like typed ones; after a command typed in the review's own session planned the preview again, the conversation's panel still shows the first preview, and each of its steps is refused before anything is posted, adjusted or planned, while the saved preview shown again offers steps that are taken and a typed command acts as before; a preview that another command adjusted or posted while its run's sessions were deleted (also one posted after an earlier publication of that review) is neither enclosed nor offered, its run ends with a receipt that says `REPLACED`, and the panel's model is the same before and after that receipt; such a run does not make its review the current one (a command without a review ID still acts on the review that was used last), and a panel that showed it running sees it end; a preview that is planned again while the first run saves the record after its receipt was made leaves that receipt offering the preview it shows, whose step is then refused; a step refused for its word leaves the conversation's current review as it is, in the process and on disk, so that a command without an ID still posts to the other pull request; a review's receipt offers nothing once a preview of that review was planned during its cleanup; a conversation nobody named is named after the PR by a check or a review, a name that is there stays, a refused command names nothing, and a host that cannot rename, fails or does not answer holds no command up. The renames the host reports decide, in scripted orders that the tests follow by the naming's own events (the turn in which the host answers a write of a name), not by how long a command takes: a name given between the read and the write is written back, also when it is given twice; so is a name that follows someone's choice of AZPR's very words while AZPR's write is under way, whether the host reports all of it at once or a little later, and a name that is followed by AZPR's words afterwards (in doubt the other name stays); of several names in a row the last one is written back, in one write when the host has reported all of them, and AZPR's own words are never written back as someone's name, also when the report of AZPR's first write comes after a name was written back; once that write-back was reported, someone's own choice of AZPR's words stands; AZPR writes four times at most; a rename reported during the read stops the naming, also when the host reported other conversations' renames before it; another conversation's rename is ignored and does not put a write-back off; a host without the feed gets no name, one that never reports AZPR's own rename or refuses the write ends the watch by itself, a feed that fails while the conversation is read leaves no rejection without a handler, a second command starts no second watch of the same conversation, and a write that the host answers long after the watch would have closed is still followed by the name it replaced. Unloading the plugin waits for a write that is under way and writes back the name it replaced, ends a watch that only waits within a moment, and does not wait without end for a host that never answers. In each case the subscription is closed. |
+| 2 | `previewActions` itself (`tests/comments.test.mjs`): the offer for an unadjusted, an adjusted, a held, an unplanned and a published review, a summary cut to 160 characters, and no offer beyond 200 findings; and the word for a review's comments: the same from the saved record, another one for another preview, no preview, another review or other adjustments, whatever order they were typed in, and unchanged by posting. |
+| 2 | The name a conversation gets, from the URL alone, without the organization or the PR's own title (`tests/attribution.test.mjs`); and that the sections of the README which the runtime names are there (`tests/release.test.mjs`). |
+
+The other changed expectations are in existing tests: the `--seen` option of
+`/pr-comment` (`tests/output.test.mjs`), the description of the commands of
+an AZPR without settings, the hints and the search lines of the
+model rows, the section of the README that "Settings file" and `--help` name
+(a test also checks that the README has that heading), the **Deep models**
+rows of `/pr-check` (the same model with a higher variant is not a repeat),
+the untitled rule and the new host capability, and the rule that the terminal
+part sends a command in one place, `/pr-comment` alone
+(`tests/release.test.mjs`).
+
+### In the real terminal UI
+
+The eleven host fixture runs passed on one tree (the hash of the code and
+tests was the same before and after).
+
+- **The steps at the panel's foot** (`tests/host-v2-tui-panel.mjs`, from
+  source and as the package, in a terminal of 170 by 46). After a review that
+  no preview follows, the row offers **Preview comments** and the adjustment,
+  and no posting. After a preview it offers **Post 5 comments…** and the
+  adjustment, and nothing to reset; the row is on the line of OpenCode's
+  status bar, the line above it is level with the lower edge of the prompt,
+  and nothing is drawn under it. The panel is then read to its end, where the
+  row is still in its place, and the keyboard is given back to the prompt: a
+  `p` typed there is a letter and asks nothing. A click on the adjustment
+  opens the list of findings, with nothing to apply yet; typing filters it;
+  one finding is left out, and a click on **apply** at the foot of the list
+  applies it: the runtime answers in the session on screen with a new preview
+  that says what a person left out, the panel shows it from its beginning and
+  offers 4 comments and the reset, and what is typed next still goes to the
+  prompt. Text is then selected with the mouse from the preview's heading
+  down to the row and let go over **Reset adjustments**, which asks nothing:
+  no command is sent and the panel shows what it showed. (With the release
+  taken for a click, as the candidate had it until then, the same step of
+  this fixture failed on OpenCode 2.3.0: the reset was sent.) The button is
+  then pressed on **Reset adjustments** and let go after the pointer has
+  left it: nothing is sent either. (Without a look at where the pointer is,
+  that step failed as well: OpenTUI sends the release to the step that was
+  pressed.) With the keyboard in the panel, `a` opens the list again, a second
+  finding is left out, and `ctrl+s` applies it. The key `p` asks before
+  posting with "No, post nothing" first: Enter posts nothing, and "Yes" ends
+  in `POSTED` with the summary and two comments on the fake PR, after which
+  nothing is offered. With the default setting only the notices that offer a
+  step carry metadata, and only that offer; with `terminalPanel: manual` they
+  carry both. The runs made 18 model requests by AZPR's sessions
+  (15 for 0.4.3; the others plan the two adjusted previews) and
+  49 Azure DevOps requests (31), and still exactly 1 request of
+  the conversation's own model.
+- **Setup** (`tests/host-v2-tui-setup.mjs`, from source and as the package).
+  Without settings the command list describes the six review commands as
+  "AZPR is not ready here; run /pr-setup to see what it needs". The settings
+  list shows `Review model for /pr-review` and `Deep model for /pr-deep` with
+  their values; the deep model's dialog says "Stronger than the review model,
+  or a higher variant" in its search line, the variant dialog "A higher
+  variant reasons longer", and leaving them saves nothing. "Settings file"
+  names the README's section "All settings and defaults" and its address. No
+  model request and 16 Azure DevOps requests, as for 0.4.3.
+- **A conversation's name** (`tests/host-v2-smoke.mjs`, fresh, replacement
+  and native). A conversation created without a title has none on OpenCode
+  2.3.0; after `/pr-check` in it its title is `AZPR: PR #123 (repository)`,
+  the conversation that was created with a title keeps it, and no model was
+  asked. The check's debug record says `named`: OpenCode 2.3.0 reported
+  AZPR's rename to the plugin's subscription, which is what the guard against
+  replacing a name given in the same moment rests on; the record of the check
+  in the named conversation says `kept`. That check adds 7 Azure DevOps
+  requests to each run: fresh 110 model and 194 Azure DevOps requests,
+  replacement 92 and 164, native 110 and 201.
+- **Unchanged**: comment scale 34 and 75, with debug off 34 and 71,
+  and background compaction 8 model requests in both runs, as
+  for 0.4.3.
+
+`npm pack --dry-run` lists 38 files (37 for 0.4.3); `src/tui-actions.mjs` is
+new. `package.json` has no dependency and no lifecycle script.
+
+### How the row got its place
+
+The first candidate drew the steps as rows of full sentences under the
+panel's header, each with the command it sends beside it. The maintainer
+installed that candidate (the pull request's commit, as a Git package) and
+used it: after a preview was read to its end, what could be done with it was
+at the other end of the panel. Three layouts were then recorded in the real
+terminal UI with stand-in services and read as text, row by row, before one
+was chosen: the same block at the foot of the panel, a band as tall as the
+prompt area beside it (at 150 by 42, 120 by 32 and 200 by 50), and one row on
+the panel's own ground (at 150 by 42 and 120 by 32). The row is what this
+candidate has. The same
+recordings showed three things the fixtures now check: a click on a step
+gave the panel the keyboard, so that the next key typed was taken for the
+panel's; a preview that was planned again arrived scrolled to where the one
+before it was left; and text that scrolled touched the panel's header.
+
+### The pictures of setup
+
+`docs/assets/setup-dialogs.gif` and `docs/assets/setup-settings.png` show
+AZPR's dialogs in the real terminal UI of OpenCode 2.3.0, with this
+candidate installed from source. They were recorded with
+`docs/assets/record-terminal.py` and rendered with
+`docs/assets/render-terminal-demo.py`, as the other recordings are, but not
+against Azure DevOps: the organization (`contoso`) and the token are test
+values, a stand-in on the same machine answered the one request that checks
+the token, and two of the listed models are entries of the recording's
+configuration. A live recording would show the maintainer's organization.
+Both pictures say so in the line above the terminal and in the line below it;
+the terminal's status bar is cropped. The recording opens the dialogs from
+the command palette, so that the conversation holds no notice with a path of
+the recording machine; every frame shown was read as text for paths and
+names before it was used.
+
+### Reviews by a second model
+
+Nine reviews of the pull request followed (GPT-6 Astra at its highest
+reasoning effort through the Codex CLI, in a read-only sandbox on a clean
+clone), each of the tree as corrected after the one before. The reviewer ran
+the build check and the tests that write nothing, and reproduced what it
+found with probes of its own; the tests that write files and the host
+fixtures ran here, on every corrected tree. The first eight reviews reported
+nineteen defects (3, 4, 2, 3, 2, 2, 2 and 1), each confirmed against the code
+and corrected, with a regression test where the defect was in the code; the
+ninth, of the code described above, found nothing to change:
+
+- **An answer for what the panel no longer offered was acted on** (first
+  review; one more step in the sixth, and the mouse in the seventh and the
+  eighth). A dialog can stay open for any time.
+  When the preview was planned again meanwhile, "Yes" still sent the command,
+  which would have posted a preview nobody had read; a panel that was closed,
+  or another session on screen, changed nothing either. Each step now comes
+  with a check that the panel still shows that notice's offer in that
+  session. The sixth review found that a finding picked from the list of an
+  offer that was gone still opened the question about that finding (nothing
+  could be sent from it, but the action went on); the list's answer is
+  checked as well now. The seventh found that an offer which changed while
+  the mouse button was held on a step let the release act on the new one:
+  **Reset adjustments**, which asks nothing, would have reset a preview that
+  was not the one pressed. A click is now the press and the release on one
+  step of one offer. The eighth found that a press which was given up (its
+  release was the end of a selection, or never reached the step) stayed on
+  record and could make a later release a click; a press now ends with every
+  other press or release the panel sees.
+- **A command was bound to its review, not to the preview on screen** (second
+  review). That check knows only what its conversation was told: after a
+  command typed in the review's own session had planned the preview again,
+  the conversation's panel still offered the first one, and posting from it
+  posted the second. Every command of the panel now names the preview and the
+  adjustments it was picked for (`--seen`), and the runtime refuses it when
+  they are others. The fifth review found that a step refused like that had
+  already made its review the conversation's current one, so that the next
+  command without an ID could act on another pull request than the one used
+  last; the word is compared first now, and a refused step changes nothing.
+- **A late receipt showed one preview and offered another** (first review;
+  two consequences of the correction in the fourth, one more in the fifth). The command locks are
+  released before a run's sessions are cleaned up, and the offer was read
+  after that. A preview that another command replaced or posted before its
+  receipt is neither shown nor offered now. The fourth review found that
+  such a run still made its review the conversation's current one, so that a
+  command without a review ID acted on another review than the panel showed,
+  and that a panel which showed the run as running never saw it end when the
+  other command was answered in another session: the run now ends with a
+  receipt of its own status, `REPLACED`, which changes neither. That
+  correction had put the save of the record between the look at the review
+  and the receipt, and the fifth review showed that a preview planned again
+  during that save was offered under the text of the one before. The
+  receipt's text and offer are made in one moment now, and the record is
+  saved after them.
+- **Naming a conversation could replace a name given in the same moment**
+  (first review; three more cases in the second, two in the third and one in
+  the fourth). The
+  title was read and then written. The host has no rename that applies only
+  to an unnamed conversation, and nothing ties a rename it reports to the
+  call that made it, so no plugin can rule this out; the renames the host
+  reports now decide, and AZPR's own name gives way wherever there is doubt.
+  The second review found that a read of that report could reject with
+  nobody listening, that two commands in a row could each watch the same
+  conversation, and that the watch gave up while its own write was still
+  under way. The third found that a report with AZPR's own words was taken
+  for AZPR's write although someone else could have chosen the same words,
+  and that unloading the plugin closed a watch whose write was still under
+  way. The fourth found an order of three renames in which AZPR's own words
+  were written back as if they were someone's name. Each is corrected; what
+  remains is said in
+  [the architecture](ARCHITECTURE.md#authorization-and-isolation): a person
+  who gives a name and then exactly the words AZPR wrote last, both in that
+  moment, keeps the name given first.
+
+- **The naming tests depended on how long a command took** (sixth review;
+  one case left over in the seventh).
+  Several cases looked at the watch after the check's receipt and expected it
+  open, which holds only while the check ends within the 60 ms the watch
+  stays open there; a busy machine would have failed them. They follow the
+  naming itself now: the fixture's host says in which turn it answered a
+  write of a name, what has to happen is waited for, and what must not happen
+  is given a pause in which it would have. Run eight times at once with every
+  processor kept busy, they passed each time; four earlier defects put back
+  into the code one at a time each made them fail.
+
+Between the reviews the corrections, and what they touch, were read again
+here, which found five more defects; each has a test that fails without its
+correction:
+
+- The release of the mouse button that ends a selection of text was taken for
+  a click. OpenTUI sends that release to whatever lies under the pointer, so
+  text selected down the panel and let go over **Reset adjustments**, which
+  asks nothing, sent that command; the fixture's step showed it on OpenCode
+  2.3.0 before the correction. The same release over a session's row opened
+  that session, and over `close` closed the panel, since 0.4.2; both were
+  seen on that host with the earlier handlers.
+- A step that was pressed and then left was still picked when the button was
+  let go elsewhere, since OpenTUI sends that release to the element that was
+  pressed; the fixture showed this as well.
+- The check for a rename that the host reports while the conversation is read
+  looked only at the first event the feed held, so a name of this
+  conversation behind another conversation's rename was missed, written over
+  and then written back.
+- The moment AZPR waits before it writes a name back began again with every
+  event of the feed, so other conversations' renames could put the write off.
+- Whether a preview was posted since it was rendered was told by whether
+  publication had begun: a review published before, planned again and posted
+  by another command while that run ended still got a receipt that said
+  `PREVIEW`.
+
+### Not verified
+
+- The steps at the panel's foot were not used against a live Azure DevOps
+  organization or after a review by a real model. The candidate the
+  maintainer used at home was the first one, with the rows under the header.
+- That a name given in the very moment AZPR names a conversation is written
+  back was shown with scripted orders of renames; on the real host only that
+  the renames are reported was checked. A host that reported renames in
+  another order than they took place would mislead it.
+- The recording at the top of the README predates the row; it shows the panel
+  of 0.4.2.
+- The pictures of setup show stand-in services, as said above.
+- Other OpenCode clients (the desktop app) were not run; they load no
+  terminal part.
+
+## 0.4.3 in use: a first setup and a review with a real model (2026-11-19)
+
+Environment: the maintainer's everyday OpenCode 2.3.0 background service on
+Ubuntu 22.04.5 under WSL2, with `opencode-azure-devops-pr-review@0.4.3` from
+npm, the maintainer's Azure DevOps test organization and `openai/gpt-6-luna`.
+0.4.3 was released without these two checks (see
+[its acceptance](#043-release-candidate-acceptance-2026-11-18)); they were
+made the day after. Nothing was posted.
+
+**A first setup in the dialogs.** The plugin entry and the settings file
+were removed (after backups) and the service restarted, so that it had no
+AZPR command and no private role. The maintainer then installed 0.4.3 with
+`opencode plugin add`, opened the terminal UI and answered the dialogs:
+organization, no proxy, the token, a model. What the dialogs showed was not
+recorded; what they left was read afterwards:
+
+- The settings file, complete and readable by its owner only (mode 600), and
+  a token file made for it, `pat-<organization>` beside it (mode 600), with
+  the same bytes as the token file used before. So the token Azure DevOps
+  was asked about is the one that was saved.
+- In the project directory where the setup ran, the seven commands and seven
+  private roles (five of the review profile, two of the quick profile; the
+  deep profile has no model after a first setup), without a restart.
+- In another project directory, which the service had opened before the
+  package was added, the review commands were still the ones that only say
+  so. This is as designed: settings saved from another directory are read
+  after a restart. But the command list described them as "AZPR setup
+  required", although setup was done and only the restart was missing.
+  0.4.4 changes those words. After a restart both directories had the
+  commands and the roles.
+
+**A review with a real model.** The review and quick models were then set to
+`openai/gpt-6-luna` and the service restarted; the other settings were those
+a first setup leaves (`outputLanguage: en`, debug off, a preview after each
+review). On Test PR 2 of the maintainer's Azure DevOps test project (1
+changed file), through OpenCode's HTTP API:
+
+| Step | Result | Time |
+| --- | --- | ---: |
+| `/pr-check` | `READY` | 5 s |
+| `/pr-review <URL> --preview` | `COMPLETE`: 2 reviewer sessions, 5 candidate findings, 3 confirmed, all medium | 60 s |
+| The preview that follows | `PREVIEW`: a summary and 3 inline comments; nothing posted | 10 s |
+
+With debug off the run deleted its two reviewer sessions when it ended and
+kept the verification session, which holds the report; the comment run kept
+none.
+
+**The notices and the conversation's own model.** During the three commands
+the conversation's model never ran: the conversation had no message, and ten
+notices waited in its inbox, each steered and none waking a model. One
+ordinary prompt was then sent to that conversation, with its model set to
+`openai/gpt-6-luna`. Its messages afterwards, in order: the model switch,
+the ten notices, the prompt, one answer of the model (19,505 input and 89
+output tokens), and the end of the turn. The inbox was empty, 15 seconds
+after the prompt. The answer named the three findings and said that the
+preview was not posted. With notices queued as before 0.4.3, OpenCode would
+have given each a turn of its own, eleven in all (measured only in the
+fixtures: 17 requests for 16 notices and a prompt).
+
+**Limits.** One run each, on a 1-file PR. The review was driven through the
+HTTP API, so the terminal panel was not on screen. The steps of the
+maintainer in the dialogs were not recorded, and the dialogs were not used
+to change an existing setup. The earlier settings were put back afterwards.
 
 ## 0.4.3 after publication (2026-11-18)
 

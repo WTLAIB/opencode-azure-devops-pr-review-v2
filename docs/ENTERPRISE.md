@@ -213,10 +213,13 @@ or published Azure comments.
 The [terminal panel](../README.md#terminal-panel) runs in OpenCode's terminal
 UI. It reads AZPR's notices and the report queued to a review session from the
 OpenCode server that terminal UI is connected to, and keeps what it read in
-memory only; it stores nothing. It sends nothing to a model, to Azure DevOps
-or anywhere else, and reads neither AZPR's settings file nor the PAT: the one
+memory only; it stores nothing. It sends nothing to a model or to Azure
+DevOps, and reads neither AZPR's settings file nor the PAT: the one
 setting meant for it, `terminalPanel`, reaches it as metadata of AZPR's
-notices. The [setup dialogs](../README.md#setup-in-the-terminal-ui) of the
+notices, and so does what a notice offers as a next step. The one thing it
+sends is to that same OpenCode server: the `/pr-comment` command of a step a
+person picked at the panel's foot, which AZPR's server part takes like a typed
+command; posting comments that way asks once more first. The [setup dialogs](../README.md#setup-in-the-terminal-ui) of the
 same terminal part talk to AZPR's server part only: they read and write no
 file, contact neither Azure DevOps nor a model, and store nothing. What they
 are told of the settings never includes the PAT or a proxy's user name and

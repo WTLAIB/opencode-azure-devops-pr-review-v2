@@ -111,6 +111,35 @@ settings, backups and failure records. Never upload `.local/`.
   with `metadata.azpr`, and tie them to the conversation through AZPR's own
   records (run stages, a saved review's sessions), never the host's session
   tree.
+- The conversation is the person's: AZPR leaves its notices there and changes
+  nothing else, with one exception. A conversation nobody named yet
+  (`isUntitledSession` in `host.mjs`) gets a name when a check or a review
+  starts in it, made of the PR's number and repository from the URL the
+  person typed (`conversationTitle`): no model runs there to name it, and the
+  session list would go on calling it "New session". Never put text from the
+  PR into a title, and never let a command wait for the update or fail on
+  it.
+- OpenCode has no rename that applies only to an unnamed conversation, and
+  nothing ties a rename it reports to the call that made it: a read followed
+  by a write can replace a name given in between, and no plugin can rule
+  that out. So AZPR's own name must give way wherever it can tell, and also
+  where it cannot (`nameConversation` in `runtime.mjs`). Name a conversation
+  only where the host reports renames (`session.renamed`), and follow them
+  from before the read. A rename reported during the read stops the naming.
+  A report with other words than AZPR wrote is someone else's name; one with
+  AZPR's words that follows it may be the write that replaced it, so that
+  name is written back: in doubt, the name that is not AZPR's stays. Write
+  back the last name reported, after the host has reported no name of that
+  conversation for a moment, and never AZPR's own words: once AZPR has
+  written a name back, a report of its first words is that first write
+  reported late, or someone's choice, and neither is a name to restore. Keep
+  the watch open for a while after the host answered AZPR's last write,
+  never close it while a write is under way or due, bound the number of
+  writes, let one watch name a conversation at a time, and let unloading end
+  what is under way first. No read of the feed may be left without a
+  handler: a feed that fails has ended. A host without that feed names
+  nothing, and a name that is not AZPR's own is never recorded. Say this
+  limit where the naming is described; never write "never replaced".
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -256,16 +285,102 @@ settings, backups and failure records. Never upload `.local/`.
 - Diagnostics are opt-in and never record reasoning, headers or provider
   configuration.
 
-**The terminal panel only reads.**
-- The panel of the package's terminal part (`src/tui-model.mjs` and
-  `src/tui-view.jsx`, compiled to `src/tui.js`) shows what the runtime already
-  produced: AZPR's
+**The terminal panel reads; it sends only the command a person picks.**
+- The panel of the package's terminal part (`src/tui-model.mjs`,
+  `src/tui-actions.mjs` and `src/tui-view.jsx`, compiled to `src/tui.js`)
+  shows what the runtime already produced: AZPR's
   notices in the conversation, the report queued to a review session and the
-  sessions' `metadata.azpr`. It sends no prompt, runs no command of the server
-  part, makes no Azure DevOps request, reads no settings file and keeps no
-  preference of its own. The one setting meant for it (`terminalPanel`)
-  reaches it in the metadata of the runtime's notices, sent only when it is
-  not the default, so default requests stay as they were.
+  sessions' `metadata.azpr`. It sends no prompt, makes no Azure DevOps
+  request, reads no settings file and keeps no preference of its own. The one
+  setting meant for it (`terminalPanel`) reaches it in the metadata of the
+  runtime's notices, sent only when it is not the default; a notice that
+  offers a next step carries that offer there as well (`azpr.next`), and
+  every other notice stays as it was.
+- The one thing the panel sends is the `/pr-comment` command of a step a
+  person picked, with a click or with its key while the panel has the
+  keyboard. Nothing is sent by itself: not on a notice, not on a timer. The
+  command is made in `tui-actions.mjs`, which imports nothing so that its
+  dialogs are tested with scripted answers, and is sent in one place of the
+  view, with the host's `client.session.command`, to the session on screen.
+  The server part takes it like a typed one: its checks, its STARTED notice
+  and its receipt are the same. Add a step only for one a receipt names,
+  and none that sends another command without changing this rule and the
+  test that holds it (`tests/release.test.mjs`).
+- What can be picked is the runtime's word, never worked out from a document:
+  `previewActions` (`comments.mjs`) writes it into the metadata of the notice
+  that offers it (a preview's receipt, the saved preview shown again, the
+  receipt of a COMPLETE review that no preview follows by itself), and
+  `nextOf` (`tui-model.mjs`) checks every value before a command is made of
+  it: IDs by their form, levels by name, the review against the one shown.
+  Anything unexpected offers nothing, and only the notice that happened last
+  offers.
+- An offer belongs to the document its notice encloses: it is true of the
+  review as that document was rendered. Read both before anything is
+  awaited, or check first that the review's preview is still the one that
+  was rendered (`previewState` in `runtime.mjs`: the plan, the adjustments,
+  and what publication has recorded, which every publication writes anew)
+  and await nothing between that check and the receipt's text and offer:
+  whatever is saved then is saved after them.
+  Under a report a preview is planned, never posted,
+  and only while nothing has acted on that review since; a preview offers
+  what is done with that preview. The command locks are released before a
+  run's sessions are cleaned up: a preview that another command adjusted,
+  planned again or posted before its receipt is neither enclosed nor
+  offered. Its run ends with a receipt of a status of its own (`REPLACED`),
+  which does not make its review the current one, and which the panel takes
+  for the end of that run but not for what happened last: the other
+  command's receipt is, wherever it was answered. `buildPanel` holds an
+  offer to its kind of document as well.
+- A step's command names its review and, with `--seen`, what that review's
+  comments were when the step was offered (`commentToken` in `comments.mjs`:
+  the saved preview and the adjustments), so that what is on screen is what
+  is acted on. A panel knows only what its own conversation was told; a
+  command typed in a review's own session, or another client, changes the
+  review without a notice there. The runtime refuses a command whose word
+  is no longer the review's: when it arrives, before the review becomes
+  the current one (a step refused there changes nothing, also not which
+  review the next command without an ID acts on), and again under the
+  comment lock, before anything is planned, saved or posted. Make the word of
+  nothing but what the review's record holds, and never of whether posting
+  began: what was shown can be posted again. A typed command carries none
+  and keeps its behaviour. Posting asks first, in a list whose first row
+  posts nothing; an adjustment gives both lists in full, since each
+  replaces the saved one.
+  One action runs at a time, and after `stop()` nothing is asked or sent,
+  whatever answer arrives. An answer counts only for what the panel still
+  offers (`still`): the same panel, drawn and the one the host shows in that
+  session, with the same notice offering (`offer`, the notice's ID). A
+  dialog stays open for any time, so check it whenever a dialog answers,
+  before another one is opened, and right before a command is sent; say
+  when nothing was sent, and never post a preview that was planned again
+  while its question was open.
+- The steps are one row at the panel's foot, on the panel's own ground under
+  a line, in place while the text scrolls: where reading ends. A label that
+  ends in "…" asks before anything is sent, and one that does not is sent at
+  once. A key is drawn in its colour only while it works, which is while the
+  panel has the keyboard. A click on a step is a button pressed: stop its
+  mouse-down event, since the host gives a panel the keyboard on it, and a
+  key of the panel would then act on what a person means to type. The
+  release that ends a selection of text is no click (`clicked` in
+  `tui-view.jsx`): OpenTUI sends it to whatever lies under the pointer,
+  marked as dragging, and a step, a session's row or `close` there must not
+  act on it. A click on a step is its press and its release on one step of
+  one offer, with the pointer still on that step: the row can come to show
+  another notice's steps while the button is held, and OpenTUI sends the
+  release of a button that was dragged away to the element it was pressed
+  on. A press is one gesture's: end it with every other press or release
+  the panel sees (`forget`), so that a gesture that was given up never makes
+  a later release a click.
+  What
+  applies a list of adjustments stays in view however long the list is (the
+  foot of its dialog), and is also the list's last row, for a host that
+  draws no such foot. The foot's action closes its dialog itself, since the
+  host does not: let it act once, and only while that list is the dialog
+  that is open.
+- A row of a session says `running` while the host says so, then what the
+  run's receipt says of its stage, and `finished` until a receipt names it:
+  never the host's word for a session at rest, which reads like a fault for
+  a reviewer that has answered.
 - `/pr-panel` is the terminal part's only slash command. Add another only for
   what neither a setting nor OpenCode's own UI (its session list, say)
   already does; setup is reached through the server part's `/pr-setup` and
@@ -348,7 +463,11 @@ settings, backups and failure records. Never upload `.local/`.
 - What setup can set is one table (`ROWS` in `setup.mjs`): a row reads, shows,
   accepts and writes its value, and its option of `/pr-setup` and its dialog
   are the same row. Give a setting people change a row; leave the rest to the
-  settings file. `shell` and `azure.verifyTls` get none.
+  settings file. `shell` and `azure.verifyTls` get none. A row says what it
+  is for where its name does not: `hint` in the list, where the host shows it
+  between the name and the value and cuts what does not fit, so a few words
+  only; `prompt` and `variantPrompt` in the search line of its dialogs, where
+  there is room (the deep model: a stronger model, or a higher variant).
 - The dialogs (`src/tui-setup.mjs`, which imports nothing so that its order
   is tested with scripted answers, and the token field in `tui-view.jsx`) use
   the host's own dialogs and hand every answer to the server part over the
@@ -407,6 +526,11 @@ settings, backups and failure records. Never upload `.local/`.
   answer (`settingsDrift` in `runtime.mjs`, the rule of its preflight), so
   that the two never disagree; do not compare texts in `setup.mjs`.
 - A process without usable settings registers commands that only say so.
+  What the command list says of them must hold for every reason a process
+  has none: no settings yet, settings that cannot be used, and settings that
+  were saved elsewhere since (another project directory's setup) and wait
+  for a restart. It says that AZPR is not ready here and names `/pr-setup`,
+  which tells which it is.
   They are AZPR's own: never register one under a name that another plugin
   has taken meanwhile, since adding a command replaces the one of that name.
   A plugin can take a name at any moment, so list the commands again right

@@ -45,9 +45,9 @@ The terminal panel's view is written in `src/tui-view.jsx` and compiled to
 `src/tui.js`, which is what OpenCode loads (see
 [architecture](docs/ARCHITECTURE.md#terminal-panel)). After changing the
 source, run `npm run build:tui` and commit both files; `npm run check` fails
-when they differ. What the panel shows is worked out in `src/tui-model.mjs`
-and what the setup dialogs ask in `src/tui-setup.mjs`; both import nothing
-and have ordinary unit tests. `tests/tui-view.test.mjs` loads the compiled
+when they differ. What the panel shows is worked out in `src/tui-model.mjs`,
+what the steps at its foot do in `src/tui-actions.mjs` and what the setup dialogs ask in
+`src/tui-setup.mjs`; all three import nothing and have ordinary unit tests. `tests/tui-view.test.mjs` loads the compiled
 view itself, with stand-ins for what the host provides, for the wiring that
 draws nothing (which server part the dialogs talk to, when they open).
 

@@ -55,6 +55,25 @@ terminal UI, not by the service, and only when the terminal UI starts.
   report was deleted or its report could not be read; the receipt in the
   conversation still names it, and `/pr-comment --show` shows a saved preview
   again.
+- **Nothing to pick at the foot of the panel.** The steps are offered by the
+  notice that happened last, and only by a comment preview or by a review
+  that no preview follows: once a run starts or another receipt arrives, they
+  are gone. A preview that an earlier version left in the conversation offers
+  none; `/pr-comment --show` shows it again with them. A review with more
+  than 200 findings offers none either; type the commands its receipt names.
+- **Their keys are dim and do nothing.** The prompt has the keyboard, so `p`
+  would type a letter. Click one of them, or click into the panel's text (or
+  use OpenCode's "Focus right pane") to give the panel the keyboard.
+- **"Nothing was sent: what the panel showed has changed since."** A question
+  was open while the preview was planned again, another session came on
+  screen or the panel was closed. Read what the panel shows now, then pick.
+- **"/pr-comment was not started".** The reason follows, as for a typed
+  command: another AZPR command is running in the conversation or on the PR,
+  the review is no longer kept, or the terminal UI could not reach the
+  OpenCode server. "Review … is no longer as it was shown" means that the
+  preview was planned again or the findings were adjusted somewhere the
+  panel was not told of (the review's own session, another client): run
+  `/pr-comment --show` and pick from what it shows.
 - **Other clients.** The desktop app and other OpenCode clients do not load
   the panel.
 
@@ -98,6 +117,7 @@ session holding the report or draft stays.
 | `azure-calls.jsonl` | Every Azure DevOps REST call, from the runtime and the reviewers' AZPR tools: method, call, file path or change page, attempt, HTTP status or error kind, duration, bytes, and whether it will be retried. Never credentials or comment bodies. |
 | `result.json` | Final status, every stage record, Azure call and retry counts, the run's token totals with `cachedInputShare`, and warnings; `searchUnavailable` lists why content search could not run, when it could not. A review records the comment step it hands on (`afterReview`: mode and source, when a step or `--no-comment` applies); an automatic comment run records `automatic` (mode, source, `sourceReview` and the reasons in `heldBack`). |
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
+| `conversation-name.json` | For a check or a review, written a few seconds after the command: how naming the conversation ended. `named` (with AZPR's own name for it), `kept` (it had a name, or got one meanwhile), `restored` (a name given in that moment was written back), `unconfirmed` (a name was written, but OpenCode did not report the rename in time) or `failed` (OpenCode refused the write and reported no rename). A name that is not AZPR's own is never recorded. |
 
 The numeric prefix is stage creation order; shards and verification sessions run
 in parallel.
@@ -169,6 +189,7 @@ Common receipts:
 | `No completed review is available for this conversation` | Run the comment command in the review's conversation, or run a new review. `/pr-comment --list` shows what is saved for a conversation. |
 | A `/pr-comment` command acted on another review than you meant | Without an ID it acts on the conversation's current review, the one completed or used there last; the `STARTED` notice and the receipt name it (`Acted on review …`). Put the ID of the one you mean first (`/pr-comment --list` shows them); an adjustment is undone with `--reset`, and a preview posts nothing. |
 | `PR source commit changed after the review` | The PR got new commits; run a new review before commenting. |
+| `[AZPR <run>] REPLACED; source review=<id>` (`This run's preview was replaced before its receipt: …`) | Another `/pr-comment` command adjusted, planned again or posted this review's preview while that run's sessions were cleaned up. What the run planned is no longer what would be posted, so it is not shown; read the other command's receipt, or `/pr-comment --show`. |
 | `Started automatically after review <id> completed (afterReview.review: preview)` or `(--publish)` | This comment run followed a COMPLETE review because of `afterReview` or the review command's flag; it is otherwise an ordinary `/pr-comment` run. |
 | `Automatic publication held back N item(s) for a person: …` (status `POSTED` or another publication status) | Those items' text has an `@<…>` mention, an image, HTML that embeds content or runs a script, HTML that hides text (a comment, `<!…>`, `<?…>` or `</` without a tag name), or a `javascript:`, `vbscript:`, `data:` or `file://` link; the other items were published. Literal code counts only for mentions, or where its Markdown could be read another way (a fence in a list or after an HTML line, a backtick after a link, tag or bare address; see [commenting](COMMENTING.md)). Read the preview, then post the held items with `/pr-comment <id> --publish` (posted items are `ALREADY_PRESENT`). `result.json` lists them under `automatic.heldBack`. With status `STALE` nothing was posted and the line offers no command: the PR changed, so run a new review. |
 | `Automatic publication held back every item: …` (status `PREVIEW`) | Every item was held for one of those reasons, so nothing was posted. Read the preview, then post it with `/pr-comment <id> --publish`. |
@@ -177,6 +198,7 @@ Common receipts:
 | `Automatic … skipped: another AZPR command is running in this conversation or on this PR` | Wait for that command, then run the `/pr-comment` command the notice names. |
 | `Automatic comments are off for this review (stopped: …)` on a COMPLETE receipt | `/pr-stop`, a timeout or an unload arrived while the finished review's report was delivered. The review is kept; no comment step started. Run `/pr-comment <id>` to preview it. |
 | `Unknown option after the PR URL` / `Use at most one of --preview, --publish or --no-comment` | Only these flags may follow the URL, at most one; start your context with a word. Nothing was started. |
+| The command list describes the review commands as `AZPR is not ready here; run /pr-setup to see what it needs` | This OpenCode process found no usable settings for this project directory when it loaded AZPR: none yet, settings it cannot use, or settings that were saved from another project directory since. `/pr-setup` says which, and running a review command answers with one of the next rows. |
 | `SETUP REQUIRED` … `could not be used when OpenCode loaded AZPR: …` | The reason names the problem (no file yet, an unreadable file, invalid JSON, a setting that fails validation or an unusable PAT file) without its value. Fix it, then restart the OpenCode service. |
 | `No --pat-file was given, and the default PAT file … could not be used` | `/pr-setup` looked for the PAT in `${XDG_CONFIG_HOME:-~/.config}/azpr/pat` (or, with `--replace`, the PAT file already set). Create it as the [quickstart](QUICKSTART.md#save-the-pat-in-a-private-file-terminal) shows, or name your file with `--pat-file`. Nothing was saved. |
 | `RESTART REQUIRED` … `can be used now, but AZPR found no usable settings when OpenCode loaded it for this project directory` | Settings were saved after this OpenCode process loaded AZPR, by a setup in another project directory or by hand. A first setup is loaded at once only where it ran; restart the OpenCode service here. |

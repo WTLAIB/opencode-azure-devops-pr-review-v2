@@ -6,10 +6,12 @@
 // the session on screen and leaves the keyboard with the prompt; with the setting
 // terminalPanel: manual it opens only with /pr-panel, its one command.
 //
-// The panel only reads: AZPR's own notices in the conversation, the report queued to a review
-// session, and the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It sends
-// no prompt, runs no command of the server part and reads no settings file: the server part writes
-// that setting into the metadata of its notices.
+// The panel reads AZPR's own notices in the conversation, the report queued to a review session, and
+// the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It reads no settings file:
+// the server part writes that setting into the metadata of its notices. After a review or a comment
+// preview it lists what can be done next in one row at its foot, picked instead of typed: each sends
+// the /pr-comment command a person would type, to the session on screen, after asking what is needed
+// (src/tui-actions.mjs). It sends nothing by itself, and never a prompt.
 //
 // The dialogs of /pr-setup ask for AZPR's settings (src/tui-setup.mjs says what and in which order) and
 // hand every answer to the server part over the plugin's RPC. They read and write no file and make no
@@ -20,6 +22,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core"
 import { PANEL, buildPanel, conversationOf, createReader, opensPanel } from "./tui-model.mjs"
+import { actionRows, createActions } from "./tui-actions.mjs"
 import { SETUP_RPC, createSetup, isSetupNotice } from "./tui-setup.mjs"
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
@@ -34,9 +37,11 @@ const token = (theme, ...paths) => {
 }
 const colors = (theme) => {
   const base = token(theme, "text.base", "text.default")
+  const muted = token(theme, "text.muted", "text.subdued") ?? base
   return {
     base,
-    muted: token(theme, "text.muted", "text.subdued") ?? base,
+    muted,
+    rule: token(theme, "border.base", "border.default") ?? muted,
     running: token(theme, "text.feedback.info.base") ?? base,
     failed: token(theme, "text.feedback.error.base") ?? base,
     done: token(theme, "text.feedback.success.base") ?? base,
@@ -72,6 +77,23 @@ function markdownStyle(context) {
   return SyntaxStyle.fromStyles(styles, context.renderer.nativeScene)
 }
 
+/**
+ * Whether the release of a mouse button is a click: the left button, and not the end of a selection. A
+ * selection of text that is dragged across the panel ends where the button is released, and OpenTUI sends that
+ * release to whatever lies under the pointer, marked as dragging: it picks nothing.
+ */
+const clicked = (event) => event.button === MouseButton.LEFT && !event.isDragging
+/**
+ * Whether the pointer of a mouse event is over the element whose handler runs. OpenTUI sends the release of a
+ * button that was dragged away to the element it was pressed on, wherever the pointer is by then: a step that
+ * was pressed and then left is not picked. True where the host does not say where either of them is.
+ */
+const inside = (event) => {
+  const at = event.currentTarget
+  if (!at || ![event.x, event.y, at.x, at.y, at.width, at.height].every(Number.isFinite)) return true
+  return event.x >= at.x && event.x < at.x + at.width && event.y >= at.y && event.y < at.y + at.height
+}
+
 function Row(props) {
   const [hover, setHover] = createSignal(false)
   const mark = () => (props.row.state === "running" ? props.colors.running : props.row.state === "failed" ? props.colors.failed : props.colors.done)
@@ -83,7 +105,7 @@ function Row(props) {
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={(event) => {
-        if (event.button !== MouseButton.LEFT) return
+        if (!clicked(event)) return
         event.stopPropagation()
         props.open(props.row.id)
       }}
@@ -103,6 +125,46 @@ function Row(props) {
           {props.row.id}
         </text>
       </Show>
+    </box>
+  )
+}
+
+/**
+ * One thing that can be done next, in the row at the panel's foot: its key and a word or two. It is clicked,
+ * or picked with the key while the panel has the keyboard, which is when the key has its colour: a key that
+ * would only type a letter into the prompt is drawn dim.
+ * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
+ * down, so that is stopped here: what is typed next still goes to the prompt. The press and its release are
+ * handed on separately, since a click is both, on one step of one offer; any other press or release here ends
+ * what was pressed (`forget`), as it does anywhere else in the panel.
+ */
+function Button(props) {
+  const [hover, setHover] = createSignal(false)
+  return (
+    <box
+      flexDirection="row"
+      flexShrink={0}
+      gap={1}
+      backgroundColor={hover() ? props.colors.hover : undefined}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      onMouseDown={(event) => {
+        if (event.button !== MouseButton.LEFT) return props.forget()
+        event.stopPropagation()
+        props.press(props.item.id)
+      }}
+      onMouseUp={(event) => {
+        if (!clicked(event)) return props.forget()
+        event.stopPropagation()
+        props.lift(props.item.id, inside(event))
+      }}
+    >
+      <text fg={props.live ? props.colors.link : props.colors.muted} flexShrink={0} selectable={false}>
+        {`[${props.item.key}]`}
+      </text>
+      <text fg={props.item.primary ? props.colors.base : props.colors.text} attributes={props.item.primary ? TextAttributes.BOLD : 0} flexShrink={0} selectable={false}>
+        {props.item.label}
+      </text>
     </box>
   )
 }
@@ -127,10 +189,47 @@ function Panel(props) {
   onCleanup(() => release(syntax()))
 
   const close = () => {
+    forget()
     state.dismiss(props.panel.sessionID)
     props.panel.close()
   }
-  const open = (sessionID) => context.ui.router.navigate({ type: "session", sessionID })
+  const open = (sessionID) => {
+    forget()
+    context.ui.router.navigate({ type: "session", sessionID })
+  }
+  // What a notice offers next, where this host lets the panel send a command; picking one asks first.
+  const offered = createMemo(() => (state.actions ? actionRows(model().next) : []))
+  const offers = (id) => offered().some((item) => item.id === id)
+  let drawn = true
+  onCleanup(() => (drawn = false))
+  const act = (id) => {
+    const next = model().next
+    if (!next || !offers(id)) return
+    const sessionID = props.panel.sessionID
+    // A dialog can stay open for any time. Its answer counts only while this panel still shows that notice's
+    // offer in that session: not for a preview planned again meanwhile, for another session on screen, or
+    // once the panel was closed.
+    const still = () => drawn && mine() && props.panel.sessionID === sessionID && model().next?.offer === next.offer
+    void state.actions.run(id, next, sessionID, still)
+  }
+  // A click is the left button pressed and let go on the same step of the same offer, with the pointer still on
+  // it. A preview can be planned again while the button is held, and the row then shows the steps of another
+  // notice: the release would act on what was not pressed, so it picks nothing. Nor does a release whose press
+  // was elsewhere, or one after the pointer left the step. A press is one gesture's: whatever the panel sees
+  // of another press or release (on a step, a session's row, `close` or anywhere in it) ends what was pressed,
+  // so that a gesture that was given up does not make a later release a click.
+  let pressed
+  const press = (id) => {
+    pressed = { id, offer: model().next?.offer }
+  }
+  const forget = () => {
+    pressed = undefined
+  }
+  const lift = (id, over) => {
+    const was = pressed
+    pressed = undefined
+    if (over && was && was.id === id && was.offer !== undefined && was.offer === model().next?.offer) act(id)
+  }
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
   // driven by commands, so the panel hands the keyboard back to the prompt: the next command can be typed
@@ -183,6 +282,16 @@ function Panel(props) {
     if (notices) state.readInbox(notices.sessionID, notices.token, false)
   })
 
+  // Another document (a preview planned again, a report after a preview) is read from its beginning, wherever
+  // the one before it was left.
+  let shownBefore
+  createEffect(() => {
+    const markdown = model().markdown
+    if (!markdown) return
+    if (shownBefore !== undefined && markdown !== shownBefore) scroll?.scrollTo(0)
+    shownBefore = markdown
+  })
+
   // Active only while the panel has the keyboard; the IDs let a user bind other keys in the TUI's configuration.
   const page = () => Math.max(4, (scroll?.viewport?.height ?? scroll?.height ?? 10) - 2)
   context.keymap.layer(() => ({
@@ -194,6 +303,11 @@ function Panel(props) {
       { id: "azpr.panel.page.down", title: "AZPR panel: page down", group: "AZPR", bind: "pagedown", run: () => scroll?.scrollBy(page()) },
       { id: "azpr.panel.top", title: "AZPR panel: go to the top", group: "AZPR", bind: "home", run: () => scroll?.scrollTo(0) },
       { id: "azpr.panel.bottom", title: "AZPR panel: go to the end", group: "AZPR", bind: "end", run: () => scroll?.scrollTo(scroll.scrollHeight) },
+      // What a review or a preview offers; each is there only while the panel lists it.
+      { id: "azpr.panel.plan", title: "AZPR panel: preview the comments", group: "AZPR", bind: "c", enabled: () => offers("plan"), run: () => act("plan") },
+      { id: "azpr.panel.publish", title: "AZPR panel: post the previewed comments", group: "AZPR", bind: "p", enabled: () => offers("publish"), run: () => act("publish") },
+      { id: "azpr.panel.adjust", title: "AZPR panel: leave findings out or change a level", group: "AZPR", bind: "a", enabled: () => offers("adjust"), run: () => act("adjust") },
+      { id: "azpr.panel.reset", title: "AZPR panel: reset your adjustments", group: "AZPR", bind: "u", enabled: () => offers("reset"), run: () => act("reset") },
     ],
   }))
 
@@ -202,77 +316,97 @@ function Panel(props) {
   const row = (id) => model().rows.find((item) => item.id === id) ?? { id, label: "", state: "", report: false }
 
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <box flexDirection="row" flexShrink={0}>
-        <text fg={palette().base} flexShrink={0}>
-          <b>AZPR</b>
-          <Show when={model().run}>
-            <span> {model().run}</span>
+    <box flexDirection="column" flexGrow={1} minHeight={0} onMouseDown={forget} onMouseUp={forget}>
+      <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <box flexDirection="row" flexShrink={0}>
+          <text fg={palette().base} flexShrink={0}>
+            <b>AZPR</b>
+            <Show when={model().run}>
+              <span> {model().run}</span>
+            </Show>
+            <Show when={model().status}>
+              <span style={{ fg: palette().muted }}> · {model().status}</span>
+            </Show>
+          </text>
+          <box flexGrow={1} />
+          <text
+            fg={palette().muted}
+            flexShrink={0}
+            selectable={false}
+            onMouseUp={(event) => {
+              if (!clicked(event)) return
+              event.stopPropagation()
+              close()
+            }}
+          >
+            close
+          </text>
+        </box>
+        <Show when={model().progress}>
+          <text fg={palette().muted} flexShrink={0}>
+            {model().progress}
+          </text>
+        </Show>
+        {/* One empty row stays under the header: the text that scrolls below never touches it. */}
+        <box height={1} flexShrink={0} />
+        <scrollbox ref={(element) => (scroll = element)} flexGrow={1} minHeight={0} verticalScrollbarOptions={{ visible: false }} contentOptions={{ minHeight: 0 }}>
+          <Show when={ids().length > 0 || model().deleted > 0}>
+            <box flexDirection="column" flexShrink={0} paddingBottom={1}>
+              <Show when={ids().length > 0}>
+                <text fg={palette().muted} selectable={false}>
+                  Sessions (click one to open it)
+                </text>
+              </Show>
+              <For each={ids()}>{(id) => <Row row={row(id)} colors={palette()} wide={props.panel.width >= 64} open={open} />}</For>
+              <Show when={model().deleted > 0}>
+                <text fg={palette().muted}>{model().deleted} session(s) were deleted when their run ended.</text>
+              </Show>
+            </box>
           </Show>
-          <Show when={model().status}>
-            <span style={{ fg: palette().muted }}> · {model().status}</span>
-          </Show>
-        </text>
-        <box flexGrow={1} />
-        <text
-          fg={palette().muted}
-          flexShrink={0}
-          selectable={false}
-          onMouseUp={(event) => {
-            if (event.button !== MouseButton.LEFT) return
-            event.stopPropagation()
-            close()
-          }}
-        >
-          close
-        </text>
-      </box>
-      <Show when={model().progress}>
-        <text fg={palette().muted} flexShrink={0}>
-          {model().progress}
-        </text>
-      </Show>
-      <scrollbox ref={(element) => (scroll = element)} flexGrow={1} minHeight={0} paddingTop={1} verticalScrollbarOptions={{ visible: false }} contentOptions={{ minHeight: 0 }}>
-        <Show when={ids().length > 0 || model().deleted > 0}>
-          <box flexDirection="column" flexShrink={0} paddingBottom={1}>
-            <Show when={ids().length > 0}>
-              <text fg={palette().muted} selectable={false}>
-                Sessions (click one to open it)
+          <Show
+            when={model().markdown}
+            fallback={
+              <text fg={palette().muted}>
+                {model().loading
+                  ? "Loading the report…"
+                  : model().inbox
+                    ? "The report is in its session: open it above."
+                    : model().run
+                      ? "No report or preview yet."
+                      : "No AZPR run in this conversation yet."}
+              </text>
+            }
+          >
+            <Show when={model().documentHead}>
+              <text fg={palette().muted} flexShrink={0} paddingBottom={1}>
+                {model().documentHead}
               </text>
             </Show>
-            <For each={ids()}>{(id) => <Row row={row(id)} colors={palette()} wide={props.panel.width >= 64} open={open} />}</For>
-            <Show when={model().deleted > 0}>
-              <text fg={palette().muted}>{model().deleted} session(s) were deleted when their run ended.</text>
-            </Show>
-          </box>
-        </Show>
-        <Show
-          when={model().markdown}
-          fallback={
-            <text fg={palette().muted}>
-              {model().loading
-                ? "Loading the report…"
-                : model().inbox
-                  ? "The report is in its session: open it above."
-                  : model().run
-                    ? "No report or preview yet."
-                    : "No AZPR run in this conversation yet."}
-            </text>
-          }
-        >
-          <Show when={model().documentHead}>
-            <text fg={palette().muted} flexShrink={0} paddingBottom={1}>
-              {model().documentHead}
-            </text>
+            <markdown syntaxStyle={syntax()} content={model().markdown} conceal tableOptions={{ style: "grid", cellPaddingX: 1 }} fg={palette().text} bg={palette().surface} />
           </Show>
-          <markdown syntaxStyle={syntax()} content={model().markdown} conceal tableOptions={{ style: "grid", cellPaddingX: 1 }} fg={palette().text} bg={palette().surface} />
-        </Show>
-      </scrollbox>
+        </scrollbox>
+      </box>
+      {/* What can be done next belongs to what is read above it: on the same ground, under a line that crosses
+          the panel, and in its place while the text scrolls. It is where reading ends, and beside the
+          conversation it is level with the host's status bar (the row under it is empty there as well), with
+          the line level with the lower edge of the prompt. Keys and labels that do not fit in one row go on
+          to the next one together. */}
+      <Show when={offered().length > 0}>
+        <box flexDirection="column" flexShrink={0}>
+          <box height={1} flexShrink={0} border={["top"]} borderColor={palette().rule} />
+          <box flexDirection="row" flexWrap="wrap" columnGap={3} flexShrink={0} paddingLeft={2} paddingRight={2}>
+            <For each={offered()}>{(item) => <Button item={item} colors={palette()} live={props.panel.focused} press={press} lift={lift} forget={forget} />}</For>
+          </box>
+          <Show when={props.panel.presentation !== "fullscreen"}>
+            <box height={1} flexShrink={0} />
+          </Show>
+        </box>
+      </Show>
     </box>
   )
 }
 
-/** The review panel: opens by itself or with /pr-panel, and only reads. Returns its cleanup, or nothing on a host without a place for it. */
+/** The review panel: opens by itself or with /pr-panel. Returns its cleanup, or nothing on a host without a place for it. */
 function panelPart(context) {
   // A host without these parts of the plugin API has no place for the panel: stay out of its way.
   const needed = [context?.ui?.slot, context?.ui?.panel?.open, context?.ui?.router?.navigate, context?.keymap?.layer, context?.data?.listen, context?.data?.session?.pending?.list]
@@ -311,10 +445,23 @@ function panelPart(context) {
   let unasked
   // The session in which another plugin's panel is open; the host shows one panel at a time.
   let occupied
+  // The rows of what a preview offers send a command of the server part, as the host's own prompt does for one
+  // that is typed. A host without that, or without the dialogs that ask first, shows no such rows.
+  const actions =
+    typeof context.client?.session?.command === "function" && typeof context.ui?.dialog?.select === "function" && typeof context.ui?.toast?.show === "function"
+      ? createActions({
+          dialog: context.ui.dialog,
+          toast: (options) => {
+            if (!disposed) context.ui.toast.show(options)
+          },
+          send: (sessionID, command) => context.client.session.command({ sessionID, name: command.name, text: command.text }),
+        })
+      : undefined
   const state = {
     source,
     known,
     read,
+    actions,
     titles: new Map(),
     lookup: reader.lookup,
     readInbox: reader.readInbox,
@@ -435,6 +582,8 @@ function panelPart(context) {
 
   return () => {
     disposed = true
+    // An action that is open ends at its next step: nothing is sent by a part that was unloaded.
+    actions?.stop()
     reader.dispose()
     stop?.()
   }

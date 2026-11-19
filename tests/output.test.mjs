@@ -42,6 +42,19 @@ test('/pr-comment arguments keep their meaning; the review ID is optional everyw
   assert.throws(() => parseCommentRequest('abcd1234 --severity'), /--severity needs ID=high/);
   assert.throws(() => parseCommentRequest('abcd1234 --severity F-1=critical'), /Not a severity change: F-1=critical/);
   assert.throws(() => parseCommentRequest('abcd1234 --severity F-1=low f1=high'), /--severity names F-1 twice/);
+  // --seen names what the review's comments were when a step was offered. The terminal panel adds it to its
+  // commands, with any of the forms above that change or post something, anywhere after the review ID.
+  const word = '0f1e2d3c4b5a';
+  assert.deepEqual(parseCommentRequest(`abcd1234 --publish --seen ${word}`), { reviewId: 'abcd1234', publish: true, show: false, seen: word });
+  assert.deepEqual(parseCommentRequest(`abcd1234 --seen=${word}`), { reviewId: 'abcd1234', publish: false, show: false, seen: word });
+  assert.deepEqual(parseCommentRequest(`--seen ${word} --reset`), { publish: false, show: false, seen: word, adjust: { reset: true } });
+  assert.deepEqual(parseCommentRequest(`abcd1234 --exclude F-1,R-2 --severity none --seen ${word}`), { reviewId: 'abcd1234', publish: false, show: false, seen: word, adjust: { exclude: ['F-1', 'R-2'], severity: {} } });
+  assert.deepEqual(parseCommentRequest(`abcd1234 --seen ${word} --exclude F-1 R-2`).adjust, { exclude: ['F-1', 'R-2'] }, 'A list goes on after it.');
+  // One word of that form, once, and not with what neither changes nor posts anything.
+  for (const text of ['--seen', '--seen=', `--seen ${word} ${word}`, '--seen 0f1e2d3c4b5', '--seen 0F1E2D3C4B5A', '--seen F-1', `--show --seen ${word}`, `--list --seen ${word}`, '--publish --seen ../../x']) {
+    assert.throws(() => parseCommentRequest(text), /--seen takes the one word the terminal panel adds to its commands, and goes with neither --show nor --list; a typed command needs none\./, text);
+  }
+  assert.throws(() => parseCommentRequest(`--seen ${word} --seen ${word}`), /Usage: \/pr-comment/);
   assert.equal(normalizeFindingId('q1001'), 'Q-1001');
   assert.equal(normalizeFindingId(' v-2 '), 'V-2');
   assert.equal(normalizeFindingId('F--1'), null);

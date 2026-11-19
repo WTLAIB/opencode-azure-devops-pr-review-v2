@@ -4,7 +4,7 @@ import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
   publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
-  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps,
+  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
@@ -648,4 +648,53 @@ test('next steps after a preview need no review ID, use the finding IDs of the r
   assert.deepEqual(commands(previewNextSteps(none)), ['/pr-comment --reset', '/pr-comment --show']);
   // A review without findings previews a summary only.
   assert.deepEqual(commands(previewNextSteps(review([]))), ['/pr-comment --publish', '/pr-comment --show']);
+});
+
+test('the same next steps travel as data for the terminal panel: what can be posted, and each finding as it is adjusted', () => {
+  const three = { ...review([finding('F-1'), finding('R-2', 'medium', { summary: 'A summary\nover two lines   with spaces' }), finding('F-3', 'low')]),
+    snapshot: { head, base: 'a'.repeat(40), files: ['/src/a.ts'], prId: 7, project: 'proj', repository: 'repo' },
+    plan: { summary: { kind: 'summary', marker: 's' }, comments: [{ marker: 'a' }, { marker: 'b' }], skipped: [] } };
+  assert.deepEqual(previewActions(three), { review: 'abcdef12', state: commentToken(three), target: 'review abcdef12 (/pr-undefined) of PR #7 in proj/repo', plan: false, publish: true, posts: 3, adjust: true, findings: [
+    { id: 'F-1', severity: 'high', summary: 'Defect F-1' }, { id: 'R-2', severity: 'medium', summary: 'A summary over two lines with spaces' }, { id: 'F-3', severity: 'low', summary: 'Defect F-3' }] });
+  // A person's adjustments: the level a finding is published at, the review's own beside it, and what is left out.
+  const adjusted = { ...three, adjustments: { excluded: ['F-1'], severity: { 'R-2': 'low' } } };
+  assert.deepEqual(previewActions(adjusted).findings, [{ id: 'F-1', severity: 'high', excluded: true, summary: 'Defect F-1' },
+    { id: 'R-2', severity: 'low', original: 'medium', summary: 'A summary over two lines with spaces' }, { id: 'F-3', severity: 'low', summary: 'Defect F-3' }]);
+  // What the text leaves out, the data leaves out: a held preview, and one with nothing left to post.
+  assert.equal(previewActions(three, { held: true }).publish, false);
+  assert.equal(previewActions({ ...review([finding('F-1')]), adjustments: { excluded: ['F-1'], severity: {} }, plan: { summary: null, comments: [], skipped: [] } }).publish, false);
+  // A review that has no preview yet: one is planned first, so nothing can be posted, and its findings can be adjusted before it.
+  const unplanned = previewActions(review([finding('F-1')]));
+  assert.deepEqual([unplanned.plan, unplanned.publish, unplanned.posts, unplanned.adjust, unplanned.findings.map(item => item.id)], [true, false, 0, true, ['F-1']]);
+  // Once publication has started the findings are not adjusted any more.
+  assert.equal(previewActions({ ...three, publication: new Map([['s', { state: 'POSTED' }]]) }).adjust, false);
+  assert.equal(previewActions({ ...three, publication: new Map([['s', { state: 'FAILED' }]]) }).adjust, true, 'A definite failure created nothing.');
+  // A summary is cut, never a list: a review with more findings than the panel lists is adjusted with typed commands.
+  assert.equal(previewActions(review([finding('F-1', 'high', { summary: 'x'.repeat(500) })])).findings[0].summary.length, 160);
+  assert.equal(previewActions(review(Array.from({ length: 200 }, (_, index) => finding(`F-${index + 1}`)))).findings.length, 200);
+  assert.equal(previewActions(review(Array.from({ length: 201 }, (_, index) => finding(`F-${index + 1}`)))), undefined);
+  // No model reads it, and it holds nothing but what the review's own text says of each finding.
+  assert.deepEqual(Object.keys(previewActions(three).findings[0]), ['id', 'severity', 'summary']);
+});
+
+test('one word names a review\'s preview and adjustments: another preview or another adjustment is another word', () => {
+  const planned = { ...review([finding('F-1'), finding('R-2', 'medium')]), plan: { summary: null, comments: [], skipped: [] }, planCreatedAt: '2026-11-19T01:02:03.004Z' };
+  const word = commentToken(planned);
+  assert.match(word, /^[a-f0-9]{12}$/);
+  // The same review says the same word, also from its saved record after a restart, and whatever else it holds.
+  assert.equal(commentToken(JSON.parse(JSON.stringify(planned))), word);
+  assert.equal(commentToken({ ...planned, usedAt: 'later', publication: new Map([['s', { state: 'POSTED' }]]), commentEvidence: ['x'] }), word, 'Posting what was shown again is still that preview.');
+  // Planned again, not planned at all, or another review: another word.
+  const others = [{ ...planned, planCreatedAt: '2026-11-19T01:02:03.005Z' }, { ...planned, plan: null }, { ...planned, id: 'abcdef13' },
+    // Adjusted: a finding left out, a level changed, and each list by its content, not by the order it was typed in.
+    { ...planned, adjustments: { excluded: ['F-1'], severity: {} } }, { ...planned, adjustments: { excluded: [], severity: { 'R-2': 'low' } } },
+    { ...planned, adjustments: { excluded: ['F-1'], severity: { 'R-2': 'low' } } }, { ...planned, adjustments: { excluded: ['F-1'], severity: { 'R-2': 'high' } } }];
+  const words = others.map(commentToken);
+  assert.equal(new Set([word, ...words]).size, others.length + 1);
+  assert.equal(commentToken({ ...planned, adjustments: { excluded: ['R-2', 'F-1'], severity: { 'R-2': 'low', 'F-1': 'high' } } }),
+    commentToken({ ...planned, adjustments: { excluded: ['F-1', 'R-2'], severity: { 'F-1': 'high', 'R-2': 'low' } } }));
+  // Adjustments that were reset are none: the word is that of the review before them, with the preview planned since.
+  assert.equal(commentToken({ ...planned, adjustments: { excluded: [], severity: {}, changes: [{ at: 'x', excluded: ['F-1'], severity: {} }] } }), word);
+  // The offer carries it.
+  assert.equal(previewActions(planned).state, word);
 });

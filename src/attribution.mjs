@@ -65,6 +65,15 @@ export function describeReview(review) {
   return `review ${review.id} (/pr-${review.profile}) of PR #${snapshot.prId ?? '?'}${snapshot.project && snapshot.repository ? ` in ${snapshot.project}/${snapshot.repository}` : ''}`;
 }
 
+/**
+ * The name of a conversation whose first AZPR command names a PR, where nobody named it yet: the PR by its
+ * number and repository, which come from the URL the person typed. The PR's own title is text from the PR
+ * and is not used.
+ */
+export function conversationTitle(target) {
+  return `AZPR: PR #${target.pullRequestId} (${String(target.repository).slice(0, 60)})`;
+}
+
 /** Models per role, aggregated over shards and retries. */
 export function reviewProvenance(run) {
   const rows = new Map();

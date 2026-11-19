@@ -44,6 +44,7 @@ export function hostCapabilities(context) {
     permissionHook: fn('permission.hook'),
     toolTransform: fn('tool.transform'),
     sessionRemove: fn('session.remove'),
+    sessionUpdate: fn('session.update'),
     eventSubscribe: fn('event.subscribe'),
     pluginList: fn('plugin.list'),
   };
@@ -174,6 +175,17 @@ export const USED_UP_LIMITS = Object.freeze({
  * with an error whose `_tag` and `name` are `Session.NotFoundError`.
  */
 export const isSessionNotFound = error => (error?._tag ?? error?.name) === 'Session.NotFoundError';
+
+/**
+ * Whether a session still has the name OpenCode shows for one that nobody named. OpenCode 2.3.0 creates a
+ * conversation without a title and lists it as "New session"; earlier releases stored the same words with the
+ * time it was created. OpenCode's own model names such a conversation when it first runs there.
+ */
+export function isUntitledSession(session) {
+  const title = session?.title;
+  return title === undefined || title === null || title === '' ||
+    (typeof title === 'string' && /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title));
+}
 
 /** Throw one readable error naming every missing host method. */
 export function requireMethods(context, paths, purpose) {

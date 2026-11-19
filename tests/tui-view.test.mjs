@@ -29,6 +29,10 @@ const STAND_INS = {
   createEffect: 'export function createEffect(run) { run(); }',
   onMount: 'export function onMount(run) { (globalThis.azprMounted ??= []).push(run); }',
   onCleanup: 'export function onCleanup(run) { (globalThis.azprCleanups ??= []).push(run); }',
+  // What the panel takes from the renderer: a button's number, a text attribute, and a style it hands on.
+  MouseButton: 'export const MouseButton = { LEFT: 0, RIGHT: 2 };',
+  TextAttributes: 'export const TextAttributes = { BOLD: 1, UNDERLINE: 8 };',
+  SyntaxStyle: 'export const SyntaxStyle = { fromStyles: styles => ({ styles, destroy() {} }) };',
 };
 const stubs = Object.fromEntries(Object.entries(imported).map(([from, names]) => [from, [...names].map(name => STAND_INS[name] ?? `export function ${name}() {}`).join('\n')]));
 register(`data:text/javascript,${encodeURIComponent(`
@@ -317,4 +321,241 @@ test('the token field keeps at most what a token can be, and an empty one is giv
     field.key({ name: 'return' });
   });
   assert.equal(answers.at(-1).length, 2048);
+});
+
+// ------------------------------------------------------------------------------------------- the panel's rows
+const REVIEW = 'bb6a8570', RUN = '36ed1562', CONVERSATION = 'ses_conversation0000000000001';
+const previewNotice = { text: `[AZPR ${RUN}] PREVIEW; source review=${REVIEW}\nActed on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository.\n\n<azpr_comment_data>\n## PR Review Summary\n</azpr_comment_data>\nNext (no review ID is needed while ${REVIEW} is this conversation's current review):\n  /pr-comment --publish`,
+  metadata: { azpr: { next: { review: REVIEW, state: '0f1e2d3c4b5a', target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 2,
+    findings: [{ id: 'F-1', severity: 'medium', summary: 'a defect' }, { id: 'R-2', severity: 'low', original: 'high', summary: 'another' }] } } } };
+
+/**
+ * A terminal UI as the panel part sees it: one conversation on screen whose inbox holds a run's notices.
+ * `arrive` adds a notice afterwards, `screen.panel` is the panel the host shows (none once it was closed), and
+ * `focused` says whether the panel has the keyboard.
+ */
+function panelTui(notices, answers = [], { without, focused = true } = {}) {
+  const log = { sent: [], shown: [], toasts: [] };
+  const queue = [...answers], layers = [], slots = {};
+  const entry = (notice, index) => ({ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic', delivery: 'steer',
+    payload: { text: notice.text, description: notice.text, ...(notice.metadata ? { metadata: notice.metadata } : {}) } });
+  const entries = notices.map(entry);
+  const arrive = notice => { entries.push(entry(notice, entries.length)); };
+  const screen = { panel: { name: 'azpr.panel', sessionID: CONVERSATION } };
+  const context = {
+    // Colours that say which token they are.
+    theme: { text: { base: 'base', muted: 'muted' }, markdown: { link: 'link', text: 'text' }, border: { base: 'rule' } },
+    renderer: { idle: async () => {}, nativeScene: {} },
+    ui: {
+      slot(claim) { slots[claim.append] = claim.render; return () => {}; },
+      panel: { open: () => true, close() {}, current: () => screen.panel },
+      router: { navigate() {}, current: () => ({ type: 'session', sessionID: CONVERSATION }) },
+      toast: { show: options => log.toasts.push(options) },
+      dialog: { select: async options => {
+        log.shown.push(options);
+        if (!queue.length) throw new Error(`No answer was scripted for "${options.title}".`);
+        const answer = queue.shift();
+        return typeof answer === 'function' ? answer(options) : answer;
+      } },
+    },
+    keymap: { layer(factory) { layers.push(factory); }, dispatch() {}, mode: { current: () => 'base' } },
+    client: { session: { inbox: { list: async () => [] }, list: async () => ({ data: [] }), command: async input => { log.sent.push(input); } } },
+    data: {
+      listen: () => () => {},
+      session: { get: id => (id === CONVERSATION ? { id, title: 'A conversation' } : undefined), list: () => [{ id: CONVERSATION, title: 'A conversation' }], status: () => 'idle', sync: async () => {},
+        message: { list: () => [] }, pending: { list: id => (id === CONVERSATION ? entries : []) } },
+    },
+  };
+  for (const path of without ?? []) { const parts = path.split('.'); const last = parts.pop(); delete parts.reduce((object, part) => object[part], context)[last]; }
+  const stop = plugin.setup(context);
+  // The panel as the host would draw it in the conversation: its keys, and the rows of what can be done next.
+  const input = { name: 'azpr.panel', sessionID: CONVERSATION, width: 96, presentation: 'panel', focused, focus() {}, close() {} };
+  globalThis.azprMounted = [];
+  globalThis.azprCleanups = [];
+  const shown = slots['session.panel'](input).props.children;
+  const root = shown.component(shown.props);
+  const commands = layers.flatMap(factory => factory().commands ?? []);
+  const command = id => commands.find(item => item.id === id);
+  // The rows are drawn by <For>, whose child draws one of them: a row is clicked like the session rows.
+  const all = [];
+  (function walk(node) { if (!node || typeof node !== 'object') return; all.push(node); for (const child of node.children ?? []) walk(child.shows ?? child); })(root);
+  const lists = () => all.filter(node => typeof node.props?.children === 'function' && Array.isArray(node.props.each)).map(node => ({ each: node.props.each, draw: node.props.children }));
+  const sections = all.filter(node => node.component && Object.getOwnPropertyDescriptor(node.props, 'children')?.get).flatMap(node => { const inner = []; (function walk(child) { if (!child || typeof child !== 'object') return; inner.push(child); for (const next of child.children ?? []) walk(next.shows ?? next); })(node.props.when ? node.props.children : undefined); return inner; });
+  const rowLists = [...lists(), ...sections.filter(node => typeof node.props?.children === 'function' && Array.isArray(node.props.each)).map(node => ({ each: node.props.each, draw: node.props.children }))];
+  const rows = rowLists.flatMap(list => list.each.filter(item => item && typeof item === 'object' && 'key' in item).map(item => {
+    const created = list.draw(item);
+    return { item, element: created.component(created.props) };
+  }));
+  // What the panel registered for the moment it is no longer drawn.
+  const cleanups = globalThis.azprCleanups;
+  return { context, log, stop, command, rows, arrive, screen, all: [...all, ...sections], undraw: () => cleanups.forEach(run => run()), left: () => queue.length };
+}
+
+test('what a preview offers is one row at the panel\'s foot: each sends /pr-comment for the review shown, to the session on screen, after asking', async t => {
+  const ui = panelTui([previewNotice], [options => options.options[1].value]);
+  t.after(ui.stop);
+  assert.deepEqual(ui.rows.map(row => [row.item.id, row.item.key, row.item.label]), [['publish', 'p', 'Post 2 comments…'], ['adjust', 'a', 'Adjust findings…'], ['reset', 'u', 'Reset adjustments']]);
+  // One of them: its key in brackets, then its label; the step the others lead to is drawn bold.
+  const drawn = element => element.children.map(text => [text.props.fg, text.props.attributes, text.children.map(child => child.text ?? (typeof child.shows === 'function' ? child.shows() : child.shows)).join('')]);
+  assert.deepEqual(drawn(ui.rows[0].element), [['link', undefined, '[p]'], ['base', 1, 'Post 2 comments…']]);
+  assert.deepEqual(drawn(ui.rows[1].element), [['link', undefined, '[a]'], ['text', 0, 'Adjust findings…']]);
+  // They wrap as whole items, under a line that crosses the panel, with an empty row below beside a conversation.
+  const row = ui.all.find(node => node.props?.flexWrap === 'wrap');
+  assert.deepEqual([row.props.flexDirection, row.props.columnGap], ['row', 3]);
+  assert.deepEqual(ui.all.filter(node => Array.isArray(node.props?.border)).map(node => [node.props.border, node.props.borderColor, node.props.height]), [[['top'], 'rule', 1]]);
+  for (const id of ['publish', 'adjust', 'reset']) assert.equal(ui.command(`azpr.panel.${id}`).enabled(), true, id);
+  assert.deepEqual(['publish', 'adjust', 'reset'].map(id => ui.command(`azpr.panel.${id}`).bind), ['p', 'a', 'u'], 'The keys the rows show.');
+  // A click on the first row: the question comes first, with "no" first.
+  const publish = ui.rows[0].element;
+  publish.props.onMouseUp({ button: 2, stopPropagation() {} });
+  await settle();
+  assert.equal(ui.log.shown.length, 0, 'Only the left button picks a row.');
+  // Nor does the release that ends a selection of text: dragged from the preview above, it ends wherever the
+  // button is let go, and OpenTUI sends it to what lies there, marked as dragging. Nothing is asked, and the
+  // step that asks nothing sends nothing.
+  let stopped = 0;
+  for (const item of ui.rows) item.element.props.onMouseUp({ button: 0, isDragging: true, stopPropagation() { stopped++; } });
+  await settle();
+  assert.deepEqual([ui.log.shown.length, ui.log.sent, stopped], [0, [], 0], 'The end of a selection picks nothing, and goes on to whoever copies it.');
+  // A click is a button pressed: the host gives a panel the keyboard on mouse down, which the left button stops here.
+  let kept = 0;
+  publish.props.onMouseDown({ button: 2, stopPropagation() { kept++; } });
+  assert.equal(kept, 0);
+  publish.props.onMouseDown({ button: 0, stopPropagation() { kept++; } });
+  assert.equal(kept, 1, 'The keyboard stays where it was.');
+  publish.props.onMouseUp({ button: 0, stopPropagation() {} });
+  await settle();
+  assert.deepEqual(ui.log.shown.map(dialog => [dialog.title, dialog.options[0].title]), [['Post these comments on the pull request?', 'No, post nothing']]);
+  assert.deepEqual(ui.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --publish --seen 0f1e2d3c4b5a` }]);
+  // A click is the button pressed and let go on one step of one offer. A release without a press on that step
+  // picks nothing: the button went down elsewhere, or on another step.
+  const elsewhere = panelTui([previewNotice], []);
+  t.after(elsewhere.stop);
+  const event = () => ({ button: 0, stopPropagation() {} });
+  elsewhere.rows[2].element.props.onMouseUp(event());
+  elsewhere.rows[1].element.props.onMouseDown(event());
+  elsewhere.rows[2].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([elsewhere.log.sent, elsewhere.log.shown.length], [[], 0], 'A release without its press picks nothing.');
+  // The preview is planned again while the button is held: the row now belongs to another notice, and the
+  // release would reset a preview that was not the one pressed.
+  const held = panelTui([previewNotice], []);
+  t.after(held.stop);
+  held.rows[2].element.props.onMouseDown(event());
+  held.arrive({ ...previewNotice, text: previewNotice.text.replace(RUN, '4a3415af') });
+  held.rows[2].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([held.log.sent, held.log.shown.length], [[], 0], 'The offer changed while the button was held.');
+  // A press is one gesture's. One that was given up does not make a later release a click: it ended with the
+  // release of a selection, with the right button, with a press or a release anywhere else in the panel, with a
+  // click on a session's row, or with the button let go after the pointer had left the step (OpenTUI sends that
+  // release to the element that was pressed).
+  const given = panelTui([previewNotice], []);
+  t.after(given.stop);
+  const reset = given.rows[2].element, panel = given.all.find(node => typeof node.props?.onMouseDown === 'function' && typeof node.props?.onMouseUp === 'function' && node.props.flexGrow === 1);
+  const place = { x: 40, y: 20, width: 17, height: 1 };
+  const endings = {
+    'the release of a selection': () => reset.props.onMouseUp({ ...event(), isDragging: true }),
+    'another button': () => reset.props.onMouseDown({ ...event(), button: 2 }),
+    'a press elsewhere in the panel': () => panel.props.onMouseDown(event()),
+    'a release elsewhere in the panel': () => panel.props.onMouseUp(event()),
+    'the pointer left the step': () => reset.props.onMouseUp({ ...event(), x: 70, y: 12, currentTarget: place }),
+  };
+  for (const [name, end] of Object.entries(endings)) {
+    reset.props.onMouseDown(event());
+    end();
+    reset.props.onMouseUp({ ...event(), x: 45, y: 20, currentTarget: place });
+    await settle();
+    assert.deepEqual([given.log.sent, given.log.shown.length], [[], 0], name);
+  }
+  // Pressed and let go on the same step of the same offer, with the pointer still on it, it is sent; the step
+  // that asks nothing is sent at once.
+  reset.props.onMouseDown(event());
+  reset.props.onMouseUp({ ...event(), x: 45, y: 20, currentTarget: place });
+  await settle();
+  assert.deepEqual(given.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`]);
+  held.rows[2].element.props.onMouseDown(event());
+  held.rows[2].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual(held.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'Also where the host does not say where the pointer is.');
+  // A key that would only type a letter into the prompt is drawn dim: its colour says that it works.
+  const prompt = panelTui([previewNotice], [], { focused: false });
+  t.after(prompt.stop);
+  assert.deepEqual(prompt.rows.map(item => item.element.children[0].props.fg), ['muted', 'muted', 'muted']);
+  // The key of a row does what a click on it does.
+  const keys = panelTui([previewNotice], ['keep']);
+  t.after(keys.stop);
+  keys.command('azpr.panel.publish').run();
+  await settle();
+  keys.command('azpr.panel.reset').run();
+  await settle();
+  assert.deepEqual(keys.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --reset --seen 0f1e2d3c4b5a` }], 'Posting was declined; resetting asks nothing.');
+  assert.equal(keys.left(), 0);
+});
+
+test('an answer counts only while the panel still shows that offer there: not after another notice, another session or a closed panel', async t => {
+  const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
+  const later = { ...previewNotice, text: previewNotice.text.replace(RUN, '4a3415af'), metadata: { azpr: { next: { ...previewNotice.metadata.azpr.next, posts: 5 } } } };
+  // The preview was planned again while the question was open: what would be posted is not what was read.
+  const replanned = panelTui([previewNotice], [options => { replanned.arrive(later); return options.options[1].value; }]);
+  t.after(replanned.stop);
+  replanned.command('azpr.panel.publish').run();
+  await settle();
+  assert.deepEqual([replanned.log.sent, replanned.log.toasts.map(toast => toast.message)], [[], [CHANGED]]);
+  // The same holds for a run that started meanwhile, which offers nothing.
+  const started = panelTui([previewNotice], [options => { started.arrive({ text: `[AZPR 4a3415af] STARTED /pr-comment. It acts on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository. Stop with /pr-stop 4a3415af.` }); return options.options[1].value; }]);
+  t.after(started.stop);
+  started.command('azpr.panel.publish').run();
+  await settle();
+  assert.deepEqual([started.log.sent, started.log.toasts.map(toast => toast.message)], [[], [CHANGED]]);
+  // The panel was closed, or the host shows another session's: the session the answer was for is not on screen.
+  for (const [name, panel] of [['closed', undefined], ['another session', { name: 'azpr.panel', sessionID: 'ses_another00000000000000001' }], ['another plugin', { name: 'other.panel', sessionID: CONVERSATION }]]) {
+    const ui = panelTui([previewNotice], [options => { ui.screen.panel = panel; return options.options[1].value; }]);
+    t.after(ui.stop);
+    ui.command('azpr.panel.publish').run();
+    await settle();
+    assert.deepEqual([ui.log.sent, ui.log.toasts.map(toast => toast.message)], [[], [CHANGED]], name);
+  }
+  // The panel is no longer drawn (its session left the screen while the dialog stayed open).
+  const gone = panelTui([previewNotice], [options => { gone.undraw(); return options.options[1].value; }]);
+  t.after(gone.stop);
+  gone.command('azpr.panel.publish').run();
+  await settle();
+  assert.deepEqual(gone.log.sent, []);
+  // Nothing of this happened: the answer is acted on.
+  const same = panelTui([previewNotice], [options => options.options[1].value]);
+  t.after(same.stop);
+  same.command('azpr.panel.publish').run();
+  await settle();
+  assert.deepEqual([same.log.sent.map(command => command.text), same.log.toasts], [[`${REVIEW} --publish --seen 0f1e2d3c4b5a`], []]);
+});
+
+test('nothing is offered while a run is under way, for a preview without that data, or on a host that cannot send a command', async t => {
+  const started = { text: `[AZPR 4a3415af] STARTED /pr-comment. Work continues in this OpenCode process; the result will return to this conversation. It acts on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository. Stop with /pr-stop 4a3415af.` };
+  for (const [name, ui] of [['a run under way', panelTui([previewNotice, started])], ['a preview of an earlier version', panelTui([{ text: previewNotice.text }])],
+    ['no command to send', panelTui([previewNotice], [], { without: ['client.session.command'] })], ['no dialog to ask in', panelTui([previewNotice], [], { without: ['ui.dialog.select'] })]]) {
+    t.after(ui.stop);
+    assert.deepEqual(ui.rows, [], name);
+    for (const id of ['publish', 'adjust', 'reset']) {
+      assert.equal(ui.command(`azpr.panel.${id}`).enabled(), false, `${name}: ${id}`);
+      ui.command(`azpr.panel.${id}`).run();
+    }
+    await settle();
+    assert.deepEqual([ui.log.shown, ui.log.sent], [[], []], name);
+  }
+  // The panel's other keys are there as before.
+  const plain = panelTui([{ text: previewNotice.text }]);
+  t.after(plain.stop);
+  assert.equal(typeof plain.command('azpr.panel.close').run, 'function');
+});
+
+test('an action that is open when the terminal part is unloaded sends nothing afterwards', async () => {
+  let answer;
+  const ui = panelTui([previewNotice], [() => new Promise(resolve => { answer = resolve; })]);
+  ui.command('azpr.panel.publish').run();
+  await settle();
+  ui.stop();
+  answer('post');
+  await settle();
+  assert.deepEqual(ui.log.sent, []);
 });

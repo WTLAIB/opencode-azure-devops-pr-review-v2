@@ -28,6 +28,40 @@ project/repository`), and a preview ends with the commands for the next step,
 written with that review's finding IDs. `--list` and `--help` use no model
 and make no Azure DevOps request.
 
+In OpenCode's terminal UI the same next steps are one row at the foot of the
+[terminal panel](../README.md#terminal-panel): **Post N comments…**, **Adjust
+findings…** and **Reset adjustments**, and **Preview comments** after a
+review that no preview follows by itself. One of them is clicked, or picked
+with its key while the panel has the keyboard, and sends the command described
+here for the review the panel shows, with that review's ID, so the rules below
+hold for it unchanged. Posting asks once more, with "No, post nothing" first;
+adjusting lists the findings, lets you choose for each whether it is left out
+or which level it is published at, and applies all of it with one command.
+What is offered comes from the runtime with the notice (which review, whether
+its preview can be posted, each finding and how it is adjusted), not from the
+text on screen, and it is acted on only while the panel still shows that
+notice: an answer to a question that was open while the preview was planned
+again sends nothing.
+
+A panel shows what its own conversation was told. A command typed in a
+review's own session, or in another client, can plan the preview again or
+adjust the findings without that conversation hearing of it. Every command
+the panel sends therefore ends with `--seen <word>`: the word names the
+review's saved preview and adjustments as they were when the step was
+offered, and the runtime refuses the command, before anything is planned,
+saved or posted, when they are others by now (`Review <id> is no longer as it
+was shown: …`). `/pr-comment --show` shows the saved preview again, with its
+steps. A command you type names no preview and acts on the review as it is.
+
+Commands for one pull request run one after another, but a run's receipt
+arrives after its sessions were cleaned up, when the next command may already
+have run. A preview that another `/pr-comment` command adjusted, planned again
+or posted in that moment is no longer what would be posted: its run ends with
+the status `REPLACED` (`[AZPR <run>] REPLACED; source review=<id>`), shows
+nothing of it, offers nothing and leaves the conversation's current review as
+it is. The other command's receipt is the one to read, in the session it was
+typed in; `/pr-comment --show` shows the saved preview anywhere.
+
 Only reviews started in the same conversation are accepted; commands from one
 of the review's own sessions route to that conversation. Reviews are
 persisted, so this also works after an OpenCode restart. A preview is

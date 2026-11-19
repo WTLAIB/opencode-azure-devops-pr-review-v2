@@ -1,5 +1,139 @@
 # Changelog
 
+## 0.4.4 — 2026-11-19
+
+After a comment preview, the terminal panel lists what you can do next at its
+foot, and picking one does it: post the comments, leave findings out or change
+a level, reset that. A conversation used for a review is named after its PR,
+and several texts of setup say more exactly what they mean. The reviewer,
+verifier and comment-planning instructions are those of 0.4.3, and no setting
+is new.
+
+The terminal panel:
+
+- A receipt ends with the commands for the next step, but the panel shows the
+  document a receipt encloses, so those commands had to be found in the
+  conversation and typed. After a comment preview the panel now lists them in
+  one row at its foot, where reading ends: **Post N comments…**, **Adjust
+  findings…**, and **Reset adjustments** once there are some. The row is on
+  the panel's own ground under a line, stays in place while the text scrolls,
+  is level with OpenCode's status bar, and wraps as whole items in a narrow
+  panel. One of them is clicked, or picked with its key (`p`, `a`, `u`) while
+  the panel has the keyboard; the keys are drawn dim while they would only
+  type a letter into the prompt. A label that ends in `…` asks before
+  anything is sent.
+- Posting asks once more, in a list whose first row is "No, post nothing":
+  a key pressed twice posts nothing.
+- Adjusting opens the findings as a list with how each is published now.
+  Pick one to leave it out or to choose its level; every change is applied
+  with one command from the foot of the list (**apply**, `ctrl+s`), which
+  stays in view however long the list is, or from the list's last row, and
+  the preview is planned again.
+- After a review that no preview follows by itself (`afterReview: none`, a
+  review that was stopped, or one without findings to comment on) the row
+  offers **Preview comments** (`c`) instead of posting, and the findings can
+  be adjusted before that first preview.
+- Each of them sends the `/pr-comment` command you would type, with the ID of
+  the review the panel shows, to the session on screen; AZPR takes it like a
+  typed command, so its checks, its `STARTED` notice and its receipt are the
+  same. The panel sends nothing by itself and never a prompt. The steps are
+  there only for the notice that happened last: once a run starts or another
+  receipt arrives, they are gone.
+- A click on one of them leaves the keyboard with the prompt: the host gives
+  a panel the keyboard on a click, and a key of the panel would then act on
+  what is typed next.
+- Letting go of the mouse button at the end of a selection of text is no
+  click. Text selected down the panel and let go over a session's row opened
+  that session, and over `close` closed the panel (since 0.4.2); neither
+  happens now, and a step at the panel's foot is not picked that way either.
+  A step is picked by pressing and letting go of the left button on it:
+  letting go after the pointer has left the step picks nothing.
+- An answer is acted on only while the panel still shows what it was given
+  for. If the preview is planned again, another session comes on screen or
+  the panel is closed while a question is open, nothing is sent, and the
+  panel says so: a preview is not posted unread.
+- A panel knows only what its own conversation was told, and a command typed
+  in a review's own session, or in another client, changes the review without
+  a notice there. Each command the panel sends therefore ends with
+  `--seen <word>`, which names the saved preview and the adjustments its step
+  was offered for; AZPR refuses the command when they are others by now
+  (`Review <id> is no longer as it was shown: …`), and `/pr-comment --show`
+  shows the saved preview again with its steps. A command you type needs no
+  such word and acts on the review as it is.
+- What can be picked comes from the runtime, in the metadata of the notice
+  that offers it (which no model reads), not from the text on screen: which
+  review, whether its preview can be posted, and each finding with its level
+  and whether it is left out. It goes with the document that notice encloses:
+  under a report a preview is planned, never posted. The text of every other
+  notice is unchanged. A review with more than 200 findings offers nothing
+  to pick.
+- A preview that is planned again is shown from its beginning, wherever the
+  one before it was left, and the text that scrolls no longer touches the
+  panel's header.
+- A session whose model has answered is shown as `finished` until its run's
+  receipt names its result (`complete`, `failed`). It was shown as `idle`,
+  OpenCode's word for a session at rest, which read like a fault while the
+  verifier was still working.
+
+Comments:
+
+- A run's receipt is written after its sessions were cleaned up, when another
+  `/pr-comment` command may already have run. A preview that another command
+  adjusted, planned again or posted in that moment was still shown in its
+  run's receipt as the preview to post. Such a run now ends with a receipt of
+  a status of its own, `REPLACED`, which shows nothing of that preview,
+  offers nothing and does not make its review the current one; the other
+  command's receipt is the one to read. The terminal panel takes it for the
+  end of that run, not for what happened last.
+
+Conversations:
+
+- OpenCode names a conversation when its own model first runs there, which an
+  AZPR command never makes it do, so a conversation used only for reviews
+  stayed "New session" in the session list. A check or a review now names a
+  conversation nobody named after the PR its URL names, for example
+  `AZPR: PR #123 (repository)`. The PR's own title is not used.
+- A name that is there stays. OpenCode has no rename that applies only to an
+  unnamed conversation, and nothing ties a rename it reports to the call
+  that made it, so AZPR's own name gives way wherever it can tell and also
+  where it cannot: it follows the renames the host reports, and a name that
+  a person or OpenCode's model gives in the same moment is written back
+  where AZPR's write may have replaced it. One conversation is named by one
+  watch at a time; the watch stays open for a few seconds after AZPR's
+  write, is not closed while a write is under way, and is ended properly
+  when the plugin is unloaded. A host that reports no renames gets no name
+  from AZPR. With debug records on, `conversation-name.json` says how naming
+  ended. What this cannot rule out (a person who gives a name and then
+  exactly the words AZPR wrote, both in that moment, keeps the name given
+  first) is said in `docs/ARCHITECTURE.md`, "Authorization and isolation".
+
+Setup:
+
+- Without usable settings, OpenCode's command list described every review
+  command as "AZPR setup required; run /pr-setup", also in a project
+  directory that only needed a restart because the settings had been saved
+  from another one. It now says "AZPR is not ready here; run /pr-setup to see
+  what it needs", which holds for both, and `/pr-setup` says which it is.
+- The settings list says what each model is for (`for /pr-review`,
+  `for /pr-quick`, `for /pr-deep`). The dialog of the deep model says what
+  makes one: a model stronger than the review model, or the same model with a
+  higher variant, which reasons longer; `/pr-setup --help`, the **Deep
+  models** rows of `/pr-check` and the settings schema say the same.
+- "Settings file" in the list, and `/pr-setup --help`, name the section of
+  the README that describes every setting, with its address:
+  [all settings and defaults](README.md#all-settings-and-defaults).
+
+Documentation:
+
+- The README shows the result and a recording first, then the first review,
+  and keeps its reference part in sections that are named in one table;
+  detail that is looked up, not read through, is folded. The settings
+  reference is no longer folded.
+- The quickstart shows a recording of the setup dialogs, and the README the
+  list of settings.
+- A source installation has one more file, `src/tui-actions.mjs`: 36 in all
+  for manual copying.
+
 ## 0.4.3 — 2026-11-18
 
 `/pr-setup` sets AZPR up in OpenCode's terminal UI: dialogs ask for the

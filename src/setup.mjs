@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { COMMANDS, MODES, SETTING_CHECKS, modelRef, modelSlots, patProblem, privateAgent, settingsText, validateSettings, withMissingSettings } from './config.mjs';
+import { COMMANDS, MODES, REPOSITORY, SETTING_CHECKS, modelRef, modelSlots, patProblem, privateAgent, settingsText, validateSettings, withMissingSettings } from './config.mjs';
 import { parseUniqueJSON } from './output.mjs';
 import { appendReport } from './session.mjs';
 import { fetchTransportSupported, listOf, recordOf, requireMethods } from './host.mjs';
@@ -27,10 +27,14 @@ const SETUP_DESCRIPTION = 'Set up AZPR: organization, token, model; --help. In t
 const USAGE = '/pr-setup --organization ORG --model PROVIDER/MODEL [--pat-file "/absolute/path/to/pat"]';
 // How long setup waits for Azure DevOps when it checks a token: a person is waiting for the answer.
 const CHECK_TIMEOUT_MS = 20000;
-// How long a first setup waits for OpenCode to drop the commands that only said "setup required".
+// How long a first setup waits for OpenCode to drop the commands that only said that AZPR is not ready.
 const RELEASE_WAIT_MS = 3000;
-// The commands of a process without usable settings: each only says what is missing.
-const PLACEHOLDER_DESCRIPTION = 'AZPR setup required; run /pr-setup';
+// The commands of a process without usable settings: each only says that AZPR cannot run here yet. The words are
+// true of every reason: no settings, settings that cannot be used, and settings that were saved elsewhere since
+// (by a setup in another project directory, say) and wait for a restart. /pr-setup tells which it is.
+const PLACEHOLDER_DESCRIPTION = 'AZPR is not ready here; run /pr-setup to see what it needs';
+// Where every setting is described: the README is long, so its section is named, and linked for a terminal that opens links.
+const SETTINGS_REFERENCE = `the README's section "All settings and defaults" (https://github.com/${REPOSITORY}#all-settings-and-defaults)`;
 const RESTART = 'restart the OpenCode service (in a terminal: opencode service restart; if you run opencode serve yourself, restart that process)';
 const MAX_SETTINGS_BYTES = 1024 * 1024;
 // A writer holds the setup lock for a few milliseconds. One this old was left behind by a process that
@@ -183,6 +187,9 @@ const PUBLISH_CONFIRMATION = { title: 'Post comments without a preview?', keep: 
  * what a dialog starts with), takes an answer as a person gives it (`accept`: the value to save, or an
  * Error that says what is wrong without quoting the answer) and writes it (`set`). `flag` is its
  * /pr-setup option. The token has no option and is never part of `changes`: it travels alone.
+ * `hint` says what a row is for, where its name does not: the list shows it between the name and the value,
+ * which leaves room for a few words only. `prompt` and `variantPrompt` say more where there is room for it:
+ * in the search line of the dialog that lists the models, and of the one that lists a model's variants.
  */
 const ROWS = Object.freeze([
   { id: 'organization', flag: '--organization', group: 'Azure DevOps', label: 'Organization', kind: 'text', title: 'Azure DevOps organization', placeholder: 'my-organization',
@@ -201,13 +208,15 @@ const ROWS = Object.freeze([
     description: () => 'Only where a company proxy inspects HTTPS: the absolute path of its root CA certificate, a PEM file. Leave it empty and press Enter to skip.',
     get: raw => text(azureOf(raw).caFile), show: value => value ? shortPath(value) : 'none', current: value => value,
     accept: async (_context, answer) => caFileOf(answer), set: (raw, value) => withAzure(raw, { caFile: value }) },
-  { id: 'reviewModel', flag: '--review-model', group: 'Models', label: 'Review model', kind: 'model', title: 'Model for /pr-review',
+  { id: 'reviewModel', flag: '--review-model', group: 'Models', label: 'Review model', kind: 'model', title: 'Model for /pr-review', hint: 'for /pr-review',
     get: raw => modelsOf(raw, 'review'), show: values => together(values, 'not set', 'differs by role'), current: values => shared(values) ?? '',
     accept: (context, answer) => modelOf(context, answer, false), set: (raw, value) => withModels(raw, 'review', value) },
-  { id: 'quickModel', flag: '--quick-model', group: 'Models', label: 'Quick model', kind: 'model', title: 'Model for /pr-quick', optional: { label: 'Off', description: '/pr-quick stays off' },
+  { id: 'quickModel', flag: '--quick-model', group: 'Models', label: 'Quick model', kind: 'model', title: 'Model for /pr-quick', hint: 'for /pr-quick', optional: { label: 'Off', description: '/pr-quick stays off' },
     get: raw => modelsOf(raw, 'quick'), show: values => values[0] || 'off', current: values => values[0],
     accept: (context, answer) => modelOf(context, answer, true), set: (raw, value) => withModels(raw, 'quick', value) },
-  { id: 'deepModel', flag: '--deep-model', group: 'Models', label: 'Deep model', kind: 'model', title: 'Stronger model for /pr-deep', optional: { label: 'Off', description: '/pr-deep stays off' },
+  { id: 'deepModel', flag: '--deep-model', group: 'Models', label: 'Deep model', kind: 'model', title: 'Model for /pr-deep', hint: 'for /pr-deep',
+    // /pr-deep is the same review with stronger models: another model, or the same one reasoning longer.
+    prompt: 'Stronger than the review model, or a higher variant', variantPrompt: 'A higher variant reasons longer', optional: { label: 'Off', description: '/pr-deep stays off' },
     get: raw => modelsOf(raw, 'deep'), show: values => together(values, 'off', 'differs by role'), current: values => shared(values) ?? '',
     accept: (context, answer) => modelOf(context, answer, true), set: (raw, value) => withModels(raw, 'deep', value) },
   { id: 'language', flag: '--language', group: 'Reviews', label: 'Output language', kind: 'choice', title: 'Language of reports and comments',
@@ -561,7 +570,8 @@ async function guide(context, path, problem, environment) {
     `3. Run ${USAGE}\n\n` +
     '--organization also takes a PR or organization URL. Without --pat-file, setup uses the default PAT file, or with --replace the PAT file already set. ' +
     'The selected model fills the three review roles and the quick reviewer. Deep remains unchanged (off for a new profile). Existing settings require --replace for these three options; other settings are kept. No model request or Azure request is made.\n\n' +
-    `One setting of existing settings is changed without --replace: ${options.join(', ')}.\n\n` +
+    `One setting of existing settings is changed without --replace: ${options.join(', ')}. A model takes a variant as PROVIDER/MODEL#VARIANT. ` +
+    `--deep-model sets the models of /pr-deep, which runs the same review: choose a stronger model than the review model, or the same model with a higher variant. Every setting is described in ${SETTINGS_REFERENCE}.\n\n` +
     `A first setup is loaded at once. After a later change, ${RESTART}. Then run /pr-check <PR URL>. Settings changes do not affect reviews already running.`;
 }
 
@@ -717,13 +727,14 @@ function createSetupService({ context, path, environment, options, loaded, saved
       : previous === null ? 'required'
         : (await drifted(use)) ? 'restart' : 'ready';
     return { version: 1, state, problem: use.blocked ? use.problem : '', editable: raw !== null, fileProblem,
-      settingsFile: path, settingsFileShown: shortPath(shownPath(path)), organization: text(azureOf(view).organization),
+      settingsFile: path, settingsFileShown: shortPath(shownPath(path)), settingsReference: SETTINGS_REFERENCE, organization: text(azureOf(view).organization),
       rows: ROWS.map(row => row.kind === 'secret'
         ? { id: row.id, group: row.group, label: row.label, kind: row.kind, title: row.title, description: `${row.description(view, environment)}${token.note ? ` ${token.note}` : ''}`, value: token.shown, saved: token.saved,
           // Whether the settings name a token at all, usable or not: another organization then needs one of its own.
           bound: Boolean(text(azureOf(view).patFile) || text(azureOf(view).pat)) }
         : { id: row.id, group: row.group, label: row.label, kind: row.kind, title: row.title, value: row.show(row.get(view)), current: row.current(row.get(view)),
           ...(row.description ? { description: row.description(view, environment) } : {}), ...(row.placeholder ? { placeholder: row.placeholder } : {}),
+          ...(row.hint ? { hint: row.hint } : {}), ...(row.prompt ? { prompt: row.prompt } : {}), ...(row.variantPrompt ? { variantPrompt: row.variantPrompt } : {}),
           ...(row.optional ? { optional: row.optional } : {}), ...(row.choices ? { choices: row.choices } : {}), ...(row.other ? { other: row.other } : {}) }) };
   }
 
@@ -948,7 +959,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   if (catalog.some(command => reserved.includes(command.name))) throw new Error('[AZPR] Reserved command name conflict; resolve it before loading AZPR.');
   let cleanup, placeholders, activating, rpc, closed = false;
   // What changes this plugin's review commands runs one after another: the load of a first setup, which
-  // takes the commands that say "setup required" away and registers the runtime's, and putting those commands
+  // takes the commands that say that AZPR is not ready away and registers the runtime's, and putting those commands
   // back. Neither sees the other half done, and what one read of the host is not older than the other's work.
   let lane = Promise.resolve();
   const inLane = job => {
@@ -961,7 +972,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
   const turn = { busy: false };
   /**
    * The review command names that another plugin has by now: what is listed under one of them and is not a
-   * command that only says "setup required". Asked right before those commands are registered, since a
+   * command that only says that AZPR is not ready. Asked right before those commands are registered, since a
    * plugin can take a name at any moment. Null where the host does not answer: nothing is known then, and
    * what was known earlier is not.
    */
@@ -1015,7 +1026,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
           use.loadProblem = '';
           return false;
         }
-        // The runtime refuses command names that exist: the commands that only said "setup required" go first.
+        // The runtime refuses command names that exist: the commands that only said that AZPR is not ready go first.
         await placeholders?.dispose();
         placeholders = undefined;
         // The host may list them a moment longer. What is listed under a review command's name and is not one

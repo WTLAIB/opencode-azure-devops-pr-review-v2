@@ -19,9 +19,9 @@ const requiredFiles = [
   'install.sh', 'LICENSE', 'scripts/merge-settings.py', 'config/settings.example.json',
   ...['plugin.js', 'setup.mjs', 'session.mjs', 'runtime.mjs', 'config.mjs', 'output.mjs', 'comments.mjs', 'comment-data.mjs', 'comment-work.mjs', 'diagnostics.mjs', 'attribution.mjs',
     'host.mjs', 'tool-queue.mjs', 'azure.mjs', 'diff.mjs', 'search.mjs', 'review-tools.mjs', 'review-work.mjs', 'store.mjs',
-    // The terminal part: what the panel shows, what setup asks (the server part shares its RPC definition), and the
-    // compiled view OpenCode loads (its JSX source, tui-view.jsx, is not installed).
-    'tui-model.mjs', 'tui-setup.mjs', 'tui.js'].map(name => 'src/' + name),
+    // The terminal part: what the panel shows, what setup asks (the server part shares its RPC definition), what the
+    // panel's rows do, and the compiled view OpenCode loads (its JSX source, tui-view.jsx, is not installed).
+    'tui-model.mjs', 'tui-setup.mjs', 'tui-actions.mjs', 'tui.js'].map(name => 'src/' + name),
   ...['common', 'functional', 'risk', 'final', 'dedupe', 'rating', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
@@ -149,7 +149,7 @@ test('local directory entry resolves and loads from a minimal fresh install', as
   const s = setup(); minimalSource(s);
   ok(install(s, ['--settings', profile(s)]));
   await loadDirectoryEntry(s);
-  assert.equal(readdirSync(installed(s, '')).length, 27); // 19 server modules + 3 of the terminal part + entry + metadata + settings + prompts + license
+  assert.equal(readdirSync(installed(s, '')).length, 28); // 19 server modules + 4 of the terminal part + entry + metadata + settings + prompts + license
   assert.ok(!existsSync(installed(s, 'tui-view.jsx')), 'OpenCode would compile a JSX entry itself; only the compiled view is installed.');
   original(s); clean(s);
 });
@@ -176,8 +176,8 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('35-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 35);
+test('36-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 36);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
