@@ -427,6 +427,30 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   await settle();
   assert.deepEqual(ui.log.shown.map(dialog => [dialog.title, dialog.options[0].title]), [['Post these comments on the pull request?', 'No, post nothing']]);
   assert.deepEqual(ui.log.sent, [{ sessionID: CONVERSATION, name: 'pr-comment', text: `${REVIEW} --publish --seen 0f1e2d3c4b5a` }]);
+  // A click is the button pressed and let go on one step of one offer. A release without a press on that step
+  // picks nothing: the button went down elsewhere, or on another step.
+  const elsewhere = panelTui([previewNotice], []);
+  t.after(elsewhere.stop);
+  const event = () => ({ button: 0, stopPropagation() {} });
+  elsewhere.rows[2].element.props.onMouseUp(event());
+  elsewhere.rows[1].element.props.onMouseDown(event());
+  elsewhere.rows[2].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([elsewhere.log.sent, elsewhere.log.shown.length], [[], 0], 'A release without its press picks nothing.');
+  // The preview is planned again while the button is held: the row now belongs to another notice, and the
+  // release would reset a preview that was not the one pressed.
+  const held = panelTui([previewNotice], []);
+  t.after(held.stop);
+  held.rows[2].element.props.onMouseDown(event());
+  held.arrive({ ...previewNotice, text: previewNotice.text.replace(RUN, '4a3415af') });
+  held.rows[2].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([held.log.sent, held.log.shown.length], [[], 0], 'The offer changed while the button was held.');
+  // Pressed and let go on the same step of the same offer, it is sent; the step that asks nothing is sent at once.
+  held.rows[2].element.props.onMouseDown(event());
+  held.rows[2].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual(held.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`]);
   // A key that would only type a letter into the prompt is drawn dim: its colour says that it works.
   const prompt = panelTui([previewNotice], [], { focused: false });
   t.after(prompt.stop);

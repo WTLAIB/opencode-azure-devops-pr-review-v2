@@ -364,7 +364,10 @@ settings, backups and failure records. Never upload `.local/`.
   release that ends a selection of text is no click (`clicked` in
   `tui-view.jsx`): OpenTUI sends it to whatever lies under the pointer,
   marked as dragging, and a step, a session's row or `close` there must not
-  act on it. What
+  act on it. A click on a step is its press and its release on one step of
+  one offer: the row can come to show another notice's steps while the
+  button is held, and a release for what was not pressed picks nothing.
+  What
   applies a list of adjustments stays in view however long the list is (the
   foot of its dialog), and is also the list's last row, for a host that
   draws no such foot. The foot's action closes its dialog itself, since the

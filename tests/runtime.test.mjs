@@ -3789,12 +3789,14 @@ test('a name that anyone else gives a conversation around that moment stands: on
   {
     const titles = new Map(), host = renames();
     const f = await fixture(t, { titles, namingMs: WATCH, updated: host.updated });
-    await f.command('pr-check');
+    // The check is not waited for before the names are given: the watch stays open for WATCH only.
+    const check = f.command('pr-check');
     await host.answered(1);
     renamed(f, 'ordinary', 'A name', titles);
     renamed(f, 'ordinary', own, titles);
     await host.answered(2);
     await closed(f);
+    await check;
     assert.deepEqual([written(f), titles.get('ordinary')], [[own, 'A name'], 'A name']);
   }
   // Someone who goes on renaming in step with AZPR does not make it write without end.

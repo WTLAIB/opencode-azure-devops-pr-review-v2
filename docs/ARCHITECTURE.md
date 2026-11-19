@@ -931,7 +931,9 @@ decided several things in it:
   that ends a selection of text is no click: text selected down the panel
   can be let go over a step, a session's row or `close`, OpenTUI sends that
   release to what lies there, marked as dragging, and none of them acts on
-  it. A panel that
+  it. A click on a step is the button pressed and let go on that step of the
+  same offer: a preview can be planned again while the button is held, and
+  the release then picks nothing. A panel that
   opened by itself and cannot hand the keyboard back closes again and shows a
   toast instead: in a terminal too narrow for two panes, where the host shows
   the panel alone, and while a dialog is open. Nor does it open by itself

@@ -211,7 +211,8 @@ function Row(props) {
  * or picked with the key while the panel has the keyboard, which is when the key has its colour: a key that
  * would only type a letter into the prompt is drawn dim.
  * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
- * down, so that is stopped here: what is typed next still goes to the prompt.
+ * down, so that is stopped here: what is typed next still goes to the prompt. The press and its release are
+ * handed on separately, since a click is both, on one step of one offer.
  */
 function Button(props) {
   const [hover, setHover] = createSignal(false);
@@ -227,12 +228,14 @@ function Button(props) {
     _$setProp(_el$6, "onMouseOver", () => setHover(true));
     _$setProp(_el$6, "onMouseOut", () => setHover(false));
     _$setProp(_el$6, "onMouseDown", event => {
-      if (event.button === MouseButton.LEFT) event.stopPropagation();
+      if (event.button !== MouseButton.LEFT) return;
+      event.stopPropagation();
+      props.press(props.item.id);
     });
     _$setProp(_el$6, "onMouseUp", event => {
       if (!clicked(event)) return;
       event.stopPropagation();
-      props.run(props.item.id);
+      props.lift(props.item.id);
     });
     _$setProp(_el$7, "flexShrink", 0);
     _$setProp(_el$7, "selectable", false);
@@ -300,6 +303,21 @@ function Panel(props) {
     // once the panel was closed.
     const still = () => drawn && mine() && props.panel.sessionID === sessionID && model().next?.offer === next.offer;
     void state.actions.run(id, next, sessionID, still);
+  };
+  // A click is the left button pressed and let go on the same step of the same offer. A preview can be planned
+  // again while the button is held, and the row then shows the steps of another notice: the release would act
+  // on what was not pressed, so it picks nothing. Nor does a release whose press was elsewhere.
+  let pressed;
+  const press = id => {
+    pressed = {
+      id,
+      offer: model().next?.offer
+    };
+  };
+  const lift = id => {
+    const was = pressed;
+    pressed = undefined;
+    if (was && was.id === id && was.offer !== undefined && was.offer === model().next?.offer) act(id);
   };
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
@@ -686,7 +704,8 @@ function Panel(props) {
             get live() {
               return props.panel.focused;
             },
-            run: act
+            press: press,
+            lift: lift
           })
         }));
         _$insert(_el$30, _$createComponent(Show, {
