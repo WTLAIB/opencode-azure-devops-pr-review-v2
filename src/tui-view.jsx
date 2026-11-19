@@ -83,6 +83,16 @@ function markdownStyle(context) {
  * release to whatever lies under the pointer, marked as dragging: it picks nothing.
  */
 const clicked = (event) => event.button === MouseButton.LEFT && !event.isDragging
+/**
+ * Whether the pointer of a mouse event is over the element whose handler runs. OpenTUI sends the release of a
+ * button that was dragged away to the element it was pressed on, wherever the pointer is by then: a step that
+ * was pressed and then left is not picked. True where the host does not say where either of them is.
+ */
+const inside = (event) => {
+  const at = event.currentTarget
+  if (!at || ![event.x, event.y, at.x, at.y, at.width, at.height].every(Number.isFinite)) return true
+  return event.x >= at.x && event.x < at.x + at.width && event.y >= at.y && event.y < at.y + at.height
+}
 
 function Row(props) {
   const [hover, setHover] = createSignal(false)
@@ -125,7 +135,8 @@ function Row(props) {
  * would only type a letter into the prompt is drawn dim.
  * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
  * down, so that is stopped here: what is typed next still goes to the prompt. The press and its release are
- * handed on separately, since a click is both, on one step of one offer.
+ * handed on separately, since a click is both, on one step of one offer; any other press or release here ends
+ * what was pressed (`forget`), as it does anywhere else in the panel.
  */
 function Button(props) {
   const [hover, setHover] = createSignal(false)
@@ -138,14 +149,14 @@ function Button(props) {
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseDown={(event) => {
-        if (event.button !== MouseButton.LEFT) return
+        if (event.button !== MouseButton.LEFT) return props.forget()
         event.stopPropagation()
         props.press(props.item.id)
       }}
       onMouseUp={(event) => {
-        if (!clicked(event)) return
+        if (!clicked(event)) return props.forget()
         event.stopPropagation()
-        props.lift(props.item.id)
+        props.lift(props.item.id, inside(event))
       }}
     >
       <text fg={props.live ? props.colors.link : props.colors.muted} flexShrink={0} selectable={false}>
@@ -178,10 +189,14 @@ function Panel(props) {
   onCleanup(() => release(syntax()))
 
   const close = () => {
+    forget()
     state.dismiss(props.panel.sessionID)
     props.panel.close()
   }
-  const open = (sessionID) => context.ui.router.navigate({ type: "session", sessionID })
+  const open = (sessionID) => {
+    forget()
+    context.ui.router.navigate({ type: "session", sessionID })
+  }
   // What a notice offers next, where this host lets the panel send a command; picking one asks first.
   const offered = createMemo(() => (state.actions ? actionRows(model().next) : []))
   const offers = (id) => offered().some((item) => item.id === id)
@@ -197,17 +212,23 @@ function Panel(props) {
     const still = () => drawn && mine() && props.panel.sessionID === sessionID && model().next?.offer === next.offer
     void state.actions.run(id, next, sessionID, still)
   }
-  // A click is the left button pressed and let go on the same step of the same offer. A preview can be planned
-  // again while the button is held, and the row then shows the steps of another notice: the release would act
-  // on what was not pressed, so it picks nothing. Nor does a release whose press was elsewhere.
+  // A click is the left button pressed and let go on the same step of the same offer, with the pointer still on
+  // it. A preview can be planned again while the button is held, and the row then shows the steps of another
+  // notice: the release would act on what was not pressed, so it picks nothing. Nor does a release whose press
+  // was elsewhere, or one after the pointer left the step. A press is one gesture's: whatever the panel sees
+  // of another press or release (on a step, a session's row, `close` or anywhere in it) ends what was pressed,
+  // so that a gesture that was given up does not make a later release a click.
   let pressed
   const press = (id) => {
     pressed = { id, offer: model().next?.offer }
   }
-  const lift = (id) => {
+  const forget = () => {
+    pressed = undefined
+  }
+  const lift = (id, over) => {
     const was = pressed
     pressed = undefined
-    if (was && was.id === id && was.offer !== undefined && was.offer === model().next?.offer) act(id)
+    if (over && was && was.id === id && was.offer !== undefined && was.offer === model().next?.offer) act(id)
   }
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
@@ -295,7 +316,7 @@ function Panel(props) {
   const row = (id) => model().rows.find((item) => item.id === id) ?? { id, label: "", state: "", report: false }
 
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0}>
+    <box flexDirection="column" flexGrow={1} minHeight={0} onMouseDown={forget} onMouseUp={forget}>
       <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
         <box flexDirection="row" flexShrink={0}>
           <text fg={palette().base} flexShrink={0}>
@@ -374,7 +395,7 @@ function Panel(props) {
         <box flexDirection="column" flexShrink={0}>
           <box height={1} flexShrink={0} border={["top"]} borderColor={palette().rule} />
           <box flexDirection="row" flexWrap="wrap" columnGap={3} flexShrink={0} paddingLeft={2} paddingRight={2}>
-            <For each={offered()}>{(item) => <Button item={item} colors={palette()} live={props.panel.focused} press={press} lift={lift} />}</For>
+            <For each={offered()}>{(item) => <Button item={item} colors={palette()} live={props.panel.focused} press={press} lift={lift} forget={forget} />}</For>
           </box>
           <Show when={props.panel.presentation !== "fullscreen"}>
             <box height={1} flexShrink={0} />

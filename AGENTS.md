@@ -365,8 +365,12 @@ settings, backups and failure records. Never upload `.local/`.
   `tui-view.jsx`): OpenTUI sends it to whatever lies under the pointer,
   marked as dragging, and a step, a session's row or `close` there must not
   act on it. A click on a step is its press and its release on one step of
-  one offer: the row can come to show another notice's steps while the
-  button is held, and a release for what was not pressed picks nothing.
+  one offer, with the pointer still on that step: the row can come to show
+  another notice's steps while the button is held, and OpenTUI sends the
+  release of a button that was dragged away to the element it was pressed
+  on. A press is one gesture's: end it with every other press or release
+  the panel sees (`forget`), so that a gesture that was given up never makes
+  a later release a click.
   What
   applies a list of adjustments stays in view however long the list is (the
   foot of its dialog), and is also the list's last row, for a host that

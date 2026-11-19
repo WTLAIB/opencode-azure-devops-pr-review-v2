@@ -171,8 +171,8 @@ async function click(text) {
   for (const action of ['M', 'm']) tmux('send-keys', '-t', 'azpr', '-l', `\x1b[<0;${column};${row + 1}${action}`);
 }
 /**
- * A selection dragged with the left button inside the panel, from the middle of `from` to the middle of `to`:
- * pressed, moved in a few steps, let go. Both are looked for from the panel's left edge on, since the
+ * The left button pressed in the middle of `from` inside the panel, moved in a few steps to the middle of `to`
+ * and let go there: a selection where it starts on text, a press that is given up where it starts on a step. Both are looked for from the panel's left edge on, since the
  * conversation beside it can show the same words.
  */
 async function dragInPanel(from, to) {
@@ -493,6 +493,12 @@ try {
   await sleep(2000);
   assert.equal((await own()).length, toldBefore, 'The end of a selection over a step sent that step\'s command.');
   assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'The end of a selection over a step changed what the panel shows.');
+  // The button is pressed on that step and let go after the pointer has left it, as a person does who thinks
+  // better of it. OpenTUI sends that release to the step that was pressed: it is not picked either.
+  await dragInPanel('Reset adjustments', 'Sessions (click one to open it)');
+  await sleep(2000);
+  assert.equal((await own()).length, toldBefore, 'A step that was pressed and then left was picked.');
+  assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'A step that was pressed and then left changed what the panel shows.');
   // With the keyboard, the panel's keys do the same: `a` opens the list, and the key at its foot applies.
   await click('Sessions (click one to open it)');
   key('a');

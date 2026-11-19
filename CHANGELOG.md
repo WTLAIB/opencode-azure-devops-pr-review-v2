@@ -46,6 +46,8 @@ The terminal panel:
   click. Text selected down the panel and let go over a session's row opened
   that session, and over `close` closed the panel (since 0.4.2); neither
   happens now, and a step at the panel's foot is not picked that way either.
+  A step is picked by pressing and letting go of the left button on it:
+  letting go after the pointer has left the step picks nothing.
 - An answer is acted on only while the panel still shows what it was given
   for. If the preview is planned again, another session comes on screen or
   the panel is closed while a question is open, nothing is sent, and the

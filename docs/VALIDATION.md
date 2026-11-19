@@ -83,7 +83,7 @@ all passing.
 | ---: | --- |
 | 10 | What the steps do (`tests/tui-actions.test.mjs`, new), with scripted dialogs: what a notice offers, each with its key, and the step the others lead to; a label that ends in "…" asks before anything is sent, and one that does not is sent at once; a command is made only of a review ID, finding IDs, level names and the word for the review's comments, and is read by the same parser as a typed one; posting asks first with "no" first and sends nothing otherwise; findings are adjusted in a list whose last row applies every change with both lists in full, and what is saved is where a person starts; the same from the foot of the list, which acts once and only while that list is open, also where a dialog that was closed answers nothing; an answer for what the panel no longer offers sends nothing and says so, for every step, and a finding picked from the list of an offer that is gone is not asked about; a command that was refused or did not get there is said with its reason, on one line; one action at a time; nothing is asked or sent after the part was unloaded. |
 | 3 | What the panel shows of it (`tests/tui-model.test.mjs`): every value of an offer is checked, and anything unexpected, or an offer without the word for the review's comments, offers nothing; the offer is taken from the notice that happened last, for the review shown, from the inbox and from a delivered message alike, goes with its kind of document (a preview is planned under a report and never posted from there), names its notice, and is gone once a run starts or another receipt arrives; the receipt of a run whose preview was replaced (`REPLACED`) ends that run in a panel that showed it running, with no progress and nothing offered, but is not what happened last, so another command's preview stays in view; a session at rest is `finished` until a receipt names it, and stays so where none does. |
-| 4 | The view (`tests/tui-view.test.mjs`): the steps are one row at the foot, each with its key in brackets and the main one bold, wrapping as whole items under a line; a click and the key ask first and then send `/pr-comment` with the review's ID and the word to the session on screen; a left mouse-down on a step is stopped, so the keyboard stays where it was, and a key is dim while the prompt has the keyboard; the release that ends a selection of text picks no step, also not the one that asks nothing, and neither does a release without its press on that step or one for an offer that changed while the button was held; an answer counts only while the panel still shows that offer there (not after another notice, a run that started, a closed panel, another session, another plugin's panel or a panel no longer drawn); nothing is offered while a run is under way, for a notice without the data, or on a host that cannot send a command or has no list dialog; an action that is open when the part is unloaded sends nothing. |
+| 4 | The view (`tests/tui-view.test.mjs`): the steps are one row at the foot, each with its key in brackets and the main one bold, wrapping as whole items under a line; a click and the key ask first and then send `/pr-comment` with the review's ID and the word to the session on screen; a left mouse-down on a step is stopped, so the keyboard stays where it was, and a key is dim while the prompt has the keyboard; the release that ends a selection of text picks no step, also not the one that asks nothing, and neither does a release without its press on that step, one for an offer that changed while the button was held, one after the pointer left the step, or one whose press was given up (by the release of a selection, another button, or a press or release elsewhere in the panel); an answer counts only while the panel still shows that offer there (not after another notice, a run that started, a closed panel, another session, another plugin's panel or a panel no longer drawn); nothing is offered while a run is under way, for a notice without the data, or on a host that cannot send a command or has no list dialog; an action that is open when the part is unloaded sends nothing. |
 | 13 | The runtime (`tests/runtime.test.mjs`): a preview's notice, the saved preview shown again, and the receipt of a review that no preview follows carry the offer as the review is at that moment (after an adjustment, after publication started, held, or with nothing left to post), and a review that a preview follows carries none; the commands of the steps adjust and post like typed ones; after a command typed in the review's own session planned the preview again, the conversation's panel still shows the first preview, and each of its steps is refused before anything is posted, adjusted or planned, while the saved preview shown again offers steps that are taken and a typed command acts as before; a preview that another command adjusted or posted while its run's sessions were deleted (also one posted after an earlier publication of that review) is neither enclosed nor offered, its run ends with a receipt that says `REPLACED`, and the panel's model is the same before and after that receipt; such a run does not make its review the current one (a command without a review ID still acts on the review that was used last), and a panel that showed it running sees it end; a preview that is planned again while the first run saves the record after its receipt was made leaves that receipt offering the preview it shows, whose step is then refused; a step refused for its word leaves the conversation's current review as it is, in the process and on disk, so that a command without an ID still posts to the other pull request; a review's receipt offers nothing once a preview of that review was planned during its cleanup; a conversation nobody named is named after the PR by a check or a review, a name that is there stays, a refused command names nothing, and a host that cannot rename, fails or does not answer holds no command up. The renames the host reports decide, in scripted orders that the tests follow by the naming's own events (the turn in which the host answers a write of a name), not by how long a command takes: a name given between the read and the write is written back, also when it is given twice; so is a name that follows someone's choice of AZPR's very words while AZPR's write is under way, whether the host reports all of it at once or a little later, and a name that is followed by AZPR's words afterwards (in doubt the other name stays); of several names in a row the last one is written back, in one write when the host has reported all of them, and AZPR's own words are never written back as someone's name, also when the report of AZPR's first write comes after a name was written back; once that write-back was reported, someone's own choice of AZPR's words stands; AZPR writes four times at most; a rename reported during the read stops the naming, also when the host reported other conversations' renames before it; another conversation's rename is ignored and does not put a write-back off; a host without the feed gets no name, one that never reports AZPR's own rename or refuses the write ends the watch by itself, a feed that fails while the conversation is read leaves no rejection without a handler, a second command starts no second watch of the same conversation, and a write that the host answers long after the watch would have closed is still followed by the name it replaced. Unloading the plugin waits for a write that is under way and writes back the name it replaced, ends a watch that only waits within a moment, and does not wait without end for a host that never answers. In each case the subscription is closed. |
 | 2 | `previewActions` itself (`tests/comments.test.mjs`): the offer for an unadjusted, an adjusted, a held, an unplanned and a published review, a summary cut to 160 characters, and no offer beyond 200 findings; and the word for a review's comments: the same from the saved record, another one for another preview, no preview, another review or other adjustments, whatever order they were typed in, and unchanged by posting. |
 | 2 | The name a conversation gets, from the URL alone, without the organization or the PR's own title (`tests/attribution.test.mjs`); and that the sections of the README which the runtime names are there (`tests/release.test.mjs`). |
@@ -120,9 +120,12 @@ tests was the same before and after).
   prompt. Text is then selected with the mouse from the preview's heading
   down to the row and let go over **Reset adjustments**, which asks nothing:
   no command is sent and the panel shows what it showed. (With the release
-  taken for a click, as the candidate had it until its last correction, the
-  same step of this fixture failed on OpenCode 2.3.0: the reset was sent.)
-  With the keyboard in the panel, `a` opens the list again, a second
+  taken for a click, as the candidate had it until then, the same step of
+  this fixture failed on OpenCode 2.3.0: the reset was sent.) The button is
+  then pressed on **Reset adjustments** and let go after the pointer has
+  left it: nothing is sent either. (Without a look at where the pointer is,
+  that step failed as well: OpenTUI sends the release to the step that was
+  pressed.) With the keyboard in the panel, `a` opens the list again, a second
   finding is left out, and `ctrl+s` applies it. The key `p` asks before
   posting with "No, post nothing" first: Enter posts nothing, and "Yes" ends
   in `POSTED` with the summary and two comments on the fake PR, after which
@@ -199,12 +202,13 @@ reasoning effort through the Codex CLI, in a read-only sandbox on a clean
 clone), each time the tree as corrected after the review before. It ran the
 build check and the tests that write nothing, and reproduced what it found
 with probes of its own; the tests that write files and the host fixtures ran
-here, on every corrected tree. The first seven reviews reported eighteen
-defects (3, 4, 2, 3, 2, 2 and 2), each confirmed against the code and
+here, on every corrected tree. The first eight reviews reported nineteen
+defects (3, 4, 2, 3, 2, 2, 2 and 1), each confirmed against the code and
 corrected, with a regression test where the defect was in the code:
 
 - **An answer for what the panel no longer offered was acted on** (first
-  review; one more step in the sixth, and the mouse in the seventh). A dialog can stay open for any time.
+  review; one more step in the sixth, and the mouse in the seventh and the
+  eighth). A dialog can stay open for any time.
   When the preview was planned again meanwhile, "Yes" still sent the command,
   which would have posted a preview nobody had read; a panel that was closed,
   or another session on screen, changed nothing either. Each step now comes
@@ -216,7 +220,10 @@ corrected, with a regression test where the defect was in the code:
   the mouse button was held on a step let the release act on the new one:
   **Reset adjustments**, which asks nothing, would have reset a preview that
   was not the one pressed. A click is now the press and the release on one
-  step of one offer.
+  step of one offer. The eighth found that a press which was given up (its
+  release was the end of a selection, or never reached the step) stayed on
+  record and could make a later release a click; a press now ends with every
+  other press or release the panel sees.
 - **A command was bound to its review, not to the preview on screen** (second
   review). That check knows only what its conversation was told: after a
   command typed in the review's own session had planned the preview again,
@@ -274,7 +281,7 @@ corrected, with a regression test where the defect was in the code:
   into the code one at a time each made them fail.
 
 Between the reviews the corrections, and what they touch, were read again
-here, which found four more defects; each has a test that fails without its
+here, which found five more defects; each has a test that fails without its
 correction:
 
 - The release of the mouse button that ends a selection of text was taken for
@@ -282,7 +289,11 @@ correction:
   text selected down the panel and let go over **Reset adjustments**, which
   asks nothing, sent that command; the fixture's step showed it on OpenCode
   2.3.0 before the correction. The same release over a session's row opened
-  that session, and over `close` closed the panel, since 0.4.2.
+  that session, and over `close` closed the panel, since 0.4.2; both were
+  seen on that host with the earlier handlers.
+- A step that was pressed and then left was still picked when the button was
+  let go elsewhere, since OpenTUI sends that release to the element that was
+  pressed; the fixture showed this as well.
 - The check for a rename that the host reports while the conversation is read
   looked only at the first event the feed held, so a name of this
   conversation behind another conversation's rename was missed, written over

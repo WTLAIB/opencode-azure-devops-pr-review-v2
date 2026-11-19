@@ -446,11 +446,38 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   held.rows[2].element.props.onMouseUp(event());
   await settle();
   assert.deepEqual([held.log.sent, held.log.shown.length], [[], 0], 'The offer changed while the button was held.');
-  // Pressed and let go on the same step of the same offer, it is sent; the step that asks nothing is sent at once.
+  // A press is one gesture's. One that was given up does not make a later release a click: it ended with the
+  // release of a selection, with the right button, with a press or a release anywhere else in the panel, with a
+  // click on a session's row, or with the button let go after the pointer had left the step (OpenTUI sends that
+  // release to the element that was pressed).
+  const given = panelTui([previewNotice], []);
+  t.after(given.stop);
+  const reset = given.rows[2].element, panel = given.all.find(node => typeof node.props?.onMouseDown === 'function' && typeof node.props?.onMouseUp === 'function' && node.props.flexGrow === 1);
+  const place = { x: 40, y: 20, width: 17, height: 1 };
+  const endings = {
+    'the release of a selection': () => reset.props.onMouseUp({ ...event(), isDragging: true }),
+    'another button': () => reset.props.onMouseDown({ ...event(), button: 2 }),
+    'a press elsewhere in the panel': () => panel.props.onMouseDown(event()),
+    'a release elsewhere in the panel': () => panel.props.onMouseUp(event()),
+    'the pointer left the step': () => reset.props.onMouseUp({ ...event(), x: 70, y: 12, currentTarget: place }),
+  };
+  for (const [name, end] of Object.entries(endings)) {
+    reset.props.onMouseDown(event());
+    end();
+    reset.props.onMouseUp({ ...event(), x: 45, y: 20, currentTarget: place });
+    await settle();
+    assert.deepEqual([given.log.sent, given.log.shown.length], [[], 0], name);
+  }
+  // Pressed and let go on the same step of the same offer, with the pointer still on it, it is sent; the step
+  // that asks nothing is sent at once.
+  reset.props.onMouseDown(event());
+  reset.props.onMouseUp({ ...event(), x: 45, y: 20, currentTarget: place });
+  await settle();
+  assert.deepEqual(given.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`]);
   held.rows[2].element.props.onMouseDown(event());
   held.rows[2].element.props.onMouseUp(event());
   await settle();
-  assert.deepEqual(held.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`]);
+  assert.deepEqual(held.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'Also where the host does not say where the pointer is.');
   // A key that would only type a letter into the prompt is drawn dim: its colour says that it works.
   const prompt = panelTui([previewNotice], [], { focused: false });
   t.after(prompt.stop);
