@@ -76,12 +76,12 @@ prompt, no setting and no file of the package is new.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 653 tests (646 for 0.4.4),
+`npm run check` passes, and `npm test` runs 654 tests (646 for 0.4.4),
 all passing.
 
 | Tests | What they establish |
 | ---: | --- |
-| 2 | The step (`tests/tui-actions.test.mjs`), with scripted dialogs: a run under way offers one step, with its key, which is not the step anything leads to; its command is `/pr-stop` with the run's ID and nothing else; stopping asks first with "No, let it run" first, names the run and its command, and sends nothing unless a person says yes; a review or a preview does not offer it, and a run under way offers nothing else; an answer for a run that ended while the question was open sends nothing and says so; a stop the server part refused is said with its reason; one action at a time; nothing is asked or sent after the part was unloaded. |
+| 3 | The step (`tests/tui-actions.test.mjs`), with scripted dialogs: a run under way offers one step, with its key, which is not the step anything leads to; its command is `/pr-stop` with the run's ID and nothing else; stopping asks first with "No, let it run" first, names the run and its command, and sends nothing unless a person says yes; a review or a preview does not offer it, and a run under way offers nothing else; an answer for a run that ended while the question was open sends nothing and says so; a stop the server part refused is said with its reason; one action at a time; nothing is asked or sent after the part was unloaded. And what is typed into the question finds a row by the beginning of its title: with nothing typed both rows, the one that keeps the run first; `s`, typed once or more, and other stray letters find none; `y` and `n` find their rows; the question before posting answers the same way, and the lists of findings are searched as the host searches. |
 | 1 | What the panel shows of it (`tests/tui-model.test.mjs`): the ID is taken only in its form and as the ID of the run the very notice starts; the offer holds from the STARTED notice until the run's receipt, whatever progress follows, with the same notice offering; every command that starts a run is named, and one the panel does not know is not; a notice of an earlier version, one that names another run and one that carries a preview's offer offer nothing; what the runtime answers to a stop is not the run's end; after any receipt nothing is stopped, and a review that no preview follows then offers its own steps; the comment run that follows a review is another run with a notice of its own; a run that starts after a preview takes the preview's steps away; in one of AZPR's own sessions the conversation's run and a run typed there are both offered to be stopped. |
 | 3 | The view (`tests/tui-view.test.mjs`): the step is alone in the row at the foot, with its key in brackets and not bold; its key and a click ask first and then send `/pr-stop` for that run to the session on screen, and the left button's press is stopped, so the keyboard stays where it was; the end of a selection of text and the right button pick nothing; an answer is not acted on once the run's receipt arrived or the next run started; a release picks nothing when the run ended while the button was held, and still picks after progress of the same run; an action that is open when the part is unloaded sends nothing. And in place of a document the panel says "No report or preview yet." of a run under way and "This run ended with no report or preview to show." of one that has its receipt. And the row is drawn from the steps' names, which stay the same values when the panel's content is worked out again, while what a step shows is read when it is drawn: a preview planned again with another count is said by the element that is there. |
 | 1 | The runtime (`tests/runtime.test.mjs`): the STARTED notice of a run carries that run's ID as the one thing it offers, and its progress notices carry nothing; the panel's model offers the step while the run is under way, and the command the step makes stops the run when it is sent to the conversation and nothing when it is sent from another one; the run ends `CANCELLED` and offers nothing; the same command sent after its run has ended stops nothing, and the run that started since goes on. |
@@ -109,7 +109,10 @@ tests was the same before and after).
   offer. A click on the step asks "Stop this run?", with "No, let it run"
   and the run's ID and command first; Enter takes that row: nothing is sent,
   the run goes on, and what is typed next goes to the prompt. With the
-  keyboard in the panel, `s` asks again, and "Yes" ends the run: the panel
+  keyboard in the panel, `s` asks again. `s` pressed once more is typed into
+  the question: it then lists no row ("No results found"), Enter does
+  nothing, and with the letter deleted both rows are back. "Yes" ends the
+  run: the panel
   shows `CANCELLED` within a second (0.2 s in these runs), offers nothing,
   counts the four deleted sessions and says that the run left nothing to
   show, and the conversation holds the runtime's answer to `/pr-stop` and the

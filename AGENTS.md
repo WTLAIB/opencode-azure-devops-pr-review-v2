@@ -356,7 +356,11 @@ settings, backups and failure records. Never upload `.local/`.
   began: what was shown can be posted again. A typed command carries none
   and keeps its behaviour. Posting asks first, in a list whose first row
   posts nothing, and stopping asks first, in a list whose first row lets the
-  run go on; an adjustment gives both lists in full, since each replaces the
+  run go on. What is typed into such a question finds a row by the beginning
+  of its title (`byBeginning`), not as the host searches (a letter anywhere
+  in a title, the best match selected): the key that opened the question,
+  pressed once more than meant, is typed into it and must leave no row to
+  take. An adjustment gives both lists in full, since each replaces the
   saved one.
   One action runs at a time, and after `stop()` nothing is asked or sent,
   whatever answer arrives. An answer counts only for what the panel still

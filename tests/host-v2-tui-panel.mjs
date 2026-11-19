@@ -304,6 +304,17 @@ try {
   await click('Sessions (click one to open it)');
   key('s');
   await see(/Stop this run\?/, 'The key did not ask before stopping.');
+  // The key pressed once more is typed into the question. The host's own search would find "s" in "Yes, stop it"
+  // alone and select it; the question answers by the beginning of a row instead, so no row is left to take, and
+  // Enter does nothing.
+  key('s');
+  await see(shown => /No results found/.test(shown) && !/Yes, stop it|No, let it run/.test(shown), 'The key pressed once more left a row of the question to take.');
+  key('Enter');
+  await sleep(1500);
+  assert.match(screen(), /Stop this run\?/, 'Enter closed the question although no row was listed.');
+  assert.ok(!(await inbox()).some(text => /cancellation requested|\] CANCELLED/.test(text)), 'The key pressed twice and Enter stopped the run.');
+  key('BSpace');
+  await see(shown => /No, let it run/.test(shown) && /Yes, stop it/.test(shown), 'With nothing typed the question does not list both rows again.');
   type('Yes');
   await sleep(400);
   const answered = Date.now();

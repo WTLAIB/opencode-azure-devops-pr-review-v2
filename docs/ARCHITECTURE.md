@@ -1083,7 +1083,13 @@ step is clicked, or picked with its key while the panel has the keyboard; the
 key is drawn in its colour only then. A label that ends in "…" asks before
 anything is sent. Posting asks in a list whose first row posts nothing, and
 stopping in one whose first row lets the run go on: the host's confirm dialog
-would confirm by default. Adjusting lists the findings;
+would confirm by default. What is typed into such a question finds a row by
+the beginning of its title (the list's own `search`, `byBeginning`): the
+host's search finds a letter anywhere in a title and selects the best match,
+and the key that opened the question, pressed once more than meant, is typed
+into it. `s` is in "Yes, stop it" and not in "No, let it run", so the host's
+search would leave "yes" as the only row for Enter to take; by the beginning
+of a title it leaves none. Adjusting lists the findings;
 picking one chooses its level or leaves it out, and everything is applied
 with one command that gives both lists in full, since each list of
 `/pr-comment` replaces the saved one. It is applied from the foot of that

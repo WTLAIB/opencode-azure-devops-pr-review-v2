@@ -24,6 +24,18 @@ const APPLY_KEY = 'ctrl+s';
 // Said when a person's answer comes back for something the panel no longer offers.
 const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
 
+/**
+ * How the rows of a question answer to what is typed into its search line: by the beginning of their titles, in
+ * the order they are listed, and all of them while nothing is typed. The host's own search finds a letter
+ * anywhere in a title and lists the best match first. A step's key pressed once more than meant is typed into
+ * the question it opened, and `s` is in "Yes, stop it" and not in "No, let it run": "yes" would be the only
+ * row, and Enter would take it. By the beginning of a title, a stray letter leaves no row at all.
+ */
+const byBeginning = (query, options) => {
+  const typed = String(query ?? '').trim().toLowerCase();
+  return typed ? options.filter(option => String(option.title).toLowerCase().startsWith(typed)) : [...options];
+};
+
 /** The level the review itself gave a finding. */
 const own = finding => finding.original ?? finding.severity;
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -134,9 +146,9 @@ export function createActions(host) {
     }
   }
 
-  /** Posting is asked once more, with "no" first: a key pressed twice posts nothing. */
+  /** Posting is asked once more, with "no" first: a key pressed twice, or more often, posts nothing. */
   async function publish(next, sessionID, still) {
-    const answer = await dialog.select({ title: 'Post these comments on the pull request?', options: [
+    const answer = await dialog.select({ title: 'Post these comments on the pull request?', search: byBeginning, options: [
       { title: 'No, post nothing', value: 'keep', description: next.target || undefined },
       { title: `Yes, post ${plural(next.posts, 'comment')}`, value: 'post', description: 'As the PAT owner; what is on the PR already is skipped' }] });
     if (answer !== 'post' || stopped) return;
@@ -145,7 +157,7 @@ export function createActions(host) {
 
   /** Stopping is asked once more, with "no" first: the run goes on unless a person says otherwise. */
   async function stopRun(next, sessionID, still) {
-    const answer = await dialog.select({ title: 'Stop this run?', options: [
+    const answer = await dialog.select({ title: 'Stop this run?', search: byBeginning, options: [
       { title: 'No, let it run', value: 'keep', description: `AZPR ${next.stop}${next.command ? ` (/${next.command})` : ''}` },
       { title: 'Yes, stop it', value: 'stop', description: 'Sent requests may still be billed' }] });
     if (answer !== 'stop' || stopped) return;

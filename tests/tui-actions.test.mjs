@@ -374,3 +374,29 @@ test('a run that ended while the question was open is not stopped, and a stop th
   await open;
   assert.deepEqual([waiting.sent, waiting.toasts], [[], []]);
 });
+
+test('what is typed into a question answers by the beginning of a row: a step\'s key pressed once more leaves no row to take', async () => {
+  // The host's search finds a letter anywhere in a title and lists the best match first; "s" is in "Yes, stop it"
+  // and not in "No, let it run". The key that opened the question, pressed again, is typed into it.
+  const titles = (dialog, query) => dialog.search(query, dialog.options).map(option => option.title);
+  const stop = host(['keep']);
+  await stop.actions.run('stop', running(), SESSION);
+  const asked = stop.shown[0];
+  assert.deepEqual(titles(asked, ''), ['No, let it run', 'Yes, stop it'], 'Nothing typed: every row, the one that keeps the run first.');
+  for (const stray of ['s', 'ss', 'sss', 't', 'o', 'e', 'x', '  s  ']) assert.deepEqual(titles(asked, stray), [], JSON.stringify(stray));
+  assert.deepEqual([titles(asked, 'y'), titles(asked, 'YES'), titles(asked, 'yes, stop'), titles(asked, ' y ')], [['Yes, stop it'], ['Yes, stop it'], ['Yes, stop it'], ['Yes, stop it']], 'Typing the answer finds it.');
+  assert.deepEqual([titles(asked, 'n'), titles(asked, 'No, let')], [['No, let it run'], ['No, let it run']]);
+  assert.deepEqual(titles(asked, undefined), ['No, let it run', 'Yes, stop it']);
+  assert.ok(asked.search('', asked.options).every((option, index) => option === asked.options[index]), 'The rows themselves, in the order they are listed.');
+  // The same for posting, whose key is in both rows: neither is found by it.
+  const post = host(['keep']);
+  await post.actions.run('publish', offer(), SESSION);
+  const posting = post.shown[0];
+  assert.deepEqual(titles(posting, ''), ['No, post nothing', 'Yes, post 4 comments']);
+  for (const stray of ['p', 'pp', 'o', 's']) assert.deepEqual(titles(posting, stray), [], stray);
+  assert.deepEqual([titles(posting, 'y'), titles(posting, 'n')], [['Yes, post 4 comments'], ['No, post nothing']]);
+  // The lists of findings and of a finding's levels are searched as the host searches: there a person looks for one of many.
+  const list = host([undefined]);
+  await list.actions.run('adjust', offer(), SESSION);
+  assert.equal('search' in list.shown[0], false);
+});

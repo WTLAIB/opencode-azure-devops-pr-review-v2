@@ -14,10 +14,15 @@ The terminal panel:
   being planned, a publication, a check) the row at the panel's foot now
   offers **Stop this run…** (`s`), and nothing else.
 - Stopping asks first, in a list whose first row is "No, let it run" and
-  names the run: a key pressed twice stops nothing. "Yes, stop it" sends
-  `/pr-stop` with that run's ID to the session on screen, and AZPR takes it
-  like a typed command; the run ends with its `CANCELLED` receipt, and
-  requests that were already sent may still be billed.
+  names the run. "Yes, stop it" sends `/pr-stop` with that run's ID to the
+  session on screen, and AZPR takes it like a typed command; the run ends
+  with its `CANCELLED` receipt, and requests that were already sent may still
+  be billed.
+- What is typed into such a question finds a row by the beginning of its
+  title: `y` finds "Yes" and `n` "No". The key that opened the question,
+  pressed once more than meant, is typed into it, and OpenCode's own search
+  would find `s` in "Yes, stop it" alone and select it; now it leaves no row
+  for Enter to take. The question before posting answers the same way.
 - An answer is acted on only while the panel still shows that run as under
   way. If the run has ended, or the next run has started, while the question
   was open, nothing is sent and the panel says so; a step that reaches AZPR
