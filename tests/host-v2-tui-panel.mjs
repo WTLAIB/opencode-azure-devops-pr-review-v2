@@ -3,7 +3,9 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * node tests/host-v2-tui-panel.mjs /absolute/path/opencode [--native [--package SPEC]]
  * The real TUI runs in a detached tmux session (tmux is required): the fixture reads its screen and
  * drives its keyboard and mouse. A review of six files starts from the TUI, and its reviewers are
- * held until the panel was seen with them running. Checked on the screen: the panel opens by itself
+ * held until the panel was seen with them running. Checked on the screen: while a run is under way
+ * the panel offers to stop it, which asks first and then sends /pr-stop for that run (a first review
+ * is stopped that way, with a click and with the key); the panel opens by itself
  * and leaves the keyboard with the prompt; a click on a row opens that session, and the panel is
  * back with the conversation; the report and the comment preview are rendered Markdown; /pr-panel,
  * the panel's one command; a terminal too narrow for two panes is not taken over; after a review or
@@ -269,9 +271,61 @@ try {
   };
   await openTerminal(170, 46);
 
+  // 0. A review under way can be stopped from the panel: its foot offers that, and nothing else, for as long as
+  // the run has no receipt. Picking it asks first, with "no" first; "yes" sends /pr-stop for that run to the
+  // session on screen, which the runtime takes like a typed command.
+  await command('pr-review', 'Verified Azure DevOps PR review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321');
+  const stopped = (await see(/AZPR ([a-f0-9]{8}) · RUNNING/, 'A review that starts did not open the panel.'))[1];
+  await see(shown => (shown.match(/● Initial [FR] shard [12]\/2 running ses_/g) ?? []).length === 4, 'The panel does not list the four reviewer sessions of the first review as running.');
+  await see(/\[s\] Stop this run…/, 'While a review is under way the panel does not offer to stop it.');
+  assert.doesNotMatch(screen(), /\[c\] Preview comments|\[p\] Post \d+ comments?|\[a\] Adjust findings…/, 'A run under way offers only to be stopped.');
+  // The step is where the steps of a preview are: on the line of the host's status bar, under a line that crosses the panel.
+  const during = screen().split('\n');
+  const stopRow = during.findIndex(line => /\[s\] Stop this run…/.test(line));
+  assert.match(during[stopRow], /ctrl\+p\s+commands\s+\[s\] Stop this run…/, 'The step is not level with the status bar.');
+  assert.match(during[stopRow - 1], /─{40,}/, 'No line separates the step from what is above it.');
+  // The start notice says that the run can be stopped, as data: that is what the panel offers.
+  const startedNotice = (await queued()).find(item => (item.payload?.text ?? '').startsWith(`[AZPR ${stopped}] STARTED /pr-review`));
+  assert.deepEqual(startedNotice.payload.metadata, { azpr: { next: { stop: stopped } } });
+  // A click asks first; Enter alone takes the first row, and the run goes on. The click left the keyboard with the prompt.
+  await click('Stop this run…');
+  await see(/Stop this run\?/, 'A click on the step did not ask before stopping.');
+  await see(new RegExp(`No, let it run\\s+AZPR ${stopped} \\(/pr-review\\)`), 'Letting the run go on is not the first row, or the run is not named.');
+  await see(/Yes, stop it\s+Sent requests may still be billed/, 'Stopping is not offered with what it leaves.');
+  key('Enter');
+  await see(shown => !/Stop this run\?/.test(shown), 'The question did not close.');
+  await sleep(1500);
+  assert.ok(!(await inbox()).some(text => /cancellation requested|\] CANCELLED/.test(text)), 'Declined: nothing was sent.');
+  assert.match(screen(), new RegExp(`AZPR ${stopped} · RUNNING`), 'Declined: the run goes on.');
+  type('still-typing');
+  await see(/┃\s+still-typing/, 'The click on the step, or its question, took the keyboard from the prompt.');
+  key('C-u');
+  // With the keyboard, the panel's key does the same; "yes" stops the run.
+  await click('Sessions (click one to open it)');
+  key('s');
+  await see(/Stop this run\?/, 'The key did not ask before stopping.');
+  type('Yes');
+  await sleep(400);
+  const answered = Date.now();
+  key('Enter');
+  await see(new RegExp(`AZPR ${stopped} · CANCELLED`), 'The run that was stopped from the panel did not end as CANCELLED.', 60000);
+  result.stopSeconds = Math.round((Date.now() - answered) / 100) / 10;
+  await see(shown => !/\[s\] Stop this run…/.test(shown), 'A run that has ended is still offered to be stopped.');
+  // Nothing more is coming of that run, and the panel does not say "yet" of it.
+  await see(shown => /4 session\(s\) were deleted when their run ended\./.test(shown) && /This run ended with no report or preview to show\./.test(shown), 'The panel does not say that the stopped run left nothing to show.');
+  const afterStop = await inbox();
+  assert.ok(afterStop.some(text => text.startsWith(`[AZPR ${stopped}] Authorization revoked and cancellation requested`)), 'The runtime did not take the step like a typed /pr-stop, in the session on screen.');
+  assert.ok(afterStop.some(text => text.startsWith(`[AZPR ${stopped}] CANCELLED`)), 'The stopped run has no receipt in the conversation.');
+  assert.equal(azure.state.threads.length, 0);
+  // The next review starts with the panel closed, as a first one does.
+  await click('close');
+  await see(shown => !panelOpen(shown), 'The panel did not close.');
+  result.stop = 'a run under way is stopped from the panel: asked first with "no" first, by a click and by its key';
+
   // 1. A review that starts opens the panel by itself, with its sessions running, and the prompt keeps the keyboard.
   await command('pr-review', 'Verified Azure DevOps PR review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321');
   const review = (await see(/AZPR ([a-f0-9]{8}) · RUNNING/, 'A review that starts did not open the panel.'))[1];
+  assert.notEqual(review, stopped);
   await see(shown => /Sessions \(click one to open it\)/.test(shown) && (shown.match(/● Initial [FR] shard [12]\/2 running ses_/g) ?? []).length === 4, 'The panel does not list the four reviewer sessions as running.');
   type('typed-while-the-panel-opened');
   await see(/┃\s+typed-while-the-panel-opened/, 'The keyboard left the prompt when the panel opened by itself.');
@@ -358,9 +412,10 @@ try {
   await see(new RegExp(`AZPR ${review} · COMPLETE`), 'The saved preview is not shown under its review.');
   await see(new RegExp(`\\[AZPR\\] Saved preview of review ${review}`), 'The saved preview is not named.');
   // With the default setting only a notice that offers a next step carries metadata, and only that offer: the
-  // receipt of the review (no preview follows it by itself here), each preview, and the saved preview shown again.
+  // start of a run (it can be stopped), the receipt of the review (no preview follows it by itself here), each
+  // preview, and the saved preview shown again.
   for (const item of await queued()) {
-    const offers = /^\[AZPR [a-f0-9]{8}\] (?:PREVIEW;|COMPLETE\n)|^\[AZPR\] Saved preview /.test(item.payload?.text ?? '');
+    const offers = /^\[AZPR [a-f0-9]{8}\] (?:STARTED \/pr-|PREVIEW;|COMPLETE\n)|^\[AZPR\] Saved preview /.test(item.payload?.text ?? '');
     assert.deepEqual(Object.keys(item.payload?.metadata?.azpr ?? {}), offers ? ['next'] : [], (item.payload?.text ?? '').slice(0, 60));
     assert.equal(item.payload?.metadata === undefined, !offers);
   }

@@ -1,15 +1,17 @@
-// What a person can do from AZPR's terminal panel after a review or a comment preview: have the comments
-// previewed, post the preview, leave findings out or change a level, reset those adjustments. The panel lists
-// these in one row at its foot; picking one asks what is needed in the host's own dialogs and then sends the
-// same /pr-comment command a person would type, to the session on screen. Nothing else is ever sent from the
-// terminal part, and nothing is decided here: the server part takes the command as it takes a typed one,
-// with its own checks, its STARTED notice and its receipt.
+// What a person can do from AZPR's terminal panel. After a review or a comment preview: have the comments
+// previewed, post the preview, leave findings out or change a level, reset those adjustments. While a run is
+// under way: stop it. The panel lists these in one row at its foot; picking one asks what is needed in the
+// host's own dialogs and then sends the same command a person would type, /pr-comment or /pr-stop, to the
+// session on screen. Nothing else is ever sent from the terminal part, and nothing is decided here: the server
+// part takes the command as it takes a typed one, with its own checks, its notices and its receipt.
 //
-// What is offered comes from the runtime (`previewActions` in comments.mjs), in the metadata of the notice
-// that offers it, and is checked before it gets here (`nextOf` in tui-model.mjs): a command is made only of
-// a review ID, finding IDs, level names and the word for the review's comments, all of the checked forms,
-// never of a text. Every command hands that word back (`--seen`): a notice shows what its own conversation was
-// told, and the runtime refuses a command whose review was planned or adjusted since, from wherever.
+// What is offered comes from the runtime, in the metadata of the notice that offers it (`previewActions` in
+// comments.mjs for a review or a preview; the run's ID with its STARTED notice), and is checked before it gets
+// here (`nextOf` and `stopOf` in tui-model.mjs): a command is made only of a review ID, finding IDs, level
+// names and the word for the review's comments, or of a run ID, all of the checked forms, never of a text.
+// Every /pr-comment command hands that word back (`--seen`): a notice shows what its own conversation was
+// told, and the runtime refuses a command whose review was planned or adjusted since, from wherever. /pr-stop
+// names its run, and a run that has ended is not stopped.
 //
 // Nothing here imports anything, so that the order of the dialogs is tested with scripted answers
 // (tests/tui-actions.test.mjs); src/tui-view.jsx supplies the dialogs and the sending.
@@ -33,6 +35,8 @@ const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
  */
 export function actionRows(next) {
   if (!next) return [];
+  // A run under way offers one thing. It is asked about first, and it is not the step anything leads to.
+  if (next.stop) return [{ id: 'stop', key: 's', label: 'Stop this run…' }];
   const adjusted = next.findings.some(finding => finding.excluded || finding.original !== undefined);
   return [
     // A review without a preview yet: one is planned first, so that what is posted was read. A model runs,
@@ -67,6 +71,8 @@ export const planCommand = next => ({ name: 'pr-comment', text: `${next.review} 
 export const publishCommand = next => ({ name: 'pr-comment', text: `${next.review} --publish ${seen(next)}` });
 /** The command that clears a person's adjustments. */
 export const resetCommand = next => ({ name: 'pr-comment', text: `${next.review} --reset ${seen(next)}` });
+/** The command that stops the run under way. It names the run, so it stops no other one. */
+export const stopCommand = next => ({ name: 'pr-stop', text: next.stop });
 
 /**
  * The command that saves `adjustments` for a preview's review, or undefined when they are the saved ones.
@@ -137,6 +143,15 @@ export function createActions(host) {
     await dispatch(sessionID, publishCommand(next), still);
   }
 
+  /** Stopping is asked once more, with "no" first: the run goes on unless a person says otherwise. */
+  async function stopRun(next, sessionID, still) {
+    const answer = await dialog.select({ title: 'Stop this run?', options: [
+      { title: 'No, let it run', value: 'keep', description: `AZPR ${next.stop}${next.command ? ` (/${next.command})` : ''}` },
+      { title: 'Yes, stop it', value: 'stop', description: 'Sent requests may still be billed' }] });
+    if (answer !== 'stop' || stopped) return;
+    await dispatch(sessionID, stopCommand(next), still);
+  }
+
   /**
    * The findings as a list: picking one says what happens to it. Once something differs from what is saved, it is
    * applied at once from the foot of the dialog, which stays in view however long the list is (clicked there, or
@@ -188,8 +203,8 @@ export function createActions(host) {
 
   return {
     /**
-     * Run one action (`plan`, `publish`, `adjust` or `reset`) for what a notice offers, in the session on
-     * screen. `still` says whether the panel still offers it there; without one it is taken to.
+     * Run one action (`plan`, `publish`, `adjust`, `reset` or `stop`) for what a notice offers, in the session
+     * on screen. `still` says whether the panel still offers it there; without one it is taken to.
      */
     async run(id, next, sessionID, still = () => true) {
       if (running || stopped || !next || typeof sessionID !== 'string' || !actionRows(next).some(row => row.id === id)) return;
@@ -199,6 +214,7 @@ export function createActions(host) {
         else if (id === 'publish') await publish(next, sessionID, still);
         else if (id === 'adjust') await adjust(next, sessionID, still);
         else if (id === 'reset') await dispatch(sessionID, resetCommand(next), still);
+        else if (id === 'stop') await stopRun(next, sessionID, still);
       } catch {
         // A dialog the host could not show: nothing was sent, and the commands can still be typed.
         if (!stopped) toast({ title: 'AZPR', message: 'That could not be done here. Type the command in the conversation instead.', variant: 'error', duration: 8000 });

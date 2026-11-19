@@ -8,8 +8,9 @@
  * decides anything about a review. It only reads texts whose form the runtime
  * owns (attribution.mjs, runtime.mjs) and what the runtime sends along with
  * its notices: the one setting meant for it, and what a notice offers as a
- * next step (`nextOf`), which the rows of tui-actions.mjs turn into the
- * command a person picks. tests/tui-model.test.mjs holds that form.
+ * next step (`nextOf` for a review or a preview, `stopOf` for a run under
+ * way), which the rows of tui-actions.mjs turn into the command a person
+ * picks. tests/tui-model.test.mjs holds that form.
  */
 
 /** The panel's name in the host's `session.panel` slot; names are shared between plugins. */
@@ -26,6 +27,8 @@ const REPORT_SESSION = new RegExp(`Report delivery: report queued to session=(${
 const ACTS_ON = / It acts on review ([a-f0-9]{8}) /;
 const SOURCE_REVIEW = /; source review=([a-f0-9]{8})/;
 const RUN_STARTED = /^\[AZPR [a-f0-9]{8}\] STARTED \/pr-(?:review|quick|deep|comment)\b/;
+// The command a STARTED notice names, of those that start a run (a check is one, though it opens no panel).
+const STARTED_COMMAND = /^\[AZPR [a-f0-9]{8}\] STARTED \/(pr-(?:review|quick|deep|comment|check))\b/;
 // A run's receipt: its status, then `;`, a line break or the end. Text follows STARTED and PROGRESS, and a run
 // also says things that are neither (`[AZPR <run>] Automatic preview skipped: …`).
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
@@ -191,6 +194,17 @@ export function nextOf(metadata, review) {
   }
   return { review: next.review, state: next.state, target: typeof next.target === 'string' ? next.target.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
     plan: next.plan === true, publish: next.publish === true && next.plan !== true, adjust: next.adjust === true, posts: Number.isInteger(next.posts) && next.posts >= 0 ? next.posts : 0, findings };
+}
+
+/**
+ * The run a STARTED notice says can be stopped, as the runtime stored it with the notice (`azpr.next.stop`), or
+ * undefined. A command is made of it, so it is checked like the rest: by its form, and as the ID of the very run
+ * the notice starts. A notice of an earlier version says nothing of it, and its run is stopped by typing.
+ */
+export function stopOf(metadata, run) {
+  const stop = metadata?.azpr?.next?.stop;
+  // A run's ID has the form of a review's: a review is named after the run that made it.
+  return typeof stop === 'string' && REVIEW_ID.test(stop) && stop === run ? stop : undefined;
 }
 
 /** Whether a failed request says that the session is not there, as opposed to a request that did not get through. */
@@ -510,10 +524,11 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   const ofRun = notices.filter(notice => notice.run === run && notice.kind !== 'NOTE');
   const receipt = ofRun.findLast(notice => notice.kind === 'RECEIPT');
   const progress = ofRun.findLast(notice => notice.kind === 'PROGRESS');
+  const started = ofRun.find(notice => notice.kind === 'STARTED');
   const status = receipt ? receipt.status : run && !answered ? 'RUNNING' : '';
   // A comment run belongs with the review it acts on: that review's sessions and report stay in view.
   // Any other run stands alone, so a review under way never shows the report of the review before it.
-  const reviewRun = SOURCE_REVIEW.exec(receipt?.text.split('\n')[0] ?? '')?.[1] ?? ACTS_ON.exec(ofRun.find(notice => notice.kind === 'STARTED')?.text ?? '')?.[1] ?? run;
+  const reviewRun = SOURCE_REVIEW.exec(receipt?.text.split('\n')[0] ?? '')?.[1] ?? ACTS_ON.exec(started?.text ?? '')?.[1] ?? run;
   const review = reviewRun === run ? receipt : notices.findLast(notice => notice.kind === 'RECEIPT' && notice.run === reviewRun);
   const reportSession = REPORT_SESSION.exec(ledgerOf(review?.text ?? ''))?.[1];
 
@@ -566,6 +581,11 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
   // `offer` names the notice, so that a row that was picked is acted on only while that notice still offers.
   const checked = offering ? nextOf(offering.metadata, answered ?? reviewRun) : undefined;
   const offered = checked && checked.plan === (offering.kind === 'RECEIPT' && offering.status === 'COMPLETE') ? { ...checked, offer: offering.id } : undefined;
+  // A run under way can be stopped, as its STARTED notice says: from that notice until the run's receipt, whatever
+  // progress it reports in between. It names its command (the runtime's own word, one of a fixed few) for the
+  // question that is asked first, and its notice, like every offer.
+  const stoppable = status === 'RUNNING' && started ? stopOf(started.metadata, run) : undefined;
+  const halting = stoppable ? { stop: stoppable, command: STARTED_COMMAND.exec(started.text)?.[1] ?? '', offer: started.id } : undefined;
   const rows = [];
   let deleted = 0;
   for (const id of candidates) {
@@ -606,8 +626,9 @@ export function buildPanel(source, sessionID, { known = {}, read = {}, titles = 
     // A report read from its session says its run and status in its own first line; an enclosed document is named by
     // the notice that encloses it.
     documentHead: own || document?.session ? '' : document?.head ?? '',
-    // The steps a preview offers, for the review shown; absent while a run is under way or after another notice.
-    ...(offered ? { next: offered } : {}),
+    // What can be done next: the steps a review or a preview offers, for the review shown, or stopping the run
+    // under way. Absent once another notice has followed the one that offers, or the run has its receipt.
+    ...(offered ? { next: offered } : halting ? { next: halting } : {}),
     inbox,
     notices: notes,
     loading,

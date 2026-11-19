@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.5 — 2026-11-20
+
+While a run is under way, the terminal panel offers to stop it. The reviewer,
+verifier and comment-planning instructions are those of 0.4.4, and no setting
+is new.
+
+The terminal panel:
+
+- A `STARTED` notice says how its run is stopped (`/pr-stop <run-id>`), but
+  in the conversation, which a person who reads the panel does not watch, and
+  with an ID to copy. While a run is under way (a review, a preview that is
+  being planned, a publication, a check) the row at the panel's foot now
+  offers **Stop this run…** (`s`), and nothing else.
+- Stopping asks first, in a list whose first row is "No, let it run" and
+  names the run: a key pressed twice stops nothing. "Yes, stop it" sends
+  `/pr-stop` with that run's ID to the session on screen, and AZPR takes it
+  like a typed command; the run ends with its `CANCELLED` receipt, and
+  requests that were already sent may still be billed.
+- An answer is acted on only while the panel still shows that run as under
+  way. If the run has ended, or the next run has started, while the question
+  was open, nothing is sent and the panel says so; a step that reaches AZPR
+  after its run has ended stops nothing, and no other run.
+- That a run can be stopped comes from the runtime, like every other step: in
+  the metadata of the run's `STARTED` notice, which no model reads (the run's
+  ID). The text of that notice is unchanged, and progress notices and
+  receipts are sent as before. A run that an earlier version started offers
+  nothing; it is stopped by typing the command its notice shows.
+- Where the panel has no report or preview to show, it said "No report or
+  preview yet." also of a run that had ended, such as one that was stopped.
+  Once the run has its receipt it now says "This run ended with no report or
+  preview to show."
+- A click on a step at the panel's foot could be lost (since 0.4.4). The
+  steps were drawn anew whenever the panel worked its content out again,
+  which every notice and every answer of the server causes, and OpenTUI finds
+  what lies under the pointer in the frame it drew last: a press or a release
+  that came before the next frame went nowhere. Each step now keeps its
+  element, as the session rows do, and its highlight under the pointer.
+
 ## 0.4.4 — 2026-11-19
 
 After a comment preview, the terminal panel lists what you can do next at its

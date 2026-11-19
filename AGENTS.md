@@ -296,16 +296,17 @@ settings, backups and failure records. Never upload `.local/`.
   runtime's notices, sent only when it is not the default; a notice that
   offers a next step carries that offer there as well (`azpr.next`), and
   every other notice stays as it was.
-- The one thing the panel sends is the `/pr-comment` command of a step a
-  person picked, with a click or with its key while the panel has the
-  keyboard. Nothing is sent by itself: not on a notice, not on a timer. The
-  command is made in `tui-actions.mjs`, which imports nothing so that its
-  dialogs are tested with scripted answers, and is sent in one place of the
-  view, with the host's `client.session.command`, to the session on screen.
-  The server part takes it like a typed one: its checks, its STARTED notice
-  and its receipt are the same. Add a step only for one a receipt names,
-  and none that sends another command without changing this rule and the
-  test that holds it (`tests/release.test.mjs`).
+- The one thing the panel sends is the command of a step a person picked,
+  with a click or with its key while the panel has the keyboard:
+  `/pr-comment` for what a review or a preview offers, and `/pr-stop` for
+  the run under way. Nothing is sent by itself: not on a notice, not on a
+  timer. The command is made in `tui-actions.mjs`, which imports nothing so
+  that its dialogs are tested with scripted answers, and is sent in one place
+  of the view, with the host's `client.session.command`, to the session on
+  screen. The server part takes it like a typed one: its checks, its notices
+  and its receipt are the same. Add a step only for one a receipt or a
+  STARTED notice names, and none that sends another command without changing
+  this rule and the test that holds it (`tests/release.test.mjs`).
 - What can be picked is the runtime's word, never worked out from a document:
   `previewActions` (`comments.mjs`) writes it into the metadata of the notice
   that offers it (a preview's receipt, the saved preview shown again, the
@@ -314,6 +315,16 @@ settings, backups and failure records. Never upload `.local/`.
   it: IDs by their form, levels by name, the review against the one shown.
   Anything unexpected offers nothing, and only the notice that happened last
   offers.
+- A run that starts says with its STARTED notice that it can be stopped
+  (`azpr.next.stop`, the run's ID, written where the notice is: `launch` in
+  `runtime.mjs`), and `stopOf` holds that to its form and to the run the
+  very notice starts. That notice offers from then until the run has a
+  receipt, whatever progress the run reports in between, and offers nothing
+  but stopping; a preview's steps are gone once a run starts. `/pr-stop`
+  names its run and carries no word: the runtime stops only a run of the
+  caller's conversation that is still under way, so a step that arrives
+  late stops nothing, and no other run. What the runtime answers to a stop
+  is not the run's end; the receipt is.
 - An offer belongs to the document its notice encloses: it is true of the
   review as that document was rendered. Read both before anything is
   awaited, or check first that the review's preview is still the one that
@@ -344,8 +355,9 @@ settings, backups and failure records. Never upload `.local/`.
   nothing but what the review's record holds, and never of whether posting
   began: what was shown can be posted again. A typed command carries none
   and keeps its behaviour. Posting asks first, in a list whose first row
-  posts nothing; an adjustment gives both lists in full, since each
-  replaces the saved one.
+  posts nothing, and stopping asks first, in a list whose first row lets the
+  run go on; an adjustment gives both lists in full, since each replaces the
+  saved one.
   One action runs at a time, and after `stop()` nothing is asked or sent,
   whatever answer arrives. An answer counts only for what the panel still
   offers (`still`): the same panel, drawn and the one the host shows in that
@@ -370,7 +382,12 @@ settings, backups and failure records. Never upload `.local/`.
   release of a button that was dragged away to the element it was pressed
   on. A press is one gesture's: end it with every other press or release
   the panel sees (`forget`), so that a gesture that was given up never makes
-  a later release a click.
+  a later release a click. Draw the steps from their names, as the session
+  rows are drawn from their IDs, so that each keeps its element while the
+  panel's content is worked out again (with every notice and every answer
+  of the server; often while a run is under way): an element made anew is
+  not under the pointer until the next frame, and a press or a release in
+  that moment goes nowhere.
   What
   applies a list of adjustments stays in view however long the list is (the
   foot of its dialog), and is also the list's last row, for a host that

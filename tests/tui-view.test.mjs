@@ -329,6 +329,11 @@ const previewNotice = { text: `[AZPR ${RUN}] PREVIEW; source review=${REVIEW}\nA
   metadata: { azpr: { next: { review: REVIEW, state: '0f1e2d3c4b5a', target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 2,
     findings: [{ id: 'F-1', severity: 'medium', summary: 'a defect' }, { id: 'R-2', severity: 'low', original: 'high', summary: 'another' }] } } } };
 
+// A run's STARTED notice as the runtime sends it: the run can be stopped, by its ID.
+const STARTED_RUN = '4a3415af';
+const startedNotice = { text: `[AZPR ${STARTED_RUN}] STARTED /pr-comment. Work continues in this OpenCode process; the result will return to this conversation. It acts on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository. Stop with /pr-stop ${STARTED_RUN}.`,
+  metadata: { azpr: { next: { stop: STARTED_RUN } } } };
+
 /**
  * A terminal UI as the panel part sees it: one conversation on screen whose inbox holds a run's notices.
  * `arrive` adds a notice afterwards, `screen.panel` is the panel the host shows (none once it was closed), and
@@ -382,10 +387,10 @@ function panelTui(notices, answers = [], { without, focused = true } = {}) {
   const lists = () => all.filter(node => typeof node.props?.children === 'function' && Array.isArray(node.props.each)).map(node => ({ each: node.props.each, draw: node.props.children }));
   const sections = all.filter(node => node.component && Object.getOwnPropertyDescriptor(node.props, 'children')?.get).flatMap(node => { const inner = []; (function walk(child) { if (!child || typeof child !== 'object') return; inner.push(child); for (const next of child.children ?? []) walk(next.shows ?? next); })(node.props.when ? node.props.children : undefined); return inner; });
   const rowLists = [...lists(), ...sections.filter(node => typeof node.props?.children === 'function' && Array.isArray(node.props.each)).map(node => ({ each: node.props.each, draw: node.props.children }))];
-  const rows = rowLists.flatMap(list => list.each.filter(item => item && typeof item === 'object' && 'key' in item).map(item => {
-    const created = list.draw(item);
-    return { item, element: created.component(created.props) };
-  }));
+  // A step is drawn for its name and reads what it shows whenever it is asked: `item` is the step as the panel
+  // offered it when this was built.
+  const rows = rowLists.flatMap(list => list.each.map(entry => list.draw(entry)).filter(created => created?.props && 'item' in created.props)
+    .map(created => ({ item: created.props.item, element: created.component(created.props) })));
   // What the panel registered for the moment it is no longer drawn.
   const cleanups = globalThis.azprCleanups;
   return { context, log, stop, command, rows, arrive, screen, all: [...all, ...sections], undraw: () => cleanups.forEach(run => run()), left: () => queue.length };
@@ -493,6 +498,28 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   assert.equal(keys.left(), 0);
 });
 
+test('a step keeps its element while the panel works its content out again: the row is drawn from the steps\' names', t => {
+  // The renderer keeps an element for as long as the value it was drawn for is in the list. The panel's content is
+  // worked out again with every notice and every answer of the server, and a step made anew each time would be
+  // drawn anew each time: until the next frame it is not where the renderer looks for what lies under the
+  // pointer, and a press or a release in that moment is lost. Names stay the same values; objects made anew do not.
+  const ui = panelTui([previewNotice]);
+  t.after(ui.stop);
+  const list = ui.all.find(node => Array.isArray(node.props?.each) && node.props.each.includes('publish'));
+  assert.deepEqual(list.props.each, ['publish', 'adjust', 'reset']);
+  assert.deepEqual(list.props.each, list.props.each, 'The same names when the list is asked for again.');
+  // What a step shows is read when it is drawn, not kept: planned again with another count, the element that is
+  // there says so.
+  const label = () => ui.rows[0].element.children[1].children.map(child => child.text ?? (typeof child.shows === 'function' ? child.shows() : child.shows)).join('');
+  assert.equal(label(), 'Post 2 comments…');
+  ui.arrive({ ...previewNotice, text: previewNotice.text.replace(RUN, '4a3415af'), metadata: { azpr: { next: { ...previewNotice.metadata.azpr.next, posts: 5 } } } });
+  assert.equal(label(), 'Post 5 comments…');
+  // A run under way: its one step, by its name.
+  const running = panelTui([startedNotice]);
+  t.after(running.stop);
+  assert.deepEqual(running.all.find(node => Array.isArray(node.props?.each) && node.props.each.includes('stop')).props.each, ['stop']);
+});
+
 test('an answer counts only while the panel still shows that offer there: not after another notice, another session or a closed panel', async t => {
   const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
   const later = { ...previewNotice, text: previewNotice.text.replace(RUN, '4a3415af'), metadata: { azpr: { next: { ...previewNotice.metadata.azpr.next, posts: 5 } } } };
@@ -530,13 +557,116 @@ test('an answer counts only while the panel still shows that offer there: not af
   assert.deepEqual([same.log.sent.map(command => command.text), same.log.toasts], [[`${REVIEW} --publish --seen 0f1e2d3c4b5a`], []]);
 });
 
-test('nothing is offered while a run is under way, for a preview without that data, or on a host that cannot send a command', async t => {
-  const started = { text: `[AZPR 4a3415af] STARTED /pr-comment. Work continues in this OpenCode process; the result will return to this conversation. It acts on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository. Stop with /pr-stop 4a3415af.` };
-  for (const [name, ui] of [['a run under way', panelTui([previewNotice, started])], ['a preview of an earlier version', panelTui([{ text: previewNotice.text }])],
-    ['no command to send', panelTui([previewNotice], [], { without: ['client.session.command'] })], ['no dialog to ask in', panelTui([previewNotice], [], { without: ['ui.dialog.select'] })]]) {
+test('a run under way offers one step at the panel\'s foot: stopping it, asked first, as /pr-stop for that run to the session on screen', async t => {
+  const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
+  const event = () => ({ button: 0, stopPropagation() {} });
+  // The receipt of that run: a preview, with what it offers.
+  const receipt = { ...previewNotice, text: previewNotice.text.replace(RUN, STARTED_RUN) };
+  const ui = panelTui([previewNotice, startedNotice], [options => options.options[0].value, options => options.options[1].value]);
+  t.after(ui.stop);
+  assert.deepEqual(ui.rows.map(row => [row.item.id, row.item.key, row.item.label]), [['stop', 's', 'Stop this run…']], 'A run started after the preview: the preview\'s steps are gone, and the run offers only to be stopped.');
+  // Its key in brackets, then its label; it is not the step anything leads to, so it is not drawn bold.
+  const drawn = element => element.children.map(text => [text.props.fg, text.props.attributes, text.children.map(child => child.text ?? (typeof child.shows === 'function' ? child.shows() : child.shows)).join('')]);
+  assert.deepEqual(drawn(ui.rows[0].element), [['link', undefined, '[s]'], ['text', 0, 'Stop this run…']]);
+  assert.deepEqual([ui.command('azpr.panel.stop').bind, ui.command('azpr.panel.stop').enabled()], ['s', true], 'The key the row shows.');
+  for (const id of ['plan', 'publish', 'adjust', 'reset']) assert.equal(ui.command(`azpr.panel.${id}`).enabled(), false, id);
+  // The key: the question comes first, with "no" first, and names the run. Declined, nothing is sent.
+  ui.command('azpr.panel.stop').run();
+  await settle();
+  assert.deepEqual(ui.log.shown.map(dialog => [dialog.title, dialog.options.map(option => option.title), dialog.options[0].description]), [['Stop this run?', ['No, let it run', 'Yes, stop it'], `AZPR ${STARTED_RUN} (/pr-comment)`]]);
+  assert.deepEqual(ui.log.sent, []);
+  // A click is the button pressed and let go on the step; the left button's press is stopped, so the keyboard stays where it was.
+  const stop = ui.rows[0].element;
+  let kept = 0;
+  stop.props.onMouseDown({ button: 0, stopPropagation() { kept++; } });
+  stop.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([kept, ui.log.shown.length, ui.log.sent, ui.log.toasts], [1, 2, [{ sessionID: CONVERSATION, name: 'pr-stop', text: STARTED_RUN }], []]);
+  assert.equal(ui.left(), 0);
+  // The end of a selection of text over the step, and the right button, pick nothing.
+  const quiet = panelTui([startedNotice], []);
+  t.after(quiet.stop);
+  quiet.rows[0].element.props.onMouseUp({ ...event(), isDragging: true });
+  quiet.rows[0].element.props.onMouseDown({ ...event(), button: 2 });
+  quiet.rows[0].element.props.onMouseUp({ ...event(), button: 2 });
+  await settle();
+  assert.deepEqual([quiet.log.shown.length, quiet.log.sent], [0, []]);
+  // The run ended while the question was open: its receipt arrived. Nothing is sent, and that is said.
+  const ended = panelTui([startedNotice], [options => { ended.arrive(receipt); return options.options[1].value; }]);
+  t.after(ended.stop);
+  ended.command('azpr.panel.stop').run();
+  await settle();
+  assert.deepEqual([ended.log.sent, ended.log.toasts.map(toast => toast.message)], [[], [CHANGED]]);
+  // So it is for a run that ended and another one that started meanwhile (a review, then the preview that follows it
+  // by itself): the answer was for the first run.
+  const followed = panelTui([startedNotice], [options => {
+    followed.arrive({ text: `[AZPR ${STARTED_RUN}] CANCELLED; source review=${REVIEW}\nActed on review ${REVIEW}.` });
+    followed.arrive({ text: startedNotice.text.replaceAll(STARTED_RUN, '0c0ffee0'), metadata: { azpr: { next: { stop: '0c0ffee0' } } } });
+    return options.options[1].value;
+  }]);
+  t.after(followed.stop);
+  followed.command('azpr.panel.stop').run();
+  await settle();
+  assert.deepEqual([followed.log.sent, followed.log.toasts.map(toast => toast.message)], [[], [CHANGED]]);
+  // The button was held while the run ended and the preview's steps took the row: the release would act on a
+  // step that was not the one pressed, so it picks nothing. Progress of the same run changes nothing: the
+  // step pressed before it is the step let go after it.
+  const held = panelTui([startedNotice], [options => options.options[1].value]);
+  t.after(held.stop);
+  held.rows[0].element.props.onMouseDown(event());
+  held.arrive({ text: `[AZPR ${STARTED_RUN}] PROGRESS — Planning comments, page 1/1` });
+  held.rows[0].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual(held.log.sent.map(command => `/${command.name} ${command.text}`), [`/pr-stop ${STARTED_RUN}`]);
+  held.rows[0].element.props.onMouseDown(event());
+  held.arrive(receipt);
+  held.rows[0].element.props.onMouseUp(event());
+  await settle();
+  assert.deepEqual([held.log.sent.length, held.log.shown.length], [1, 1], 'The offer changed while the button was held.');
+  // A key that would only type a letter into the prompt is drawn dim.
+  const prompt = panelTui([startedNotice], [], { focused: false });
+  t.after(prompt.stop);
+  assert.deepEqual(prompt.rows.map(item => item.element.children[0].props.fg), ['muted']);
+  // An action that is open when the terminal part is unloaded sends nothing afterwards.
+  let answer;
+  const unloaded = panelTui([startedNotice], [() => new Promise(resolve => { answer = resolve; })]);
+  unloaded.command('azpr.panel.stop').run();
+  await settle();
+  unloaded.stop();
+  answer('stop');
+  await settle();
+  assert.deepEqual([unloaded.log.sent, unloaded.log.toasts], [[], []]);
+});
+
+test('in place of a document the panel says whether one is still awaited: not of a run that has ended', t => {
+  // What the panel shows where the report or preview would be.
+  const says = ui => {
+    const show = ui.all.find(node => node.component && Object.getOwnPropertyDescriptor(node.props ?? {}, 'fallback')?.get);
+    return show.props.fallback.children.map(child => (typeof child.shows === 'function' ? child.shows() : child.shows)).join('');
+  };
+  const none = panelTui([]);
+  t.after(none.stop);
+  assert.equal(says(none), 'No AZPR run in this conversation yet.');
+  const running = panelTui([startedNotice, { text: `[AZPR ${STARTED_RUN}] PROGRESS — Planning comments, page 1/1` }]);
+  t.after(running.stop);
+  assert.equal(says(running), 'No report or preview yet.');
+  // Stopped from the panel, or failed before it had anything to show: nothing more is coming, and "yet" would say otherwise.
+  for (const status of ['CANCELLED', 'INCOMPLETE', 'FAILED']) {
+    const ended = panelTui([startedNotice, { text: `[AZPR ${STARTED_RUN}] ${status}; source review=${REVIEW}\nActed on review ${REVIEW} (/pr-review) of PR #4 in Project/Repository.\nReason: User requested /pr-stop.\n\n<azpr_comment_data>\n\n</azpr_comment_data>\nAll grants are revoked.` }]);
+    t.after(ended.stop);
+    assert.equal(says(ended), 'This run ended with no report or preview to show.', status);
+  }
+});
+
+test('nothing is offered for a run or a preview whose notice does not say it, or on a host that cannot send a command', async t => {
+  // A run whose STARTED notice an earlier version wrote: it does not say that the run can be stopped.
+  const started = { text: startedNotice.text };
+  for (const [name, ui] of [['a run under way, started by an earlier version', panelTui([previewNotice, started])], ['a preview of an earlier version', panelTui([{ text: previewNotice.text }])],
+    ['no command to send', panelTui([previewNotice], [], { without: ['client.session.command'] })], ['no dialog to ask in', panelTui([previewNotice], [], { without: ['ui.dialog.select'] })],
+    ['a run under way, no command to send', panelTui([startedNotice], [], { without: ['client.session.command'] })], ['a run under way, no dialog to ask in', panelTui([startedNotice], [], { without: ['ui.dialog.select'] })]]) {
     t.after(ui.stop);
     assert.deepEqual(ui.rows, [], name);
-    for (const id of ['publish', 'adjust', 'reset']) {
+    for (const id of ['publish', 'adjust', 'reset', 'stop']) {
       assert.equal(ui.command(`azpr.panel.${id}`).enabled(), false, `${name}: ${id}`);
       ui.command(`azpr.panel.${id}`).run();
     }

@@ -9,9 +9,10 @@
 // The panel reads AZPR's own notices in the conversation, the report queued to a review session, and
 // the sessions' `metadata.azpr` (src/tui-model.mjs works out what to show). It reads no settings file:
 // the server part writes that setting into the metadata of its notices. After a review or a comment
-// preview it lists what can be done next in one row at its foot, picked instead of typed: each sends
-// the /pr-comment command a person would type, to the session on screen, after asking what is needed
-// (src/tui-actions.mjs). It sends nothing by itself, and never a prompt.
+// preview, and while a run is under way, it lists what can be done next in one row at its foot, picked
+// instead of typed: each sends the command a person would type (/pr-comment, or /pr-stop for the run
+// under way), to the session on screen, after asking what is needed (src/tui-actions.mjs). It sends
+// nothing by itself, and never a prompt.
 //
 // The dialogs of /pr-setup ask for AZPR's settings (src/tui-setup.mjs says what and in which order) and
 // hand every answer to the server part over the plugin's RPC. They read and write no file and make no
@@ -197,9 +198,17 @@ function Panel(props) {
     forget()
     context.ui.router.navigate({ type: "session", sessionID })
   }
-  // What a notice offers next, where this host lets the panel send a command; picking one asks first.
+  // What a notice offers next (a review or a preview its steps, a run under way that it can be stopped), where
+  // this host lets the panel send a command; picking one asks first.
   const offered = createMemo(() => (state.actions ? actionRows(model().next) : []))
   const offers = (id) => offered().some((item) => item.id === id)
+  // Steps are keyed by their name, so a step keeps its element, and with it its place and its hover, while the
+  // list is worked out again, which every notice and every answer of the server causes. A step that was drawn
+  // anew is, until the next frame, not where the renderer looks for what lies under the pointer: a press or a
+  // release in that moment would go nowhere, and the click would be lost. While a run is under way, the
+  // moments are many.
+  const steps = createMemo(() => offered().map((item) => item.id), [], { equals: (a, b) => a.length === b.length && a.every((id, index) => id === b[index]) })
+  const step = (id) => offered().find((item) => item.id === id) ?? { id, key: "", label: "" }
   let drawn = true
   onCleanup(() => (drawn = false))
   const act = (id) => {
@@ -303,14 +312,18 @@ function Panel(props) {
       { id: "azpr.panel.page.down", title: "AZPR panel: page down", group: "AZPR", bind: "pagedown", run: () => scroll?.scrollBy(page()) },
       { id: "azpr.panel.top", title: "AZPR panel: go to the top", group: "AZPR", bind: "home", run: () => scroll?.scrollTo(0) },
       { id: "azpr.panel.bottom", title: "AZPR panel: go to the end", group: "AZPR", bind: "end", run: () => scroll?.scrollTo(scroll.scrollHeight) },
-      // What a review or a preview offers; each is there only while the panel lists it.
+      // What a review, a preview or a run under way offers; each is there only while the panel lists it.
       { id: "azpr.panel.plan", title: "AZPR panel: preview the comments", group: "AZPR", bind: "c", enabled: () => offers("plan"), run: () => act("plan") },
       { id: "azpr.panel.publish", title: "AZPR panel: post the previewed comments", group: "AZPR", bind: "p", enabled: () => offers("publish"), run: () => act("publish") },
       { id: "azpr.panel.adjust", title: "AZPR panel: leave findings out or change a level", group: "AZPR", bind: "a", enabled: () => offers("adjust"), run: () => act("adjust") },
       { id: "azpr.panel.reset", title: "AZPR panel: reset your adjustments", group: "AZPR", bind: "u", enabled: () => offers("reset"), run: () => act("reset") },
+      { id: "azpr.panel.stop", title: "AZPR panel: stop the run under way", group: "AZPR", bind: "s", enabled: () => offers("stop"), run: () => act("stop") },
     ],
   }))
 
+  // A run with a receipt has ended: one that was stopped, or failed before it had anything to show, is not
+  // waited for, so the panel does not say "yet" of it.
+  const ended = () => Boolean(model().status) && model().status !== "RUNNING"
   // Rows are keyed by session, so a row keeps its place and its hover while the list is worked out again.
   const ids = createMemo(() => model().rows.map((row) => row.id), [], { equals: (a, b) => a.length === b.length && a.every((id, index) => id === b[index]) })
   const row = (id) => model().rows.find((item) => item.id === id) ?? { id, label: "", state: "", report: false }
@@ -372,7 +385,9 @@ function Panel(props) {
                   : model().inbox
                     ? "The report is in its session: open it above."
                     : model().run
-                      ? "No report or preview yet."
+                      ? ended()
+                        ? "This run ended with no report or preview to show."
+                        : "No report or preview yet."
                       : "No AZPR run in this conversation yet."}
               </text>
             }
@@ -391,11 +406,11 @@ function Panel(props) {
           conversation it is level with the host's status bar (the row under it is empty there as well), with
           the line level with the lower edge of the prompt. Keys and labels that do not fit in one row go on
           to the next one together. */}
-      <Show when={offered().length > 0}>
+      <Show when={steps().length > 0}>
         <box flexDirection="column" flexShrink={0}>
           <box height={1} flexShrink={0} border={["top"]} borderColor={palette().rule} />
           <box flexDirection="row" flexWrap="wrap" columnGap={3} flexShrink={0} paddingLeft={2} paddingRight={2}>
-            <For each={offered()}>{(item) => <Button item={item} colors={palette()} live={props.panel.focused} press={press} lift={lift} forget={forget} />}</For>
+            <For each={steps()}>{(id) => <Button item={step(id)} colors={palette()} live={props.panel.focused} press={press} lift={lift} forget={forget} />}</For>
           </box>
           <Show when={props.panel.presentation !== "fullscreen"}>
             <box height={1} flexShrink={0} />
@@ -445,8 +460,8 @@ function panelPart(context) {
   let unasked
   // The session in which another plugin's panel is open; the host shows one panel at a time.
   let occupied
-  // The rows of what a preview offers send a command of the server part, as the host's own prompt does for one
-  // that is typed. A host without that, or without the dialogs that ask first, shows no such rows.
+  // The steps at the panel's foot send a command of the server part, as the host's own prompt does for one
+  // that is typed. A host without that, or without the dialogs that ask first, shows no such steps.
   const actions =
     typeof context.client?.session?.command === "function" && typeof context.ui?.dialog?.select === "function" && typeof context.ui?.toast?.show === "function"
       ? createActions({
