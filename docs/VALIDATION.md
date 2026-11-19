@@ -164,6 +164,30 @@ The candidate draws them from their names, as it already drew the session
 rows from their IDs. This is no test of the package: the copies exist only
 for it, and the offline test holds that the row is drawn from names.
 
+### Reviews by a second model
+
+Three reviews of the pull request (GPT-6 Astra at its highest reasoning
+effort through the Codex CLI, in a read-only sandbox on a clean clone): of
+the first commit, of the correction described below, and of the tree with the
+recording; the commit after that one adds this record only. The reviewer ran
+the build check and the tests that write nothing, and probes of its own (a
+press under one run and a release under the next, on the element both share;
+an answer after the session changed or the panel closed); the tests that
+write files and the host fixtures ran here, on every tree. None of the three
+reported a defect.
+
+One defect was found by reading the change again while the first review ran,
+and corrected before the second. The question before a stop is a list the
+host lets a person search, and what is typed into it includes the key that
+opened it, when that key is pressed once more than meant. The host's search
+finds a letter anywhere in a title and selects the best match; `s` is in
+"Yes, stop it" and not in "No, let it run", so "yes" was the only row left,
+selected, for Enter to take. The two questions (before a stop and before
+posting) now give their list a search of its own, by the beginning of a row's
+title. On OpenCode 2.3.0, in the panel's fixture: after the second `s` the
+question lists no row, Enter does nothing, and with the letter deleted both
+rows are back.
+
 ### With a real model: a review stopped from the panel, and the recording
 
 The recording at the top of the README and the pictures of the panel in
