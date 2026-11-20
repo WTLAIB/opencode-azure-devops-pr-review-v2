@@ -173,6 +173,11 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   check or a review now names an unnamed conversation after the PR; a name
   that is there stays, and AZPR's own gives way to one given in the same
   moment.
+- **Stopping a run from the panel.** A STARTED notice says how its run is
+  stopped (`/pr-stop <run-id>`), but in the conversation, which a person who
+  reads the panel does not watch, and with an ID to copy. While a run is
+  under way the panel's foot now offers **Stop this run…**: it asks first,
+  with "no" first, and sends `/pr-stop` for that run.
 
 ## Planned
 

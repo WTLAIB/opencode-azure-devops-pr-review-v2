@@ -58,17 +58,26 @@ terminal UI, not by the service, and only when the terminal UI starts.
 - **Nothing to pick at the foot of the panel.** The steps are offered by the
   notice that happened last, and only by a comment preview or by a review
   that no preview follows: once a run starts or another receipt arrives, they
-  are gone. A preview that an earlier version left in the conversation offers
-  none; `/pr-comment --show` shows it again with them. A review with more
-  than 200 findings offers none either; type the commands its receipt names.
+  are gone, and a run under way offers only **Stop this run…**. A preview
+  that an earlier version left in the conversation offers none;
+  `/pr-comment --show` shows it again with them. A review with more than 200
+  findings offers none either; type the commands its receipt names. A run
+  that a version before 0.4.5 started cannot be stopped from the panel; type
+  the `/pr-stop` command its STARTED notice shows.
+- **The panel says RUNNING, and stopping answers "No active review in this
+  conversation matches that request".** The OpenCode process that ran the
+  run was restarted, so the run ended without a receipt and the panel has
+  nothing that says so. Nothing is running; the next run replaces what the
+  panel shows.
 - **Their keys are dim and do nothing.** The prompt has the keyboard, so `p`
   would type a letter. Click one of them, or click into the panel's text (or
   use OpenCode's "Focus right pane") to give the panel the keyboard.
 - **"Nothing was sent: what the panel showed has changed since."** A question
-  was open while the preview was planned again, another session came on
-  screen or the panel was closed. Read what the panel shows now, then pick.
-- **"/pr-comment was not started".** The reason follows, as for a typed
-  command: another AZPR command is running in the conversation or on the PR,
+  was open while the preview was planned again, the run it asked about ended,
+  another session came on screen or the panel was closed. Read what the
+  panel shows now, then pick.
+- **"/pr-comment was not started"** (or "/pr-stop"). The reason follows, as
+  for a typed command: another AZPR command is running in the conversation or on the PR,
   the review is no longer kept, or the terminal UI could not reach the
   OpenCode server. "Review … is no longer as it was shown" means that the
   preview was planned again or the findings were adjusted somewhere the

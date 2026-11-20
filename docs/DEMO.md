@@ -83,7 +83,7 @@ high: 0 · medium: 3 · low: 0
 
 ## The terminal panel
 
-![Real OpenCode terminal recording: a review starts and a panel opens beside the conversation, lists the reviewer sessions and the verifier, then shows the report and the comment preview rendered, scrolled to an inline comment.](assets/terminal-panel-teaser.gif)
+![Real OpenCode terminal recording: a review starts and a panel opens beside the conversation and lists the reviewer sessions, with a step at its foot that stops the run; the reviewers and the verifier finish; the panel shows the report rendered while the comment preview is planned, then the preview with the next step at its foot, and the findings as a list.](assets/terminal-panel-teaser.gif)
 
 The 15-second teaser uses a **real OpenCode 2.3.0 session and real configured
 model calls**; nothing was posted to Azure DevOps. The PR is a dedicated test
@@ -92,48 +92,59 @@ next 20 upstream commits as the source, and two deliberately seeded
 regressions. It demonstrates the workflow; it is not a benchmark of review
 accuracy or a promise about the time or cost of another PR.
 
-Recorded on **2026-11-17**, on Ubuntu 22.04 under WSL2, using
+Recorded on **2026-11-20**, on Ubuntu 22.04 under WSL2, using
 `openai/gpt-6-luna` for the functional reviewer, risk reviewer, verifier and
 comment planner. OpenCode's plugin manager had installed the plugin from
-public Git commit [`74d450d`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/74d450d09f4db546a2c3fee6e012ca3e4adea258)
-of the 0.4.2 release candidate; the settings were `afterReview: preview`,
-`returnReport: full`, `outputLanguage: en` and no debug records. Model IDs
+public Git commit [`4427f75`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/4427f75828e66d2643128a45945c3d18aebaad96)
+of the 0.4.5 release candidate; the settings were `afterReview: preview`,
+`returnReport: receipt`, `outputLanguage: en` and no debug records. Model IDs
 identify the configured selection, not an independently attested provider
 backend.
 
 The recording follows one conversation, to which `/pr-review <test-pr-url>`
-was sent once:
+was sent twice. The teaser shows the second review; the first one was stopped
+from the panel, which the first picture below shows.
 
-1. The review starts and the panel opens by itself beside the conversation.
-   It lists the four reviewer sessions (two roles, two shards) as they run and
-   end, and then the verifier.
-2. The review completes in 76 seconds. The four reviewers reported no
-   candidate; the verifier found one of the two seeded regressions itself
-   (medium, in `json_schema.py`). The panel shows the report rendered, names
-   the session that holds it and says that four sessions were deleted when
-   their run ended. The conversation shows the same report as Markdown
-   source, because this installation returns it in the receipt
-   (`returnReport: full`).
-3. The automatic preview follows 8 seconds later, with a summary and one
-   inline comment, and takes the report's place in the panel. Nothing is
-   posted.
-4. A click in the panel and Page Down scroll the preview to the inline
-   comment as it would be posted.
+1. A first review starts and the panel opens by itself beside the
+   conversation, which the review names after the PR. It lists the four
+   reviewer sessions (two roles, two shards) as running, and its foot offers
+   **Stop this run…**. A click on that step asks first, with "No, let it run"
+   first; "Yes, stop it" ends the run: the panel shows `CANCELLED` within a
+   second and says that the four sessions were deleted and that the run left
+   nothing to show.
+2. The second review completes in about 70 seconds. The reviewers reported
+   two candidates, and the verifier confirmed one finding, one of the two
+   seeded regressions (medium, in `json_schema.py`). While it runs, the foot
+   offers to stop it; the rows of the sessions change from `running` to
+   `finished`, and the verifier follows.
+3. The automatic preview is planned in a run of its own, which can be stopped
+   as well. Meanwhile the panel shows the report rendered, names the session
+   that holds it and says that four sessions were deleted when their run
+   ended. With `returnReport: receipt` the conversation shows the receipt, not
+   the report.
+4. The preview arrives 7 seconds later, with a summary and one inline comment,
+   and takes the report's place. The foot now offers **Post 2 comments…** and
+   **Adjust findings…**. Nothing is posted.
+5. A click on **Adjust findings…** opens the findings as a list. It is left
+   with Escape, and nothing is changed.
 
-![Actual review result in the panel: the run's status and sessions and the report with its summary table rendered, beside the receipt's Markdown source in the conversation.](assets/terminal-panel-report.png)
+![Actual question before a stop: "Stop this run?", with "No, let it run" and the run's ID and command selected first, and "Yes, stop it" below; behind it the panel with four reviewer sessions running.](assets/terminal-panel-stop.png)
 
-![Actual comment preview in the panel: the inline comment with its summary, evidence and suggested fix, beside the preview's receipt in the conversation.](assets/terminal-panel-preview.png)
+![Actual review result in the panel: the comment run's status and sessions, the report with its summary table rendered, and the step that stops the run at the panel's foot, beside the receipt in the conversation.](assets/terminal-panel-report.png)
+
+![Actual comment preview in the panel: the disclosure line, the review notes and the summary table, with "Post 2 comments…" and "Adjust findings…" at the panel's foot, beside the preview's receipt in the conversation.](assets/terminal-panel-preview.png)
 
 These are faithful rendered frames from one terminal capture, **not Azure
-DevOps browser screenshots**. The command was submitted through OpenCode's
-native command API to the session shown in the attached TUI, so it appears as
-AZPR's notices and a segment caption rather than as typed input; the click and
-the keys were sent to the terminal itself. The bottom six rows (the empty
-input box with the conversation's chat model, and the status/path bar) are
-cropped, which also cuts the last rows of the panel. The panel was not
-scrolled as far as the report's scope section, which names the Azure DevOps
-organization, and no session row was opened, since a reviewer session names
-it too. The original private cast is unchanged.
+DevOps browser screenshots**, and they show the whole terminal: nothing is
+cropped. The commands were submitted through OpenCode's native command API to
+the session shown in the attached TUI, so they appear as AZPR's notices and a
+segment caption rather than as typed input; the clicks and the keys were sent
+to the terminal itself. The input box names the conversation's model, which
+was set to the model the review used and never ran, and the status bar names
+the directory the conversation was created in for the recording. The panel
+was not scrolled as far as the report's scope section, which names the Azure
+DevOps organization, and no session row was opened, since a reviewer session
+names it too. The original private cast is unchanged.
 
 ## Adjust findings before publishing
 

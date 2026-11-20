@@ -812,7 +812,8 @@ newest report or comment preview as rendered Markdown.
 The panel is a reader first. It sends no prompt, calls no Azure DevOps API
 and reads no settings file (the dialogs of [setup](#setup), which the same
 terminal part brings, are a separate piece with rules of their own). The one
-thing it sends is the `/pr-comment` command of a step a person picked (see
+thing it sends is the command of a step a person picked: `/pr-comment` for
+what a review or a preview offers, `/pr-stop` for a run under way (see
 [what can be done next](#what-can-be-done-next)). What it shows comes from
 three things the runtime already produced:
 
@@ -937,7 +938,12 @@ decided several things in it:
   was pressed and then left is not picked either, although OpenTUI sends the
   release to the element that was pressed; and a press ends with any other
   press or release the panel sees, so that a gesture that was given up does
-  not make a later release a click. A panel that
+  not make a later release a click. The steps are drawn from their names, so
+  each keeps its element while the panel's content is worked out again, which
+  every notice and every answer of the server causes: OpenTUI finds what lies
+  under the pointer in the frame it drew last, and a step that was made anew
+  since is not in it, so a press or a release in that moment went nowhere and
+  the click was lost (0.4.4 drew them from objects made anew each time). A panel that
   opened by itself and cannot hand the keyboard back closes again and shows a
   toast instead: in a terminal too narrow for two panes, where the host shows
   the panel alone, and while a dialog is open. Nor does it open by itself
@@ -1033,7 +1039,39 @@ the one shown, offers nothing, and the commands are typed as the receipt says
 them. `buildPanel` also holds an offer to its document (planning only under a
 report, never under a preview) and gives it the ID of its notice (`offer`).
 Only the notice that happened last offers: once a run starts or another
-receipt arrives, nothing is offered.
+receipt arrives, what a review or a preview offered is gone.
+
+**A run under way offers to be stopped.** A STARTED notice ends with the
+command that stops its run, in the conversation and with an ID to copy. The
+same notice therefore carries the run's ID as data (`azpr.next.stop`, written
+where the notice is sent, `launch` in `runtime.mjs`), for every command that
+starts a run: a review, a quick or deep review, a comment run, also the one
+that follows a review by itself, and a check. The model (`stopOf`) takes it
+only as an ID of the right form that names the run the very notice starts.
+That notice offers from then until its run has a receipt, whatever progress
+the run reports in between (progress notices carry nothing and are sent as
+before), and it offers nothing else: the row at the foot is **Stop this
+run…** alone. Its offer is the STARTED notice's ID, so a step that was picked
+for one run is not taken for the comment run that follows it. The step asks
+first, in a list whose first row lets the run go on and names the run and its
+command, and then sends `/pr-stop <run>` to the session on screen. The
+command names its run and needs no word like `--seen`: the runtime stops a
+run only while it is under way and only from its own conversation or one of
+its sessions, so a step that reaches it late stops nothing, and never another
+run. What the runtime answers to a stop is a notice that is neither a start,
+progress nor a receipt, and changes nothing shown: the run is under way until
+its receipt arrives (`CANCELLED`), which in the fixtures takes a fraction of
+a second. A run whose STARTED notice an earlier version wrote, and a run that
+the panel shows as running after the OpenCode process that ran it was
+restarted, cannot be told from here: the first offers nothing, and a stop of
+the second is answered with "No active review in this conversation matches
+that request". The step stands where the first step of a receipt stands. A
+click that was aimed at it in the moment its run ends is therefore a click on
+that first step, pressed and let go on one offer like any other: after a
+preview that is **Post N comments…**, which asks first; after a review that no
+preview follows (`afterReview: none`) it is **Preview comments**, which is
+sent at once, so a preview is planned that was not asked for. Nothing is
+posted by it.
 
 `src/tui-actions.mjs` turns an offer into the steps and into the commands
 they send. It imports nothing, so the order of its dialogs is tested with
@@ -1043,27 +1081,35 @@ crosses it, in place while the text scrolls, level with the host's status bar
 beside a conversation, and wrapping as whole items where they do not fit. A
 step is clicked, or picked with its key while the panel has the keyboard; the
 key is drawn in its colour only then. A label that ends in "…" asks before
-anything is sent. Posting asks in a list whose first row posts nothing: the
-host's confirm dialog would confirm by default. Adjusting lists the findings;
+anything is sent. Posting asks in a list whose first row posts nothing, and
+stopping in one whose first row lets the run go on: the host's confirm dialog
+would confirm by default. What is typed into such a question finds a row by
+the beginning of its title (the list's own `search`, `byBeginning`): the
+host's search finds a letter anywhere in a title and selects the best match,
+and the key that opened the question, pressed once more than meant, is typed
+into it. `s` is in "Yes, stop it" and not in "No, let it run", so the host's
+search would leave "yes" as the only row for Enter to take; by the beginning
+of a title it leaves none. Adjusting lists the findings;
 picking one chooses its level or leaves it out, and everything is applied
 with one command that gives both lists in full, since each list of
 `/pr-comment` replaces the saved one. It is applied from the foot of that
 dialog (`DialogSelectOptions.actions`, `ctrl+s` or a click), which stays in
 view however long the list is, and from the list's last row, for a host that
 draws no such foot; the foot's action does not close a dialog, so it closes it
-itself, once and only while that list is the dialog that is open. Every command names its review, so that what is on screen is what is
+itself, once and only while that list is the dialog that is open. Every command names its review (`/pr-stop` its run), so that what is on screen is what is
 acted on, whatever the conversation's current review is by then. The view
 sends it with `client.session.command` to the session on screen, as the
 host's own prompt does for a typed command, and the server part takes it like
-one: its checks, its STARTED notice and its receipt are the same.
+one: its checks, its notices and its receipt are the same.
 
 A dialog can stay open for any time. With each step the view gives the
 actions a way to ask whether the step is still what the panel offers
 (`still`): the same panel, still drawn and the one the host shows in that
 session, with the same notice offering. An answer that comes back for
 anything else sends nothing and says so in a toast: a preview that was
-planned again while the question was open is not posted unread, and nothing
-goes to a session that left the screen.
+planned again while the question was open is not posted unread, a run that
+has ended meanwhile is not asked to stop, and nothing goes to a session that
+left the screen.
 
 That check knows only what this conversation was told. A command typed in a
 review's own session is answered there, and another client's panel may have
@@ -1087,7 +1133,11 @@ without the list dialog shows no steps.
 
 The panel reads a document from its beginning when another one takes its
 place (a preview planned again), and keeps one empty row under its header,
-which the text that scrolls never touches.
+which the text that scrolls never touches. Where it has no document to show
+it says so: "No report or preview yet." while a run is under way, and "This
+run ended with no report or preview to show." once the run has a receipt (a
+run that was stopped, or one that failed before it had anything), since "yet"
+would have a person wait for what is not coming.
 
 **Why a compiled file.** OpenCode compiles a plugin's JSX when it loads it,
 but OpenCode 2.3.0 (OpenTUI 0.8.4) skips every file under `node_modules`,

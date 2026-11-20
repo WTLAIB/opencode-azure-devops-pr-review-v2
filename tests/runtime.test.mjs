@@ -13,7 +13,7 @@ import { ROLES } from '../src/config.mjs';
 import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
 import { buildPanel, nextOf, opensPanel } from '../src/tui-model.mjs';
-import { actionRows, adjustCommand, planCommand, publishCommand, savedAdjustments } from '../src/tui-actions.mjs';
+import { actionRows, adjustCommand, planCommand, publishCommand, savedAdjustments, stopCommand } from '../src/tui-actions.mjs';
 import { fakeAzure, toolRegistry, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -3269,26 +3269,70 @@ test('terminalPanel: manual travels with every notice, for the terminal panel; t
   const kinds = ['STARTED /pr-review', 'PROGRESS', 'COMPLETE', '# AZPR', 'STARTED /pr-comment', 'PREVIEW', '[AZPR] Saved preview', 'READY'];
   for (const kind of kinds) assert.ok(f.notices.some(n => n.text.includes(kind)), kind);
   assert.ok(f.notices.length >= kinds.length);
-  // A notice that offers a next step also carries it, under the same key: the receipt of a review that no preview
-  // follows by itself (afterReview is none in this fixture), a preview, and the saved preview shown again. Every
-  // other notice carries only the mark.
-  const offers = n => /^\[AZPR [a-f0-9]{8}\] (?:PREVIEW;|COMPLETE\n)|^\[AZPR\] Saved preview /.test(n.text);
+  // A notice that offers a next step also carries it, under the same key: a run's STARTED notice (the run can be
+  // stopped), the receipt of a review that no preview follows by itself (afterReview is none in this fixture), a
+  // preview, and the saved preview shown again. Every other notice carries only the mark.
+  const offers = n => /^\[AZPR [a-f0-9]{8}\] (?:STARTED \/pr-|PREVIEW;|COMPLETE\n)|^\[AZPR\] Saved preview /.test(n.text);
   for (const n of f.notices) {
     assert.equal(n.metadata?.azpr?.panel, 'manual', n.text.slice(0, 60));
     assert.deepEqual(Object.keys(n.metadata.azpr).sort(), offers(n) ? ['next', 'panel'] : ['panel'], n.text.slice(0, 60));
   }
-  assert.equal(f.notices.filter(offers).length, 3);
+  assert.equal(f.notices.filter(offers).length, 6, 'Three runs started (a review, a preview, a check), and three notices offer what follows a review or a preview.');
   // Nothing of it opens the panel; the same texts without the mark do.
   for (const n of f.notices) assert.equal(opensPanel(n.text, n.metadata), false);
   assert.equal(f.notices.filter(n => opensPanel(n.text)).length, 6, 'Two STARTED notices, the receipt of the review, the preview, the saved preview shown again and the table of checks.');
-  // The default: no metadata at all, so every request to the host is the one earlier versions made.
+  // The default: no mark, and no metadata at all on a notice that offers nothing, so those requests to the host
+  // are the ones earlier versions made.
   const g = await fixture(t);
   await g.command();
   await g.command('pr-comment', '');
   assert.ok(g.notices.length >= 5 && g.notices.every(n => !Object.hasOwn(n, 'metadata') || offers(n)));
-  assert.deepEqual(g.notices.filter(n => Object.hasOwn(n, 'metadata')).map(n => Object.keys(n.metadata.azpr)), [['next'], ['next']], 'Only the notices that offer a next step carry metadata, and only that.');
-  assert.deepEqual(Object.keys(g.notices[0]).sort(), ['delivery', 'description', 'resume', 'sessionID', 'text']);
+  assert.deepEqual(g.notices.filter(n => Object.hasOwn(n, 'metadata')).map(n => [/^\[AZPR [a-f0-9]{8}\] ([A-Z]+)/.exec(n.text)[1], Object.keys(n.metadata.azpr)]),
+    [['STARTED', ['next']], ['COMPLETE', ['next']], ['STARTED', ['next']], ['PREVIEW', ['next']]], 'Only the notices that offer a next step carry metadata, and only that.');
+  const plain = g.notices.find(n => /\] PROGRESS /.test(n.text));
+  assert.deepEqual(Object.keys(plain).sort(), ['delivery', 'description', 'resume', 'sessionID', 'text']);
   assert.equal(g.notices.filter(n => opensPanel(n.text, n.metadata)).length, 4);
+});
+
+test('a run says with its STARTED notice that it can be stopped, and the step the terminal panel makes of it stops that run', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, { async during({ role }) { if (ROLES[role].format === 'initial') { entered.resolve(); await release.promise; } } });
+  t.after(() => release.resolve());
+  const running = f.command();
+  await entered.promise;
+  // What the notice's last sentence says is there as data as well: the ID of the very run it starts.
+  const started = f.notices.find(n => /\] STARTED \/pr-review/.test(n.text));
+  const run = reviewId(started.text);
+  assert.match(started.text, new RegExp(`Stop with /pr-stop ${run}\\.$`));
+  assert.deepEqual(started.metadata, { azpr: { next: { stop: run } } });
+  // Its progress carries nothing: those notices are sent as before.
+  const reported = f.notices.filter(n => /\] PROGRESS /.test(n.text));
+  assert.ok(reported.length >= 1 && reported.every(n => !Object.hasOwn(n, 'metadata')));
+  // The panel offers one step while the run is under way, whatever progress followed the notice.
+  const panel = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual([panel.status, panel.next.stop, panel.next.command], ['RUNNING', run, 'pr-review']);
+  assert.match(panel.next.offer, /^msg_/);
+  assert.deepEqual(actionRows(panel.next).map(row => [row.id, row.key, row.label]), [['stop', 's', 'Stop this run…']]);
+  const command = stopCommand(panel.next);
+  assert.deepEqual(command, { name: 'pr-stop', text: run });
+  // From another conversation that command stops nothing: the runtime takes it like a typed one.
+  assert.match(await f.command(command.name, command.text, 'another'), /No active review in this conversation/);
+  assert.equal(buildPanel(panelSource(f), 'ordinary').status, 'RUNNING');
+  // Sent to the conversation, it stops the run. Until the receipt arrives the run is still under way in the panel.
+  assert.match(await f.command(command.name, command.text), new RegExp(`^\\[AZPR ${run}\\] Authorization revoked and cancellation requested`));
+  assert.deepEqual([buildPanel(panelSource(f), 'ordinary').status, buildPanel(panelSource(f), 'ordinary').next.stop], ['RUNNING', run]);
+  release.resolve();
+  const receipt = await running;
+  assert.match(receipt, new RegExp(`^\\[AZPR ${run}\\] CANCELLED`));
+  assert.equal(Object.hasOwn(f.notices.find(n => n.text === receipt), 'metadata'), false, 'A stopped review offers nothing.');
+  const after = buildPanel(panelSource(f), 'ordinary');
+  assert.deepEqual([after.run, after.status, Object.hasOwn(after, 'next')], [run, 'CANCELLED', false]);
+  // A step that reaches the runtime after its run has ended stops nothing, and no other run.
+  const next = f.command();
+  const second = await f.waitFor(notices => notices.findLast(n => /\] STARTED \/pr-review/.test(n.text) && !n.text.includes(run)));
+  await f.command(command.name, command.text);
+  assert.equal(f.notices.filter(n => n.sessionID === 'ordinary' && /^\[AZPR\] No active review in this conversation matches that request\./.test(n.text)).length, 1);
+  assert.match(await next, new RegExp(`^\\[AZPR ${reviewId(second.text)}\\] COMPLETE`), 'The run that started since went on.');
 });
 
 test('a preview carries what it offers next for the terminal panel, as the review is at that moment', async t => {

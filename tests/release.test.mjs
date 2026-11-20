@@ -42,11 +42,14 @@ test('the terminal part is shipped compiled and binds only what OpenCode provide
   assert.doesNotMatch(parts, /settings\.json|node:fs|process\.env/, 'The terminal part reads no file and no environment.');
   // Setup's dialogs talk to the server part only, over AZPR's own RPC, and nothing asks Azure DevOps anything.
   assert.doesNotMatch(parts, /\bfetch\(|dev\.azure\.com\/[^{<]|session\.(?:prompt|synthetic)\b/, 'The terminal part asks Azure DevOps nothing and sends no prompt or notice.');
-  // One place sends a command of the server part: the rows of what a preview offers, which a person picks. What
-  // they send is made in tui-actions.mjs, of /pr-comment alone; setup and the model of the panel send nothing.
+  // One place sends a command of the server part: the steps at the panel's foot, which a person picks. What they
+  // send is made in tui-actions.mjs, of two commands and no other: /pr-comment for what a review or a preview
+  // offers, and /pr-stop for the run under way, made in one place of that run's ID alone. Setup and the model of
+  // the panel send nothing.
   assert.equal([...compiled.matchAll(/session\.command\(/g)].length, 1, 'The view sends a command in one place.');
   assert.doesNotMatch(read('src/tui-model.mjs') + read('src/tui-setup.mjs') + read('src/tui-actions.mjs'), /session\.command\b/);
-  assert.deepEqual([...new Set([...read('src/tui-actions.mjs').matchAll(/name: '([^']+)'/g)].map(match => match[1]))], ['pr-comment'], 'The rows send /pr-comment and nothing else.');
+  assert.deepEqual([...new Set([...read('src/tui-actions.mjs').matchAll(/name: '([^']+)'/g)].map(match => match[1]))].sort(), ['pr-comment', 'pr-stop'], 'The steps send /pr-comment or /pr-stop and nothing else.');
+  assert.deepEqual([...read('src/tui-actions.mjs').matchAll(/name: 'pr-stop'[^}]*/g)].map(match => match[0].trim()), ["name: 'pr-stop', text: next.stop"], '/pr-stop names the run it was offered for, and nothing else.');
   // One command of its own, to show or hide the panel. Whether the panel opens by itself is a setting of AZPR
   // (terminalPanel), which reaches it with the notices: it keeps no preference of its own.
   assert.deepEqual([...compiled.matchAll(/slash:\s*\{\s*name:\s*"([^"]+)"/g)].map(match => match[1]), ['pr-panel']);

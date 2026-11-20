@@ -32,7 +32,7 @@ opencode models
 ## 2. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.4
+opencode plugin add opencode-azure-devops-pr-review@0.4.5
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -41,7 +41,7 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.4'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.5'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -139,10 +139,11 @@ without running a model.
 
 In the terminal UI a panel opens beside the conversation: it lists the
 review's sessions while they run, and then shows the report and the comment
-preview rendered instead of as Markdown source. After the preview its foot
-lists what you can do next, where reading ends (`[p] Post 4 comments…`,
-`[a] Adjust findings…`), to click, so the commands of the next two sections
-need not be typed; posting asks once more before anything is sent (see the
+preview rendered instead of as Markdown source. Its foot lists what you can
+do next, to click: `[s] Stop this run…` while a run is under way, and after
+the preview, where reading ends, `[p] Post 4 comments…` and
+`[a] Adjust findings…`, so the commands of the next two sections need not be
+typed; stopping and posting ask once more before anything is sent (see the
 [terminal panel](../README.md#terminal-panel)).
 
 Follow the progress notices and wait for the review receipt. If the COMPLETE
@@ -168,8 +169,9 @@ session and a comment-planning session; `/pr-quick` commonly uses one review
 session plus comment planning. **A session is not a single model request**:
 tool reads, corrections, retries, more shards or planning pages add requests
 and cost. Refreshing a preview with `/pr-comment` runs planning
-again. Use the displayed `/pr-stop <run-id>` to cancel an active command; no
-cost cap is configured by default.
+again. Use the displayed `/pr-stop <run-id>` to cancel an active command, or
+**Stop this run…** at the foot of the terminal panel; no cost cap is
+configured by default.
 
 ## Optional: adjust findings before publishing
 
@@ -324,7 +326,7 @@ follow the migration notes in [installation](../README.md#native-package-npm-or-
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.4.4 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.4.tar.gz),
+[v0.4.5 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.5.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings: `/pr-setup` in the terminal UI

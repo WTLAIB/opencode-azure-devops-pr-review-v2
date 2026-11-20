@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { actionRows, adjustCommand, createActions, planCommand, publishCommand, resetCommand, savedAdjustments } from '../src/tui-actions.mjs';
-import { nextOf } from '../src/tui-model.mjs';
+import { actionRows, adjustCommand, createActions, planCommand, publishCommand, resetCommand, savedAdjustments, stopCommand } from '../src/tui-actions.mjs';
+import { nextOf, stopOf } from '../src/tui-model.mjs';
 import { parseCommentRequest } from '../src/output.mjs';
 
 const REVIEW = 'bb6a8570', SESSION = 'ses_conversation0000000000001';
@@ -13,6 +13,10 @@ const offer = (extra = {}, findings = [
   { id: 'R-2', severity: 'high', summary: 'snapshot returns live state' },
   { id: 'F-3', severity: 'low', summary: 'ordering uses local time' }]) =>
   nextOf({ azpr: { next: { review: REVIEW, state: STATE, target: `review ${REVIEW} (/pr-review) of PR #4 in Project/Repository`, publish: true, adjust: true, posts: 4, findings, ...extra } } }, REVIEW);
+// What a run under way offers, as the panel's model hands it on: the run its STARTED notice says can be stopped
+// (`stopOf`), and the command that notice names.
+const RUN = '36ed1562';
+const running = (command = 'pr-review') => ({ stop: stopOf({ azpr: { next: { stop: RUN } } }, RUN), command });
 
 /**
  * The actions with dialogs that answer from a list, in order; every dialog, toast and command is recorded.
@@ -72,6 +76,10 @@ test('a label that ends in "…" asks before anything is sent, and one that does
     }
   }
   assert.deepEqual(seen, ['publish', 'adjust', 'reset', 'plan']);
+  // Stopping a run asks first as well, and its label says so.
+  const stop = host([undefined]);
+  await stop.actions.run('stop', running(), SESSION);
+  assert.deepEqual([actionRows(running())[0].label.endsWith('…'), stop.shown.length, stop.sent], [true, 1, []]);
 });
 
 test('a command names its review and is made only of checked IDs and level names', () => {
@@ -304,4 +312,91 @@ test('after the terminal part was unloaded nothing is asked or sent, whatever an
   const list = host(['F-1', () => { list.actions.stop(); return 'low'; }, options => value(options, 'Apply')]);
   await list.actions.run('adjust', offer(), SESSION);
   assert.deepEqual([list.sent, list.left()], [[], 1]);
+});
+
+test('a run under way offers one step: stopping it, asked first with "no" first, as /pr-stop with the run\'s ID', async () => {
+  const next = running();
+  assert.equal(next.stop, RUN);
+  assert.deepEqual(actionRows(next), [{ id: 'stop', key: 's', label: 'Stop this run…' }], 'Alone in the row, and not the step anything leads to.');
+  assert.deepEqual(stopCommand(next), { name: 'pr-stop', text: RUN }, 'The command names its run and nothing else: it stops no other one.');
+  const yes = host([options => value(options, 'Yes')]);
+  await yes.actions.run('stop', next, SESSION);
+  assert.deepEqual(yes.titles(), ['Stop this run?']);
+  assert.deepEqual(yes.shown[0].options.map(option => [option.title, option.value, option.description]),
+    [['No, let it run', 'keep', `AZPR ${RUN} (/pr-review)`], ['Yes, stop it', 'stop', 'Sent requests may still be billed']], 'A key pressed twice chooses the first row: the run goes on.');
+  assert.deepEqual(yes.sent, [{ sessionID: SESSION, name: 'pr-stop', text: RUN }]);
+  assert.deepEqual(yes.toasts, []);
+  for (const answer of ['keep', undefined]) {
+    const no = host([answer]);
+    await no.actions.run('stop', next, SESSION);
+    assert.deepEqual([no.sent, no.toasts], [[], []], String(answer));
+  }
+  // Which run it is, in the runtime's words; a STARTED notice whose command the panel does not know names only the run.
+  const comment = host(['keep']);
+  await comment.actions.run('stop', running('pr-comment'), SESSION);
+  assert.equal(comment.shown[0].options[0].description, `AZPR ${RUN} (/pr-comment)`);
+  const unnamed = host(['keep']);
+  await unnamed.actions.run('stop', running(''), SESSION);
+  assert.equal(unnamed.shown[0].options[0].description, `AZPR ${RUN}`);
+  // A run under way offers nothing else, and a review or a preview does not offer stopping.
+  const other = host([]);
+  for (const id of ['plan', 'publish', 'adjust', 'reset']) await other.actions.run(id, next, SESSION);
+  await other.actions.run('stop', offer(), SESSION);
+  await other.actions.run('stop', offer({ plan: true, publish: false, posts: 0 }), SESSION);
+  assert.deepEqual([other.shown, other.sent], [[], []]);
+});
+
+test('a run that ended while the question was open is not stopped, and a stop that was refused is said', async () => {
+  const CHANGED = 'Nothing was sent: what the panel showed has changed since. Read it again, then pick.';
+  // The run's receipt arrived, another run started, or the panel was closed, while the question was open.
+  let offered = true;
+  const ended = host([options => { offered = false; return value(options, 'Yes'); }]);
+  await ended.actions.run('stop', running(), SESSION, () => offered);
+  assert.deepEqual([ended.sent, ended.toasts.map(toast => [toast.variant, toast.message])], [[], [['warning', CHANGED]]]);
+  // Still under way: sent, and nothing is said.
+  const kept = host([options => value(options, 'Yes')]);
+  await kept.actions.run('stop', running(), SESSION, () => true);
+  assert.deepEqual([kept.sent.map(command => `/${command.name} ${command.text}`), kept.toasts], [[`/pr-stop ${RUN}`], []]);
+  // The server part refused it, as for a session that is being deleted: its own words, on one line.
+  const refused = host([options => value(options, 'Yes')], { send: async () => { throw new Error('[AZPR] This reviewer session is being deleted:\nits run has ended.'); } });
+  await refused.actions.run('stop', running(), SESSION);
+  assert.deepEqual(refused.toasts.map(toast => [toast.variant, toast.message]), [['error', '/pr-stop was not started: [AZPR] This reviewer session is being deleted: its run has ended.']]);
+  // One action at a time: while the question is open, another pick asks nothing.
+  let release;
+  const waiting = host([() => new Promise(resolve => { release = resolve; })]);
+  const open = waiting.actions.run('stop', running(), SESSION);
+  await Promise.resolve();
+  await waiting.actions.run('stop', running(), SESSION);
+  assert.deepEqual([waiting.actions.running, waiting.shown.length], [true, 1]);
+  // Unloaded while the question was open: nothing is sent or said, whatever the answer.
+  waiting.actions.stop();
+  release('stop');
+  await open;
+  assert.deepEqual([waiting.sent, waiting.toasts], [[], []]);
+});
+
+test('what is typed into a question answers by the beginning of a row: a step\'s key pressed once more leaves no row to take', async () => {
+  // The host's search finds a letter anywhere in a title and lists the best match first; "s" is in "Yes, stop it"
+  // and not in "No, let it run". The key that opened the question, pressed again, is typed into it.
+  const titles = (dialog, query) => dialog.search(query, dialog.options).map(option => option.title);
+  const stop = host(['keep']);
+  await stop.actions.run('stop', running(), SESSION);
+  const asked = stop.shown[0];
+  assert.deepEqual(titles(asked, ''), ['No, let it run', 'Yes, stop it'], 'Nothing typed: every row, the one that keeps the run first.');
+  for (const stray of ['s', 'ss', 'sss', 't', 'o', 'e', 'x', '  s  ']) assert.deepEqual(titles(asked, stray), [], JSON.stringify(stray));
+  assert.deepEqual([titles(asked, 'y'), titles(asked, 'YES'), titles(asked, 'yes, stop'), titles(asked, ' y ')], [['Yes, stop it'], ['Yes, stop it'], ['Yes, stop it'], ['Yes, stop it']], 'Typing the answer finds it.');
+  assert.deepEqual([titles(asked, 'n'), titles(asked, 'No, let')], [['No, let it run'], ['No, let it run']]);
+  assert.deepEqual(titles(asked, undefined), ['No, let it run', 'Yes, stop it']);
+  assert.ok(asked.search('', asked.options).every((option, index) => option === asked.options[index]), 'The rows themselves, in the order they are listed.');
+  // The same for posting, whose key is in both rows: neither is found by it.
+  const post = host(['keep']);
+  await post.actions.run('publish', offer(), SESSION);
+  const posting = post.shown[0];
+  assert.deepEqual(titles(posting, ''), ['No, post nothing', 'Yes, post 4 comments']);
+  for (const stray of ['p', 'pp', 'o', 's']) assert.deepEqual(titles(posting, stray), [], stray);
+  assert.deepEqual([titles(posting, 'y'), titles(posting, 'n')], [['Yes, post 4 comments'], ['No, post nothing']]);
+  // The lists of findings and of a finding's levels are searched as the host searches: there a person looks for one of many.
+  const list = host([undefined]);
+  await list.actions.run('adjust', offer(), SESSION);
+  assert.equal('search' in list.shown[0], false);
 });

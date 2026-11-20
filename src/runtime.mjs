@@ -683,8 +683,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   // The terminal panel reads no settings file: what it needs of the settings travels with the notices. Only
   // terminalPanel: manual is marked, so the default sends every notice exactly as before.
   const noticeMetadata = settings.terminalPanel === 'manual' ? { azpr: { panel: 'manual' } } : undefined;
-  // `extra` is what one notice carries besides, under the same key: the next steps of a preview, as data for the
-  // panel's rows. No model reads a notice's metadata, and every other notice is sent exactly as before.
+  // `extra` is what one notice carries besides, under the same key: what it offers as a next step, as data for the
+  // steps at the panel's foot (stopping the run a STARTED notice announces; the next steps of a review or a
+  // preview). No model reads a notice's metadata, and every other notice is sent exactly as before.
   const notice = ({ extra, ...input }) => appendReport(context, { ...input, metadata: extra ? { azpr: { ...noticeMetadata?.azpr, ...extra } } : noticeMetadata });
   async function deliver(sessionID, body, runId, extra) {
     let failure;
@@ -1782,8 +1783,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     jobs.add(completion);
     void completion.finally(() => jobs.delete(completion));
     try {
+      // What the notice's last sentence says is also there as data, for the terminal panel: the run can be
+      // stopped, by its ID, from now until its receipt.
       await deadline(signal => notice({ sessionID,
-        text: `[AZPR ${run.id}] STARTED /${name}${run.startLabel ? ` ${run.startLabel}` : ''}. Work continues in this OpenCode process; the result will return to this conversation.${run.startNote ?? ''} Stop with /pr-stop ${run.id}.`, signal }), 10000);
+        text: `[AZPR ${run.id}] STARTED /${name}${run.startLabel ? ` ${run.startLabel}` : ''}. Work continues in this OpenCode process; the result will return to this conversation.${run.startNote ?? ''} Stop with /pr-stop ${run.id}.`, signal,
+        extra: { next: { stop: run.id } } }), 10000);
     } catch (error) {
       await abortRun(run, 'The command start notice could not be queued. No review was started.', 'INCOMPLETE');
       throw error;
