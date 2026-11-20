@@ -59,6 +59,44 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.4.5 after publication (2026-11-20)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.0 and tmux 3.2a, in isolated OpenCode profiles with the fake model and
+Azure DevOps services, except for the last item.
+
+- **The merged tree.** The pull request was merged with a merge commit whose
+  tree is that of the candidate's last commit. CI passed on that commit, on
+  `main` and on the tag. That last commit adds the record of the reviews to
+  this page and nothing else; the third review was of the tree before it.
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. Both passed the clean-directory installation check: 23 runtime
+  modules, 9 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.5`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (110 model and 194 Azure DevOps requests), the terminal panel's fixture
+  (26 and 57, with one request of the conversation's model) and the setup
+  fixture (no model request, 16 Azure DevOps requests). In the terminal UI a
+  review was stopped from the panel's foot: the step was clicked and
+  declined, picked again with its key, the key pressed once more left no row
+  of the question to take, and "Yes" ended the run `CANCELLED`.
+- **The npm package.** The registry's integrity and shasum for 0.4.5 equal
+  those of the package built from the tag (38 files), the tarball downloaded
+  from the registry is byte-identical to it, and `latest` names 0.4.5.
+  Installed from the registry, the package passed the same three fixtures
+  with the same request counts.
+- **On the maintainer's everyday service**, which runs the npm package since
+  the release, the 38 installed files are those of the package built from the
+  tag, and `/pr-check` of the 1-file test PR reported `READY` and named
+  0.4.5; its `STARTED` notice carried the offer to stop the run, as data. No
+  model ran.
+
+The step that stops a run was used once on a run of a real model, with the
+candidate, for the recording; see the acceptance below for that run and for
+what was not verified.
+
 ## 0.4.5 release candidate acceptance (2026-11-20)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
