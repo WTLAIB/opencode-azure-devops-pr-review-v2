@@ -818,8 +818,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     else if (body.length > INLINE_HARD_LIMIT) problems.push(`body exceeds ${INLINE_HARD_LIMIT} characters`);
     const named = namedExcluded(body, excluded);
     if (named.length) problems.push(`body names ${named.join(', ')}, which a person excluded from publication; leave ${named.length === 1 ? 'it' : 'them'} out`);
-    // The list of other places is the runtime's, and a later plan reads it back from the posted comment by its heading.
-    if (body.split(/\r?\n/).some(line => OTHER_PLACES_HEADINGS.includes(line.trimEnd()))) problems.push('body holds the heading of the list of other places, which only the runtime writes; leave that list out');
+    // The list of other places is the runtime's: its heading appears nowhere in a body, however it is
+    // indented, quoted or continued, so that no text a planner wrote reads like the runtime's list.
+    if (OTHER_PLACES_HEADINGS.some(heading => body.includes(heading))) problems.push('body holds the heading of the list of other places, which only the runtime writes; leave that list out');
     const path = nonempty(c.path) ? (c.path.startsWith('/') ? c.path : '/' + c.path) : '';
     if (!changed.has(path) || /[\r\n\0]/.test(path)) problems.push(`path ${JSON.stringify(c.path ?? '')} is not a changed file of this PR`);
     else if (lines && path !== lines.path) problems.push(`path must be ${lines.path}, where the combined findings are`);

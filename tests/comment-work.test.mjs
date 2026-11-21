@@ -692,6 +692,9 @@ test('the list of other places is read back only in the form the runtime writes 
   // The whole line is the runtime's wording: other words before the models are someone's sentence, whatever it ends with.
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nThe places above are withdrawn. Models: \`provider/model\`\n\n${marker}`), []);
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION.replace('Models:', 'The places above are withdrawn. Models:')}\n\n${marker}`), []);
+  // ... and the models are model references, as settings take them: a sentence in a code span is none.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`the other place was withdrawn\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`provider/model#high\`\n\n${marker}`), read);
   // A row is a place and a finding's ID, as the runtime writes IDs: a row whose ID someone replaced is no row, and the list no list.
   assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(F-2)', '(withdrawn)')}${tail}`), []);
   assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(Q-1003)', '(Q-1003, fixed)')}${tail}`), []);
@@ -962,6 +965,17 @@ test('publication knows a comment for several places by its own marker: it is sk
   const quoted = await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts, compare: true });
   assert.equal(quoted.otherComments, 1, 'The shared comment\'s thread is still another comment.');
   azure.state.threads[0].comments.pop();
+  // Which thread a quoted marker is found in first does not matter: a preview's two comments, one of them quoted in
+  // the other's thread, are the preview's own in either order of the threads.
+  const quoting = await placedSetup(t, findings), q = publisher(quoting.azure);
+  const twoItems = { ...quoting.review, publication: new Map(), plan: { summary: null, skipped: [], comments: separate.comments.slice(0, 2) } };
+  await publishPlan({ run: q.run, review: twoItems, azure: q.api, attempts: q.attempts });
+  quoting.azure.state.threads[0].comments.push({ id: 2, parentCommentId: 1, content: `As in ${separate.comments[1].marker}`, commentType: 'text' });
+  for (const reversed of [false, true]) {
+    if (reversed) quoting.azure.state.threads.reverse();
+    const ownOnly = await publishPlan({ run: q.run, review: { ...twoItems, publication: new Map() }, azure: q.api, attempts: q.attempts, compare: true });
+    assert.deepEqual([ownOnly.counts, ownOnly.otherComments], [{ ALREADY_PRESENT: 2 }, 0], reversed ? 'reversed' : 'in order');
+  }
   // Two defects at the same places are two comments on the PR.
   const twin = { ...item, findingId: 'F-9', findingIds: ['F-9', 'F-8'], marker: sharedMarker(review.target, item, 1) };
   twin.content = item.content.replace(item.marker, twin.marker);
@@ -989,6 +1003,13 @@ test('a page continued in a new session still offers what is open of a group, wh
   const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf });
   assert.deepEqual(payloads.map(p => [p.findings.map(f => f.id), p.repeatCandidates ?? null]), [[['F-1', 'F-2', 'F-3', 'F-4'], [['F-1', 'F-2', 'F-3']]], [['F-2', 'F-3', 'F-4'], [['F-2', 'F-3']]]]);
   assert.deepEqual(plan.comments.map(c => c.findingIds ?? c.findingId), ['F-1', ['F-2', 'F-3'], 'F-4']);
+  // What is left of a set must still lie at two places: two findings on the same lines can share no comment.
+  const same = await placedSetup(t, [placed('F-1', 'A', 'medium'), placed('F-2', 'A', 'medium'), placed('F-3', 'B', 'medium')]);
+  const left = stages(async payload => payload.findings.length === 3
+    ? JSON.stringify({ status: 'CONTINUE', continuation: 'F-3 is done; F-1 and F-2 remain.', skipped: [], comments: [{ ...comment('F-3'), severity: 'medium', path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'line two' }] })
+    : groupwise(payload));
+  await prepareComments(same.review, same.store, left.invoke, { fetchSource: sourceOf });
+  assert.deepEqual(left.payloads.map(p => [p.findings.map(f => f.id), p.repeatCandidates ?? null]), [[['F-1', 'F-2', 'F-3'], [['F-1', 'F-2', 'F-3']]], [['F-1', 'F-2'], null]]);
   // One finding left of a group is no group.
   const pair = await placedSetup(t, findings.slice(0, 2));
   const alone = stages(async payload => payload.findings.length === 2

@@ -1,4 +1,4 @@
-import { ROLES, MAX_ARCHIVE_MEGABYTES } from './config.mjs';
+import { ROLES, MAX_ARCHIVE_MEGABYTES, MODEL_REFERENCE } from './config.mjs';
 // Deterministic attribution from invoked reviewer stages, not model-authored claims.
 const vocabulary = {
   en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check', 'Quick review', 'Severity rating'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
@@ -222,11 +222,12 @@ export function listedPlaces(content) {
 /**
  * Whether a line is the attribution `commentAttribution` writes for an inline
  * comment, in any language: its fixed wording for a verified or a quick
- * review, then the models, each in a code span, and nothing else.
+ * review, then the models (references as settings take them), each in a code
+ * span, and nothing else.
  */
 function commentAttributionLine(line) {
   return Object.values(vocabulary).flatMap(words => [`${words.comment} `, `${words.lead}${words.quick}${words.end}${words.models} `])
-    .some(wording => line.startsWith(wording) && /^`[^`]+`(?:, `[^`]+`)*$/.test(line.slice(wording.length)));
+    .some(wording => line.startsWith(wording) && line.slice(wording.length).split(', ').every(span => /^`[^`]+`$/.test(span) && MODEL_REFERENCE.test(span.slice(1, -1))));
 }
 
 /** A compact index of existing claims, not another model-authored assessment. */

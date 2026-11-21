@@ -175,10 +175,12 @@ function integer(value, at, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${at} must be an integer from ${min} to ${max}.`);
   return value;
 }
+/** A model reference as settings take it: provider/model, optionally #variant. */
+export const MODEL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
 function model(value, at, optional = false) {
   if (optional && value === '') return '';
   if (typeof value !== 'string' || value.length > 512 ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(value) ||
+      !MODEL_REFERENCE.test(value) ||
       /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(value)) throw new Error(`${at}: select an actual provider/model ID from opencode models, optionally with a variant as provider/model#variant; do not use a display name or placeholder.`);
   return value;
 }

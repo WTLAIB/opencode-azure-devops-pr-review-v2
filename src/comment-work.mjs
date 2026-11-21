@@ -1,7 +1,7 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
-import { markersInThreads, markerTexts, deletedThreads, markedThreads } from './azure.mjs';
+import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
@@ -98,19 +98,19 @@ export function repeatEligible(findings, duplicates = [], files = null) {
   });
 }
 
+/** Whether some two of these findings lie at different places (another file, or lines that share none). */
+function twoPlaces(findings) {
+  const at = findings.map(finding => parseLocation(finding.location));
+  return at.some((x, index) => at.slice(index + 1).some(y => x.path !== y.path || x.start > y.end || y.start > x.end));
+}
+
 /**
  * The sets of eligible findings that have one severity and lie at two places
  * or more: only within such a set can one comment hold a repeated defect.
  * Findings that all share lines are no such set.
  */
 export function severitySets(eligible) {
-  const apart = (a, b) => {
-    const x = parseLocation(a.location), y = parseLocation(b.location);
-    return x.path !== y.path || x.start > y.end || y.start > x.end;
-  };
-  return ['high', 'medium'].map(level => eligible.filter(finding => finding.severity === level))
-    .filter(set => set.some((a, index) => set.slice(index + 1).some(b => apart(a, b))))
-    .map(set => set.map(finding => finding.id));
+  return ['high', 'medium'].map(level => eligible.filter(finding => finding.severity === level)).filter(twoPlaces).map(set => set.map(finding => finding.id));
 }
 
 /**
@@ -376,7 +376,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       // several places: what is still open of each group, while two or more of its findings are.
       const open = id => assigned.some(item => item.id === id);
       const candidates = offeredTwice.filter(ids => ids.every(open));
-      const repeatCandidates = offeredRepeats.map(ids => ids.filter(open)).filter(ids => ids.length > 1);
+      const repeatCandidates = offeredRepeats.map(ids => ids.filter(open)).filter(ids => twoPlaces(ids.map(id => assigned.find(item => item.id === id))));
       const sourceExcerpts = await excerpts(assigned);
       // Only the first page writes the summary note; a note from another page is dropped.
       const allowSummary = index === 0 && !summaryWritten;
@@ -576,11 +576,11 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
-  // The other AZPR comments on the PR, counted by thread: a comment for several places has two markers,
-  // a reply may quote another thread's, and a thread that holds a comment of this preview is not another
-  // one whatever further marker it carries.
-  const own = new Set(items.map(item => present.get(item.marker)).filter(threadId => threadId !== undefined));
+  // The other AZPR comments on the PR, counted by thread: a comment for several places has two markers and
+  // a reply may quote another thread's, so a thread is another comment when none of the markers it holds is
+  // a marker of this preview. That does not depend on the order of the threads.
+  const planned = new Set(items.map(item => item.marker));
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
-    ...(compare ? { otherComments: [...markedThreads(listed)].filter(threadId => !own.has(threadId)).length } : {}) };
+    ...(compare ? { otherComments: [...threadMarkers(listed).values()].filter(markers => ![...markers].some(marker => planned.has(marker))).length } : {}) };
 }

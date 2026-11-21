@@ -541,6 +541,26 @@ test('a comment for several places and a comment for one place are not put on th
   assert.deepEqual([side.issues, side.result.comments.map(c => c.findingId)], [[], ['F-4', 'F-1']]);
 });
 
+test('a planner\'s text never holds the heading of the list of other places, however it is written', () => {
+  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+  const heading = '**📍 Also at** (the same defect; fix these places with it):', row = '- `/src/unrelated.ts:25` (F-9)';
+  const others = [combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })];
+  for (const text of [`${heading}\n${row}`, ` ${heading}\n${row}`, `\t${heading}\n${row}`, `> ${heading}\n> ${row}`, `- ${heading}`, `See ${heading} for the rest.`,
+    '**📍 其他位置**（同一個問題，請一併修正）：\n- `/src/unrelated.ts:25`（F-9）', ' **📍 其他位置**（同一个问题，请一并修正）：']) {
+    // In a comment for several places, where the runtime's own list would follow it, and in a comment for one place.
+    const shared = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: `🟡 medium: Value is lost\n\nBody.\n\n${text}` })]), { review: r, assigned, repeats, sources: shown });
+    assert.match(shared.issues.join('\n'), /combined comment for F-1, F-2, F-3: body holds the heading of the list of other places, which only the runtime writes; leave that list out/, text);
+    const single = evaluatePlanPage(answer([comment({ severity: 'medium', body: `🟡 medium: One\n\nBody.\n\n${text}` }), ...others]), { review: r, assigned, repeats, sources: shown });
+    assert.match(single.issues.join('\n'), /comment for F-1: body holds the heading of the list of other places/, text);
+    // After the correction turns such a comment is not planned.
+    const final = evaluatePlanPage(answer([comment({ severity: 'medium', body: `🟡 medium: One\n\nBody.\n\n${text}` }), ...others]), { review: r, assigned, repeats, sources: shown, final: true });
+    assert.deepEqual([final.result.comments.map(c => c.findingId), final.result.skipped.map(s => s.findingId)], [['F-2'], ['F-1']], text);
+  }
+  // Words about other places are a planner's to write; only the runtime's heading is not.
+  const plain = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: '🟡 medium: Value is lost\n\nAlso at the other handlers; fix these places with it.' })]), { review: r, assigned, repeats, sources: shown });
+  assert.deepEqual(plain.issues, []);
+});
+
 test('a comment for several places quotes lines the file has, also in a review whose single comments need not', () => {
   const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   // /src/b.ts has three lines; the comment claims lines 3-4 and invents the fourth. Its lines would touch F-2 (lines 2-3).
