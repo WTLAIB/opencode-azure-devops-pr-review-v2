@@ -185,7 +185,8 @@ export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u0
  * could have produced: a path, its lines in order, an ID). After the rows
  * comes a blank line, then the attribution if there is one (a rule, the line
  * `commentAttribution` writes for a comment, and a blank line), then the two
- * markers of such a comment with a blank line between them.
+ * markers of such a comment (`linesMarker`, then its own) with a blank line
+ * between them.
  * [] for any other text: one that merely holds such a heading or such rows,
  * one whose row has another form, one that was continued after the list.
  * What is read here tells a planner what a thread says it covers, as the
@@ -198,17 +199,20 @@ export function listedPlaces(content) {
   if (heading < 0) return [];
   const places = [];
   let next = heading + 1;
-  for (; next < lines.length; next++) {
-    const row = /^- (`+) ?(.+?) ?\1 ?[（(]([A-Za-z]+-\d+)[)）]$/.exec(lines[next]);
-    if (!row) break;
-    const [, , place, findingId] = row, at = /^\/.*:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
+  for (; next < lines.length && lines[next].startsWith('- `'); next++) {
+    // The row's parts, each read once: the opening code-span delimiter, the finding ID at the end, the place
+    // between them. Writing the row again must give the very line, so nothing else passes.
+    const line = lines[next], fence = /^`+/.exec(line.slice(2))[0], id = /[（(]([A-Za-z]+-\d+)[)）]$/.exec(line);
+    const inner = id && line.slice(2 + fence.length, id.index).trimEnd();
+    const place = inner && inner.endsWith(fence) ? inner.slice(0, -fence.length).trim() : '';
+    const at = /^\/.*:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
     // A place as a finding's is written (lines in order), in the row the runtime writes for it.
-    if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || !ROW_BRACKETS.some(brackets => placeRow(place, findingId, brackets) === lines[next])) return [];
+    if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || !ROW_BRACKETS.some(brackets => placeRow(place, id[1], brackets) === line)) return [];
     places.push(place);
   }
   const rest = lines.slice(next);
   const marker = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
-  // The end of a comment for several places: the marker of its place, a blank line, its own marker.
+  // The end of a comment for several places: the marker of its lines, a blank line, its own marker.
   if (!places.length || rest.shift() !== '' || !marker.test(rest.pop() ?? '') || rest.pop() !== '' || !marker.test(rest.pop() ?? '')) return [];
   if (!rest.length) return places;
   // The attribution: a rule, the line the runtime writes for a comment, and a blank line.

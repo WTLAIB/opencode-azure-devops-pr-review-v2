@@ -233,7 +233,7 @@ settings, backups and failure records. Never upload `.local/`.
   behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
   review ID or model wording into them. A comment for several places has a
-  second one of its own, which also takes its other places (see below).
+  marker of its own instead, which also takes its other places (see below).
 - A person's adjustments (`/pr-comment [review-id] --exclude`, `--severity`,
   `--reset`) change only the findings handed to comment planning, never the
   review record or a prompt file; the planner input carries `adjustments` only
@@ -284,19 +284,17 @@ settings, backups and failure records. Never upload `.local/`.
   it needs are read a few at a time, like the pages'.
 - A comment for several places is a comment of its own, so it has a marker
   of its own (`sharedMarker`: PR, path, normalized anchor, the other places,
-  ordinal) next to the marker of its place, which it carries as every
-  comment on those lines does. Publication skips it only when its own marker
-  is on the PR: the comment found there is then this very comment, and a
-  receipt never has to work out from a posted text what a comment covers.
-  Never infer that from a comment's text, a thread's position or an
-  attempt's record. A comment for its place alone finds it by the marker of
-  the place (and is skipped, as a comment on the same lines always was), so
-  whatever is kept or counted by marker takes both: the attempt record of a
-  shared comment, and the markers that count as a preview's own. A comment
-  for several places does not find a comment for one, and is planned away
-  from lines that already carry a comment of AZPR's (the prompt says so, and
-  `posted` in `evaluatePlanPage` holds it), so that no second thread is put
-  on them.
+  ordinal). Publication, its ledger and its attempt records know it by that
+  marker alone and skip it only when that marker is on the PR: the comment
+  found there is then this very comment, and a receipt never has to work out
+  what a posted comment covers. Never infer that from a comment's text, a
+  thread's position or an attempt's record, and never give publication a
+  second marker to go by. A comment for several places and a comment for
+  one place do not find each other by marker, so planning keeps them off
+  each other's quoted lines (`occupiedLines` in `comments.mjs`, with the
+  markers the PR had when planning began; the prompt says so too): the
+  shared comment carries a second marker for this, made of its path and
+  quoted lines only (`linesMarker`), which nothing but that rule reads.
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

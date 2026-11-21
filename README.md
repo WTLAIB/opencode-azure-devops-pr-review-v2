@@ -1111,8 +1111,8 @@ that need different corrections keep their own comments. Every place keeps
 its row in the summary index, and you can still exclude or regrade each one
 after a preview. A shared comment has a marker of its own, so it counts as
 already posted only when this very comment, with every place, is on the pull
-request; and it is planned away from lines that already carry a comment of
-AZPR's (see
+request; and a shared comment and a comment for one place are not planned
+onto the same quoted lines (see
 [one defect at several places](docs/COMMENTING.md#one-defect-at-several-places)).
 
 ### Adjusting findings after a preview

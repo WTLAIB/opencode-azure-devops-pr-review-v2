@@ -20,7 +20,8 @@ const evidenceKeys = evidence => [...new Set(evidence.map(item =>
 
 const MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
 const INLINE_BUDGET = 40000;
-// The findings of the grouping pass are inline up to this size; above it the pass reads them from the store.
+// The findings of the grouping pass are always inline. Above this size they go without the evidence, and a
+// list that is still larger is not grouped: the pass never gets a reference it would have to read first.
 const GROUPING_BUDGET = 60000;
 // Up to this size the changed-file list and the dispositions are inline on every
 // planning page; above it a page carries those of its findings and a reference.
@@ -307,7 +308,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     // A group shares a page: where no two findings of a set fit one together, no group could be used.
     else if (!pairFits(eligible)) repeats = [];
     else if (JSON.stringify(listed).length > GROUPING_BUDGET) {
-      progress?.(`Planning comments: ${eligible.length} findings are too many to look through for one defect at several places; every finding gets its own comment.`);
+      progress?.(`Planning comments: ${eligible.length} findings are too many to look through for one defect at several places; planning goes on without grouping them.`);
     } else {
       progress?.(`Planning comments: looking for one defect at several places (${eligible.length} findings)`);
       try {
@@ -326,7 +327,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       } catch (error) {
         if (!active() || error?.failureClass === 'cancelled') throw error;
         repeats = [];
-        progress?.(`Planning comments: the grouping failed (${String(error?.message ?? error).slice(0, 200)}); every finding gets its own comment.`);
+        progress?.(`Planning comments: the grouping failed (${String(error?.message ?? error).slice(0, 200)}); planning goes on without grouping repeated places.`);
       }
     }
   }
@@ -497,17 +498,10 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     ...entry, at: at() });
   // Remember the thread of every item found on the PR (also one an uncertain create or an earlier
   // version left without a record), so a comment deleted there later is not posted again.
-  // A comment for several places is known by its own marker and carries the marker of its place too
-  // (`placeMarker`): the record is kept under both, so that a comment for that place alone finds it as it
-  // would find any comment on those lines, also while the thread list lags or after it was deleted.
-  const keys = item => item.placeMarker ? [item.marker, item.placeMarker] : [item.marker];
   for (const item of items) {
-    const threadId = present.get(item.marker);
-    for (const key of keys(item)) {
-      const earlier = attempts.get(key);
-      if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
-      await attempts.set(key, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
-    }
+    const threadId = present.get(item.marker), earlier = attempts.get(item.marker);
+    if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
+    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
   }
   let written = 0, halted = '';
   for (const [index, item] of items.entries()) {
@@ -539,7 +533,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     try {
       const created = await azure.createThread(run, review.snapshot, item);
       record(item, { state: 'POSTED', threadId: created.threadId, ...(created.contentMatches === false ? { contentMismatch: true } : {}) });
-      try { for (const key of keys(item)) await attempts.set(key, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id }); }
+      try { await attempts.set(item.marker, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id }); }
       catch (error) { halted = `The created thread could not be recorded (${String(error?.message ?? error).slice(0, 200)}); publication stopped.`; }
     } catch (error) {
       if (!run.active) throw error;
@@ -580,8 +574,12 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
-  const planned = new Set(items.flatMap(keys));
+  // The other AZPR comments on the PR, counted by comment: one that stands for several places has two
+  // markers, and a comment of this preview is not another one whatever further marker it carries.
+  const planned = new Set(items.map(item => item.marker));
+  const own = new Set(items.map(item => present.get(item.marker)).filter(threadId => threadId !== undefined));
+  const others = new Set([...present].filter(([marker, threadId]) => !planned.has(marker) && !own.has(threadId)).map(([, threadId]) => threadId));
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
-    ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };
+    ...(compare ? { otherComments: others.size } : {}) };
 }

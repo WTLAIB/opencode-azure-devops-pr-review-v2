@@ -37,13 +37,11 @@ Comments:
 - The review is unchanged: it still has one finding per place. Each keeps
   its row in the summary index, its ID, and can be left out or given another
   severity after a preview.
-- A shared comment carries two hidden markers: the marker of the place where
-  it stands, by the same formula as before, so that a later comment on those
-  lines finds it; and one of its own, made of the place and the other places
-  it lists. Publication skips a shared comment only when its own marker is
-  on the pull request, so `ALREADY_PRESENT` means that this very comment,
-  with every place, is there. The markers of comments for one place are
-  unchanged.
+- A shared comment has a marker of its own, made of its file, the lines it
+  quotes and the other places it lists. Publication skips it only when that
+  marker is on the pull request, so `ALREADY_PRESENT` means that this very
+  comment, with every place, is there. The markers of comments for one place
+  are unchanged, and so is publication.
 - Which findings may be such repeats is settled before the planning pages are
   made, and only when at least two of them have one severity and lie at
   different places. When all findings fit one page (at most four, within a
@@ -53,18 +51,18 @@ Comments:
   one request, whose input is those high and medium findings and which says
   which are one mistake at several places. A group then shares a
   page, which can hold more than four findings. A pass that fails costs only
-  the grouping (a progress notice says so, and every finding gets its own
-  comment), and a run that is stopped during it plans nothing more.
+  the grouping (a progress notice says so, and the comments are planned one
+  per place), and a run that is stopped during it plans nothing more.
 - Nothing posted is ever changed, and an item the PR already has is skipped
   as always. When a pull request with a shared comment is planned again, the
   planner is told which other places that thread says it covers, so they get
   no thread of their own; the list is read back only where AZPR wrote it, in
   the comment that opened the thread.
-- A shared comment is not put on lines that already carry a comment of
-  AZPR's (a thread per place from an earlier version, say): the planner is
-  asked to put it at another of its places or to leave that finding out, and
-  a comment that still stands there is dropped, with the reason shown in the
-  preview.
+- A shared comment and a comment for one place are not put on the same
+  quoted lines (a thread per place from an earlier version, say): when
+  planning, the comment is sent back and the planner is asked for another
+  place or to skip the finding as discussed, and a comment that still stands
+  there is not planned, with the reason shown in the preview.
 
 The README's benchmark section now says what each precision measures: the
 share of comments on Martian's list of issues, next to the share of findings

@@ -1863,9 +1863,9 @@ test('a comment for several places is its own comment on the PR: posted in full 
   assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
   const planned = await saved();
   assert.deepEqual([planned.path, planned.findingIds], ['/src/A.java', ['F-1', 'F-2', 'F-3']]);
-  assert.ok(planned.content.endsWith(`\n\n${planned.placeMarker}\n\n${planned.marker}`), 'The comment carries the marker of its place and its own.');
-  // Meanwhile the PR got a comment for that place alone (an earlier plan, posted from another machine): it has the marker of the place.
-  const single = `${planned.body}\n\n${planned.placeMarker}`;
+  assert.ok(planned.content.endsWith(`\n\n${planned.linesMarker}\n\n${planned.marker}`), 'The comment ends with the marker of its lines and its own.');
+  // Meanwhile the PR got a comment for that place alone (an earlier plan, posted from another machine).
+  const single = `${planned.body}\n\n<!-- azpr-comment:${'5'.repeat(32)} -->`;
   f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' }, content: single }],
     threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
   // The saved preview is posted as it was read: the shared comment is another comment than the one found there, so it
@@ -1889,15 +1889,20 @@ test('a comment for several places is its own comment on the PR: posted in full 
 test('a comment for several places is planned away from lines where the PR already has a comment of AZPR\'s', async t => {
   const files = ['/src/A.java', '/src/B.java', '/src/C.java'], functional = findingPerFile(files);
   const initial = input => input.role === 'azpr-review-risk' ? { ...functional(input), findings: [] } : functional(input);
-  const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input) });
-  const id = reviewId(await f.command());
-  // The PR already has a comment on the first place, from an earlier publication of a comment for that place alone:
-  // its marker is the one any comment quoting those lines has.
-  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
-  const first = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments.find(item => item.otherPlaces);
-  f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' }, content: `${first.body}\n\n${first.placeMarker}` }],
+  // The planner comments on each finding separately until the test lets it combine them.
+  let combine = false;
+  const f = await fixture(t, { files, answer: input => initial(input) ?? repeating({ ...input, packet: combine ? input.packet : { ...input.packet, repeatCandidates: [] } }) });
+  await f.command();
+  // An earlier publication: a thread for each place. Only the first is posted here.
+  assert.match(await f.command('pr-comment', ''), /Inline comments prepared: 3\n/);
+  const id = reviewId(f.notices.map(n => n.text).filter(text => /\] COMPLETE/.test(text))[0]);
+  const first = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments[0];
+  assert.deepEqual([first.findingId, first.path, Object.hasOwn(first, 'otherPlaces')], ['F-1', '/src/A.java', false]);
+  f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' }, content: first.content }],
     threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
-  // A new plan sees it: the page is sent back once with the thread named, and the comment stands at the second place.
+  // A new plan combines the three and sees that comment: the page is sent back once with the thread named, and the
+  // shared comment stands at the second place.
+  combine = true;
   const preview = await f.command('pr-comment', '');
   assert.match(preview, /\] PREVIEW/);
   assert.match(preview, /### F-2, F-1, F-3 — \/src\/B\.java:1-1\n[\s\S]*\*\*📍 Also at\*\* \(the same defect; fix these places with it\):\n- `\/src\/A\.java:1` \(F-1\)\n- `\/src\/C\.java:1` \(F-3\)\n/);
@@ -1947,7 +1952,7 @@ test('a grouping pass that fails costs only the grouping; /pr-stop during it sta
   await f.command();
   const preview = await f.command('pr-comment', '');
   assert.match(preview, /\] PREVIEW/);
-  assert.ok(f.notices.some(n => /PROGRESS — Planning comments: the grouping failed \([^\n]*\); every finding gets its own comment\./.test(n.text)));
+  assert.ok(f.notices.some(n => /PROGRESS — Planning comments: the grouping failed \([^\n]*\); planning goes on without grouping repeated places\./.test(n.text)));
   assert.match(preview, /Inline comments prepared: 6\n/);
   assert.doesNotMatch(preview, /Also at/);
   const stages = (await stageRecords(preview)).filter(stage => stage.stage === 'comment-plan');

@@ -270,7 +270,7 @@ such findings have one severity and lie at different places:
   a page, which can then hold more than four findings; a group larger than a
   page's text is planned in parts of two or more findings. A list that is too
   long even without the evidence is not grouped: a `PROGRESS` notice says so,
-  and every finding gets its own comment.
+  and planning goes on without grouping.
 
 The page's planner still decides whether a group gets one comment. The
 runtime accepts it only when every finding it names is in one listed group,
@@ -285,7 +285,7 @@ while two or more of its findings are. The preview shows such a comment with
 all its findings and the planner's reason (`Combined: …`).
 
 A grouping pass that fails, for instance on a provider error, costs only the
-grouping: a `PROGRESS` notice says so, and every finding gets its own comment.
+grouping: a `PROGRESS` notice says so, and planning goes on without it.
 The pass is one more stage of the comment planner's model: usually one
 request, since its input holds the findings and it needs no tool, though it
 has the planner's read-only tools and correction turns like a page. Its
@@ -314,43 +314,45 @@ comment ends with a hidden marker made of its file and the lines it quotes
 (not their numbers, so that it survives lines moving). Publication skips a
 comment whose marker the pull request already has, which is what makes
 posting safe to repeat. A comment for several places is more than its place,
-so it carries two markers:
+so its marker is made of the file, the quoted lines **and the other places
+it lists**. Publication skips it only when that marker is on the pull
+request: the comment found is then this very comment, with every place. A
+comment for the place alone, or one that lists other places, is another
+comment and does not stand for it. So a receipt never has to work out from a
+posted text which findings a comment covers: `ALREADY_PRESENT` for a shared
+comment means that this comment, with these places, is there.
 
-- the marker of **its place**, the one any comment on those quoted lines
-  has. A later comment for that place alone finds the shared comment by it
-  and is not posted on top of it, as a comment on the same lines never was.
-- a marker of **its own**, made of the file, the quoted lines and the other
-  places it lists (and a count, for two defects at the same places).
-  Publication skips a shared comment only when this marker is on the pull
-  request: the comment found is then this very comment, with every place. A
-  comment for the place alone, or one that lists other places, is another
-  comment and does not stand for it.
+It follows that a shared comment and a comment for one place do not find
+each other by marker, and one could be posted next to the other on the same
+lines. Planning avoids that, with the comments the pull request had when
+planning began. A shared comment carries a second hidden marker, made of its
+file and quoted lines only, which says "a comment for several places stands
+here" and which nothing but this rule reads:
 
-So a receipt never has to work out from a posted text which findings a
-comment covers: `ALREADY_PRESENT` for a shared comment means that this
-comment, with these places, is there. And because a shared comment does not
-find a comment for one place, it would be posted next to it. The runtime
-avoids that when planning: the planner is told not to choose such a place,
-and a shared comment on quoted lines that already carry a comment of AZPR's
-(a marker of the place is on the pull request, its own marker is not) is
-sent back, with the request to anchor it at another of its places or to
-leave that finding out (a finding that an existing thread covers is skipped
-as discussed). A comment that still stands there after the correction turns
-is dropped like any refused combination, and its findings are skipped with
-that reason. When the threads could not be read before planning, nothing is
-refused, and such a comment is posted next to the one that is there.
+- A **shared comment** on quoted lines that already carry a comment of
+  AZPR's (for one place or for several) is sent back, unless the pull
+  request has this very comment. The planner, which is told not to choose
+  such a place, is asked to anchor it at another of its places or to leave
+  that finding out (a finding that an existing thread covers is skipped as
+  discussed).
+- A **comment for one place** on quoted lines that carry a shared comment is
+  sent back too, unless a comment for one place is there as well (which it
+  then finds by its marker, as always). The planner is asked to skip the
+  finding as discussed, or to quote other lines.
 
-The record of a shared comment's creation is kept under both markers, so a
-comment for its place alone is not sent while Azure DevOps has not listed
-the new thread yet, nor after someone deleted it.
+A comment that still stands there after the correction turns is not planned:
+the shared one is dropped like any refused combination, the single one is
+skipped, and the preview gives the reason. When the threads could not be
+read before planning, or a comment appears between a preview and its
+publication, nothing is refused and the comment is posted next to the one
+that is there: one more thread, never a finding counted as posted that is
+not.
 
-As for every comment, the marker of a place does not hold line numbers: the
-same lines of text elsewhere in the same file share it, and comments that
-quote the same lines get it in the order of the plan, so a new comment that
-comes before an already posted one on the same lines takes its marker and
-counts as discussed. And the other places are compared as written (a file
-and its lines), so a shared comment whose other places moved is another
-comment than the one posted before.
+As for every comment, a marker does not hold line numbers: the same lines of
+text elsewhere in the same file share it, and comments that quote the same
+lines are told apart by their order in the plan. And the other places are
+compared as written (a file and its lines), so a shared comment whose other
+places moved is another comment than the one posted before.
 
 ## Planning
 
@@ -563,19 +565,19 @@ Each item ends with `<!-- azpr-comment:<32 hex> -->`:
   wording, so a later review of unchanged code finds the earlier comment and
   does not post a duplicate. A different issue on exactly the same lines is
   treated as already discussed; it stays in the report and the summary index.
-- A comment for one defect at several places carries that marker for its
-  place and, after it, a marker of its own: hash of PR identity, file path,
-  normalized anchor text, the other places it lists, and an ordinal for two
-  such comments that are alike in all of these (two defects at the same
-  places). Its own marker is the one publication goes by (see
+- A comment for one defect at several places: hash of PR identity, file
+  path, normalized anchor text, the other places it lists, and an ordinal
+  for two such comments that are alike in all of these (two defects at the
+  same places). Before it stands a second marker, of the file path and
+  anchor text only, which planning reads and publication does not (see
   [one defect at several places](#one-defect-at-several-places)).
 - Summary: hash of PR identity, reviewed head and the inline markers (for a
   comment at several places, its own), so a new review of the same commit
   with the same comments does not post a second summary.
 
-A combined comment is one inline item. One that combines a quick review's
-findings on the same lines has the one marker of those lines; one for several
-places has the two above and is known by its own. The publication ledger
+A combined comment is one inline item, known by one marker: one that combines
+a quick review's findings on the same lines by the marker of those lines, one
+for several places by its own. The publication ledger
 records all finding IDs of a combined comment (`findingIds`), and ledgers and
 plans saved before that field existed are read as before.
 

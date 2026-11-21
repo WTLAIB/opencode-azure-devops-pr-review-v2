@@ -643,20 +643,48 @@ export function inlineMarker(target, comment, ordinal = 0) {
 /**
  * The fingerprint of a comment that stands for one defect at several places:
  * PR + path + normalized anchor + the other places it lists. Such a comment
- * carries the marker of its place too (`inlineMarker`), so that a comment on
- * the same lines finds it as always; this one is its own. Publication skips a
- * shared comment only when this marker is on the PR, so the comment found
- * there is this very comment, with every place: nothing has to be read out of
- * a posted text to know what it covers. The ordinal tells apart two comments
- * with the same quoted lines and the same other places, which two defects at
- * the same places would have.
+ * is a comment of its own: publication skips it only when this marker is on
+ * the PR, so the comment found there is this very comment, with every place,
+ * and nothing has to be read out of a posted text to know what it covers.
+ * The ordinal tells apart two comments with the same quoted lines and the
+ * same other places, which two defects at the same places would have.
  */
 export function sharedMarker(target, comment, ordinal = 0) {
   return markerTag(hash([targetKey(target), 'shared', comment.path, normalizedAnchor(comment.anchor), comment.otherPlaces.map(other => other.place).sort(), ordinal]));
 }
 
+/**
+ * The second marker of a comment for several places: PR + path + normalized
+ * anchor, nothing else. It says that such a comment stands on these quoted
+ * lines, whatever it lists and whichever plan wrote it. Only planning reads
+ * it, to keep another comment off those lines (`occupiedLines`); publication,
+ * its ledger and its attempt records know a comment by its own marker alone.
+ */
+export function linesMarker(target, comment) {
+  return markerTag(hash([targetKey(target), 'lines', comment.path, normalizedAnchor(comment.anchor)]));
+}
+
 /** How many comments on the same quoted lines the planning rule looks for on the PR (their markers count from 0). */
-const PLACE_ORDINALS = 8;
+const SAME_LINES = 8;
+
+/**
+ * Why a planned comment may not stand on its quoted lines, given the markers
+ * the PR already has (`posted`, marker to thread): a comment for several
+ * places and a comment for one place do not find each other by marker, so
+ * one of them would be posted next to the other. A comment for several
+ * places stays off lines that carry any comment of AZPR's, unless the PR has
+ * this very comment; a comment for one place (or for findings on the same
+ * lines) stays off lines that carry a comment for several places, unless the
+ * PR has a comment of its own kind there, which it then finds by marker as
+ * always. Nothing here depends on other comments of the plan. '' when it may.
+ */
+function occupiedLines(target, comment, posted) {
+  const first = make => Array.from({ length: SAME_LINES }, (_, ordinal) => posted.get(make(ordinal))).find(thread => thread !== undefined);
+  const single = first(ordinal => inlineMarker(target, comment, ordinal)), several = posted.get(linesMarker(target, comment));
+  const says = thread => `the PR already has a comment of AZPR's on these quoted lines${thread ? ` (thread ${thread})` : ''}, and a second one is not put on them`;
+  if (comment.otherPlaces) return (single ?? several) !== undefined && first(ordinal => sharedMarker(target, comment, ordinal)) === undefined ? says(single ?? several) : '';
+  return several !== undefined && single === undefined ? says(several) : '';
+}
 
 /** One summary per reviewed source commit and set of inline comments. */
 export function summaryMarker(target, head, inlineMarkers) {
@@ -735,8 +763,8 @@ const aliases = (value, names) => {
  * the runtime read (null when it could not): skip causes are checked against them.
  * `posted` maps the markers the PR already has to their threads
  * (`markersInThreads`; null when the threads could not be read): a comment
- * for several places does not stand on lines that already carry a comment of
- * AZPR's, unless that comment is this very one.
+ * for several places and a comment for one place are not put on the same
+ * quoted lines (`occupiedLines`).
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
@@ -871,16 +899,14 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       else if (!touched.length) problems.push(`the anchor must lie on the lines of one of the combined findings (${members.map(member => `${member.id} at ${placeOf(member)}`).join(', ')})`);
       else problems.push(`the anchor (lines ${startLine}-${endLine}) touches the lines of ${touched.map(member => `${member.id} at ${placeOf(member)}`).join(' and ')}; quote lines of one of them only`);
     }
-    if (!problems.length && repeated && posted) {
-      // A comment on the same quoted lines finds an earlier one by the marker of its place and is not
-      // posted again. A comment for several places is another comment, with a marker of its own, and
-      // would be posted next to the one that is there: it stands elsewhere instead, unless the PR
-      // already has this very comment (its own marker), which publication then skips.
-      // Comments on the same quoted lines count from 0; one of them may have been deleted since, so a few are looked for.
-      const others = members.filter(member => member !== first).map(member => ({ place: placeOf(member) }));
-      const thread = Array.from({ length: PLACE_ORDINALS }, (_, ordinal) => posted.get(inlineMarker(review.target, drafted.comment, ordinal))).find(found => found !== undefined);
-      if (thread !== undefined && !posted.has(sharedMarker(review.target, { ...drafted.comment, otherPlaces: others }))) {
-        problems.push(`the PR already has a comment of AZPR's on these quoted lines${thread ? ` (thread ${thread})` : ''}, and a second one is not put on them. Anchor this comment on the lines of another of its findings, or leave ${first.id} out of it; a finding that an existing thread covers is skipped with cause existing-thread`);
+    if (!problems.length && posted) {
+      // Comments for one place and comments for several do not find each other by marker: neither is put
+      // on quoted lines that carry the other kind (`occupiedLines`).
+      const others = repeated ? members.filter(member => member !== first).map(member => ({ place: placeOf(member) })) : undefined;
+      const taken = occupiedLines(review.target, { ...drafted.comment, ...(others ? { otherPlaces: others } : {}) }, posted);
+      if (taken) {
+        problems.push(repeated ? `${taken}. Anchor this comment on the lines of another of its findings, or leave ${first.id} out of it; a finding that an existing thread covers is skipped with cause existing-thread`
+          : `${taken}. Skip these findings with cause existing-thread when that thread covers them, or quote other lines`);
       }
     }
     if (problems.length) {
@@ -920,6 +946,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       continue;
     }
     const { problems, comment } = draft(c, finding.id, finding.severity);
+    // A comment for one place is not put on quoted lines that carry a comment for several places.
+    const taken = !problems.length && posted ? occupiedLines(review.target, comment, posted) : '';
+    if (taken) problems.push(`${taken}. Skip ${finding.id} with cause existing-thread when that thread covers it, or quote other lines`);
     if (problems.length) {
       if (!final) { issues.push(`comment for ${finding.id}: ${problems.join('; ')}.`); reported.add(finding.id); continue; }
       skip(finding.id, `No inline comment: ${problems.join('; ')}. The finding remains in the summary index.`);
@@ -1066,30 +1095,30 @@ function summaryComment(review, note, details, inlineMarkers, groups = []) {
 
 /** Assemble validated pages into one saved plan with markers and exact content. */
 export function assemblePlan(review, pages) {
-  const ordinals = new Map(), sharedOrdinals = new Map();
+  const ordinals = new Map();
+  // Comments that are alike in what their marker is made of are told apart by their order in the plan.
+  const ordinalOf = (...key) => {
+    const name = JSON.stringify(key), ordinal = ordinals.get(name) ?? 0;
+    ordinals.set(name, ordinal + 1);
+    return ordinal;
+  };
   const comments = pages.flatMap(page => page.comments).map(c => {
-    const key = `${c.path}\n${normalizedAnchor(c.anchor)}`;
-    const ordinal = ordinals.get(key) ?? 0;
-    ordinals.set(key, ordinal + 1);
-    // The marker of the place and its quoted lines, as for every comment.
-    const placeMarker = inlineMarker(review.target, c, ordinal);
     // Azure positions are one-based UTF-16 offsets within their lines.
     const endOffset = Math.max(1, c.anchor.split('\n').at(-1).length);
+    const anchor = normalizedAnchor(c.anchor);
     if (!c.otherPlaces?.length) {
-      return { ...c, kind: 'inline', startOffset: 1, endOffset, marker: placeMarker,
-        content: `${c.body}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${placeMarker}` };
+      const marker = inlineMarker(review.target, c, ordinalOf('inline', c.path, anchor));
+      return { ...c, kind: 'inline', startOffset: 1, endOffset, marker,
+        content: `${c.body}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${marker}` };
     }
     // One defect made at several places: the runtime lists the other places under the comment's own text.
-    // The comment is known by a marker of its own (`sharedMarker`) and carries the marker of its place as
-    // well, so that a later comment on these lines finds it. Two defects at the same places, whose comments
-    // quote the same lines, are told apart by their order in the plan.
-    const own = `${key}\n${c.otherPlaces.map(other => other.place).sort().join('\n')}`;
-    const sharedOrdinal = sharedOrdinals.get(own) ?? 0;
-    sharedOrdinals.set(own, sharedOrdinal + 1);
-    const marker = sharedMarker(review.target, c, sharedOrdinal);
-    const places = escapeComments(renderOtherPlaces(c.otherPlaces, review.outputLanguage ?? 'en'));
-    return { ...c, kind: 'inline', startOffset: 1, endOffset, marker, placeMarker,
-      content: `${c.body}\n\n${places}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${placeMarker}\n\n${marker}` };
+    // The comment is known by a marker of its own (`sharedMarker`); before it stands the marker that says a
+    // comment for several places is on these quoted lines (`linesMarker`), which planning reads.
+    const places = c.otherPlaces.map(other => other.place).sort();
+    const marker = sharedMarker(review.target, c, ordinalOf('shared', c.path, anchor, places)), lines = linesMarker(review.target, c);
+    const list = escapeComments(renderOtherPlaces(c.otherPlaces, review.outputLanguage ?? 'en'));
+    return { ...c, kind: 'inline', startOffset: 1, endOffset, marker, linesMarker: lines,
+      content: `${c.body}\n\n${list}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${lines}\n\n${marker}` };
   });
   const skipped = pages.flatMap(page => page.skipped);
   const intro = pages.map(page => page.summary).find(Boolean);

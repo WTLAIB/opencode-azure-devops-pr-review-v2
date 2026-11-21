@@ -470,28 +470,27 @@ and the models) and the comment's two markers; a body that writes such a
 heading itself is refused.
 
 A comment for several places is a comment of its own, so `assemblePlan` gives
-it two markers. `placeMarker` is `inlineMarker` (PR, path, normalized anchor,
-ordinal), the marker any comment on those quoted lines has: a later comment
-for that place alone finds the shared one by it. Its own `marker` is
-`sharedMarker` (PR, path, normalized anchor, the sorted other places, and an
-ordinal for two such comments that are alike in all of these: two defects at
-the same places); it is the key of the item in the ledger and the summary's
-marker. `publishPlan` goes by an item's `marker`, as before: it skips an item
-whose marker the PR has. For a shared comment that is this very comment,
-with every place, so a receipt never infers what a posted comment covers.
-What it does with the second marker: the attempt record of a shared comment
-is kept under both, so that a comment for that place alone is not sent while
-the thread list lags behind the create, nor after the thread was deleted;
-and both count as the preview's own where the other comments of the PR are
-counted. Because a shared comment does not find a comment for one place,
-`evaluatePlanPage` keeps it off lines that already carry one: with `posted`
-(`markersInThreads` of the threads read before planning), a shared comment
-whose place marker is on the PR (under one of the first ordinals; an earlier
-comment on those lines may have been deleted) while its own marker is not
-goes back to the planner, and is dropped like any refused combination after
-the correction turns. A shared comment's quoted lines must also be found in
-the HEAD text and end within the file. The files read ahead of the pages are
-not read further once the run was stopped.
+it a marker of its own: `sharedMarker` (PR, path, normalized anchor, the
+sorted other places, and an ordinal for two such comments that are alike in
+all of these: two defects at the same places). It is the item's key in the
+ledger, the attempt records and the summary's marker, and `publishPlan`,
+which is unchanged but for how it counts the other comments of a PR, skips
+the item only when that marker is on the PR. That is this very comment, with
+every place, so a receipt never infers what a posted comment covers. A
+shared comment and a comment for one place do not find each other by marker;
+`occupiedLines` (`comments.mjs`) keeps them off each other's quoted lines
+when planning, with `posted` (`markersInThreads` of the threads read before
+planning). For that, the shared comment's text carries a second marker
+before its own, `linesMarker` (PR, path, normalized anchor), which only this
+rule reads. A shared comment is sent back when a comment for one place is on
+its quoted lines (an `inlineMarker` under one of the first ordinals; an
+earlier comment there may have been deleted) or another shared comment is
+(its `linesMarker`), unless the PR has this very comment; a comment for one
+place is sent back when a shared comment is on its quoted lines and no
+comment for one place is. After the correction turns such a comment is not
+planned. A shared comment's quoted lines must also be found in the HEAD text
+and end within the file. The files read ahead of the pages are not read
+further once the run was stopped.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both

@@ -629,7 +629,7 @@ test('the discussion digest lists only live threads, compactly', () => {
 });
 
 test('a posted comment for several places tells a later plan which other places it covers', () => {
-  // As such a comment ends: the marker of its place, a blank line, its own marker.
+  // As such a comment ends: the marker of its lines, a blank line, its own marker.
   const marker = '<!-- azpr-comment:' + 'b'.repeat(32) + ' -->\n\n<!-- azpr-comment:' + 'd'.repeat(32) + ' -->';
   const places = [{ findingId: 'F-2', place: '/src/b.ts:30-34' }, { findingId: 'F-3', place: '/src/c`d.ts:12' }];
   for (const language of ['en', 'zh-TW', 'zh-CN']) {
@@ -656,7 +656,7 @@ test('a posted comment for several places tells a later plan which other places 
 });
 
 test('the list of other places is read back only in the form the runtime writes it', () => {
-  // A comment for several places ends with the marker of its place, a blank line and its own marker.
+  // A comment for several places ends with the marker of its lines, a blank line and its own marker.
   const one = '<!-- azpr-comment:' + 'c'.repeat(32) + ' -->', marker = `${one}\n\n<!-- azpr-comment:${'e'.repeat(32)} -->`, tail = `\n\n---\n${ATTRIBUTION}\n\n${marker}`;
   const places = [{ findingId: 'F-2', place: '/src/b.ts:30-34' }, { findingId: 'Q-1003', place: '/src/c.ts:12' }], read = ['/src/b.ts:30-34', '/src/c.ts:12'];
   const list = renderOtherPlaces(places, 'en');
@@ -926,59 +926,50 @@ test('a comment for several places planned onto lines that already carry a comme
   assert.equal(same.comments[0].marker, plan.comments[0].marker);
 });
 
-test('a comment for several places is skipped only when the PR has this very comment; one for its place alone does not stand for it', async t => {
+test('publication knows a comment for several places by its own marker: it is skipped only when the PR has this very comment', async t => {
   const findings = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C')];
   const { review, store, azure } = await placedSetup(t, findings);
   const { api, run, attempts } = publisher(azure);
-  const plan = answer => prepareComments(review, store, stages(answer).invoke, { fetchSource: sourceOf });
+  const plan = (answer, options = {}) => prepareComments(review, store, stages(answer).invoke, { fetchSource: sourceOf, ...options });
   const separate = await plan(async payload => groupwise({ ...payload, repeatCandidates: [] })), shared = await plan(async payload => groupwise(payload));
   const item = shared.comments[0];
-  assert.deepEqual([shared.comments.length, item.placeMarker === separate.comments[0].marker, item.marker === sharedMarker(review.target, item)], [1, true, true]);
+  assert.deepEqual([shared.comments.length, item.marker === sharedMarker(review.target, item, 0), item.marker === separate.comments[0].marker], [1, true, false]);
   const only = comments => ({ ...review, publication: new Map(), plan: { summary: null, skipped: [], comments } });
   // An earlier publication put a comment for F-1 alone on the PR.
   assert.equal((await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts })).status, 'POSTED');
-  // A plan made without a look at the PR has the shared comment on the same lines. It is another comment, with a
-  // marker of its own: it is posted with every place, and the receipt says of it only what is so.
+  // A plan made without a look at the PR has the shared comment on the same lines. It is another comment: it is posted
+  // with every place, and the receipt says of it only what is so.
   const later = only(shared.comments);
   const result = await publishPlan({ run, review: later, azure: api, attempts });
   assert.deepEqual([result.status, result.counts, azure.callsTo('createThread').length], ['POSTED', { VERIFIED: 1 }, 2]);
   assert.deepEqual(azure.state.threads.map(thread => thread.comments[0].content), [separate.comments[0].content, item.content], 'The earlier comment is as it was; the new one lists the other places.');
   assert.match(renderPublication(later, result), /^Publication \(VERIFIED=1\):\n- F-1, F-2, F-3 \(\/src\/A\.java:2\): VERIFIED; thread=\d+\n\nPOSTED\/VERIFIED entries/);
-  // Published again, it is found by its own marker, which no other comment has.
+  // Published again, it is found by its own marker, which no other comment has; its record is under that marker alone.
   const again = await publishPlan({ run, review: only(shared.comments), azure: api, attempts });
   assert.deepEqual([again.counts, azure.callsTo('createThread').length], [{ ALREADY_PRESENT: 1 }, 2]);
+  assert.deepEqual([attempts.entries[item.marker].state, Object.hasOwn(attempts.entries, item.linesMarker)], ['CREATED', false]);
   // Other places on the same quoted lines are another comment; the same places are the same one whoever is named first.
-  const fewer = { ...item, otherPlaces: item.otherPlaces.slice(0, 1) };
-  assert.notEqual(sharedMarker(review.target, fewer), item.marker);
+  assert.notEqual(sharedMarker(review.target, { ...item, otherPlaces: item.otherPlaces.slice(0, 1) }), item.marker);
   assert.equal(sharedMarker(review.target, { ...item, otherPlaces: [...item.otherPlaces].reverse() }), item.marker);
-  // The other way round: where the shared comment is on the PR, a comment for F-1 alone on those lines finds it by
-  // the marker of its place, as a comment on the same lines always did.
-  const fresh = await placedSetup(t, findings), other = publisher(fresh.azure);
-  const at = comments => ({ ...fresh.review, publication: new Map(), plan: { summary: null, skipped: [], comments } });
-  assert.equal((await publishPlan({ run: other.run, review: at(shared.comments), azure: other.api, attempts: other.attempts })).status, 'POSTED');
-  const alone = await publishPlan({ run: other.run, review: at(separate.comments.slice(0, 1)), azure: other.api, attempts: other.attempts });
-  assert.deepEqual([alone.counts, fresh.azure.callsTo('createThread').length], [{ ALREADY_PRESENT: 1 }, 1]);
-  // The record of a shared comment's creation is kept under both its markers ...
-  const created = other.attempts.entries;
-  assert.deepEqual([created[item.marker].state, created[item.placeMarker].state, created[item.placeMarker].threadId], ['CREATED', 'CREATED', created[item.marker].threadId]);
-  // ... so a comment for its place alone is not sent while the thread list lags behind the create, as between two comments for one place.
-  const lagging = await placedSetup(t, findings), lag = publisher(lagging.azure);
-  const of = comments => ({ ...lagging.review, publication: new Map(), plan: { summary: null, skipped: [], comments } });
-  assert.equal((await publishPlan({ run: lag.run, review: of(shared.comments), azure: lag.api, attempts: lag.attempts })).status, 'POSTED');
-  lagging.azure.state.fail.threads = () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: [], count: 0 }) });
-  await publishPlan({ run: lag.run, review: of(separate.comments.slice(0, 1)), azure: lag.api, attempts: lag.attempts });
-  assert.equal(lagging.azure.callsTo('createThread').length, 1, 'No second create for the place the shared comment stands at.');
-  // With a person's adjustments, the comments of the PR that are not in the preview are counted by comment: the marker of
-  // the shared comment's place is the preview's own.
-  delete lagging.azure.state.fail.threads;
-  const counted = await publishPlan({ run: lag.run, review: of(shared.comments), azure: lag.api, attempts: lag.attempts, compare: true });
-  assert.deepEqual([counted.counts, counted.otherComments], [{ ALREADY_PRESENT: 1 }, 0]);
+  // With a person's adjustments, the other AZPR comments of the PR are counted by comment: the shared comment of the
+  // preview is none, whatever second marker it carries, and one outside the preview is one.
+  const counted = await publishPlan({ run, review: only(shared.comments), azure: api, attempts, compare: true });
+  assert.deepEqual([counted.counts, counted.otherComments], [{ ALREADY_PRESENT: 1 }, 1], 'The comment for F-1 alone is the other one.');
+  const outside = await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts, compare: true });
+  assert.equal(outside.otherComments, 1, 'The shared comment, with its two markers, is one comment.');
   // Two defects at the same places are two comments on the PR.
-  const twin = { ...item, findingId: 'F-9', findingIds: ['F-9', 'F-8'], marker: sharedMarker(review.target, item, 1), placeMarker: inlineMarker(review.target, item, 1) };
-  twin.content = item.content.replace(item.placeMarker, twin.placeMarker).replace(item.marker, twin.marker);
+  const twin = { ...item, findingId: 'F-9', findingIds: ['F-9', 'F-8'], marker: sharedMarker(review.target, item, 1) };
+  twin.content = item.content.replace(item.marker, twin.marker);
   const both = await placedSetup(t, findings), pair = publisher(both.azure);
   const result2 = await publishPlan({ run: pair.run, review: { ...both.review, publication: new Map(), plan: { summary: null, skipped: [], comments: [item, twin] } }, azure: pair.api, attempts: pair.attempts });
   assert.deepEqual([result2.counts, both.azure.callsTo('createThread').length], [{ VERIFIED: 2 }, 2]);
+  // Planning keeps the two kinds off each other's lines. With the shared comment on the PR, a plan that comments on
+  // F-1 alone at those lines is sent back; left as it is, F-1 is skipped with the reason and the others are planned.
+  const threads = [{ id: 51, status: 'active', comments: [{ id: 1, parentCommentId: 0, content: item.content }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 2 } } }];
+  const issues = [];
+  const alone = await plan(async (payload, turn, evaluation) => { if (turn) issues.push(...evaluation.issues); return groupwise({ ...payload, repeatCandidates: [] }); }, { discussions: discussionDigest(threads), posted: markersInThreads(threads) });
+  assert.match(issues.join('\n'), /comment for F-1: the PR already has a comment of AZPR's on these quoted lines \(thread 51\), and a second one is not put on them\. Skip F-1 with cause existing-thread when that thread covers it, or quote other lines\./);
+  assert.deepEqual([alone.comments.map(c => c.findingId), alone.skipped.map(s => s.findingId)], [['F-2', 'F-3'], ['F-1']]);
 });
 
 test('a page continued in a new session still offers what is open of a group, while two of its findings are', async t => {
@@ -1019,7 +1010,7 @@ test('the grouping pass reads its findings inline: a long list goes without the 
   const skipped = stages(answer), said = [];
   const plan = await prepareComments(huge.review, huge.store, skipped.invoke, { fetchSource: sourceOf, progress: note => said.push(note) });
   assert.ok(skipped.payloads.every(p => p.commentWork.kind === 'plan' && !Object.hasOwn(p, 'repeatCandidates')));
-  assert.match(said.join('\n'), /Planning comments: 40 findings are too many to look through for one defect at several places; every finding gets its own comment\./);
+  assert.match(said.join('\n'), /Planning comments: 40 findings are too many to look through for one defect at several places; planning goes on without grouping them\./);
   assert.equal(plan.comments.length, 40);
 });
 
@@ -1079,7 +1070,7 @@ test('a grouping pass that fails costs only the grouping; a stopped run is not c
   const { review, store } = await placedSetup(t, findings);
   const pages = stages(async payload => groupwise(payload)), notes = [];
   const plan = await prepareComments(review, store, failing(pages), { fetchSource: sourceOf, progress: note => notes.push(note) });
-  assert.match(notes.join('\n'), /the grouping failed \(Provider unavailable\.\); every finding gets its own comment\./);
+  assert.match(notes.join('\n'), /the grouping failed \(Provider unavailable\.\); planning goes on without grouping repeated places\./);
   assert.deepEqual(pagesOf(pages.payloads).map(p => p.findings.map(f => f.id)), [['F-1', 'F-2', 'F-3', 'F-4'], ['F-5']]);
   assert.ok(pages.payloads.every(p => !Object.hasOwn(p, 'repeatCandidates')));
   assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1', 'F-2', 'F-3', 'F-4', 'F-5']);
