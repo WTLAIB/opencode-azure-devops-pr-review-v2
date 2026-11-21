@@ -39,9 +39,10 @@ export function discussionDigest(threads) {
     const first = comments[0];
     // The places a thread covers are read only from the comment that opened it, as AZPR posts its
     // comments (never as a reply), and only in the runtime's own form: a reply that quotes such a
-    // comment, marker and all, says nothing about the thread it is in.
-    const opening = thread.comments.find(comment => !(comment?.parentCommentId > 0));
-    const alsoAt = context.filePath && opening === first && first.content.match(MARKER) ? listedPlaces(first.content) : [];
+    // comment, marker and all, says nothing about the thread it is in. The opener is the comment
+    // without a parent, wherever it stands among the comments.
+    const opening = comments.find(comment => !(comment.parentCommentId > 0));
+    const alsoAt = context.filePath && opening?.content.match(MARKER) ? listedPlaces(opening.content) : [];
     live.push({
       threadId: thread.id, status: thread.status ?? null,
       ...(context.filePath ? { path: context.filePath, line: context.rightFileStart?.line ?? context.leftFileStart?.line ?? null } : {}),

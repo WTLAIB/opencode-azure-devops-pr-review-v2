@@ -556,6 +556,17 @@ test('a planner\'s text never holds the heading of the list of other places, how
     const final = evaluatePlanPage(answer([comment({ severity: 'medium', body: `🟡 medium: One\n\nBody.\n\n${text}` }), ...others]), { review: r, assigned, repeats, sources: shown, final: true });
     assert.deepEqual([final.result.comments.map(c => c.findingId), final.result.skipped.map(s => s.findingId)], [['F-2'], ['F-1']], text);
   }
+  // The list follows the body, so a code fence the body leaves open would take the list into the code: such a body
+  // is sent back for a comment for several places. A closed fence, or one inside a quote or a list, takes nothing.
+  const fenced = text => evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: `🟡 medium: Value is lost\n\nSuggested fix:\n\n${text}` })]), { review: r, assigned, repeats, sources: shown });
+  for (const open of ['```ts\nconst value = load();', '~~~\ncode', '   ```\ncode', '````\ncode\n```', '```\ncode\n~~~']) {
+    assert.match(fenced(open).issues.join('\n'), /combined comment for F-1, F-2, F-3: body leaves a code fence open, which would take the list of other places into the code; close the fence/, open);
+  }
+  for (const closed of ['```ts\nconst value = load();\n```', '~~~\ncode\n~~~~', '```\na\n```\n\n```\nb\n```', '> ```\n> code', '- item\n\n      ```\n      code', 'Use ``` in a sentence.']) {
+    assert.deepEqual(fenced(closed).issues, [], closed);
+  }
+  const dropped = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: '🟡 medium: Value is lost\n\n```ts\nconst value = load();' })]), { review: r, assigned, repeats, sources: shown, final: true });
+  assert.deepEqual([dropped.result.comments, dropped.result.skipped.map(s => s.findingId)], [[], ['F-1', 'F-2', 'F-3']]);
   // Words about other places are a planner's to write; only the runtime's heading is not.
   const plain = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: '🟡 medium: Value is lost\n\nAlso at the other handlers; fix these places with it.' })]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(plain.issues, []);

@@ -733,6 +733,24 @@ export function restoreAnchor(comment, review) {
     : { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine, found: false };
 }
 
+/**
+ * Whether a text ends inside a fenced code block of its own: a fence at the
+ * start of a line (up to three spaces in) that no later line closes. A fence
+ * inside a quote or a list ends with it, so it is none.
+ */
+function leavesFenceOpen(text) {
+  let open = null;
+  for (const line of String(text).replace(/\r\n?/g, '\n').split('\n')) {
+    if (open) {
+      if (new RegExp(`^ {0,3}${open.mark}{${open.length},}[ \\t]*$`).test(line)) open = null;
+      continue;
+    }
+    const fence = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
+    if (fence) open = { mark: fence[1] ? '`' : '~', length: (fence[1] ?? fence[2]).length };
+  }
+  return open !== null;
+}
+
 /** Strip any severity label the model wrote, then apply the canonical one. */
 export function normalizeTitle(body, severity) {
   const trimmed = body.trim();
@@ -885,6 +903,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       // ends within the file (a quote that adds an empty line after the last one is found, but is no line).
       if (!problems.length && repeated && !drafted.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
       // (An anchor in a file that holds none of the findings is refused below, where the place is looked for.)
+      // The list follows the body: a code fence the body leaves open would take it into the code.
+      if (!problems.length && repeated && leavesFenceOpen(drafted.comment.body)) problems.push('body leaves a code fence open, which would take the list of other places into the code; close the fence');
       const lineCount = (read => read && (read.totalLines ?? read.lastLine))(repeated && drafted.comment && sources.find(item => item.path === drafted.comment.path));
       if (!problems.length && lineCount && drafted.comment.endLine > lineCount) {
         problems.push(`the anchor (lines ${drafted.comment.startLine}-${drafted.comment.endLine}) reaches past the end of ${drafted.comment.path}, which has ${lineCount} line(s); quote lines the file has`);

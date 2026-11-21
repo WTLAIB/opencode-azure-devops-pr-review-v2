@@ -653,6 +653,9 @@ test('a posted comment for several places tells a later plan which other places 
   const orphan = discussionDigest([{ id: 11, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, { id: 2, parentCommentId: 1, content: posted }], threadContext: at }])[0];
   assert.equal(Object.hasOwn(orphan, 'alsoAt'), false);
   assert.deepEqual(discussionDigest([{ id: 12, comments: [{ id: 1, parentCommentId: 0, content: posted }, { id: 2, parentCommentId: 1, content: 'Fixed in both.' }], threadContext: at }])[0].alsoAt, ['/src/b.ts:30-34', '/src/c`d.ts:12']);
+  // The opener is the comment without a parent, in whatever order the comments come.
+  const reordered = discussionDigest([{ id: 13, comments: [{ id: 2, parentCommentId: 1, content: 'Fixed in both.' }, { id: 1, parentCommentId: 0, content: posted }], threadContext: at }])[0];
+  assert.deepEqual([reordered.alsoAt, reordered.excerpt], [['/src/b.ts:30-34', '/src/c`d.ts:12'], 'Fixed in both.']);
 });
 
 test('the list of other places is read back only in the form the runtime writes it', () => {
@@ -692,8 +695,11 @@ test('the list of other places is read back only in the form the runtime writes 
   // The whole line is the runtime's wording: other words before the models are someone's sentence, whatever it ends with.
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nThe places above are withdrawn. Models: \`provider/model\`\n\n${marker}`), []);
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION.replace('Models:', 'The places above are withdrawn. Models:')}\n\n${marker}`), []);
-  // ... and the models are model references, as settings take them: a sentence in a code span is none.
+  // ... and the models are model references, as settings take them: a sentence in a code span, a placeholder or an
+  // overlong name is none.
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`the other place was withdrawn\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`YOUR_PROVIDER/YOUR_MODEL\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`provider/${'m'.repeat(510)}\`\n\n${marker}`), []);
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`provider/model#high\`\n\n${marker}`), read);
   // A row is a place and a finding's ID, as the runtime writes IDs: a row whose ID someone replaced is no row, and the list no list.
   assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(F-2)', '(withdrawn)')}${tail}`), []);
@@ -702,10 +708,14 @@ test('the list of other places is read back only in the form the runtime writes 
   for (const other of ['not a location', '/src/b.ts', '/src/b.ts:0', '/src/b.ts:3-', 'src/b.ts:3', '/src/b.ts:3-x', '/src/b.ts:12-7', '/src/a.ts:1` or `/src/b.ts:2', '/src/b.ts:3\ttab', '/src/a.ts:4 corrected to /src/b.ts:8', '/:3']) {
     assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('/src/b.ts:30-34', other)}${tail}`), [], other);
   }
-  // A row is the row the runtime writes for that place and ID, to the character: other spacing or brackets are not.
-  for (const [from, to] of [['- `/src/b.ts:30-34` (F-2)', '-  `/src/b.ts:30-34` (F-2)'], ['` (F-2)', '`(F-2)'], ['` (F-2)', '` （F-2）'], ['- `/src/b.ts:30-34`', '- `` /src/b.ts:30-34 ``']]) {
-    assert.deepEqual(listedPlaces(`Body.\n\n${list.replace(from, to)}${tail}`), [], to);
+  // A row is the row the runtime writes for that place and ID under that heading, to the character: other spacing,
+  // other brackets, the other language's brackets or anything after the row are not.
+  for (const [from, to] of [['- `/src/b.ts:30-34` (F-2)', '-  `/src/b.ts:30-34` (F-2)'], ['` (F-2)', '`(F-2)'], ['` (F-2)', '` （F-2）'], ['` (F-2)', '`（F-2）'], ['- `/src/b.ts:30-34`', '- `` /src/b.ts:30-34 ``'], ['(F-2)', '(F-2)\t'], ['(F-2)', '(F-2) ']]) {
+    assert.deepEqual(listedPlaces(`Body.\n\n${list.replace(from, to)}${tail}`), [], JSON.stringify(to));
   }
+  const chinese = renderOtherPlaces(places, 'zh-TW');
+  assert.deepEqual(listedPlaces(`Body.\n\n${chinese}${tail}`), read);
+  assert.deepEqual(listedPlaces(`Body.\n\n${chinese.replace('（F-2）', ' (F-2)')}${tail}`), [], 'English brackets under the Chinese heading.');
   // What `commentAttribution` writes, for each kind of review and language, is such a line.
   const provenance = { stages: [{ model: 'provider/reviewer' }, { model: 'provider/verifier#high' }] };
   for (const language of ['en', 'zh-TW', 'zh-CN']) for (const options of [{}, { verification: 'none' }, { verification: 'none', coverage: { complete: false, reviewed: 3, total: 5 } }]) {

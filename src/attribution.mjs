@@ -1,4 +1,4 @@
-import { ROLES, MAX_ARCHIVE_MEGABYTES, MODEL_REFERENCE } from './config.mjs';
+import { ROLES, MAX_ARCHIVE_MEGABYTES, isModelReference } from './config.mjs';
 // Deterministic attribution from invoked reviewer stages, not model-authored claims.
 const vocabulary = {
   en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check', 'Quick review', 'Severity rating'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
@@ -193,10 +193,13 @@ export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u0
  * start of the thread's text does; nothing is posted or skipped because of it.
  */
 export function listedPlaces(content) {
-  const lines = String(content ?? '').split(/\r?\n/).map(line => line.trimEnd());
+  // Line by line as written: only the line ends a service may return differ from what the runtime wrote.
+  const lines = String(content ?? '').split(/\r?\n/);
   while (lines.length && lines.at(-1) === '') lines.pop();
   const heading = lines.findLastIndex(line => OTHER_PLACES_HEADINGS.includes(line));
   if (heading < 0) return [];
+  // The rows are written in the heading's language: English brackets under the English heading, Chinese ones otherwise.
+  const brackets = ROW_BRACKETS[OTHER_PLACES_HEADINGS.indexOf(lines[heading]) ? 1 : 0];
   const places = [];
   let next = heading + 1;
   for (; next < lines.length && lines[next].startsWith('- `'); next++) {
@@ -206,8 +209,8 @@ export function listedPlaces(content) {
     const inner = id && line.slice(2 + fence.length, id.index).trimEnd();
     const place = inner && inner.endsWith(fence) ? inner.slice(0, -fence.length).trim() : '';
     const at = /^\/[^:]+:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
-    // A place as a finding's is written (lines in order), in the row the runtime writes for it.
-    if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || !ROW_BRACKETS.some(brackets => placeRow(place, id[1], brackets) === line)) return [];
+    // A place as a finding's is written (lines in order), in the row the runtime writes for it under this heading.
+    if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || placeRow(place, id[1], brackets) !== line) return [];
     places.push(place);
   }
   const rest = lines.slice(next);
@@ -227,7 +230,7 @@ export function listedPlaces(content) {
  */
 function commentAttributionLine(line) {
   return Object.values(vocabulary).flatMap(words => [`${words.comment} `, `${words.lead}${words.quick}${words.end}${words.models} `])
-    .some(wording => line.startsWith(wording) && line.slice(wording.length).split(', ').every(span => /^`[^`]+`$/.test(span) && MODEL_REFERENCE.test(span.slice(1, -1))));
+    .some(wording => line.startsWith(wording) && line.slice(wording.length).split(', ').every(span => /^`[^`]+`$/.test(span) && isModelReference(span.slice(1, -1))));
 }
 
 /** A compact index of existing claims, not another model-authored assessment. */
