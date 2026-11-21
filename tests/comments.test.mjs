@@ -556,20 +556,59 @@ test('a planner\'s text never holds the heading of the list of other places, how
     const final = evaluatePlanPage(answer([comment({ severity: 'medium', body: `🟡 medium: One\n\nBody.\n\n${text}` }), ...others]), { review: r, assigned, repeats, sources: shown, final: true });
     assert.deepEqual([final.result.comments.map(c => c.findingId), final.result.skipped.map(s => s.findingId)], [['F-2'], ['F-1']], text);
   }
-  // The list follows the body, so a code fence the body leaves open would take the list into the code: such a body
-  // is sent back for a comment for several places. A closed fence, or one inside a quote or a list, takes nothing.
-  const fenced = text => evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: `🟡 medium: Value is lost\n\nSuggested fix:\n\n${text}` })]), { review: r, assigned, repeats, sources: shown });
-  for (const open of ['```ts\nconst value = load();', '~~~\ncode', '   ```\ncode', '````\ncode\n```', '```\ncode\n~~~']) {
-    assert.match(fenced(open).issues.join('\n'), /combined comment for F-1, F-2, F-3: body leaves a code fence open, which would take the list of other places into the code; close the fence/, open);
-  }
-  for (const closed of ['```ts\nconst value = load();\n```', '~~~\ncode\n~~~~', '```\na\n```\n\n```\nb\n```', '> ```\n> code', '- item\n\n      ```\n      code', 'Use ``` in a sentence.']) {
-    assert.deepEqual(fenced(closed).issues, [], closed);
-  }
-  const dropped = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: '🟡 medium: Value is lost\n\n```ts\nconst value = load();' })]), { review: r, assigned, repeats, sources: shown, final: true });
-  assert.deepEqual([dropped.result.comments, dropped.result.skipped.map(s => s.findingId)], [[], ['F-1', 'F-2', 'F-3']]);
   // Words about other places are a planner's to write; only the runtime's heading is not.
   const plain = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: '🟡 medium: Value is lost\n\nAlso at the other handlers; fix these places with it.' })]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(plain.issues, []);
+});
+
+test('a comment for several places leaves no block open that would take the list of other places in', () => {
+  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+  // The list follows the body after a blank line. A block that goes on over a blank line would take it in, so
+  // such a body is sent back; the text after the title is the planner's.
+  const planned = (text, options = {}) => evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: `🟡 medium: Value is lost\n\nSuggested fix:\n\n${text}` })]), { review: r, assigned, repeats, sources: shown, ...options });
+  const sentBack = block => new RegExp(`^combined comment for F-1, F-2, F-3: body leaves ${block} open, which would take the list of other places into it; close it\\. Correct it, or comment on each finding separately\\.$`);
+  const open = {
+    'a code fence': [
+      // A fence without a closing one: of its own marker, at least as long, with nothing after it.
+      '```ts\nconst value = load();', '~~~\ncode', '   ```\ncode', '````\ncode\n```', '```\ncode\n~~~', '```\ncode\n``` not a closing fence',
+      // What ends a list item or a quote ends the fence in it, and a fence line after it starts a block at the top level:
+      // an unindented one under an item, one indented less than the item's text, one after a quote.
+      '- ~~~js\n  code\n~~~', '1. Change the call:\n  ```ts\n  load();', '> ```\n> code\n\n```\nmore', '> ```\ncode\n```',
+      // A line that continues an item's paragraph does not continue its code.
+      '- ~~~js\n  code\ntext\n  ~~~',
+      // Under a paragraph, a number other than 1 and a marker without text start no list item, so the fence is not in one.
+      'Then:\n2. step\n   ```\n   code', 'Then:\n-\n  ~~~\n  code',
+      // An item that began with nothing ends at a blank line.
+      '-\n\n  ```\n  code',
+    ],
+    'a <pre> block': ['<pre>\nconst value = load();', '<PRE class="x">\ncode', '<pre>\ncode\n\nmore'],
+    'a <script> block': ['<script>\nrun();'],
+    'a <?…?> block': ['<?php\necho 1;'],
+    'a <!…> declaration': ['<!DOCTYPE html'],
+    'a CDATA section': ['<![CDATA[\nvalue'],
+  };
+  for (const [block, texts] of Object.entries(open)) {
+    for (const text of texts) assert.match(planned(text).issues.join('\n'), sentBack(block.replace(/[?.[\]]/g, '\\$&')), text);
+  }
+  const closed = [
+    '```ts\nconst value = load();\n```', '~~~\ncode\n~~~~', '```\na\n```\n\n```\nb\n```', 'Use ``` in a sentence.', '```js `x` ```', '\t```\n\tcode',
+    // A fence in a list item, closed there, and one the item ends: by a sibling, by text after a blank line, by the body's end.
+    '- ~~~js\n  code\n  ~~~', '1. Change the call:\n   ```ts\n   load();\n   ```\n2. Run it again.', '-\t```js\n\tcode\n\t```', '- item\n  ```\n  code\n\nAfter the list.', '- item\n\n      ```\n      code',
+    // A fence in a quote ends with the quote; an item's paragraph goes on in a line that is not indented.
+    '> ```\n> code', '- item\ngoes on\n  ```\n  code',
+    // Raw HTML that ends where it says, in the same line or later; a tag in code or in a sentence opens no block; in a list item it ends with the item.
+    '<pre>\ncode\n</pre>', '<pre>code</pre>', '<textarea>\nvalue\n</TEXTAREA>', '<?php echo 1; ?>', '<!DOCTYPE html>', 'Wrap the output in `<pre>`.', 'The <pre> tag is missing.', '```html\n<pre>\n```', '- <pre>\n  code',
+    // Raw HTML that ends at a blank line holds the fence line as text.
+    '<details>\n```\n</details>', '<div>\n~~~\n\nAfter it.',
+  ];
+  for (const text of closed) assert.deepEqual(planned(text).issues, [], text);
+  // After the correction turns such a comment is not planned; its findings stay in the summary index.
+  const dropped = planned('```ts\nconst value = load();', { final: true });
+  assert.deepEqual([dropped.issues, dropped.result.comments, dropped.result.skipped.map(s => s.findingId)], [[], [], ['F-1', 'F-2', 'F-3']]);
+  // A comment for one place has no list under it and is planned as before.
+  const single = evaluatePlanPage(answer([comment({ severity: 'medium', body: '🟡 medium: One\n\n```ts\nconst value = load();' }), combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]),
+    { review: r, assigned, repeats, sources: shown });
+  assert.deepEqual([single.issues, single.result.comments.map(c => c.findingId)], [[], ['F-1', 'F-2']]);
 });
 
 test('a comment for several places quotes lines the file has, also in a review whose single comments need not', () => {

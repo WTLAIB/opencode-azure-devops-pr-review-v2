@@ -33,7 +33,8 @@ Comments:
   finding only when the file has those lines at the reviewed commit and its
   name can stand in a list unchanged, and it accepts a shared comment only
   when its anchor touches the lines of exactly one of its findings, which is
-  where the comment stands.
+  where the comment stands. A text that ends inside a code fence or a raw
+  HTML block, which would take the list in, is sent back for correction.
 - The review is unchanged: it still has one finding per place. Each keeps
   its row in the summary index, its ID, and can be left out or given another
   severity after a preview.

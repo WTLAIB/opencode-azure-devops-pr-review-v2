@@ -653,9 +653,17 @@ test('a posted comment for several places tells a later plan which other places 
   const orphan = discussionDigest([{ id: 11, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, { id: 2, parentCommentId: 1, content: posted }], threadContext: at }])[0];
   assert.equal(Object.hasOwn(orphan, 'alsoAt'), false);
   assert.deepEqual(discussionDigest([{ id: 12, comments: [{ id: 1, parentCommentId: 0, content: posted }, { id: 2, parentCommentId: 1, content: 'Fixed in both.' }], threadContext: at }])[0].alsoAt, ['/src/b.ts:30-34', '/src/c`d.ts:12']);
-  // The opener is the comment without a parent, in whatever order the comments come.
-  const reordered = discussionDigest([{ id: 13, comments: [{ id: 2, parentCommentId: 1, content: 'Fixed in both.' }, { id: 1, parentCommentId: 0, content: posted }], threadContext: at }])[0];
-  assert.deepEqual([reordered.alsoAt, reordered.excerpt], [['/src/b.ts:30-34', '/src/c`d.ts:12'], 'Fixed in both.']);
+  // The opener is the comment without a parent, in whatever order the comments come, and what the digest says
+  // of the thread is that one comment's: the places are never shown next to the words of a reply.
+  const reply = { id: 2, parentCommentId: 1, author: { displayName: 'Ben' }, content: 'Retries are a separate matter.' };
+  const opener = { id: 1, parentCommentId: 0, author: { displayName: 'Review bot' }, content: posted };
+  for (const comments of [[opener, reply], [reply, opener]]) {
+    const [entry] = discussionDigest([{ id: 13, comments, threadContext: at }]);
+    assert.deepEqual([entry.alsoAt, entry.author, entry.excerpt.startsWith('Note **📍 Also at** (the same defect'), entry.comments], [['/src/b.ts:30-34', '/src/c`d.ts:12'], 'Review bot', true, 2]);
+  }
+  // A thread whose opener is gone is described by the first comment that is left, as before.
+  const left = discussionDigest([{ id: 14, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, reply], threadContext: at }])[0];
+  assert.deepEqual([left.author, left.excerpt, Object.hasOwn(left, 'alsoAt')], ['Ben', 'Retries are a separate matter.', false]);
 });
 
 test('the list of other places is read back only in the form the runtime writes it', () => {

@@ -284,6 +284,18 @@ that continues in another session is still offered what is open of a group,
 while two or more of its findings are. The preview shows such a comment with
 all its findings and the planner's reason (`Combined: …`).
 
+The list follows the planner's text after a blank line, so that text must not
+end inside a block that would take the list in. As CommonMark reads blocks,
+two kinds go on over a blank line: a code fence without its closing fence,
+and raw HTML that waits for its own end (`<pre>`, `<script>`, `<style>`,
+`<textarea>`, `<?…`, `<!…`, a CDATA section). A text that leaves one of them
+open is sent back with its name, like any other refused combination. The
+runtime reads the lines for this and nothing else: a fence inside a list item
+or a quote ends with it, and a fence line after it stands on its own. What a
+browser makes of an inline tag that the planner left unclosed is not a block
+and is not checked; automatic publication holds scripts, embedded content and
+hidden text as for every comment.
+
 A grouping pass that fails, for instance on a provider error, costs only the
 grouping: a `PROGRESS` notice says so, and planning goes on without it.
 The pass is one more stage of the comment planner's model: usually one

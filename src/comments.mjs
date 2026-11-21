@@ -733,22 +733,114 @@ export function restoreAnchor(comment, review) {
     : { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine, found: false };
 }
 
+// What decides where a block of Markdown begins and ends, as CommonMark reads lines (tabs made spaces first).
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const fenceStart = line => {
+  const found = FENCE_LINE.exec(line);
+  return found && (found[1][0] === '~' || !found[2].includes('`')) ? { mark: found[1][0], length: found[1].length } : null;
+};
+const fenceEnd = (fence, line) => {
+  const found = FENCE_LINE.exec(line);
+  return Boolean(found) && found[1][0] === fence.mark && found[1].length >= fence.length && /^ *$/.test(found[2]);
+};
+const QUOTE_MARK = /^ {0,3}> ?/;
+const LIST_ITEM = /^( {0,3}(?:[-*+]|(\d{1,9})[.)]))(?:( +)(.*))?$/;
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?: *\1){2,} *$/;
+const HEADING = /^ {0,3}#{1,6}(?: |$)/;
+const UNDERLINE = /^ {0,3}(?:=+|-+) *$/;
+// Raw HTML that ends only where a line says so, not at a blank line (CommonMark's HTML blocks 1 and 3 to 5; the
+// start of an HTML comment is escaped in a body): how a line starts it, what a line holds that ends it, its name.
+const LASTING_HTML = [
+  [/^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)/i, /<\/(?:pre|script|style|textarea)>/i, found => `a <${found[1].toLowerCase()}> block`],
+  [/^ {0,3}<\?/, /\?>/, () => 'a <?…?> block'],
+  [/^ {0,3}<!\[CDATA\[/, /\]\]>/, () => 'a CDATA section'],
+  [/^ {0,3}<![a-z]/i, />/, () => 'a <!…> declaration'],
+];
+// Raw HTML that ends at a blank line: a line that begins with one of these tags (HTML block 6), or one that is
+// a whole tag and nothing else, which no paragraph continues into (7).
+const BLOCK_TAG = /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i;
+const TAG_LINE = /^ {0,3}(?:<[a-z][a-z0-9-]*(?:\s+[a-z_:][a-z0-9:._-]*(?:\s*=\s*(?:[^"'=<>`\x00-\x20]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[a-z][a-z0-9-]*\s*>)\s*$/i;
+
 /**
- * Whether a text ends inside a fenced code block of its own: a fence at the
- * start of a line (up to three spaces in) that no later line closes. A fence
- * inside a quote or a list ends with it, so it is none.
+ * The block a body leaves open for what follows it after a blank line, named
+ * for a correction; '' when it leaves none. As CommonMark reads blocks, only
+ * two kinds go on over a blank line at the top level: a fenced code block
+ * without its closing fence, and raw HTML that waits for its own end
+ * (LASTING_HTML). Inside a quote or a list item both end with it, and
+ * unindented text after a blank line ends every quote and list.
+ *
+ * So the lines are read for where the top level is. A quote is known by its
+ * mark and a list item by its marker and the indentation of its content, the
+ * outermost one only: what is nested in it is read as its text. Its lines,
+ * and those of the top level, are read alike for code fences, raw HTML and
+ * paragraphs, since a line without the mark or the indentation still
+ * continues a paragraph, and a paragraph is interrupted by some list items
+ * only. This is a reading of lines, not a Markdown parser, and it decides
+ * only whether a body is sent back for correction.
  */
-function leavesFenceOpen(text) {
-  let open = null;
-  for (const line of String(text).replace(/\r\n?/g, '\n').split('\n')) {
-    if (open) {
-      if (new RegExp(`^ {0,3}${open.mark}{${open.length},}[ \\t]*$`).test(line)) open = null;
-      continue;
+function openBlock(text) {
+  // Lines that hold no quote or list item of their own: the top level, or the content of the one the lines
+  // are in. open: code or raw HTML that waits for its end. raw: raw HTML that ends at a blank line.
+  // paragraph: the last line was a paragraph's.
+  const run = () => ({ open: null, raw: false, paragraph: false });
+  const top = run();
+  let within = null;
+  const read = (state, line) => {
+    if (state.open) {
+      if (state.open.ends(line)) state.open = null;
+      return;
     }
-    const fence = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
-    if (fence) open = { mark: fence[1] ? '`' : '~', length: (fence[1] ?? fence[2]).length };
+    const indent = /^ */.exec(line)[0].length;
+    if (indent === line.length) state.raw = state.paragraph = false;
+    // Raw HTML takes every line up to a blank one; four spaces or more are code, or a paragraph's next line.
+    if (indent === line.length || state.raw || indent > 3) return;
+    const fence = fenceStart(line), html = fence ? undefined : LASTING_HTML.find(([start]) => start.test(line));
+    if (fence) state.open = { ends: next => fenceEnd(fence, next), name: 'a code fence' };
+    else if (html && !html[1].test(line)) state.open = { ends: next => html[1].test(next), name: html[2](html[0].exec(line)) };
+    else if (!html) state.raw = BLOCK_TAG.test(line) || (!state.paragraph && TAG_LINE.test(line));
+    // Under a paragraph, a line of = or - makes it a heading; what starts no block is a paragraph's line.
+    state.paragraph = !(fence || html || state.raw || THEMATIC_BREAK.test(line) || HEADING.test(line) || (state.paragraph && UNDERLINE.test(line)));
+  };
+  // Whether a line starts a block wherever it stands, so that it never continues the paragraph of a quote or a list item above it.
+  const starts = line => Boolean(fenceStart(line)) || QUOTE_MARK.test(line) || Boolean(LIST_ITEM.exec(line)) || THEMATIC_BREAK.test(line) || HEADING.test(line)
+    || LASTING_HTML.some(([start]) => start.test(line)) || BLOCK_TAG.test(line);
+  for (const written of String(text).replace(/\r\n?/g, '\n').split('\n')) {
+    // A tab reaches the next column that is a multiple of four.
+    let line = '', column = 0;
+    for (const char of written) {
+      const width = char === '\t' ? 4 - column % 4 : 1;
+      line += char === '\t' ? ' '.repeat(width) : char;
+      column += width;
+    }
+    const indent = /^ */.exec(line)[0].length, blank = indent === line.length;
+    if (within) {
+      // A list item that began with nothing ends at a blank line; any other goes on over it.
+      const empty = within.empty;
+      within.empty = false;
+      if (within.quote ? QUOTE_MARK.test(line) : blank ? !empty : indent >= within.offset) {
+        read(within.content, within.quote ? line.replace(QUOTE_MARK, '') : line.slice(within.offset));
+        continue;
+      }
+      if (!blank && within.content.paragraph && !starts(line)) continue;
+      within = null;
+    }
+    if (!top.open && !top.raw && !blank && indent <= 3) {
+      const item = (top.paragraph && UNDERLINE.test(line)) || THEMATIC_BREAK.test(line) ? null : LIST_ITEM.exec(line), worded = /[^ ]/.test(item?.[4] ?? '');
+      if (line[indent] === '>') within = { quote: true, content: run() };
+      // A paragraph is interrupted only by an item with text, and by a numbered one only when it starts at 1.
+      else if (item && (!top.paragraph || (worded && (item[2] === undefined || Number(item[2]) === 1)))) {
+        // The content's column: after the marker and its spaces, or one space after it where code or nothing follows.
+        within = { offset: item[1].length + (worded && item[3].length <= 4 ? item[3].length : 1), empty: !worded, content: run() };
+      }
+      if (within) {
+        top.paragraph = false;
+        read(within.content, within.quote ? line.replace(QUOTE_MARK, '') : line.slice(within.offset));
+        continue;
+      }
+    }
+    read(top, line);
   }
-  return open !== null;
+  return top.open?.name ?? '';
 }
 
 /** Strip any severity label the model wrote, then apply the canonical one. */
@@ -903,8 +995,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       // ends within the file (a quote that adds an empty line after the last one is found, but is no line).
       if (!problems.length && repeated && !drafted.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
       // (An anchor in a file that holds none of the findings is refused below, where the place is looked for.)
-      // The list follows the body: a code fence the body leaves open would take it into the code.
-      if (!problems.length && repeated && leavesFenceOpen(drafted.comment.body)) problems.push('body leaves a code fence open, which would take the list of other places into the code; close the fence');
+      // The list follows the body: a block the body leaves open would take it in.
+      const left = !problems.length && repeated ? openBlock(drafted.comment.body) : '';
+      if (left) problems.push(`body leaves ${left} open, which would take the list of other places into it; close it`);
       const lineCount = (read => read && (read.totalLines ?? read.lastLine))(repeated && drafted.comment && sources.find(item => item.path === drafted.comment.path));
       if (!problems.length && lineCount && drafted.comment.endLine > lineCount) {
         problems.push(`the anchor (lines ${drafted.comment.startLine}-${drafted.comment.endLine}) reaches past the end of ${drafted.comment.path}, which has ${lineCount} line(s); quote lines the file has`);

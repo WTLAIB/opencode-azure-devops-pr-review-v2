@@ -43,13 +43,16 @@ export function discussionDigest(threads) {
     // without a parent, wherever it stands among the comments.
     const opening = comments.find(comment => !(comment.parentCommentId > 0));
     const alsoAt = context.filePath && opening?.content.match(MARKER) ? listedPlaces(opening.content) : [];
+    // What a thread is about is said by the comment that opened it, also when a reply comes first in the
+    // response: the author, the excerpt and the listed places are that one comment's.
+    const lead = opening ?? first;
     live.push({
       threadId: thread.id, status: thread.status ?? null,
       ...(context.filePath ? { path: context.filePath, line: context.rightFileStart?.line ?? context.leftFileStart?.line ?? null } : {}),
-      author: first.author?.displayName ?? first.author?.uniqueName ?? null,
+      author: lead.author?.displayName ?? lead.author?.uniqueName ?? null,
       comments: comments.length,
       azpr: comments.some(comment => comment.content.match(MARKER)),
-      excerpt: first.content.replace(MARKER, '').replace(/\s+/g, ' ').trim().slice(0, 300),
+      excerpt: lead.content.replace(MARKER, '').replace(/\s+/g, ' ').trim().slice(0, 300),
       ...(alsoAt.length ? { alsoAt } : {}),
     });
   }

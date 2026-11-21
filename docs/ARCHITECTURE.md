@@ -455,6 +455,10 @@ lines of exactly one of them: that finding is the comment's place
 (`findingId`), the others become `otherPlaces`. `assemblePlan` renders them
 under the planner's text with `renderOtherPlaces` (`attribution.mjs`): the
 findings' own locations and IDs as a plain list, never text a model wrote.
+The planner's text must leave no block open that would take that list in (a
+code fence without its closing fence, raw HTML that waits for its own end):
+`openBlock` reads its lines as CommonMark reads blocks, and such a text is
+sent back.
 The summary index keeps one row per place; only findings reported twice on
 the same lines share a row. A grouping pass that fails is said in a progress
 notice and planning goes on without groups; a stopped run starts no page.
