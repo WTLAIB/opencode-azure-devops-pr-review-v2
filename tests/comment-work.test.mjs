@@ -49,6 +49,11 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Waits in these tests are bounded, so a broken lane fails an assertion instead of hanging.
 const within = (promise, ms = 5000) => Promise.race([promise, sleep(ms)]);
+// A wait that must end by what it waits for: running out of time fails the test instead of letting it pass late.
+const inTime = (promise, what, ms = 5000) => {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what}.`)), ms); })]).finally(() => clearTimeout(timer));
+};
 
 test('planning pages hold at most four findings and assemble one plan with every finding accounted for', async t => {
   const findings = Array.from({ length: 10 }, (_, i) => finding(`F-${i + 1}`, i === 9 ? 'low' : 'high'));
@@ -342,8 +347,10 @@ test('a page still preparing its input when another page fails starts no model w
 
 test('a page treats the HEAD source of its own and earlier pages as observed, whichever fetch finishes first', async t => {
   // Page 1 (F-1 to F-4, in A) quotes a line of B; page 2 (F-5, in B) quotes a line of A; both declare line 20.
+  // F-5 has a severity of its own, so no two places could share a comment and no file is read before the pages:
+  // the fetches below are the pages' own.
   const findings = [...Array.from({ length: PLANNING_FINDINGS_PER_PAGE }, (_, i) => ({ ...finding(`F-${i + 1}`), location: 'head:/src/A.java:2' })),
-    { ...finding('F-5'), location: 'head:/src/B.java:2' }];
+    { ...finding('F-5', 'medium'), location: 'head:/src/B.java:2' }];
   const sources = { '/src/A.java': 'a0\nonly in A\n', '/src/B.java': 'b0\nonly in B\n' };
   const answer = payload => JSON.stringify(payload.commentWork.page === 1
     ? { status: 'READY', comments: [{ ...comment('F-1'), path: '/src/B.java', startLine: 20, endLine: 20, anchor: 'only in B' }],
@@ -358,9 +365,9 @@ test('a page treats the HEAD source of its own and earlier pages as observed, wh
       // Two lanes: A is still being fetched while page 2 checks its answer, and
       // page 1 checks its answer only after page 2, which fetched B, finished.
       const aFetched = deferred(), secondDone = deferred();
-      const fetchSource = async path => { if (parallel === 2 && path === '/src/A.java') await within(aFetched.promise); return sources[path]; };
+      const fetchSource = async path => { if (parallel === 2 && path === '/src/A.java') await inTime(aFetched.promise, 'page 2 to release the read of A'); return sources[path]; };
       const { invoke } = stages(async payload => {
-        if (parallel === 2 && payload.commentWork.page === 1) await within(secondDone.promise);
+        if (parallel === 2 && payload.commentWork.page === 1) await inTime(secondDone.promise, 'page 2 to finish before page 1 answers');
         if (parallel === 2 && payload.commentWork.page === 2) setTimeout(aFetched.resolve, 20);
         return answer(payload);
       });
@@ -662,6 +669,12 @@ test('the list of other places is read back only in the form the runtime writes 
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n- no place here${tail}`), [], 'Every line under the heading is a row.');
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\nMore of the body.${tail}`), [], 'A list inside someone\'s text is not the runtime\'s.');
   assert.deepEqual(listedPlaces(`Body.\n\n${list}\n${marker}`), [], 'A blank line ends the list.');
+  // After the rows comes what the runtime writes and nothing else: the marker, or a rule, one paragraph and the marker.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nThe list above is only an example.\n\n---\nAI review\n\n${marker}`), [], 'A paragraph between the list and the attribution.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nAI review\n\nOne more paragraph.\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n\n${marker}`), [], 'A rule without an attribution.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\nAI review\n\n${marker}`), [], 'An attribution without its rule.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nAI review\nsecond line of it\n\n${marker}`), read, 'An attribution of two lines is one paragraph.');
   assert.deepEqual(listedPlaces(null), []);
   // A text that quotes such a list above the runtime's own: the rows are those under the last heading.
   assert.deepEqual(listedPlaces(`Body.\n\n${renderOtherPlaces([{ findingId: 'F-9', place: '/fake.ts:1' }], 'en')}\n\nMore.\n\n${list}${tail}`), read);
@@ -676,15 +689,27 @@ test('the list of other places is read back only in the form the runtime writes 
   for (const place of ['/src/x-->y.ts:2', '/src/x<!--y.ts:2', '/src/a\tb.ts:2', '/src/a\nb.ts:2', '/src/a\u007fb.ts:2', '/src/a\u0085b.ts:2', '/src/a\u2028b.ts:2', 7, null, undefined]) assert.equal(listablePlace(place), false, String(place));
 });
 
-test('AZPR\'s comments on the PR are known by their marker, each with its thread', () => {
-  const one = '<!-- azpr-comment:' + '1'.repeat(32) + ' -->', two = '<!-- azpr-comment:' + '2'.repeat(32) + ' -->';
+test('what a comment would meet on the PR under its marker: the thread, and the places that the comment which opened it lists', () => {
+  const mark = digit => '<!-- azpr-comment:' + String(digit).repeat(32) + ' -->';
+  const list = renderOtherPlaces([{ findingId: 'F-2', place: '/src/b.ts:3' }], 'en');
+  const shared = marker => `Body.\n\n${list}\n\n---\nAI review\n\n${marker}`, single = marker => `Body.\n\n---\nAI review\n\n${marker}`;
   const posted = postedComments([
-    { id: 5, comments: [{ content: `First ${one}` }, { content: `A reply that quotes ${one}` }] },
-    { id: 6, isDeleted: true, comments: [{ content: `Gone ${two}` }] },
-    { id: 7, comments: [{ isDeleted: true, content: `Deleted ${two}` }, { content: 'No marker.' }] },
-    { id: 8, comments: [{ content: `Second ${two}` }] },
+    // A reply that quotes a shared comment whose own thread is gone: the marker is on the PR, but nothing says what it covers.
+    { id: 4, comments: [{ id: 1, parentCommentId: 0, content: 'Is this still open?' }, { id: 2, parentCommentId: 1, content: shared(mark(1)) }] },
+    { id: 5, comments: [{ id: 1, parentCommentId: 0, content: shared(mark(2)) }, { id: 2, parentCommentId: 1, content: `A reply that quotes ${mark(3)}` }] },
+    { id: 6, isDeleted: true, comments: [{ id: 1, parentCommentId: 0, content: shared(mark(4)) }] },
+    { id: 7, comments: [{ id: 1, parentCommentId: 0, isDeleted: true, content: shared(mark(5)) }, { id: 2, parentCommentId: 1, content: 'No marker.' }] },
+    // The opening comment of a later thread is what the marker of a quote stands for, wherever the quote came first.
+    { id: 8, comments: [{ id: 1, parentCommentId: 0, content: single(mark(3)) }] },
+    // A marker inside a text that ends otherwise is on the PR and lists nothing.
+    { id: 9, comments: [{ id: 1, parentCommentId: 0, content: `${shared(mark(6))}\n\nA note written after it.` }] },
   ]);
-  assert.deepEqual([...posted], [[one, { threadId: 5, content: `First ${one}` }], [two, { threadId: 8, content: `Second ${two}` }]]);
+  assert.deepEqual([...posted].sort(([a], [b]) => a.localeCompare(b)), [
+    [mark(1), { threadId: 4, places: [], opening: false }],
+    [mark(2), { threadId: 5, places: ['/src/b.ts:3'], opening: true }],
+    [mark(3), { threadId: 8, places: [], opening: true }],
+    [mark(6), { threadId: 9, places: [], opening: false }],
+  ]);
   assert.equal(postedComments(null).size, 0);
 });
 
@@ -881,7 +906,7 @@ test('a comment for several places that the PR would already seem to have goes b
     return JSON.stringify({ status: 'READY', skipped: [], comments: [{ findingIds: ['F-1', 'F-2', 'F-3'], mergeReason: 'Same.', severity: 'high', path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'line two', body: '🔴 high: Unchecked call\n\nBody.' }] });
   });
   const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf, discussions: discussionDigest(threads), posted: postedComments(threads) });
-  assert.match(issues.join('\n'), /the PR already has a comment of AZPR's on these lines \(thread 31\)[\s\S]*does not list F-2 at \/src\/B\.java:2, F-3 at \/src\/C\.java:2/);
+  assert.match(issues.join('\n'), /the PR already has a comment under the marker of these lines \(thread 31\)[\s\S]*does not list F-2 at \/src\/B\.java:2, F-3 at \/src\/C\.java:2/);
   assert.deepEqual(plan.comments.map(c => [c.findingId, c.path, c.otherPlaces.map(other => other.place)]), [['F-2', '/src/B.java', ['/src/A.java:2', '/src/C.java:2']]]);
   assert.notEqual(plan.comments[0].marker, first.comments[0].marker);
 });
@@ -1035,17 +1060,23 @@ test('a shared comment that meets an earlier comment at its place: publication s
   const thread = azure.state.threads[0].id;
   assert.deepEqual([result.status, result.counts], ['POSTED', { ALREADY_PRESENT: 1 }]);
   assert.deepEqual(result.uncovered, [{ marker: shared.comments[0].marker, findingIds: ['F-2', 'F-3'], path: '/src/A.java', startLine: 2, threadId: thread }]);
-  assert.equal(Object.hasOwn([...later.publication.values()][0], 'uncovered'), false, 'The ledger records what became of the item; this is what the run found.');
+  assert.deepEqual([...later.publication.values()][0].unlisted, ['F-2', 'F-3'], 'The item\'s entry says what the comment there does not list.');
   const receipt = renderPublication(later, result);
-  assert.match(receipt, new RegExp(`^Publication \\(ALREADY_PRESENT=1\\):\\n- F-1, F-2, F-3 \\(/src/A\\.java:2\\): ALREADY_PRESENT; thread=${thread}; not on the PR: F-2, F-3\\n`));
-  assert.match(receipt, /An entry marked "not on the PR" stands for one defect at several places, and the comment found at its place was posted earlier and does not list them all: the findings named have no comment on the PR\.$/);
+  assert.match(receipt, new RegExp(`^Publication \\(ALREADY_PRESENT=1\\):\\n- F-1, F-2, F-3 \\(/src/A\\.java:2\\): ALREADY_PRESENT; thread=${thread}; the comment there does not list F-2, F-3\\n`));
+  assert.match(receipt, /An entry that says "the comment there does not list" stands for one defect at several places, and the comment the PR has under its marker lists fewer: that comment was not changed, and this one was not posted for the findings named\.$/);
+  // A later publication of another plan of this review keeps that row as it was recorded, with what it says.
+  const next = { ...later, plan: { summary: null, skipped: [], comments: separate.comments.slice(1, 2) } };
+  const nextResult = await publishPlan({ run, review: next, azure: api, attempts });
+  assert.equal(Object.hasOwn(nextResult, 'uncovered'), false, 'Nothing of the kind was found for the items of this publication.');
+  assert.match(renderPublication(next, nextResult), new RegExp(`- F-1, F-2, F-3 \\(/src/A\\.java:2\\): ALREADY_PRESENT; thread=${thread}; the comment there does not list F-2, F-3\\n- F-2 \\(/src/B\\.java:2\\): VERIFIED`));
   // The shared comment itself on the PR covers every place: a re-run says nothing of the kind, and its receipt is as it was.
   const fresh = await placedSetup(t, findings), other = publisher(fresh.azure);
   const posted = { ...fresh.review, publication: new Map(), plan: { summary: null, skipped: [], comments: shared.comments } };
   const first = await publishPlan({ run: other.run, review: posted, azure: other.api, attempts: other.attempts });
   const again = await publishPlan({ run: other.run, review: posted, azure: other.api, attempts: other.attempts });
   assert.deepEqual([first.status, Object.hasOwn(first, 'uncovered'), again.counts, Object.hasOwn(again, 'uncovered')], ['POSTED', false, { ALREADY_PRESENT: 1 }, false]);
-  assert.doesNotMatch(renderPublication(posted, again), /not on the PR/);
+  assert.ok([...posted.publication.values()].every(entry => !Object.hasOwn(entry, 'unlisted')));
+  assert.doesNotMatch(renderPublication(posted, again), /does not list/);
   // A comment there that lists some of the places leaves the others.
   const partly = await placedSetup(t, findings), third = publisher(partly.azure);
   const two = { ...shared.comments[0], otherPlaces: shared.comments[0].otherPlaces.slice(0, 1) };
@@ -1053,6 +1084,61 @@ test('a shared comment that meets an earlier comment at its place: publication s
   assert.equal((await publishPlan({ run: third.run, review: earlier, azure: third.api, attempts: third.attempts })).status, 'POSTED');
   const now = { ...partly.review, publication: new Map(), plan: { summary: null, skipped: [], comments: shared.comments } };
   assert.deepEqual((await publishPlan({ run: third.run, review: now, azure: third.api, attempts: third.attempts })).uncovered.map(row => row.findingIds), [['F-3']]);
+});
+
+test('what a shared comment stands for is read from the last listing of the PR, whoever wrote the comment found there', async t => {
+  const findings = [placed('F-1', 'A'), placed('F-2', 'B')];
+  const planned = async () => {
+    const ctx = await placedSetup(t, findings);
+    const plan = await prepareComments(ctx.review, ctx.store, stages(async payload => groupwise(payload)).invoke, { fetchSource: sourceOf });
+    return { ...ctx, ...publisher(ctx.azure), review: { ...ctx.review, plan: { summary: null, skipped: [], comments: plan.comments } }, item: plan.comments[0] };
+  };
+  const listing = (azure, change) => { let listings = 0; azure.state.fail.threads = (_call, state) => { if (listings++ === 1) change(state); }; };
+  // This run's own write, kept by the service without the list: the read-back shows the marker and no place.
+  const own = await planned();
+  listing(own.azure, state => { state.threads[0].comments[0].content = own.item.content.replace(/\n\n\*\*📍 Also at[^\n]*\n- [^\n]*/, ''); });
+  const written = await publishPlan({ run: own.run, review: own.review, azure: own.api, attempts: own.attempts });
+  assert.equal(own.azure.callsTo('createThread').length, 1);
+  assert.deepEqual([[...own.review.publication.values()].map(entry => [entry.state, entry.unlisted]), written.uncovered.map(row => row.findingIds)], [[['VERIFIED', ['F-2']]], [['F-2']]]);
+  // A comment found on the PR whose list was completed between the two listings: nothing is missing in the end.
+  const completed = await planned();
+  completed.azure.state.threads.push({ id: 41, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, content: `Body.\n\n${completed.item.marker}` }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 2 } } });
+  listing(completed.azure, state => { state.threads[0].comments[0].content = completed.item.content; });
+  const found = await publishPlan({ run: completed.run, review: completed.review, azure: completed.api, attempts: completed.attempts });
+  assert.deepEqual([[...completed.review.publication.values()].map(entry => [entry.state, entry.unlisted]), Object.hasOwn(found, 'uncovered')], [[['ALREADY_PRESENT', undefined]], false]);
+  // A marker that only a reply holds (the thread of the quoted comment is gone): the item counts as present, as always,
+  // and nothing on the PR says what that marker covers.
+  const quoted = await planned();
+  quoted.azure.state.threads.push({ id: 42, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, content: 'Was this not settled?' }, { id: 2, parentCommentId: 1, content: quoted.item.content }],
+    threadContext: { filePath: '/src/Other.java', rightFileStart: { line: 9 } } });
+  const reply = await publishPlan({ run: quoted.run, review: quoted.review, azure: quoted.api, attempts: quoted.attempts });
+  assert.equal(quoted.azure.callsTo('createThread').length, 0);
+  assert.deepEqual([[...quoted.review.publication.values()].map(entry => [entry.state, entry.threadId, entry.unlisted]), reply.uncovered.map(row => row.findingIds)], [[['ALREADY_PRESENT', 42, ['F-2']]], [['F-2']]]);
+  // The same at planning: such a marker lists nothing, so the comment is sent back.
+  const issues = [];
+  await prepareComments(quoted.review, quoted.store, stages(async (payload, turn, evaluation) => { if (turn) issues.push(...evaluation.issues); return groupwise({ ...payload, repeatCandidates: turn ? [] : payload.repeatCandidates }); }).invoke,
+    { fetchSource: sourceOf, posted: postedComments(quoted.azure.state.threads) });
+  assert.match(issues.join('\n'), /the PR already has a comment under the marker of these lines \(thread 42\)[\s\S]*does not list F-2 at \/src\/B\.java:2/);
+  // With `compare`, the entry of such an item says both: other text, and what that text does not list.
+  const adjusted = await planned();
+  adjusted.azure.state.threads.push({ id: 43, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, content: `Body.\n\n${adjusted.item.marker}` }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 2 } } });
+  await publishPlan({ run: adjusted.run, review: adjusted.review, azure: adjusted.api, attempts: adjusted.attempts, compare: true });
+  assert.deepEqual([...adjusted.review.publication.values()].map(entry => [entry.state, entry.earlierText, entry.unlisted]), [['ALREADY_PRESENT', true, ['F-2']]]);
+});
+
+test('the files of possible repeats are read a few at a time before the pages, never all at once', async t => {
+  const files = Array.from({ length: 9 }, (_, i) => `F${i}`);
+  const findings = files.map((file, i) => placed(`F-${i + 1}`, file));
+  for (const parallel of [1, 2, 3]) {
+    const { review, store } = await placedSetup(t, findings);
+    let reading = 0, most = 0;
+    const read = [];
+    const fetchSource = async path => { read.push(path); most = Math.max(most, ++reading); await sleep(5); reading--; return 'line one\nline two\nline three\n'; };
+    const { invoke } = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [] }) : groupwise(payload));
+    await prepareComments(review, store, invoke, { fetchSource, parallel });
+    assert.equal(most, parallel, `at most ${parallel} read(s) under way`);
+    assert.deepEqual(read, files.map(file => `/src/${file}.java`), 'Each file once, in the order of the findings.');
+  }
 });
 
 test('an earlier comment that only the read-back lists is checked for the places of a shared comment too', async t => {

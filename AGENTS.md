@@ -271,19 +271,28 @@ settings, backups and failure records. Never upload `.local/`.
   (`listablePlace`).
   The runtime checks only the rules of a combination (`repeatProblems` and
   the page: one severity, high or medium, different lines that changed files
-  have in the HEAD text the runtime read, the anchor on the lines of exactly
-  one member); it never combines findings by itself, never chooses between
-  two places an anchor touches and never proposes a group from how alike two
-  texts are. The grouping pass has one answer and reads its findings inline:
-  no continuation, no reference it would need a tool for.
-- A marker is its place and quoted lines, and a posted comment is neither
-  changed nor posted again. A comment for several places that meets an
-  earlier comment of AZPR's on its lines must not make the receipt say more
-  than the PR holds: refuse it at planning where the PR's comments are known
-  (the planner then moves it), and at publication name the findings whose
-  place the comment found there does not list (`uncovered`, the receipt's
-  "No comment on the PR for …"); never count them as posted, and never
-  record this in the ledger, which says what became of each item.
+  have in the HEAD text the runtime read, an anchor found in that text and
+  on the lines of exactly one member); it never combines findings by itself,
+  never chooses between two places an anchor touches and never proposes a
+  group from how alike two texts are. The grouping pass has one answer and
+  reads its findings inline: no continuation, no reference it would need a
+  tool for. The files it needs are read a few at a time, like the pages'.
+- A marker is a file and quoted lines, and a posted comment is neither
+  changed nor posted again. A comment for several places that meets a
+  comment the PR already has under its marker must not make the receipt say
+  more than that comment's text holds: refuse it at planning where the PR's
+  comments are known (the planner then moves it), and at publication say for
+  which findings the comment found there lists no place (`unlisted` in the
+  item's entry, `uncovered` in the result, the receipt's "This preview's
+  comment was not posted for …"), from the last listing of the PR and
+  whoever wrote that comment. What a comment lists is read only from the
+  comment that opened a thread and ends with the marker
+  (`postedComments`); a marker that only a reply holds is present, as
+  publication has always taken it, and lists nothing. Claim what was
+  established and no more: one comment's list says nothing about other
+  threads, and the place where a comment stands is known by its marker
+  alone, as for every comment (thread positions go stale when lines move, so
+  they are not compared).
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

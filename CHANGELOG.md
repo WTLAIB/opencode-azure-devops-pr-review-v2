@@ -56,9 +56,10 @@ Comments:
 - A shared comment can meet an earlier comment of AZPR's on the same lines
   that lists fewer places or none (a thread per place from an earlier
   version, say). The planner is then asked to put the comment at another of
-  its places. If such a comment is still met when posting, the receipt names
-  the findings whose place no comment on the pull request lists
-  (`No comment on the PR for …`) instead of counting them as posted.
+  its places. If such a comment is still met when posting, the receipt says
+  for which findings the comment found there lists no place
+  (`This preview's comment was not posted for …`), so that it never says
+  more than that comment's text holds.
 
 The README's benchmark section now says what each precision measures: the
 share of comments on Martian's list of issues, next to the share of findings

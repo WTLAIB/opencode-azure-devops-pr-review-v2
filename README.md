@@ -1111,8 +1111,8 @@ that need different corrections keep their own comments. Every place keeps
 its row in the summary index, and you can still exclude or regrade each one
 after a preview. A posted comment is never changed: where the pull request
 already has AZPR's comment on those lines without the other places, the
-planner is asked for another place, and a receipt never counts a finding as
-posted whose place no comment lists (see
+planner is asked for another place, and a receipt says for which findings
+the comment found there lists no place (see
 [one defect at several places](docs/COMMENTING.md#one-defect-at-several-places)).
 
 ### Adjusting findings after a preview

@@ -464,16 +464,24 @@ carries AZPR's marker, under one of `OTHER_PLACES_HEADINGS`, with nothing
 after its rows but the attribution and the marker; a body that writes such a
 heading itself is refused.
 
-A marker follows a comment's place and quoted lines, and a posted comment is
-never changed or posted again, so a comment for several places can meet an
-earlier comment of AZPR's on the same lines that lists fewer places or none.
-`evaluatePlanPage` refuses such a comment against the comments the PR had
-when planning began (`postedComments`, by the marker of ordinal 0), which
-sends it back to the planner for another place. `publishPlan` looks at the
-PR again: for an item found there with another text it reports the findings
-whose place that text does not list (`uncovered` in its result, never in the
-ledger), and the receipt names them in the item's row and in a line of its
-own (`describeUncovered`) instead of counting them as posted.
+A marker follows a comment's file and quoted lines, and a posted comment is
+never changed or posted again, so a comment for several places can meet a
+comment the PR already has under its marker that lists fewer places or none.
+`postedComments` maps each marker on the PR to its thread and to the places
+its comment lists, read only from the comment that opened a thread and ends
+with the marker (a marker that only a reply holds is present and lists
+nothing). `evaluatePlanPage` refuses such a comment against the comments the
+PR had when planning began, by the marker the comment gets among its
+answer's comments, which sends it back to the planner for another place; a
+shared comment's quoted lines must also be found in the HEAD text.
+`publishPlan` looks at the PR again: from its last listing, for every shared
+item found there and whoever wrote the comment, it records the findings
+whose place that comment does not list (`unlisted` in the item's entry,
+`uncovered` in its result), and the receipt says so in the item's row and in
+a line of its own (`describeUncovered`); `describeEarlierText` names only
+the findings such a comment covers. Only what that one comment lists is
+established, and the place where a comment stands is known by its marker
+alone, as for every comment.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both

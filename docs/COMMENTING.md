@@ -303,27 +303,39 @@ followed by nothing but the attribution and the marker. A reply that quotes
 such a comment says nothing about its thread, and a planner's text that
 writes that heading itself is sent back.
 
-**A place that already has a comment.** A comment's marker follows its place
+**A place that already has a comment.** A comment's marker follows its file
 and the lines it quotes, and AZPR neither changes a posted comment nor posts
-it again. A comment for several places can therefore meet an earlier comment
-of AZPR's on the same lines: one for that place alone, or one that lists
-other places. Publication would skip the new comment, and the places the
-earlier one does not list would have no comment at all. AZPR deals with this
-twice:
+it again. A comment for several places can therefore meet a comment the pull
+request already has under the same marker: an earlier one for that place
+alone, or one that lists other places. Publication would skip the new
+comment, and the places the earlier one does not list would get nothing from
+it. AZPR deals with this twice:
 
 - **When planning**, the runtime compares such a comment with the comments
   the pull request already has. Where the earlier one does not list every
   other place, the planner is asked to anchor the comment at another of its
-  places or to leave that finding out; a comment that still collides after
+  places or to leave that finding out (a finding that already has a thread
+  of its own is skipped as discussed); a comment that still collides after
   the correction turns is dropped like any refused combination, and its
   findings are skipped with that reason.
-- **When posting**, the pull request is read again. An item found there with
-  another text is reported as usual (`ALREADY_PRESENT`), and its row and a
-  line of the receipt name the findings whose place the comment on the pull
-  request does not list: `No comment on the PR for F-2, F-3 (…)`. They are
-  never reported as posted. `/pr-comment` plans the preview again and asks
-  for another place; a review whose adjusted preview began publication needs
-  a new review for that.
+- **When posting**, the pull request is read again, and what the comment
+  found under the marker lists is taken from the last reading. The item is
+  reported as usual (`ALREADY_PRESENT`, or `VERIFIED` when a write of this
+  run met it), its row adds `the comment there does not list F-2, F-3`, and
+  a line of the receipt says so: `This preview's comment was not posted for
+  F-2, F-3 (…)`. `/pr-comment` plans the preview again and asks for another
+  place; a review whose adjusted preview began publication needs a new
+  review for that.
+
+What is established is what that one comment lists. Whether the findings it
+leaves out have threads of their own (posted one per place by an earlier
+version, say) is not looked up, so the receipt says "unless they have threads
+of their own". What a comment lists is read only from the comment that
+opened its thread; a marker that only a reply holds counts as present, as it
+always has, and lists nothing. And the place where a comment stands is known
+by its marker, as for every comment: the same quoted lines elsewhere in the
+same file share a marker, so a comment at one of them counts for the other.
+Thread positions are not compared, because they go stale when lines move.
 
 ## Planning
 

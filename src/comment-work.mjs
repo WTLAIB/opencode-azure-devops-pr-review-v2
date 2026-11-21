@@ -2,7 +2,7 @@
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads } from './azure.mjs';
-import { listedPlaces, listablePlace } from './attribution.mjs';
+import { listedPlaces, listablePlace, closingMarker } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -55,14 +55,26 @@ export function discussionDigest(threads) {
 }
 
 /**
- * AZPR's live comments on the PR by their marker, each with its thread: what a
- * planned comment of that marker would meet there, since publication skips an
- * item whose marker the PR has.
- * @returns {Map<string, {threadId: number, content: string}>}
+ * What a planned comment would meet on the PR under its marker, by marker:
+ * the thread, and the other places the comment there lists. A marker counts
+ * as present wherever a live comment holds it, as publication skips such an
+ * item. What a comment lists is read only from the comment that opened a
+ * thread and ends with that marker, as AZPR posts it: a marker that only a
+ * reply holds, or that stands inside another text, lists nothing (`opening`
+ * false).
+ * @returns {Map<string, {threadId: number, places: string[], opening: boolean}>}
  */
 export function postedComments(threads) {
-  const threadOf = markersInThreads(threads ?? []);
-  return new Map([...markerTexts(threads ?? [])].map(([marker, content]) => [marker, { threadId: threadOf.get(marker), content }]));
+  const found = new Map();
+  for (const thread of threads ?? []) {
+    if (thread?.isDeleted === true || !Array.isArray(thread?.comments)) continue;
+    const opening = thread.comments.find(comment => !(comment?.parentCommentId > 0));
+    if (!opening || opening.isDeleted === true || typeof opening.content !== 'string') continue;
+    const marker = closingMarker(opening.content);
+    if (marker && !found.has(marker)) found.set(marker, { threadId: thread.id, places: listedPlaces(opening.content), opening: true });
+  }
+  for (const [marker, threadId] of markersInThreads(threads ?? [])) if (!found.has(marker)) found.set(marker, { threadId, places: [], opening: false });
+  return found;
 }
 
 export { parseLocation };
@@ -272,6 +284,12 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   // files are read only when findings could share a comment at all; the pages read them anyway.
   let eligible = repeatEligible(all, twice, review.snapshot.files);
   if (severitySets(eligible).length) {
+    // As many reads at a time as pages are planned, so that one preview never puts all its files
+    // ahead of what other conversations ask of Azure DevOps.
+    const paths = [...new Set(eligible.map(finding => parseLocation(finding.location).path))];
+    let next = 0;
+    const reader = async () => { while (next < paths.length) await source(paths[next++]); };
+    await Promise.all(Array.from({ length: Math.min(paths.length, Number.isSafeInteger(parallel) && parallel > 1 ? parallel : 1) }, reader));
     const heads = await Promise.all(eligible.map(finding => source(parseLocation(finding.location).path)));
     eligible = eligible.filter((finding, index) => heads[index] !== null && parseLocation(finding.location).end <= sourceWindow(heads[index]).totalLines);
   }
@@ -456,13 +474,17 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   earlier version, since nothing posted is ever changed. The result then
  *   counts the other AZPR comments on the PR (`otherComments`).
  * - A comment for one defect at several places stands for all of them, but its
- *   marker is that of the one place where it stands. When the PR already has a
- *   comment with that marker which this run did not create (an earlier
- *   publication, of one place or of other places), the places it does not list
- *   have no comment: the result names their findings per item (`uncovered`),
- *   so that the receipt never says of a finding that it is on the PR when no
- *   posted text holds its place. Planning refuses such a comment where it can
- *   (`evaluatePlanPage`); this is the check of what the PR holds when posting.
+ *   marker is that of the one place where it stands. The comment the PR has
+ *   under that marker may list fewer places: an earlier comment for that place
+ *   alone, one that lists other places, or text the service returned changed.
+ *   For every such item found on the PR, the places that comment does not
+ *   list are named in the item's entry (`unlisted`, the findings) and in the
+ *   result (`uncovered`), from the last listing of the PR this call read,
+ *   whoever created the comment: the receipt says of no finding that the
+ *   comment covers it when the comment's text does not. Planning refuses such
+ *   a comment where it can (`evaluatePlanPage`); this is the check of what the
+ *   PR holds when posting. What one comment lists is all that is established:
+ *   whether those findings have threads of their own is not looked up.
  */
 export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only, compare = false }) {
   const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
@@ -473,17 +495,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   }
   const listed = await azure.threads(run, review.snapshot);
   const present = markersInThreads(listed);
-  const shared = items.some(item => item.otherPlaces?.length);
-  const texts = compare || shared ? markerTexts(listed) : null;
-  // The findings of a shared comment whose places the comment found on the PR does not list, by marker.
-  // Not part of the ledger, which records what became of each item: this is what this run found.
-  const uncovered = new Map();
-  const unlisted = (item, text) => {
-    if (!item.otherPlaces?.length || typeof text !== 'string' || text === item.content) return;
-    const covered = new Set(listedPlaces(text));
-    const missing = item.otherPlaces.filter(other => !covered.has(other.place)).map(other => other.findingId);
-    if (missing.length) uncovered.set(item.marker, missing);
-  };
+  const texts = compare ? markerTexts(listed) : null;
   const at = () => new Date(now()).toISOString();
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
@@ -499,8 +511,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
     if (present.has(item.marker)) {
-      unlisted(item, texts?.get(item.marker));
-      record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(compare && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
+      record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(texts && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
       continue;
     }
     if (halted) { record(item, { state: 'FAILED', error: halted }); continue; }
@@ -541,27 +552,35 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     await persist?.();
     if (written % 10 === 0) progress?.(`Posted ${index + 1}/${items.length} comment item(s)`);
   }
-  let readBack = 'complete';
+  let readBack = 'complete', latest = listed;
   try {
     const listedAfter = await azure.threads(run, review.snapshot);
     const after = markersInThreads(listedAfter), removedAfter = deletedThreads(listedAfter);
-    const textsAfter = compare || shared ? markerTexts(listedAfter) : null;
+    const textsAfter = compare ? markerTexts(listedAfter) : null;
     for (const item of items) {
       const entry = ledger.get(item.marker);
       if (!['POSTED', 'UNCERTAIN', 'FAILED'].includes(entry.state)) continue;
       if (after.has(item.marker)) {
         // A comment this run did not create (an earlier attempt's, or one the first list did not show yet,
-        // also after a refused write) keeps its own text, and lists the places it listed.
-        const foreign = entry.state !== 'POSTED' || entry.earlierAttempt;
-        const earlierText = compare && foreign && textsAfter.get(item.marker) !== item.content;
-        if (foreign) unlisted(item, textsAfter?.get(item.marker));
+        // also after a refused write) keeps its own text.
+        const earlierText = textsAfter && (entry.state !== 'POSTED' || entry.earlierAttempt) && textsAfter.get(item.marker) !== item.content;
         Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker), ...(earlierText ? { earlierText: true } : {}) });
       }
       else if (entry.state === 'POSTED') entry.state = removedAfter.has(entry.threadId) ? 'DELETED' : 'UNVERIFIED';
     }
+    latest = listedAfter;
   } catch (error) {
     if (!run.active) throw error;
     readBack = `unavailable: ${String(error?.message ?? error).slice(0, 300)}`;
+  }
+  // What a comment for several places stands for on the PR is what the comment found under its marker
+  // lists. Read from the last listing there is, for every such item found in it, whoever created that
+  // comment: an earlier publication's, one a write of this run met, or this run's own as the service kept it.
+  const standing = postedComments(latest);
+  for (const item of items) {
+    const on = item.otherPlaces?.length ? standing.get(item.marker) : undefined;
+    const missing = on ? item.otherPlaces.filter(other => !on.places.includes(other.place)).map(other => other.findingId) : [];
+    if (missing.length) ledger.get(item.marker).unlisted = missing;
   }
   await persist?.();
   const states = items.map(item => ledger.get(item.marker).state);
@@ -570,8 +589,12 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
   const planned = new Set(items.map(item => item.marker));
+  const uncovered = items.filter(item => ledger.get(item.marker).unlisted).map(item => {
+    const { unlisted: findingIds, threadId } = ledger.get(item.marker);
+    return { marker: item.marker, findingIds, path: item.path, startLine: item.startLine, threadId };
+  });
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
-    ...(uncovered.size ? { uncovered: items.filter(item => uncovered.has(item.marker)).map(item => ({ marker: item.marker, findingIds: uncovered.get(item.marker), path: item.path, startLine: item.startLine, threadId: ledger.get(item.marker).threadId })) } : {}),
+    ...(uncovered.length ? { uncovered } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
     ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };
 }
