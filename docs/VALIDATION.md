@@ -65,6 +65,45 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.4.6 after publication (2026-11-21)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.0 and tmux 3.2a, in isolated OpenCode profiles with the fake model and
+Azure DevOps services.
+
+- **The merged tree.** The pull request was merged with a merge commit whose
+  tree is that of the candidate's last commit. CI passed on that commit, on
+  `main` and on the tag. The three commits after the thirteenth review change
+  this page only; the code and tests are those of the tree that review read
+  and that the eleven host fixture runs passed on.
+- **Before the tag.** On the candidate's last commit: the source archive
+  passed the clean-directory installation check, the package built from a
+  clean export holds 38 files, all 309 local links and images of the 50
+  Markdown files resolve, and the public Git commit, installed by OpenCode's
+  plugin manager, passed the native smoke, terminal panel and setup fixtures.
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. Both passed the clean-directory installation check: 23 runtime
+  modules, 9 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.6`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (110 model and 194 Azure DevOps requests), the terminal panel's fixture
+  (30 and 57, with one request of the conversation's model; four of its five
+  previews start with a grouping pass) and the setup fixture (no model
+  request, 16 Azure DevOps requests).
+- **The npm package.** The registry's integrity and shasum for 0.4.6 equal
+  those of the package built from the tag (38 files), which is the package
+  built from the candidate before the merge; the tarball downloaded from the
+  registry is byte-identical to it, and `latest` names 0.4.6. Installed from
+  the registry, the package passed the same three fixtures with the same
+  request counts.
+
+The runs with real models were made with the candidate; see
+[which findings share a comment](#with-real-models-which-findings-share-a-comment)
+and [the public benchmark](#martians-code-review-bench-measured-again) for
+them, and the [limits](#limits-of-this-candidate) for what was not verified.
+
 ## 0.4.6 release candidate acceptance (2026-11-21)
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
