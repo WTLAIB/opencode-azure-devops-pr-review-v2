@@ -285,8 +285,10 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     // ahead of what other conversations ask of Azure DevOps.
     const paths = [...new Set(eligible.map(finding => parseLocation(finding.location).path))];
     let next = 0;
-    const reader = async () => { while (next < paths.length) await source(paths[next++]); };
+    const reader = async () => { while (next < paths.length && active()) await source(paths[next++]); };
     await Promise.all(Array.from({ length: Math.min(paths.length, Number.isSafeInteger(parallel) && parallel > 1 ? parallel : 1) }, reader));
+    // A run that was stopped meanwhile reads no further file and plans nothing.
+    if (!active()) throw new Error('Comment planning was stopped.');
     // Lines are counted once for a file, however many findings it holds.
     const lineCounts = new Map();
     for (const path of paths) {
@@ -495,10 +497,17 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     ...entry, at: at() });
   // Remember the thread of every item found on the PR (also one an uncertain create or an earlier
   // version left without a record), so a comment deleted there later is not posted again.
+  // A comment for several places is known by its own marker and carries the marker of its place too
+  // (`placeMarker`): the record is kept under both, so that a comment for that place alone finds it as it
+  // would find any comment on those lines, also while the thread list lags or after it was deleted.
+  const keys = item => item.placeMarker ? [item.marker, item.placeMarker] : [item.marker];
   for (const item of items) {
-    const threadId = present.get(item.marker), earlier = attempts.get(item.marker);
-    if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
-    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
+    const threadId = present.get(item.marker);
+    for (const key of keys(item)) {
+      const earlier = attempts.get(key);
+      if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
+      await attempts.set(key, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
+    }
   }
   let written = 0, halted = '';
   for (const [index, item] of items.entries()) {
@@ -530,7 +539,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     try {
       const created = await azure.createThread(run, review.snapshot, item);
       record(item, { state: 'POSTED', threadId: created.threadId, ...(created.contentMatches === false ? { contentMismatch: true } : {}) });
-      try { await attempts.set(item.marker, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id }); }
+      try { for (const key of keys(item)) await attempts.set(key, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id }); }
       catch (error) { halted = `The created thread could not be recorded (${String(error?.message ?? error).slice(0, 200)}); publication stopped.`; }
     } catch (error) {
       if (!run.active) throw error;
@@ -571,7 +580,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
-  const planned = new Set(items.map(item => item.marker));
+  const planned = new Set(items.flatMap(keys));
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
     ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };

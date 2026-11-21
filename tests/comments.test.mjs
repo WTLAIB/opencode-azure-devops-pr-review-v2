@@ -479,7 +479,15 @@ test('a comment for several places has a marker of its own and carries the marke
   const stacked = assemblePlan(both, [evaluatePlanPage(answer([comment({ findingId: 'F-4', severity: 'medium', body: '🟡 medium: Twin\n\nBody.' }), combined(['F-1', 'F-2', 'F-3'])]),
     { review: both, assigned: confirmedFindings(both), repeats, sources: shown }).result]).comments;
   assert.deepEqual(stacked.map(c => [c.findingId, c.placeMarker ?? c.marker]), [['F-4', inlineMarker(both.target, shared, 0)], ['F-1', inlineMarker(both.target, shared, 1)]]);
-  assert.equal(stacked[1].marker, shared.marker, 'Its own marker has no count: no two comments of a plan hold the same findings.');
+  assert.equal(stacked[1].marker, shared.marker, 'Its own marker does not count comments for one place.');
+  // Two defects at the same places: each has a finding on the same lines of both files, their comments quote the same
+  // line and list the same place. They are two comments, told apart by their order in the plan.
+  const twins = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }), finding('F-3', 'medium'), finding('F-4', 'medium', { location: 'head:/src/b.ts:2-3' })], twoFiles);
+  const pair = assemblePlan(twins, [evaluatePlanPage(answer([combined(['F-1', 'F-2']), combined(['F-3', 'F-4'], { body: '🟡 medium: Another defect\n\nBody.' })]),
+    { review: twins, assigned: confirmedFindings(twins), repeats: [['F-1', 'F-2'], ['F-3', 'F-4']], sources: shown }).result]).comments;
+  assert.deepEqual(pair.map(c => c.findingIds), [['F-1', 'F-2'], ['F-3', 'F-4']]);
+  assert.deepEqual(pair.map(c => c.marker), [sharedMarker(twins.target, pair[0], 0), sharedMarker(twins.target, pair[0], 1)]);
+  assert.equal(new Set(pair.flatMap(c => [c.marker, c.placeMarker])).size, 4, 'Four markers, none shared.');
 });
 
 test('a comment for several places does not stand on lines that already carry a comment of AZPR\'s, unless the PR has this very comment', () => {
@@ -493,6 +501,9 @@ test('a comment for several places does not stand on lines that already carry a 
   assert.match(plan(single).issues.join('\n'), /combined comment for F-1, F-2, F-3: the PR already has a comment of AZPR's on these quoted lines \(thread 12\), and a second one is not put on them\. Anchor this comment on the lines of another of its findings, or leave F-1 out of it; a finding that an existing thread covers is skipped with cause existing-thread/);
   // So for a shared comment with other places that stands there.
   assert.match(plan(new Map([[shared.placeMarker, 12], ['<!-- azpr-comment:' + '0'.repeat(32) + ' -->', 12]])).issues.join('\n'), /already has a comment of AZPR's on these quoted lines/);
+  // Comments on the same quoted lines count from 0, and the first may have been deleted since: the next ones are looked for too.
+  assert.match(plan(new Map([[inlineMarker(r.target, shared, 1), 14]])).issues.join('\n'), /already has a comment of AZPR's on these quoted lines \(thread 14\)/);
+  assert.match(plan(new Map([[inlineMarker(r.target, shared, 7), 15]])).issues.join('\n'), /\(thread 15\)/);
   // The PR has this very comment (its own marker): planned again it is the same, and publication will skip it.
   assert.deepEqual(plan(new Map([[shared.placeMarker, 12], [shared.marker, 12]])).issues, []);
   // Anchored at another place it meets nothing, and a comment for one place is as it always was.
@@ -558,6 +569,8 @@ test('the grouping pass proposes groups under the same rules; what breaks one is
   assert.deepEqual([final.result.groups, final.issues], [[['F-4', 'F-6']], []]);
   assert.deepEqual(final.corrections.map(c => c.action), ['drop-invalid-group', 'drop-invalid-group']);
   assert.deepEqual(evaluateGrouping('not json', { findings, final: true }).result, { status: 'READY', groups: [] });
+  // A missing status is no READY: an answer may name unfinished work without one.
+  assert.match(evaluateGrouping(JSON.stringify({ groups: [], continuation: 'not finished' }), { findings }).issues.join('\n'), /status must be READY: this pass has no continuation/);
   // The pass has one answer and no continuation: another status goes back, and after the repairs the groups it named stand.
   const early = JSON.stringify({ status: 'CONTINUE', continuation: 'F-5 is still to be read.', groups: [{ findingIds: ['F-4', 'F-6'] }] });
   assert.match(evaluateGrouping(early, { findings }).issues.join('\n'), /status must be READY: this pass has no continuation/);

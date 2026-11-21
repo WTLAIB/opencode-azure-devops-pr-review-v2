@@ -153,17 +153,20 @@ export const OTHER_PLACES_HEADINGS = Object.freeze(['**📍 Also at** (the same 
  * @param {{findingId: string, place: string}[]} places
  */
 export function renderOtherPlaces(places, language) {
-  // A code span that holds any text: longer than the longest run of backticks inside it.
-  const span = value => {
-    const text = String(value).replace(/[\r\n\t]+/g, ' ');
-    const run = Math.max(0, ...(text.match(/`+/g) ?? []).map(match => match.length));
-    const fence = '`'.repeat(run + 1);
-    return run ? `${fence} ${text} ${fence}` : `\`${text}\``;
-  };
   const [english, traditional, simplified] = OTHER_PLACES_HEADINGS;
   const heading = pick(language, english, traditional, simplified);
-  const open = pick(language, ' (', '（', '（'), close = pick(language, ')', '）', '）');
-  return `${heading}\n${places.map(({ findingId, place }) => `- ${span(place)}${open}${String(findingId).replace(/[^A-Za-z0-9_-]/g, '')}${close}`).join('\n')}`;
+  return `${heading}\n${places.map(({ findingId, place }) => placeRow(place, findingId, pick(language, ROW_BRACKETS[0], ROW_BRACKETS[1], ROW_BRACKETS[1]))).join('\n')}`;
+}
+
+// How a row puts its finding ID in brackets: in English, and in Chinese.
+const ROW_BRACKETS = [[' (', ')'], ['（', '）']];
+
+/** One row of that list: the place in a code span that holds any text (longer than the longest run of backticks inside it), then the finding ID. */
+function placeRow(place, findingId, [open, close]) {
+  const text = String(place).replace(/[\r\n\t]+/g, ' ');
+  const run = Math.max(0, ...(text.match(/`+/g) ?? []).map(match => match.length));
+  const fence = '`'.repeat(run + 1);
+  return `- ${run ? `${fence} ${text} ${fence}` : `\`${text}\``}${open}${String(findingId).replace(/[^A-Za-z0-9_-]/g, '')}${close}`;
 }
 
 /**
@@ -177,11 +180,12 @@ export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u0
  * The places a posted comment of AZPR's lists, read back from its text for a
  * later plan (`alsoAt` in the digest of a thread): the rows under the heading
  * `renderOtherPlaces` writes, where they end the comment's own text as
- * `assemblePlan` writes it. A row is a place as `placeOf` writes one (a path
- * and its lines) in a code span and a finding ID. After the rows comes a
- * blank line, then the attribution if there is one (a rule, the one line
- * `commentAttribution` writes, which ends with its models, and a blank line),
- * then the two markers of such a comment with a blank line between them.
+ * `assemblePlan` writes it. A row counts only when writing its place and its
+ * finding ID again gives the very line (so a row is one a finding's place
+ * could have produced: a path, its lines in order, an ID). After the rows
+ * comes a blank line, then the attribution if there is one (a rule, the line
+ * `commentAttribution` writes for a comment, and a blank line), then the two
+ * markers of such a comment with a blank line between them.
  * [] for any other text: one that merely holds such a heading or such rows,
  * one whose row has another form, one that was continued after the list.
  * What is read here tells a planner what a thread says it covers, as the
@@ -195,23 +199,31 @@ export function listedPlaces(content) {
   const places = [];
   let next = heading + 1;
   for (; next < lines.length; next++) {
-    const row = /^- (`+) ?(.+?) ?\1 ?[（(][A-Za-z]+-\d+[)）]$/.exec(lines[next]);
+    const row = /^- (`+) ?(.+?) ?\1 ?[（(]([A-Za-z]+-\d+)[)）]$/.exec(lines[next]);
     if (!row) break;
-    if (!/^\/.*:[1-9]\d*(?:-[1-9]\d*)?$/.test(row[2]) || !listablePlace(row[2])) return [];
-    places.push(row[2]);
+    const [, , place, findingId] = row, at = /^\/.*:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
+    // A place as a finding's is written (lines in order), in the row the runtime writes for it.
+    if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || !ROW_BRACKETS.some(brackets => placeRow(place, findingId, brackets) === lines[next])) return [];
+    places.push(place);
   }
   const rest = lines.slice(next);
   const marker = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
   // The end of a comment for several places: the marker of its place, a blank line, its own marker.
   if (!places.length || rest.shift() !== '' || !marker.test(rest.pop() ?? '') || rest.pop() !== '' || !marker.test(rest.pop() ?? '')) return [];
   if (!rest.length) return places;
-  // The attribution: a rule, its one line and a blank line. The line ends with the word for the models and
-  // the models themselves, each in a code span, with nothing after them.
-  return rest.length === 3 && rest[0] === '---' && ATTRIBUTION_MODELS.test(rest[1]) && rest[2] === '' ? places : [];
+  // The attribution: a rule, the line the runtime writes for a comment, and a blank line.
+  return rest.length === 3 && rest[0] === '---' && commentAttributionLine(rest[1]) && rest[2] === '' ? places : [];
 }
 
-/** How the attribution line of a comment ends in each language (`commentAttribution`): "Models: `a`, `b`". */
-const ATTRIBUTION_MODELS = new RegExp(`(?:${[...new Set(Object.values(vocabulary).map(words => words.models))].map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) \`[^\`]+\`(?:, \`[^\`]+\`)*$`);
+/**
+ * Whether a line is the attribution `commentAttribution` writes for an inline
+ * comment, in any language: its fixed wording for a verified or a quick
+ * review, then the models, each in a code span, and nothing else.
+ */
+function commentAttributionLine(line) {
+  return Object.values(vocabulary).flatMap(words => [`${words.comment} `, `${words.lead}${words.quick}${words.end}${words.models} `])
+    .some(wording => line.startsWith(wording) && /^`[^`]+`(?:, `[^`]+`)*$/.test(line.slice(wording.length)));
+}
 
 /** A compact index of existing claims, not another model-authored assessment. */
 export function renderReviewSummary(findings, language, introduction = '', { verification = 'independent', groups = [] } = {}) {
