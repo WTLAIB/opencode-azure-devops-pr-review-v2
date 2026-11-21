@@ -165,6 +165,89 @@ tests was the same before and after).
 `npm pack --dry-run` lists 38 files, as for 0.4.5. `package.json` has no
 dependency and no lifecycle script.
 
+### Reviews by a second model
+
+The pull request was reviewed thirteen times by a second model (GPT-6.2 Astra
+at its highest reasoning effort through the Codex CLI 0.171.0, in a read-only
+sandbox on a clean clone; its instructions were the change and its purpose,
+not the results of the checks above). Each commit after the first corrects
+what the review before it reported, and each was reviewed again. The reviewer
+ran the build check and the tests that write nothing; the tests that write
+files and the eleven host fixture runs ran here, on every tree. The reviews
+reported 13, 12, 7, 11, 9, 12, 8, 6, 5, 4, 3, 5 and 4 points.
+
+One question took three designs. The first review found the one serious
+defect of the first commit: publication skipped a shared comment whose marker
+the pull request already had, and the receipt counted every finding of it as
+posted, also when the comment found there was an earlier one for that place
+alone.
+
+1. The first answer worked out, from the comment found under the marker,
+   which places it listed, and reported the rest. Each of the next four
+   reviews found another path on which that inference said more than the pull
+   request held: a marker found in a reply, a list that someone had edited, a
+   comment deleted while publication ran, a record written before the answer.
+2. The second answer gave a shared comment a marker of its own next to the
+   marker of its place. The second marker then had to be kept in step with
+   the counts of comments on the same lines and with the records of attempts,
+   and two reviews found where it was not.
+3. As it stands since the eighth commit, a shared comment is known to
+   publication by its own marker alone, publication is that of 0.4.5 but for
+   one count, and the two kinds of comment are kept off each other's quoted
+   lines when planning. The six reviews of this design reported 6, 5, 4, 3, 5
+   and 4 points, and the last one found no duplicate write and no false
+   receipt in the publication path.
+
+The other corrections that stand:
+
+- A place is checked against the file as the runtime reads it at the reviewed
+  commit, when findings are offered and again on the page; the anchor of a
+  shared comment must be found in that text, end within the file and touch
+  the lines of one finding only.
+- The list is read back only from the comment that opened a thread (its
+  comment 1), and only in the very form the runtime writes: rows that write
+  back as they stand, the whole attribution line, the two markers. The
+  thread's author and excerpt are that comment's too.
+- A planner's text may not hold the list's heading, and a shared comment's
+  text may not end inside a code fence or a raw HTML block.
+- A page that continues in a new session keeps what is open of its groups,
+  and a group cut to a page's text never exceeds a page.
+- The grouping pass has an answer of its own form (an explicit READY, a list
+  of groups, entries that are lists) and a checkpoint text of its own; it
+  reads its findings inline, and is asked only about findings that could
+  share a page with another one.
+- The files read ahead of the pages are read a few at a time and not at all
+  once the run was stopped; a stop while the pass is ending prepares no page.
+- With a person's adjustments, the other AZPR comments of a pull request are
+  counted by thread.
+- Several statements of this record and of the documentation were narrowed
+  to what was run.
+
+Left as they are, and stated under the limits below: a marker holds no line
+numbers, comments that quote the same lines are told apart by their order in
+the plan, a marker counts wherever a live comment holds it, thread positions
+are not compared, and of two defects at the same places the second passes the
+rule that keeps comments off occupied lines. One point of the twelfth review
+was not taken: a line that holds `<pre/>` alone starts raw HTML in both
+parsers the reading of blocks was compared with, whatever the wording of the
+specification.
+
+The thirteenth review reported four points that change nothing a pull request
+gets, so the tree it reviewed is the one that stands; the commit after it
+adds this record only.
+
+- `listablePlace` would admit a file name with a colon, which `listedPlaces`
+  does not read back. No such place is listed: a finding's location is not
+  read with a colon in its path, as in every earlier version, where such a
+  finding has no inline comment either.
+- A thread listed without its comment 1, in which a later comment names no
+  parent, would have that comment's list read. Azure DevOps keeps a deleted
+  comment in the listing, and that case is handled.
+- On a single page, the file of a finding without a partner is read ahead of
+  the page with the others. It is the read the page makes anyway.
+- The planner's policy states the shared comment as a rule, where the page's
+  instructions give its conditions and the runtime holds them.
+
 ### Limits of this candidate
 
 - **No real model.** The fake planner groups what the fixture tells it to.
