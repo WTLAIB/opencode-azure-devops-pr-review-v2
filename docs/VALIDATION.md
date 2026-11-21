@@ -42,7 +42,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   whose preview was adjusted (one finding lowered to low) and then posted: a
   summary and two inline comments, read back. With the 0.4.5 candidate, a
   gpt-6-luna review of the 35-file PR stopped from the terminal panel, and a
-  second one to its preview.
+  second one to its preview. With the 0.4.6 candidate, 62 reviews of public
+  pull requests with three models, each followed by its comment preview,
+  against a local stand-in for Azure DevOps.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -67,8 +69,11 @@ Findings still vary between models and runs; see
 
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
 2.3.0 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
-Azure DevOps services. No real model ran for this candidate; what that leaves
-open is under [limits](#limits-of-this-candidate).
+Azure DevOps services for the tests and host fixtures. Real models ran
+afterwards, against a local stand-in for Azure DevOps
+([which findings share a comment](#with-real-models-which-findings-share-a-comment),
+[the public benchmark](#martians-code-review-bench-measured-again)); what
+is left open is under [limits](#limits-of-this-candidate).
 
 0.4.6 lets one inline comment hold one defect that a pull request makes at
 several places (see
@@ -252,6 +257,66 @@ adds this record only.
 - The planner's policy states the shared comment as a rule, where the page's
   instructions give its conditions and the runtime holds them.
 
+### With real models: which findings share a comment
+
+After the reviews above, the candidate planned comments with real models, in
+three runs on public pull requests: OpenCode 2.3.0 in a profile of its own,
+the package built from the tree named below, and the benchmark harness's
+local service in the place of Azure DevOps, which serves each pull request's
+real files at its commits. Each task reviewed one pull request and then
+planned its comments; nothing was posted. The shared comments and the
+findings they hold were read one by one by the author of this change. No
+benchmark judge took part in that reading.
+
+| | `/pr-review`, `openai/gpt-6-luna` | `/pr-deep`, `openai/gpt-6.1-sol` | `/pr-deep`, `claude-agent/opus#medium` |
+| --- | --- | --- | --- |
+| Tree | `2cee3dd` | `f6a3d8a` | `d7b5ab3` |
+| Pull requests | 8 | 4 of those 8 | the 50 of Martian's Code Review Bench |
+| Reviews | 8 COMPLETE, 24 findings | 4 COMPLETE, 37 findings | 50 COMPLETE, 341 findings |
+| Grouping passes, one request each | 1 | 2 | 23 |
+| Shared comments | 2, of 2 findings each | 3, of 2, 2 and 3 findings | 7, of 16 findings |
+| Shared comments that held different defects | 0 | 0 | 0 |
+| Correction turns that a rule of the shared comment caused | 0 | 0 | 0 |
+| Clear repeats that got a comment each | 1 | none found | not looked for |
+
+The eight pull requests are those of the benchmark's 50 where an earlier run
+had reported the most findings with a common cause: calcom/cal.com 11059,
+10967, 8087 and 7232, keycloak/keycloak 37038, 37634 and 37429, and
+grafana/grafana 107534. The three trees differ in what the reviews by a
+second model corrected, not in the planner's instructions for a shared
+comment.
+
+- **What was combined.** In cal.com 11059 GPT-6 Luna and GPT-6.1 Sol each
+  gave one comment to the two Zoho adapters that read a Fetch response as an
+  Axios response. Luna also combined the two Lithuanian message files of
+  keycloak 37429 that hold Italian text. Sol combined the two query-splitting
+  paths of grafana 107534 that apply filters before a second interpolation,
+  and the three reschedule implementations of cal.com 8087 that discard the
+  promises of an asynchronous `forEach` callback, while it left a fourth
+  finding of that page, whose correction differs, on its own. Claude Opus 5.5
+  combined, among others, three calls that cancel a reminder at once
+  (cal.com 7232), the update and the delete of one calendar adapter that
+  share a fallback which never matches (cal.com 10967), a desktop and a
+  mobile stylesheet with the same slip, and the background writes of Create,
+  Delete and Update that inherit a request's cancellation (grafana 90045).
+  Its 50 previews hold 147 inline comments where a comment per place would
+  have made 156; 39 correction turns were for a text over the length limit,
+  2 of them texts of shared comments.
+- **What was left apart.** For the three implementations of cal.com 8087,
+  Luna wrote three comments with nearly the same text, although the page
+  listed them as possible repeats. Two variants of the instructions were
+  then tried with Luna on the same eight pull requests, outside this tree: a
+  sentence that names such comments as the case for one comment, and a
+  grouping pass also where all findings fit one page. Neither made it
+  combine them, and neither is part of this release. How often repeats share
+  a comment therefore depends on the planner's model, which is the one of
+  the risk reviewer (`models.<mode>.risk`).
+- **What this does not show.** These are 62 reviews read by one person, of
+  pull requests that are public and partly chosen for their repeats: no rate
+  of wrong or missed combinations follows from them. Publication was not
+  part of these runs, and neither was a later plan on a pull request that
+  already has a shared comment.
+
 ### Martian's Code Review Bench, measured again
 
 The figures of the [public benchmark](#martian-code-review-bench-2026-11-05-and-06)
@@ -353,11 +418,13 @@ estimate from the number of judged pairs.
 
 ### Limits of this candidate
 
-- **No real model.** The fake planner groups what the fixture tells it to.
-  How well a model's planner tells one repeated defect from findings that
-  only resemble each other, how often it combines two different defects, and
-  how often it leaves repeats apart is not measured. The runtime cannot tell
-  a well-formed but wrong combination; the preview shows each shared comment
+- **A small sample with real models.** In the fixtures the fake planner
+  groups what the fixture tells it to. With real models, no shared comment of
+  [62 reviews](#with-real-models-which-findings-share-a-comment) combined
+  different defects, as read by one person; how often a planner does, and
+  how often it leaves repeats apart, is not a rate these runs give, and a
+  weaker planner left clear repeats apart. The runtime cannot tell a
+  well-formed but wrong combination; the preview shows each shared comment
   with its findings and the planner's reason, and each finding keeps its row.
 - **The grouping pass is given finding text only**, not source; it has the
   planner's read-only tools, but its instructions say that it needs none.
