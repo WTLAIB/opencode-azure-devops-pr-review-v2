@@ -174,16 +174,22 @@ export function renderOtherPlaces(places, language) {
 export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]|<!--|-->/.test(place);
 
 /**
- * The places a posted comment of AZPR's lists, read back from its text: the
- * rows under the heading `renderOtherPlaces` writes, where they end the
- * comment's own text as `assemblePlan` writes it. After the rows comes a
- * blank line and then either the marker, or a rule, the attribution (the one
- * line `commentAttribution` writes, which ends with its models), a blank line
- * and the marker; nothing else. [] for any other text, also one that merely
- * holds such a heading or such rows, or that was continued after them.
+ * The places a posted comment of AZPR's lists, read back from its text for a
+ * later plan (`alsoAt` in the digest of a thread): the rows under the heading
+ * `renderOtherPlaces` writes, where they end the comment's own text as
+ * `assemblePlan` writes it. A row is a place as `placeOf` writes one (a path
+ * and its lines) in a code span and a finding ID. After the rows comes a
+ * blank line, then the attribution if there is one (a rule, the one line
+ * `commentAttribution` writes, which ends with its models, and a blank line),
+ * then the two markers of such a comment with a blank line between them.
+ * [] for any other text: one that merely holds such a heading or such rows,
+ * one whose row has another form, one that was continued after the list.
+ * What is read here tells a planner what a thread says it covers, as the
+ * start of the thread's text does; nothing is posted or skipped because of it.
  */
 export function listedPlaces(content) {
   const lines = String(content ?? '').split(/\r?\n/).map(line => line.trimEnd());
+  while (lines.length && lines.at(-1) === '') lines.pop();
   const heading = lines.findLastIndex(line => OTHER_PLACES_HEADINGS.includes(line));
   if (heading < 0) return [];
   const places = [];
@@ -191,11 +197,13 @@ export function listedPlaces(content) {
   for (; next < lines.length; next++) {
     const row = /^- (`+) ?(.+?) ?\1 ?[（(][A-Za-z]+-\d+[)）]$/.exec(lines[next]);
     if (!row) break;
+    if (!/^\/.*:[1-9]\d*(?:-[1-9]\d*)?$/.test(row[2]) || !listablePlace(row[2])) return [];
     places.push(row[2]);
   }
   const rest = lines.slice(next);
-  while (rest.length && rest.at(-1) === '') rest.pop();
-  if (!places.length || rest.shift() !== '' || !COMMENT_MARKER_LINE.test(rest.pop() ?? '')) return [];
+  const marker = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
+  // The end of a comment for several places: the marker of its place, a blank line, its own marker.
+  if (!places.length || rest.shift() !== '' || !marker.test(rest.pop() ?? '') || rest.pop() !== '' || !marker.test(rest.pop() ?? '')) return [];
   if (!rest.length) return places;
   // The attribution: a rule, its one line and a blank line. The line ends with the word for the models and
   // the models themselves, each in a code span, with nothing after them.
@@ -204,16 +212,6 @@ export function listedPlaces(content) {
 
 /** How the attribution line of a comment ends in each language (`commentAttribution`): "Models: `a`, `b`". */
 const ATTRIBUTION_MODELS = new RegExp(`(?:${[...new Set(Object.values(vocabulary).map(words => words.models))].map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) \`[^\`]+\`(?:, \`[^\`]+\`)*$`);
-
-/** The line a posted comment of AZPR's ends with; its marker. */
-const COMMENT_MARKER_LINE = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
-
-/** The marker a posted comment ends with, as `assemblePlan` writes it last; '' for a text that ends otherwise. */
-export function closingMarker(content) {
-  const lines = String(content ?? '').split(/\r?\n/).map(line => line.trimEnd());
-  while (lines.length && lines.at(-1) === '') lines.pop();
-  return COMMENT_MARKER_LINE.test(lines.at(-1) ?? '') ? lines.at(-1) : '';
-}
 
 /** A compact index of existing claims, not another model-authored assessment. */
 export function renderReviewSummary(findings, language, introduction = '', { verification = 'independent', groups = [] } = {}) {
@@ -346,19 +344,13 @@ export function enclose(name, text) {
     (found, left, right) => (left === undefined ? `&lt;${tag}&gt;` : `&amp;${left}lt;${tag}&amp;${right}gt;`));
 }
 
-/**
- * Publication ledger rows for receipts. An item that stands for several
- * places while the comment found on the PR under its marker does not list
- * them all (`unlisted` in its entry, see `publishPlan`) says so in its row:
- * what was established is what that one comment lists.
- */
+/** Publication ledger rows for receipts. */
 export function renderPublication(review, result) {
-  const entries = [...(review.publication ?? new Map()).values()];
-  const rows = entries.map(entry =>
-    `- ${entry.kind === 'summary' ? 'PR summary' : `${(entry.findingIds ?? [entry.findingId]).join(', ')} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}${entry.earlierText ? '; the PR keeps its earlier text' : ''}${entry.unlisted?.length ? `; the comment ${entry.unlistedThread && entry.unlistedThread !== entry.threadId ? `of thread ${entry.unlistedThread}` : 'there'} does not list ${entry.unlisted.join(', ')}` : ''}`).join('\n');
+  const rows = [...(review.publication ?? new Map()).values()].map(entry =>
+    `- ${entry.kind === 'summary' ? 'PR summary' : `${(entry.findingIds ?? [entry.findingId]).join(', ')} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}${entry.earlierText ? '; the PR keeps its earlier text' : ''}`).join('\n');
   const counts = result?.counts ? Object.entries(result.counts).map(([state, count]) => `${state}=${count}`).join(', ') : '';
   // A PR that is not active takes comments all the same; its status is named, so a wrong PR shows.
-  return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}${result?.prStatus ? `; the PR is ${result.prStatus}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. DELETED entries were created by AZPR and later deleted on the PR; AZPR does not post them again. FAILED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers. UNVERIFIED entries were created but not found when read back; a re-run checks them again and never posts them twice. UNCERTAIN entries may still appear from an earlier attempt and are retried only after their marker check settles.${entries.some(entry => entry.unlisted?.length) ? ' An entry that says a comment "does not list" findings stands for one defect at several places, and the comment the PR has under its marker lists fewer: that comment was not changed, and this one was not posted for the findings named.' : ''}`;
+  return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}${result?.prStatus ? `; the PR is ${result.prStatus}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. DELETED entries were created by AZPR and later deleted on the PR; AZPR does not post them again. FAILED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers. UNVERIFIED entries were created but not found when read back; a re-run checks them again and never posts them twice. UNCERTAIN entries may still appear from an earlier attempt and are retried only after their marker check settles.`;
 }
 
 function renderStageReceipt(stage) {

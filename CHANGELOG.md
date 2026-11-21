@@ -36,8 +36,14 @@ Comments:
   where the comment stands.
 - The review is unchanged: it still has one finding per place. Each keeps
   its row in the summary index, its ID, and can be left out or given another
-  severity after a preview. The comment's marker is that of the place where
-  it stands, by the same formula as before.
+  severity after a preview.
+- A shared comment carries two hidden markers: the marker of the place where
+  it stands, by the same formula as before, so that a later comment on those
+  lines finds it; and one of its own, made of the place and the other places
+  it lists. Publication skips a shared comment only when its own marker is
+  on the pull request, so `ALREADY_PRESENT` means that this very comment,
+  with every place, is there. The markers of comments for one place are
+  unchanged.
 - Which findings may be such repeats is settled before the planning pages are
   made, and only when at least two of them have one severity and lie at
   different places. When all findings fit one page (at most four, within a
@@ -51,16 +57,14 @@ Comments:
   comment), and a run that is stopped during it plans nothing more.
 - Nothing posted is ever changed, and an item the PR already has is skipped
   as always. When a pull request with a shared comment is planned again, the
-  planner is told which other places that thread covers, so they get no
-  thread of their own; the list is read back only where AZPR wrote it, in
+  planner is told which other places that thread says it covers, so they get
+  no thread of their own; the list is read back only where AZPR wrote it, in
   the comment that opened the thread.
-- A shared comment can meet an earlier comment of AZPR's on the same lines
-  that lists fewer places or none (a thread per place from an earlier
-  version, say). The planner is then asked to put the comment at another of
-  its places. If such a comment is still met when posting, the receipt says
-  for which findings the comment found there lists no place
-  (`This preview's comment was not posted for …`), so that it never says
-  more than that comment's text holds.
+- A shared comment is not put on lines that already carry a comment of
+  AZPR's (a thread per place from an earlier version, say): the planner is
+  asked to put it at another of its places or to leave that finding out, and
+  a comment that still stands there is dropped, with the reason shown in the
+  preview.
 
 The README's benchmark section now says what each precision measures: the
 share of comments on Martian's list of issues, next to the share of findings

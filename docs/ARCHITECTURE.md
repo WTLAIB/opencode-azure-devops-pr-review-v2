@@ -460,40 +460,31 @@ the same lines share a row. A grouping pass that fails is said in a progress
 notice and planning goes on without groups; a stopped run starts no page.
 `discussionDigest` reads the list back (`listedPlaces`) and gives the planner
 those places as `alsoAt`, since the list lies beyond the excerpt of a thread:
-a later plan then sees them as discussed. The list is read only in the form
+a later plan then sees them as discussed. That only informs the planner;
+nothing is posted or skipped because of it. The list is read only in the form
 the runtime writes it: in the comment that opened a thread on a file and
 carries AZPR's marker, under one of `OTHER_PLACES_HEADINGS`, with nothing
 after its rows (a place and a finding ID each) but the attribution (the one
 line `commentAttribution` writes, which ends with the word for the models
-and the models) and the marker; a body that writes such a heading itself is
-refused.
+and the models) and the comment's two markers; a body that writes such a
+heading itself is refused.
 
-A marker follows a comment's file and quoted lines, and a posted comment is
-never changed or posted again, so a comment for several places can meet a
-comment the PR already has under its marker that lists fewer places or none.
-`postedComments` maps each marker on the PR to its thread and to the places
-its comment lists, read only from the comment that opened a thread on a file
-and ends with the marker (a marker that only a reply holds, or that opens a
-thread without a file, is present and lists nothing). `evaluatePlanPage` refuses such a comment against the comments the
-PR had when planning began, by the marker the comment gets among its page's
-comments (those of the page's earlier sessions and of the answer), which
-sends it back to the planner for another place; on the first page that
-marker is the plan's and the refusal stands, on a later page a comment of an
-earlier page could give it another one, so the comment is kept once the
-correction turns are used up, and an answer sent back for this alone stands
-if they bring nothing usable. A shared comment's quoted lines must also be
-found in the HEAD text and end within the file. `publishPlan` looks at the
-PR again: for every shared item that is on the PR or that an earlier attempt
-put there, and whoever wrote the comment, it records the findings whose
-place that comment does not list (`unlisted` and that comment's thread in
-the item's entry, `uncovered` in its result), from the last listing that
-shows the marker, else from the attempt record of the comment's creation
-(`places`); the note is made when the item is first found and anew after the
-read-back. The receipt says so in the item's row and in a line of its own
-(`describeUncovered`); `describeEarlierText` names only the findings such a
-comment covers. Only what that one comment lists is established, and the
-place where a comment stands is known by its marker alone, as for every
-comment.
+A comment for several places is a comment of its own, so `assemblePlan` gives
+it two markers. `placeMarker` is `inlineMarker` (PR, path, normalized anchor,
+ordinal), the marker any comment on those quoted lines has: a later comment
+for that place alone finds the shared one by it. Its own `marker` is
+`sharedMarker` (PR, path, normalized anchor and the sorted other places, no
+ordinal, since no two comments of a plan hold the same findings); it is the
+key of the item in the ledger, the attempt records and the summary's marker.
+`publishPlan` is unchanged: it skips an item whose `marker` the PR has. For a
+shared comment that is this very comment, with every place, so a receipt
+never infers what a posted comment covers. Because a shared comment does not
+find a comment for one place, `evaluatePlanPage` keeps it off lines that
+already carry one: with `posted` (`markersInThreads` of the threads read
+before planning), a shared comment whose place marker of ordinal 0 is on the
+PR while its own marker is not goes back to the planner, and is dropped like
+any refused combination after the correction turns. A shared comment's
+quoted lines must also be found in the HEAD text and end within the file.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both

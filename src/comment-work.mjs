@@ -2,7 +2,7 @@
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads } from './azure.mjs';
-import { listedPlaces, listablePlace, closingMarker } from './attribution.mjs';
+import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -52,29 +52,6 @@ export function discussionDigest(threads) {
     });
   }
   return live;
-}
-
-/**
- * What a planned comment would meet on the PR under its marker, by marker:
- * the thread, and the other places the comment there lists. A marker counts
- * as present wherever a live comment holds it, as publication skips such an
- * item. What a comment lists is read only from the comment that opened a
- * thread on a file and ends with that marker, as AZPR posts an inline
- * comment: a marker that only a reply holds, that opens a thread without a
- * file, or that stands inside another text, lists nothing (`opening` false).
- * @returns {Map<string, {threadId: number, places: string[], opening: boolean}>}
- */
-export function postedComments(threads) {
-  const found = new Map();
-  for (const thread of threads ?? []) {
-    if (thread?.isDeleted === true || !Array.isArray(thread?.comments) || !thread.threadContext?.filePath) continue;
-    const opening = thread.comments.find(comment => !(comment?.parentCommentId > 0));
-    if (!opening || opening.isDeleted === true || typeof opening.content !== 'string') continue;
-    const marker = closingMarker(opening.content);
-    if (marker && !found.has(marker)) found.set(marker, { threadId: thread.id, places: listedPlaces(opening.content), opening: true });
-  }
-  for (const [marker, threadId] of markersInThreads(threads ?? [])) if (!found.has(marker)) found.set(marker, { threadId, places: [], opening: false });
-  return found;
 }
 
 export { parseLocation };
@@ -197,10 +174,17 @@ export function candidatePages(findings, candidates, size = PAGE_CHARACTERS, max
   return { pages, offered };
 }
 
-/** Numbered source lines: the whole file when small, else a window around the lines. */
-export function sourceWindow(text, { start = null, end = null, context = 25, wholeFileLines = 400 } = {}) {
+/** The lines of a text as `sourceWindow` numbers them: a line break at the end begins no line. */
+const sourceLines = text => {
   const lines = String(text).replace(/\r\n/g, '\n').split('\n');
   if (lines.at(-1) === '') lines.pop();
+  return lines;
+};
+const lineTotal = text => sourceLines(text).length;
+
+/** Numbered source lines: the whole file when small, else a window around the lines. */
+export function sourceWindow(text, { start = null, end = null, context = 25, wholeFileLines = 400 } = {}) {
+  const lines = sourceLines(text);
   let first = 1, last = lines.length;
   if (lines.length > wholeFileLines) {
     if (start) { first = Math.max(1, start - context); last = Math.min(lines.length, (end ?? start) + context); }
@@ -271,9 +255,10 @@ async function planningInput(review, store, findings, report, work, continuation
  * tells whether the run still goes on; a stopped run is never continued.
  * A place is listed as its finding states it, so only a finding whose lines
  * the file has, as `fetchSource` reads it at HEAD, can be one of several
- * places: without that text nothing is offered. `posted` are AZPR's comments
- * already on the PR (`postedComments`; null when unknown), for the page check
- * of a comment that the PR would already seem to have.
+ * places: without that text nothing is offered. `posted` are the markers the
+ * PR already has, each with its thread (`markersInThreads`; null when
+ * unknown), for the page's rule that a comment for several places does not
+ * stand on lines that already carry a comment of AZPR's.
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
 export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, posted = null, parallel = PLANNING_PARALLEL_PAGES, active = () => true } = {}) {
@@ -302,8 +287,13 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     let next = 0;
     const reader = async () => { while (next < paths.length) await source(paths[next++]); };
     await Promise.all(Array.from({ length: Math.min(paths.length, Number.isSafeInteger(parallel) && parallel > 1 ? parallel : 1) }, reader));
-    const heads = await Promise.all(eligible.map(finding => source(parseLocation(finding.location).path)));
-    eligible = eligible.filter((finding, index) => heads[index] !== null && parseLocation(finding.location).end <= sourceWindow(heads[index]).totalLines);
+    // Lines are counted once for a file, however many findings it holds.
+    const lineCounts = new Map();
+    for (const path of paths) {
+      const head = await source(path);
+      if (head !== null) lineCounts.set(path, lineTotal(head));
+    }
+    eligible = eligible.filter(finding => (at => at.end <= (lineCounts.get(at.path) ?? 0))(parseLocation(finding.location)));
   }
   let repeats = [];
   if (severitySets(eligible).length) {
@@ -391,8 +381,6 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
-      // The comments this page's earlier sessions wrote: they come before this answer's in the plan.
-      const earlier = parts.flatMap(part => part.comments);
       const scoped = async answer => {
         const parsed = parseModelJSON(answer, { keys: ['status', 'comments', 'skipped'] });
         const comments = Array.isArray(parsed.value?.comments) ? parsed.value.comments : [];
@@ -404,20 +392,14 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         }
         return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head)] };
       };
-      const options = { assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, earlier, firstPage: index === 0, allowSummary };
-      // An answer that was sent back only for a collision that may be none (see `evaluatePlanPage`): it stands
-      // as it was when the correction turns end without a usable answer.
-      let standby;
+      const options = { assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const review = await scoped(answer);
-          const { result, issues, corrections, tentative } = evaluatePlanPage(answer, { review, ...options });
-          if (tentative) standby = evaluatePlanPage(answer, { review, ...options, final: true });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const last = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });
-          const { result, corrections } = standby && last.corrections.some(correction => correction.action === 'skip-unparsed-plan') ? standby : last;
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });
           return { ...result, corrections };
         },
       });
@@ -496,23 +478,6 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   with other text is still skipped, marked `earlierText`: the PR keeps that
  *   earlier version, since nothing posted is ever changed. The result then
  *   counts the other AZPR comments on the PR (`otherComments`).
- * - A comment for one defect at several places stands for all of them, but its
- *   marker is that of the one place where it stands. The comment the PR has
- *   under that marker may list fewer places: an earlier comment for that place
- *   alone, one that lists other places, or text the service returned changed.
- *   For every such item that is on the PR, or that an earlier attempt put
- *   there, the places that comment does not list are named in the item's
- *   entry (`unlisted`, the findings, and `unlistedThread`) and in the result
- *   (`uncovered`), whoever created the comment: the receipt says of no
- *   finding that the comment covers it when nothing shows that. What the
- *   comment lists is what the last listing that shows its marker says (the
- *   read-back, else the first listing), else what the attempt record of its
- *   creation holds (`places`; a record without them is of a comment for one
- *   place). The note is made when the item is first found, so that a
- *   publication that is stopped leaves it, and made anew after the read-back.
- *   Planning refuses such a comment where it can (`evaluatePlanPage`); this
- *   is the check of what the PR holds when posting. What one comment lists is
- *   all that is established: nothing else on the PR is looked at.
  */
 export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only, compare = false }) {
   const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
@@ -528,36 +493,18 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
     ...entry, at: at() });
-  // What a comment for several places stands for on the PR is what the comment under its marker lists,
-  // whoever wrote that comment: the last listing that shows the marker says it, and for a comment no
-  // listing shows, the record of the attempt that created it (one without places was for one place).
-  const listings = [postedComments(listed)];
-  const placesOf = item => item.otherPlaces?.length ? { places: item.otherPlaces.map(other => other.place) } : {};
-  const note = item => {
-    const entry = ledger.get(item.marker);
-    delete entry.unlisted; delete entry.unlistedThread;
-    if (!item.otherPlaces?.length || ['FAILED', 'UNCERTAIN', 'SENDING'].includes(entry.state)) return;
-    const earlier = attempts.get(item.marker);
-    const on = listings.map(listing => listing.get(item.marker)).find(Boolean) ?? (earlier?.state === 'CREATED' ? { threadId: earlier.threadId, places: earlier.places ?? [] } : undefined);
-    const missing = on ? item.otherPlaces.filter(other => !on.places.includes(other.place)).map(other => other.findingId) : [];
-    if (missing.length) Object.assign(entry, { unlisted: missing, unlistedThread: on.threadId });
-  };
   // Remember the thread of every item found on the PR (also one an uncertain create or an earlier
   // version left without a record), so a comment deleted there later is not posted again.
   for (const item of items) {
     const threadId = present.get(item.marker), earlier = attempts.get(item.marker);
     if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
-    // With the places its comment lists, where the listing shows them.
-    const seen = listings[0].get(item.marker);
-    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}),
-      ...(seen?.opening && seen.places.length ? { places: seen.places } : {}) }).catch(() => {});
+    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
   }
   let written = 0, halted = '';
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
     if (present.has(item.marker)) {
       record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(texts && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
-      note(item);
       continue;
     }
     if (halted) { record(item, { state: 'FAILED', error: halted }); continue; }
@@ -566,7 +513,6 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
       // Azure DevOps returned a thread for it; a lagging thread list is no reason to send it again,
       // and a comment someone deleted on the PR stays deleted (read-back reports it).
       record(item, { state: 'POSTED', threadId: earlier.threadId, earlierAttempt: earlier.review ?? true });
-      note(item);
       continue;
     }
     if (earlier?.state === 'SENDING' && !(now() - Date.parse(earlier.at) >= settleMs)) {
@@ -584,7 +530,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     try {
       const created = await azure.createThread(run, review.snapshot, item);
       record(item, { state: 'POSTED', threadId: created.threadId, ...(created.contentMatches === false ? { contentMismatch: true } : {}) });
-      try { await attempts.set(item.marker, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id, ...placesOf(item) }); }
+      try { await attempts.set(item.marker, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id }); }
       catch (error) { halted = `The created thread could not be recorded (${String(error?.message ?? error).slice(0, 200)}); publication stopped.`; }
     } catch (error) {
       if (!run.active) throw error;
@@ -599,7 +545,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     await persist?.();
     if (written % 10 === 0) progress?.(`Posted ${index + 1}/${items.length} comment item(s)`);
   }
-  let readBack = 'complete', latest = listed;
+  let readBack = 'complete';
   try {
     const listedAfter = await azure.threads(run, review.snapshot);
     const after = markersInThreads(listedAfter), removedAfter = deletedThreads(listedAfter);
@@ -615,18 +561,9 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
       }
       else if (entry.state === 'POSTED') entry.state = removedAfter.has(entry.threadId) ? 'DELETED' : 'UNVERIFIED';
     }
-    latest = listedAfter;
   } catch (error) {
     if (!run.active) throw error;
     readBack = `unavailable: ${String(error?.message ?? error).slice(0, 300)}`;
-  }
-  // The notes anew, now that the read-back is known: it comes first where it shows a marker.
-  if (latest !== listed) listings.unshift(postedComments(latest));
-  const uncovered = [];
-  for (const item of items) {
-    note(item);
-    const { unlisted, unlistedThread } = ledger.get(item.marker);
-    if (unlisted) uncovered.push({ marker: item.marker, findingIds: unlisted, path: item.path, startLine: item.startLine, threadId: unlistedThread });
   }
   await persist?.();
   const states = items.map(item => ledger.get(item.marker).state);
@@ -636,7 +573,6 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
   const planned = new Set(items.map(item => item.marker));
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
-    ...(uncovered.length ? { uncovered } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
     ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };
 }

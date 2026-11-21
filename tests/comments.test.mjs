@@ -5,7 +5,7 @@ import {
   publishableFindings, reviewVerification, combinationProblems, repeatProblems, placeOf, evaluateGrouping, groupingRepairPrompt,
   automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
-  everyFindingExcluded, publicationStarted, describeEarlierText, describeUncovered, excludedReferences, previewNextSteps, previewActions, commentToken,
+  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken, sharedMarker,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
@@ -439,8 +439,8 @@ test('the plan lists the other places under the comment, from the findings\' own
   const page = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2', 'F-3']], sources: shown }).result;
   const plan = assemblePlan(r, [page]);
   const item = plan.comments[0];
-  assert.equal(item.content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 Also at** (the same defect; fix these places with it):\n- \`/src/b.ts:2-3\` (F-2)\n- \`/src/a.ts:4\` (F-3)\n\n---\n${r.attribution}\n\n${item.marker}`);
-  assert.equal(item.marker, inlineMarker(r.target, item, 0), 'The marker is that of the place where the comment stands; the formula is unchanged.');
+  assert.equal(item.content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 Also at** (the same defect; fix these places with it):\n- \`/src/b.ts:2-3\` (F-2)\n- \`/src/a.ts:4\` (F-3)\n\n---\n${r.attribution}\n\n${item.placeMarker}\n\n${item.marker}`);
+  assert.equal(item.placeMarker, inlineMarker(r.target, item, 0), 'The marker of the place where the comment stands, by the formula of every comment.');
   assert.equal(item.body, '🟡 medium: Value is lost\n\nBody.', 'The planner\'s text is kept as it was written.');
   assert.match(plan.summary.content, /medium: 3 · low: 0/);
   for (const id of ['F-1', 'F-2', 'F-3']) assert.match(plan.summary.content, new RegExp(`\\| 🟡 medium \\| ${id} — Defect ${id} \\|`), 'Each place is a finding of its own in the index.');
@@ -450,63 +450,67 @@ test('the plan lists the other places under the comment, from the findings\' own
   assert.match(odd.comments[0].content, /- `\/src\/x--&gt;y&lt;!--\.ts:2` \(F-2\)/);
   // In the review's language, and nothing but the list when no attribution is set.
   const local = assemblePlan({ ...r, outputLanguage: 'zh-TW', attribution: undefined }, [page]);
-  assert.equal(local.comments[0].content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 其他位置**（同一個問題，請一併修正）：\n- \`/src/b.ts:2-3\`（F-2）\n- \`/src/a.ts:4\`（F-3）\n\n${local.comments[0].marker}`);
+  assert.equal(local.comments[0].content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 其他位置**（同一個問題，請一併修正）：\n- \`/src/b.ts:2-3\`（F-2）\n- \`/src/a.ts:4\`（F-3）\n\n${local.comments[0].placeMarker}\n\n${local.comments[0].marker}`);
 });
 
-test('a comment for several places is refused where the PR already has a comment of AZPR\'s that does not list them', () => {
+test('a comment for several places has a marker of its own and carries the marker of its place', () => {
+  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+  const planned = (page, extra = {}) => assemblePlan(r, [evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, ...extra }).result]);
+  const [shared] = planned([combined(['F-1', 'F-2', 'F-3'])]).comments;
+  // Its own marker follows the file, the quoted lines and the other places; the marker of the place is the one of any comment on these lines.
+  assert.equal(shared.marker, sharedMarker(r.target, shared));
+  assert.equal(shared.placeMarker, inlineMarker(r.target, shared, 0));
+  assert.notEqual(shared.marker, shared.placeMarker);
+  assert.ok(shared.content.endsWith(`\n\n---\n${r.attribution}\n\n${shared.placeMarker}\n\n${shared.marker}`), 'Both end the comment, each on a line of its own between blank lines.');
+  // The same comment planned again is the same comment, whatever order the planner names the findings in.
+  assert.equal(planned([combined(['F-3', 'F-1', 'F-2'])]).comments[0].marker, shared.marker);
+  // Other places, another quote or another file make another comment; the marker of the place stays where the quote stays.
+  const two = planned([combined(['F-1', 'F-2']), third]).comments[0];
+  assert.deepEqual([two.marker === shared.marker, two.placeMarker === shared.placeMarker], [false, true]);
+  const elsewhere = planned([combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]).comments[0];
+  assert.deepEqual([elsewhere.marker === shared.marker, elsewhere.placeMarker === shared.placeMarker], [false, false]);
+  // A comment for one place has the one marker it always had, and the summary is keyed by each comment's own marker.
+  const single = planned([comment({ severity: 'medium', body: '🟡 medium: One\n\nBody.' }), combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
+  assert.deepEqual([single.comments[0].marker, Object.hasOwn(single.comments[0], 'placeMarker')], [inlineMarker(r.target, single.comments[0], 0), false]);
+  assert.equal(single.comments[0].marker, shared.placeMarker, 'A comment for F-1 alone on the same quoted lines has the marker the shared comment carries for its place.');
+  assert.equal(single.summary.marker, summaryMarker(r.target, r.snapshot.head, single.comments.map(c => c.marker)));
+  // Two comments that quote the same lines: the marker of the place counts them in the order of the plan, shared or not.
+  const twin = finding('F-4', 'medium'), both = repeated([twin]);
+  const stacked = assemblePlan(both, [evaluatePlanPage(answer([comment({ findingId: 'F-4', severity: 'medium', body: '🟡 medium: Twin\n\nBody.' }), combined(['F-1', 'F-2', 'F-3'])]),
+    { review: both, assigned: confirmedFindings(both), repeats, sources: shown }).result]).comments;
+  assert.deepEqual(stacked.map(c => [c.findingId, c.placeMarker ?? c.marker]), [['F-4', inlineMarker(both.target, shared, 0)], ['F-1', inlineMarker(both.target, shared, 1)]]);
+  assert.equal(stacked[1].marker, shared.marker, 'Its own marker has no count: no two comments of a plan hold the same findings.');
+});
+
+test('a comment for several places does not stand on lines that already carry a comment of AZPR\'s, unless the PR has this very comment', () => {
   const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   const whole = [combined(['F-1', 'F-2', 'F-3'])];
-  // The marker the plan's comment would carry at F-1's lines.
-  const item = assemblePlan(r, [evaluatePlanPage(answer(whole), { review: r, assigned, repeats, sources: shown }).result]).comments[0];
-  // What the PR has under that marker: the thread and the other places the comment there lists (`postedComments`).
-  const on = (places, marker = item.marker) => new Map([[marker, { threadId: 12, places, opening: true }]]);
+  const [shared] = assemblePlan(r, [evaluatePlanPage(answer(whole), { review: r, assigned, repeats, sources: shown }).result]).comments;
   const plan = (posted, page = whole, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, posted, ...options });
-  // An earlier publication left a comment for that place alone: publication would skip the shared one, and the other places would get nothing from it.
-  assert.match(plan(on([])).issues.join('\n'), /the PR already has a comment under the marker of these lines \(thread 12\), which is neither changed nor posted again, and it does not list F-2 at \/src\/b\.ts:2-3, F-3 at \/src\/a\.ts:4: this comment would not be posted, and those places would get nothing from it\. Anchor it on the lines of another of its findings, or leave F-1 out of it; a finding that already has a thread of its own is skipped with cause existing-thread/);
-  // One that lists some of the places leaves the others.
-  assert.match(plan(on(['/src/b.ts:2-3'])).issues.join('\n'), /does not list F-3 at \/src\/a\.ts:4: this comment would not be posted, and that place would get nothing from it/);
-  // A comment that lists every place stands for it, as the plan's own comment does once it is posted.
-  assert.deepEqual(plan(on(['/src/b.ts:2-3', '/src/a.ts:4'])).issues, []);
-  assert.deepEqual(plan(on(['/src/a.ts:4', '/src/b.ts:2-3', '/src/c.ts:9'])).issues, []);
-  // Anchored at another place the comment has another marker, and a comment for one place is as it always was.
-  const moved = plan(on([]), [combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
+  // An earlier publication left a comment for F-1 alone on these lines (the marker of the place, thread 12): a second
+  // comment would be posted next to it, so the planner is asked to put this one elsewhere.
+  const single = new Map([[shared.placeMarker, 12]]);
+  assert.match(plan(single).issues.join('\n'), /combined comment for F-1, F-2, F-3: the PR already has a comment of AZPR's on these quoted lines \(thread 12\), and a second one is not put on them\. Anchor this comment on the lines of another of its findings, or leave F-1 out of it; a finding that an existing thread covers is skipped with cause existing-thread/);
+  // So for a shared comment with other places that stands there.
+  assert.match(plan(new Map([[shared.placeMarker, 12], ['<!-- azpr-comment:' + '0'.repeat(32) + ' -->', 12]])).issues.join('\n'), /already has a comment of AZPR's on these quoted lines/);
+  // The PR has this very comment (its own marker): planned again it is the same, and publication will skip it.
+  assert.deepEqual(plan(new Map([[shared.placeMarker, 12], [shared.marker, 12]])).issues, []);
+  // Anchored at another place it meets nothing, and a comment for one place is as it always was.
+  const moved = plan(single, [combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
   assert.deepEqual([moved.issues, moved.result.comments[0].findingId], [[], 'F-2']);
-  const apart = plan(on([]), [comment({ severity: 'medium', body: '🟡 medium: One\n\nBody.' }), combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
+  const apart = plan(single, [comment({ severity: 'medium', body: '🟡 medium: One\n\nBody.' }), combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
   assert.deepEqual([apart.issues, apart.result.comments.map(c => c.findingIds ?? c.findingId)], [[], ['F-1', ['F-2', 'F-3']]]);
-  // Threads that could not be read refuse nothing: publication looks at the PR again.
+  // Threads that could not be read refuse nothing.
   assert.deepEqual(plan(null).issues, []);
   // After the repair turns the comment is dropped like any that breaks a rule, and its findings stay accounted for.
-  const final = plan(on([]), whole, { final: true });
+  const final = plan(single, whole, { final: true });
   assert.deepEqual([final.result.comments, final.result.skipped.map(s => s.findingId), final.issues], [[], ['F-1', 'F-2', 'F-3'], []]);
-  assert.match(final.result.skipped[0].reason, /did not meet the combination rules \(the PR already has a comment under the marker of these lines/);
-  // The marker is the one the comment gets among the page's comments. Two findings on the same lines: the first has its own
-  // comment there, which the PR already has; the shared comment of the second quotes the same line and is the second of that line.
-  const twin = finding('F-4', 'medium'), both = repeated([twin]), four = confirmedFindings(both);
-  const page = [comment({ findingId: 'F-4', severity: 'medium', body: '🟡 medium: Twin\n\nBody.' }), combined(['F-1', 'F-2', 'F-3'])];
-  const second = evaluatePlanPage(answer(page), { review: both, assigned: four, repeats, sources: shown, posted: on([]) });
-  assert.deepEqual([second.issues, second.result.comments.map(c => c.findingId)], [[], ['F-4', 'F-1']], 'The PR has the first comment of these lines, not the second.');
-  const planned = assemblePlan(both, [second.result]).comments;
-  assert.deepEqual(planned.map(c => c.marker), [item.marker, inlineMarker(both.target, item, 1)]);
-  // ... and it is refused when the PR has a comment under that second marker without the places.
-  assert.match(evaluatePlanPage(answer(page), { review: both, assigned: four, repeats, sources: shown, posted: on([], inlineMarker(both.target, item, 1)) }).issues.join('\n'), /the PR already has a comment under the marker of these lines/);
-  // A comment that an earlier session of the page wrote on the same lines counts as well: it comes first in the plan.
-  const before = [{ path: '/src/a.ts', anchor: '  const value = load();  ' }];
-  assert.deepEqual(plan(on([]), whole, { earlier: before }).issues, [], 'The shared comment is the second of these lines.');
-  assert.match(plan(on([], inlineMarker(r.target, item, 1)), whole, { earlier: before }).issues.join('\n'), /the PR already has a comment under the marker of these lines/);
-  // On a later page a comment of an earlier page may quote the same lines too, which no page can know. The planner is
-  // asked all the same, in words that say so; once the correction turns are used up the comment is kept, since it may
-  // well be posted. An answer with no other fault is marked, so that it stands if the corrections bring nothing usable.
-  const later = plan(on([]), whole, { firstPage: false });
-  assert.match(later.issues.join('\n'), /combined comment for F-1, F-2, F-3: the PR has a comment on these quoted lines \(thread 12\), which is neither changed nor posted again, and it does not list F-2 at \/src\/b\.ts:2-3, F-3 at \/src\/a\.ts:4: unless an earlier page's comment quotes the same lines, this comment would not be posted\. Anchor it on the lines of another of its findings, or leave F-1 out of it/);
-  assert.equal(later.tentative, true);
-  const kept = plan(on([]), whole, { firstPage: false, final: true });
-  assert.deepEqual([kept.result.comments.map(c => c.findingIds), kept.result.skipped, kept.issues], [[['F-1', 'F-2', 'F-3']], [], []]);
-  // Not so on the first page, where the refusal stands, nor for an answer that has another fault as well.
-  assert.equal(Object.hasOwn(plan(on([])), 'tentative'), false);
-  const faulty = evaluatePlanPage(answer([combined(['F-1', 'F-2']), comment({ findingId: 'F-3', severity: 'medium', path: '/src/elsewhere.ts', startLine: 4, endLine: 4, anchor: 'line four', body: '🟡 medium: Other\n\nBody.' })]),
-    { review: r, assigned, repeats, sources: shown, posted: on([]), firstPage: false });
-  assert.deepEqual([faulty.issues.length, Object.hasOwn(faulty, 'tentative')], [2, false]);
-  assert.equal(Object.hasOwn(plan(null), 'tentative'), false, 'An answer without issues is not marked.');
+  assert.match(final.result.skipped[0].reason, /did not meet the combination rules \(the PR already has a comment of AZPR's on these quoted lines/);
+  // A comment of this very plan on the same lines is no comment of the PR: both are planned, as two comments on one line always were.
+  const twin = finding('F-4', 'medium'), both = repeated([twin]);
+  const side = evaluatePlanPage(answer([comment({ findingId: 'F-4', severity: 'medium', body: '🟡 medium: Twin\n\nBody.' }), combined(['F-1', 'F-2', 'F-3'])]),
+    { review: both, assigned: confirmedFindings(both), repeats, sources: shown, posted: new Map() });
+  assert.deepEqual([side.issues, side.result.comments.map(c => c.findingId)], [[], ['F-4', 'F-1']]);
 });
 
 test('a comment for several places quotes lines the file has, also in a review whose single comments need not', () => {
@@ -528,21 +532,6 @@ test('a comment for several places quotes lines the file has, also in a review w
   assert.match(past.issues.join('\n'), /combined comment for F-1, F-2, F-3: the anchor \(lines 3-4\) reaches past the end of \/src\/b\.ts, which has 3 line\(s\); quote lines the file has/);
 });
 
-test('a publication names the findings of a shared comment that have no comment on the PR, and what gives them one', () => {
-  const r = repeated();
-  assert.equal(describeUncovered(r), '');
-  assert.equal(describeUncovered(r, []), '');
-  const rows = [{ marker: 'm', findingIds: ['F-2', 'F-3'], path: '/src/a.ts', startLine: 2, threadId: 12 }];
-  // Only what the one comment lists is established: the line says what was not posted, not that the findings have no comment anywhere.
-  assert.equal(describeUncovered(r, rows), `This preview's comment was not posted for F-2, F-3 (the PR already has a comment under the marker of /src/a.ts:2, thread 12, which is not changed and does not list their places). Whether anything else on the PR covers these findings was not checked; /pr-comment ${r.id} plans the preview again.\n`);
-  // An adjusted preview is not planned again once its publication started.
-  assert.equal(describeUncovered({ ...r, adjustments: { excluded: [], severity: {} } }, [{ ...rows[0], findingIds: ['F-2'], threadId: undefined }]),
-    'This preview\'s comment was not posted for F-2 (the PR already has a comment under the marker of /src/a.ts:2, which is not changed and does not list its place). Whether anything else on the PR covers these findings was not checked; an adjusted preview is not planned again once its publication started, so a new review plans these comments anew.\n');
-  // What the PR keeps with earlier text names only the findings that the comment there covers.
-  const ledger = new Map([['m', { kind: 'inline', findingId: 'F-1', findingIds: ['F-1', 'F-2', 'F-3'], path: '/src/a.ts', startLine: 2, state: 'ALREADY_PRESENT', earlierText: true, unlisted: ['F-2', 'F-3'] }]]);
-  assert.match(describeEarlierText({ ...r, adjustments: { excluded: [], severity: {} }, publication: ledger }), /^Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: F-1 at \/src\/a\.ts:2\. /);
-});
-
 test('the grouping pass proposes groups under the same rules; what breaks one is reported, then dropped', () => {
   const findings = [finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }), finding('F-3', 'medium', { location: 'head:/src/a.ts:4' }),
     finding('F-4', 'high', { location: 'head:/src/b.ts:1' }), finding('F-5', 'medium'), finding('F-6', 'high', { location: 'head:/src/a.ts:9' })];
@@ -551,7 +540,10 @@ test('the grouping pass proposes groups under the same rules; what breaks one is
   assert.deepEqual(ok.issues, []);
   assert.deepEqual(ok.result, { status: 'READY', groups: [['F-1', 'F-3'], ['F-4', 'F-6']] }, 'Groups and their members follow the order of the findings.');
   assert.deepEqual(evaluateGrouping(grouping([]), { findings }).result.groups, []);
-  assert.deepEqual(evaluateGrouping(JSON.stringify({ status: 'READY' }), { findings }).result.groups, [], 'No groups is a valid answer.');
+  // An answer without `groups` (a page's answer, say) is no grouping: it is sent back, and counts as none once the turns are used up.
+  const page = JSON.stringify({ status: 'READY', comments: [], skipped: [] });
+  assert.match(evaluateGrouping(page, { findings }).issues.join('\n'), /groups is missing: answer with \{"status": "READY", "groups": \[\.\.\.\]\}/);
+  assert.deepEqual([evaluateGrouping(page, { findings, final: true }).result, evaluateGrouping(page, { findings, final: true }).issues], [{ status: 'READY', groups: [] }, []]);
   const issues = groups => evaluateGrouping(grouping(groups), { findings }).issues.join('\n');
   assert.match(issues([{ findingIds: ['F-1', 'F-9'] }]), /group F-1, F-9: F-9 is not in findings/);
   assert.match(issues([{ findingIds: ['F-1', 'F-2'] }, { findingIds: ['F-2', 'F-3'] }]), /group F-2, F-3: F-2 already belongs to another group/);

@@ -1853,37 +1853,59 @@ test('one defect in three files gets one comment that lists the other two; the g
   assert.equal(f.azure.state.threads.filter(item => item.threadContext).length, 4);
 });
 
-test('a shared comment that meets an earlier comment at its place: the receipt names the findings left without one, and a new plan moves it', async t => {
+test('a comment for several places is its own comment on the PR: posted in full next to a comment for its place alone, and found again by its own marker', async t => {
   // One finding per file, from the functional reviewer alone: three places on one page, and no other comment on their lines.
   const files = ['/src/A.java', '/src/B.java', '/src/C.java'], functional = findingPerFile(files);
   const initial = input => input.role === 'azpr-review-risk' ? { ...functional(input), findings: [] } : functional(input);
   const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input) });
   const id = reviewId(await f.command());
+  const saved = async () => JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments.find(item => item.otherPlaces);
   assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
-  const planned = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments.find(item => item.otherPlaces);
+  const planned = await saved();
   assert.deepEqual([planned.path, planned.findingIds], ['/src/A.java', ['F-1', 'F-2', 'F-3']]);
-  // Meanwhile the PR got a comment for that place alone, under the same marker (an earlier plan, posted from another machine).
-  f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' },
-    content: `${planned.body}\n\n${planned.marker}` }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
+  assert.ok(planned.content.endsWith(`\n\n${planned.placeMarker}\n\n${planned.marker}`), 'The comment carries the marker of its place and its own.');
+  // Meanwhile the PR got a comment for that place alone (an earlier plan, posted from another machine): it has the marker of the place.
+  const single = `${planned.body}\n\n${planned.placeMarker}`;
+  f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' }, content: single }],
+    threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
+  // The saved preview is posted as it was read: the shared comment is another comment than the one found there, so it
+  // is posted with its list, and the receipt says of every finding what is so.
   const posted = await f.command('pr-comment', '--publish');
   assert.match(posted, /\] POSTED/);
-  assert.match(posted, new RegExp(`\\nThis preview's comment was not posted for F-2, F-3 \\(the PR already has a comment under the marker of /src/A\\.java:1, thread 77, which is not changed and does not list their places\\)\\. Whether anything else on the PR covers these findings was not checked; /pr-comment ${id} plans the preview again\\.\\n`));
-  assert.match(posted, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): ALREADY_PRESENT; thread=77; the comment there does not list F-2, F-3\n/);
-  assert.equal(f.azure.state.threads.find(thread => thread.id === 77).comments[0].content, `${planned.body}\n\n${planned.marker}`, 'The earlier comment is as it was.');
-  assert.equal(f.azure.state.threads.filter(thread => /Also at/.test(thread.comments[0].content)).length, 0, 'The shared comment was not posted; the summary was.');
-  assert.deepEqual(f.azure.state.threads.filter(thread => thread.id !== 77).map(thread => Boolean(thread.threadContext)), [false], 'This publication wrote the summary and nothing else.');
-  // Planning again sees that comment: the shared one is sent back once and stands at another of its places.
+  assert.match(posted, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): (?:POSTED|VERIFIED); thread=\d+\n/);
+  assert.equal(f.azure.state.threads.find(thread => thread.id === 77).comments[0].content, single, 'The earlier comment is as it was.');
+  const listing = f.azure.state.threads.filter(thread => /- `\/src\/B\.java:1` \(F-2\)\n- `\/src\/C\.java:1` \(F-3\)/.test(thread.comments[0].content));
+  assert.deepEqual(listing.map(thread => thread.threadContext.filePath), ['/src/A.java']);
+  // Planned again, with that comment on the PR: it is the same comment, nothing is sent back, and publication finds it.
   const again = await f.command('pr-comment', '');
   assert.match(again, /\] PREVIEW/);
-  assert.match(again, /### F-2, F-1, F-3 — \/src\/B\.java:1-1\n[\s\S]*\*\*📍 Also at\*\* \(the same defect; fix these places with it\):\n- `\/src\/A\.java:1` \(F-1\)\n- `\/src\/C\.java:1` \(F-3\)\n/);
-  const page = (await stageRecords(again)).find(stage => stage.repairs?.length);
-  assert.match(JSON.stringify(page.repairs), /the PR already has a comment under the marker of these lines \(thread 77\)[^"]*does not list F-2 at \/src\/B\.java:1, F-3 at \/src\/C\.java:1/);
+  assert.equal((await saved()).marker, planned.marker);
+  assert.ok((await stageRecords(again)).every(stage => !stage.repairs?.length));
   const second = await f.command('pr-comment', '--publish');
-  assert.match(second, /\] POSTED/);
-  assert.doesNotMatch(second, /This preview's comment was not posted for/, 'Nothing of the kind for the comment posted now.');
-  assert.match(second, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): ALREADY_PRESENT; thread=77; the comment there does not list F-2, F-3\n/, 'The row of the earlier plan stays as it was recorded.');
-  assert.match(second, /- F-2, F-1, F-3 \(\/src\/B\.java:1\): (?:POSTED|VERIFIED)/);
-  assert.equal(f.azure.state.threads.filter(thread => /- `\/src\/A\.java:1` \(F-1\)\n- `\/src\/C\.java:1` \(F-3\)/.test(thread.comments[0].content)).length, 1);
+  assert.match(second, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): ALREADY_PRESENT; thread=\d+\n/);
+  assert.equal(f.azure.state.threads.filter(thread => /Also at/.test(thread.comments[0].content)).length, 1, 'Nothing was posted twice.');
+});
+
+test('a comment for several places is planned away from lines where the PR already has a comment of AZPR\'s', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], functional = findingPerFile(files);
+  const initial = input => input.role === 'azpr-review-risk' ? { ...functional(input), findings: [] } : functional(input);
+  const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input) });
+  const id = reviewId(await f.command());
+  // The PR already has a comment on the first place, from an earlier publication of a comment for that place alone:
+  // its marker is the one any comment quoting those lines has.
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  const first = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments.find(item => item.otherPlaces);
+  f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' }, content: `${first.body}\n\n${first.placeMarker}` }],
+    threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
+  // A new plan sees it: the page is sent back once with the thread named, and the comment stands at the second place.
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  assert.match(preview, /### F-2, F-1, F-3 — \/src\/B\.java:1-1\n[\s\S]*\*\*📍 Also at\*\* \(the same defect; fix these places with it\):\n- `\/src\/A\.java:1` \(F-1\)\n- `\/src\/C\.java:1` \(F-3\)\n/);
+  const page = (await stageRecords(preview)).find(stage => stage.repairs?.length);
+  assert.match(JSON.stringify(page.repairs), /the PR already has a comment of AZPR's on these quoted lines \(thread 77\), and a second one is not put on them/);
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, /- F-2, F-1, F-3 \(\/src\/B\.java:1\): (?:POSTED|VERIFIED)/);
+  assert.deepEqual(f.azure.state.threads.filter(thread => thread.threadContext).map(thread => thread.threadContext.filePath).sort(), ['/src/A.java', '/src/B.java'], 'One new thread, at the second place.');
 });
 
 test('a grouping pass that takes many steps is told to finish in its own words: groups and READY, no page and no continuation', async t => {

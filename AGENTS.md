@@ -232,7 +232,8 @@ settings, backups and failure records. Never upload `.local/`.
   never relax them to model judgment. Commands the user types keep their
   behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
-  review ID or model wording into them.
+  review ID or model wording into them. A comment for several places has a
+  second one of its own, which also takes its other places (see below).
 - A person's adjustments (`/pr-comment [review-id] --exclude`, `--severity`,
   `--reset`) change only the findings handed to comment planning, never the
   review record or a prompt file; the planner input carries `adjustments` only
@@ -260,13 +261,13 @@ settings, backups and failure records. Never upload `.local/`.
   that no page depends on another; a grouping pass that fails costs only the
   grouping, and a stopped run starts no page. The review keeps every finding:
   each place keeps its row in the summary index, its ID and its adjustments.
-  The list is read back (`listedPlaces`) to tell a later plan which places a
-  thread covers, and to tell what a comment on the PR stands for. Read it
-  only in the form the runtime writes: in the comment that opened a thread
-  on a file and carries AZPR's marker, under the list's own heading, in rows
-  of a place and a finding ID, followed by nothing but the attribution (its
-  one line, which ends with the word for the models and the models) and the
-  marker; a reply that quotes such a comment says nothing about its thread,
+  The list is read back (`listedPlaces`) only to tell a later plan which
+  places a thread says it covers (`alsoAt`), as the start of a thread's text
+  tells it: nothing is posted or skipped because of it. Read it only in the
+  form the runtime writes: in the comment that opened a thread on a file and
+  carries AZPR's marker, under the list's own heading, in rows of a place and
+  a finding ID, followed by nothing but the attribution and the comment's two
+  markers; a reply that quotes such a comment says nothing about its thread,
   and a planner's text that writes the heading is refused. Change
   `renderOtherPlaces`, the form of `commentAttribution` and `listedPlaces`
   together (a test reads back what the first two write), and list only a
@@ -281,31 +282,18 @@ settings, backups and failure records. Never upload `.local/`.
   would need a tool for; it is asked only where two findings could share a
   page, and no file is read ahead of the pages where none could. The files
   it needs are read a few at a time, like the pages'.
-- A marker is a file and quoted lines, and a posted comment is neither
-  changed nor posted again. A comment for several places that meets a
-  comment the PR already has under its marker must not make the receipt say
-  more than that comment's text holds: refuse it at planning where the PR's
-  comments are known (the planner then moves it), and at publication say for
-  which findings the comment found there lists no place (`unlisted` in the
-  item's entry, `uncovered` in the result, the receipt's "This preview's
-  comment was not posted for …"), whoever wrote that comment. What it lists
-  is what the last listing of the PR that shows the marker says, and for a
-  comment no listing shows, the record of the attempt that created it
-  (`places`; a record without them is of a comment for one place). Make the
-  note when an item is first found, so that a publication that is stopped
-  leaves it, and anew after the read-back. What a comment lists is read
-  only from the comment that opened a thread on a file and ends with the
-  marker (`postedComments`), and the thread named is that comment's; a
-  marker that only a reply holds is present, as publication has always
-  taken it, and lists nothing. Claim what was established and no more: one
-  comment's list says nothing about anything else on the PR, and the place
-  where a comment stands is known by its marker alone, as for every comment
-  (thread positions go stale when lines move, so they are not compared). A
-  page knows the markers of its own comments only: on the first page a
-  refusal stands, on a later one it is a request that never costs the
-  comment (also not when the correction turns bring nothing usable), since
-  a comment of an earlier page on the same lines would give it another
-  marker.
+- A comment for several places is a comment of its own, so it has a marker
+  of its own (`sharedMarker`: PR, path, normalized anchor and the other
+  places) next to the marker of its place, which it carries as every comment
+  on those lines does. Publication skips it only when its own marker is on
+  the PR: the comment found there is then this very comment, and a receipt
+  never has to work out from a posted text what a comment covers. Never
+  infer that from a comment's text, a thread's position or an attempt's
+  record. A comment for its place alone finds it by the marker of the place
+  (and is skipped, as a comment on the same lines always was); a comment for
+  several places does not find a comment for one, and is planned away from
+  lines that already carry a comment of AZPR's (`posted` in
+  `evaluatePlanPage`), so that no second thread is put on them.
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

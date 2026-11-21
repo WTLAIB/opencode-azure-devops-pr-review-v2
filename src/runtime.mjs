@@ -19,11 +19,11 @@ import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, r
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
-import { prepareComments, publishPlan, discussionDigest, postedComments, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
+import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewVerification,
-  everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, describeUncovered, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
+  everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
-import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
+import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
@@ -1621,13 +1621,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         const data = await dataFor(run);
         // Read live discussions once for the planner's duplicate checks; the
         // planner can still read threads itself if this read fails.
-        // AZPR's own comments among them, by marker: a comment for several places is checked against
-        // the one the PR already has at its place.
+        // The markers among them, each with its thread: a comment for several places does not stand on
+        // lines that already carry a comment of AZPR's.
         let posted = null;
         try {
           const threads = await azure.threads(run, review.snapshot);
           discussions = discussionDigest(threads);
-          posted = postedComments(threads);
+          posted = markersInThreads(threads);
         }
         catch (error) {
           if (!run.active) throw error;
@@ -1678,8 +1678,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const result = await publishPlan({ run, review, azure, attempts, progress: message => progress(run, message), persist: () => persistReview(review), only, compare: everAdjusted(review) });
       // An adjusted review says what the PR keeps from earlier publications instead of the preview.
       if (everAdjusted(review)) earlier = describeEarlierText(review, result.otherComments);
-      // So does a comment for several places that met an earlier comment at its place.
-      earlier += describeUncovered(review, result.uncovered);
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
     // What this run decides about the review's preview and its own sessions is settled here, before anything is

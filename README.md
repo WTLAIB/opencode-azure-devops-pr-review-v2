@@ -1109,10 +1109,10 @@ mistake most clearly, and AZPR lists every other place under it:
 The findings must have the same severity and need the same correction; places
 that need different corrections keep their own comments. Every place keeps
 its row in the summary index, and you can still exclude or regrade each one
-after a preview. A posted comment is never changed: where the pull request
-already has AZPR's comment on those lines without the other places, the
-planner is asked for another place, and a receipt says for which findings
-the comment found there lists no place (see
+after a preview. A shared comment has a marker of its own, so it counts as
+already posted only when this very comment, with every place, is on the pull
+request; and it is planned away from lines that already carry a comment of
+AZPR's (see
 [one defect at several places](docs/COMMENTING.md#one-defect-at-several-places)).
 
 ### Adjusting findings after a preview

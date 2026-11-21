@@ -298,60 +298,51 @@ Azure DevOps, like the other code hosts, cannot anchor one thread at several
 places, and one thread cannot show which of its places were fixed; that is why
 the other places are written out in full. When the pull request is planned
 again later, the runtime reads that list back and tells the planner which
-places the thread covers (`alsoAt` in `existingDiscussions`), so that the
-other places are seen as discussed and get no thread of their own. It reads
-the list only where the runtime wrote it: in the comment that opened a thread
-on a file, which carries AZPR's marker, under the list's own heading, and
-followed by nothing but the attribution (the one line that ends with the
-models) and the marker. A comment that someone continued after its list no
-longer says what it lists, a reply that quotes such a comment says nothing
-about its thread, and a planner's text that writes that heading itself is
-sent back.
+places the thread says it covers (`alsoAt` in `existingDiscussions`), so that
+the other places are seen as discussed and get no thread of their own. This
+only informs the planner, as the start of a thread's text does: nothing is
+posted or skipped because of it. The list is read only where the runtime
+wrote it: in the comment that opened a thread on a file, which carries AZPR's
+marker, under the list's own heading, in rows of a place and a finding ID,
+and followed by nothing but the attribution and the comment's two markers. A
+comment that someone continued after its list no longer says what it lists,
+a reply that quotes such a comment says nothing about its thread, and a
+planner's text that writes that heading itself is sent back.
 
-**A place that already has a comment.** A comment's marker follows its file
-and the lines it quotes, and AZPR neither changes a posted comment nor posts
-it again. A comment for several places can therefore meet a comment the pull
-request already has under the same marker: an earlier one for that place
-alone, or one that lists other places. Publication would skip the new
-comment, and the places the earlier one does not list would get nothing from
-it. AZPR deals with this twice:
+**Markers: when is a comment already on the pull request?** Every inline
+comment ends with a hidden marker made of its file and the lines it quotes
+(not their numbers, so that it survives lines moving). Publication skips a
+comment whose marker the pull request already has, which is what makes
+posting safe to repeat. A comment for several places is more than its place,
+so it carries two markers:
 
-- **When planning**, the runtime compares such a comment with the comments
-  the pull request already has. Where the earlier one does not list every
-  other place, the planner is asked to anchor the comment at another of its
-  places or to leave that finding out (a finding that already has a thread
-  of its own is skipped as discussed). On the first planning page a comment
-  that still collides after the correction turns is dropped like any refused
-  combination, and its findings are skipped with that reason. On a later
-  page it is kept: comments that quote the same lines get their markers in
-  the order of the plan, so one of an earlier page would give this one
-  another marker, which no page can know. An answer that was sent back for
-  this alone also stands when the correction turns bring nothing usable.
-- **When posting**, the pull request is read again, and what the comment
-  under the marker lists is taken from the last reading that shows it; for
-  a comment that no reading shows (deleted on the pull request since AZPR
-  created it), from the record of its creation. The item is reported as
-  usual (`ALREADY_PRESENT`, `VERIFIED` when a write of this run met it,
-  `DELETED`), its row adds `the comment there does not list F-2, F-3`, and a
-  line of the receipt says so: `This preview's comment was not posted for
-  F-2, F-3 (…)`. For a review without adjustments, `/pr-comment` plans the
-  preview again; one whose adjusted preview began publication is not
-  planned again and needs a new review.
+- the marker of **its place**, the one any comment on those quoted lines
+  has. A later comment for that place alone finds the shared comment by it
+  and is not posted on top of it, as a comment on the same lines never was.
+- a marker of **its own**, made of the file, the quoted lines and the other
+  places it lists. Publication skips a shared comment only when this marker
+  is on the pull request: the comment found is then this very comment, with
+  every place. A comment for the place alone, or one that lists other
+  places, is another comment and does not stand for it.
 
-What is established is what that one comment lists. Nothing else on the pull
-request is looked at, so the receipt says "whether anything else on the PR
-covers these findings was not checked": an earlier version may have posted a
-thread for each place, another comment may list them, or a reply may discuss
-them. What a comment lists is read only from the comment that opened its
-thread on a file, and that thread is the one the receipt names; a marker
-that only a reply holds, or that opens a thread without a file, counts as
-present, as it always has, and lists nothing. A list counts only while it
-has the form the runtime wrote (rows of a place and a finding ID, then the
-attribution with its models, then the marker); it is not a defence against
-someone who rewrites a place. And the place where a comment stands is known
-by its marker, as for every comment: the same quoted lines elsewhere in the
-same file share a marker, so a comment at one of them counts for the other.
-Thread positions are not compared, because they go stale when lines move.
+So a receipt never has to work out from a posted text which findings a
+comment covers: `ALREADY_PRESENT` for a shared comment means that this
+comment, with these places, is there. And because a shared comment does not
+find a comment for one place, it would be posted next to it. The runtime
+avoids that when planning: a shared comment on quoted lines that already
+carry a comment of AZPR's (the marker of the place is on the pull request,
+its own marker is not) is sent back, and the planner is asked to anchor it
+at another of its places or to leave that finding out (a finding that an
+existing thread covers is skipped as discussed). A comment that still stands
+there after the correction turns is dropped like any refused combination,
+and its findings are skipped with that reason. When the threads could not be
+read before planning, nothing is refused, and such a comment is posted next
+to the one that is there.
+
+As for every comment, the marker of a place does not hold line numbers: the
+same lines of text elsewhere in the same file share it. And the other places
+are compared as written (a file and its lines), so a shared comment whose
+other places moved is another comment than the one posted before.
 
 ## Planning
 

@@ -364,33 +364,13 @@ export function describeEarlierText(review, otherComments = 0) {
   const kept = review?.publication instanceof Map ? [...review.publication.values()].filter(entry => entry?.earlierText) : [];
   const rows = kept.map(entry => {
     if (entry.kind === 'summary') return `the PR summary${active ? ' (it may still list findings you excluded or show earlier severities)' : ''}`;
-    // Of a comment for several places, only the findings that the comment on the PR covers (`unlisted` names the others).
-    const ids = (entry.findingIds ?? [entry.findingId]).filter(id => !entry.unlisted?.includes(id));
+    const ids = entry.findingIds ?? [entry.findingId];
     return `${ids.join(', ')} at ${entry.path}:${entry.startLine}${ids.some(id => Object.hasOwn(severity, id)) ? ' (you changed its severity)' : ''}`;
   });
   const lines = [];
   if (rows.length) lines.push(`Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: ${rows.join('; ')}. Edit them on the PR if they should change.`);
   if (excluded.length && otherComments > 0) lines.push(`The PR has ${otherComments} other AZPR comment(s) from earlier publications that are not part of this preview; AZPR does not change them, so a finding you excluded may still be visible there.`);
   return lines.map(line => `${line}\n`).join('');
-}
-
-/**
- * What a publication found for its comments that stand for one defect at
- * several places (`uncovered` in the result of `publishPlan`): the comment
- * the PR has under such a comment's marker lists fewer places, and AZPR
- * neither changes a posted comment nor posts one again. Says for which
- * findings the preview's comment was therefore not posted and what plans them
- * again. Only what that one comment lists is established: no other thread
- * or reply was looked at, and the line says so instead of saying that the
- * findings have no comment. '' when none.
- */
-export function describeUncovered(review, uncovered = []) {
-  if (!uncovered.length) return '';
-  const rows = uncovered.map(row => `${row.findingIds.join(', ')} (the PR already has a comment under the marker of ${row.path}:${row.startLine}${row.threadId ? `, thread ${row.threadId}` : ''}, which is not changed and does not list ${row.findingIds.length === 1 ? 'its place' : 'their places'})`);
-  // An adjusted preview is not planned again once its publication started.
-  const again = everAdjusted(review) ? 'an adjusted preview is not planned again once its publication started, so a new review plans these comments anew'
-    : `/pr-comment ${review.id} plans the preview again`;
-  return `This preview's comment was not posted for ${rows.join('; ')}. Whether anything else on the PR covers these findings was not checked; ${again}.\n`;
 }
 
 /**
@@ -660,6 +640,20 @@ export function inlineMarker(target, comment, ordinal = 0) {
   return markerTag(hash([targetKey(target), 'inline', comment.path, normalizedAnchor(comment.anchor), ordinal]));
 }
 
+/**
+ * The fingerprint of a comment that stands for one defect at several places:
+ * PR + path + normalized anchor + the other places it lists. Such a comment
+ * carries the marker of its place too (`inlineMarker`), so that a comment on
+ * the same lines finds it as always; this one is its own. Publication skips a
+ * shared comment only when this marker is on the PR, so the comment found
+ * there is this very comment, with every place: nothing has to be read out of
+ * a posted text to know what it covers. No ordinal: no two comments of a plan
+ * hold the same findings.
+ */
+export function sharedMarker(target, comment) {
+  return markerTag(hash([targetKey(target), 'shared', comment.path, normalizedAnchor(comment.anchor), comment.otherPlaces.map(other => other.place).sort()]));
+}
+
 /** One summary per reviewed source commit and set of inline comments. */
 export function summaryMarker(target, head, inlineMarkers) {
   return markerTag(hash([targetKey(target), 'summary', head, [...inlineMarkers].sort()]));
@@ -735,24 +729,14 @@ const aliases = (value, names) => {
  * The runtime never combines findings itself.
  * `sources` are the page's source excerpts and `discussions` the live threads
  * the runtime read (null when it could not): skip causes are checked against them.
- * `posted` maps the markers on the PR to `{ threadId, places }`
- * (`postedComments`; null when the threads could not be read): a comment for
- * several places whose marker the PR already has would never be posted, so
- * the places that the comment there does not list would get nothing from it.
- * The marker is the one the comment gets among the page's comments: those of
- * its earlier sessions (`earlier`) and of this answer. On the first page
- * (`firstPage`) that is the marker the plan gives it. On a later page a
- * comment of an earlier page may quote the same lines and move it on, which
- * no page can know: there the comment is sent back all the same, as a
- * collision that may be one, but after the correction turns it is kept, and
- * publication looks at the PR again. An answer whose only issues are of that
- * kind is `tentative`: it is good as it stands, should the correction turns
- * bring nothing usable.
- * @returns {{result: object, issues: string[], corrections: object[], tentative?: boolean}}
+ * `posted` maps the markers the PR already has to their threads
+ * (`markersInThreads`; null when the threads could not be read): a comment
+ * for several places does not stand on lines that already carry a comment of
+ * AZPR's, unless that comment is this very one.
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, posted = null, earlier = [], firstPage = true, allowSummary = true }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, posted = null, allowSummary = true }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -785,8 +769,6 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   // checked location and an anchor found in source text the runtime read.
   const quick = reviewVerification(review) === 'none';
   const comments = [], skipped = [], handled = new Set(), reported = new Set(), refusedCombinations = [];
-  // Issues that ask for a correction which may not be needed (a collision on a later page).
-  let tentativeIssues = 0;
   const skip = (findingId, reason, extra = {}) => { if (!handled.has(findingId)) { handled.add(findingId); skipped.push({ findingId, reason, ...extra }); } };
   // A location that can carry an inline comment: on a changed HEAD file whose text the page shows.
   const inlineEligible = finding => {
@@ -886,25 +868,14 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       else problems.push(`the anchor (lines ${startLine}-${endLine}) touches the lines of ${touched.map(member => `${member.id} at ${placeOf(member)}`).join(' and ')}; quote lines of one of them only`);
     }
     if (!problems.length && repeated && posted) {
-      // A marker is the file and the quoted lines (and a count for comments that quote the same lines),
-      // and a posted comment is neither changed nor posted again. A comment the PR has under this one's
-      // marker would stand for it, so every other place must be in that comment's list. The count is that
-      // of the page's comments so far (its earlier sessions' and this answer's), in the order the plan is
-      // assembled in. On the first page that is the comment's marker. On a later page a comment of an
-      // earlier page may quote the same lines and give this one a later marker, which no page can know:
-      // the planner is asked all the same, but once the correction turns are used up the comment is
-      // kept, since it may well be posted, and publication looks at the PR again.
-      const { path, anchor } = drafted.comment;
-      const ordinal = [...earlier, ...comments].filter(other => other.path === path && normalizedAnchor(other.anchor) === normalizedAnchor(anchor)).length;
-      const existing = !final || firstPage ? posted.get(inlineMarker(review.target, drafted.comment, ordinal)) : undefined;
-      const missing = existing ? members.filter(member => member !== first && !existing.places.includes(placeOf(member))) : [];
-      if (missing.length) {
-        const thread = existing.threadId ? ` (thread ${existing.threadId})` : '', places = missing.map(member => `${member.id} at ${placeOf(member)}`).join(', ');
-        const ways = `Anchor it on the lines of another of its findings, or leave ${first.id} out of it; a finding that already has a thread of its own is skipped with cause existing-thread`;
-        problems.push(firstPage
-          ? `the PR already has a comment under the marker of these lines${thread}, which is neither changed nor posted again, and it does not list ${places}: this comment would not be posted, and ${missing.length === 1 ? 'that place' : 'those places'} would get nothing from it. ${ways}`
-          : `the PR has a comment on these quoted lines${thread}, which is neither changed nor posted again, and it does not list ${places}: unless an earlier page's comment quotes the same lines, this comment would not be posted. ${ways}`);
-        if (!firstPage) tentativeIssues++;
+      // A comment on the same quoted lines finds an earlier one by the marker of its place and is not
+      // posted again. A comment for several places is another comment, with a marker of its own, and
+      // would be posted next to the one that is there: it stands elsewhere instead, unless the PR
+      // already has this very comment (its own marker), which publication then skips.
+      const others = members.filter(member => member !== first).map(member => ({ place: placeOf(member) }));
+      const thread = posted.get(inlineMarker(review.target, drafted.comment));
+      if (thread !== undefined && !posted.has(sharedMarker(review.target, { ...drafted.comment, otherPlaces: others }))) {
+        problems.push(`the PR already has a comment of AZPR's on these quoted lines${thread ? ` (thread ${thread})` : ''}, and a second one is not put on them. Anchor this comment on the lines of another of its findings, or leave ${first.id} out of it; a finding that an existing thread covers is skipped with cause existing-thread`);
       }
     }
     if (problems.length) {
@@ -1004,8 +975,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     else if (field === 'summary') { summary = undefined; corrections.push({ action: 'drop-summary-note-naming-excluded', findingIds: named }); }
     else { summaryDetails = ''; corrections.push({ action: 'drop-summary-details-naming-excluded', findingIds: named }); }
   }
-  return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections,
-    ...(issues.length && tentativeIssues === issues.length ? { tentative: true } : {}) };
+  return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections };
 }
 
 export function planRepairPrompt(issues, { parseOnly = false } = {}) {
@@ -1047,7 +1017,9 @@ export function evaluateGrouping(answerText, { findings, final = false }) {
     if (final) corrections.push({ action: 'drop-invalid-group', findingIds: ids, problem });
     else issues.push(`group ${ids.join(', ')}: ${problem}. Correct it or leave it out.`);
   };
-  if (value.groups !== undefined && !Array.isArray(value.groups) && !final) issues.push('groups must be an array of {"findingIds": [...], "reason": "..."}; use [] when nothing repeats.');
+  // An answer without `groups` (a page's answer, say) is no grouping: it gets its correction turn like any other.
+  if (!Array.isArray(value.groups) && !final) issues.push(value.groups === undefined ? 'groups is missing: answer with {"status": "READY", "groups": [...]}, and "groups": [] when nothing repeats.'
+    : 'groups must be an array of {"findingIds": [...], "reason": "..."}; use [] when nothing repeats.');
   for (const [index, raw] of (Array.isArray(value.groups) ? value.groups : []).entries()) {
     const group = Array.isArray(raw) ? { findingIds: raw } : isObject(raw) ? aliases(raw, ['findingIds', 'reason']) : {};
     const ids = Array.isArray(group.findingIds) ? [...new Set(group.findingIds.map(id => String(id)))] : [];
@@ -1093,13 +1065,21 @@ export function assemblePlan(review, pages) {
     const key = `${c.path}\n${normalizedAnchor(c.anchor)}`;
     const ordinal = ordinals.get(key) ?? 0;
     ordinals.set(key, ordinal + 1);
-    const marker = inlineMarker(review.target, c, ordinal);
+    // The marker of the place and its quoted lines, as for every comment.
+    const placeMarker = inlineMarker(review.target, c, ordinal);
     // Azure positions are one-based UTF-16 offsets within their lines.
     const endOffset = Math.max(1, c.anchor.split('\n').at(-1).length);
+    if (!c.otherPlaces?.length) {
+      return { ...c, kind: 'inline', startOffset: 1, endOffset, marker: placeMarker,
+        content: `${c.body}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${placeMarker}` };
+    }
     // One defect made at several places: the runtime lists the other places under the comment's own text.
-    const places = c.otherPlaces?.length ? `\n\n${escapeComments(renderOtherPlaces(c.otherPlaces, review.outputLanguage ?? 'en'))}` : '';
-    return { ...c, kind: 'inline', startOffset: 1, endOffset, marker,
-      content: `${c.body}${places}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${marker}` };
+    // The comment is known by a marker of its own (`sharedMarker`) and carries the marker of its place as
+    // well, so that a later comment on these lines finds it.
+    const marker = sharedMarker(review.target, c);
+    const places = escapeComments(renderOtherPlaces(c.otherPlaces, review.outputLanguage ?? 'en'));
+    return { ...c, kind: 'inline', startOffset: 1, endOffset, marker, placeMarker,
+      content: `${c.body}\n\n${places}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${placeMarker}\n\n${marker}` };
   });
   const skipped = pages.flatMap(page => page.skipped);
   const intro = pages.map(page => page.summary).find(Boolean);
