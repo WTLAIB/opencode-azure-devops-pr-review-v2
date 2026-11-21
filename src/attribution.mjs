@@ -177,9 +177,10 @@ export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u0
  * The places a posted comment of AZPR's lists, read back from its text: the
  * rows under the heading `renderOtherPlaces` writes, where they end the
  * comment's own text as `assemblePlan` writes it. After the rows comes a
- * blank line and then either the marker, or a rule, the attribution (one
- * paragraph), a blank line and the marker; nothing else. [] for any other
- * text, also one that merely holds such a heading or such rows.
+ * blank line and then either the marker, or a rule, the attribution (the one
+ * line `commentAttribution` writes, which ends with its models), a blank line
+ * and the marker; nothing else. [] for any other text, also one that merely
+ * holds such a heading or such rows, or that was continued after them.
  */
 export function listedPlaces(content) {
   const lines = String(content ?? '').split(/\r?\n/).map(line => line.trimEnd());
@@ -196,10 +197,8 @@ export function listedPlaces(content) {
   while (rest.length && rest.at(-1) === '') rest.pop();
   if (!places.length || rest.shift() !== '' || !COMMENT_MARKER_LINE.test(rest.pop() ?? '')) return [];
   if (!rest.length) return places;
-  // The attribution: a rule, one paragraph and a blank line, as the runtime writes them.
-  const paragraph = rest.slice(1, -1);
-  if (rest[0] !== '---' || rest.at(-1) !== '' || !paragraph.length || paragraph.some(line => line === '' || line === '---')) return [];
-  return places;
+  // The attribution: a rule, its one line (which ends with the models, each in a code span) and a blank line.
+  return rest.length === 3 && rest[0] === '---' && /`[^`]+`$/.test(rest[1]) && rest[2] === '' ? places : [];
 }
 
 /** The line a posted comment of AZPR's ends with; its marker. */
@@ -352,10 +351,10 @@ export function enclose(name, text) {
 export function renderPublication(review, result) {
   const entries = [...(review.publication ?? new Map()).values()];
   const rows = entries.map(entry =>
-    `- ${entry.kind === 'summary' ? 'PR summary' : `${(entry.findingIds ?? [entry.findingId]).join(', ')} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}${entry.earlierText ? '; the PR keeps its earlier text' : ''}${entry.unlisted?.length ? `; the comment there does not list ${entry.unlisted.join(', ')}` : ''}`).join('\n');
+    `- ${entry.kind === 'summary' ? 'PR summary' : `${(entry.findingIds ?? [entry.findingId]).join(', ')} (${entry.path}:${entry.startLine})`}: ${entry.state}${entry.threadId ? `; thread=${entry.threadId}` : ''}${entry.error ? `; error=${entry.error}` : ''}${entry.contentMismatch ? '; returned text differs' : ''}${entry.earlierText ? '; the PR keeps its earlier text' : ''}${entry.unlisted?.length ? `; the comment ${entry.unlistedThread && entry.unlistedThread !== entry.threadId ? `of thread ${entry.unlistedThread}` : 'there'} does not list ${entry.unlisted.join(', ')}` : ''}`).join('\n');
   const counts = result?.counts ? Object.entries(result.counts).map(([state, count]) => `${state}=${count}`).join(', ') : '';
   // A PR that is not active takes comments all the same; its status is named, so a wrong PR shows.
-  return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}${result?.prStatus ? `; the PR is ${result.prStatus}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. DELETED entries were created by AZPR and later deleted on the PR; AZPR does not post them again. FAILED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers. UNVERIFIED entries were created but not found when read back; a re-run checks them again and never posts them twice. UNCERTAIN entries may still appear from an earlier attempt and are retried only after their marker check settles.${entries.some(entry => entry.unlisted?.length) ? ' An entry that says "the comment there does not list" stands for one defect at several places, and the comment the PR has under its marker lists fewer: that comment was not changed, and this one was not posted for the findings named.' : ''}`;
+  return `Publication${counts ? ` (${counts})` : ''}${result?.readBack && result.readBack !== 'complete' ? `; read-back ${result.readBack}` : ''}${result?.prStatus ? `; the PR is ${result.prStatus}` : ''}:\n${rows || '- Nothing recorded.'}\n\nPOSTED/VERIFIED entries were created by AZPR and VERIFIED ones were read back from Azure DevOps. ALREADY_PRESENT entries existed before this run. DELETED entries were created by AZPR and later deleted on the PR; AZPR does not post them again. FAILED entries are safe to retry with /pr-comment ${review.id} --publish; existing comments are skipped by their markers. UNVERIFIED entries were created but not found when read back; a re-run checks them again and never posts them twice. UNCERTAIN entries may still appear from an earlier attempt and are retried only after their marker check settles.${entries.some(entry => entry.unlisted?.length) ? ' An entry that says a comment "does not list" findings stands for one defect at several places, and the comment the PR has under its marker lists fewer: that comment was not changed, and this one was not posted for the findings named.' : ''}`;
 }
 
 function renderStageReceipt(stage) {

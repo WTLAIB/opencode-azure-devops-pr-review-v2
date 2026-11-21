@@ -258,8 +258,9 @@ such findings have one severity and lie at different places:
 - When all findings fit one page (at most four, and within a page's text),
   that page is offered its findings of equal severity at different places
   (`repeatCandidates`).
-- Otherwise one **grouping pass** runs first: a session of the comment planner
-  that gets only those high and medium findings, inline (ID, severity,
+- Otherwise one **grouping pass** runs first, provided that two such findings
+  fit one page together (a group shares a page): a session of the comment
+  planner that gets only those high and medium findings, inline (ID, severity,
   location, summary, suggestion, and the evidence unless the list is then
   longer than 60,000 characters), and says which of them are one mistake at
   several places. The runtime checks each group it proposes (two or more of
@@ -299,9 +300,11 @@ places the thread covers (`alsoAt` in `existingDiscussions`), so that the
 other places are seen as discussed and get no thread of their own. It reads
 the list only where the runtime wrote it: in the comment that opened a thread
 on a file, which carries AZPR's marker, under the list's own heading, and
-followed by nothing but the attribution and the marker. A reply that quotes
-such a comment says nothing about its thread, and a planner's text that
-writes that heading itself is sent back.
+followed by nothing but the attribution (the one line that ends with the
+models) and the marker. A comment that someone continued after its list no
+longer says what it lists, a reply that quotes such a comment says nothing
+about its thread, and a planner's text that writes that heading itself is
+sent back.
 
 **A place that already has a comment.** A comment's marker follows its file
 and the lines it quotes, and AZPR neither changes a posted comment nor posts
@@ -315,27 +318,31 @@ it. AZPR deals with this twice:
   the pull request already has. Where the earlier one does not list every
   other place, the planner is asked to anchor the comment at another of its
   places or to leave that finding out (a finding that already has a thread
-  of its own is skipped as discussed); a comment that still collides after
-  the correction turns is dropped like any refused combination, and its
-  findings are skipped with that reason.
+  of its own is skipped as discussed). On the first planning page a comment
+  that still collides after the correction turns is dropped like any refused
+  combination, and its findings are skipped with that reason. On a later
+  page it is kept: comments that quote the same lines get their markers in
+  the order of the plan, so one of an earlier page would give this one
+  another marker, which no page can know.
 - **When posting**, the pull request is read again, and what the comment
-  found under the marker lists is taken from the last reading. The item is
-  reported as usual (`ALREADY_PRESENT`, or `VERIFIED` when a write of this
-  run met it), its row adds `the comment there does not list F-2, F-3`, and
-  a line of the receipt says so: `This preview's comment was not posted for
-  F-2, F-3 (…)`. `/pr-comment` plans the preview again and asks for another
-  place; a review whose adjusted preview began publication needs a new
-  review for that.
+  found under the marker lists is taken from the last reading that shows
+  it. The item is reported as usual (`ALREADY_PRESENT`, or `VERIFIED` when a
+  write of this run met it), its row adds `the comment there does not list
+  F-2, F-3`, and a line of the receipt says so: `This preview's comment was
+  not posted for F-2, F-3 (…)`. `/pr-comment` plans the preview again; a
+  review whose adjusted preview began publication needs a new review for
+  that.
 
-What is established is what that one comment lists. Whether the findings it
-leaves out have threads of their own (posted one per place by an earlier
-version, say) is not looked up, so the receipt says "unless they have threads
-of their own". What a comment lists is read only from the comment that
-opened its thread; a marker that only a reply holds counts as present, as it
-always has, and lists nothing. And the place where a comment stands is known
-by its marker, as for every comment: the same quoted lines elsewhere in the
-same file share a marker, so a comment at one of them counts for the other.
-Thread positions are not compared, because they go stale when lines move.
+What is established is what that one comment lists. No other thread is
+looked at, so the receipt says "unless one of them covers these findings":
+an earlier version may have posted a thread for each place, or another
+comment may list them. What a comment lists is read only from the comment
+that opened its thread, and that thread is the one the receipt names; a
+marker that only a reply holds counts as present, as it always has, and
+lists nothing. And the place where a comment stands is known by its marker,
+as for every comment: the same quoted lines elsewhere in the same file share
+a marker, so a comment at one of them counts for the other. Thread positions
+are not compared, because they go stale when lines move.
 
 ## Planning
 

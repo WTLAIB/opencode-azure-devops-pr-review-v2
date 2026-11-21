@@ -380,16 +380,17 @@ export function describeEarlierText(review, otherComments = 0) {
  * the PR has under such a comment's marker lists fewer places, and AZPR
  * neither changes a posted comment nor posts one again. Says for which
  * findings the preview's comment was therefore not posted and what plans them
- * again. Only what that one comment lists is established, so the line does
- * not say that the findings have no comment anywhere. '' when none.
+ * again. Only what that one comment lists is established: no other thread
+ * was looked at, and the line says so instead of saying that the findings
+ * have no comment. '' when none.
  */
 export function describeUncovered(review, uncovered = []) {
   if (!uncovered.length) return '';
   const rows = uncovered.map(row => `${row.findingIds.join(', ')} (the PR already has a comment under the marker of ${row.path}:${row.startLine}${row.threadId ? `, thread ${row.threadId}` : ''}, which is not changed and does not list ${row.findingIds.length === 1 ? 'its place' : 'their places'})`);
   // An adjusted preview is not planned again once its publication started.
   const again = everAdjusted(review) ? 'an adjusted preview is not planned again once its publication started, so a new review plans these comments anew'
-    : `/pr-comment ${review.id} plans the preview again and asks for another place`;
-  return `This preview's comment was not posted for ${rows.join('; ')}. Unless they have threads of their own, these findings have no comment on the PR; ${again}.\n`;
+    : `/pr-comment ${review.id} plans the preview again`;
+  return `This preview's comment was not posted for ${rows.join('; ')}. Other threads were not looked at: unless one of them covers these findings, they have no comment on the PR; ${again}.\n`;
 }
 
 /**
@@ -738,13 +739,16 @@ const aliases = (value, names) => {
  * (`postedComments`; null when the threads could not be read): a comment for
  * several places whose marker the PR already has would never be posted, so
  * the places that the comment there does not list would get nothing from it.
- * The marker is the one the comment gets among this answer's comments; a
- * comment of another page, or of an earlier session of this page, that quotes
- * the same lines is not known here, and publication looks again.
+ * The marker is the one the comment gets among the page's comments: those of
+ * its earlier sessions (`earlier`) and of this answer. On the first page
+ * (`firstPage`) that is the marker the plan gives it. On a later page a
+ * comment of an earlier page may quote the same lines and move it on, which
+ * no page can know: there the comment is sent back all the same, but after
+ * the correction turns it is kept, and publication looks at the PR again.
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, posted = null, allowSummary = true }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, posted = null, earlier = [], firstPage = true, allowSummary = true }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -856,8 +860,14 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       drafted = draft(c, label, members[0].severity, lines);
       problems.push(...drafted.problems);
       // Where the comment stands follows from the lines it quotes, so they must be lines the file has:
-      // the quote is found in the HEAD text, also for a review whose single comments need not be.
+      // the quote is found in the HEAD text, also for a review whose single comments need not be, and
+      // ends within the file (a quote that adds an empty line after the last one is found, but is no line).
       if (!problems.length && repeated && !drafted.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
+      // (An anchor in a file that holds none of the findings is refused below, where the place is looked for.)
+      const lineCount = (read => read && (read.totalLines ?? read.lastLine))(repeated && drafted.comment && sources.find(item => item.path === drafted.comment.path));
+      if (!problems.length && lineCount && drafted.comment.endLine > lineCount) {
+        problems.push(`the anchor (lines ${drafted.comment.startLine}-${drafted.comment.endLine}) reaches past the end of ${drafted.comment.path}, which has ${lineCount} line(s); quote lines the file has`);
+      }
     }
     if (!problems.length && repeated) {
       // The comment stands at one of the places: the one finding whose lines its anchor touches.
@@ -873,12 +883,14 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       // A marker is the file and the quoted lines (and a count for comments that quote the same lines),
       // and a posted comment is neither changed nor posted again. A comment the PR has under this one's
       // marker would stand for it, so every other place must be in that comment's list. The count is that
-      // of this answer's comments so far, in the order the plan is assembled in; a comment of another page
-      // or of an earlier session that quotes the same lines is not known here, and publication looks at
-      // the PR again.
+      // of the page's comments so far (its earlier sessions' and this answer's), in the order the plan is
+      // assembled in. On the first page that is the comment's marker. On a later page a comment of an
+      // earlier page may quote the same lines and give this one a later marker, which no page can know:
+      // the planner is asked all the same, but once the correction turns are used up the comment is
+      // kept, since it may well be posted, and publication looks at the PR again.
       const { path, anchor } = drafted.comment;
-      const ordinal = comments.filter(other => other.path === path && normalizedAnchor(other.anchor) === normalizedAnchor(anchor)).length;
-      const existing = posted.get(inlineMarker(review.target, drafted.comment, ordinal));
+      const ordinal = [...earlier, ...comments].filter(other => other.path === path && normalizedAnchor(other.anchor) === normalizedAnchor(anchor)).length;
+      const existing = !final || firstPage ? posted.get(inlineMarker(review.target, drafted.comment, ordinal)) : undefined;
       const missing = existing ? members.filter(member => member !== first && !existing.places.includes(placeOf(member))) : [];
       if (missing.length) {
         problems.push(`the PR already has a comment under the marker of these lines${existing.threadId ? ` (thread ${existing.threadId})` : ''}, which is neither changed nor posted again, and it does not list ${missing.map(member => `${member.id} at ${placeOf(member)}`).join(', ')}: this comment would not be posted, and ${missing.length === 1 ? 'that place' : 'those places'} would get nothing from it. Anchor it on the lines of another of its findings, or leave ${first.id} out of it; a finding that already has a thread of its own is skipped with cause existing-thread`);

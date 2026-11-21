@@ -439,7 +439,8 @@ finding states it. When every finding fits one page, the page is offered the
 sets as they are. Otherwise a grouping pass runs first: one stage of the
 comment-plan role whose input is `commentWork: { kind: "group" }` and the
 eligible findings' text, inline (without the evidence above 60,000
-characters; a list still longer is not grouped), and whose answer
+characters; a list still longer is not grouped, and no pass is asked where
+no two findings of a set fit one page together, `pairFits`), and whose answer
 `evaluateGrouping` checks (`repeatProblems`: one severity, high or medium,
 lines of a HEAD file, no two findings on the same lines; a finding in one
 group at most; a status other than READY is sent back, since the pass has no
@@ -461,7 +462,8 @@ those places as `alsoAt`, since the list lies beyond the excerpt of a thread:
 a later plan then sees them as discussed. The list is read only in the form
 the runtime writes it: in the comment that opened a thread on a file and
 carries AZPR's marker, under one of `OTHER_PLACES_HEADINGS`, with nothing
-after its rows but the attribution and the marker; a body that writes such a
+after its rows but the attribution (the one line `commentAttribution` writes,
+which ends with its models) and the marker; a body that writes such a
 heading itself is refused.
 
 A marker follows a comment's file and quoted lines, and a posted comment is
@@ -471,17 +473,21 @@ comment the PR already has under its marker that lists fewer places or none.
 its comment lists, read only from the comment that opened a thread and ends
 with the marker (a marker that only a reply holds is present and lists
 nothing). `evaluatePlanPage` refuses such a comment against the comments the
-PR had when planning began, by the marker the comment gets among its
-answer's comments, which sends it back to the planner for another place; a
-shared comment's quoted lines must also be found in the HEAD text.
-`publishPlan` looks at the PR again: from its last listing, for every shared
-item found there and whoever wrote the comment, it records the findings
-whose place that comment does not list (`unlisted` in the item's entry,
-`uncovered` in its result), and the receipt says so in the item's row and in
-a line of its own (`describeUncovered`); `describeEarlierText` names only
-the findings such a comment covers. Only what that one comment lists is
-established, and the place where a comment stands is known by its marker
-alone, as for every comment.
+PR had when planning began, by the marker the comment gets among its page's
+comments (those of the page's earlier sessions and of the answer), which
+sends it back to the planner for another place; on the first page that
+marker is the plan's and the refusal stands, on a later page a comment of an
+earlier page could give it another one, so the comment is kept once the
+correction turns are used up. A shared comment's quoted lines must also be
+found in the HEAD text and end within the file. `publishPlan` looks at the
+PR again: from the last listing that shows the marker, for every shared item
+found there and whoever wrote the comment, it records the findings whose
+place that comment does not list (`unlisted` and that comment's thread in
+the item's entry, `uncovered` in its result), and the receipt says so in the
+item's row and in a line of its own (`describeUncovered`);
+`describeEarlierText` names only the findings such a comment covers. Only
+what that one comment lists is established, and the place where a comment
+stands is known by its marker alone, as for every comment.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both

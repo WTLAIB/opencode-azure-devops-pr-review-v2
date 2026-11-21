@@ -136,6 +136,17 @@ export function severitySets(eligible) {
 }
 
 /**
+ * Whether two eligible findings of one severity at different places fit one
+ * planning page together: a group shares a page (`boundedGroups`), so without
+ * such a pair no grouping could be used.
+ */
+export function pairFits(eligible, size = PAGE_CHARACTERS) {
+  const sized = eligible.map(finding => ({ finding, at: parseLocation(finding.location), length: JSON.stringify(finding).length }));
+  return sized.some((a, index) => sized.slice(index + 1).some(b => a.finding.severity === b.finding.severity && a.length + b.length <= size &&
+    (a.at.path !== b.at.path || a.at.start > b.at.end || b.at.start > a.at.end)));
+}
+
+/**
  * Groups that fit a planning page's text: a larger one is split into
  * consecutive parts of two or more findings, each planned as a group of its
  * own, so that no place is dropped; a single finding left over stays alone.
@@ -300,6 +311,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     let listed = eligible.map(({ id, severity, location, summary, evidence, suggestion }) => ({ id, severity, location, summary, evidence, suggestion }));
     if (JSON.stringify(listed).length > GROUPING_BUDGET) listed = listed.map(({ evidence: _long, ...short }) => short);
     if (paged.pages.length <= 1) repeats = severitySets(eligible);
+    // A group shares a page: where no two findings of a set fit one together, no group could be used.
+    else if (!pairFits(eligible)) repeats = [];
     else if (JSON.stringify(listed).length > GROUPING_BUDGET) {
       progress?.(`Planning comments: ${eligible.length} findings are too many to look through for one defect at several places; every finding gets its own comment.`);
     } else {
@@ -377,6 +390,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
+      // The comments this page's earlier sessions wrote: they come before this answer's in the plan.
+      const earlier = parts.flatMap(part => part.comments);
       const scoped = async answer => {
         const parsed = parseModelJSON(answer, { keys: ['status', 'comments', 'skipped'] });
         const comments = Array.isArray(parsed.value?.comments) ? parsed.value.comments : [];
@@ -390,11 +405,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, earlier, firstPage: index === 0, allowSummary });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary });
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, earlier, firstPage: index === 0, allowSummary });
           return { ...result, corrections };
         },
       });
@@ -574,13 +589,18 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     readBack = `unavailable: ${String(error?.message ?? error).slice(0, 300)}`;
   }
   // What a comment for several places stands for on the PR is what the comment found under its marker
-  // lists. Read from the last listing there is, for every such item found in it, whoever created that
-  // comment: an earlier publication's, one a write of this run met, or this run's own as the service kept it.
-  const standing = postedComments(latest);
+  // lists, whoever wrote that comment: an earlier publication's, one a write of this run met, or this
+  // run's own as the service kept it. Taken from the last listing that shows the marker: the read-back,
+  // or the first listing for a marker that the read-back does not show (or when there was none). The
+  // thread named is that comment's own, which a quoting reply elsewhere does not change.
+  const first = postedComments(listed), last = latest === listed ? first : postedComments(latest);
+  const uncovered = [];
   for (const item of items) {
-    const on = item.otherPlaces?.length ? standing.get(item.marker) : undefined;
+    const on = item.otherPlaces?.length ? last.get(item.marker) ?? first.get(item.marker) : undefined;
     const missing = on ? item.otherPlaces.filter(other => !on.places.includes(other.place)).map(other => other.findingId) : [];
-    if (missing.length) ledger.get(item.marker).unlisted = missing;
+    if (!missing.length) continue;
+    Object.assign(ledger.get(item.marker), { unlisted: missing, unlistedThread: on.threadId });
+    uncovered.push({ marker: item.marker, findingIds: missing, path: item.path, startLine: item.startLine, threadId: on.threadId });
   }
   await persist?.();
   const states = items.map(item => ledger.get(item.marker).state);
@@ -589,10 +609,6 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
   const planned = new Set(items.map(item => item.marker));
-  const uncovered = items.filter(item => ledger.get(item.marker).unlisted).map(item => {
-    const { unlisted: findingIds, threadId } = ledger.get(item.marker);
-    return { marker: item.marker, findingIds, path: item.path, startLine: item.startLine, threadId };
-  });
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
     ...(uncovered.length ? { uncovered } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),

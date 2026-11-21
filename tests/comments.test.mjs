@@ -489,6 +489,15 @@ test('a comment for several places is refused where the PR already has a comment
   assert.deepEqual(planned.map(c => c.marker), [item.marker, inlineMarker(both.target, item, 1)]);
   // ... and it is refused when the PR has a comment under that second marker without the places.
   assert.match(evaluatePlanPage(answer(page), { review: both, assigned: four, repeats, sources: shown, posted: on([], inlineMarker(both.target, item, 1)) }).issues.join('\n'), /the PR already has a comment under the marker of these lines/);
+  // A comment that an earlier session of the page wrote on the same lines counts as well: it comes first in the plan.
+  const before = [{ path: '/src/a.ts', anchor: '  const value = load();  ' }];
+  assert.deepEqual(plan(on([]), whole, { earlier: before }).issues, [], 'The shared comment is the second of these lines.');
+  assert.match(plan(on([], inlineMarker(r.target, item, 1)), whole, { earlier: before }).issues.join('\n'), /the PR already has a comment under the marker of these lines/);
+  // On a later page a comment of an earlier page may quote the same lines too, which no page can know. The planner is
+  // asked all the same; once the correction turns are used up the comment is kept, since it may well be posted.
+  assert.match(plan(on([]), whole, { firstPage: false }).issues.join('\n'), /the PR already has a comment under the marker of these lines/);
+  const kept = plan(on([]), whole, { firstPage: false, final: true });
+  assert.deepEqual([kept.result.comments.map(c => c.findingIds), kept.result.skipped, kept.issues], [[['F-1', 'F-2', 'F-3']], [], []]);
 });
 
 test('a comment for several places quotes lines the file has, also in a review whose single comments need not', () => {
@@ -504,6 +513,10 @@ test('a comment for several places quotes lines the file has, also in a review w
   // A quote that is found at other lines than declared is moved there, and the comment stands where the quote is.
   const moved = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { startLine: 1, endLine: 1, anchor: 'line four' })]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual([moved.issues, moved.result.comments[0].findingId, moved.result.comments[0].startLine], [[], 'F-3', 4]);
+  // A quote of the file's last line and a blank one after it matches the text (which ends with a line break), but the
+  // file has no such line: the range would end past its end.
+  const past = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 3, endLine: 4, anchor: 'third\n ' })]), { review: r, assigned, repeats, sources: shown });
+  assert.match(past.issues.join('\n'), /combined comment for F-1, F-2, F-3: the anchor \(lines 3-4\) reaches past the end of \/src\/b\.ts, which has 3 line\(s\); quote lines the file has/);
 });
 
 test('a publication names the findings of a shared comment that have no comment on the PR, and what gives them one', () => {
@@ -512,10 +525,10 @@ test('a publication names the findings of a shared comment that have no comment 
   assert.equal(describeUncovered(r, []), '');
   const rows = [{ marker: 'm', findingIds: ['F-2', 'F-3'], path: '/src/a.ts', startLine: 2, threadId: 12 }];
   // Only what the one comment lists is established: the line says what was not posted, not that the findings have no comment anywhere.
-  assert.equal(describeUncovered(r, rows), `This preview's comment was not posted for F-2, F-3 (the PR already has a comment under the marker of /src/a.ts:2, thread 12, which is not changed and does not list their places). Unless they have threads of their own, these findings have no comment on the PR; /pr-comment ${r.id} plans the preview again and asks for another place.\n`);
+  assert.equal(describeUncovered(r, rows), `This preview's comment was not posted for F-2, F-3 (the PR already has a comment under the marker of /src/a.ts:2, thread 12, which is not changed and does not list their places). Other threads were not looked at: unless one of them covers these findings, they have no comment on the PR; /pr-comment ${r.id} plans the preview again.\n`);
   // An adjusted preview is not planned again once its publication started.
   assert.equal(describeUncovered({ ...r, adjustments: { excluded: [], severity: {} } }, [{ ...rows[0], findingIds: ['F-2'], threadId: undefined }]),
-    'This preview\'s comment was not posted for F-2 (the PR already has a comment under the marker of /src/a.ts:2, which is not changed and does not list its place). Unless they have threads of their own, these findings have no comment on the PR; an adjusted preview is not planned again once its publication started, so a new review plans these comments anew.\n');
+    'This preview\'s comment was not posted for F-2 (the PR already has a comment under the marker of /src/a.ts:2, which is not changed and does not list its place). Other threads were not looked at: unless one of them covers these findings, they have no comment on the PR; an adjusted preview is not planned again once its publication started, so a new review plans these comments anew.\n');
   // What the PR keeps with earlier text names only the findings that the comment there covers.
   const ledger = new Map([['m', { kind: 'inline', findingId: 'F-1', findingIds: ['F-1', 'F-2', 'F-3'], path: '/src/a.ts', startLine: 2, state: 'ALREADY_PRESENT', earlierText: true, unlisted: ['F-2', 'F-3'] }]]);
   assert.match(describeEarlierText({ ...r, adjustments: { excluded: [], severity: {} }, publication: ledger }), /^Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: F-1 at \/src\/a\.ts:2\. /);
