@@ -260,13 +260,30 @@ settings, backups and failure records. Never upload `.local/`.
   that no page depends on another; a grouping pass that fails costs only the
   grouping, and a stopped run starts no page. The review keeps every finding:
   each place keeps its row in the summary index, its ID and its adjustments.
-  The list is read back only from a comment that carries AZPR's marker
-  (`listedPlaces`), to tell a later plan which places a thread covers; change
-  `renderOtherPlaces` and `listedPlaces` together.
-  The runtime checks only the rules of a combination (`repeatProblems`: one
-  severity, high or medium, different lines of changed HEAD files, the anchor
-  on one member's lines); it never combines findings by itself and never
-  proposes a group from how alike two texts are.
+  The list is read back (`listedPlaces`) to tell a later plan which places a
+  thread covers, and to tell what a comment on the PR stands for. Read it
+  only in the form the runtime writes: in the comment that opened a thread
+  and carries AZPR's marker, under the list's own heading, followed by
+  nothing but the attribution and the marker; a reply that quotes such a
+  comment says nothing about its thread, and a planner's text that writes
+  the heading is refused. Change `renderOtherPlaces` and `listedPlaces`
+  together, and list only a place that reads back as it was written
+  (`listablePlace`).
+  The runtime checks only the rules of a combination (`repeatProblems` and
+  the page: one severity, high or medium, different lines that changed files
+  have in the HEAD text the runtime read, the anchor on the lines of exactly
+  one member); it never combines findings by itself, never chooses between
+  two places an anchor touches and never proposes a group from how alike two
+  texts are. The grouping pass has one answer and reads its findings inline:
+  no continuation, no reference it would need a tool for.
+- A marker is its place and quoted lines, and a posted comment is neither
+  changed nor posted again. A comment for several places that meets an
+  earlier comment of AZPR's on its lines must not make the receipt say more
+  than the PR holds: refuse it at planning where the PR's comments are known
+  (the planner then moves it), and at publication name the findings whose
+  place the comment found there does not list (`uncovered`, the receipt's
+  "No comment on the PR for …"); never count them as posted, and never
+  record this in the ledger, which says what became of each item.
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

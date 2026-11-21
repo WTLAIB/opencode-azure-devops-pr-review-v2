@@ -28,13 +28,14 @@ own. `repeatCandidates`, when present, lists groups of this page's findings
 that may be such repeats: findings of one severity at different places. Give
 findings of one group a single comment only when they are the same mistake and
 one instruction corrects every place: anchor it at the place that shows the
-mistake most clearly, give it `findingIds` with every finding it covers and a
-`mergeReason`, and word the body so that it holds for each of them. Do not list
-the other places: the runtime adds each other finding's file and lines under
-your text. Findings that only resemble each other, that follow from one
-another, or whose places need different corrections keep their own comments;
-when unsure, comment on each finding separately. A combined comment accounts
-for every finding it names; never combine findings outside a listed group.
+mistake most clearly, quoting lines of that one finding only, give it
+`findingIds` with every finding it covers and a `mergeReason`, and word the
+body so that it holds for each of them. Do not list the other places: the
+runtime adds each other finding's file and lines under your text. Findings
+that only resemble each other, that follow from one another, or whose places
+need different corrections keep their own comments; when unsure, comment on
+each finding separately. A combined comment accounts for every finding it
+names; never combine findings outside a listed group.
 
 The runtime already read what this page normally needs, so most pages need no
 tool call at all:
@@ -118,11 +119,12 @@ to correct a skip whose cause does not hold.
 
 When `commentWork.kind` is `"group"`, the work is not a page: write no comments
 and no skips. `findings` then holds the review's high and medium findings (ID,
-severity, location, summary, evidence, suggestion). Say which of them are one
-mistake made at several places, as described above: the same defect, and one
-instruction corrects every place. A group has two or more findings of one
-severity at different places; a finding belongs to one group at most, and most
-findings belong to none. No tool call is needed. Return only:
+severity, location, summary, suggestion, and the evidence unless the list is
+long). Say which of them are one mistake made at several places, as described
+above: the same defect, and one instruction corrects every place. A group has
+two or more findings of one severity at different places; a finding belongs to
+one group at most, and most findings belong to none. No tool call is needed,
+and the pass has one answer, without a continuation. Return only:
 
 ```json
 {"status": "READY", "groups": [{"findingIds": ["F-2", "F-5"], "reason": "The shared mistake and the one correction, in a sentence."}]}

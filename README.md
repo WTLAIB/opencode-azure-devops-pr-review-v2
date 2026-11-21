@@ -1080,7 +1080,8 @@ notices as before. The same terminal part brings the
 
 `/pr-comment` plans one general summary plus inline comments for confirmed high
 and medium findings (low findings stay in the summary index). Planning runs in
-pages of at most four findings, two pages at a time, and the pages are joined
+pages of at most four findings (more only where one defect at several places
+keeps its findings together), two pages at a time, and the pages are joined
 in page order, so the result does not depend on which page finishes first; each
 page may get a correction turn, and an item that still cannot be posted
 faithfully is skipped with a reason instead of failing the command. Inline
@@ -1108,7 +1109,10 @@ mistake most clearly, and AZPR lists every other place under it:
 The findings must have the same severity and need the same correction; places
 that need different corrections keep their own comments. Every place keeps
 its row in the summary index, and you can still exclude or regrade each one
-after a preview (see
+after a preview. A posted comment is never changed: where the pull request
+already has AZPR's comment on those lines without the other places, the
+planner is asked for another place, and a receipt never counts a finding as
+posted whose place no comment lists (see
 [one defect at several places](docs/COMMENTING.md#one-defect-at-several-places)).
 
 ### Adjusting findings after a preview

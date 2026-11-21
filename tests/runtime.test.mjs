@@ -1808,8 +1808,11 @@ test('/pr-stop cancels both running planning pages; nothing keeps running and no
   assert.match(await f.command('pr-comment', ''), /\] PREVIEW/, 'A later preview plans again.');
 });
 
-/** A planner that says the functional reviewer's findings repeat one defect, and gives each listed group one comment. */
-const repeating = ({ role, packet }) => {
+/**
+ * A planner that says the functional reviewer's findings repeat one defect, and gives each listed group one comment:
+ * at the group's first place, and at its second one when the runtime sends the page back.
+ */
+const repeating = ({ role, packet, turn }) => {
   if (ROLES[role].format !== 'comment-plan') return undefined;
   if (packet.commentWork.kind === 'group') {
     return { status: 'READY', groups: [{ findingIds: packet.findings.filter(f => f.id.startsWith('F-')).map(f => f.id).reverse(), reason: 'The same dropped guard in each file.' }] };
@@ -1818,7 +1821,7 @@ const repeating = ({ role, packet }) => {
   const body = id => `🔴 high: ${id} loses state\n\nTrigger, impact and correction.`;
   const at = f => ({ severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code' });
   return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}), skipped: [],
-    comments: [...(packet.repeatCandidates ?? []).map(ids => ({ findingIds: ids, mergeReason: 'One guard, dropped in each file.', ...at(byId.get(ids[0])), body: body('The guard') })),
+    comments: [...(packet.repeatCandidates ?? []).map(ids => ({ findingIds: ids, mergeReason: 'One guard, dropped in each file.', ...at(byId.get(ids[turn ? 1 : 0])), body: body('The guard') })),
       ...packet.findings.filter(f => !grouped.has(f.id)).map(f => ({ findingId: f.id, ...at(f), body: body(f.id) }))] };
 };
 
@@ -1850,17 +1853,73 @@ test('one defect in three files gets one comment that lists the other two; the g
   assert.equal(f.azure.state.threads.filter(item => item.threadContext).length, 4);
 });
 
+test('a shared comment that meets an earlier comment at its place: the receipt names the findings left without one, and a new plan moves it', async t => {
+  // One finding per file, from the functional reviewer alone: three places on one page, and no other comment on their lines.
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], functional = findingPerFile(files);
+  const initial = input => input.role === 'azpr-review-risk' ? { ...functional(input), findings: [] } : functional(input);
+  const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input) });
+  const id = reviewId(await f.command());
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  const planned = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments.find(item => item.otherPlaces);
+  assert.deepEqual([planned.path, planned.findingIds], ['/src/A.java', ['F-1', 'F-2', 'F-3']]);
+  // Meanwhile the PR got a comment for that place alone, under the same marker (an earlier plan, posted from another machine).
+  f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' },
+    content: `${planned.body}\n\n${planned.marker}` }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, /\] POSTED/);
+  assert.match(posted, new RegExp(`\\nNo comment on the PR for F-2, F-3 \\(the comment at /src/A\\.java:1, thread 77, was posted earlier and does not list their places\\)\\. AZPR does not change a posted comment; /pr-comment ${id} plans the preview again and asks for another place\\.\\n`));
+  assert.match(posted, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): ALREADY_PRESENT; thread=77; not on the PR: F-2, F-3\n/);
+  assert.equal(f.azure.state.threads.find(thread => thread.id === 77).comments[0].content, `${planned.body}\n\n${planned.marker}`, 'The earlier comment is as it was.');
+  assert.equal(f.azure.state.threads.filter(thread => /Also at/.test(thread.comments[0].content)).length, 0);
+  // Planning again sees that comment: the shared one is sent back once and stands at another of its places.
+  const again = await f.command('pr-comment', '');
+  assert.match(again, /\] PREVIEW/);
+  assert.match(again, /### F-2, F-1, F-3 — \/src\/B\.java:1-1\n[\s\S]*\*\*📍 Also at\*\* \(the same defect; fix these places with it\):\n- `\/src\/A\.java:1` \(F-1\)\n- `\/src\/C\.java:1` \(F-3\)\n/);
+  const page = (await stageRecords(again)).find(stage => stage.repairs?.length);
+  assert.match(JSON.stringify(page.repairs), /the PR already has a comment of AZPR's on these lines \(thread 77\)[^"]*does not list F-2 at \/src\/B\.java:1, F-3 at \/src\/C\.java:1/);
+  const second = await f.command('pr-comment', '--publish');
+  assert.match(second, /\] POSTED/);
+  assert.doesNotMatch(second, /No comment on the PR|not on the PR/);
+  assert.match(second, /- F-2, F-1, F-3 \(\/src\/B\.java:1\): (?:POSTED|VERIFIED)/);
+  assert.equal(f.azure.state.threads.filter(thread => /- `\/src\/A\.java:1` \(F-1\)\n- `\/src\/C\.java:1` \(F-3\)/.test(thread.comments[0].content)).length, 1);
+});
+
+test('a grouping pass that takes many steps is told to finish in its own words: groups and READY, no page and no continuation', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], initial = findingPerFile(files), frames = {};
+  const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input), async during({ session, role, packet, turn, emit }) {
+    if (role !== 'azpr-review-comment-plan' || turn || frames[packet.commentWork.kind]) return;
+    const model = structuredClone(session.model);
+    const context = async () => {
+      const frame = { sessionID: session.id, agent: role, model, system: [], messages: [], tools: { azpr_read_file: {}, read: {} } };
+      await emit('session', 'context', frame);
+      return frame;
+    };
+    // Eleven more steps of the turn, as of a model that keeps calling tools: the next one is the thirteenth request.
+    for (let step = 0; step < 11; step++) {
+      assert.deepEqual((await context()).system, [], 'No checkpoint before the twelfth request.');
+      await emit('session', 'model.request', { sessionID: session.id, agent: role, model, kind: 'primary' });
+    }
+    frames[packet.commentWork.kind] = await context();
+  } });
+  await f.command();
+  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  assert.deepEqual([frames.group.tools, frames.plan.tools], [{}, {}], 'Neither may call a tool in that response.');
+  assert.equal(frames.group.system.length, 1);
+  assert.equal(frames.group.system[0].text, 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.');
+  assert.match(frames.plan.system[0].text, /^Finish this work page now; tools are unavailable for this response\.[\s\S]*Otherwise return CONTINUE with completed comments\/skips and a "continuation" note/);
+});
+
 test('a grouping pass that fails costs only the grouping; /pr-stop during it starts no page', async t => {
   const files = ['/src/A.java', '/src/B.java', '/src/C.java'], initial = findingPerFile(files);
   let failing = true;
-  const entered = deferred(), release = deferred();
+  const entered = deferred();
   let hold = false;
   const f = await fixture(t, { files,
     answer: input => input.role === 'azpr-review-comment-plan' && input.packet.commentWork.kind === 'group' && failing ? { $provider: 401 } : initial(input),
-    async during({ role, packet, turn }) {
-      if (hold && role === 'azpr-review-comment-plan' && packet.commentWork.kind === 'group' && !turn) { entered.resolve(); await within(release.promise, 10000); }
+    async during({ session, role, packet, turn }) {
+      // The pass's request is under way until AZPR interrupts its session: the stop ends it, no clock does.
+      if (hold && role === 'azpr-review-comment-plan' && packet.commentWork.kind === 'group' && !turn) { entered.resolve(); await new Promise(resolve => { session.onInterrupt = resolve; }); }
     } });
-  t.after(() => release.resolve());
   await f.command();
   const preview = await f.command('pr-comment', '');
   assert.match(preview, /\] PREVIEW/);
@@ -1878,7 +1937,8 @@ test('a grouping pass that fails costs only the grouping; /pr-stop during it sta
   assert.match(await f.command('pr-stop', /\[AZPR ([a-f0-9]{8})\] STARTED/.exec(started)[1]), /cancellation requested/);
   const receipt = await running;
   assert.match(receipt, /\] CANCELLED/);
-  hold = false; release.resolve();
+  assert.doesNotMatch(receipt, /Cancellation warning/, 'The interrupted pass settled.');
+  hold = false;
   assert.equal(f.sessionsFor('azpr-review-comment-plan').length, before + 1, 'Only the grouping pass had a session.');
   assert.doesNotMatch(f.notices.map(n => n.text).join('\n'), /the grouping failed \(Review stopped/);
 });

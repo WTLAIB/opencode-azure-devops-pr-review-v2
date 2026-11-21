@@ -20,31 +20,45 @@ Comments:
   `**📍 Also at** (the same defect; fix these places with it):` (in Chinese
   `**📍 其他位置**`): one row per other finding with its file, its lines and
   its ID. The rows are the findings' own locations, not text the planner
-  wrote, and the list is plain: nothing is collapsed, and nothing in it waits
-  for a person in automatic publication.
+  wrote, and the list is plain: nothing is collapsed or linked, so its own
+  markup holds nothing back in automatic publication (a file name is checked
+  like any other text of the comment).
 - Findings share a comment only when they have the same severity (high or
   medium), lie on different lines of files the pull request changes, and the
   planner says they are the same mistake with the same correction. Places
   that need different corrections keep their own comments, and when unsure
   the planner keeps findings apart. The preview shows a shared comment with
   all its findings and the planner's reason.
+- A place is listed as its finding states it. The runtime therefore offers a
+  finding only when the file has those lines at the reviewed commit and its
+  name can stand in a list unchanged, and it accepts a shared comment only
+  when its anchor touches the lines of exactly one of its findings, which is
+  where the comment stands.
 - The review is unchanged: it still has one finding per place. Each keeps
   its row in the summary index, its ID, and can be left out or given another
   severity after a preview. The comment's marker is that of the place where
   it stands, by the same formula as before.
 - Which findings may be such repeats is settled before the planning pages are
-  made. When all findings fit one page, that page is offered its findings of
-  equal severity at different places. Otherwise a grouping pass runs first:
-  one more session of the comment planner, which reads only the high and
-  medium findings and says which are one mistake at several places. A group
-  then shares a page. A pass that fails costs only the grouping (a progress
-  notice says so, and every finding gets its own comment), and a run that is
-  stopped during it plans nothing more.
-- On a pull request where an earlier version already posted a thread per
-  place, nothing posted is changed, and an item the PR already has is skipped
-  as always. When a pull request with such a shared comment is planned again,
-  the planner is told which other places that thread covers, so they get no
-  thread of their own.
+  made, and only when at least two of them have one severity and lie at
+  different places. When all findings fit one page (at most four, within a
+  page's text), that page is offered its findings of equal severity at
+  different places. Otherwise a grouping pass runs first: one more session
+  of the comment planner, which reads only those high and medium findings
+  and says which are one mistake at several places. A group then shares a
+  page, which can hold more than four findings. A pass that fails costs only
+  the grouping (a progress notice says so, and every finding gets its own
+  comment), and a run that is stopped during it plans nothing more.
+- Nothing posted is ever changed, and an item the PR already has is skipped
+  as always. When a pull request with a shared comment is planned again, the
+  planner is told which other places that thread covers, so they get no
+  thread of their own; the list is read back only where AZPR wrote it, in
+  the comment that opened the thread.
+- A shared comment can meet an earlier comment of AZPR's on the same lines
+  that lists fewer places or none (a thread per place from an earlier
+  version, say). The planner is then asked to put the comment at another of
+  its places. If such a comment is still met when posting, the receipt names
+  the findings whose place no comment on the pull request lists
+  (`No comment on the PR for …`) instead of counting them as posted.
 
 The README's benchmark section now says what each precision measures: the
 share of comments on Martian's list of issues, next to the share of findings

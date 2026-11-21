@@ -19,9 +19,9 @@ import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, r
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
-import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
+import { prepareComments, publishPlan, discussionDigest, postedComments, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewVerification,
-  everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
+  everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, describeUncovered, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
@@ -832,6 +832,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       visibleCharacters: input.length, checkpointRequested: false,
       // The planning page whose sessions this grant serves; its tool evidence is that page's.
       commentPage: payload.commentWork?.page ?? null,
+      // The grouping pass has an answer of its own: no page, no comments, no continuation.
+      grouping: payload.commentWork?.kind === 'group',
       // "commit\npath" of the file contents this session's own tool calls showed;
       // never the run's shared cache or another session's reads.
       reads: new Set(),
@@ -1619,7 +1621,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         const data = await dataFor(run);
         // Read live discussions once for the planner's duplicate checks; the
         // planner can still read threads itself if this read fails.
-        try { discussions = discussionDigest(await azure.threads(run, review.snapshot)); }
+        // AZPR's own comments among them, by marker: a comment for several places is checked against
+        // the one the PR already has at its place.
+        let posted = null;
+        try {
+          const threads = await azure.threads(run, review.snapshot);
+          discussions = discussionDigest(threads);
+          posted = postedComments(threads);
+        }
         catch (error) {
           if (!run.active) throw error;
           run.debug.warnings.push(`Existing discussions could not be read before planning: ${errorText(error)}`);
@@ -1629,7 +1638,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // The grouping pass, which looks for one defect at several places before the pages are made, is a stage like a page.
         review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler,
           { label: payload.commentWork.kind === 'group' ? 'grouping' : `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
-          { progress: message => progress(run, message), discussions, parallel: parallelPages, active: () => run.active,
+          { progress: message => progress(run, message), discussions, posted, parallel: parallelPages, active: () => run.active,
             fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
         planning = false;
@@ -1669,6 +1678,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const result = await publishPlan({ run, review, azure, attempts, progress: message => progress(run, message), persist: () => persistReview(review), only, compare: everAdjusted(review) });
       // An adjusted review says what the PR keeps from earlier publications instead of the preview.
       if (everAdjusted(review)) earlier = describeEarlierText(review, result.otherComments);
+      // So does a comment for several places that met an earlier comment at its place.
+      earlier += describeUncovered(review, result.uncovered);
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
     // What this run decides about the review's preview and its own sessions is settled here, before anything is
@@ -1917,7 +1928,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
       if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
-        event.system?.push?.({ type: 'text', text: 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
+        event.system?.push?.({ type: 'text', text: g.grouping
+          ? 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.'
+          : 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
       }
       g.primaryPrepared = true;
     }));

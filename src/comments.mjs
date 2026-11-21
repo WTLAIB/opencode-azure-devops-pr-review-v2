@@ -1,6 +1,6 @@
 // Comment plans: per-item validation, stable markers and saved publication text.
 import { createHash } from 'node:crypto';
-import { renderReviewSummary, renderOtherPlaces, describeReview } from './attribution.mjs';
+import { renderReviewSummary, renderOtherPlaces, listablePlace, listedPlaces, OTHER_PLACES_HEADINGS, describeReview } from './attribution.mjs';
 import { targetKey } from './azure.mjs';
 import { parseModelJSON, canonicalKey, parseRepairPrompt } from './output.mjs';
 
@@ -88,8 +88,12 @@ export function combinationProblems(members) {
 /**
  * Why findings may not share one comment as one defect made at several places;
  * [] when they may. Members are high or medium findings of one severity, each
- * on lines of a HEAD file, and no two of them share a line: findings on the
- * same lines are not another place.
+ * on lines of a HEAD file (a first line and a last one not before it), and no
+ * two of them share a line: findings on the same lines are not another place.
+ * The comment lists each other place as its finding states it, so a place
+ * whose text a list cannot hold unchanged (`listablePlace`) shares no comment.
+ * Whether the lines exist in the file is checked where its text is known
+ * (`evaluatePlanPage`).
  */
 export function repeatProblems(members) {
   const problems = [];
@@ -97,10 +101,12 @@ export function repeatProblems(members) {
   else if (!['high', 'medium'].includes(members[0].severity)) problems.push('only high and medium findings get inline comments');
   if (members.some(member => member.inline === false)) problems.push('a combined finding has no inline location');
   const at = members.map(member => parseLocation(member.location));
-  if (at.some(location => location?.side !== 'head' || !location.start)) {
+  if (at.some(location => location?.side !== 'head' || !location.start || location.end < location.start)) {
     problems.push('every combined finding must be located on lines of a HEAD file');
     return { problems };
   }
+  const unlistable = members.filter(member => !listablePlace(placeOf(member)));
+  if (unlistable.length) problems.push(`the file name of ${unlistable.map(member => member.id).join(', ')} cannot be written into a list of places as it is`);
   for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
     if (at[i].path === at[j].path && at[i].start <= at[j].end && at[j].start <= at[i].end) {
       problems.push(`${members[i].id} and ${members[j].id} are on the same lines, which is not another place`);
@@ -365,6 +371,22 @@ export function describeEarlierText(review, otherComments = 0) {
   if (rows.length) lines.push(`Already on the PR with earlier text, which AZPR does not change, so this preview is not what the PR shows there: ${rows.join('; ')}. Edit them on the PR if they should change.`);
   if (excluded.length && otherComments > 0) lines.push(`The PR has ${otherComments} other AZPR comment(s) from earlier publications that are not part of this preview; AZPR does not change them, so a finding you excluded may still be visible there.`);
   return lines.map(line => `${line}\n`).join('');
+}
+
+/**
+ * What a publication found for its comments that stand for one defect at
+ * several places (`uncovered` in the result of `publishPlan`): the comment
+ * that was on the PR at such a place already, from an earlier publication,
+ * does not list every place, and AZPR never changes a posted comment. Names
+ * the findings that therefore have no comment on the PR and what gives them
+ * one. '' when none.
+ */
+export function describeUncovered(review, uncovered = []) {
+  if (!uncovered.length) return '';
+  const rows = uncovered.map(row => `${row.findingIds.join(', ')} (the comment at ${row.path}:${row.startLine}${row.threadId ? `, thread ${row.threadId},` : ''} was posted earlier and does not list ${row.findingIds.length === 1 ? 'its place' : 'their places'})`);
+  const again = everAdjusted(review) ? ', and an adjusted preview is not planned again once its publication started; a new review plans these comments anew'
+    : `; /pr-comment ${review.id} plans the preview again and asks for another place`;
+  return `No comment on the PR for ${rows.join('; ')}. AZPR does not change a posted comment${again}.\n`;
 }
 
 /**
@@ -709,10 +731,14 @@ const aliases = (value, names) => {
  * The runtime never combines findings itself.
  * `sources` are the page's source excerpts and `discussions` the live threads
  * the runtime read (null when it could not): skip causes are checked against them.
+ * `posted` maps the markers of AZPR's comments on the PR to `{ threadId,
+ * content }` (null when the threads could not be read): a comment for several
+ * places whose marker the PR already has would never be posted, so the places
+ * that comment does not list would have no comment.
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, allowSummary = true }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, posted = null, allowSummary = true }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -762,6 +788,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     else if (body.length > INLINE_HARD_LIMIT) problems.push(`body exceeds ${INLINE_HARD_LIMIT} characters`);
     const named = namedExcluded(body, excluded);
     if (named.length) problems.push(`body names ${named.join(', ')}, which a person excluded from publication; leave ${named.length === 1 ? 'it' : 'them'} out`);
+    // The list of other places is the runtime's, and a later plan reads it back from the posted comment by its heading.
+    if (body.split(/\r?\n/).some(line => OTHER_PLACES_HEADINGS.includes(line.trimEnd()))) problems.push('body holds the heading of the list of other places, which only the runtime writes; leave that list out');
     const path = nonempty(c.path) ? (c.path.startsWith('/') ? c.path : '/' + c.path) : '';
     if (!changed.has(path) || /[\r\n\0]/.test(path)) problems.push(`path ${JSON.stringify(c.path ?? '')} is not a changed file of this PR`);
     else if (lines && path !== lines.path) problems.push(`path must be ${lines.path}, where the combined findings are`);
@@ -807,9 +835,14 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       const checked = twice ? combinationProblems(members) : repeatProblems(members);
       problems.push(...checked.problems);
       lines = checked.lines;
-      // Every place a comment lists is a place of this PR's changes.
-      const elsewhere = twice ? [] : members.filter(member => !changed.has(parseLocation(member.location)?.path));
-      if (elsewhere.length) problems.push(`${elsewhere.map(member => member.id).join(', ')} ${elsewhere.length === 1 ? 'is' : 'are'} not on a changed file of this PR`);
+      // Every place a comment lists is a place of this PR's changes as it is at HEAD: a changed
+      // file whose text the runtime read for this page, and lines that file has.
+      const absent = twice ? [] : members.filter(member => {
+        const at = parseLocation(member.location);
+        const read = sources.find(item => item.path === at?.path);
+        return !at || !changed.has(at.path) || !read || !(at.end <= (read.totalLines ?? read.lastLine));
+      });
+      if (absent.length) problems.push(`${absent.map(member => `${member.id} (${placeOf(member)})`).join(', ')} ${absent.length === 1 ? 'is' : 'are'} not on lines of a changed file as the runtime read it at HEAD`);
       if (!nonempty(c.mergeReason)) problems.push('a combined comment needs a mergeReason');
     }
     let drafted, first;
@@ -818,11 +851,26 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       problems.push(...drafted.problems);
     }
     if (!problems.length && repeated) {
-      // The comment stands at one of the places: the finding whose lines its anchor touches
-      // (members never share a line, so the first such finding of the page is the place).
+      // The comment stands at one of the places: the one finding whose lines its anchor touches.
+      // Members never share a line, but quoted lines can reach from one into the next: such an
+      // anchor names no place, and the runtime does not choose one.
       const { path, startLine, endLine } = drafted.comment;
-      first = assigned.find(finding => members.includes(finding) && (at => at.path === path && startLine <= at.end && endLine >= at.start)(parseLocation(finding.location)));
-      if (!first) problems.push(`the anchor must lie on the lines of one of the combined findings (${members.map(member => `${member.id} at ${placeOf(member)}`).join(', ')})`);
+      const touched = members.filter(member => (at => at.path === path && startLine <= at.end && endLine >= at.start)(parseLocation(member.location)));
+      if (touched.length === 1) [first] = touched;
+      else if (!touched.length) problems.push(`the anchor must lie on the lines of one of the combined findings (${members.map(member => `${member.id} at ${placeOf(member)}`).join(', ')})`);
+      else problems.push(`the anchor (lines ${startLine}-${endLine}) touches the lines of ${touched.map(member => `${member.id} at ${placeOf(member)}`).join(' and ')}; quote lines of one of them only`);
+    }
+    if (!problems.length && repeated && posted) {
+      // Markers follow the place and its quoted lines, and a posted comment is never changed or posted
+      // again. A comment of AZPR's that is at this place already would stand for this one, so every
+      // other place must be in its list. (A second comment of the same lines on another page gets
+      // another marker; publication checks every item once more.)
+      const existing = posted.get(inlineMarker(review.target, drafted.comment));
+      const covered = new Set(existing ? listedPlaces(existing.content) : []);
+      const missing = existing ? members.filter(member => member !== first && !covered.has(placeOf(member))) : [];
+      if (missing.length) {
+        problems.push(`the PR already has a comment of AZPR's on these lines${existing.threadId ? ` (thread ${existing.threadId})` : ''}, which is neither changed nor posted again, and it does not list ${missing.map(member => `${member.id} at ${placeOf(member)}`).join(', ')}: this comment would leave ${missing.length === 1 ? 'that place' : 'those places'} without a comment. Anchor it on the lines of another of its findings, or leave ${first.id} out of it (skip ${first.id} with cause existing-thread${existing.threadId ? ` and threadId ${existing.threadId}` : ''} when that thread covers it)`);
+      }
     }
     if (problems.length) {
       if (!final) {
@@ -948,6 +996,14 @@ export function evaluateGrouping(answerText, { findings, final = false }) {
   }
   if (parsed.corrections) corrections.push(...parsed.corrections);
   const value = aliases(parsed.value, ['status', 'groups']);
+  // The pass has one answer and no continuation: any other status is an answer that stopped early,
+  // which a correction turn may finish. After the repairs the groups it did name are kept, since each
+  // is only a proposal that meets the rules.
+  const status = String(value.status ?? 'READY').trim().toUpperCase();
+  if (status !== 'READY') {
+    if (final) corrections.push({ action: 'accept-grouping-without-ready', status: status.slice(0, 40) });
+    else issues.push('status must be READY: this pass has no continuation. Name the groups you are sure of and return READY; use [] when nothing repeats.');
+  }
   const order = new Map(findings.map((finding, index) => [finding.id, index]));
   const byId = new Map(findings.map(finding => [finding.id, finding]));
   const taken = new Set(), groups = [];

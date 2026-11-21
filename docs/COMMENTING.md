@@ -241,33 +241,47 @@ one:
   the same correction. Findings that only resemble each other, that follow
   from one another, or whose places need different corrections keep their own
   comments. When unsure, the planner keeps them apart.
+- **Only places that exist as written.** A place is listed as its finding
+  states it, so the runtime offers a finding only when the file, as it reads
+  it at the reviewed commit, has those lines (a file the pull request deletes
+  has none), and when the file's name can stand in a list unchanged (no
+  control character, no end of an HTML comment). Any other finding keeps its
+  own comment.
 - **The review keeps every finding.** Each place stays a row of the summary
   index with its own ID, and each can be excluded or given another severity
   after a preview like any finding.
 
 Which findings may be such repeats is settled before the planning pages are
-made, so that a group is on one page:
+made, so that a group is on one page. Nothing is added unless at least two
+such findings have one severity and lie at different places:
 
-- When every finding fits one page, that page is offered its findings of
-  equal severity at different places (`repeatCandidates`).
+- When all findings fit one page (at most four, and within a page's text),
+  that page is offered its findings of equal severity at different places
+  (`repeatCandidates`).
 - Otherwise one **grouping pass** runs first: a session of the comment planner
-  that gets only the high and medium findings (ID, severity, location,
-  summary, evidence, suggestion) and says which of them are one mistake at
+  that gets only those high and medium findings, inline (ID, severity,
+  location, summary, suggestion, and the evidence unless the list is then
+  longer than 60,000 characters), and says which of them are one mistake at
   several places. The runtime checks each group it proposes (two or more of
   those findings, one severity, different lines, a finding in one group at
   most), asks for a correction like for a page, and then drops a group that
-  is still wrong. A group shares a page, which can then hold more than four
-  findings; a group larger than a page's text is planned in parts of two or
-  more findings.
+  is still wrong. The pass has one answer and no continuation. A group shares
+  a page, which can then hold more than four findings; a group larger than a
+  page's text is planned in parts of two or more findings. A list that is too
+  long even without the evidence is not grouped: a `PROGRESS` notice says so,
+  and every finding gets its own comment.
 
 The page's planner still decides whether a group gets one comment. The
 runtime accepts it only when every finding it names is in one listed group,
-they share a severity, lie on different lines of changed files, and the
-anchor touches the lines of one of them; that finding is where the comment
-stands. A refused combination goes back for correction and then falls
-back to single comments and reasoned skips, as for quick reviews. The preview
-shows such a comment with all its findings and the planner's reason
-(`Combined: …`).
+they share a severity, lie on different lines that the changed files have at
+the reviewed commit, and the anchor touches the lines of exactly one of them;
+that finding is where the comment stands. An anchor that reaches from one
+finding's lines into another's names no place, and the runtime does not
+choose one. A refused combination goes back for correction and then falls
+back to single comments and reasoned skips, as for quick reviews. A page
+that continues in another session is still offered what is open of a group,
+while two or more of its findings are. The preview shows such a comment with
+all its findings and the planner's reason (`Combined: …`).
 
 A grouping pass that fails, for instance on a provider error, costs only the
 grouping: a `PROGRESS` notice says so, and every finding gets its own comment.
@@ -280,14 +294,41 @@ in the index either way.
 Azure DevOps, like the other code hosts, cannot anchor one thread at several
 places, and one thread cannot show which of its places were fixed; that is why
 the other places are written out in full. When the pull request is planned
-again later, the runtime reads that list back from AZPR's own comment and
-tells the planner which places the thread covers (`alsoAt` in
-`existingDiscussions`), so that the other places are seen as discussed and
-get no thread of their own.
+again later, the runtime reads that list back and tells the planner which
+places the thread covers (`alsoAt` in `existingDiscussions`), so that the
+other places are seen as discussed and get no thread of their own. It reads
+the list only where the runtime wrote it: in the comment that opened a thread
+on a file, which carries AZPR's marker, under the list's own heading, and
+followed by nothing but the attribution and the marker. A reply that quotes
+such a comment says nothing about its thread, and a planner's text that
+writes that heading itself is sent back.
+
+**A place that already has a comment.** A comment's marker follows its place
+and the lines it quotes, and AZPR neither changes a posted comment nor posts
+it again. A comment for several places can therefore meet an earlier comment
+of AZPR's on the same lines: one for that place alone, or one that lists
+other places. Publication would skip the new comment, and the places the
+earlier one does not list would have no comment at all. AZPR deals with this
+twice:
+
+- **When planning**, the runtime compares such a comment with the comments
+  the pull request already has. Where the earlier one does not list every
+  other place, the planner is asked to anchor the comment at another of its
+  places or to leave that finding out; a comment that still collides after
+  the correction turns is dropped like any refused combination, and its
+  findings are skipped with that reason.
+- **When posting**, the pull request is read again. An item found there with
+  another text is reported as usual (`ALREADY_PRESENT`), and its row and a
+  line of the receipt name the findings whose place the comment on the pull
+  request does not list: `No comment on the PR for F-2, F-3 (…)`. They are
+  never reported as posted. `/pr-comment` plans the preview again and asks
+  for another place; a review whose adjusted preview began publication needs
+  a new review for that.
 
 ## Planning
 
-Planning uses the review's risk model (the quick reviewer's model for a quick review) in pages of at most four findings, plus
+Planning uses the review's risk model (the quick reviewer's model for a quick review) in pages of at most four findings
+(more only where one defect at several places keeps its findings together, see above), plus
 segments of the final report for the summary details. Before planning, the
 runtime reads every live thread once and fetches the HEAD source of each
 finding's file. Each page then receives, inline: the verified findings,

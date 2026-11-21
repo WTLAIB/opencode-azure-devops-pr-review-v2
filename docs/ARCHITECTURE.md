@@ -388,7 +388,8 @@ additions for review and deep, REPORTED ones for a quick review. A saved
 review without a verification field is trusted only when its profile is review
 or deep. `commentFindings` hands them to planning as a person adjusted them
 after a preview (see below); without adjustments they are exactly the
-publishable findings. Planning (model) uses pages of at most four findings plus report segments
+publishable findings. Planning (model) uses pages of at most four findings (more only where
+one defect at several places keeps its findings on one page) plus report segments
 (on a large PR each page carries the changed files and dispositions of its own
 findings and references to the complete lists), with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
@@ -429,28 +430,50 @@ One defect made at several places is several findings (a reviewer files one
 for each place that needs its own correction), and one comment may hold them.
 Before the pages are made, `prepareComments` settles which findings may be
 such repeats: `repeatEligible` takes the high and medium findings on lines of
-a changed HEAD file (a quick finding that is a merge candidate is left to that
-rule), and `severitySets` the sets of one severity that lie at two places or
-more. When every finding fits one page, the page is offered those sets as
-they are. Otherwise a grouping pass runs first: one stage of the comment-plan
-role whose input is `commentWork: { kind: "group" }` and the eligible
-findings' text, and whose answer `evaluateGrouping` checks (`repeatProblems`:
-one severity, high or medium, lines of a HEAD file, no two findings on the
-same lines; a finding in one group at most), with repair turns like a page;
-`boundedGroups` cuts a group to a page's text and `candidatePages` keeps each
-group on one page. A page receives its groups as `repeatCandidates`. A
-combined comment for one names findings of one listed group, of one severity,
-on different lines of changed files, and its anchor touches the lines of one
-of them: that finding is the comment's place (`findingId`), the others
-become `otherPlaces`. `assemblePlan` renders them under the planner's text
-with `renderOtherPlaces` (`attribution.mjs`): the findings' own locations and
-IDs as a plain list, never text a model wrote. The summary index keeps one
-row per place; only findings reported twice on the same lines share a row. A
-grouping pass that fails is said in a progress notice and planning goes on
-without groups; a stopped run starts no page. `discussionDigest` reads the
-list back from a comment that carries AZPR's marker (`listedPlaces`) and gives
-the planner those places as `alsoAt`, since the list lies beyond the excerpt
-of a thread: a later plan then sees them as discussed.
+a changed HEAD file whose place a list can hold as it is (`listablePlace`; a
+quick finding that is a merge candidate is left to that rule), and
+`severitySets` the sets of one severity that lie at two places or more. Where
+there is such a set, the HEAD text of those findings' files is read, and only
+a finding whose lines the file has stays eligible: a place is listed as its
+finding states it. When every finding fits one page, the page is offered the
+sets as they are. Otherwise a grouping pass runs first: one stage of the
+comment-plan role whose input is `commentWork: { kind: "group" }` and the
+eligible findings' text, inline (without the evidence above 60,000
+characters; a list still longer is not grouped), and whose answer
+`evaluateGrouping` checks (`repeatProblems`: one severity, high or medium,
+lines of a HEAD file, no two findings on the same lines; a finding in one
+group at most; a status other than READY is sent back, since the pass has no
+continuation), with repair turns like a page and a checkpoint text of its
+own; `boundedGroups` cuts a group to a page's text and `candidatePages` keeps
+each group on one page. A page receives its groups as `repeatCandidates`,
+and a continued page what is still open of them. A combined comment for one
+names findings of one listed group, of one severity, on different lines that
+the changed files have in the page's HEAD text, and its anchor touches the
+lines of exactly one of them: that finding is the comment's place
+(`findingId`), the others become `otherPlaces`. `assemblePlan` renders them
+under the planner's text with `renderOtherPlaces` (`attribution.mjs`): the
+findings' own locations and IDs as a plain list, never text a model wrote.
+The summary index keeps one row per place; only findings reported twice on
+the same lines share a row. A grouping pass that fails is said in a progress
+notice and planning goes on without groups; a stopped run starts no page.
+`discussionDigest` reads the list back (`listedPlaces`) and gives the planner
+those places as `alsoAt`, since the list lies beyond the excerpt of a thread:
+a later plan then sees them as discussed. The list is read only in the form
+the runtime writes it: in the comment that opened a thread on a file and
+carries AZPR's marker, under one of `OTHER_PLACES_HEADINGS`, with nothing
+after its rows but the attribution and the marker; a body that writes such a
+heading itself is refused.
+
+A marker follows a comment's place and quoted lines, and a posted comment is
+never changed or posted again, so a comment for several places can meet an
+earlier comment of AZPR's on the same lines that lists fewer places or none.
+`evaluatePlanPage` refuses such a comment against the comments the PR had
+when planning began (`postedComments`, by the marker of ordinal 0), which
+sends it back to the planner for another place. `publishPlan` looks at the
+PR again: for an item found there with another text it reports the findings
+whose place that text does not list (`uncovered` in its result, never in the
+ledger), and the receipt names them in the item's row and in a line of its
+own (`describeUncovered`) instead of counting them as posted.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both

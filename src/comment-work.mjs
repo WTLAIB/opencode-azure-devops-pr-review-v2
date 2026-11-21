@@ -1,7 +1,8 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
-import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
+import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads } from './azure.mjs';
+import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -25,23 +26,6 @@ const GROUPING_BUDGET = 60000;
 // planning page; above it a page carries those of its findings and a reference.
 const PAGE_CONTEXT_CHARACTERS = 2000;
 
-/**
- * The other places a comment of AZPR's covers: the rows the runtime added
- * under its text ("📍 Also at", see `renderOtherPlaces`). Read back so that a
- * later plan sees those places as discussed too; [] for any other text.
- */
-export function listedPlaces(content) {
-  const at = content.indexOf('**📍');
-  if (at < 0) return [];
-  const places = [];
-  for (const line of content.slice(at).split('\n').slice(1)) {
-    const row = /^- (`+) ?(.+?) ?\1 ?[（(]/.exec(line);
-    if (!row) break;
-    places.push(row[2]);
-  }
-  return places;
-}
-
 /** Live (not deleted) discussions in a compact, model-readable form. */
 export function discussionDigest(threads) {
   const live = [];
@@ -52,20 +36,33 @@ export function discussionDigest(threads) {
     if (!comments.length) continue;
     const context = thread.threadContext ?? {};
     const first = comments[0];
-    // Only AZPR's own comment is read for the places it lists: the format is the runtime's.
-    const own = comments.find(comment => comment.content.match(MARKER));
-    const alsoAt = own && context.filePath ? listedPlaces(own.content) : [];
+    // The places a thread covers are read only from the comment that opened it, as AZPR posts its
+    // comments (never as a reply), and only in the runtime's own form: a reply that quotes such a
+    // comment, marker and all, says nothing about the thread it is in.
+    const opening = thread.comments.find(comment => !(comment?.parentCommentId > 0));
+    const alsoAt = context.filePath && opening === first && first.content.match(MARKER) ? listedPlaces(first.content) : [];
     live.push({
       threadId: thread.id, status: thread.status ?? null,
       ...(context.filePath ? { path: context.filePath, line: context.rightFileStart?.line ?? context.leftFileStart?.line ?? null } : {}),
       author: first.author?.displayName ?? first.author?.uniqueName ?? null,
       comments: comments.length,
-      azpr: Boolean(own),
+      azpr: comments.some(comment => comment.content.match(MARKER)),
       excerpt: first.content.replace(MARKER, '').replace(/\s+/g, ' ').trim().slice(0, 300),
       ...(alsoAt.length ? { alsoAt } : {}),
     });
   }
   return live;
+}
+
+/**
+ * AZPR's live comments on the PR by their marker, each with its thread: what a
+ * planned comment of that marker would meet there, since publication skips an
+ * item whose marker the PR has.
+ * @returns {Map<string, {threadId: number, content: string}>}
+ */
+export function postedComments(threads) {
+  const threadOf = markersInThreads(threads ?? []);
+  return new Map([...markerTexts(threads ?? [])].map(([marker, content]) => [marker, { threadId: threadOf.get(marker), content }]));
 }
 
 export { parseLocation };
@@ -96,16 +93,18 @@ export function mergeCandidates(findings, limit = PLANNING_FINDINGS_PER_PAGE) {
 /**
  * The findings that may share a comment as one defect made at several places:
  * high and medium ones on lines of a HEAD file that the PR changes (`files`,
- * when given). A quick finding that already is a merge candidate (the same
- * lines, another session) is left to that rule.
+ * when given), whose place a list can hold as it is. A quick finding that
+ * already is a merge candidate (the same lines, another session) is left to
+ * that rule. Whether the lines exist in the file is for the caller, which
+ * reads it (`prepareComments`).
  */
 export function repeatEligible(findings, duplicates = [], files = null) {
   const taken = new Set(duplicates.flat());
   const changed = files && new Set(files.map(path => path.startsWith('/') ? path : '/' + path));
   return findings.filter(finding => {
     const at = parseLocation(finding.location);
-    return ['high', 'medium'].includes(finding.severity) && finding.inline !== false && at?.side === 'head' && Boolean(at.start) &&
-      (!changed || changed.has(at.path)) && !taken.has(finding.id);
+    return ['high', 'medium'].includes(finding.severity) && finding.inline !== false && at?.side === 'head' && Boolean(at.start) && at.end >= at.start &&
+      (!changed || changed.has(at.path)) && listablePlace(placeOf(finding)) && !taken.has(finding.id);
   });
 }
 
@@ -136,7 +135,8 @@ export function boundedGroups(groups, findings, size = PAGE_CHARACTERS) {
     let part = [], characters = 0;
     for (const id of ids) {
       const own = length.get(id) ?? 0;
-      if (part.length > 1 && characters + own > size) { bounded.push(part); part = []; characters = 0; }
+      // A part that the next finding would overfill ends here; one finding alone is no part and is planned by itself.
+      if (part.length && characters + own > size) { if (part.length > 1) bounded.push(part); part = []; characters = 0; }
       part.push(id); characters += own;
     }
     if (part.length > 1) bounded.push(part);
@@ -246,9 +246,14 @@ async function planningInput(review, store, findings, report, work, continuation
  * proposes (a stage of its own, with repair turns). A grouping pass that fails
  * costs only the grouping: every finding is then planned on its own. `active`
  * tells whether the run still goes on; a stopped run is never continued.
+ * A place is listed as its finding states it, so only a finding whose lines
+ * the file has, as `fetchSource` reads it at HEAD, can be one of several
+ * places: without that text nothing is offered. `posted` are AZPR's comments
+ * already on the PR (`postedComments`; null when unknown), for the page check
+ * of a comment that the PR would already seem to have.
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
-export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, parallel = PLANNING_PARALLEL_PAGES, active = () => true } = {}) {
+export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, posted = null, parallel = PLANNING_PARALLEL_PAGES, active = () => true } = {}) {
   // Adjusted by a person after a preview, if they did; otherwise the publishable findings unchanged.
   const all = commentFindings(review);
   const adjustments = adjustmentInput(review);
@@ -256,15 +261,33 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   const twice = reviewVerification(review) === 'none' ? mergeCandidates(all) : [];
   // Pages as they are without any repeated defect; they change only when the grouping pass proposes a group.
   let paged = candidatePages(all, twice);
-  const eligible = repeatEligible(all, twice, review.snapshot.files);
+  const sourceText = new Map();
+  const source = path => {
+    if (!fetchSource) return Promise.resolve(null);
+    if (!sourceText.has(path)) sourceText.set(path, Promise.resolve().then(() => fetchSource(path)).then(text => typeof text === 'string' ? text : null, () => null));
+    return sourceText.get(path);
+  };
+  // Only a finding whose lines the HEAD file has is offered as one of several places: a place is
+  // listed as the finding states it, and a file that is deleted or shorter has no such lines. The
+  // files are read only when findings could share a comment at all; the pages read them anyway.
+  let eligible = repeatEligible(all, twice, review.snapshot.files);
+  if (severitySets(eligible).length) {
+    const heads = await Promise.all(eligible.map(finding => source(parseLocation(finding.location).path)));
+    eligible = eligible.filter((finding, index) => heads[index] !== null && parseLocation(finding.location).end <= sourceWindow(heads[index]).totalLines);
+  }
   let repeats = [];
   if (severitySets(eligible).length) {
+    // The pass reads its findings inline and needs no tool. A long list goes without the evidence, and one
+    // that is still too long is not grouped: no stored reference, which the pass would have to read first.
+    let listed = eligible.map(({ id, severity, location, summary, evidence, suggestion }) => ({ id, severity, location, summary, evidence, suggestion }));
+    if (JSON.stringify(listed).length > GROUPING_BUDGET) listed = listed.map(({ evidence: _long, ...short }) => short);
     if (paged.pages.length <= 1) repeats = severitySets(eligible);
-    else {
+    else if (JSON.stringify(listed).length > GROUPING_BUDGET) {
+      progress?.(`Planning comments: ${eligible.length} findings are too many to look through for one defect at several places; every finding gets its own comment.`);
+    } else {
       progress?.(`Planning comments: looking for one defect at several places (${eligible.length} findings)`);
       try {
-        const listed = eligible.map(({ id, severity, location, summary, evidence, suggestion }) => ({ id, severity, location, summary, evidence, suggestion }));
-        const grouped = await invoke({ reviewId: review.id, outputLanguage: review.outputLanguage, findings: await store.pack(listed, GROUPING_BUDGET), commentWork: { kind: 'group' } }, {
+        const grouped = await invoke({ reviewId: review.id, outputLanguage: review.outputLanguage, findings: listed, commentWork: { kind: 'group' } }, {
           async evaluate(answer) {
             const { result, issues, corrections } = evaluateGrouping(answer, { findings: eligible });
             return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? groupingRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
@@ -289,12 +312,6 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   const offeredTwice = kept(twice), offeredRepeats = groups.length <= 1 ? repeats : kept(repeats);
   const reports = textPages(review.final.report ?? '');
   const count = Math.max(groups.length, reports.length, 1);
-  const sourceText = new Map();
-  const source = path => {
-    if (!fetchSource) return Promise.resolve(null);
-    if (!sourceText.has(path)) sourceText.set(path, Promise.resolve().then(() => fetchSource(path)).then(text => typeof text === 'string' ? text : null, () => null));
-    return sourceText.get(path);
-  };
   async function excerpts(findings) {
     const windows = new Map();
     for (const finding of findings) {
@@ -328,9 +345,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     progress?.(`Planning comments, page ${index + 1}/${count}`);
     do {
       const assigned = pending;
-      // Groups whose findings are all still open on this page.
-      const open = ids => ids.every(id => assigned.some(item => item.id === id));
-      const candidates = offeredTwice.filter(open), repeatCandidates = offeredRepeats.filter(open);
+      // Findings reported twice: groups whose findings are all still open on this page. One defect at
+      // several places: what is still open of each group, while two or more of its findings are.
+      const open = id => assigned.some(item => item.id === id);
+      const candidates = offeredTwice.filter(ids => ids.every(open));
+      const repeatCandidates = offeredRepeats.map(ids => ids.filter(open)).filter(ids => ids.length > 1);
       const sourceExcerpts = await excerpts(assigned);
       // Only the first page writes the summary note; a note from another page is dropped.
       const allowSummary = index === 0 && !summaryWritten;
@@ -353,11 +372,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, allowSummary });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, allowSummary });
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary });
           return { ...result, corrections };
         },
       });
@@ -436,6 +455,14 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   with other text is still skipped, marked `earlierText`: the PR keeps that
  *   earlier version, since nothing posted is ever changed. The result then
  *   counts the other AZPR comments on the PR (`otherComments`).
+ * - A comment for one defect at several places stands for all of them, but its
+ *   marker is that of the one place where it stands. When the PR already has a
+ *   comment with that marker which this run did not create (an earlier
+ *   publication, of one place or of other places), the places it does not list
+ *   have no comment: the result names their findings per item (`uncovered`),
+ *   so that the receipt never says of a finding that it is on the PR when no
+ *   posted text holds its place. Planning refuses such a comment where it can
+ *   (`evaluatePlanPage`); this is the check of what the PR holds when posting.
  */
 export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only, compare = false }) {
   const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
@@ -446,7 +473,17 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   }
   const listed = await azure.threads(run, review.snapshot);
   const present = markersInThreads(listed);
-  const texts = compare ? markerTexts(listed) : null;
+  const shared = items.some(item => item.otherPlaces?.length);
+  const texts = compare || shared ? markerTexts(listed) : null;
+  // The findings of a shared comment whose places the comment found on the PR does not list, by marker.
+  // Not part of the ledger, which records what became of each item: this is what this run found.
+  const uncovered = new Map();
+  const unlisted = (item, text) => {
+    if (!item.otherPlaces?.length || typeof text !== 'string' || text === item.content) return;
+    const covered = new Set(listedPlaces(text));
+    const missing = item.otherPlaces.filter(other => !covered.has(other.place)).map(other => other.findingId);
+    if (missing.length) uncovered.set(item.marker, missing);
+  };
   const at = () => new Date(now()).toISOString();
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
@@ -462,7 +499,8 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
     if (present.has(item.marker)) {
-      record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(texts && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
+      unlisted(item, texts?.get(item.marker));
+      record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(compare && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
       continue;
     }
     if (halted) { record(item, { state: 'FAILED', error: halted }); continue; }
@@ -507,14 +545,16 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   try {
     const listedAfter = await azure.threads(run, review.snapshot);
     const after = markersInThreads(listedAfter), removedAfter = deletedThreads(listedAfter);
-    const textsAfter = compare ? markerTexts(listedAfter) : null;
+    const textsAfter = compare || shared ? markerTexts(listedAfter) : null;
     for (const item of items) {
       const entry = ledger.get(item.marker);
       if (!['POSTED', 'UNCERTAIN', 'FAILED'].includes(entry.state)) continue;
       if (after.has(item.marker)) {
         // A comment this run did not create (an earlier attempt's, or one the first list did not show yet,
-        // also after a refused write) keeps its own text.
-        const earlierText = textsAfter && (entry.state !== 'POSTED' || entry.earlierAttempt) && textsAfter.get(item.marker) !== item.content;
+        // also after a refused write) keeps its own text, and lists the places it listed.
+        const foreign = entry.state !== 'POSTED' || entry.earlierAttempt;
+        const earlierText = compare && foreign && textsAfter.get(item.marker) !== item.content;
+        if (foreign) unlisted(item, textsAfter?.get(item.marker));
         Object.assign(entry, { state: 'VERIFIED', threadId: after.get(item.marker), ...(earlierText ? { earlierText: true } : {}) });
       }
       else if (entry.state === 'POSTED') entry.state = removedAfter.has(entry.threadId) ? 'DELETED' : 'UNVERIFIED';
@@ -531,6 +571,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
   const planned = new Set(items.map(item => item.marker));
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
+    ...(uncovered.size ? { uncovered: items.filter(item => uncovered.has(item.marker)).map(item => ({ marker: item.marker, findingIds: uncovered.get(item.marker), path: item.path, startLine: item.startLine, threadId: ledger.get(item.marker).threadId })) } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
     ...(compare ? { otherComments: [...present.keys()].filter(marker => !planned.has(marker)).length } : {}) };
 }

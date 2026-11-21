@@ -5,7 +5,7 @@ import {
   publishableFindings, reviewVerification, combinationProblems, repeatProblems, placeOf, evaluateGrouping, groupingRepairPrompt,
   automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
-  everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken,
+  everyFindingExcluded, publicationStarted, describeEarlierText, describeUncovered, excludedReferences, previewNextSteps, previewActions, commentToken,
 } from '../src/comments.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
@@ -342,34 +342,36 @@ const twoFiles = [{ input: { path: '/src/a.ts', version: head }, output: lines }
 const repeated = (extra = []) => review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }),
   finding('F-3', 'medium', { location: 'head:/src/a.ts:4' }), ...extra], twoFiles);
 const third = comment({ findingId: 'F-3', severity: 'medium', startLine: 4, endLine: 4, anchor: 'line four', body: '🟡 medium: Other defect\n\nBody.' });
+// What a page shows of the two files as the runtime read them at HEAD: four lines and three.
+const shown = [{ path: '/src/a.ts', firstLine: 1, lastLine: 4, totalLines: 4 }, { path: '/src/b.ts', firstLine: 1, lastLine: 3, totalLines: 3 }];
 
 test('one comment may hold one defect made at several places: it stands at one place and carries the others', () => {
   const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   // The planner names F-2 first, but the anchor lies in F-1's lines: the comment stands there.
-  const ok = evaluatePlanPage(answer([combined(['F-2', 'F-1']), third]), { review: r, assigned, repeats });
+  const ok = evaluatePlanPage(answer([combined(['F-2', 'F-1']), third]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(ok.issues, []);
   assert.deepEqual(ok.result.comments.map(c => [c.findingId, c.findingIds ?? null, c.otherPlaces ?? null]),
     [['F-1', ['F-1', 'F-2'], [{ findingId: 'F-2', place: '/src/b.ts:2-3' }]], ['F-3', null, null]]);
   assert.equal(ok.result.comments[0].mergeReason, 'Both describe the dropped load result.');
   assert.deepEqual(ok.result.skipped, []);
   // The whole group in one comment: the other places follow the order of the page, whatever order the planner wrote.
-  const all = evaluatePlanPage(answer([combined(['F-3', 'F-2', 'F-1'])]), { review: r, assigned, repeats });
+  const all = evaluatePlanPage(answer([combined(['F-3', 'F-2', 'F-1'])]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(all.issues, []);
   assert.deepEqual(all.result.comments[0].otherPlaces, [{ findingId: 'F-2', place: '/src/b.ts:2-3' }, { findingId: 'F-3', place: '/src/a.ts:4' }]);
   // Anchored at the other file, the same findings stand there instead.
-  const elsewhere = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { path: '/src/b.ts', startLine: 3, endLine: 3, anchor: 'third' }), third]), { review: r, assigned, repeats });
+  const elsewhere = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { path: '/src/b.ts', startLine: 3, endLine: 3, anchor: 'third' }), third]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(elsewhere.issues, []);
   assert.deepEqual([elsewhere.result.comments[0].findingId, elsewhere.result.comments[0].otherPlaces], ['F-2', [{ findingId: 'F-1', place: '/src/a.ts:2' }]]);
   // Nothing is combined unless the planner says so: separate comments stay separate.
   const apart = evaluatePlanPage(answer([comment({ severity: 'medium', body: '🟡 medium: One\n\nBody.' }),
-    comment({ findingId: 'F-2', severity: 'medium', path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second', body: '🟡 medium: Two\n\nBody.' }), third]), { review: r, assigned, repeats });
+    comment({ findingId: 'F-2', severity: 'medium', path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second', body: '🟡 medium: Two\n\nBody.' }), third]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(apart.result.comments.map(c => [c.findingId, c.otherPlaces]), [['F-1', undefined], ['F-2', undefined], ['F-3', undefined]]);
 });
 
 test('rules of a comment for several places: a listed group, one severity, different lines, an anchor in one member\'s lines', () => {
   const low = finding('F-4', 'low', { location: 'head:/src/b.ts:1' }), high = finding('F-5', 'high', { location: 'head:/src/b.ts:1' }), same = finding('F-6', 'medium');
   const r = repeated([low, high, same]), assigned = confirmedFindings(r);
-  const refused = (page, repeats, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, ...options }).issues.join('\n');
+  const refused = (page, repeats, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, ...options }).issues.join('\n');
   assert.match(refused([combined(['F-1', 'F-2'])], []), /only the findings of one listed group \(mergeCandidates or repeatCandidates\)/);
   assert.match(refused([combined(['F-1', 'F-3'])], [['F-1', 'F-2'], ['F-3', 'F-6']]), /not all in one listed group/);
   assert.match(refused([combined(['F-1', 'F-2'], { mergeReason: ' ' })], [['F-1', 'F-2']]), /needs a mergeReason/);
@@ -377,27 +379,46 @@ test('rules of a comment for several places: a listed group, one severity, diffe
     /anchor must lie on the lines of one of the combined findings \(F-1 at \/src\/a\.ts:2, F-2 at \/src\/b\.ts:2-3\)/);
   // An anchor that reaches beyond a finding's lines still stands at that finding.
   const plain = repeated();
-  const wide = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { startLine: 1, endLine: 2, anchor: 'line one\nconst value = load();' }), third]), { review: plain, assigned: confirmedFindings(plain), repeats: [['F-1', 'F-2']] });
+  const wide = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { startLine: 1, endLine: 2, anchor: 'line one\nconst value = load();' }), third]), { review: plain, assigned: confirmedFindings(plain), repeats: [['F-1', 'F-2']], sources: shown });
   assert.deepEqual([wide.issues, wide.result.comments[0].findingId, wide.result.comments[0].startLine, wide.result.comments[0].endLine], [[], 'F-1', 1, 2]);
+  // Quoted lines that reach from one finding's lines into another's name no place, and the runtime chooses none.
+  const both = evaluatePlanPage(answer([combined(['F-1', 'F-3'], { startLine: 2, endLine: 4, anchor: 'const value = load();\nline three\nline four' }),
+    comment({ findingId: 'F-2', severity: 'medium', path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second', body: '🟡 medium: Two\n\nBody.' })]),
+  { review: plain, assigned: confirmedFindings(plain), repeats: [['F-1', 'F-2', 'F-3']], sources: shown });
+  assert.match(both.issues.join('\n'), /the anchor \(lines 2-4\) touches the lines of F-1 at \/src\/a\.ts:2 and F-3 at \/src\/a\.ts:4; quote lines of one of them only/);
   assert.match(refused([combined(['F-1', 'F-5'])], [['F-1', 'F-5']]), /must have the same severity/);
   assert.match(refused([combined(['F-1', 'F-6'])], [['F-1', 'F-6']]), /F-1 and F-6 are on the same lines, which is not another place/);
   assert.match(refused([combined(['F-1', 'F-9'])], [['F-1', 'F-9']]), /F-9 not assigned to this page/);
   const outside = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/unchanged.ts:7' })], twoFiles);
-  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: outside, assigned: confirmedFindings(outside), repeats: [['F-1', 'F-2']] }).issues.join('\n'), /F-2 is not on a changed file of this PR/);
+  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: outside, assigned: confirmedFindings(outside), repeats: [['F-1', 'F-2']], sources: [...shown, { path: '/src/unchanged.ts', firstLine: 1, lastLine: 9, totalLines: 9 }] }).issues.join('\n'),
+    /F-2 \(\/src\/unchanged\.ts:7\) is not on lines of a changed file as the runtime read it at HEAD/);
+  // A place is listed as its finding states it, so its lines must be in the file as the runtime read it at HEAD:
+  // not beyond its end, not in a file the page could not read (deleted in this PR, say).
+  const beyond = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:40' })], twoFiles);
+  const placesOf = (r, sources) => evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2']], sources }).issues.join('\n');
+  assert.match(placesOf(beyond, shown), /F-2 \(\/src\/b\.ts:40\) is not on lines of a changed file as the runtime read it at HEAD/);
+  assert.match(placesOf(repeated(), shown.slice(0, 1)), /F-2 \(\/src\/b\.ts:2-3\) is not on lines of a changed file as the runtime read it at HEAD/);
+  assert.equal(placesOf(repeated(), shown.map(({ totalLines: _all, ...window }) => window)).includes('not on lines'), false, 'A window that ends at the lines is enough.');
   assert.deepEqual(repeatProblems([low, { ...low, id: 'F-7', location: 'head:/src/b.ts:3' }]).problems, ['only high and medium findings get inline comments']);
   assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'base:/src/b.ts:3' })]).problems, ['every combined finding must be located on lines of a HEAD file']);
   assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/b.ts' })]).problems, ['every combined finding must be located on lines of a HEAD file']);
   assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/a.ts:3-9' })]).problems, []);
+  assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/b.ts:3-2' })]).problems, ['every combined finding must be located on lines of a HEAD file'], 'A range that ends before it begins is no lines.');
+  // A file name that a list cannot hold as it is (a control character, an end of an HTML comment) is listed nowhere.
+  for (const name of ['/src/x-->y.ts', '/src/x<!--y.ts', '/src/x\ty.ts']) {
+    assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: `head:${name}:2` })]).problems, ['the file name of F-2 cannot be written into a list of places as it is'], name);
+  }
+  assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/a `b` (F-9).ts:2' })]).problems, [], 'Backticks and brackets are text a list holds.');
   assert.equal(placeOf({ location: 'head:/src/a.ts:12-14' }), '/src/a.ts:12-14');
   assert.equal(placeOf({ location: '/src/a.ts:7' }), '/src/a.ts:7');
   // After the repair turns a comment that still breaks a rule is dropped; every finding it named stays accounted for.
-  const final = evaluatePlanPage(answer([combined(['F-1', 'F-6']), third]), { review: r, assigned: assigned.filter(f => ['F-1', 'F-3', 'F-6'].includes(f.id)), repeats: [['F-1', 'F-6']], final: true });
+  const final = evaluatePlanPage(answer([combined(['F-1', 'F-6']), third]), { review: r, assigned: assigned.filter(f => ['F-1', 'F-3', 'F-6'].includes(f.id)), repeats: [['F-1', 'F-6']], sources: shown, final: true });
   assert.deepEqual(final.result.comments.map(c => c.findingId), ['F-3']);
   assert.deepEqual(final.result.skipped.map(s => s.findingId).sort(), ['F-1', 'F-6']);
   assert.ok(final.result.skipped.every(s => /did not meet the combination rules \(F-1 and F-6 are on the same lines/.test(s.reason)));
   // A skip that leans on another finding's comment is sent back with the way to combine them.
   const leaning = evaluatePlanPage(answer([combined(['F-1'], { findingId: 'F-1', findingIds: undefined }), third], [{ findingId: 'F-2', reason: 'Covered by the comment for F-1.' }]),
-    { review: repeated(), assigned: confirmedFindings(repeated()), repeats: [['F-1', 'F-2']] });
+    { review: repeated(), assigned: confirmedFindings(repeated()), repeats: [['F-1', 'F-2']], sources: shown });
   assert.match(leaning.issues.join('\n'), /skip for F-2 relies on F-1[\s\S]*give one comment findingIds with both only when a listed repeatCandidates group holds them/);
 });
 
@@ -405,17 +426,17 @@ test('a quick review keeps both kinds apart: the same lines twice, and one defec
   const r = quickReview([reported('Q-1', '1/2', 'head:/src/a.ts:2'), reported('Q-1001', '2/2', 'head:/src/a.ts:1-3'), reported('Q-2', '1/2', 'head:/src/b.ts:2'), reported('Q-3', '1/2', 'head:/src/a.ts:4')], twoFiles);
   const assigned = publishableFindings(r);
   const page = [combined(['Q-1', 'Q-1001']), combined(['Q-2', 'Q-3'], { path: '/src/b.ts', anchor: 'second' })];
-  const ok = evaluatePlanPage(answer(page), { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']] });
+  const ok = evaluatePlanPage(answer(page), { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']], sources: shown });
   assert.deepEqual(ok.issues, []);
   assert.deepEqual(ok.result.comments.map(c => [c.findingIds, c.otherPlaces ?? null]), [[['Q-1', 'Q-1001'], null], [['Q-2', 'Q-3'], [{ findingId: 'Q-3', place: '/src/a.ts:4' }]]]);
   // A quick comment for several places needs its anchor in the HEAD source like any other.
   assert.match(evaluatePlanPage(answer([page[0], combined(['Q-2', 'Q-3'], { path: '/src/b.ts', anchor: 'not there' })]),
-    { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']] }).issues.join('\n'), /anchor text was not found in the HEAD source/);
+    { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']], sources: shown }).issues.join('\n'), /anchor text was not found in the HEAD source/);
 });
 
 test('the plan lists the other places under the comment, from the findings\' own locations, and every place keeps its index row', () => {
   const r = repeated();
-  const page = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2', 'F-3']] }).result;
+  const page = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2', 'F-3']], sources: shown }).result;
   const plan = assemblePlan(r, [page]);
   const item = plan.comments[0];
   assert.equal(item.content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 Also at** (the same defect; fix these places with it):\n- \`/src/b.ts:2-3\` (F-2)\n- \`/src/a.ts:4\` (F-3)\n\n---\n${r.attribution}\n\n${item.marker}`);
@@ -430,6 +451,46 @@ test('the plan lists the other places under the comment, from the findings\' own
   // In the review's language, and nothing but the list when no attribution is set.
   const local = assemblePlan({ ...r, outputLanguage: 'zh-TW', attribution: undefined }, [page]);
   assert.equal(local.comments[0].content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 其他位置**（同一個問題，請一併修正）：\n- \`/src/b.ts:2-3\`（F-2）\n- \`/src/a.ts:4\`（F-3）\n\n${local.comments[0].marker}`);
+});
+
+test('a comment for several places is refused where the PR already has a comment of AZPR\'s that does not list them', () => {
+  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+  const whole = [combined(['F-1', 'F-2', 'F-3'])];
+  // What the plan would post at F-1's lines, and the marker it would carry there.
+  const item = assemblePlan(r, [evaluatePlanPage(answer(whole), { review: r, assigned, repeats, sources: shown }).result]).comments[0];
+  const single = `🟡 medium: Value is lost\n\nBody.\n\n---\n${r.attribution}\n\n${item.marker}`;
+  const on = content => new Map([[item.marker, { threadId: 12, content }]]);
+  const plan = (posted, page = whole, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, posted, ...options });
+  // An earlier publication left a comment for that place alone: publication would skip the shared one, and the other places would have none.
+  assert.match(plan(on(single)).issues.join('\n'), /the PR already has a comment of AZPR's on these lines \(thread 12\), which is neither changed nor posted again, and it does not list F-2 at \/src\/b\.ts:2-3, F-3 at \/src\/a\.ts:4: this comment would leave those places without a comment\. Anchor it on the lines of another of its findings, or leave F-1 out of it \(skip F-1 with cause existing-thread and threadId 12 when that thread covers it\)/);
+  // One that lists some of the places leaves the others; the finding IDs of that earlier list are not what counts.
+  const partly = single.replace('\n\n---', '\n\n**📍 Also at** (the same defect; fix these places with it):\n- `/src/b.ts:2-3` (F-7)\n\n---');
+  assert.match(plan(on(partly)).issues.join('\n'), /does not list F-3 at \/src\/a\.ts:4: this comment would leave that place without a comment/);
+  // The comment the plan itself would post stands for it, as does any that lists every place.
+  assert.deepEqual(plan(on(item.content)).issues, []);
+  assert.deepEqual(plan(on(partly.replace('(F-7)', '(F-7)\n- `/src/a.ts:4` (F-8)'))).issues, []);
+  // Anchored at another place the comment has another marker, and a comment for one place is as it always was.
+  const moved = plan(on(single), [combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
+  assert.deepEqual([moved.issues, moved.result.comments[0].findingId], [[], 'F-2']);
+  const apart = plan(on(single), [comment({ severity: 'medium', body: '🟡 medium: One\n\nBody.' }), combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]);
+  assert.deepEqual([apart.issues, apart.result.comments.map(c => c.findingIds ?? c.findingId)], [[], ['F-1', ['F-2', 'F-3']]]);
+  // Threads that could not be read refuse nothing: publication looks at the PR again.
+  assert.deepEqual(plan(null).issues, []);
+  // After the repair turns the comment is dropped like any that breaks a rule, and its findings stay accounted for.
+  const final = plan(on(single), whole, { final: true });
+  assert.deepEqual([final.result.comments, final.result.skipped.map(s => s.findingId), final.issues], [[], ['F-1', 'F-2', 'F-3'], []]);
+  assert.match(final.result.skipped[0].reason, /did not meet the combination rules \(the PR already has a comment of AZPR's on these lines/);
+});
+
+test('a publication names the findings of a shared comment that have no comment on the PR, and what gives them one', () => {
+  const r = repeated();
+  assert.equal(describeUncovered(r), '');
+  assert.equal(describeUncovered(r, []), '');
+  const rows = [{ marker: 'm', findingIds: ['F-2', 'F-3'], path: '/src/a.ts', startLine: 2, threadId: 12 }];
+  assert.equal(describeUncovered(r, rows), `No comment on the PR for F-2, F-3 (the comment at /src/a.ts:2, thread 12, was posted earlier and does not list their places). AZPR does not change a posted comment; /pr-comment ${r.id} plans the preview again and asks for another place.\n`);
+  // An adjusted preview is not planned again once its publication started.
+  assert.equal(describeUncovered({ ...r, adjustments: { excluded: [], severity: {} } }, [{ ...rows[0], findingIds: ['F-2'], threadId: undefined }]),
+    'No comment on the PR for F-2 (the comment at /src/a.ts:2 was posted earlier and does not list its place). AZPR does not change a posted comment, and an adjusted preview is not planned again once its publication started; a new review plans these comments anew.\n');
 });
 
 test('the grouping pass proposes groups under the same rules; what breaks one is reported, then dropped', () => {
@@ -455,6 +516,11 @@ test('the grouping pass proposes groups under the same rules; what breaks one is
   assert.deepEqual([final.result.groups, final.issues], [[['F-4', 'F-6']], []]);
   assert.deepEqual(final.corrections.map(c => c.action), ['drop-invalid-group', 'drop-invalid-group']);
   assert.deepEqual(evaluateGrouping('not json', { findings, final: true }).result, { status: 'READY', groups: [] });
+  // The pass has one answer and no continuation: another status goes back, and after the repairs the groups it named stand.
+  const early = JSON.stringify({ status: 'CONTINUE', continuation: 'F-5 is still to be read.', groups: [{ findingIds: ['F-4', 'F-6'] }] });
+  assert.match(evaluateGrouping(early, { findings }).issues.join('\n'), /status must be READY: this pass has no continuation/);
+  const stopped = evaluateGrouping(early, { findings, final: true });
+  assert.deepEqual([stopped.result, stopped.issues, stopped.corrections], [{ status: 'READY', groups: [['F-4', 'F-6']] }, [], [{ action: 'accept-grouping-without-ready', status: 'CONTINUE' }]]);
   assert.match(groupingRepairPrompt(['group F-1, F-9: F-9 is not in findings.']), /this grouping needs correction[\s\S]*- group F-1, F-9[\s\S]*leave them out of every group/);
 });
 
