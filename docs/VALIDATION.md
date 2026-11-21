@@ -53,6 +53,10 @@ acceptance runs, including the MCP-based runs, are preserved in
   catch and 74.2% of the High and Critical ones, scored with the benchmark's
   own pipeline and judge. That recall is higher than any of the 21 tools on
   the benchmark's dashboard; on its overall F2 score AZPR would place sixth.
+  The 0.4.6 candidate, [measured the same way](#martians-code-review-bench-measured-again)
+  on 2026-11-21, found 67.1% and 75.8%, again the highest recall, with an F2
+  that would place eighth: one run each, and within one run's sampling error
+  of 0.3.5.
 
 The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
@@ -247,6 +251,105 @@ adds this record only.
   the page with the others. It is the read the page makes anyway.
 - The planner's policy states the shared comment as a rule, where the page's
   instructions give its conditions and the runtime holds them.
+
+### Martian's Code Review Bench, measured again
+
+The figures of the [public benchmark](#martian-code-review-bench-2026-11-05-and-06)
+are those of 0.3.5, and two releases since changed what the reviewers and the
+verifier are told (0.3.6 and 0.3.7; this candidate changes comment planning
+only). So the benchmark was run once more with this candidate, in the same
+way.
+
+- **Review.** On 2026-11-21, the tree `d7b5ab3` of this candidate (its code is
+  that of `bae12e7`), packed as the npm package is, on OpenCode 2.3.0. Every
+  pull request ran `/pr-deep` with `claude-agent/opus#medium` for all three
+  roles (Claude Code CLI 2.1.314, the version of 2026-11-05), four pull
+  requests at a time, with English output, against the same 50 pull requests
+  at the same commits and the same local implementation of the Azure DevOps
+  calls. All 50 reviews were COMPLETE; the run took about an hour, the median
+  review 156 seconds and the longest 323. They hold 341 confirmed findings:
+  26 high, 133 medium and 182 low (0.3.5: 323, of them 30, 81 and 212).
+- **Scoring.** As on 2026-11-06: each confirmed finding is one inline comment
+  with its summary, evidence and suggested fix, scored by the benchmark's
+  pipeline at commit `e616e84` and the dashboard's judge, Claude Opus 4.5
+  (`claude-opus-4-5-20251101`, temperature 0), through Anthropic's
+  OpenAI-compatible endpoint. The pipeline reported no error.
+
+| Core golden comments, one run each | Comments | Issues per PR | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| AZPR 0.3.5 (2026-11-06) | 323 | 7.6 | 30.0 | 67.7 | 54.1 | 74.2 |
+| This candidate (2026-11-21) | 341 | 8.1 | 27.2 | 67.1 | 51.9 | 75.8 |
+
+The candidate matched 106 of the 158 core golden comments (0.3.5: 107) and 50
+of the 66 High and Critical ones (49); 283 extracted issues matched no golden
+comment (250). On the dashboard's default view that is still the highest
+recall of its 21 tools, by one golden comment (copilot-v2 66.5), now the
+highest High and Critical recall alone (qodo-extended-v2 and augment 74.2),
+and the eighth F2 instead of the sixth: after gemini-v2 (52.8) and gitlab
+(52.7), ahead of sourcery (51.5).
+
+What this shows and what it does not:
+
+- **No measurable change in what is found.** With 158 golden comments one
+  run's recall has a sampling error of about 3.7 points and its precision of
+  about 2.3, so neither figure differs from that of 0.3.5 by more than one
+  run does from the next. The benchmark does not show these releases finding
+  more or less of its list.
+- **More findings, the same matches.** The candidate files 18 more findings
+  and labels more of them medium, as 0.3.7's severity rules intend. The
+  benchmark's precision counts every issue outside its list, accurate or
+  not, so more findings with the same matches lower it. Medium findings did
+  not match the list more often than low ones: by the finding each issue
+  most resembles, 45% of the issues from high findings were counted as
+  matched, 26% of those from medium ones and 31% of those from low ones.
+- **Where the additional unmatched issues come from.** The reviewers filed
+  572 candidates (563), and the verifier merged 216 of them into others as
+  duplicates (227) and confirmed 342 (323). Sorted by what a finding's
+  summary says, again by the finding each issue most resembles: 26 findings
+  ask whether a behavior is intended, as the instructions since 0.3.6 tell
+  the reviewers to do instead of leaving such a finding out, where the 0.3.5
+  run has none; their issues are 7 matched and 24 unmatched ones. Findings
+  about documentation rose from 7 to 13, with 12 more unmatched issues. For
+  the other findings the number of unmatched issues is as it was (244 and
+  241). The questions are not noise for this benchmark: counting the
+  recorded verdicts without them gives precision 27.9 and recall 63.3, so
+  they hold six of the matched golden comments.
+- **The change of this candidate is not in the score.** The comments scored
+  are the findings, one per place, as for 0.3.5. Each review of this run was
+  also followed by a comment preview, which the score does not use: 147
+  inline comments for the 156 high and medium findings with an inline
+  location, 7 of them for several places (16 places), after 23 grouping
+  passes of one request each. Scored as they would be posted, the shared
+  comments could remove at most 9 of the 404 extracted issues.
+
+**The benchmark's corrected counting.** On 2026-11-20 the benchmark changed
+how its last step counts (pull request 75 of its repository, in `23a35d0` of
+2026-11-21). An issue that the judge matched to a golden comment used to
+count as unmatched when another issue already held a match of the same or a
+higher confidence for that comment; now every issue the judge matched counts
+as matched. The steps that extract issues and group duplicates are unchanged,
+and the results the dashboard shows are those of 2026-08-30, counted the
+earlier way, so the table above is the one that compares with the dashboard.
+
+The candidate's issues were judged a second time with the corrected step,
+with the judge's 1,694 verdicts recorded. Of the 283 unmatched issues, 17
+are issues the judge had matched:
+
+| This candidate, core golden comments | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: |
+| Counted as the dashboard's results are | 27.2 | 67.1 | 51.9 | 75.8 |
+| With the benchmark's corrected counting | 28.5 | 67.1 | 52.8 | 75.8 |
+
+Counting the recorded verdicts the earlier way gives the first judging's
+numbers exactly, and counting them the corrected way gives the pipeline's own
+output, pull request by pull request. No other tool's results were counted
+again, so the second row compares with nothing on the dashboard.
+
+Limits: one run of one model combination; the judge model is scheduled for
+retirement (not before 2026-11-24), after which these figures cannot be
+reproduced with it; the pull requests are public ones of well-known
+repositories; and the two judgings cost about US$31 at list prices, by our
+estimate from the number of judged pairs.
 
 ### Limits of this candidate
 
