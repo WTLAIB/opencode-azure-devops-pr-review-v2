@@ -3,15 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, sourceWindow, mergeCandidates, candidatePages } from '../src/comment-work.mjs';
+import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
-import { createAzureClient, parsePullRequestUrl } from '../src/azure.mjs';
+import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
-import { publicationItems, inlineMarker } from '../src/comments.mjs';
-import { renderPublication } from '../src/attribution.mjs';
+import { publicationItems, inlineMarker, sharedMarker } from '../src/comments.mjs';
+import { renderPublication, renderOtherPlaces, listedPlaces, listablePlace, commentAttribution } from '../src/attribution.mjs';
 import { fakeAzure, azureError, FAKE_PAT } from './fake-azure.mjs';
 
 const head = 'b'.repeat(40);
+// The attribution of a comment as the runtime writes it for a verified review, in English.
+const ATTRIBUTION = commentAttribution({ stages: [{ model: 'fixture/reviewer' }] }, 'en', 'fixture/planner');
+const literal = text => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 const finding = (id, severity = 'high') => ({ id, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', location: 'head:/src/Main.java:2', severity, suggestion: 's' });
 
 async function setup(t, findings, azure = fakeAzure()) {
@@ -20,7 +23,7 @@ async function setup(t, findings, azure = fakeAzure()) {
   const store = await createCommentData({ root: directory });
   const target = parsePullRequestUrl(azure.prUrl());
   const review = {
-    id: 'abcdef12', target, outputLanguage: 'en', attribution: 'AI review',
+    id: 'abcdef12', target, outputLanguage: 'en', attribution: ATTRIBUTION,
     snapshot: { head, base: 'a'.repeat(40), files: ['/src/Main.java'], prId: azure.state.prId, repositoryId: 'rid', projectId: 'pid' },
     final: { report: 'Final report text', reviewWarnings: [], newFindings: [],
       dispositions: findings.map(f => ({ id: f.id, status: 'CONFIRMED', reason: 'ok', verifiedFinding: f })) },
@@ -49,6 +52,11 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Waits in these tests are bounded, so a broken lane fails an assertion instead of hanging.
 const within = (promise, ms = 5000) => Promise.race([promise, sleep(ms)]);
+// A wait that must end by what it waits for: running out of time fails the test instead of letting it pass late.
+const inTime = (promise, what, ms = 5000) => {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what}.`)), ms); })]).finally(() => clearTimeout(timer));
+};
 
 test('planning pages hold at most four findings and assemble one plan with every finding accounted for', async t => {
   const findings = Array.from({ length: 10 }, (_, i) => finding(`F-${i + 1}`, i === 9 ? 'low' : 'high'));
@@ -321,7 +329,8 @@ test('after a page fails no page or continuation starts; the running page finish
 });
 
 test('a page still preparing its input when another page fails starts no model work', async t => {
-  const findings = [...Array.from({ length: PLANNING_FINDINGS_PER_PAGE }, (_, i) => finding(`F-${i + 1}`)), { ...finding('F-5'), location: 'head:/src/Other.java:2' }];
+  // F-5 has a severity of its own, so no two places could share a comment: nothing is read before the pages.
+  const findings = [...Array.from({ length: PLANNING_FINDINGS_PER_PAGE }, (_, i) => finding(`F-${i + 1}`)), { ...finding('F-5', 'medium'), location: 'head:/src/Other.java:2' }];
   const { review, store } = await setup(t, findings);
   review.snapshot.files.push('/src/Other.java');
   const fetching = deferred(), release = deferred(), started = [];
@@ -341,8 +350,10 @@ test('a page still preparing its input when another page fails starts no model w
 
 test('a page treats the HEAD source of its own and earlier pages as observed, whichever fetch finishes first', async t => {
   // Page 1 (F-1 to F-4, in A) quotes a line of B; page 2 (F-5, in B) quotes a line of A; both declare line 20.
+  // F-5 has a severity of its own, so no two places could share a comment and no file is read before the pages:
+  // the fetches below are the pages' own.
   const findings = [...Array.from({ length: PLANNING_FINDINGS_PER_PAGE }, (_, i) => ({ ...finding(`F-${i + 1}`), location: 'head:/src/A.java:2' })),
-    { ...finding('F-5'), location: 'head:/src/B.java:2' }];
+    { ...finding('F-5', 'medium'), location: 'head:/src/B.java:2' }];
   const sources = { '/src/A.java': 'a0\nonly in A\n', '/src/B.java': 'b0\nonly in B\n' };
   const answer = payload => JSON.stringify(payload.commentWork.page === 1
     ? { status: 'READY', comments: [{ ...comment('F-1'), path: '/src/B.java', startLine: 20, endLine: 20, anchor: 'only in B' }],
@@ -357,9 +368,9 @@ test('a page treats the HEAD source of its own and earlier pages as observed, wh
       // Two lanes: A is still being fetched while page 2 checks its answer, and
       // page 1 checks its answer only after page 2, which fetched B, finished.
       const aFetched = deferred(), secondDone = deferred();
-      const fetchSource = async path => { if (parallel === 2 && path === '/src/A.java') await within(aFetched.promise); return sources[path]; };
+      const fetchSource = async path => { if (parallel === 2 && path === '/src/A.java') await inTime(aFetched.promise, 'page 2 to release the read of A'); return sources[path]; };
       const { invoke } = stages(async payload => {
-        if (parallel === 2 && payload.commentWork.page === 1) await within(secondDone.promise);
+        if (parallel === 2 && payload.commentWork.page === 1) await inTime(secondDone.promise, 'page 2 to finish before page 1 answers');
         if (parallel === 2 && payload.commentWork.page === 2) setTimeout(aFetched.resolve, 20);
         return answer(payload);
       });
@@ -617,6 +628,128 @@ test('the discussion digest lists only live threads, compactly', () => {
   assert.equal(digest[1].excerpt.length, 300);
 });
 
+test('a posted comment for several places tells a later plan which other places it covers', () => {
+  // As such a comment ends: the marker of its lines, a blank line, its own marker.
+  const marker = '<!-- azpr-comment:' + 'b'.repeat(32) + ' -->\n\n<!-- azpr-comment:' + 'd'.repeat(32) + ' -->';
+  const places = [{ findingId: 'F-2', place: '/src/b.ts:30-34' }, { findingId: 'F-3', place: '/src/c`d.ts:12' }];
+  for (const language of ['en', 'zh-TW', 'zh-CN']) {
+    // The text is what the runtime posts: the planner's body, the list, the attribution and the two markers.
+    const content = `🔴 high: Unchecked call\n\n${'Body. '.repeat(80)}\n\n${renderOtherPlaces(places, language)}\n\n---\n${ATTRIBUTION}\n\n${marker}`;
+    assert.deepEqual(listedPlaces(content), ['/src/b.ts:30-34', '/src/c`d.ts:12'], language);
+    const [entry] = discussionDigest([{ id: 7, status: 1, comments: [{ content }], threadContext: { filePath: '/src/a.ts', rightFileStart: { line: 4 } } }]);
+    assert.deepEqual(entry.alsoAt, ['/src/b.ts:30-34', '/src/c`d.ts:12'], 'The list lies beyond the excerpt, so the digest names the places.');
+    assert.equal(entry.excerpt.length, 300);
+  }
+  // Only AZPR's own comment is read this way: the same words from anyone else, or without a file, are just text.
+  const list = renderOtherPlaces(places, 'en'), lookalike = `Note\n\n${list}`, tail = `\n\n---\n${ATTRIBUTION}\n\n${marker}`;
+  const at = { filePath: '/src/a.ts', rightFileStart: { line: 4 } };
+  assert.equal(Object.hasOwn(discussionDigest([{ id: 8, comments: [{ content: lookalike }], threadContext: at }])[0], 'alsoAt'), false);
+  assert.equal(Object.hasOwn(discussionDigest([{ id: 9, comments: [{ content: `${lookalike}\n\n${marker}` }] }])[0], 'alsoAt'), false);
+  // ... and only where it opened the thread, as AZPR posts it. A reply that quotes such a comment, marker and
+  // all, says nothing about the thread it is in, also when it is the first comment left there.
+  const posted = `Note\n\n${list}${tail}`;
+  const quoting = discussionDigest([{ id: 10, comments: [{ id: 1, parentCommentId: 0, content: 'Is this still right?' }, { id: 2, parentCommentId: 1, content: posted }], threadContext: at }])[0];
+  assert.deepEqual([Object.hasOwn(quoting, 'alsoAt'), quoting.azpr], [false, true]);
+  const orphan = discussionDigest([{ id: 11, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, { id: 2, parentCommentId: 1, content: posted }], threadContext: at }])[0];
+  assert.equal(Object.hasOwn(orphan, 'alsoAt'), false);
+  assert.deepEqual(discussionDigest([{ id: 12, comments: [{ id: 1, parentCommentId: 0, content: posted }, { id: 2, parentCommentId: 1, content: 'Fixed in both.' }], threadContext: at }])[0].alsoAt, ['/src/b.ts:30-34', '/src/c`d.ts:12']);
+  // The opener is the comment without a parent, in whatever order the comments come, and what the digest says
+  // of the thread is that one comment's: the places are never shown next to the words of a reply.
+  const reply = { id: 2, parentCommentId: 1, author: { displayName: 'Ben' }, content: 'Retries are a separate matter.' };
+  const opener = { id: 1, parentCommentId: 0, author: { displayName: 'Review bot' }, content: posted };
+  for (const comments of [[opener, reply], [reply, opener]]) {
+    const [entry] = discussionDigest([{ id: 13, comments, threadContext: at }]);
+    assert.deepEqual([entry.alsoAt, entry.author, entry.excerpt.startsWith('Note **📍 Also at** (the same defect'), entry.comments], [['/src/b.ts:30-34', '/src/c`d.ts:12'], 'Review bot', true, 2]);
+  }
+  // A thread whose opener is gone is described by the first comment that is left, as before.
+  const left = discussionDigest([{ id: 14, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, reply], threadContext: at }])[0];
+  assert.deepEqual([left.author, left.excerpt, Object.hasOwn(left, 'alsoAt')], ['Ben', 'Retries are a separate matter.', false]);
+  // The opener is comment 1 of its thread, as publication takes it. When it is gone, no later comment stands
+  // for it, whatever that one says of its parent (none, or no such field): what it quotes is not this thread's.
+  for (const parent of [{ parentCommentId: 0 }, {}]) {
+    const quoted = discussionDigest([{ id: 15, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, { id: 2, ...parent, author: { displayName: 'Ben' }, content: posted }], threadContext: at }])[0];
+    assert.deepEqual([Object.hasOwn(quoted, 'alsoAt'), quoted.author, quoted.azpr], [false, 'Ben', true]);
+  }
+});
+
+test('the list of other places is read back only in the form the runtime writes it', () => {
+  // A comment for several places ends with the marker of its lines, a blank line and its own marker.
+  const one = '<!-- azpr-comment:' + 'c'.repeat(32) + ' -->', marker = `${one}\n\n<!-- azpr-comment:${'e'.repeat(32)} -->`, tail = `\n\n---\n${ATTRIBUTION}\n\n${marker}`;
+  const places = [{ findingId: 'F-2', place: '/src/b.ts:30-34' }, { findingId: 'Q-1003', place: '/src/c.ts:12' }], read = ['/src/b.ts:30-34', '/src/c.ts:12'];
+  const list = renderOtherPlaces(places, 'en');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}${tail}`), read);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n${marker}`), read, 'Without an attribution the markers follow at once.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}\n\n${one}`), [], 'One marker ends a comment for one place, which has no list.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}\n\n${one}\n${one}`), [], 'The two markers stand apart.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}${tail}\n\n${one}`), [], 'A third marker is not what the runtime writes.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}${tail}`.replaceAll('\n', '\r\n')), read, 'Line ends as a service may return them.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}${tail}\n\n`), read);
+  // Anything else is text: no marker, another heading, the heading inside a line, rows that do not follow it, text after the rows.
+  assert.deepEqual(listedPlaces('🔴 high: Title\n\nNo list here.'), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}`), [], 'No marker.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}`), [], 'No marker at the end.');
+  assert.deepEqual(listedPlaces(`Body.\n\n**📍 Also at** (…):\n- \`/x.ts:1\` (F-1)${tail}`), [], 'Another heading.');
+  assert.deepEqual(listedPlaces(`Body.\n\nSee **📍 Also at** (the same defect; fix these places with it):\n- \`/x.ts:1\` (F-1)${tail}`), [], 'The heading is a line of its own.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('\n', '\nnot a row\n')}${tail}`), [], 'Rows follow the heading directly.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n- no place here${tail}`), [], 'Every line under the heading is a row.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\nMore of the body.${tail}`), [], 'A list inside someone\'s text is not the runtime\'s.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n${marker}`), [], 'A blank line ends the list.');
+  // After the rows comes what the runtime writes and nothing else: the markers, or a rule, the attribution's line and the markers.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nThe list above is only an example.\n\n---\n${ATTRIBUTION}\n\n${marker}`), [], 'A paragraph between the list and the attribution.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}\n\nOne more paragraph.\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n\n${marker}`), [], 'A rule without an attribution.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n${ATTRIBUTION}\n\n${marker}`), [], 'An attribution without its rule.');
+  // The attribution is the one line the runtime writes, which ends with its models: a comment that someone continued
+  // after it (a heading and a withdrawal, say, with or without a blank line) no longer says what it lists.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}\n## Correction\nThe second place is withdrawn.\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION} The second place is withdrawn.\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nAI review\n\n${marker}`), [], 'Not an attribution of the runtime\'s: no models.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION} No change is needed in \`/src/b.ts:30-34\`\n\n${marker}`), [], 'Text after the models, though it ends with a code span.');
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nAI review \`fixture/planner\`\n\n${marker}`), [], 'The models follow the word for them.');
+  // The whole line is the runtime's wording: other words before the models are someone's sentence, whatever it ends with.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\nThe places above are withdrawn. Models: \`provider/model\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION.replace('Models:', 'The places above are withdrawn. Models:')}\n\n${marker}`), []);
+  // ... and the models are model references, as settings take them: a sentence in a code span, a placeholder or an
+  // overlong name is none.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`the other place was withdrawn\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`YOUR_PROVIDER/YOUR_MODEL\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`provider/${'m'.repeat(510)}\`\n\n${marker}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list}\n\n---\n${ATTRIBUTION}, \`provider/model#high\`\n\n${marker}`), read);
+  // A row is a place and a finding's ID, as the runtime writes IDs: a row whose ID someone replaced is no row, and the list no list.
+  assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(F-2)', '(withdrawn)')}${tail}`), []);
+  assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(Q-1003)', '(Q-1003, fixed)')}${tail}`), []);
+  // ... and a place is a path with its lines, as a finding's place is written: one row of another form makes the whole list none.
+  for (const other of ['not a location', '/src/b.ts', '/src/b.ts:0', '/src/b.ts:3-', 'src/b.ts:3', '/src/b.ts:3-x', '/src/b.ts:12-7', '/src/a.ts:1` or `/src/b.ts:2', '/src/b.ts:3\ttab', '/src/a.ts:4 corrected to /src/b.ts:8', '/:3']) {
+    assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('/src/b.ts:30-34', other)}${tail}`), [], other);
+  }
+  // A row is the row the runtime writes for that place and ID under that heading, to the character: other spacing,
+  // other brackets, the other language's brackets or anything after the row are not.
+  for (const [from, to] of [['- `/src/b.ts:30-34` (F-2)', '-  `/src/b.ts:30-34` (F-2)'], ['` (F-2)', '`(F-2)'], ['` (F-2)', '` （F-2）'], ['` (F-2)', '`（F-2）'], ['- `/src/b.ts:30-34`', '- `` /src/b.ts:30-34 ``'], ['(F-2)', '(F-2)\t'], ['(F-2)', '(F-2) ']]) {
+    assert.deepEqual(listedPlaces(`Body.\n\n${list.replace(from, to)}${tail}`), [], JSON.stringify(to));
+  }
+  const chinese = renderOtherPlaces(places, 'zh-TW');
+  assert.deepEqual(listedPlaces(`Body.\n\n${chinese}${tail}`), read);
+  assert.deepEqual(listedPlaces(`Body.\n\n${chinese.replace('（F-2）', ' (F-2)')}${tail}`), [], 'English brackets under the Chinese heading.');
+  // What `commentAttribution` writes, for each kind of review and language, is such a line.
+  const provenance = { stages: [{ model: 'provider/reviewer' }, { model: 'provider/verifier#high' }] };
+  for (const language of ['en', 'zh-TW', 'zh-CN']) for (const options of [{}, { verification: 'none' }, { verification: 'none', coverage: { complete: false, reviewed: 3, total: 5 } }]) {
+    const attribution = commentAttribution(provenance, language, 'provider/planner', options);
+    assert.deepEqual(listedPlaces(`Body.\n\n${renderOtherPlaces(places, language)}\n\n---\n${attribution}\n\n${marker}`), read, `${language} ${JSON.stringify(options)}: ${attribution}`);
+  }
+  assert.deepEqual(listedPlaces(null), []);
+  // A text that quotes such a list above the runtime's own: the rows are those under the last heading.
+  assert.deepEqual(listedPlaces(`Body.\n\n${renderOtherPlaces([{ findingId: 'F-9', place: '/fake.ts:1' }], 'en')}\n\nMore.\n\n${list}${tail}`), read);
+  // Whatever a file is called, a place that may be listed reads back as it was written, in each language.
+  for (const place of ['/src/a b.ts:3', '/src/a`b``c.ts:3-9', '/src/(F-1) x.ts:7', '/src/名前.ts:1', '/src/a（F-2）.ts:5', '/src/` (F-1)`.ts:2', '/src/&lt;!--.ts:4', '/`.ts:1', '/src/a - `x` (F-3).ts:10-11']) {
+    assert.equal(listablePlace(place), true, place);
+    for (const language of ['en', 'zh-TW', 'zh-CN']) {
+      assert.deepEqual(listedPlaces(`Body.\n\n${renderOtherPlaces([{ findingId: 'F-2', place }, { findingId: 'F-3', place: '/z.ts:1' }], language)}${tail}`), [place, '/z.ts:1'], `${place} ${language}`);
+    }
+  }
+  // One that cannot (a control character, an end of an HTML comment, which the posted text would change) is never offered for a list.
+  for (const place of ['/src/x-->y.ts:2', '/src/x<!--y.ts:2', '/src/a\tb.ts:2', '/src/a\nb.ts:2', '/src/a\u007fb.ts:2', '/src/a\u0085b.ts:2', '/src/a\u2028b.ts:2', 7, null, undefined]) assert.equal(listablePlace(place), false, String(place));
+});
+
 test('locations and source windows', () => {
   assert.deepEqual(parseLocation('head:/src/a.ts:12-14'), { side: 'head', path: '/src/a.ts', start: 12, end: 14 });
   assert.deepEqual(parseLocation('/src/a.ts:7'), { side: 'head', path: '/src/a.ts', start: 7, end: 7 });
@@ -692,6 +825,404 @@ test('candidate pages keep a group on one page and plan an oversized group separ
   const split = candidatePages([{ ...a, evidence: big }, { ...b, evidence: big }], [['Q-1', 'Q-1001']]);
   assert.deepEqual(split.offered, [], 'A group that does not fit one page is not offered, and its evidence is not cut.');
   assert.deepEqual(ids(split.pages), [['Q-1'], ['Q-1001']]);
+});
+
+// ------------------------------------------------------------ one defect at several places
+// Findings on line 2 of their own files: the same mistake wherever a test says so.
+const placed = (id, file, severity = 'high', extra = {}) => ({ ...finding(id, severity), location: `head:/src/${file}.java:2`, ...extra });
+const sourceOf = async () => 'line one\nline two\nline three\n';
+async function placedSetup(t, findings) {
+  const prepared = await setup(t, findings);
+  prepared.review.snapshot.files = [...new Set(findings.map(f => parseLocation(f.location).path))];
+  return prepared;
+}
+// The planning pages among recorded payloads, in page order (lanes record them as they start).
+// Whether any two of these findings could share a planning page.
+const pairFits = findings => pairable(findings).length > 0;
+const pagesOf = payloads => payloads.filter(p => p.commentWork.kind !== 'group').sort((x, y) => x.commentWork.page - y.commentWork.page);
+// A planner that writes one comment for every listed group and its own comment for every other finding.
+const groupwise = payload => {
+  const grouped = new Set((payload.repeatCandidates ?? []).flat());
+  const at = f => ({ path: parseLocation(f.location).path, startLine: 2, endLine: 2, anchor: 'line two' });
+  const byId = new Map(payload.findings.map(f => [f.id, f]));
+  return JSON.stringify({ status: 'READY', skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low.' })),
+    comments: [...(payload.repeatCandidates ?? []).map(ids => ({ findingIds: ids, mergeReason: 'The same unchecked call.', severity: byId.get(ids[0]).severity, ...at(byId.get(ids[0])), body: `🔴 high: Unchecked call\n\nBody.` })),
+      ...payload.findings.filter(f => f.severity !== 'low' && !grouped.has(f.id)).map(f => ({ ...comment(f.id), severity: f.severity, ...at(f) }))] });
+};
+
+test('repeat candidates: high and medium findings on HEAD lines; a set needs one severity and two places', () => {
+  const a = placed('F-1', 'A'), b = placed('F-2', 'B'), c = placed('F-3', 'C', 'medium'), d = placed('F-4', 'A');
+  assert.deepEqual(repeatEligible([a, b, c, placed('F-5', 'D', 'low'), { ...placed('F-6', 'E'), inline: false }, { ...placed('F-7', 'F'), location: 'base:/src/F.java:2' },
+    { ...placed('F-8', 'G'), location: 'head:/src/G.java' }]).map(f => f.id), ['F-1', 'F-2', 'F-3']);
+  assert.deepEqual(repeatEligible([a, b, c], [['F-2', 'F-9']]).map(f => f.id), ['F-1', 'F-3'], 'A quick finding that is a merge candidate is left to that rule.');
+  assert.deepEqual(repeatEligible([a, b, c], [], ['/src/A.java', 'src/C.java']).map(f => f.id), ['F-1', 'F-3'], 'Only places on files the PR changes.');
+  assert.deepEqual(repeatEligible([a, { ...b, location: 'head:/src/B.java:5-3' }, { ...c, location: 'head:/src/x-->y.java:2' }, { ...d, location: 'head:/src/a\tb.java:2' }]).map(f => f.id), ['F-1'],
+    'Lines that end before they begin are no place, and a file name a list cannot hold as it is is listed nowhere.');
+  assert.deepEqual(severitySets([a, b, c]), [['F-1', 'F-2']], 'One medium finding is no set.');
+  assert.deepEqual(severitySets([a, d]), [], 'Findings that all share lines lie at one place.');
+  assert.deepEqual(severitySets([a, d, b]), [['F-1', 'F-4', 'F-2']]);
+  assert.deepEqual(severitySets([a, { ...d, location: 'head:/src/A.java:3-5' }]), [['F-1', 'F-4']], 'Other lines of one file are another place.');
+  assert.deepEqual(severitySets([a, c]), []);
+});
+
+test('a group larger than a page\'s text is planned in parts of two or more findings; no place is dropped', () => {
+  const big = 'x'.repeat(5000);
+  const findings = ['A', 'B', 'C', 'D', 'E'].map((file, i) => placed(`F-${i + 1}`, file, 'high', { evidence: big }));
+  assert.deepEqual(boundedGroups([['F-1', 'F-2', 'F-3', 'F-4', 'F-5']], findings), [['F-1', 'F-2'], ['F-3', 'F-4']], 'F-5 is left alone and gets its own comment.');
+  assert.deepEqual(boundedGroups([['F-1', 'F-2', 'F-3', 'F-4']], findings), [['F-1', 'F-2'], ['F-3', 'F-4']]);
+  const small = findings.map(f => ({ ...f, evidence: 'e' }));
+  assert.deepEqual(boundedGroups([['F-1', 'F-2', 'F-3', 'F-4', 'F-5'], ['F-9']], small), [['F-1', 'F-2', 'F-3', 'F-4', 'F-5']]);
+  // A long finding before two short ones: it is planned alone, and the part that follows fits a page.
+  const uneven = [placed('F-1', 'A', 'high', { evidence: 'x'.repeat(9000) }), placed('F-2', 'B', 'high', { evidence: 'x'.repeat(4000) }), placed('F-3', 'C', 'high', { evidence: 'x'.repeat(4000) })];
+  const parts = boundedGroups([['F-1', 'F-2', 'F-3']], uneven);
+  assert.deepEqual(parts, [['F-2', 'F-3']]);
+  const length = ids => ids.reduce((sum, id) => sum + JSON.stringify(uneven.find(f => f.id === id)).length, 0);
+  assert.ok(parts.every(ids => length(ids) <= 12000), 'No part is larger than a page.');
+  assert.deepEqual(boundedGroups([['F-1', 'F-2', 'F-3']], [uneven[1], uneven[0], uneven[2]].map((f, i) => ({ ...f, id: `F-${i + 1}` }))), [], 'A long finding between two short ones leaves no two for one page.');
+});
+
+test('on one page the findings of equal severity at different places are offered; one comment lists the other places', async t => {
+  const { review, store } = await placedSetup(t, [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C', 'medium'), placed('F-4', 'D', 'low')]);
+  const { invoke, payloads } = stages(async payload => groupwise(payload));
+  const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf });
+  assert.equal(payloads.length, 1, 'No grouping pass: the page sees every finding itself.');
+  assert.deepEqual(payloads[0].repeatCandidates, [['F-1', 'F-2']]);
+  assert.equal(Object.hasOwn(payloads[0], 'mergeCandidates'), false);
+  assert.deepEqual(payloads[0].findings.map(f => f.id), ['F-1', 'F-2', 'F-3', 'F-4'], 'The page keeps its order.');
+  assert.deepEqual(plan.comments.map(c => [c.findingIds ?? c.findingId, c.path, c.otherPlaces ?? null]),
+    [[['F-1', 'F-2'], '/src/A.java', [{ findingId: 'F-2', place: '/src/B.java:2' }]], ['F-3', '/src/C.java', null]]);
+  assert.match(plan.comments[0].content, new RegExp(`Body\\.\\n\\n\\*\\*📍 Also at\\*\\* \\(the same defect; fix these places with it\\):\\n- \`/src/B\\.java:2\` \\(F-2\\)\\n\\n---\\n${literal(ATTRIBUTION)}\\n\\n<!-- azpr-comment:[a-f0-9]{32} -->\\n\\n<!-- azpr-comment:[a-f0-9]{32} -->$`));
+  assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-4']);
+  assert.match(plan.summary.content, /high: 2 · medium: 1 · low: 1/, 'Every place keeps its row and its count.');
+  // The same findings on the same lines are one place: nothing is offered and the input is as before.
+  const same = await setup(t, [finding('F-1'), finding('F-2')]);
+  const unchanged = stages(async payload => JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }));
+  await prepareComments(same.review, same.store, unchanged.invoke);
+  assert.equal(Object.hasOwn(unchanged.payloads[0], 'repeatCandidates'), false);
+});
+
+test('only a place whose lines the HEAD file has is offered; without that text nothing is', async t => {
+  // F-3 names line 40 of a file of three lines, F-4 a file that cannot be read at HEAD (deleted in this PR, say).
+  const findings = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C', 'high', { location: 'head:/src/C.java:40' }), placed('F-4', 'D')];
+  const fetchSource = async path => { if (path === '/src/D.java') throw new Error('not found'); return 'line one\nline two\nline three\n'; };
+  const { review, store } = await placedSetup(t, findings);
+  const one = stages(async payload => groupwise(payload));
+  const plan = await prepareComments(review, store, one.invoke, { fetchSource });
+  assert.deepEqual(one.payloads[0].repeatCandidates, [['F-1', 'F-2']]);
+  assert.deepEqual(plan.comments.map(c => c.findingIds ?? c.findingId), [['F-1', 'F-2'], 'F-3', 'F-4']);
+  // A planner that combines them all the same is refused, with the place and the reason.
+  const forced = await placedSetup(t, findings), issues = [];
+  const insisting = stages(async (payload, turn, evaluation) => {
+    if (turn) { issues.push(...evaluation.issues); return groupwise(payload); }
+    return JSON.stringify({ status: 'READY', skipped: [{ findingId: 'F-4', cause: 'cannot-anchor', reason: 'No source.' }], comments: [{ findingIds: ['F-1', 'F-2', 'F-3'], mergeReason: 'Same.', severity: 'high', path: '/src/A.java', startLine: 2, endLine: 2, anchor: 'line two', body: '🔴 high: Unchecked call\n\nBody.' }] });
+  });
+  await prepareComments(forced.review, forced.store, insisting.invoke, { fetchSource });
+  assert.match(issues.join('\n'), /combined comment for F-1, F-2, F-3: the findings are not all in one listed group/);
+  // With several pages the pass sees only such places.
+  const many = [...findings, placed('F-5', 'E'), placed('F-6', 'F')];
+  const paged = await placedSetup(t, many);
+  const pass = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [] }) : groupwise(payload));
+  await prepareComments(paged.review, paged.store, pass.invoke, { fetchSource });
+  assert.deepEqual(pass.payloads[0].findings.map(f => f.id), ['F-1', 'F-2', 'F-5', 'F-6']);
+  // Without the text of the files nothing can be listed, so nothing is offered and no pass runs.
+  const blind = await placedSetup(t, many);
+  const none = stages(async payload => JSON.stringify({ status: 'READY', skipped: payload.findings.map(f => ({ findingId: f.id, cause: 'cannot-anchor', reason: 'No source.' })), comments: [] }));
+  await prepareComments(blind.review, blind.store, none.invoke);
+  assert.ok(none.payloads.every(p => p.commentWork.kind === 'plan' && !Object.hasOwn(p, 'repeatCandidates')));
+});
+
+test('a comment for several places planned onto lines that already carry a comment of AZPR\'s goes back to the planner, which moves it', async t => {
+  const findings = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C')];
+  const { review, store } = await placedSetup(t, findings);
+  // What an earlier publication left at F-1's lines: a comment for that place alone.
+  const first = await prepareComments(review, store, stages(async payload => groupwise({ ...payload, repeatCandidates: [] })).invoke, { fetchSource: sourceOf });
+  const threads = [{ id: 31, status: 'active', comments: [{ id: 1, parentCommentId: 0, content: first.comments[0].content }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 2 } } }];
+  const issues = [];
+  const { invoke } = stages(async (payload, turn, evaluation) => {
+    if (!turn) return groupwise(payload);
+    issues.push(...evaluation.issues);
+    // The planner anchors the comment at another of its places.
+    return JSON.stringify({ status: 'READY', skipped: [], comments: [{ findingIds: ['F-1', 'F-2', 'F-3'], mergeReason: 'Same.', severity: 'high', path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'line two', body: '🔴 high: Unchecked call\n\nBody.' }] });
+  });
+  const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf, discussions: discussionDigest(threads), posted: markersInThreads(threads) });
+  assert.match(issues.join('\n'), /the PR already has a comment of AZPR's on these quoted lines \(thread 31\), and a second one is not put on them/);
+  assert.deepEqual(plan.comments.map(c => [c.findingId, c.path, c.otherPlaces.map(other => other.place)]), [['F-2', '/src/B.java', ['/src/A.java:2', '/src/C.java:2']]]);
+  // Once that comment is on the PR, the same plan made again is that very comment: nothing is sent back.
+  const there = [...threads, { id: 32, status: 'active', comments: [{ id: 1, parentCommentId: 0, content: plan.comments[0].content }], threadContext: { filePath: '/src/B.java', rightFileStart: { line: 2 } } }];
+  const again = stages(async payload => JSON.stringify({ status: 'READY', skipped: [], comments: [{ findingIds: ['F-1', 'F-2', 'F-3'], mergeReason: 'Same.', severity: 'high', path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'line two', body: '🔴 high: Unchecked call\n\nBody.' }] }));
+  const same = await prepareComments(review, store, async (payload, handler) => { const page = await again.invoke(payload, handler); assert.deepEqual(page.corrections, []); return page; },
+    { fetchSource: sourceOf, discussions: discussionDigest(there), posted: markersInThreads(there) });
+  assert.equal(same.comments[0].marker, plan.comments[0].marker);
+});
+
+test('publication knows a comment for several places by its own marker: it is skipped only when the PR has this very comment', async t => {
+  const findings = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C')];
+  const { review, store, azure } = await placedSetup(t, findings);
+  const { api, run, attempts } = publisher(azure);
+  const plan = (answer, options = {}) => prepareComments(review, store, stages(answer).invoke, { fetchSource: sourceOf, ...options });
+  const separate = await plan(async payload => groupwise({ ...payload, repeatCandidates: [] })), shared = await plan(async payload => groupwise(payload));
+  const item = shared.comments[0];
+  assert.deepEqual([shared.comments.length, item.marker === sharedMarker(review.target, item, 0), item.marker === separate.comments[0].marker], [1, true, false]);
+  const only = comments => ({ ...review, publication: new Map(), plan: { summary: null, skipped: [], comments } });
+  // An earlier publication put a comment for F-1 alone on the PR.
+  assert.equal((await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts })).status, 'POSTED');
+  // A plan made without a look at the PR has the shared comment on the same lines. It is another comment: it is posted
+  // with every place, and the receipt says of it only what is so.
+  const later = only(shared.comments);
+  const result = await publishPlan({ run, review: later, azure: api, attempts });
+  assert.deepEqual([result.status, result.counts, azure.callsTo('createThread').length], ['POSTED', { VERIFIED: 1 }, 2]);
+  assert.deepEqual(azure.state.threads.map(thread => thread.comments[0].content), [separate.comments[0].content, item.content], 'The earlier comment is as it was; the new one lists the other places.');
+  assert.match(renderPublication(later, result), /^Publication \(VERIFIED=1\):\n- F-1, F-2, F-3 \(\/src\/A\.java:2\): VERIFIED; thread=\d+\n\nPOSTED\/VERIFIED entries/);
+  // Published again, it is found by its own marker, which no other comment has; its record is under that marker alone.
+  const again = await publishPlan({ run, review: only(shared.comments), azure: api, attempts });
+  assert.deepEqual([again.counts, azure.callsTo('createThread').length], [{ ALREADY_PRESENT: 1 }, 2]);
+  assert.deepEqual([attempts.entries[item.marker].state, Object.hasOwn(attempts.entries, item.linesMarker)], ['CREATED', false]);
+  // Other places on the same quoted lines are another comment; the same places are the same one whoever is named first.
+  assert.notEqual(sharedMarker(review.target, { ...item, otherPlaces: item.otherPlaces.slice(0, 1) }), item.marker);
+  assert.equal(sharedMarker(review.target, { ...item, otherPlaces: [...item.otherPlaces].reverse() }), item.marker);
+  // With a person's adjustments, the other AZPR comments of the PR are counted by comment: the shared comment of the
+  // preview is none, whatever second marker it carries, and one outside the preview is one.
+  const counted = await publishPlan({ run, review: only(shared.comments), azure: api, attempts, compare: true });
+  assert.deepEqual([counted.counts, counted.otherComments], [{ ALREADY_PRESENT: 1 }, 1], 'The comment for F-1 alone is the other one.');
+  const outside = await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts, compare: true });
+  assert.equal(outside.otherComments, 1, 'The shared comment, with its two markers, is one comment.');
+  // A reply in the preview's own thread that quotes another thread's marker does not hide that thread.
+  azure.state.threads[0].comments.push({ id: 2, parentCommentId: 1, content: `See also ${item.marker}`, commentType: 'text' });
+  const quoted = await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts, compare: true });
+  assert.equal(quoted.otherComments, 1, 'The shared comment\'s thread is still another comment.');
+  azure.state.threads[0].comments.pop();
+  // Which thread a quoted marker is found in first does not matter: a preview's two comments, one of them quoted in
+  // the other's thread, are the preview's own in either order of the threads.
+  const quoting = await placedSetup(t, findings), q = publisher(quoting.azure);
+  const twoItems = { ...quoting.review, publication: new Map(), plan: { summary: null, skipped: [], comments: separate.comments.slice(0, 2) } };
+  await publishPlan({ run: q.run, review: twoItems, azure: q.api, attempts: q.attempts });
+  quoting.azure.state.threads[0].comments.push({ id: 2, parentCommentId: 1, content: `As in ${separate.comments[1].marker}`, commentType: 'text' });
+  for (const reversed of [false, true]) {
+    if (reversed) quoting.azure.state.threads.reverse();
+    const ownOnly = await publishPlan({ run: q.run, review: { ...twoItems, publication: new Map() }, azure: q.api, attempts: q.attempts, compare: true });
+    assert.deepEqual([ownOnly.counts, ownOnly.otherComments], [{ ALREADY_PRESENT: 2 }, 0], reversed ? 'reversed' : 'in order');
+  }
+  // Two defects at the same places are two comments on the PR.
+  const twin = { ...item, findingId: 'F-9', findingIds: ['F-9', 'F-8'], marker: sharedMarker(review.target, item, 1) };
+  twin.content = item.content.replace(item.marker, twin.marker);
+  const both = await placedSetup(t, findings), pair = publisher(both.azure);
+  const result2 = await publishPlan({ run: pair.run, review: { ...both.review, publication: new Map(), plan: { summary: null, skipped: [], comments: [item, twin] } }, azure: pair.api, attempts: pair.attempts });
+  assert.deepEqual([result2.counts, both.azure.callsTo('createThread').length], [{ VERIFIED: 2 }, 2]);
+  // Planning keeps the two kinds off each other's lines. With the shared comment on the PR, a plan that comments on
+  // F-1 alone at those lines is sent back; left as it is, F-1 is skipped with the reason and the others are planned.
+  const threads = [{ id: 51, status: 'active', comments: [{ id: 1, parentCommentId: 0, content: item.content }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 2 } } }];
+  const issues = [];
+  const alone = await plan(async (payload, turn, evaluation) => { if (turn) issues.push(...evaluation.issues); return groupwise({ ...payload, repeatCandidates: [] }); }, { discussions: discussionDigest(threads), posted: markersInThreads(threads) });
+  assert.match(issues.join('\n'), /comment for F-1: the PR already has a comment of AZPR's on these quoted lines \(thread 51\), and a second one is not put on them\. Skip F-1 with cause existing-thread when that thread covers it, or quote other lines\./);
+  assert.deepEqual([alone.comments.map(c => c.findingId), alone.skipped.map(s => s.findingId)], [['F-2', 'F-3'], ['F-1']]);
+});
+
+test('a page continued in a new session still offers what is open of a group, while two of its findings are', async t => {
+  const findings = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C'), placed('F-4', 'D', 'medium')];
+  const { review, store } = await placedSetup(t, findings);
+  const { invoke, payloads } = stages(async payload => {
+    // The first session comments on F-1 alone and stops; the next one sees what is left.
+    if (payload.findings.length === 4) return JSON.stringify({ status: 'CONTINUE', continuation: 'F-1 is done; F-2, F-3 and F-4 remain.', skipped: [],
+      comments: [{ ...comment('F-1'), path: '/src/A.java', startLine: 2, endLine: 2, anchor: 'line two' }] });
+    return groupwise(payload);
+  });
+  const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf });
+  assert.deepEqual(payloads.map(p => [p.findings.map(f => f.id), p.repeatCandidates ?? null]), [[['F-1', 'F-2', 'F-3', 'F-4'], [['F-1', 'F-2', 'F-3']]], [['F-2', 'F-3', 'F-4'], [['F-2', 'F-3']]]]);
+  assert.deepEqual(plan.comments.map(c => c.findingIds ?? c.findingId), ['F-1', ['F-2', 'F-3'], 'F-4']);
+  // What is left of a set must still lie at two places: two findings on the same lines can share no comment.
+  const same = await placedSetup(t, [placed('F-1', 'A', 'medium'), placed('F-2', 'A', 'medium'), placed('F-3', 'B', 'medium')]);
+  const left = stages(async payload => payload.findings.length === 3
+    ? JSON.stringify({ status: 'CONTINUE', continuation: 'F-3 is done; F-1 and F-2 remain.', skipped: [], comments: [{ ...comment('F-3'), severity: 'medium', path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'line two' }] })
+    : groupwise(payload));
+  await prepareComments(same.review, same.store, left.invoke, { fetchSource: sourceOf });
+  assert.deepEqual(left.payloads.map(p => [p.findings.map(f => f.id), p.repeatCandidates ?? null]), [[['F-1', 'F-2', 'F-3'], [['F-1', 'F-2', 'F-3']]], [['F-1', 'F-2'], null]]);
+  // One finding left of a group is no group.
+  const pair = await placedSetup(t, findings.slice(0, 2));
+  const alone = stages(async payload => payload.findings.length === 2
+    ? JSON.stringify({ status: 'CONTINUE', continuation: 'F-1 is done; F-2 remains.', skipped: [], comments: [{ ...comment('F-1'), path: '/src/A.java', startLine: 2, endLine: 2, anchor: 'line two' }] })
+    : groupwise(payload));
+  await prepareComments(pair.review, pair.store, alone.invoke, { fetchSource: sourceOf });
+  assert.deepEqual(alone.payloads.map(p => p.repeatCandidates ?? null), [[['F-1', 'F-2']], null]);
+});
+
+test('the grouping pass reads its findings inline: a long list goes without the evidence, and one that is still too long is not grouped', async t => {
+  const answer = async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [] }) : groupwise(payload);
+  const files = Array.from({ length: 40 }, (_, i) => `F${i}`);
+  // 40 findings with 2,000 characters of evidence each: more than the pass takes, but not without the evidence.
+  const long = await placedSetup(t, files.map((file, i) => placed(`F-${i + 1}`, file, 'high', { evidence: 'e'.repeat(2000) })));
+  const some = stages(answer), notes = [];
+  await prepareComments(long.review, long.store, some.invoke, { fetchSource: sourceOf, progress: note => notes.push(note) });
+  const pass = some.payloads.find(p => p.commentWork.kind === 'group');
+  assert.ok(Array.isArray(pass.findings), 'The findings are inline, never a reference the pass would have to read.');
+  assert.equal(pass.findings.length, 40);
+  assert.deepEqual(Object.keys(pass.findings[0]), ['id', 'severity', 'location', 'summary', 'suggestion']);
+  assert.ok(JSON.stringify(pass.findings).length <= 60000);
+  // Summaries alone beyond that size: no pass, a note, and every finding planned on its own.
+  const huge = await placedSetup(t, files.map((file, i) => ({ ...placed(`F-${i + 1}`, file), summary: 's'.repeat(2000) })));
+  const skipped = stages(answer), said = [];
+  const plan = await prepareComments(huge.review, huge.store, skipped.invoke, { fetchSource: sourceOf, progress: note => said.push(note) });
+  assert.ok(skipped.payloads.every(p => p.commentWork.kind === 'plan' && !Object.hasOwn(p, 'repeatCandidates')));
+  assert.match(said.join('\n'), /Planning comments: 40 findings are too many to look through for one defect at several places; planning goes on without grouping them\./);
+  assert.equal(plan.comments.length, 40);
+});
+
+test('with several pages one grouping pass runs first; a group shares a page, which may then hold more than four findings', async t => {
+  const findings = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C'), placed('F-4', 'D'), placed('F-5', 'E'), placed('F-6', 'F'), placed('F-7', 'G', 'medium'), placed('F-8', 'H', 'low')];
+  const { review, store } = await placedSetup(t, findings);
+  const notes = [];
+  const { invoke, payloads } = stages(async payload => payload.commentWork.kind === 'group'
+    // F-2 to F-6 repeat one mistake. F-7 is the only medium finding: no group could hold it, so the pass is not asked about it.
+    ? JSON.stringify({ status: 'READY', groups: [{ findingIds: ['F-6', 'F-2', 'F-5', 'F-3', 'F-4'], reason: 'The same unchecked call in each handler.' }] })
+    : groupwise(payload));
+  const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf, progress: note => notes.push(note) });
+  const pass = payloads[0], pages = pagesOf(payloads);
+  assert.equal(payloads.filter(p => p.commentWork.kind === 'group').length, 1, 'One pass, before any page.');
+  assert.deepEqual(pass.commentWork, { kind: 'group' });
+  assert.deepEqual(pass.findings.map(f => f.id), ['F-1', 'F-2', 'F-3', 'F-4', 'F-5', 'F-6'], 'The pass sees the findings that could share a comment: not the low one, nor the one that is alone in its severity.');
+  assert.deepEqual(Object.keys(pass.findings[0]), ['id', 'severity', 'location', 'summary', 'evidence', 'suggestion']);
+  assert.deepEqual(Object.keys(pass).sort(), ['commentWork', 'findings', 'outputLanguage', 'reviewId']);
+  assert.match(notes[0], /looking for one defect at several places \(6 findings\)/);
+  assert.deepEqual(pages.map(p => p.findings.map(f => f.id)), [['F-1'], ['F-2', 'F-3', 'F-4', 'F-5', 'F-6'], ['F-7', 'F-8']], 'The group has a page of its own, in the order of the findings.');
+  assert.deepEqual(pages.map(p => p.repeatCandidates ?? null), [null, [['F-2', 'F-3', 'F-4', 'F-5', 'F-6']], null]);
+  assert.deepEqual(pages.map(p => [p.commentWork.page, p.commentWork.pages]), [[1, 3], [2, 3], [3, 3]]);
+  assert.deepEqual(plan.comments.map(c => c.findingIds ?? c.findingId), ['F-1', ['F-2', 'F-3', 'F-4', 'F-5', 'F-6'], 'F-7']);
+  assert.deepEqual(plan.comments[1].otherPlaces.map(place => place.place), ['/src/C.java:2', '/src/D.java:2', '/src/E.java:2', '/src/F.java:2']);
+  assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-8']);
+  // A pass that finds nothing leaves the pages exactly as they are without it.
+  const none = await placedSetup(t, findings);
+  const plain = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [] }) : groupwise(payload));
+  await prepareComments(none.review, none.store, plain.invoke, { fetchSource: sourceOf });
+  assert.deepEqual(pagesOf(plain.payloads).map(p => p.findings.map(f => f.id)), [['F-1', 'F-2', 'F-3', 'F-4'], ['F-5', 'F-6', 'F-7', 'F-8']]);
+  assert.ok(pagesOf(plain.payloads).every(p => !Object.hasOwn(p, 'repeatCandidates')));
+});
+
+test('the grouping pass is corrected like a page; a group that stays wrong is dropped and its findings are planned alone', async t => {
+  const findings = ['A', 'B', 'C', 'D', 'E'].map((file, i) => placed(`F-${i + 1}`, file));
+  const { review, store } = await placedSetup(t, findings);
+  const turns = [];
+  const { invoke, payloads } = stages(async (payload, turn, evaluation) => {
+    if (payload.commentWork.kind !== 'group') return groupwise(payload);
+    turns.push(evaluation?.issues ?? null);
+    // F-9 does not exist; the planner never corrects it, and keeps one valid group.
+    return JSON.stringify({ status: 'READY', groups: [{ findingIds: ['F-1', 'F-9'] }, { findingIds: ['F-4', 'F-5'], reason: 'Same.' }] });
+  });
+  const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf });
+  assert.equal(turns.length, 3, 'Two correction turns, as for a page.');
+  assert.match(turns[1].join('\n'), /group F-1, F-9: F-9 is not in findings/);
+  assert.deepEqual(pagesOf(payloads).map(p => [p.findings.map(f => f.id), p.repeatCandidates ?? null]), [[['F-1', 'F-2', 'F-3'], null], [['F-4', 'F-5'], [['F-4', 'F-5']]]]);
+  assert.deepEqual(plan.comments.map(c => c.findingIds ?? c.findingId), ['F-1', 'F-2', 'F-3', ['F-4', 'F-5']]);
+});
+
+test('a grouping pass that fails costs only the grouping; a stopped run is not continued', async t => {
+  const findings = ['A', 'B', 'C', 'D', 'E'].map((file, i) => placed(`F-${i + 1}`, file));
+  const failing = pages => async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') throw Object.assign(new Error('Provider unavailable.'), { failureClass: 'transient' });
+    return pages.invoke(payload, handler);
+  };
+  const { review, store } = await placedSetup(t, findings);
+  const pages = stages(async payload => groupwise(payload)), notes = [];
+  const plan = await prepareComments(review, store, failing(pages), { fetchSource: sourceOf, progress: note => notes.push(note) });
+  assert.match(notes.join('\n'), /the grouping failed \(Provider unavailable\.\); planning goes on without grouping repeated places\./);
+  assert.deepEqual(pagesOf(pages.payloads).map(p => p.findings.map(f => f.id)), [['F-1', 'F-2', 'F-3', 'F-4'], ['F-5']]);
+  assert.ok(pages.payloads.every(p => !Object.hasOwn(p, 'repeatCandidates')));
+  assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1', 'F-2', 'F-3', 'F-4', 'F-5']);
+  // A run that was stopped meanwhile plans nothing more, whatever the failure looked like.
+  const stopped = await placedSetup(t, findings), later = stages(async payload => groupwise(payload));
+  await assert.rejects(prepareComments(stopped.review, stopped.store, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') throw Object.assign(new Error('Review stopped.'), { failureClass: 'cancelled' });
+    return later.invoke(payload, handler);
+  }, { fetchSource: sourceOf }), /Review stopped/);
+  assert.equal(later.payloads.length, 0, 'No page starts after a stop.');
+  // A stop that arrives while the pass is ending, so that it still answers: no page is prepared, and no further file is read.
+  const late = await placedSetup(t, [...findings, placed('F-6', 'F', 'low')]), after = stages(async payload => groupwise(payload)), files = [];
+  let running = true;
+  await assert.rejects(prepareComments(late.review, late.store, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') { running = false; return { status: 'READY', groups: [['F-1', 'F-2']], corrections: [] }; }
+    return after.invoke(payload, handler);
+  }, { active: () => running, fetchSource: async path => { files.push(path); return 'line one\nline two\nline three\n'; } }), /Comment planning was stopped/);
+  assert.deepEqual([after.payloads.length, files.includes('/src/F.java')], [0, false], 'The low finding\'s file is read for its page only, and no page is prepared.');
+  // Stopped while the files are read ahead of the pages: no further file is read, no pass is asked and no page starts.
+  for (const stopAfter of [0, 2]) {
+    const early = await placedSetup(t, findings), none = stages(async payload => groupwise(payload)), read = [];
+    let active = true;
+    await assert.rejects(prepareComments(early.review, early.store, none.invoke, { parallel: 1, active: () => active,
+      fetchSource: async path => { read.push(path); if (read.length >= stopAfter) active = false; return 'line one\nline two\nline three\n'; },
+      ...(stopAfter ? {} : { active: () => false }) }), /Comment planning was stopped/);
+    assert.deepEqual([read.length, none.payloads.length], [stopAfter, 0]);
+  }
+});
+
+test('a quick review offers both kinds: the same lines twice as merge candidates, other places as repeat candidates', async t => {
+  const a = quickFinding('Q-1', '1/2', 'head:/src/A.java:2'), b = quickFinding('Q-1001', '2/2', 'head:/src/A.java:2'),
+    c = quickFinding('Q-2', '1/2', 'head:/src/B.java:2'), d = quickFinding('Q-3', '1/2', 'head:/src/C.java:2');
+  const { review, store } = await placedSetup(t, [a, b, c, d]);
+  Object.assign(review, { verification: 'none', final: { ...review.final, dispositions: [a, b, c, d].map(f => ({ id: f.id, status: 'REPORTED', finding: f, shard: f.shard })) } });
+  const { invoke, payloads } = stages(async payload => JSON.stringify({ status: 'READY', skipped: [], comments: [
+    { findingIds: ['Q-1', 'Q-1001'], mergeReason: 'Reported twice.', severity: 'medium', path: '/src/A.java', startLine: 2, endLine: 2, anchor: 'line two', body: '🟡 medium: Twice\n\nBody.' },
+    { findingIds: ['Q-2', 'Q-3'], mergeReason: 'The same call.', severity: 'medium', path: '/src/C.java', startLine: 2, endLine: 2, anchor: 'line two', body: '🟡 medium: Repeated\n\nBody.' }] }));
+  const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf });
+  assert.deepEqual([payloads[0].mergeCandidates, payloads[0].repeatCandidates], [[['Q-1', 'Q-1001']], [['Q-2', 'Q-3']]]);
+  assert.deepEqual(plan.comments.map(c => [c.findingId, c.findingIds, c.otherPlaces ?? null]),
+    [['Q-1', ['Q-1', 'Q-1001'], null], ['Q-3', ['Q-3', 'Q-2'], [{ findingId: 'Q-2', place: '/src/B.java:2' }]]]);
+  assert.match(plan.summary.content, /\| 🟡 medium \| Q-1, Q-1001 — Defect Q-1 \|/, 'Reported twice on the same lines: one row.');
+  assert.match(plan.summary.content, /\| 🟡 medium \| Q-2 — Defect Q-2 \|[\s\S]*\| 🟡 medium \| Q-3 — Defect Q-3 \|/, 'Two places: two rows.');
+});
+
+test('no grouping pass is asked where no two findings of a set fit one page together', async t => {
+  // Two high findings in different files, each with 6,500 characters of evidence: a pair is larger than a page.
+  const long = await placedSetup(t, [placed('F-1', 'A', 'high', { evidence: 'e'.repeat(6500) }), placed('F-2', 'B', 'high', { evidence: 'e'.repeat(6500) })]);
+  const none = stages(async payload => groupwise(payload));
+  const plan = await prepareComments(long.review, long.store, none.invoke, { fetchSource: sourceOf });
+  // Two lanes plan the two pages; either may reach the model first.
+  assert.ok(none.payloads.every(p => p.commentWork.kind === 'plan'), 'No grouping pass was asked.');
+  assert.deepEqual(pagesOf(none.payloads).map(p => [p.findings.map(f => f.id), p.repeatCandidates ?? null]), [[['F-1'], null], [['F-2'], null]]);
+  assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1', 'F-2']);
+  // Nor is any file read ahead of the pages for it: each page reads its own, when its turn comes.
+  const four = await placedSetup(t, ['A', 'B', 'C', 'D'].map((name, i) => placed(`F-${i + 1}`, name, 'high', { evidence: 'e'.repeat(6500) })));
+  const reads = [], started = [];
+  await prepareComments(four.review, four.store, async (payload, handler) => { started.push([payload.commentWork.page, [...reads]]); return stages(async p => groupwise(p)).invoke(payload, handler); },
+    { fetchSource: async path => { reads.push(path); return 'line one\nline two\nline three\n'; }, parallel: 1 });
+  assert.deepEqual(started, [[1, ['/src/A.java']], [2, ['/src/A.java', '/src/B.java']], [3, ['/src/A.java', '/src/B.java', '/src/C.java']], [4, ['/src/A.java', '/src/B.java', '/src/C.java', '/src/D.java']]]);
+  assert.equal(pairFits([placed('F-1', 'A', 'high', { evidence: 'e'.repeat(6500) }), placed('F-2', 'B', 'high', { evidence: 'e'.repeat(6500) })]), false);
+  // With a third, short finding of that severity a pair fits, so the pass is asked.
+  const mixed = await placedSetup(t, [placed('F-1', 'A', 'high', { evidence: 'e'.repeat(6500) }), placed('F-2', 'B', 'high', { evidence: 'e'.repeat(6500) }), placed('F-3', 'C')]);
+  const some = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [{ findingIds: ['F-2', 'F-3'] }] }) : groupwise(payload));
+  const grouped = await prepareComments(mixed.review, mixed.store, some.invoke, { fetchSource: sourceOf });
+  assert.equal(some.payloads.filter(p => p.commentWork.kind === 'group').length, 1);
+  assert.deepEqual(grouped.comments.map(c => c.findingIds ?? c.findingId), ['F-1', ['F-2', 'F-3']]);
+  // A pair of another severity, or on the same lines, is no pair.
+  assert.equal(pairFits([placed('F-1', 'A'), placed('F-2', 'B', 'medium')]), false);
+  assert.equal(pairFits([placed('F-1', 'A'), placed('F-2', 'A')]), false);
+  assert.equal(pairFits([placed('F-1', 'A'), placed('F-2', 'B')]), true);
+  // A finding that fits a page with no other one takes no part in any group. With several pages nothing is read
+  // ahead for it and the pass is not asked about it, so that it takes none of the pass's input: here a finding
+  // longer than a page, and one that is alone in its severity.
+  const unpaired = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C', 'high', { evidence: 'e'.repeat(12000) }), placed('F-4', 'D', 'medium')];
+  assert.deepEqual(pairable(unpaired).map(f => f.id), ['F-1', 'F-2']);
+  const lone = await placedSetup(t, unpaired);
+  const fetched = [], asked = [];
+  const pair = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [{ findingIds: ['F-1', 'F-2'] }] }) : groupwise(payload));
+  const paired = await prepareComments(lone.review, lone.store, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') asked.push([...fetched], payload.findings.map(f => f.id));
+    return pair.invoke(payload, handler);
+  }, { fetchSource: async path => { fetched.push(path); return 'line one\nline two\nline three\n'; }, parallel: 1 });
+  assert.deepEqual(asked, [['/src/A.java', '/src/B.java'], ['F-1', 'F-2']]);
+  assert.deepEqual(paired.comments.map(c => c.findingIds ?? c.findingId), [['F-1', 'F-2'], 'F-3', 'F-4']);
+});
+
+test('the files of possible repeats are read a few at a time before the pages, never all at once', async t => {
+  const files = Array.from({ length: 9 }, (_, i) => `F${i}`);
+  const findings = files.map((file, i) => placed(`F-${i + 1}`, file));
+  for (const parallel of [1, 2, 3]) {
+    const { review, store } = await placedSetup(t, findings);
+    let reading = 0, most = 0;
+    const read = [];
+    const fetchSource = async path => { read.push(path); most = Math.max(most, ++reading); await sleep(5); reading--; return 'line one\nline two\nline three\n'; };
+    const { invoke } = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [] }) : groupwise(payload));
+    await prepareComments(review, store, invoke, { fetchSource, parallel });
+    assert.equal(most, parallel, `at most ${parallel} read(s) under way`);
+    assert.deepEqual(read, files.map(file => `/src/${file}.java`), 'Each file once, in the order of the findings.');
+  }
 });
 
 test('a person\'s adjustments reach the planner only when there are some; the planning input is otherwise unchanged', async t => {

@@ -238,6 +238,18 @@ export function markersInThreads(threads) {
   return found;
 }
 
+/** The AZPR markers each live thread holds in its live comments, by thread: AZPR's comments on the PR, thread by thread. */
+export function threadMarkers(threads) {
+  const found = new Map();
+  for (const thread of threads) {
+    if (thread?.isDeleted === true) continue;
+    const markers = (Array.isArray(thread?.comments) ? thread.comments : []).filter(comment => comment?.isDeleted !== true && typeof comment?.content === 'string')
+      .flatMap(comment => [...comment.content.matchAll(MARKER_PATTERN)].map(match => match[0]));
+    if (markers.length) found.set(thread.id, new Set(markers));
+  }
+  return found;
+}
+
 /** The text of the live comment that carries each marker, found as markersInThreads finds its thread. */
 export function markerTexts(threads) {
   const found = new Map();

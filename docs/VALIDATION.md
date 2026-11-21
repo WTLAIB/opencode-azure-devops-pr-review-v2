@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.4.5, the move to OpenCode 2.3.0, a run of Martian's public code review
+0.4.6, the move to OpenCode 2.3.0, a run of Martian's public code review
 benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
 of 0.3.7 run on ReviewBench's test set. Host
@@ -42,7 +42,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   whose preview was adjusted (one finding lowered to low) and then posted: a
   summary and two inline comments, read back. With the 0.4.5 candidate, a
   gpt-6-luna review of the 35-file PR stopped from the terminal panel, and a
-  second one to its preview.
+  second one to its preview. With the 0.4.6 candidate, 62 reviews of public
+  pull requests with three models, each followed by its comment preview,
+  against a local stand-in for Azure DevOps.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -53,11 +55,417 @@ acceptance runs, including the MCP-based runs, are preserved in
   catch and 74.2% of the High and Critical ones, scored with the benchmark's
   own pipeline and judge. That recall is higher than any of the 21 tools on
   the benchmark's dashboard; on its overall F2 score AZPR would place sixth.
+  The 0.4.6 candidate, [measured the same way](#martians-code-review-bench-measured-again)
+  on 2026-11-21, found 67.1% and 75.8%, again the highest recall, with an F2
+  that would place eighth: one run each, and within one run's sampling error
+  of 0.3.5.
 
 The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.6 release candidate acceptance (2026-11-21)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.0 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
+Azure DevOps services for the tests and host fixtures. Real models ran
+afterwards, against a local stand-in for Azure DevOps
+([which findings share a comment](#with-real-models-which-findings-share-a-comment),
+[the public benchmark](#martians-code-review-bench-measured-again)); what
+is left open is under [limits](#limits-of-this-candidate).
+
+0.4.6 lets one inline comment hold one defect that a pull request makes at
+several places (see
+[one defect at several places](COMMENTING.md#one-defect-at-several-places)).
+`comment-work.mjs` settles before the planning pages which findings may be
+such repeats, with a grouping pass when there are several pages, and reads
+the list of places back from AZPR's own comments on the PR for a later plan.
+`comments.mjs` checks the groups and the comments that combine them, gives
+a shared comment a marker of its own, and keeps a shared comment and a
+comment for one place off each other's quoted lines when planning;
+`attribution.mjs` renders the list of other places and reads it back, and
+`runtime.mjs` labels the grouping pass's stage and gives it a checkpoint text
+of its own. Publication (`publishPlan`) is unchanged but for one count: the
+other AZPR comments of a PR are counted by thread (`threadMarkers` in
+`azure.mjs`), not by marker. Of the
+prompts, `comment-plan.md` and `comment-policy.md` changed. The hash test
+holds the system prompts of the six review roles in two configurations
+(shell denied with English output, shell on request with Traditional Chinese
+output): the two hashes of the comment-plan role changed, and the ten of the
+reviewers, the verifier, the duplicate check and the rating are as for
+0.4.5. The deep roles are compared with the review roles and are identical
+to them; the quick planner gets the same new instructions and is checked for
+its wording, not by a hash. No setting and no file of the package is new.
+
+### Offline
+
+`npm run check` passes, and `npm test` runs 686 tests (654 for 0.4.5), all
+passing.
+
+| Tests | What they establish |
+| ---: | --- |
+| 10 | The rules (`tests/comments.test.mjs`): a comment that names several findings of a listed group stands at the one finding whose lines its anchor touches and carries the others as places, in the order of the page, whatever order the planner wrote; nothing is combined unless the planner says so. A combination is refused outside a listed group, across two groups, without a reason, across severities, for findings on the same lines, for lines that end before they begin, for a file name a list cannot hold as it is, for a place that is not on lines of a changed file as the runtime read it at HEAD (an unchanged file, a line beyond the file's end, a file the page could not read), when the anchor touches no member's lines and when it reaches from one member's lines into another's (one that reaches beyond a single finding's lines still stands at that finding); after the correction turns it is dropped and every finding it named is skipped with that reason. A shared comment's quote must be found in the HEAD text also in a verified review (a quote of a line the file does not have is refused; one found at other lines is moved there; one that adds a blank line after the file's last line is refused as reaching past its end), while a single comment keeps its declared lines as before. A quick review keeps both kinds apart (the same lines twice, and several places). A planner's text that holds the heading of the list of other places is sent back and then not planned, in a comment for several places and in one for one place, however the heading is indented, quoted or continued. A shared comment whose text leaves a block open that would take the list in is sent back and then not planned: a code fence without its closing fence at the top level, or raw HTML that waits for its own end (`<pre>`, `<script>`, `<?…`, `<!…`, CDATA). The test holds 22 texts that are sent back and 27 that are not: a fence in a list item or a quote ends with it, a fence line after it stands at the top level (an unindented one under an item, one indented less than the item's text, one after a quote), a paragraph is interrupted only by some list items, raw HTML that ends at a blank line holds a fence line as text (a line that is one whole tag starts it, `<pre/>` too), a tag in code or within a sentence opens nothing, and a line ends at a line feed or a carriage return only (U+2028 is a character of its line). A comment for one place with an open fence is planned as before. The assembled text is the planner's text, the list, the attribution and the comment's two markers, in English and Chinese; each place keeps its row and its count in the summary index; and automatic publication holds nothing of the list's own markup. A shared comment's own marker follows its file, its quoted lines and its other places, whatever order the planner names the findings in; other places, another quote or another file give another one, and so does the second of two defects at the same places, whose comments quote the same line and list the same place; what a marker is made of is kept apart (a quote of two lines is not a quote of one line with a place listed); its second marker follows the file and the quoted lines only; and the markers of comments for one place and the summary's are as before, whichever kind comes first in the plan. A shared comment on quoted lines that already carry a comment of AZPR's is refused with the thread and the ways out: a comment for one place (also when the first comment of those lines is gone and a later one is there) or a shared comment with other places; it is accepted when the PR has this very comment or its twin, when it stands at another place, next to a comment of the same plan on those lines, and when the PR's comments are unknown. The other way round, a comment for one place on quoted lines that carry a shared comment is sent back and then skipped with that reason, unless a comment for one place is there as well. After the correction turns a refused shared comment is dropped and its findings are skipped with that reason. The grouping pass's answer is checked by the same rules: unknown findings, a finding in two groups, mixed severities and findings on the same lines are reported, then dropped; a status other than READY, or none, is sent back, and so are an answer without `groups` and an entry whose findings are no list (a string, another field); after the correction turns the groups it named stand, and what was malformed counts as none. |
+| 16 | Planning and publication (`tests/comment-work.test.mjs`): which findings are eligible (high and medium, on lines of a changed HEAD file, with a place a list can hold, not already a quick merge candidate) and which sets can hold a repeat (one severity, two places or more). Only a place whose lines the file has at HEAD is offered: a finding beyond the file's end or on a file that cannot be read is planned alone, on one page and in the pass's input, and without the files' text nothing is offered. Those files are read before the pages, each once, in the order of the findings and never more at a time than pages are planned (one, two or three). On one page the sets are offered without a grouping pass and the page keeps its order; findings that share lines are offered nothing, and their planning input is as before. With several pages one pass runs first, sees only the findings that fit a page together with another one of their severity at a different place (not a finding longer than a page, nor the only one of its severity, for which no file is read ahead either), and its group shares a page of five findings; a pass that finds nothing leaves the pages exactly as without it. No pass is asked where no two findings of a set fit one page together (two findings with 6,500 characters of evidence each), and no file is then read ahead of the pages; one is asked once a shorter third makes a pair. The pass reads its findings inline: 40 findings with long evidence go without the evidence, and a list too long even then is not grouped, with a notice. The pass gets two correction turns like a page, and a group that stays wrong is dropped. A pass that fails costs only the grouping, with a progress notice; a stopped run starts no page, one stopped while the files are read ahead of the pages reads no further file and asks no pass, and one stopped while the pass was ending prepares no page. A group larger than a page's text is planned in parts of two or more findings, none larger than a page; a long finding is planned alone. A page continued in a new session is offered what is open of a group while two of its findings at different places are. A shared comment planned onto lines that already carry a comment of AZPR's goes back to the planner, which moves it; once that comment is on the PR, the same plan made again is that very comment and nothing is sent back. At publication a shared comment is another comment than one for its place alone: it is posted in full next to it, the earlier comment is as it was, and the receipt has the usual row; published again it is found by its own marker, and its attempt record is under that marker alone; other places give another marker and the same places the same one in any order; with a person's adjustments the other AZPR comments of the PR are counted by thread, so a shared comment with its two markers is one, a reply that quotes another thread's marker hides no thread, and the count does not depend on the order of the threads; two defects at the same places are two threads; and with the shared comment on the PR, a plan that comments on its place alone is sent back and then skips that finding. The list is read back only in the runtime's form (its heading as a line, rows of a place and a finding ID directly under it, and after them the comment's two markers, or a rule, the attribution's line and the two markers, with nothing in between; CRLF; the last heading when a text quotes a list): a single marker, a third one, a row that writing its place and ID again under that heading does not give to the character (another ID, no lines, lines out of order, two code spans, other spacing, the other language's brackets, anything after the row), an attribution that is not the whole line the runtime writes (a sentence before or after the models, a code span that is no model reference as settings take one: a sentence, a placeholder, an overlong name), or a comment continued after its attribution reads as no list; every listable place reads back as written, whatever its file is called, in three languages, and so does what `commentAttribution` writes for a verified and a quick review in each language. In a thread the list is read only from the comment that opened it, wherever that comment stands among the thread's comments, not from a reply that quotes one; the thread's author and excerpt are that comment's too, so the places never stand next to the words of a reply. The opener is comment 1 of its thread, as publication takes it: when it is gone, the thread is described by the first comment left, as before, and no later comment's list is read, whatever that comment says of its parent. |
+| 1 | The list (`tests/attribution.test.mjs`): one row per place with its ID, in English, Traditional and Simplified Chinese; a path stays inside its code span whatever characters it holds; nothing is collapsed or linked. |
+| 5 | The runtime (`tests/runtime.test.mjs`): a review whose reviewers report one defect in three files plans its comments with a grouping stage of its own (titled "Comment plan grouping") and two pages; the preview shows one comment for the three places with the two others listed, four inline comments instead of six and six rows in the index; `/pr-comment --publish` posts that text, and the receipt names the three findings of the shared thread. A preview's shared comment, with a comment for its place alone posted meanwhile on the same lines: publication leaves that comment as it is and posts the shared one in full, as a comment of its own; planned again it has the same marker, no correction turn is taken, and its publication finds it (`ALREADY_PRESENT`, nothing posted twice). A plan that combines three findings while the PR already has AZPR's comment for the first place: the page is sent back once with that thread named, the comment stands at the second place, and its publication adds one thread there. A grouping pass that takes twelve model requests gets a thirteenth without tools and the instruction to return READY with its groups, where a page is told to return READY or CONTINUE. A grouping pass that the provider refuses leaves a preview of six separate comments and a FAILED stage; `/pr-stop` during the pass ends the run as CANCELLED, with the pass's session interrupted, no page session made and no "grouping failed" notice. |
+
+The other changed expectations are in existing tests: the two comment-plan
+prompt hashes (`tests/config.test.mjs`), the message for a combination outside
+a listed group, three runtime tests whose reviews now run a grouping pass
+before their pages, and two planning tests about pages that run side by side,
+whose findings now have severities that rule a shared comment out, so that
+the reads they order are the pages' own (a wait that runs out there now fails
+the test).
+
+Whether a shared comment's text leaves a block open is decided by reading its
+lines (`openBlock`). That reading was also compared, outside the repository,
+with two Markdown parsers: commonmark.js 0.31.2 and markdown-it 14.1.0 (HTML
+on), on Node.js 22.23.3. Each of 730,216 generated texts (one to seven lines
+drawn from 58 to 132 forms of line: fences, list items, quotes, raw HTML,
+headings, tabs) was followed by the list of other places and parsed, and the
+list counted as taken in when it was not a paragraph followed by a list at
+the top level. The reading agreed with commonmark.js on all but 13 texts:
+eight with a list nested in a list item, which the reading takes as that
+item's text, and five with a link reference definition, where the two
+parsers disagree with each other (on 228 texts in all). The 49 texts of the
+test are as both parsers read them. The package has no dependency, so this
+comparison is not part of `npm test`, and it says how these two parsers read
+a text, not how Azure DevOps renders it.
+
+### On the real host
+
+The eleven host fixture runs passed on one tree (the hash of the code and
+tests was the same before and after).
+
+- **One defect in three files, at scale** (`tests/host-v2-comment-scale.mjs`,
+  with debug on and off). The review of 120 files leaves 29 findings: 19
+  high ones in different files and 10 low ones. Their plan has eight pages,
+  so a grouping pass runs first, in a session of its own; the fake planner
+  answers that the first three high findings are one lost guard in three
+  files. The three share a page and one comment. Publication creates 18
+  threads where 0.4.5 created 20: 17 inline comments and the summary. The
+  shared thread stands at the first finding's file and lists the two other
+  files with their lines and finding IDs; the receipt names the three
+  findings together; and each of them still has its row in the summary
+  index. A second publish writes nothing. The run made 35 model requests
+  (34 for 0.4.5: the pass) and 73 Azure DevOps requests (75: two threads
+  fewer), with at most two planning pages in flight. With debug off, the
+  planner's sessions, the pass's included, are gone when the preview's run
+  ends, and the host lists the report session alone (35 model and 69 Azure
+  DevOps requests).
+- **The terminal panel** (`tests/host-v2-tui-panel.mjs`, from source and as
+  the package). It plans five previews. Four of them have two pages and high
+  findings in several files, so each now starts with a grouping pass, which
+  finds nothing there; the fifth, after two findings were left out, fits one
+  page and has none. The panel lists a pass's session like a page's, and
+  every step of the fixture passes as for 0.4.5. The runs made 30 model
+  requests by AZPR's sessions (26 for 0.4.5: the four passes), 57 Azure
+  DevOps requests and still exactly 1 request of the conversation's own
+  model.
+- **Unchanged**: setup no model request and 16 Azure DevOps requests; smoke
+  fresh 110 model and 194 Azure DevOps requests, replacement 92 and 164,
+  native 110 and 201; and background compaction 8 model requests in both
+  runs, all as for 0.4.5. The smoke fixtures plan comments for a single
+  finding on one page, so no pass runs there; the setup fixtures run setup
+  and `/pr-check`, and the background-compaction fixtures only `/pr-review`,
+  so neither plans a comment at all.
+
+`npm pack --dry-run` lists 38 files, as for 0.4.5. `package.json` has no
+dependency and no lifecycle script.
+
+### Reviews by a second model
+
+The pull request was reviewed thirteen times by a second model (GPT-6.2 Astra
+at its highest reasoning effort through the Codex CLI 0.171.0, in a read-only
+sandbox on a clean clone; its instructions were the change and its purpose,
+not the results of the checks above). Each commit after the first corrects
+what the review before it reported, and each was reviewed again. The reviewer
+ran the build check and the tests that write nothing; the tests that write
+files and the eleven host fixture runs ran here, on every tree. The reviews
+reported 13, 12, 7, 11, 9, 12, 8, 6, 5, 4, 3, 5 and 4 points.
+
+One question took three designs. The first review found the one serious
+defect of the first commit: publication skipped a shared comment whose marker
+the pull request already had, and the receipt counted every finding of it as
+posted, also when the comment found there was an earlier one for that place
+alone.
+
+1. The first answer worked out, from the comment found under the marker,
+   which places it listed, and reported the rest. Each of the next four
+   reviews found another path on which that inference said more than the pull
+   request held: a marker found in a reply, a list that someone had edited, a
+   comment deleted while publication ran, a record written before the answer.
+2. The second answer gave a shared comment a marker of its own next to the
+   marker of its place. The second marker then had to be kept in step with
+   the counts of comments on the same lines and with the records of attempts,
+   and two reviews found where it was not.
+3. As it stands since the eighth commit, a shared comment is known to
+   publication by its own marker alone, publication is that of 0.4.5 but for
+   one count, and the two kinds of comment are kept off each other's quoted
+   lines when planning. The six reviews of this design reported 6, 5, 4, 3, 5
+   and 4 points, and the last one found no duplicate write and no false
+   receipt in the publication path.
+
+The other corrections that stand:
+
+- A place is checked against the file as the runtime reads it at the reviewed
+  commit, when findings are offered and again on the page; the anchor of a
+  shared comment must be found in that text, end within the file and touch
+  the lines of one finding only.
+- The list is read back only from the comment that opened a thread (its
+  comment 1), and only in the very form the runtime writes: rows that write
+  back as they stand, the whole attribution line, the two markers. The
+  thread's author and excerpt are that comment's too.
+- A planner's text may not hold the list's heading, and a shared comment's
+  text may not end inside a code fence or a raw HTML block.
+- A page that continues in a new session keeps what is open of its groups,
+  and a group cut to a page's text never exceeds a page.
+- The grouping pass has an answer of its own form (an explicit READY, a list
+  of groups, entries that are lists) and a checkpoint text of its own; it
+  reads its findings inline, and is asked only about findings that could
+  share a page with another one.
+- The files read ahead of the pages are read a few at a time and not at all
+  once the run was stopped; a stop while the pass is ending prepares no page.
+- With a person's adjustments, the other AZPR comments of a pull request are
+  counted by thread.
+- Several statements of this record and of the documentation were narrowed
+  to what was run.
+
+Left as they are, and stated under the limits below: a marker holds no line
+numbers, comments that quote the same lines are told apart by their order in
+the plan, a marker counts wherever a live comment holds it, thread positions
+are not compared, and of two defects at the same places the second passes the
+rule that keeps comments off occupied lines. One point of the twelfth review
+was not taken: a line that holds `<pre/>` alone starts raw HTML in both
+parsers the reading of blocks was compared with, whatever the wording of the
+specification.
+
+The thirteenth review reported four points that change nothing a pull request
+gets, so the tree it reviewed is the one that stands; the commit after it
+adds this record only.
+
+- `listablePlace` would admit a file name with a colon, which `listedPlaces`
+  does not read back. No such place is listed: a finding's location is not
+  read with a colon in its path, as in every earlier version, where such a
+  finding has no inline comment either.
+- A thread listed without its comment 1, in which a later comment names no
+  parent, would have that comment's list read. Azure DevOps keeps a deleted
+  comment in the listing, and that case is handled.
+- On a single page, the file of a finding without a partner is read ahead of
+  the page with the others. It is the read the page makes anyway.
+- The planner's policy states the shared comment as a rule, where the page's
+  instructions give its conditions and the runtime holds them.
+
+### With real models: which findings share a comment
+
+After the reviews above, the candidate planned comments with real models, in
+three runs on public pull requests: OpenCode 2.3.0 in a profile of its own,
+the package built from the tree named below, and the benchmark harness's
+local service in the place of Azure DevOps, which serves each pull request's
+real files at its commits. Each task reviewed one pull request and then
+planned its comments; nothing was posted. The shared comments and the
+findings they hold were read one by one by the author of this change. No
+benchmark judge took part in that reading.
+
+| | `/pr-review`, `openai/gpt-6-luna` | `/pr-deep`, `openai/gpt-6.1-sol` | `/pr-deep`, `claude-agent/opus#medium` |
+| --- | --- | --- | --- |
+| Tree | `2cee3dd` | `f6a3d8a` | `d7b5ab3` |
+| Pull requests | 8 | 4 of those 8 | the 50 of Martian's Code Review Bench |
+| Reviews | 8 COMPLETE, 24 findings | 4 COMPLETE, 37 findings | 50 COMPLETE, 341 findings |
+| Grouping passes, one request each | 1 | 2 | 23 |
+| Shared comments | 2, of 2 findings each | 3, of 2, 2 and 3 findings | 7, of 16 findings |
+| Shared comments that held different defects | 0 | 0 | 0 |
+| Correction turns that a rule of the shared comment caused | 0 | 0 | 0 |
+| Clear repeats that got a comment each | 1 | none found | not looked for |
+
+The eight pull requests are those of the benchmark's 50 where an earlier run
+had reported the most findings with a common cause: calcom/cal.com 11059,
+10967, 8087 and 7232, keycloak/keycloak 37038, 37634 and 37429, and
+grafana/grafana 107534. The three trees differ in what the reviews by a
+second model corrected, not in the planner's instructions for a shared
+comment.
+
+- **What was combined.** In cal.com 11059 GPT-6 Luna and GPT-6.1 Sol each
+  gave one comment to the two Zoho adapters that read a Fetch response as an
+  Axios response. Luna also combined the two Lithuanian message files of
+  keycloak 37429 that hold Italian text. Sol combined the two query-splitting
+  paths of grafana 107534 that apply filters before a second interpolation,
+  and the three reschedule implementations of cal.com 8087 that discard the
+  promises of an asynchronous `forEach` callback, while it left a fourth
+  finding of that page, whose correction differs, on its own. Claude Opus 5.5
+  combined, among others, three calls that cancel a reminder at once
+  (cal.com 7232), the update and the delete of one calendar adapter that
+  share a fallback which never matches (cal.com 10967), a desktop and a
+  mobile stylesheet with the same slip, and the background writes of Create,
+  Delete and Update that inherit a request's cancellation (grafana 90045).
+  Its 50 previews hold 147 inline comments where a comment per place would
+  have made 156; 39 correction turns were for a text over the length limit,
+  2 of them texts of shared comments.
+- **What was left apart.** For the three implementations of cal.com 8087,
+  Luna wrote three comments with nearly the same text, although the page
+  listed them as possible repeats. Two variants of the instructions were
+  then tried with Luna on the same eight pull requests, outside this tree: a
+  sentence that names such comments as the case for one comment, and a
+  grouping pass also where all findings fit one page. Neither made it
+  combine them, and neither is part of this release. How often repeats share
+  a comment therefore depends on the planner's model, which is the one of
+  the risk reviewer (`models.<mode>.risk`).
+- **What this does not show.** These are 62 reviews read by one person, of
+  pull requests that are public and partly chosen for their repeats: no rate
+  of wrong or missed combinations follows from them. Publication was not
+  part of these runs, and neither was a later plan on a pull request that
+  already has a shared comment.
+
+### Martian's Code Review Bench, measured again
+
+The figures of the [public benchmark](#martian-code-review-bench-2026-11-05-and-06)
+are those of 0.3.5, and two releases since changed what the reviewers and the
+verifier are told (0.3.6 and 0.3.7; this candidate changes comment planning
+only). So the benchmark was run once more with this candidate, in the same
+way.
+
+- **Review.** On 2026-11-21, the tree `d7b5ab3` of this candidate (its code is
+  that of `bae12e7`), packed as the npm package is, on OpenCode 2.3.0. Every
+  pull request ran `/pr-deep` with `claude-agent/opus#medium` for all three
+  roles (Claude Code CLI 2.1.314, the version of 2026-11-05), four pull
+  requests at a time, with English output, against the same 50 pull requests
+  at the same commits and the same local implementation of the Azure DevOps
+  calls. All 50 reviews were COMPLETE; the run took about an hour, the median
+  review 156 seconds and the longest 323. They hold 341 confirmed findings:
+  26 high, 133 medium and 182 low (0.3.5: 323, of them 30, 81 and 212).
+- **Scoring.** As on 2026-11-06: each confirmed finding is one inline comment
+  with its summary, evidence and suggested fix, scored by the benchmark's
+  pipeline at commit `e616e84` and the dashboard's judge, Claude Opus 4.5
+  (`claude-opus-4-5-20251101`, temperature 0), through Anthropic's
+  OpenAI-compatible endpoint. The pipeline reported no error.
+
+| Core golden comments, one run each | Comments | Issues per PR | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| AZPR 0.3.5 (2026-11-06) | 323 | 7.6 | 30.0 | 67.7 | 54.1 | 74.2 |
+| This candidate (2026-11-21) | 341 | 8.1 | 27.2 | 67.1 | 51.9 | 75.8 |
+
+The candidate matched 106 of the 158 core golden comments (0.3.5: 107) and 50
+of the 66 High and Critical ones (49); 283 extracted issues matched no golden
+comment (250). On the dashboard's default view that is still the highest
+recall of its 21 tools, by one golden comment (copilot-v2 66.5), now the
+highest High and Critical recall alone (qodo-extended-v2 and augment 74.2),
+and the eighth F2 instead of the sixth: after gemini-v2 (52.8) and gitlab
+(52.7), ahead of sourcery (51.5).
+
+What this shows and what it does not:
+
+- **No measurable change in what is found.** With 158 golden comments one
+  run's recall has a sampling error of about 3.7 points and its precision of
+  about 2.3, so neither figure differs from that of 0.3.5 by more than one
+  run does from the next. The benchmark does not show these releases finding
+  more or less of its list.
+- **More findings, the same matches.** The candidate files 18 more findings
+  and labels more of them medium, as 0.3.7's severity rules intend. The
+  benchmark's precision counts every issue outside its list, accurate or
+  not, so more findings with the same matches lower it. Medium findings did
+  not match the list more often than low ones: by the finding each issue
+  most resembles, 45% of the issues from high findings were counted as
+  matched, 26% of those from medium ones and 31% of those from low ones.
+- **Where the additional unmatched issues come from.** The reviewers filed
+  572 candidates (563), and the verifier merged 216 of them into others as
+  duplicates (227) and confirmed 342 (323). Sorted by what a finding's
+  summary says, again by the finding each issue most resembles: 26 findings
+  ask whether a behavior is intended, as the instructions since 0.3.6 tell
+  the reviewers to do instead of leaving such a finding out, where the 0.3.5
+  run has none; their issues are 7 matched and 24 unmatched ones. Findings
+  about documentation rose from 7 to 13, with 12 more unmatched issues. For
+  the other findings the number of unmatched issues is as it was (244 and
+  241). The questions are not noise for this benchmark: counting the
+  recorded verdicts without them gives precision 27.9 and recall 63.3, so
+  they hold six of the matched golden comments.
+- **The change of this candidate is not in the score.** The comments scored
+  are the findings, one per place, as for 0.3.5. Each review of this run was
+  also followed by a comment preview, which the score does not use: 147
+  inline comments for the 156 high and medium findings with an inline
+  location, 7 of them for several places (16 places), after 23 grouping
+  passes of one request each. Scored as they would be posted, the shared
+  comments could remove at most 9 of the 404 extracted issues.
+
+**The benchmark's corrected counting.** On 2026-11-20 the benchmark changed
+how its last step counts (pull request 75 of its repository, in `23a35d0` of
+2026-11-21). An issue that the judge matched to a golden comment used to
+count as unmatched when another issue already held a match of the same or a
+higher confidence for that comment; now every issue the judge matched counts
+as matched. The steps that extract issues and group duplicates are unchanged,
+and the results the dashboard shows are those of 2026-08-30, counted the
+earlier way, so the table above is the one that compares with the dashboard.
+
+The candidate's issues were judged a second time with the corrected step,
+with the judge's 1,694 verdicts recorded. Of the 283 unmatched issues, 17
+are issues the judge had matched:
+
+| This candidate, core golden comments | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: |
+| Counted as the dashboard's results are | 27.2 | 67.1 | 51.9 | 75.8 |
+| With the benchmark's corrected counting | 28.5 | 67.1 | 52.8 | 75.8 |
+
+Counting the recorded verdicts the earlier way gives the first judging's
+numbers exactly, and counting them the corrected way gives the pipeline's own
+output, pull request by pull request. No other tool's results were counted
+again, so the second row compares with nothing on the dashboard.
+
+Limits: one run of one model combination; the judge model is scheduled for
+retirement (not before 2026-11-24), after which these figures cannot be
+reproduced with it; the pull requests are public ones of well-known
+repositories; and the two judgings cost about US$31 at list prices, by our
+estimate from the number of judged pairs.
+
+### Limits of this candidate
+
+- **A small sample with real models.** In the fixtures the fake planner
+  groups what the fixture tells it to. With real models, no shared comment of
+  [62 reviews](#with-real-models-which-findings-share-a-comment) combined
+  different defects, as read by one person; how often a planner does, and
+  how often it leaves repeats apart, is not a rate these runs give, and a
+  weaker planner left clear repeats apart. The runtime cannot tell a
+  well-formed but wrong combination; the preview shows each shared comment
+  with its findings and the planner's reason, and each finding keeps its row.
+- **The grouping pass is given finding text only**, not source; it has the
+  planner's read-only tools, but its instructions say that it needs none.
+  The page that writes the comment sees the source of every place and
+  decides again.
+- **One severity.** Places of one defect that were given different severities
+  are not combined, and low findings have no inline comment to share.
+- **Large groups.** A group larger than a page's text is planned in parts, so
+  it gets a comment per part, each listing the places of its part.
+- **One thread, several places.** A thread's status cannot say which of its
+  places were fixed. A comment that was posted is never changed, so a place
+  fixed later stays in its list.
+- **Re-reviews.** A later plan is told which places a posted shared comment
+  covers; whether a real planner then skips those places was not run.
+- **A place is a file and its lines.** A shared comment's own marker takes
+  its other places as written. After their lines moved, a later comment for
+  the same defect is another comment than the one posted before, and it is
+  planned away from the lines of the earlier one: this errs towards one more
+  thread, never towards a finding without one.
+- **A marker does not hold line numbers.** The same lines of text elsewhere
+  in the same file share it, as for every comment since the first version,
+  and comments that quote the same lines are told apart by their order in
+  the plan. Thread positions are not compared, since they go stale when
+  lines move.
+- **Two kinds of comment on the same lines are kept apart at planning
+  only.** A shared comment and a comment for one place do not find each
+  other by marker, and the rule that keeps them off each other's quoted
+  lines uses the threads read before planning. A comment that appears on the
+  PR between a preview and its publication (also one that Azure DevOps has
+  created but not listed yet), or threads that could not be read, leave the
+  later comment to be posted next to the earlier one: one more thread, never
+  a finding counted as posted that is not. And the rule lets a shared
+  comment stand where the PR has a shared comment with the same file, quoted
+  lines and other places: of two defects at the same places, whose comments
+  differ by a count given only when the pages are assembled, the second
+  passes too and is posted next to what is there.
+- **The text above the list is the planner's Markdown.** The runtime checks
+  only that it does not end inside a code fence or raw HTML that waits for
+  its own end, as CommonMark reads blocks. What is nested inside a list item
+  or a quote is read as its text, an inline tag that was left unclosed is
+  not checked, and how Azure DevOps renders a text was not compared.
 
 ## 0.4.5 after publication (2026-11-20)
 

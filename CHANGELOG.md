@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.4.6 — 2026-11-21
+
+One defect that a pull request makes at several places now gets one inline
+comment that lists the other places, where each place had a thread of its own.
+The reviewer and verifier instructions are those of 0.4.5, so a review finds
+and verifies as before; the comment planner's instructions changed, and no
+setting is new.
+
+Comments:
+
+- A mistake repeated in several places (the same wrong call in each handler,
+  the same stale text in each copy) is one finding per place, since each place
+  needs its own correction. Each of them used to get an inline thread with
+  much the same text: twelve moved files with one inherited defect were twelve
+  threads to read and resolve. The comment planner may now write one comment
+  for such findings, at the place that shows the mistake most clearly.
+- AZPR lists every other place under that comment, in a section
+  `**📍 Also at** (the same defect; fix these places with it):` (in Chinese
+  `**📍 其他位置**`): one row per other finding with its file, its lines and
+  its ID. The rows are the findings' own locations, not text the planner
+  wrote, and the list is plain: nothing is collapsed or linked, so its own
+  markup holds nothing back in automatic publication (a file name is checked
+  like any other text of the comment).
+- Findings share a comment only when they have the same severity (high or
+  medium), lie on different lines of files the pull request changes, and the
+  planner says they are the same mistake with the same correction. Places
+  that need different corrections keep their own comments, and when unsure
+  the planner keeps findings apart. The preview shows a shared comment with
+  all its findings and the planner's reason.
+- A place is listed as its finding states it. The runtime therefore offers a
+  finding only when the file has those lines at the reviewed commit and its
+  name can stand in a list unchanged, and it accepts a shared comment only
+  when its anchor touches the lines of exactly one of its findings, which is
+  where the comment stands. A text that ends inside a code fence or a raw
+  HTML block, which would take the list in, is sent back for correction.
+- The review is unchanged: it still has one finding per place. Each keeps
+  its row in the summary index, its ID, and can be left out or given another
+  severity after a preview.
+- A shared comment has a marker of its own, made of its file, the lines it
+  quotes and the other places it lists. Publication skips it only when that
+  marker is on the pull request, so `ALREADY_PRESENT` means that this very
+  comment, with every place, is there. The markers of comments for one place
+  are unchanged, and so is publication.
+- Which findings may be such repeats is settled before the planning pages are
+  made, and only when at least two of them have one severity and lie at
+  different places. When all findings fit one page (at most four, within a
+  page's text), that page is offered its findings of equal severity at
+  different places. Otherwise, where two of them fit one page together, a
+  grouping pass runs first: one more stage of the comment planner, usually
+  one request, whose input is the findings that could share a page with
+  another one of their severity, and which says which are one mistake at
+  several places. A group then shares a
+  page, which can hold more than four findings. A pass that fails costs only
+  the grouping (a progress notice says so, and the comments are planned one
+  per place), and a run that is stopped during it plans nothing more.
+- Nothing posted is ever changed, and an item the PR already has is skipped
+  as always. When a pull request with a shared comment is planned again, the
+  planner is told which other places that thread says it covers, so they get
+  no thread of their own; the list is read back only where AZPR wrote it, in
+  the comment that opened the thread.
+- A shared comment and a comment for one place are not put on the same
+  quoted lines (a thread per place from an earlier version, say): when
+  planning, the comment is sent back and the planner is asked for another
+  place or to skip the finding as discussed, and a comment that still stands
+  there is not planned, with the reason shown in the preview.
+
+The README's benchmark section now says what each precision measures: the
+share of comments on Martian's list of issues, next to the share of findings
+that ReviewBench's judge rated valid.
+
 ## 0.4.5 — 2026-11-20
 
 While a run is under way, the terminal panel offers to stop it. The reviewer,

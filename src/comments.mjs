@@ -1,6 +1,6 @@
 // Comment plans: per-item validation, stable markers and saved publication text.
 import { createHash } from 'node:crypto';
-import { renderReviewSummary, describeReview } from './attribution.mjs';
+import { renderReviewSummary, renderOtherPlaces, listablePlace, OTHER_PLACES_HEADINGS, describeReview } from './attribution.mjs';
 import { targetKey } from './azure.mjs';
 import { parseModelJSON, canonicalKey, parseRepairPrompt } from './output.mjs';
 
@@ -55,6 +55,13 @@ export function parseLocation(location) {
   return { side: match[1] ?? 'head', path: match[2], start, end: match[4] ? Number(match[4]) : start };
 }
 
+/** A finding's place as a comment lists it: "/src/a.ts:12-14". */
+export function placeOf(finding) {
+  const at = parseLocation(finding.location);
+  if (!at) return String(finding.location ?? '');
+  return `${at.path}${at.start ? `:${at.start}${at.end !== at.start ? `-${at.end}` : ''}` : ''}`;
+}
+
 /**
  * Why findings may not share one comment; [] when they may. Members must be
  * inline-eligible quick findings of different sessions with the same
@@ -76,6 +83,36 @@ export function combinationProblems(members) {
   const lines = { path: at[0].path, start: Math.max(...at.map(location => location.start)), end: Math.min(...at.map(location => location.end)) };
   if (lines.start > lines.end) problems.push('the findings share no common line');
   return { problems, lines };
+}
+
+/**
+ * Why findings may not share one comment as one defect made at several places;
+ * [] when they may. Members are high or medium findings of one severity, each
+ * on lines of a HEAD file (a first line and a last one not before it), and no
+ * two of them share a line: findings on the same lines are not another place.
+ * The comment lists each other place as its finding states it, so a place
+ * whose text a list cannot hold unchanged (`listablePlace`) shares no comment.
+ * Whether the lines exist in the file is checked where its text is known
+ * (`evaluatePlanPage`).
+ */
+export function repeatProblems(members) {
+  const problems = [];
+  if (new Set(members.map(member => member.severity)).size !== 1) problems.push('combined findings must have the same severity');
+  else if (!['high', 'medium'].includes(members[0].severity)) problems.push('only high and medium findings get inline comments');
+  if (members.some(member => member.inline === false)) problems.push('a combined finding has no inline location');
+  const at = members.map(member => parseLocation(member.location));
+  if (at.some(location => location?.side !== 'head' || !location.start || location.end < location.start)) {
+    problems.push('every combined finding must be located on lines of a HEAD file');
+    return { problems };
+  }
+  const unlistable = members.filter(member => !listablePlace(placeOf(member)));
+  if (unlistable.length) problems.push(`the file name of ${unlistable.map(member => member.id).join(', ')} cannot be written into a list of places as it is`);
+  for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
+    if (at[i].path === at[j].path && at[i].start <= at[j].end && at[j].start <= at[i].end) {
+      problems.push(`${members[i].id} and ${members[j].id} are on the same lines, which is not another place`);
+    }
+  }
+  return { problems };
 }
 
 // A finding ID as a text names it (F-1, Q-1001, V-2).
@@ -603,6 +640,52 @@ export function inlineMarker(target, comment, ordinal = 0) {
   return markerTag(hash([targetKey(target), 'inline', comment.path, normalizedAnchor(comment.anchor), ordinal]));
 }
 
+/**
+ * The fingerprint of a comment that stands for one defect at several places:
+ * PR + path + normalized anchor + the other places it lists. Such a comment
+ * is a comment of its own: publication skips it only when this marker is on
+ * the PR, so the comment found there is this very comment, with every place,
+ * and nothing has to be read out of a posted text to know what it covers.
+ * The ordinal tells apart two comments with the same quoted lines and the
+ * same other places, which two defects at the same places would have.
+ */
+export function sharedMarker(target, comment, ordinal = 0) {
+  return markerTag(hash([targetKey(target), 'shared', comment.path, normalizedAnchor(comment.anchor), comment.otherPlaces.map(other => other.place).sort(), ordinal]));
+}
+
+/**
+ * The second marker of a comment for several places: PR + path + normalized
+ * anchor, nothing else. It says that such a comment stands on these quoted
+ * lines, whatever it lists and whichever plan wrote it. Only planning reads
+ * it, to keep another comment off those lines (`occupiedLines`); publication,
+ * its ledger and its attempt records know a comment by its own marker alone.
+ */
+export function linesMarker(target, comment) {
+  return markerTag(hash([targetKey(target), 'lines', comment.path, normalizedAnchor(comment.anchor)]));
+}
+
+/** How many comments on the same quoted lines the planning rule looks for on the PR (their markers count from 0). */
+const SAME_LINES = 8;
+
+/**
+ * Why a planned comment may not stand on its quoted lines, given the markers
+ * the PR already has (`posted`, marker to thread): a comment for several
+ * places and a comment for one place do not find each other by marker, so
+ * one of them would be posted next to the other. A comment for several
+ * places stays off lines that carry any comment of AZPR's, unless the PR has
+ * this very comment; a comment for one place (or for findings on the same
+ * lines) stays off lines that carry a comment for several places, unless the
+ * PR has a comment of its own kind there, which it then finds by marker as
+ * always. Nothing here depends on other comments of the plan. '' when it may.
+ */
+function occupiedLines(target, comment, posted) {
+  const first = make => Array.from({ length: SAME_LINES }, (_, ordinal) => posted.get(make(ordinal))).find(thread => thread !== undefined);
+  const single = first(ordinal => inlineMarker(target, comment, ordinal)), several = posted.get(linesMarker(target, comment));
+  const says = thread => `the PR already has a comment of AZPR's on these quoted lines${thread ? ` (thread ${thread})` : ''}, and a second one is not put on them`;
+  if (comment.otherPlaces) return (single ?? several) !== undefined && first(ordinal => sharedMarker(target, comment, ordinal)) === undefined ? says(single ?? several) : '';
+  return several !== undefined && single === undefined ? says(several) : '';
+}
+
 /** One summary per reviewed source commit and set of inline comments. */
 export function summaryMarker(target, head, inlineMarkers) {
   return markerTag(hash([targetKey(target), 'summary', head, [...inlineMarkers].sort()]));
@@ -650,6 +733,119 @@ export function restoreAnchor(comment, review) {
     : { anchor: comment.anchor, startLine: comment.startLine, endLine: comment.endLine, found: false };
 }
 
+// What decides where a block of Markdown begins and ends, as CommonMark reads lines (tabs made spaces first).
+// A line ends at a line feed or a carriage return only, so the rest of one may hold any other character (the s flag).
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/s;
+const fenceStart = line => {
+  const found = FENCE_LINE.exec(line);
+  return found && (found[1][0] === '~' || !found[2].includes('`')) ? { mark: found[1][0], length: found[1].length } : null;
+};
+const fenceEnd = (fence, line) => {
+  const found = FENCE_LINE.exec(line);
+  return Boolean(found) && found[1][0] === fence.mark && found[1].length >= fence.length && /^ *$/.test(found[2]);
+};
+const QUOTE_MARK = /^ {0,3}> ?/;
+const LIST_ITEM = /^( {0,3}(?:[-*+]|(\d{1,9})[.)]))(?:( +)(.*))?$/s;
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?: *\1){2,} *$/;
+const HEADING = /^ {0,3}#{1,6}(?: |$)/;
+const UNDERLINE = /^ {0,3}(?:=+|-+) *$/;
+// Raw HTML that ends only where a line says so, not at a blank line (CommonMark's HTML blocks 1 and 3 to 5; the
+// start of an HTML comment is escaped in a body): how a line starts it, what a line holds that ends it, its name.
+const LASTING_HTML = [
+  [/^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)/i, /<\/(?:pre|script|style|textarea)>/i, found => `a <${found[1].toLowerCase()}> block`],
+  [/^ {0,3}<\?/, /\?>/, () => 'a <?…?> block'],
+  [/^ {0,3}<!\[CDATA\[/, /\]\]>/, () => 'a CDATA section'],
+  [/^ {0,3}<![a-z]/i, />/, () => 'a <!…> declaration'],
+];
+// Raw HTML that ends at a blank line: a line that begins with one of these tags (HTML block 6), or one that is
+// a whole tag and nothing else, which no paragraph continues into (7). The whole tag is taken as commonmark.js
+// and markdown-it take it: of any name (`<pre/>` too, which starts no block of the first kind) and followed by
+// any white space.
+const BLOCK_TAG = /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i;
+const TAG_LINE = /^ {0,3}(?:<[a-z][a-z0-9-]*(?:\s+[a-z_:][a-z0-9:._-]*(?:\s*=\s*(?:[^"'=<>`\x00-\x20]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[a-z][a-z0-9-]*\s*>)\s*$/i;
+
+/**
+ * The block a body leaves open for what follows it after a blank line, named
+ * for a correction; '' when it leaves none. As CommonMark reads blocks, only
+ * two kinds go on over a blank line at the top level: a fenced code block
+ * without its closing fence, and raw HTML that waits for its own end
+ * (LASTING_HTML). Inside a quote or a list item both end with it, and
+ * unindented text after a blank line ends every quote and list.
+ *
+ * So the lines are read for where the top level is. A quote is known by its
+ * mark and a list item by its marker and the indentation of its content, the
+ * outermost one only: what is nested in it is read as its text. Its lines,
+ * and those of the top level, are read alike for code fences, raw HTML and
+ * paragraphs, since a line without the mark or the indentation still
+ * continues a paragraph, and a paragraph is interrupted by some list items
+ * only. This is a reading of lines, not a Markdown parser, and it decides
+ * only whether a body is sent back for correction.
+ */
+function openBlock(text) {
+  // Lines that hold no quote or list item of their own: the top level, or the content of the one the lines
+  // are in. open: code or raw HTML that waits for its end. raw: raw HTML that ends at a blank line.
+  // paragraph: the last line was a paragraph's.
+  const run = () => ({ open: null, raw: false, paragraph: false });
+  const top = run();
+  let within = null;
+  const read = (state, line) => {
+    if (state.open) {
+      if (state.open.ends(line)) state.open = null;
+      return;
+    }
+    const indent = /^ */.exec(line)[0].length;
+    if (indent === line.length) state.raw = state.paragraph = false;
+    // Raw HTML takes every line up to a blank one; four spaces or more are code, or a paragraph's next line.
+    if (indent === line.length || state.raw || indent > 3) return;
+    const fence = fenceStart(line), html = fence ? undefined : LASTING_HTML.find(([start]) => start.test(line));
+    if (fence) state.open = { ends: next => fenceEnd(fence, next), name: 'a code fence' };
+    else if (html && !html[1].test(line)) state.open = { ends: next => html[1].test(next), name: html[2](html[0].exec(line)) };
+    else if (!html) state.raw = BLOCK_TAG.test(line) || (!state.paragraph && TAG_LINE.test(line));
+    // Under a paragraph, a line of = or - makes it a heading; what starts no block is a paragraph's line.
+    state.paragraph = !(fence || html || state.raw || THEMATIC_BREAK.test(line) || HEADING.test(line) || (state.paragraph && UNDERLINE.test(line)));
+  };
+  // Whether a line starts a block wherever it stands, so that it never continues the paragraph of a quote or a list item above it.
+  const starts = line => Boolean(fenceStart(line)) || QUOTE_MARK.test(line) || Boolean(LIST_ITEM.exec(line)) || THEMATIC_BREAK.test(line) || HEADING.test(line)
+    || LASTING_HTML.some(([start]) => start.test(line)) || BLOCK_TAG.test(line);
+  for (const written of String(text).replace(/\r\n?/g, '\n').split('\n')) {
+    // A tab reaches the next column that is a multiple of four.
+    let line = '', column = 0;
+    for (const char of written) {
+      const width = char === '\t' ? 4 - column % 4 : 1;
+      line += char === '\t' ? ' '.repeat(width) : char;
+      column += width;
+    }
+    const indent = /^ */.exec(line)[0].length, blank = indent === line.length;
+    if (within) {
+      // A list item that began with nothing ends at a blank line; any other goes on over it.
+      const empty = within.empty;
+      within.empty = false;
+      if (within.quote ? QUOTE_MARK.test(line) : blank ? !empty : indent >= within.offset) {
+        read(within.content, within.quote ? line.replace(QUOTE_MARK, '') : line.slice(within.offset));
+        continue;
+      }
+      if (!blank && within.content.paragraph && !starts(line)) continue;
+      within = null;
+    }
+    if (!top.open && !top.raw && !blank && indent <= 3) {
+      const item = (top.paragraph && UNDERLINE.test(line)) || THEMATIC_BREAK.test(line) ? null : LIST_ITEM.exec(line), worded = /[^ ]/.test(item?.[4] ?? '');
+      if (line[indent] === '>') within = { quote: true, content: run() };
+      // A paragraph is interrupted only by an item with text, and by a numbered one only when it starts at 1.
+      else if (item && (!top.paragraph || (worded && (item[2] === undefined || Number(item[2]) === 1)))) {
+        // The content's column: after the marker and its spaces, or one space after it where code or nothing follows.
+        within = { offset: item[1].length + (worded && item[3].length <= 4 ? item[3].length : 1), empty: !worded, content: run() };
+      }
+      if (within) {
+        top.paragraph = false;
+        read(within.content, within.quote ? line.replace(QUOTE_MARK, '') : line.slice(within.offset));
+        continue;
+      }
+    }
+    read(top, line);
+  }
+  return top.open?.name ?? '';
+}
+
 /** Strip any severity label the model wrote, then apply the canonical one. */
 export function normalizeTitle(body, severity) {
   const trimmed = body.trim();
@@ -671,13 +867,21 @@ const aliases = (value, names) => {
  * @returns {{result: object, issues: string[], corrections: object[]}}
  * With `final`, every remaining problem becomes a local skip instead of an issue.
  * `candidates` lists the groups of a quick review whose findings one comment
- * may combine (`findingIds`); the runtime never combines findings itself.
+ * may combine (`findingIds`): one defect reported twice on the same lines.
+ * `repeats` lists the groups, of any review, whose findings may be one defect
+ * made at several places; a comment that combines some of them stands at one
+ * place and carries the others as `otherPlaces`, which the runtime renders.
+ * The runtime never combines findings itself.
  * `sources` are the page's source excerpts and `discussions` the live threads
  * the runtime read (null when it could not): skip causes are checked against them.
+ * `posted` maps the markers the PR already has to their threads
+ * (`markersInThreads`; null when the threads could not be read): a comment
+ * for several places and a comment for one place are not put on the same
+ * quoted lines (`occupiedLines`).
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], sources = [], discussions = null, allowSummary = true }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, posted = null, allowSummary = true }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -727,6 +931,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     else if (body.length > INLINE_HARD_LIMIT) problems.push(`body exceeds ${INLINE_HARD_LIMIT} characters`);
     const named = namedExcluded(body, excluded);
     if (named.length) problems.push(`body names ${named.join(', ')}, which a person excluded from publication; leave ${named.length === 1 ? 'it' : 'them'} out`);
+    // The list of other places is the runtime's: its heading appears nowhere in a body, however it is
+    // indented, quoted or continued, so that no text a planner wrote reads like the runtime's list.
+    if (OTHER_PLACES_HEADINGS.some(heading => body.includes(heading))) problems.push('body holds the heading of the list of other places, which only the runtime writes; leave that list out');
     const path = nonempty(c.path) ? (c.path.startsWith('/') ? c.path : '/' + c.path) : '';
     if (!changed.has(path) || /[\r\n\0]/.test(path)) problems.push(`path ${JSON.stringify(c.path ?? '')} is not a changed file of this PR`);
     else if (lines && path !== lines.path) problems.push(`path must be ${lines.path}, where the combined findings are`);
@@ -751,29 +958,73 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     }
     if (problems.length) return { problems };
     if (body.length > INLINE_SOFT_LIMIT) corrections.push({ action: 'accept-long-body', findingId: label, characters: body.length });
-    return { problems, comment: { severity, path, startLine: restored.startLine, endLine: restored.endLine, anchor: restored.anchor, body } };
+    return { problems, found: restored.found, comment: { severity, path, startLine: restored.startLine, endLine: restored.endLine, anchor: restored.anchor, body } };
   }
-  // One comment for findings of a listed candidate group. The planner decides
-  // whether they state one defect; the runtime checks only the group rules.
+  // One comment for findings of a listed group: one defect reported twice on
+  // the same lines (`candidates`, quick reviews) or made at several places
+  // (`repeats`). The planner decides whether they state one defect; the runtime
+  // checks only the group rules.
   function combine(c, ids) {
     const label = ids.join('+');
     const members = ids.map(id => eligible.get(id));
     const problems = [];
+    const listed = group => ids.every(id => group.includes(id));
+    const twice = quick && candidates.some(listed), repeated = !twice && repeats.some(listed);
     let lines;
-    if (!quick || !candidates.length) problems.push('findingIds may combine only the findings of a listed mergeCandidates group');
+    if (!(quick && candidates.length) && !repeats.length) problems.push('findingIds may combine only the findings of one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => !member)) problems.push(`${ids.filter(id => !eligible.has(id)).join(', ')} not assigned to this page`);
-    else if (!candidates.some(group => ids.every(id => group.includes(id)))) problems.push('the findings are not all in one mergeCandidates group');
+    else if (!twice && !repeated) problems.push('the findings are not all in one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => handled.has(member.id))) problems.push('a combined finding already has a comment or skip');
     else {
-      const checked = combinationProblems(members);
+      const checked = twice ? combinationProblems(members) : repeatProblems(members);
       problems.push(...checked.problems);
       lines = checked.lines;
+      // Every place a comment lists is a place of this PR's changes as it is at HEAD: a changed
+      // file whose text the runtime read for this page, and lines that file has.
+      const absent = twice ? [] : members.filter(member => {
+        const at = parseLocation(member.location);
+        const read = sources.find(item => item.path === at?.path);
+        return !at || !changed.has(at.path) || !read || !(at.end <= (read.totalLines ?? read.lastLine));
+      });
+      if (absent.length) problems.push(`${absent.map(member => `${member.id} (${placeOf(member)})`).join(', ')} ${absent.length === 1 ? 'is' : 'are'} not on lines of a changed file as the runtime read it at HEAD`);
       if (!nonempty(c.mergeReason)) problems.push('a combined comment needs a mergeReason');
     }
-    let drafted;
+    let drafted, first;
     if (!problems.length) {
       drafted = draft(c, label, members[0].severity, lines);
       problems.push(...drafted.problems);
+      // Where the comment stands follows from the lines it quotes, so they must be lines the file has:
+      // the quote is found in the HEAD text, also for a review whose single comments need not be, and
+      // ends within the file (a quote that adds an empty line after the last one is found, but is no line).
+      if (!problems.length && repeated && !drafted.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
+      // (An anchor in a file that holds none of the findings is refused below, where the place is looked for.)
+      // The list follows the body: a block the body leaves open would take it in.
+      const left = !problems.length && repeated ? openBlock(drafted.comment.body) : '';
+      if (left) problems.push(`body leaves ${left} open, which would take the list of other places into it; close it`);
+      const lineCount = (read => read && (read.totalLines ?? read.lastLine))(repeated && drafted.comment && sources.find(item => item.path === drafted.comment.path));
+      if (!problems.length && lineCount && drafted.comment.endLine > lineCount) {
+        problems.push(`the anchor (lines ${drafted.comment.startLine}-${drafted.comment.endLine}) reaches past the end of ${drafted.comment.path}, which has ${lineCount} line(s); quote lines the file has`);
+      }
+    }
+    if (!problems.length && repeated) {
+      // The comment stands at one of the places: the one finding whose lines its anchor touches.
+      // Members never share a line, but quoted lines can reach from one into the next: such an
+      // anchor names no place, and the runtime does not choose one.
+      const { path, startLine, endLine } = drafted.comment;
+      const touched = members.filter(member => (at => at.path === path && startLine <= at.end && endLine >= at.start)(parseLocation(member.location)));
+      if (touched.length === 1) [first] = touched;
+      else if (!touched.length) problems.push(`the anchor must lie on the lines of one of the combined findings (${members.map(member => `${member.id} at ${placeOf(member)}`).join(', ')})`);
+      else problems.push(`the anchor (lines ${startLine}-${endLine}) touches the lines of ${touched.map(member => `${member.id} at ${placeOf(member)}`).join(' and ')}; quote lines of one of them only`);
+    }
+    if (!problems.length && posted) {
+      // Comments for one place and comments for several do not find each other by marker: neither is put
+      // on quoted lines that carry the other kind (`occupiedLines`).
+      const others = repeated ? members.filter(member => member !== first).map(member => ({ place: placeOf(member) })) : undefined;
+      const taken = occupiedLines(review.target, { ...drafted.comment, ...(others ? { otherPlaces: others } : {}) }, posted);
+      if (taken) {
+        problems.push(repeated ? `${taken}. Anchor this comment on the lines of another of its findings, or leave ${first.id} out of it; a finding that an existing thread covers is skipped with cause existing-thread`
+          : `${taken}. Skip these findings with cause existing-thread when that thread covers them, or quote other lines`);
+      }
     }
     if (problems.length) {
       if (!final) {
@@ -788,7 +1039,13 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       return;
     }
     for (const id of ids) handled.add(id);
-    comments.push({ findingId: ids[0], findingIds: ids, ...drafted.comment, mergeReason: c.mergeReason.trim() });
+    if (!repeated) { comments.push({ findingId: ids[0], findingIds: ids, ...drafted.comment, mergeReason: c.mergeReason.trim() }); return; }
+    // The place of the comment first, the others in the order of the page; their
+    // locations are the findings' own, never text the planner wrote.
+    const position = new Map(assigned.map((finding, index) => [finding.id, index]));
+    const others = members.filter(member => member !== first).sort((a, b) => position.get(a.id) - position.get(b.id));
+    comments.push({ findingId: first.id, findingIds: [first.id, ...others.map(member => member.id)], ...drafted.comment, mergeReason: c.mergeReason.trim(),
+      otherPlaces: others.map(member => ({ findingId: member.id, place: placeOf(member) })) });
   }
   for (const [index, raw] of (Array.isArray(value.comments) ? value.comments : []).entries()) {
     if (!isObject(raw)) { corrections.push({ action: 'drop-non-object-comment', index }); continue; }
@@ -806,6 +1063,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       continue;
     }
     const { problems, comment } = draft(c, finding.id, finding.severity);
+    // A comment for one place is not put on quoted lines that carry a comment for several places.
+    const taken = !problems.length && posted ? occupiedLines(review.target, comment, posted) : '';
+    if (taken) problems.push(`${taken}. Skip ${finding.id} with cause existing-thread when that thread covers it, or quote other lines`);
     if (problems.length) {
       if (!final) { issues.push(`comment for ${finding.id}: ${problems.join('; ')}.`); reported.add(finding.id); continue; }
       skip(finding.id, `No inline comment: ${problems.join('; ')}. The finding remains in the summary index.`);
@@ -823,8 +1083,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     const cited = citedFindings(reason, s.findingId, findingIds);
     if (cited.length && !final) {
       issues.push(quick
-        ? `skip for ${s.findingId} relies on ${cited.join(', ')}: another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates group holds both and they state one defect, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`
-        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
+        ? `skip for ${s.findingId} relies on ${cited.join(', ')}: another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates or repeatCandidates group holds both and they state one defect, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`
+        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
       reported.add(s.findingId);
       continue;
     }
@@ -875,6 +1135,74 @@ export function planRepairPrompt(issues, { parseOnly = false } = {}) {
   return `AZPR runtime: this comment plan page needs correction before it can be saved.\n${listed}\n\nReturn the complete corrected JSON object for this page (status, comments, skipped, optional summary and summaryDetails). Keep valid comments unchanged.`;
 }
 
+/**
+ * Validate the grouping pass: which findings may be one defect made at several
+ * places. Only a proposal: each planning page still decides whether a group
+ * gets one comment, and the runtime checks that comment's rules. A group holds
+ * two or more of `findings` (the high and medium ones on lines of a HEAD file)
+ * under `repeatProblems`, and a finding belongs to at most one group. With
+ * `final`, a group that breaks a rule is dropped instead of reported.
+ * @returns {{result: {status: string, groups: string[][]}|null, issues: string[], corrections: object[]}}
+ */
+export function evaluateGrouping(answerText, { findings, final = false }) {
+  const corrections = [], issues = [];
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'groups'] });
+  if (!parsed.value) {
+    if (!final) return { result: null, issues: [`Your answer could not be used: ${parsed.problem}.`], corrections };
+    return { result: { status: 'READY', groups: [] }, issues: [], corrections: [{ action: 'no-usable-grouping' }] };
+  }
+  if (parsed.corrections) corrections.push(...parsed.corrections);
+  const value = aliases(parsed.value, ['status', 'groups']);
+  // The pass has one answer and no continuation: any other status is an answer that stopped early,
+  // which a correction turn may finish. After the repairs the groups it did name are kept, since each
+  // is only a proposal that meets the rules.
+  // A missing status is no READY either: an answer may name unfinished work without one.
+  const status = String(value.status ?? '').trim().toUpperCase();
+  if (status !== 'READY') {
+    if (final) corrections.push({ action: 'accept-grouping-without-ready', status: status.slice(0, 40) });
+    else issues.push('status must be READY: this pass has no continuation. Name the groups you are sure of and return READY; use [] when nothing repeats.');
+  }
+  const order = new Map(findings.map((finding, index) => [finding.id, index]));
+  const byId = new Map(findings.map(finding => [finding.id, finding]));
+  const taken = new Set(), groups = [];
+  const refuse = (ids, problem) => {
+    if (final) corrections.push({ action: 'drop-invalid-group', findingIds: ids, problem });
+    else issues.push(`group ${ids.join(', ')}: ${problem}. Correct it or leave it out.`);
+  };
+  // An answer without `groups` (a page's answer, say) is no grouping: it gets its correction turn like any other.
+  if (!Array.isArray(value.groups) && !final) issues.push(value.groups === undefined ? 'groups is missing: answer with {"status": "READY", "groups": [...]}, and "groups": [] when nothing repeats.'
+    : 'groups must be an array of {"findingIds": [...], "reason": "..."}; use [] when nothing repeats.');
+  for (const [index, raw] of (Array.isArray(value.groups) ? value.groups : []).entries()) {
+    const group = Array.isArray(raw) ? { findingIds: raw } : isObject(raw) ? aliases(raw, ['findingIds', 'reason']) : {};
+    // An entry that is no group at all (its findings are not a list) is a mistake to correct; a list of fewer
+    // than two findings is a group of nothing, and nothing to correct.
+    if (!Array.isArray(group.findingIds)) {
+      if (final) corrections.push({ action: 'drop-malformed-group', index });
+      else issues.push(`group ${index + 1}: findingIds must be an array of finding IDs, as in {"findingIds": ["F-2", "F-5"], "reason": "..."}.`);
+      continue;
+    }
+    const ids = [...new Set(group.findingIds.map(id => String(id)))];
+    if (ids.length < 2) { corrections.push({ action: 'drop-group-without-two-findings', index }); continue; }
+    const unknown = ids.filter(id => !byId.has(id));
+    if (unknown.length) { refuse(ids, `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in findings`); continue; }
+    const again = ids.filter(id => taken.has(id));
+    if (again.length) { refuse(ids, `${again.join(', ')} already ${again.length === 1 ? 'belongs' : 'belong'} to another group`); continue; }
+    const { problems } = repeatProblems(ids.map(id => byId.get(id)));
+    if (problems.length) { refuse(ids, problems.join('; ')); continue; }
+    for (const id of ids) taken.add(id);
+    // In the order of the findings, so that pages and their comments do not depend on how the answer listed them.
+    groups.push(ids.sort((a, b) => order.get(a) - order.get(b)));
+  }
+  groups.sort((a, b) => order.get(a[0]) - order.get(b[0]));
+  return { result: { status: 'READY', groups }, issues, corrections };
+}
+
+export function groupingRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  const listed = issues.slice(0, 25).map(issue => `- ${issue}`).join('\n');
+  return `AZPR runtime: this grouping needs correction before it can be used.\n${listed}\n\nReturn the complete corrected JSON object (status, groups). When unsure whether findings are one defect, leave them out of every group.`;
+}
+
 function summaryComment(review, note, details, inlineMarkers, groups = []) {
   const chinese = /^zh(?:-|$)/i.test(review.outputLanguage ?? '');
   const traditional = chinese && new Intl.Locale(review.outputLanguage).maximize().script === 'Hant';
@@ -892,19 +1220,35 @@ function summaryComment(review, note, details, inlineMarkers, groups = []) {
 /** Assemble validated pages into one saved plan with markers and exact content. */
 export function assemblePlan(review, pages) {
   const ordinals = new Map();
+  // Comments that are alike in what their marker is made of are told apart by their order in the plan.
+  const ordinalOf = (...key) => {
+    const name = JSON.stringify(key), ordinal = ordinals.get(name) ?? 0;
+    ordinals.set(name, ordinal + 1);
+    return ordinal;
+  };
   const comments = pages.flatMap(page => page.comments).map(c => {
-    const key = `${c.path}\n${normalizedAnchor(c.anchor)}`;
-    const ordinal = ordinals.get(key) ?? 0;
-    ordinals.set(key, ordinal + 1);
-    const marker = inlineMarker(review.target, c, ordinal);
     // Azure positions are one-based UTF-16 offsets within their lines.
     const endOffset = Math.max(1, c.anchor.split('\n').at(-1).length);
-    return { ...c, kind: 'inline', startOffset: 1, endOffset, marker,
-      content: `${c.body}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${marker}` };
+    const anchor = normalizedAnchor(c.anchor);
+    if (!c.otherPlaces?.length) {
+      const marker = inlineMarker(review.target, c, ordinalOf('inline', c.path, anchor));
+      return { ...c, kind: 'inline', startOffset: 1, endOffset, marker,
+        content: `${c.body}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${marker}` };
+    }
+    // One defect made at several places: the runtime lists the other places under the comment's own text.
+    // The comment is known by a marker of its own (`sharedMarker`); before it stands the marker that says a
+    // comment for several places is on these quoted lines (`linesMarker`), which planning reads.
+    const places = c.otherPlaces.map(other => other.place).sort();
+    const marker = sharedMarker(review.target, c, ordinalOf('shared', c.path, anchor, places)), lines = linesMarker(review.target, c);
+    const list = escapeComments(renderOtherPlaces(c.otherPlaces, review.outputLanguage ?? 'en'));
+    return { ...c, kind: 'inline', startOffset: 1, endOffset, marker, linesMarker: lines,
+      content: `${c.body}\n\n${list}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${lines}\n\n${marker}` };
   });
   const skipped = pages.flatMap(page => page.skipped);
   const intro = pages.map(page => page.summary).find(Boolean);
   const details = [...new Set(pages.map(page => page.summaryDetails).filter(nonempty))].join('\n\n');
-  const groups = comments.filter(c => c.findingIds?.length > 1).map(c => c.findingIds);
+  // Findings reported twice on the same lines share an index row; the places of
+  // one repeated defect are findings of their own and keep their rows.
+  const groups = comments.filter(c => c.findingIds?.length > 1 && !c.otherPlaces).map(c => c.findingIds);
   return { summary: summaryComment(review, intro, details, comments.map(c => c.marker), groups), comments, skipped };
 }

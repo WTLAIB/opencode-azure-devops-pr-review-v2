@@ -1,4 +1,4 @@
-import { ROLES, MAX_ARCHIVE_MEGABYTES } from './config.mjs';
+import { ROLES, MAX_ARCHIVE_MEGABYTES, isModelReference } from './config.mjs';
 // Deterministic attribution from invoked reviewer stages, not model-authored claims.
 const vocabulary = {
   en: { title: 'AI review provenance', disclaimer: 'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.', method: 'Independent initial reviews, followed by source-based verification, duplicate merging, and rejection of unsupported findings; not majority voting.', roles: ['Source check', 'Functional review', 'Risk review', 'Verification', 'Duplicate check', 'Quick review', 'Severity rating'], stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Initial findings', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into', extra: 'New verifier findings', note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
@@ -140,6 +140,97 @@ function displayLocation(value) {
     }
   } catch { /* Ordinary string locations stay literal. */ }
   return value;
+}
+
+/** The heading of the list of other places in each language it is written in; what reads the list back knows it by these lines. */
+export const OTHER_PLACES_HEADINGS = Object.freeze(['**📍 Also at** (the same defect; fix these places with it):', '**📍 其他位置**（同一個問題，請一併修正）：', '**📍 其他位置**（同一个问题，请一并修正）：']);
+
+/**
+ * The other places of one defect that a comment covers, as the runtime adds
+ * them under the comment's own text: one row per finding with its file and
+ * lines, from the findings' own locations, never from text a model wrote.
+ * A plain list: nothing here is collapsed or linked.
+ * @param {{findingId: string, place: string}[]} places
+ */
+export function renderOtherPlaces(places, language) {
+  const [english, traditional, simplified] = OTHER_PLACES_HEADINGS;
+  const heading = pick(language, english, traditional, simplified);
+  return `${heading}\n${places.map(({ findingId, place }) => placeRow(place, findingId, pick(language, ROW_BRACKETS[0], ROW_BRACKETS[1], ROW_BRACKETS[1]))).join('\n')}`;
+}
+
+// How a row puts its finding ID in brackets: in English, and in Chinese.
+const ROW_BRACKETS = [[' (', ')'], ['（', '）']];
+
+/** One row of that list: the place in a code span that holds any text (longer than the longest run of backticks inside it), then the finding ID. */
+function placeRow(place, findingId, [open, close]) {
+  const text = String(place).replace(/[\r\n\t]+/g, ' ');
+  const run = Math.max(0, ...(text.match(/`+/g) ?? []).map(match => match.length));
+  const fence = '`'.repeat(run + 1);
+  return `- ${run ? `${fence} ${text} ${fence}` : `\`${text}\``}${open}${String(findingId).replace(/[^A-Za-z0-9_-]/g, '')}${close}`;
+}
+
+/**
+ * Whether a place can be written into that list and read back as it is: its
+ * text holds no control character, no line separator and neither end of an
+ * HTML comment, which the posted text would have to change.
+ */
+export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]|<!--|-->/.test(place);
+
+/**
+ * The places a posted comment of AZPR's lists, read back from its text for a
+ * later plan (`alsoAt` in the digest of a thread): the rows under the heading
+ * `renderOtherPlaces` writes, where they end the comment's own text as
+ * `assemblePlan` writes it. A row counts only when writing its place and its
+ * finding ID again gives the very line (so a row is one a finding's place
+ * could have produced: a path, its lines in order, an ID). After the rows
+ * comes a blank line, then the attribution if there is one (a rule, the line
+ * `commentAttribution` writes for a comment, and a blank line), then the two
+ * markers of such a comment (`linesMarker`, then its own) with a blank line
+ * between them.
+ * [] for any other text: one that merely holds such a heading or such rows,
+ * one whose row has another form, one that was continued after the list.
+ * What is read here tells a planner what a thread says it covers, as the
+ * start of the thread's text does; nothing is posted or skipped because of it.
+ */
+export function listedPlaces(content) {
+  // Line by line as written: only the line ends a service may return differ from what the runtime wrote.
+  const lines = String(content ?? '').split(/\r?\n/);
+  while (lines.length && lines.at(-1) === '') lines.pop();
+  const heading = lines.findLastIndex(line => OTHER_PLACES_HEADINGS.includes(line));
+  if (heading < 0) return [];
+  // The rows are written in the heading's language: English brackets under the English heading, Chinese ones otherwise.
+  const brackets = ROW_BRACKETS[OTHER_PLACES_HEADINGS.indexOf(lines[heading]) ? 1 : 0];
+  const places = [];
+  let next = heading + 1;
+  for (; next < lines.length && lines[next].startsWith('- `'); next++) {
+    // The row's parts, each read once: the opening code-span delimiter, the finding ID at the end, the place
+    // between them. Writing the row again must give the very line, so nothing else passes.
+    const line = lines[next], fence = /^`+/.exec(line.slice(2))[0], id = /[（(]([A-Za-z]+-\d+)[)）]$/.exec(line);
+    const inner = id && line.slice(2 + fence.length, id.index).trimEnd();
+    const place = inner && inner.endsWith(fence) ? inner.slice(0, -fence.length).trim() : '';
+    const at = /^\/[^:]+:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
+    // A place as a finding's is written (lines in order), in the row the runtime writes for it under this heading.
+    if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || placeRow(place, id[1], brackets) !== line) return [];
+    places.push(place);
+  }
+  const rest = lines.slice(next);
+  const marker = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;
+  // The end of a comment for several places: the marker of its lines, a blank line, its own marker.
+  if (!places.length || rest.shift() !== '' || !marker.test(rest.pop() ?? '') || rest.pop() !== '' || !marker.test(rest.pop() ?? '')) return [];
+  if (!rest.length) return places;
+  // The attribution: a rule, the line the runtime writes for a comment, and a blank line.
+  return rest.length === 3 && rest[0] === '---' && commentAttributionLine(rest[1]) && rest[2] === '' ? places : [];
+}
+
+/**
+ * Whether a line is the attribution `commentAttribution` writes for an inline
+ * comment, in any language: its fixed wording for a verified or a quick
+ * review, then the models (references as settings take them), each in a code
+ * span, and nothing else.
+ */
+function commentAttributionLine(line) {
+  return Object.values(vocabulary).flatMap(words => [`${words.comment} `, `${words.lead}${words.quick}${words.end}${words.models} `])
+    .some(wording => line.startsWith(wording) && line.slice(wording.length).split(', ').every(span => /^`[^`]+`$/.test(span) && isModelReference(span.slice(1, -1))));
 }
 
 /** A compact index of existing claims, not another model-authored assessment. */

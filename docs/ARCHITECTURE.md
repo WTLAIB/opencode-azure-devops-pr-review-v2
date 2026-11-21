@@ -388,7 +388,8 @@ additions for review and deep, REPORTED ones for a quick review. A saved
 review without a verification field is trusted only when its profile is review
 or deep. `commentFindings` hands them to planning as a person adjusted them
 after a preview (see below); without adjustments they are exactly the
-publishable findings. Planning (model) uses pages of at most four findings plus report segments
+publishable findings. Planning (model) uses pages of at most four findings (more only where
+one defect at several places keeps its findings on one page) plus report segments
 (on a large PR each page carries the changed files and dispositions of its own
 findings and references to the complete lists), with
 CONTINUE checkpoints when a page needs more reading: at most three continuation
@@ -424,6 +425,78 @@ group, come from different sessions, share a severity and a line, and the
 anchor lies on the shared lines; a refused combination falls back to the valid
 single comments and reasoned skips. The summary index gives an accepted
 combination one row. The assembled plan stores exact content, offsets and markers.
+
+One defect made at several places is several findings (a reviewer files one
+for each place that needs its own correction), and one comment may hold them.
+Before the pages are made, `prepareComments` settles which findings may be
+such repeats: `repeatEligible` takes the high and medium findings on lines of
+a changed HEAD file whose place a list can hold as it is (`listablePlace`; a
+quick finding that is a merge candidate is left to that rule), and
+`severitySets` the sets of one severity that lie at two places or more. Where
+there is such a set, the HEAD text of those findings' files is read, and only
+a finding whose lines the file has stays eligible: a place is listed as its
+finding states it. When every finding fits one page, the page is offered the
+sets as they are. Otherwise a group must share a page, so only a finding that
+fits one together with another finding of its severity at a different place
+stays (`pairable`): nothing is read ahead of the pages and nothing asked for
+any other, and without such a pair there is no pass. Then a grouping pass
+runs first: one stage of the comment-plan role whose input is
+`commentWork: { kind: "group" }` and those findings' text, inline (without
+the evidence above 60,000 characters; a list still longer is not grouped),
+and whose answer
+`evaluateGrouping` checks (`repeatProblems`: one severity, high or medium,
+lines of a HEAD file, no two findings on the same lines; a finding in one
+group at most; a status other than READY is sent back, since the pass has no
+continuation), with repair turns like a page and a checkpoint text of its
+own; `boundedGroups` cuts a group to a page's text and `candidatePages` keeps
+each group on one page. A page receives its groups as `repeatCandidates`,
+and a continued page what is still open of them. A combined comment for one
+names findings of one listed group, of one severity, on different lines that
+the changed files have in the page's HEAD text, and its anchor touches the
+lines of exactly one of them: that finding is the comment's place
+(`findingId`), the others become `otherPlaces`. `assemblePlan` renders them
+under the planner's text with `renderOtherPlaces` (`attribution.mjs`): the
+findings' own locations and IDs as a plain list, never text a model wrote.
+The planner's text must leave no block open that would take that list in (a
+code fence without its closing fence, raw HTML that waits for its own end):
+`openBlock` reads its lines as CommonMark reads blocks, and such a text is
+sent back.
+The summary index keeps one row per place; only findings reported twice on
+the same lines share a row. A grouping pass that fails is said in a progress
+notice and planning goes on without groups; a stopped run starts no page.
+`discussionDigest` reads the list back (`listedPlaces`) and gives the planner
+those places as `alsoAt`, since the list lies beyond the excerpt of a thread:
+a later plan then sees them as discussed. That only informs the planner;
+nothing is posted or skipped because of it. The list is read only in the form
+the runtime writes it: in the comment that opened a thread on a file and
+carries AZPR's marker, under one of `OTHER_PLACES_HEADINGS`, with nothing
+after its rows (a place and a finding ID each) but the attribution (the one
+line `commentAttribution` writes, which ends with the word for the models
+and the models) and the comment's two markers; a body that writes such a
+heading itself is refused.
+
+A comment for several places is a comment of its own, so `assemblePlan` gives
+it a marker of its own: `sharedMarker` (PR, path, normalized anchor, the
+sorted other places, and an ordinal for two such comments that are alike in
+all of these: two defects at the same places). It is the item's key in the
+ledger, the attempt records and the summary's marker, and `publishPlan`,
+which is unchanged but for how it counts the other comments of a PR, skips
+the item only when that marker is on the PR. That is this very comment, with
+every place, so a receipt never infers what a posted comment covers. A
+shared comment and a comment for one place do not find each other by marker;
+`occupiedLines` (`comments.mjs`) keeps them off each other's quoted lines
+when planning, with `posted` (`markersInThreads` of the threads read before
+planning). For that, the shared comment's text carries a second marker
+before its own, `linesMarker` (PR, path, normalized anchor), which only this
+rule reads. A shared comment is sent back when a comment for one place is on
+its quoted lines (an `inlineMarker` under one of the first ordinals; an
+earlier comment there may have been deleted) or another shared comment is
+(its `linesMarker`), unless the PR has this very comment; a comment for one
+place is sent back when a shared comment is on its quoted lines and no
+comment for one place is. After the correction turns such a comment is not
+planned. A shared comment's quoted lines must also be found in the HEAD text
+and end within the file. The files read ahead of the pages are not read
+further once the run was stopped.
 
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both

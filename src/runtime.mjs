@@ -23,7 +23,7 @@ import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewVerification,
   everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
-import { API_VERSION, createAzureClient, fetchTransport, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
+import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
@@ -832,6 +832,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       visibleCharacters: input.length, checkpointRequested: false,
       // The planning page whose sessions this grant serves; its tool evidence is that page's.
       commentPage: payload.commentWork?.page ?? null,
+      // The grouping pass has an answer of its own: no page, no comments, no continuation.
+      grouping: payload.commentWork?.kind === 'group',
       // "commit\npath" of the file contents this session's own tool calls showed;
       // never the run's shared cache or another session's reads.
       reads: new Set(),
@@ -1619,16 +1621,24 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         const data = await dataFor(run);
         // Read live discussions once for the planner's duplicate checks; the
         // planner can still read threads itself if this read fails.
-        try { discussions = discussionDigest(await azure.threads(run, review.snapshot)); }
+        // The markers among them, each with its thread: a comment for several places does not stand on
+        // lines that already carry a comment of AZPR's.
+        let posted = null;
+        try {
+          const threads = await azure.threads(run, review.snapshot);
+          discussions = discussionDigest(threads);
+          posted = markersInThreads(threads);
+        }
         catch (error) {
           if (!run.active) throw error;
           run.debug.warnings.push(`Existing discussions could not be read before planning: ${errorText(error)}`);
         }
         // Planning pages run side by side, never more than the configured sessions.
         const parallelPages = Math.min(PLANNING_PARALLEL_PAGES, settings.workflow.parallelSessions);
+        // The grouping pass, which looks for one defect at several places before the pages are made, is a stage like a page.
         review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler,
-          { label: `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
-          { progress: message => progress(run, message), discussions, parallel: parallelPages,
+          { label: payload.commentWork.kind === 'group' ? 'grouping' : `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
+          { progress: message => progress(run, message), discussions, posted, parallel: parallelPages, active: () => run.active,
             fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
         planning = false;
@@ -1916,7 +1926,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
       if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
-        event.system?.push?.({ type: 'text', text: 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
+        event.system?.push?.({ type: 'text', text: g.grouping
+          ? 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.'
+          : 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
       }
       g.primaryPrepared = true;
     }));

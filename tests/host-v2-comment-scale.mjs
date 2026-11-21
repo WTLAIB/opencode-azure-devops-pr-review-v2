@@ -7,7 +7,9 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * shard instead. 30 findings are verified in two sessions; the second verifier
  * moves one finding into a file of the first, so a duplicate-check session
  * merges it. The other 29 are planned in pages of four, two pages at a time,
- * and published; a second publish creates nothing.
+ * and published; a second publish creates nothing. Before the pages a grouping
+ * pass says that three high findings are one defect in three files: they share
+ * a page and one comment, which lists the other two places.
  * With --cleanup the same review runs with debug off, as installed by default.
  * A run then deletes its sessions when it ends, which debug prevents: the
  * fixture checks on the host that only the session holding the report is left
@@ -39,6 +41,8 @@ const levelOf = id => (Number(id.split('-')[1]) - 1) % 1000 % 3 === 2 ? 'low' : 
 let child, logs = '', overflowShards = 0;
 // Planning requests in flight: the first page waits for a second one, so two lanes must overlap.
 let planning = 0, planningMost = 0, planningGate = null;
+// The findings the grouping pass called one defect at several places.
+let grouped = [];
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
 const provider = createServer(async (request, response) => {
   try {
@@ -71,6 +75,10 @@ const provider = createServer(async (request, response) => {
       // Candidates arrive without the reviewer's severity; the verifier sets the level again.
       const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => levelOf(f.id) === 'high') : undefined;
       final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, severity: levelOf(f.id), ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
+    } else if (payload?.commentWork?.kind === 'group') {
+      // The pass before the pages: the first three high findings are the same lost guard in three files.
+      grouped = payload.findings.slice(0, 3).map(f => f.id);
+      final = { status: 'READY', groups: [{ findingIds: grouped, reason: 'The same guard is lost in each file.' }] };
     } else if (payload?.commentWork?.kind === 'plan') {
       planningMost = Math.max(planningMost, ++planning);
       if (!planningGate) {
@@ -78,8 +86,12 @@ const provider = createServer(async (request, response) => {
         await Promise.race([planningGate.promise, new Promise(resolve => setTimeout(resolve, 10000))]);
       } else planningGate.open();
       planning--;
+      // One comment for a listed group of repeats, at its first finding; every other finding gets its own.
+      const repeats = payload.repeatCandidates ?? [], together = new Set(repeats.flat()), byId = new Map(payload.findings.map(f => [f.id, f]));
+      const at = f => ({ severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code' });
       final = { status: 'READY', ...(payload.commentWork.allowSummary ? { summary: 'Fixture change.' } : {}),
-        comments: payload.findings.filter(f => f.severity !== 'low').map(f => ({ findingId: f.id, severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.summary}\n\nTrigger, evidence and correction.` })),
+        comments: [...repeats.map(ids => ({ findingIds: ids, mergeReason: 'One guard, lost in each file.', ...at(byId.get(ids[0])), body: '🔴 high: State lost where the guard was dropped\n\nTrigger, evidence and correction.' })),
+          ...payload.findings.filter(f => f.severity !== 'low' && !together.has(f.id)).map(f => ({ findingId: f.id, ...at(f), body: `🔴 high: ${f.summary}\n\nTrigger, evidence and correction.` }))],
         skipped: payload.findings.filter(f => f.severity === 'low').map(f => ({ findingId: f.id, cause: 'low-severity', reason: 'Low severity stays in the summary.' })) };
     } else {
       final = 'Fixture summary.';
@@ -135,7 +147,7 @@ try {
     assert.equal(Number(/\nSession notice: (\d+) reviewer session\(s\) of this run were deleted/.exec(receipt)?.[1]), created.length - 1, 'The receipt counts the deleted sessions.');
     assert.equal((await sessions.listed()).length, 1, 'The host lists one private session, the report.');
     assert.deepEqual(await sessions.records(), {}, 'Nothing is left to delete, and no unfinished run keeps a session.');
-    // A preview plans in eight sessions and keeps none of them; the report session stays.
+    // A preview plans in nine sessions (the grouping pass and eight pages) and keeps none of them; the report session stays.
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '', delivery: 'steer' });
     assert.match(await latest(), /\] PREVIEW/);
     assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
@@ -143,7 +155,7 @@ try {
     assert.ok(await sessions.exists(report), 'The report session is still there after the preview.');
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
     assert.match(await latest(), /\] POSTED/);
-    assert.equal(azure.state.threads.length, 20, 'The saved preview is posted as in the default mode.');
+    assert.equal(azure.state.threads.length, 18, 'The saved preview is posted as in the default mode.');
     // A command typed in the report session still acts on its review.
     await rawApi(`/api/session/${report}/command`, { name: 'pr-comment', text: '--show', delivery: 'steer' });
     assert.match((await rawApi(`/api/session/${report}/inbox`)).data.at(-1).payload.text, /^\[AZPR\] Saved preview of review [a-f0-9]{8}/);
@@ -176,15 +188,25 @@ try {
     const posted = await latest();
     assert.match(posted, /\] POSTED/, posted);
     const state = azure.state;
-    assert.equal(state.threads.length, 20, '19 high findings inline plus one summary; 10 low findings stay in the summary.');
-    const planner = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
-    assert.equal(planner.length, 8, '29 findings in planning pages of four.');
+    assert.equal(state.threads.length, 18, '19 high findings in 17 inline comments (three of them share one) plus one summary; 10 low findings stay in the summary.');
+    const stagesOfPlan = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
+    const passes = stagesOfPlan.filter(s => s.commentWork.kind === 'group'), planner = stagesOfPlan.filter(s => s.commentWork.kind === 'plan');
+    assert.deepEqual(passes.map(s => [s.label, s.status]), [['grouping', 'READY']], 'One grouping pass before the pages.');
+    assert.equal(planner.length, 8, '29 findings in planning pages of four; the three repeats share a page.');
+    // The three places of the one defect: a comment at the first, the two others listed under its text, each still a row of the index.
+    assert.equal(grouped.length, 3);
+    const shared = state.threads.filter(thread => /📍 Also at/.test(thread.comments[0].content));
+    assert.equal(shared.length, 1, 'One comment covers the three places.');
+    assert.equal(shared[0].comments[0].content.match(/^- `\/src\/module-\d\d\/file-\d{3}\.ts:1` \((?:F|R|V)-\d+\)$/gm)?.length, 2, shared[0].comments[0].content);
+    assert.match(posted, new RegExp(`- ${grouped.join(', ')} \\(`), 'The receipt names the findings of the shared comment.');
+    const summary = state.threads.find(thread => !thread.threadContext).comments[0].content;
+    for (const id of grouped) assert.match(summary, new RegExp(`\\| 🔴 high \\| ${id} — `), `${id} keeps its row in the summary index.`);
     assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
     assert.match(await latest(), /ALREADY_PRESENT/);
-    assert.equal(azure.callsTo('createThread').length, 20, 'A second publish writes nothing.');
+    assert.equal(azure.callsTo('createThread').length, 18, 'A second publish writes nothing.');
     console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-      riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, plannerSessions: planner.length, planningInFlightMax: planningMost, threads: state.threads.length, providerRequests: requests.length,
+      riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, groupingPasses: passes.length, plannerSessions: planner.length, planningInFlightMax: planningMost, sharedComments: shared.length, threads: state.threads.length, providerRequests: requests.length,
       maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
   }
 } finally {

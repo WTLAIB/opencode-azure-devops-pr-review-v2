@@ -175,11 +175,12 @@ function integer(value, at, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${at} must be an integer from ${min} to ${max}.`);
   return value;
 }
+/** Whether a value is a model reference as settings take one: provider/model, optionally #variant; no placeholder. */
+export const isModelReference = value => typeof value === 'string' && value.length <= 512 &&
+  /^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(value) && !/REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(value);
 function model(value, at, optional = false) {
   if (optional && value === '') return '';
-  if (typeof value !== 'string' || value.length > 512 ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:@/+=-]*(?:#[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(value) ||
-      /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(value)) throw new Error(`${at}: select an actual provider/model ID from opencode models, optionally with a variant as provider/model#variant; do not use a display name or placeholder.`);
+  if (!isModelReference(value)) throw new Error(`${at}: select an actual provider/model ID from opencode models, optionally with a variant as provider/model#variant; do not use a display name or placeholder.`);
   return value;
 }
 /** A forward proxy for Azure DevOps calls. Never echo it: it may carry credentials. */

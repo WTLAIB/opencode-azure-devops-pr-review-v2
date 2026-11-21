@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   renderReceipt, renderDiagnosticNotices, searchLimitation, describeReview, conversationTitle, renderCommentActions, renderFinalReport, renderCheckReport, renderPublication,
-  reviewProvenance, provenanceReport, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote, enclose,
-} from '../src/attribution.mjs';
+  reviewProvenance, provenanceReport, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote, enclose, renderOtherPlaces } from '../src/attribution.mjs';
 import { buildPanel, disclose } from '../src/tui-model.mjs';
 
 function freeze(value) {
@@ -280,4 +279,16 @@ test('a conversation is named after the PR its first command names, from the URL
   const long = conversationTitle({ organization: 'org', project: 'p', repository: 'r'.repeat(200), pullRequestId: 7 });
   assert.equal(long, `AZPR: PR #7 (${'r'.repeat(60)})`);
   assert.doesNotMatch(conversationTitle({ organization: 'secret-org', project: 'p', repository: 'repo', pullRequestId: 7 }), /secret-org/);
+});
+
+test('the other places of one defect are a plain list of the findings\' own files and lines', () => {
+  const places = [{ findingId: 'F-5', place: '/src/b.ts:30-34' }, { findingId: 'R-1002', place: '/src/c.ts:12' }];
+  assert.equal(renderOtherPlaces(places, 'en'), '**📍 Also at** (the same defect; fix these places with it):\n- `/src/b.ts:30-34` (F-5)\n- `/src/c.ts:12` (R-1002)');
+  assert.equal(renderOtherPlaces(places.slice(0, 1), 'zh-TW'), '**📍 其他位置**（同一個問題，請一併修正）：\n- `/src/b.ts:30-34`（F-5）');
+  assert.equal(renderOtherPlaces(places.slice(0, 1), 'zh-CN'), '**📍 其他位置**（同一个问题，请一并修正）：\n- `/src/b.ts:30-34`（F-5）');
+  assert.match(renderOtherPlaces(places, 'ja'), /^\*\*📍 Also at\*\*/, 'Any other language reads the English words.');
+  // A path is text: it stays inside its code span whatever it holds, on one line, and nothing is collapsed or linked.
+  const odd = renderOtherPlaces([{ findingId: 'F-1', place: '/src/a`b``c.ts:1' }, { findingId: 'F-2', place: '/src/x\n<!-- y -->.ts:2' }, { findingId: 'F-3</b>', place: '/src/[z](u).ts:3' }], 'en');
+  assert.deepEqual(odd.split('\n').slice(1), ['- ``` /src/a`b``c.ts:1 ``` (F-1)', '- `/src/x <!-- y -->.ts:2` (F-2)', '- `/src/[z](u).ts:3` (F-3b)']);
+  assert.doesNotMatch(odd, /<details|<summary|\]\(http/);
 });

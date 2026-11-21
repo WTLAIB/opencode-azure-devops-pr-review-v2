@@ -232,7 +232,8 @@ settings, backups and failure records. Never upload `.local/`.
   never relax them to model judgment. Commands the user types keep their
   behavior.
 - Inline markers are stable (PR, path, normalized anchor, ordinal); do not put a
-  review ID or model wording into them.
+  review ID or model wording into them. A comment for several places has a
+  marker of its own instead, which also takes its other places (see below).
 - A person's adjustments (`/pr-comment [review-id] --exclude`, `--severity`,
   `--reset`) change only the findings handed to comment planning, never the
   review record or a prompt file; the planner input carries `adjustments` only
@@ -249,6 +250,52 @@ settings, backups and failure records. Never upload `.local/`.
   may depend on which page finishes first: only the first page writes the
   summary note, each page keeps its own continuation state and evidence, and
   pages are assembled in page order (ordinals follow page order).
+- One defect made at several places is several findings and may be one
+  comment. Whether findings are the same defect is the planner's judgment (a
+  grouping pass before the pages, then the page that writes the comment).
+  Where the comment stands and what it lists is the runtime's: the finding
+  whose lines hold the anchor, and under the planner's text the other
+  findings' own locations (`renderOtherPlaces`), never locations a model
+  wrote, as a plain list (nothing collapsed or linked: automatic publication
+  holds text that hides). Settle the groups before the pages are made, so
+  that no page depends on another; a grouping pass that fails costs only the
+  grouping, and a stopped run starts no page. The review keeps every finding:
+  each place keeps its row in the summary index, its ID and its adjustments.
+  The list is read back (`listedPlaces`) only to tell a later plan which
+  places a thread says it covers (`alsoAt`), as the start of a thread's text
+  tells it: nothing is posted or skipped because of it. Read it only in the
+  form the runtime writes: in the comment that opened a thread on a file and
+  carries AZPR's marker, under the list's own heading, in rows of a place and
+  a finding ID, followed by nothing but the attribution and the comment's two
+  markers; a reply that quotes such a comment says nothing about its thread,
+  and a planner's text that writes the heading is refused. Change
+  `renderOtherPlaces`, the form of `commentAttribution` and `listedPlaces`
+  together (a test reads back what the first two write), and list only a
+  place that reads back as it was written (`listablePlace`).
+  The runtime checks only the rules of a combination (`repeatProblems` and
+  the page: one severity, high or medium, different lines that changed files
+  have in the HEAD text the runtime read, an anchor found in that text,
+  within the file and on the lines of exactly one member); it never combines
+  findings by itself, never chooses between two places an anchor touches and
+  never proposes a group from how alike two texts are. The grouping pass has
+  one answer and reads its findings inline: no continuation, no reference it
+  would need a tool for; it is asked only about findings that could share a
+  page with another one (`pairable`), and no file is read ahead of the pages
+  for any other. The files it needs are read a few at a time, like the
+  pages'.
+- A comment for several places is a comment of its own, so it has a marker
+  of its own (`sharedMarker`: PR, path, normalized anchor, the other places,
+  ordinal). Publication, its ledger and its attempt records know it by that
+  marker alone and skip it only when that marker is on the PR: the comment
+  found there is then this very comment, and a receipt never has to work out
+  what a posted comment covers. Never infer that from a comment's text, a
+  thread's position or an attempt's record, and never give publication a
+  second marker to go by. A comment for several places and a comment for
+  one place do not find each other by marker, so planning keeps them off
+  each other's quoted lines (`occupiedLines` in `comments.mjs`, with the
+  markers the PR had when planning began; the prompt says so too): the
+  shared comment carries a second marker for this, made of its path and
+  quoted lines only (`linesMarker`), which nothing but that rule reads.
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

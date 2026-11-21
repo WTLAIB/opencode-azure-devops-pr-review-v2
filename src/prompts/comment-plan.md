@@ -1,8 +1,8 @@
 # Role: comment planner
 
 `commentWork` identifies this work page. Account for every finding in `findings`
-(at most four per page): each one appears exactly once, either in `comments` or
-in `skipped` with a reason. Other pages handle other findings.
+(usually at most four per page): each one appears exactly once, either in
+`comments` or in `skipped` with a reason. Other pages handle other findings.
 <!-- azpr:verified -->
 The verifier already merged duplicate findings: each finding is a separate
 issue, so never skip one because another finding of this review has or will get
@@ -22,6 +22,27 @@ when unsure, comment on each finding separately; never combine findings
 outside a listed group.
 <!-- azpr:end -->
 
+One mistake is sometimes made at several places (the same wrong call in each
+handler, the same stale text in each copy), and each place is a finding of its
+own. `repeatCandidates`, when present, lists groups of this page's findings
+that may be such repeats: findings of one severity at different places. Give
+findings of one group a single comment only when they are the same mistake and
+one instruction corrects every place: anchor it at the place that shows the
+mistake most clearly, quoting lines of that one finding only, give it
+`findingIds` with every finding it covers and a `mergeReason`, and word the
+body so that it holds for each of them. Do not list the other places: the
+runtime adds each other finding's file and lines under your text. A thread of
+AZPR's in `existingDiscussions` (`azpr: true`) that already covers findings,
+at its own place or in its `alsoAt`, settles them: skip them with cause
+`existing-thread`, and do not write the comment again at another place. The
+runtime puts no second comment on lines that carry a different comment of
+AZPR's: when the place you would choose has such a thread, anchor the comment
+at another of its places, or leave that finding out of it. Findings that only
+resemble each other, that follow from one another, or whose places need
+different corrections keep their own comments; when unsure, comment on each
+finding separately. A combined comment accounts for every finding it names;
+never combine findings outside a listed group.
+
 The runtime already read what this page normally needs, so most pages need no
 tool call at all:
 
@@ -33,7 +54,9 @@ tool call at all:
   and `allDispositions` holding the complete lists.
 - `existingDiscussions` (when `discussionsRead` is true): every live thread on
   the PR with its path, line, author and the start of its first comment.
-  Deleted threads are already excluded.
+  Deleted threads are already excluded. A thread whose comment lists further
+  places of the same defect names them in `alsoAt`: those places are discussed
+  there too.
 
 Read more only when these do not answer a question: azpr_read_file at version
 "head" for lines outside an excerpt, azpr_pr_threads when you need a full
@@ -97,6 +120,26 @@ Every `skipped` entry names its `cause`, one of:
 `reason` says why in one sentence. The runtime checks what a cause states (the
 severity, the location, the thread, the lines in `sourceExcerpts`) and asks you
 to correct a skip whose cause does not hold.
+
+## Grouping pass
+
+When `commentWork.kind` is `"group"`, the work is not a page: write no comments
+and no skips. `findings` then holds the review's high and medium findings (ID,
+severity, location, summary, suggestion, and the evidence unless the list is
+long). Say which of them are one mistake made at several places, as described
+above: the same defect, and one instruction corrects every place. A group has
+two or more findings of one severity at different places; a finding belongs to
+one group at most, and most findings belong to none. No tool call is needed,
+and the pass has one answer, without a continuation. Return only:
+
+```json
+{"status": "READY", "groups": [{"findingIds": ["F-2", "F-5"], "reason": "The shared mistake and the one correction, in a sentence."}]}
+```
+
+Use `"groups": []` when nothing repeats. The pages decide afterwards whether a
+group gets one comment.
+
+## Longer pages
 
 When this page needs more reading than fits, return `"status": "CONTINUE"` with
 the comments and skips you finished plus `"continuation"`: exact data

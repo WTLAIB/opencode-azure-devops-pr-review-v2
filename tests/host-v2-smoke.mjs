@@ -191,6 +191,9 @@ const provider = createServer(async (request, response) => {
     final = repair
       ? JSON.stringify({ dispositions: findings.slice(1).map(item => ({ id: item.id, status: 'MERGED', mergedInto: findings[0].id, reason: '相同根因。' })) })
       : JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...findings[0], severity: 'medium', reason: '已回查原始碼。' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: '驗證完成。' });
+  } else if (payload?.commentWork?.kind === 'group') {
+    // The pass before several planning pages: nothing repeats in these reviews.
+    final = JSON.stringify({ status: 'READY', groups: [] });
   } else if (payload?.commentWork?.kind === 'plan' && commentDiscussed && Array.isArray(payload.existingDiscussions)) {
     // Every finding is already discussed by AZPR's own comment on the PR.
     const threadId = payload.existingDiscussions.find(thread => thread.azpr && thread.path)?.threadId;
