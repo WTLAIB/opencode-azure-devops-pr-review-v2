@@ -734,7 +734,8 @@ export function restoreAnchor(comment, review) {
 }
 
 // What decides where a block of Markdown begins and ends, as CommonMark reads lines (tabs made spaces first).
-const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// A line ends at a line feed or a carriage return only, so the rest of one may hold any other character (the s flag).
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/s;
 const fenceStart = line => {
   const found = FENCE_LINE.exec(line);
   return found && (found[1][0] === '~' || !found[2].includes('`')) ? { mark: found[1][0], length: found[1].length } : null;
@@ -744,7 +745,7 @@ const fenceEnd = (fence, line) => {
   return Boolean(found) && found[1][0] === fence.mark && found[1].length >= fence.length && /^ *$/.test(found[2]);
 };
 const QUOTE_MARK = /^ {0,3}> ?/;
-const LIST_ITEM = /^( {0,3}(?:[-*+]|(\d{1,9})[.)]))(?:( +)(.*))?$/;
+const LIST_ITEM = /^( {0,3}(?:[-*+]|(\d{1,9})[.)]))(?:( +)(.*))?$/s;
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?: *\1){2,} *$/;
 const HEADING = /^ {0,3}#{1,6}(?: |$)/;
 const UNDERLINE = /^ {0,3}(?:=+|-+) *$/;
@@ -757,7 +758,9 @@ const LASTING_HTML = [
   [/^ {0,3}<![a-z]/i, />/, () => 'a <!…> declaration'],
 ];
 // Raw HTML that ends at a blank line: a line that begins with one of these tags (HTML block 6), or one that is
-// a whole tag and nothing else, which no paragraph continues into (7).
+// a whole tag and nothing else, which no paragraph continues into (7). The whole tag is taken as commonmark.js
+// and markdown-it take it: of any name (`<pre/>` too, which starts no block of the first kind) and followed by
+// any white space.
 const BLOCK_TAG = /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i;
 const TAG_LINE = /^ {0,3}(?:<[a-z][a-z0-9-]*(?:\s+[a-z_:][a-z0-9:._-]*(?:\s*=\s*(?:[^"'=<>`\x00-\x20]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[a-z][a-z0-9-]*\s*>)\s*$/i;
 

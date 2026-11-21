@@ -279,9 +279,10 @@ settings, backups and failure records. Never upload `.local/`.
   findings by itself, never chooses between two places an anchor touches and
   never proposes a group from how alike two texts are. The grouping pass has
   one answer and reads its findings inline: no continuation, no reference it
-  would need a tool for; it is asked only where two findings could share a
-  page, and no file is read ahead of the pages where none could. The files
-  it needs are read a few at a time, like the pages'.
+  would need a tool for; it is asked only about findings that could share a
+  page with another one (`pairable`), and no file is read ahead of the pages
+  for any other. The files it needs are read a few at a time, like the
+  pages'.
 - A comment for several places is a comment of its own, so it has a marker
   of its own (`sharedMarker`: PR, path, normalized anchor, the other places,
   ordinal). Publication, its ledger and its attempt records know it by that

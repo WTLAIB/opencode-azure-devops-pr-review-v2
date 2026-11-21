@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups, pairFits } from '../src/comment-work.mjs';
+import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
 import { createCommentData } from '../src/comment-data.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -664,6 +664,12 @@ test('a posted comment for several places tells a later plan which other places 
   // A thread whose opener is gone is described by the first comment that is left, as before.
   const left = discussionDigest([{ id: 14, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, reply], threadContext: at }])[0];
   assert.deepEqual([left.author, left.excerpt, Object.hasOwn(left, 'alsoAt')], ['Ben', 'Retries are a separate matter.', false]);
+  // The opener is comment 1 of its thread, as publication takes it. When it is gone, no later comment stands
+  // for it, whatever that one says of its parent (none, or no such field): what it quotes is not this thread's.
+  for (const parent of [{ parentCommentId: 0 }, {}]) {
+    const quoted = discussionDigest([{ id: 15, comments: [{ id: 1, parentCommentId: 0, isDeleted: true }, { id: 2, ...parent, author: { displayName: 'Ben' }, content: posted }], threadContext: at }])[0];
+    assert.deepEqual([Object.hasOwn(quoted, 'alsoAt'), quoted.author, quoted.azpr], [false, 'Ben', true]);
+  }
 });
 
 test('the list of other places is read back only in the form the runtime writes it', () => {
@@ -831,6 +837,8 @@ async function placedSetup(t, findings) {
   return prepared;
 }
 // The planning pages among recorded payloads, in page order (lanes record them as they start).
+// Whether any two of these findings could share a planning page.
+const pairFits = findings => pairable(findings).length > 0;
 const pagesOf = payloads => payloads.filter(p => p.commentWork.kind !== 'group').sort((x, y) => x.commentWork.page - y.commentWork.page);
 // A planner that writes one comment for every listed group and its own comment for every other finding.
 const groupwise = payload => {
@@ -1063,17 +1071,17 @@ test('with several pages one grouping pass runs first; a group shares a page, wh
   const { review, store } = await placedSetup(t, findings);
   const notes = [];
   const { invoke, payloads } = stages(async payload => payload.commentWork.kind === 'group'
-    // F-2, F-3, F-5 and F-6 and F-7 repeat one mistake; F-7 is medium and belongs to no group.
+    // F-2 to F-6 repeat one mistake. F-7 is the only medium finding: no group could hold it, so the pass is not asked about it.
     ? JSON.stringify({ status: 'READY', groups: [{ findingIds: ['F-6', 'F-2', 'F-5', 'F-3', 'F-4'], reason: 'The same unchecked call in each handler.' }] })
     : groupwise(payload));
   const plan = await prepareComments(review, store, invoke, { fetchSource: sourceOf, progress: note => notes.push(note) });
   const pass = payloads[0], pages = pagesOf(payloads);
   assert.equal(payloads.filter(p => p.commentWork.kind === 'group').length, 1, 'One pass, before any page.');
   assert.deepEqual(pass.commentWork, { kind: 'group' });
-  assert.deepEqual(pass.findings.map(f => f.id), ['F-1', 'F-2', 'F-3', 'F-4', 'F-5', 'F-6', 'F-7'], 'The pass sees the high and medium findings, not the low one.');
+  assert.deepEqual(pass.findings.map(f => f.id), ['F-1', 'F-2', 'F-3', 'F-4', 'F-5', 'F-6'], 'The pass sees the findings that could share a comment: not the low one, nor the one that is alone in its severity.');
   assert.deepEqual(Object.keys(pass.findings[0]), ['id', 'severity', 'location', 'summary', 'evidence', 'suggestion']);
   assert.deepEqual(Object.keys(pass).sort(), ['commentWork', 'findings', 'outputLanguage', 'reviewId']);
-  assert.match(notes[0], /looking for one defect at several places \(7 findings\)/);
+  assert.match(notes[0], /looking for one defect at several places \(6 findings\)/);
   assert.deepEqual(pages.map(p => p.findings.map(f => f.id)), [['F-1'], ['F-2', 'F-3', 'F-4', 'F-5', 'F-6'], ['F-7', 'F-8']], 'The group has a page of its own, in the order of the findings.');
   assert.deepEqual(pages.map(p => p.repeatCandidates ?? null), [null, [['F-2', 'F-3', 'F-4', 'F-5', 'F-6']], null]);
   assert.deepEqual(pages.map(p => [p.commentWork.page, p.commentWork.pages]), [[1, 3], [2, 3], [3, 3]]);
@@ -1186,6 +1194,20 @@ test('no grouping pass is asked where no two findings of a set fit one page toge
   assert.equal(pairFits([placed('F-1', 'A'), placed('F-2', 'B', 'medium')]), false);
   assert.equal(pairFits([placed('F-1', 'A'), placed('F-2', 'A')]), false);
   assert.equal(pairFits([placed('F-1', 'A'), placed('F-2', 'B')]), true);
+  // A finding that fits a page with no other one takes no part in any group. With several pages nothing is read
+  // ahead for it and the pass is not asked about it, so that it takes none of the pass's input: here a finding
+  // longer than a page, and one that is alone in its severity.
+  const unpaired = [placed('F-1', 'A'), placed('F-2', 'B'), placed('F-3', 'C', 'high', { evidence: 'e'.repeat(12000) }), placed('F-4', 'D', 'medium')];
+  assert.deepEqual(pairable(unpaired).map(f => f.id), ['F-1', 'F-2']);
+  const lone = await placedSetup(t, unpaired);
+  const fetched = [], asked = [];
+  const pair = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [{ findingIds: ['F-1', 'F-2'] }] }) : groupwise(payload));
+  const paired = await prepareComments(lone.review, lone.store, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') asked.push([...fetched], payload.findings.map(f => f.id));
+    return pair.invoke(payload, handler);
+  }, { fetchSource: async path => { fetched.push(path); return 'line one\nline two\nline three\n'; }, parallel: 1 });
+  assert.deepEqual(asked, [['/src/A.java', '/src/B.java'], ['F-1', 'F-2']]);
+  assert.deepEqual(paired.comments.map(c => c.findingIds ?? c.findingId), [['F-1', 'F-2'], 'F-3', 'F-4']);
 });
 
 test('the files of possible repeats are read a few at a time before the pages, never all at once', async t => {

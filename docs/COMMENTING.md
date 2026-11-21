@@ -260,10 +260,12 @@ such findings have one severity and lie at different places:
   (`repeatCandidates`).
 - Otherwise one **grouping pass** runs first, provided that two such findings
   fit one page together (a group shares a page): a session of the comment
-  planner that gets only those high and medium findings, inline (ID, severity,
+  planner that gets only the findings that fit a page together with another
+  one of their severity at a different place, inline (ID, severity,
   location, summary, suggestion, and the evidence unless the list is then
   longer than 60,000 characters), and says which of them are one mistake at
-  several places. The runtime checks each group it proposes (two or more of
+  several places. A finding without such a partner (the only one of its
+  severity, or one longer than a page) is not part of the pass. The runtime checks each group it proposes (two or more of
   those findings, one severity, different lines, a finding in one group at
   most), asks for a correction like for a page, and then drops a group that
   is still wrong. The pass has one answer and no continuation. A group shares
@@ -346,7 +348,11 @@ here" and which nothing but this rule reads:
   request has this very comment. The planner, which is told not to choose
   such a place, is asked to anchor it at another of its places or to leave
   that finding out (a finding that an existing thread covers is skipped as
-  discussed).
+  discussed). "This very comment" is a shared comment with the same file,
+  quoted lines and other places: the count that tells two defects at the
+  same places apart is given only when the pages are assembled, so the
+  second of two such comments passes too, and is posted next to what is
+  there.
 - A **comment for one place** on quoted lines that carry a shared comment is
   sent back too, unless a comment for one place is there as well (which it
   then finds by its marker, as always). The planner is asked to skip the

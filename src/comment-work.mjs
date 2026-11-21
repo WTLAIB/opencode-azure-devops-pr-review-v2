@@ -39,9 +39,12 @@ export function discussionDigest(threads) {
     const first = comments[0];
     // The places a thread covers are read only from the comment that opened it, as AZPR posts its
     // comments (never as a reply), and only in the runtime's own form: a reply that quotes such a
-    // comment, marker and all, says nothing about the thread it is in. The opener is the comment
-    // without a parent, wherever it stands among the comments.
-    const opening = comments.find(comment => !(comment.parentCommentId > 0));
+    // comment, marker and all, says nothing about the thread it is in. The opener is comment 1 of
+    // its thread, as publication takes it (`deletedThreads`), wherever it stands among the comments;
+    // when it is gone, no other comment stands for it. Where the comments carry no such number, it
+    // is the comment without a parent.
+    const numbered = thread.comments.some(comment => comment?.id === 1);
+    const opening = comments.find(comment => numbered ? comment.id === 1 : !(comment.parentCommentId > 0));
     const alsoAt = context.filePath && opening?.content.match(MARKER) ? listedPlaces(opening.content) : [];
     // What a thread is about is said by the comment that opened it, also when a reply comes first in the
     // response: the author, the excerpt and the listed places are that one comment's.
@@ -118,14 +121,16 @@ export function severitySets(eligible) {
 }
 
 /**
- * Whether two eligible findings of one severity at different places fit one
- * planning page together: a group shares a page (`boundedGroups`), so without
- * such a pair no grouping could be used.
+ * The eligible findings that fit one planning page together with another one
+ * of their severity at a different place. A group shares a page
+ * (`boundedGroups`), so a finding without such a partner can be in no group
+ * that is used: with several pages nothing is read or asked for it.
  */
-export function pairFits(eligible, size = PAGE_CHARACTERS) {
+export function pairable(eligible, size = PAGE_CHARACTERS) {
   const sized = eligible.map(finding => ({ finding, at: parseLocation(finding.location), length: JSON.stringify(finding).length }));
-  return sized.some((a, index) => sized.slice(index + 1).some(b => a.finding.severity === b.finding.severity && a.length + b.length <= size &&
-    (a.at.path !== b.at.path || a.at.start > b.at.end || b.at.start > a.at.end)));
+  const together = (a, b) => a !== b && a.finding.severity === b.finding.severity && a.length + b.length <= size &&
+    (a.at.path !== b.at.path || a.at.start > b.at.end || b.at.start > a.at.end);
+  return sized.filter(a => sized.some(b => together(a, b))).map(({ finding }) => finding);
 }
 
 /**
@@ -283,9 +288,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   // Only a finding whose lines the HEAD file has is offered as one of several places: a place is
   // listed as the finding states it, and a file that is deleted or shorter has no such lines. The
   // files are read only when findings could share a comment at all; the pages read them anyway.
-  let eligible = repeatEligible(all, twice, review.snapshot.files);
-  // With several pages a group must share one, so nothing is read ahead where no two findings could.
-  if (severitySets(eligible).length && (paged.pages.length <= 1 || pairFits(eligible))) {
+  // With several pages a group must share one: a finding that fits a page with no other one is left out here,
+  // so that no file is read ahead for it and it takes none of the grouping pass's input.
+  const usable = findings => paged.pages.length <= 1 ? findings : pairable(findings);
+  let eligible = usable(repeatEligible(all, twice, review.snapshot.files));
+  if (severitySets(eligible).length) {
     // As many reads at a time as pages are planned, so that one preview never puts all its files
     // ahead of what other conversations ask of Azure DevOps.
     const paths = [...new Set(eligible.map(finding => parseLocation(finding.location).path))];
@@ -300,7 +307,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const head = await source(path);
       if (head !== null) lineCounts.set(path, lineTotal(head));
     }
-    eligible = eligible.filter(finding => (at => at.end <= (lineCounts.get(at.path) ?? 0))(parseLocation(finding.location)));
+    // A place the file does not have is none, which may leave another finding without its partner.
+    eligible = usable(eligible.filter(finding => (at => at.end <= (lineCounts.get(at.path) ?? 0))(parseLocation(finding.location))));
   }
   let repeats = [];
   if (severitySets(eligible).length) {
@@ -309,8 +317,6 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     let listed = eligible.map(({ id, severity, location, summary, evidence, suggestion }) => ({ id, severity, location, summary, evidence, suggestion }));
     if (JSON.stringify(listed).length > GROUPING_BUDGET) listed = listed.map(({ evidence: _long, ...short }) => short);
     if (paged.pages.length <= 1) repeats = severitySets(eligible);
-    // A group shares a page: where no two findings of a set fit one together, no group could be used.
-    else if (!pairFits(eligible)) repeats = [];
     else if (JSON.stringify(listed).length > GROUPING_BUDGET) {
       progress?.(`Planning comments: ${eligible.length} findings are too many to look through for one defect at several places; planning goes on without grouping them.`);
     } else {

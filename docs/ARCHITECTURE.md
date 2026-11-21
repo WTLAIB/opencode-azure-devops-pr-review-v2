@@ -436,12 +436,14 @@ quick finding that is a merge candidate is left to that rule), and
 there is such a set, the HEAD text of those findings' files is read, and only
 a finding whose lines the file has stays eligible: a place is listed as its
 finding states it. When every finding fits one page, the page is offered the
-sets as they are. Otherwise a grouping pass runs first: one stage of the
-comment-plan role whose input is `commentWork: { kind: "group" }` and the
-eligible findings' text, inline (without the evidence above 60,000
-characters; a list still longer is not grouped, and no pass is asked, nor a
-file read ahead of the pages, where no two findings of a set fit one page
-together, `pairFits`), and whose answer
+sets as they are. Otherwise a group must share a page, so only a finding that
+fits one together with another finding of its severity at a different place
+stays (`pairable`): nothing is read ahead of the pages and nothing asked for
+any other, and without such a pair there is no pass. Then a grouping pass
+runs first: one stage of the comment-plan role whose input is
+`commentWork: { kind: "group" }` and those findings' text, inline (without
+the evidence above 60,000 characters; a list still longer is not grouped),
+and whose answer
 `evaluateGrouping` checks (`repeatProblems`: one severity, high or medium,
 lines of a HEAD file, no two findings on the same lines; a finding in one
 group at most; a status other than READY is sent back, since the pass has no

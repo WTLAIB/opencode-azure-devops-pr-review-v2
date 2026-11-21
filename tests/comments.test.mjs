@@ -580,6 +580,8 @@ test('a comment for several places leaves no block open that would take the list
       'Then:\n2. step\n   ```\n   code', 'Then:\n-\n  ~~~\n  code',
       // An item that began with nothing ends at a blank line.
       '-\n\n  ```\n  code',
+      // A line ends at a line feed or a carriage return only: U+2028 is a character of the fence's first line.
+      '~~~js\u2028x\nrun();',
     ],
     'a <pre> block': ['<pre>\nconst value = load();', '<PRE class="x">\ncode', '<pre>\ncode\n\nmore'],
     'a <script> block': ['<script>\nrun();'],
@@ -600,6 +602,11 @@ test('a comment for several places leaves no block open that would take the list
     '<pre>\ncode\n</pre>', '<pre>code</pre>', '<textarea>\nvalue\n</TEXTAREA>', '<?php echo 1; ?>', '<!DOCTYPE html>', 'Wrap the output in `<pre>`.', 'The <pre> tag is missing.', '```html\n<pre>\n```', '- <pre>\n  code',
     // Raw HTML that ends at a blank line holds the fence line as text.
     '<details>\n```\n</details>', '<div>\n~~~\n\nAfter it.',
+    // ... which a line that is one whole tag starts, as commonmark.js and markdown-it take it: `<pre/>` too
+    // (no block of the first kind), and with any white space after the tag.
+    '<pre/>\n~~~js\nrun();', '<span>\u00a0\n~~~js\nrun();',
+    // U+2028 is a character of a list item's first line, so the fence under it is the item's.
+    '- item\u2028x\n  ```\n  code',
   ];
   for (const text of closed) assert.deepEqual(planned(text).issues, [], text);
   // After the correction turns such a comment is not planned; its findings stay in the summary index.
