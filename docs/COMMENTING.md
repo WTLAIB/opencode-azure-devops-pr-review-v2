@@ -177,7 +177,9 @@ the severity, whether the location can carry an inline comment, that the
 thread is live, and that the finding's lines were not in the page's source
 excerpts. Whether a finding deserves a comment stays the planner's call. Findings of the same review never cover each
 other: the verifier already merged duplicates, so each confirmed high or medium
-finding gets its own comment unless one of those reasons applies.
+finding gets its own comment unless one of those reasons applies, or it shares
+a comment with the other places of the same defect
+([below](#one-defect-at-several-places)).
 
 ### Quick reviews
 
@@ -217,6 +219,71 @@ finding. The runtime cannot tell a well-formed but wrong combination of two
 different defects, so the prompt says to keep findings apart when unsure. No
 dedicated duplicate stage runs, although planning pages, corrections or
 continuations can still add sessions and model requests.
+
+### One defect at several places
+
+One mistake is often made at several places of a pull request: the same wrong
+call in each of three handlers, the same stale sentence in each copy of a
+file. Each place needs its own correction, so each is a finding of its own,
+and before 0.4.6 each got its own inline thread. Such findings may now share
+one:
+
+- **One comment at one place.** The planner writes a single comment, anchored
+  at the place that shows the mistake most clearly, in words that hold for
+  every place.
+- **Every other place is listed under it.** AZPR adds a section
+  `**📍 Also at** (the same defect; fix these places with it):` (in Chinese
+  `**📍 其他位置**`) with one row per other finding: its file and lines, and
+  its ID. The rows are the findings' own locations, not text the planner
+  wrote. It is a plain list, never collapsed.
+- **Only for the same defect.** The findings have the same severity (high or
+  medium), lie on different lines of files the pull request changes, and need
+  the same correction. Findings that only resemble each other, that follow
+  from one another, or whose places need different corrections keep their own
+  comments. When unsure, the planner keeps them apart.
+- **The review keeps every finding.** Each place stays a row of the summary
+  index with its own ID, and each can be excluded or given another severity
+  after a preview like any finding.
+
+Which findings may be such repeats is settled before the planning pages are
+made, so that a group is on one page:
+
+- When every finding fits one page, that page is offered its findings of
+  equal severity at different places (`repeatCandidates`).
+- Otherwise one **grouping pass** runs first: a session of the comment planner
+  that gets only the high and medium findings (ID, severity, location,
+  summary, evidence, suggestion) and says which of them are one mistake at
+  several places. The runtime checks each group it proposes (two or more of
+  those findings, one severity, different lines, a finding in one group at
+  most), asks for a correction like for a page, and then drops a group that
+  is still wrong. A group shares a page, which can then hold more than four
+  findings; a group larger than a page's text is planned in parts of two or
+  more findings.
+
+The page's planner still decides whether a group gets one comment. The
+runtime accepts it only when every finding it names is in one listed group,
+they share a severity, lie on different lines of changed files, and the
+anchor touches the lines of one of them; that finding is where the comment
+stands. A refused combination goes back for correction and then falls
+back to single comments and reasoned skips, as for quick reviews. The preview
+shows such a comment with all its findings and the planner's reason
+(`Combined: …`).
+
+A grouping pass that fails, for instance on a provider error, costs only the
+grouping: a `PROGRESS` notice says so, and every finding gets its own comment.
+The pass is one more model request of the comment planner's model, and its
+session is listed and deleted like a page's. The runtime cannot tell a
+well-formed but wrong combination of two different defects, so the prompt
+says to keep findings apart when unsure, and each finding's own summary stays
+in the index either way.
+
+Azure DevOps, like the other code hosts, cannot anchor one thread at several
+places, and one thread cannot show which of its places were fixed; that is why
+the other places are written out in full. When the pull request is planned
+again later, the runtime reads that list back from AZPR's own comment and
+tells the planner which places the thread covers (`alsoAt` in
+`existingDiscussions`), so that the other places are seen as discussed and
+get no thread of their own.
 
 ## Planning
 

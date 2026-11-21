@@ -271,7 +271,9 @@ test('prompts: review stays byte-identical and deep shares it; quick never claim
   // tools: its prompt is its own text and the Severity section, so the settings
   // below name a rater. The comment-plan prompts gained skip causes and
   // page-scoped lists after origin/main 5f9b917 and lost `priorPages` when pages
-  // began to run side by side. Every role's tool guidance leaves what each tool
+  // began to run side by side; then (0.4.6) one comment may hold one defect
+  // made at several places (`repeatCandidates`), and a grouping pass proposes
+  // such groups before the pages. Every role's tool guidance leaves what each tool
   // returns to the tool's own description.
   // Changing a review prompt is a deliberate change: update these together with
   // the validation notes. Deep roles run the same prompts with other models.
@@ -281,13 +283,13 @@ test('prompts: review stays byte-identical and deep shares it; quick never claim
     'deny/en/azpr-review-verifier': '1e5886b0b7de5b0f8c056a5fb61bfcc6fc8f4356cc90c579b95b874595d53971',
     'deny/en/azpr-review-dedupe': '95bd1d48ff6fcc4802576854e591909d5bbf0101079a8ea11cacb45115069303',
     'deny/en/azpr-review-rating': 'ce9b0cc6de07e877f224bfb0c658c941e062145d0c6d60c9eeb0c8ab5f36d899',
-    'deny/en/azpr-review-comment-plan': '4459cd370adb32ee1b2d54168f2ed20d315c1944550f3d29bd389e09283286a5',
+    'deny/en/azpr-review-comment-plan': '8418d9cd9108d847e3de357cb53d15625130240413d7ac7619c8a14c5e040b09',
     'ask/zh-TW/azpr-review-functional': 'c5e8f32697d3ebe9028926f55fe6ec60b5b389374721f3a472a7823345c1427a',
     'ask/zh-TW/azpr-review-risk': '1947a4209eacbfb628deec3aa07dac0d1d98412b13bab9b4027e664e83140cbf',
     'ask/zh-TW/azpr-review-verifier': 'c6ee1fba842a998d830502c3bab85e316307adc45e947c8ba1b71c5540a0f739',
     'ask/zh-TW/azpr-review-dedupe': 'f4ee9194952f7a6ffa752c5f54eac6012d5c380fe91d6223c64f4a3dd9632afc',
     'ask/zh-TW/azpr-review-rating': '520ba5dbabde44dab1d37f7936a03f7c1b9b00b87ff9c7f443e940b95e55a62e',
-    'ask/zh-TW/azpr-review-comment-plan': '09fa9efd33f441743cb8fe0255f18cf02db3add68c532d4b129b64fa900d2ac1',
+    'ask/zh-TW/azpr-review-comment-plan': 'c6df599c1fab8dc2efa96e2085097f3c8cde4afefd4688b48595af3c9321bfe8',
   };
   const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v', rater: 'p/x' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv', rater: 'p/dx' }, quick: { reviewer: 'p/q' } };
   for (const [shell, outputLanguage] of [['deny', 'en'], ['ask', 'zh-TW']]) {

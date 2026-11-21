@@ -72,6 +72,9 @@ const provider = createServer(async (request, response) => {
       }
     } else if (payload?.assignment?.findingIds) {
       final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, severity: levelOf(f.id), reason: 'Verified against HEAD and BASE.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Advice: extract the guard into **one helper**.' };
+    } else if (payload?.commentWork?.kind === 'group') {
+      // The pass before several planning pages: nothing repeats in this review.
+      final = { status: 'READY', groups: [] };
     } else if (payload?.commentWork?.kind === 'plan') {
       final = { status: 'READY', ...(payload.commentWork.allowSummary ? { summary: 'This change reworks the order and billing helpers.' } : {}),
         comments: payload.findings.filter(f => f.severity !== 'low').map(f => ({ findingId: f.id, severity: f.severity, path: /head:([^:]+)/.exec(f.location)[1], startLine: 1, endLine: 1, anchor: 'fixture code',

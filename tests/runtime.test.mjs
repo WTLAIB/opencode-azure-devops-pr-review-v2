@@ -40,6 +40,8 @@ function defaultAnswer({ role, packet }) {
   }
   if (spec.format === 'dedupe') return { status: 'COMPLETE', merged: [], report: '' };
   if (spec.format === 'rating') return { status: 'COMPLETE', ratings: packet.assignment.findingIds.map(id => ({ id, severity: 'high', reason: 'Fixture rating.' })), report: '' };
+  // The grouping pass before several planning pages: nothing repeats unless a test says so.
+  if (packet.commentWork.kind === 'group') return { status: 'READY', groups: [] };
   const eligible = packet.findings.filter(f => f.severity !== 'low');
   return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}),
     comments: eligible.map(f => ({ findingId: f.id, severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code', body: `🔴 high: ${f.id} loses state\n\nTrigger, impact and correction.` })),
@@ -1730,9 +1732,10 @@ test('comment pages are planned two at a time, never more than parallelSessions;
     let inFlight = 0, most = 0;
     const together = deferred(), initial = findingPerFile(files);
     const f = await fixture(t, { files, settings: settings => { settings.workflow.parallelSessions = parallelSessions; },
-      answer: input => { if (input.role === 'azpr-review-comment-plan' && input.turn === 0) inFlight--; return initial(input); },
-      async during({ role, session, turn, invoke }) {
-        if (role !== 'azpr-review-comment-plan' || turn) return;
+      answer: input => { if (input.role === 'azpr-review-comment-plan' && input.turn === 0 && input.packet.commentWork.kind === 'plan') inFlight--; return initial(input); },
+      async during({ role, packet, session, turn, invoke }) {
+        // The grouping pass runs alone, before the pages.
+        if (role !== 'azpr-review-comment-plan' || turn || packet.commentWork.kind !== 'plan') return;
         most = Math.max(most, ++inFlight);
         await invoke(session, 'azpr_read_file', { path: '/src/A.java', version: 'head' });
         // A planner waits, briefly, for a second one to start.
@@ -1744,9 +1747,11 @@ test('comment pages are planned two at a time, never more than parallelSessions;
     assert.match(receipt, /\] PREVIEW/);
     const lanes = Math.min(2, parallelSessions);
     assert.equal(most, lanes, `parallelSessions ${parallelSessions}`);
-    assert.deepEqual(f.sessionsFor('azpr-review-comment-plan').map(session => session.packet.commentWork.page).sort(), [1, 2], 'Six findings fill two pages.');
+    const planners = f.sessionsFor('azpr-review-comment-plan');
+    assert.deepEqual(planners.map(session => session.packet.commentWork.kind), ['group', 'plan', 'plan'], 'Findings in three files: one grouping pass, then the pages.');
+    assert.deepEqual(planners.slice(1).map(session => session.packet.commentWork.page).sort(), [1, 2], 'Six findings fill two pages.');
     assert.deepEqual(f.calls.filter(call => call.kind === 'create' && call.agent === 'azpr-review-comment-plan').map(call => call.title.replace(/^\[AZPR [a-f0-9]{8}\] /, '')).sort(),
-      ['Comment plan page 1/2', 'Comment plan page 2/2']);
+      ['Comment plan grouping', 'Comment plan page 1/2', 'Comment plan page 2/2']);
     const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
     assert.equal(saved.commentEvidence.length, 2);
     assert.ok(saved.commentEvidence.every(item => item.page === f.sessions.get(item.sessionID).packet.commentWork.page), 'The runtime tags each planner tool result with its page.');
@@ -1770,7 +1775,7 @@ test('when a planning page fails, the page already running finishes before the c
   const id = reviewId(await f.command());
   const receipt = await f.command('pr-comment', '');
   assert.match(receipt, /\] INCOMPLETE/);
-  const planners = (await stageRecords(receipt)).filter(stage => stage.stage === 'comment-plan');
+  const planners = (await stageRecords(receipt)).filter(stage => stage.stage === 'comment-plan' && stage.commentWork.kind === 'plan');
   assert.deepEqual(planners.map(stage => [stage.commentWork.page, stage.status]).sort(), [[1, 'READY'], [2, 'FAILED']], 'The running page finished; the failed page was not retried.');
   const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
   assert.equal(saved.plan, null);
@@ -1780,8 +1785,8 @@ test('/pr-stop cancels both running planning pages; nothing keeps running and no
   const files = ['/src/A.java', '/src/B.java', '/src/C.java'];
   const both = deferred(), release = deferred();
   let entered = 0, hold = true;
-  const f = await fixture(t, { files, answer: findingPerFile(files), async during({ role, turn }) {
-    if (role !== 'azpr-review-comment-plan' || turn || !hold) return;
+  const f = await fixture(t, { files, answer: findingPerFile(files), async during({ role, packet, turn }) {
+    if (role !== 'azpr-review-comment-plan' || turn || !hold || packet.commentWork.kind !== 'plan') return;
     if (++entered === 2) both.resolve();
     await within(release.promise, 10000);
   } });
@@ -1794,13 +1799,88 @@ test('/pr-stop cancels both running planning pages; nothing keeps running and no
   assert.match(await f.command('pr-stop', runId), /cancellation requested/);
   const receipt = await running;
   assert.match(receipt, /\] CANCELLED/);
-  const planners = (await stageRecords(receipt)).filter(stage => stage.stage === 'comment-plan');
+  const planners = (await stageRecords(receipt)).filter(stage => stage.stage === 'comment-plan' && stage.commentWork.kind === 'plan');
   assert.deepEqual(planners.map(stage => [stage.status, stage.failureClass]), [['FAILED', 'cancelled'], ['FAILED', 'cancelled']], 'Both pages were stopped; none is left running.');
   hold = false;
   release.resolve();
   const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
   assert.equal(saved.plan, null, 'A cancelled refresh keeps no plan.');
   assert.match(await f.command('pr-comment', ''), /\] PREVIEW/, 'A later preview plans again.');
+});
+
+/** A planner that says the functional reviewer's findings repeat one defect, and gives each listed group one comment. */
+const repeating = ({ role, packet }) => {
+  if (ROLES[role].format !== 'comment-plan') return undefined;
+  if (packet.commentWork.kind === 'group') {
+    return { status: 'READY', groups: [{ findingIds: packet.findings.filter(f => f.id.startsWith('F-')).map(f => f.id).reverse(), reason: 'The same dropped guard in each file.' }] };
+  }
+  const grouped = new Set((packet.repeatCandidates ?? []).flat()), byId = new Map(packet.findings.map(f => [f.id, f]));
+  const body = id => `🔴 high: ${id} loses state\n\nTrigger, impact and correction.`;
+  const at = f => ({ severity: f.severity, path: pathOf(f.location), startLine: 1, endLine: 1, anchor: 'fixture code' });
+  return { status: 'READY', ...(packet.commentWork.allowSummary ? { summary: 'Fixture purpose.' } : {}), skipped: [],
+    comments: [...(packet.repeatCandidates ?? []).map(ids => ({ findingIds: ids, mergeReason: 'One guard, dropped in each file.', ...at(byId.get(ids[0])), body: body('The guard') })),
+      ...packet.findings.filter(f => !grouped.has(f.id)).map(f => ({ findingId: f.id, ...at(f), body: body(f.id) }))] };
+};
+
+test('one defect in three files gets one comment that lists the other two; the grouping pass is a stage of its own', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], initial = findingPerFile(files);
+  const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input) });
+  await f.command();
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  const planners = f.sessionsFor('azpr-review-comment-plan');
+  const pass = planners.find(session => session.packet.commentWork.kind === 'group');
+  assert.deepEqual(Object.keys(pass.packet).sort(), ['commentWork', 'findings', 'outputLanguage', 'reviewId']);
+  assert.equal(pass.packet.findings.length, 6, 'Both reviewers reported each file.');
+  assert.ok(f.notices.some(n => /PROGRESS — Planning comments: looking for one defect at several places \(6 findings\)/.test(n.text)));
+  const stages = (await stageRecords(preview)).filter(stage => stage.stage === 'comment-plan');
+  assert.deepEqual(stages.map(stage => [stage.commentWork.kind, stage.label, stage.status]).sort(), [['group', 'grouping', 'READY'], ['plan', 'page 1/2', 'READY'], ['plan', 'page 2/2', 'READY']]);
+  const page = planners.find(session => session.packet.repeatCandidates);
+  assert.deepEqual(page.packet.repeatCandidates, [['F-1', 'F-2', 'F-3']], 'The group is on one page, in the order of the findings.');
+  assert.match(preview, /### F-1, F-2, F-3 — \/src\/A\.java:1-1\n\nCombined: One guard, dropped in each file\.\n\n🔴 high: The guard loses state\n\nTrigger, impact and correction\.\n\n\*\*📍 Also at\*\* \(the same defect; fix these places with it\):\n- `\/src\/B\.java:1` \(F-2\)\n- `\/src\/C\.java:1` \(F-3\)\n\n---\n/);
+  assert.match(preview, /Inline comments prepared: 4\n/, 'One comment for the three places, one for each other finding.');
+  assert.match(preview, /high: 6 · medium: 0 · low: 0/, 'The index still lists every place.');
+  // What is posted is the previewed text, the list included.
+  const posted = await f.command('pr-comment', '--publish');
+  assert.match(posted, /\] POSTED/);
+  assert.match(posted, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): (?:POSTED|VERIFIED)/);
+  const thread = f.azure.state.threads.find(item => /Also at/.test(item.comments[0].content));
+  assert.equal(thread.threadContext.filePath, '/src/A.java');
+  assert.match(thread.comments[0].content, /- `\/src\/B\.java:1` \(F-2\)\n- `\/src\/C\.java:1` \(F-3\)/);
+  assert.equal(f.azure.state.threads.filter(item => item.threadContext).length, 4);
+});
+
+test('a grouping pass that fails costs only the grouping; /pr-stop during it starts no page', async t => {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], initial = findingPerFile(files);
+  let failing = true;
+  const entered = deferred(), release = deferred();
+  let hold = false;
+  const f = await fixture(t, { files,
+    answer: input => input.role === 'azpr-review-comment-plan' && input.packet.commentWork.kind === 'group' && failing ? { $provider: 401 } : initial(input),
+    async during({ role, packet, turn }) {
+      if (hold && role === 'azpr-review-comment-plan' && packet.commentWork.kind === 'group' && !turn) { entered.resolve(); await within(release.promise, 10000); }
+    } });
+  t.after(() => release.resolve());
+  await f.command();
+  const preview = await f.command('pr-comment', '');
+  assert.match(preview, /\] PREVIEW/);
+  assert.ok(f.notices.some(n => /PROGRESS — Planning comments: the grouping failed \([^\n]*\); every finding gets its own comment\./.test(n.text)));
+  assert.match(preview, /Inline comments prepared: 6\n/);
+  assert.doesNotMatch(preview, /Also at/);
+  const stages = (await stageRecords(preview)).filter(stage => stage.stage === 'comment-plan');
+  assert.deepEqual(stages.map(stage => [stage.commentWork.kind, stage.status]).sort(), [['group', 'FAILED'], ['plan', 'READY'], ['plan', 'READY']]);
+  // Stopped while the pass runs: the run ends, and no page session is made.
+  failing = false; hold = true;
+  const before = f.sessionsFor('azpr-review-comment-plan').length;
+  const running = f.command('pr-comment', '');
+  await within(entered.promise);
+  const started = f.notices.filter(n => n.sessionID === 'ordinary' && /\] STARTED /.test(n.text)).at(-1).text;
+  assert.match(await f.command('pr-stop', /\[AZPR ([a-f0-9]{8})\] STARTED/.exec(started)[1]), /cancellation requested/);
+  const receipt = await running;
+  assert.match(receipt, /\] CANCELLED/);
+  hold = false; release.resolve();
+  assert.equal(f.sessionsFor('azpr-review-comment-plan').length, before + 1, 'Only the grouping pass had a session.');
+  assert.doesNotMatch(f.notices.map(n => n.text).join('\n'), /the grouping failed \(Review stopped/);
 });
 
 test('AZPR tools read ranges, list folders and threads for private reviewers only', async t => {

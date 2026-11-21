@@ -142,6 +142,26 @@ function displayLocation(value) {
   return value;
 }
 
+/**
+ * The other places of one defect that a comment covers, as the runtime adds
+ * them under the comment's own text: one row per finding with its file and
+ * lines, from the findings' own locations, never from text a model wrote.
+ * A plain list: nothing here is collapsed or linked.
+ * @param {{findingId: string, place: string}[]} places
+ */
+export function renderOtherPlaces(places, language) {
+  // A code span that holds any text: longer than the longest run of backticks inside it.
+  const span = value => {
+    const text = String(value).replace(/[\r\n\t]+/g, ' ');
+    const run = Math.max(0, ...(text.match(/`+/g) ?? []).map(match => match.length));
+    const fence = '`'.repeat(run + 1);
+    return run ? `${fence} ${text} ${fence}` : `\`${text}\``;
+  };
+  const heading = pick(language, '**📍 Also at** (the same defect; fix these places with it):', '**📍 其他位置**（同一個問題，請一併修正）：', '**📍 其他位置**（同一个问题，请一并修正）：');
+  const open = pick(language, ' (', '（', '（'), close = pick(language, ')', '）', '）');
+  return `${heading}\n${places.map(({ findingId, place }) => `- ${span(place)}${open}${String(findingId).replace(/[^A-Za-z0-9_-]/g, '')}${close}`).join('\n')}`;
+}
+
 /** A compact index of existing claims, not another model-authored assessment. */
 export function renderReviewSummary(findings, language, introduction = '', { verification = 'independent', groups = [] } = {}) {
   const w = reportWords(language);

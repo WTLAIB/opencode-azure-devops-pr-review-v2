@@ -1,5 +1,5 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
-import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
+import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads } from './azure.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
@@ -19,9 +19,28 @@ const evidenceKeys = evidence => [...new Set(evidence.map(item =>
 
 const MARKER = /<!-- azpr-comment:[a-f0-9]{32} -->/g;
 const INLINE_BUDGET = 40000;
+// The findings of the grouping pass are inline up to this size; above it the pass reads them from the store.
+const GROUPING_BUDGET = 60000;
 // Up to this size the changed-file list and the dispositions are inline on every
 // planning page; above it a page carries those of its findings and a reference.
 const PAGE_CONTEXT_CHARACTERS = 2000;
+
+/**
+ * The other places a comment of AZPR's covers: the rows the runtime added
+ * under its text ("📍 Also at", see `renderOtherPlaces`). Read back so that a
+ * later plan sees those places as discussed too; [] for any other text.
+ */
+export function listedPlaces(content) {
+  const at = content.indexOf('**📍');
+  if (at < 0) return [];
+  const places = [];
+  for (const line of content.slice(at).split('\n').slice(1)) {
+    const row = /^- (`+) ?(.+?) ?\1 ?[（(]/.exec(line);
+    if (!row) break;
+    places.push(row[2]);
+  }
+  return places;
+}
 
 /** Live (not deleted) discussions in a compact, model-readable form. */
 export function discussionDigest(threads) {
@@ -33,13 +52,17 @@ export function discussionDigest(threads) {
     if (!comments.length) continue;
     const context = thread.threadContext ?? {};
     const first = comments[0];
+    // Only AZPR's own comment is read for the places it lists: the format is the runtime's.
+    const own = comments.find(comment => comment.content.match(MARKER));
+    const alsoAt = own && context.filePath ? listedPlaces(own.content) : [];
     live.push({
       threadId: thread.id, status: thread.status ?? null,
       ...(context.filePath ? { path: context.filePath, line: context.rightFileStart?.line ?? context.leftFileStart?.line ?? null } : {}),
       author: first.author?.displayName ?? first.author?.uniqueName ?? null,
       comments: comments.length,
-      azpr: comments.some(comment => comment.content.match(MARKER)),
+      azpr: Boolean(own),
       excerpt: first.content.replace(MARKER, '').replace(/\s+/g, ' ').trim().slice(0, 300),
+      ...(alsoAt.length ? { alsoAt } : {}),
     });
   }
   return live;
@@ -68,6 +91,57 @@ export function mergeCandidates(findings, limit = PLANNING_FINDINGS_PER_PAGE) {
   const groups = new Map();
   for (const { finding } of located) groups.set(root(finding.id), [...(groups.get(root(finding.id)) ?? []), finding.id]);
   return [...groups.values()].filter(ids => ids.length > 1 && ids.length <= limit);
+}
+
+/**
+ * The findings that may share a comment as one defect made at several places:
+ * high and medium ones on lines of a HEAD file that the PR changes (`files`,
+ * when given). A quick finding that already is a merge candidate (the same
+ * lines, another session) is left to that rule.
+ */
+export function repeatEligible(findings, duplicates = [], files = null) {
+  const taken = new Set(duplicates.flat());
+  const changed = files && new Set(files.map(path => path.startsWith('/') ? path : '/' + path));
+  return findings.filter(finding => {
+    const at = parseLocation(finding.location);
+    return ['high', 'medium'].includes(finding.severity) && finding.inline !== false && at?.side === 'head' && Boolean(at.start) &&
+      (!changed || changed.has(at.path)) && !taken.has(finding.id);
+  });
+}
+
+/**
+ * The sets of eligible findings that have one severity and lie at two places
+ * or more: only within such a set can one comment hold a repeated defect.
+ * Findings that all share lines are no such set.
+ */
+export function severitySets(eligible) {
+  const apart = (a, b) => {
+    const x = parseLocation(a.location), y = parseLocation(b.location);
+    return x.path !== y.path || x.start > y.end || y.start > x.end;
+  };
+  return ['high', 'medium'].map(level => eligible.filter(finding => finding.severity === level))
+    .filter(set => set.some((a, index) => set.slice(index + 1).some(b => apart(a, b))))
+    .map(set => set.map(finding => finding.id));
+}
+
+/**
+ * Groups that fit a planning page's text: a larger one is split into
+ * consecutive parts of two or more findings, each planned as a group of its
+ * own, so that no place is dropped; a single finding left over stays alone.
+ */
+export function boundedGroups(groups, findings, size = PAGE_CHARACTERS) {
+  const length = new Map(findings.map(finding => [finding.id, JSON.stringify(finding).length]));
+  const bounded = [];
+  for (const ids of groups) {
+    let part = [], characters = 0;
+    for (const id of ids) {
+      const own = length.get(id) ?? 0;
+      if (part.length > 1 && characters + own > size) { bounded.push(part); part = []; characters = 0; }
+      part.push(id); characters += own;
+    }
+    if (part.length > 1) bounded.push(part);
+  }
+  return bounded;
 }
 
 /**
@@ -145,6 +219,7 @@ async function planningInput(review, store, findings, report, work, continuation
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
     ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
+    ...(extras.repeatCandidates?.length ? { repeatCandidates: extras.repeatCandidates } : {}),
     // This page's own earlier reads; pages planned at the same time keep theirs.
     ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(extras.evidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
@@ -164,14 +239,54 @@ async function planningInput(review, store, findings, report, work, continuation
  * After a page fails, no page or continuation session starts; stages already
  * running finish (with their repairs and retries) before the failure of the
  * lowest failed page is thrown.
+ * One defect made at several places is several findings. Which findings may
+ * be such repeats is settled before the pages are made, so that a group is on
+ * one page: when every finding fits one page, that page's findings of equal
+ * severity; otherwise what one grouping pass over the high and medium findings
+ * proposes (a stage of its own, with repair turns). A grouping pass that fails
+ * costs only the grouping: every finding is then planned on its own. `active`
+ * tells whether the run still goes on; a stopped run is never continued.
  * @param {(payload: object, handler: object) => Promise<object>} invoke
  */
-export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, parallel = PLANNING_PARALLEL_PAGES } = {}) {
+export async function prepareComments(review, store, invoke, { progress, fetchSource, discussions = null, parallel = PLANNING_PARALLEL_PAGES, active = () => true } = {}) {
   // Adjusted by a person after a preview, if they did; otherwise the publishable findings unchanged.
   const all = commentFindings(review);
   const adjustments = adjustmentInput(review);
   // Only a quick review, which has no verifier, offers candidate duplicates to the planner.
-  const { pages: groups, offered } = candidatePages(all, reviewVerification(review) === 'none' ? mergeCandidates(all) : []);
+  const twice = reviewVerification(review) === 'none' ? mergeCandidates(all) : [];
+  // Pages as they are without any repeated defect; they change only when the grouping pass proposes a group.
+  let paged = candidatePages(all, twice);
+  const eligible = repeatEligible(all, twice, review.snapshot.files);
+  let repeats = [];
+  if (severitySets(eligible).length) {
+    if (paged.pages.length <= 1) repeats = severitySets(eligible);
+    else {
+      progress?.(`Planning comments: looking for one defect at several places (${eligible.length} findings)`);
+      try {
+        const listed = eligible.map(({ id, severity, location, summary, evidence, suggestion }) => ({ id, severity, location, summary, evidence, suggestion }));
+        const grouped = await invoke({ reviewId: review.id, outputLanguage: review.outputLanguage, findings: await store.pack(listed, GROUPING_BUDGET), commentWork: { kind: 'group' } }, {
+          async evaluate(answer) {
+            const { result, issues, corrections } = evaluateGrouping(answer, { findings: eligible });
+            return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? groupingRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
+          },
+          async finalize(answer) {
+            const { result, corrections } = evaluateGrouping(answer, { findings: eligible, final: true });
+            return { ...result, corrections };
+          },
+        });
+        repeats = boundedGroups(grouped.groups, all);
+        if (repeats.length) paged = candidatePages(all, [...twice, ...repeats]);
+      } catch (error) {
+        if (!active() || error?.failureClass === 'cancelled') throw error;
+        repeats = [];
+        progress?.(`Planning comments: the grouping failed (${String(error?.message ?? error).slice(0, 200)}); every finding gets its own comment.`);
+      }
+    }
+  }
+  const { pages: groups, offered } = paged;
+  // On one page the findings of equal severity are offered as they are; otherwise the groups that a page keeps whole.
+  const kept = list => offered.filter(ids => list.some(group => group.length === ids.length && group.every(id => ids.includes(id))));
+  const offeredTwice = kept(twice), offeredRepeats = groups.length <= 1 ? repeats : kept(repeats);
   const reports = textPages(review.final.report ?? '');
   const count = Math.max(groups.length, reports.length, 1);
   const sourceText = new Map();
@@ -214,14 +329,15 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     do {
       const assigned = pending;
       // Groups whose findings are all still open on this page.
-      const candidates = offered.filter(ids => ids.every(id => assigned.some(item => item.id === id)));
+      const open = ids => ids.every(id => assigned.some(item => item.id === id));
+      const candidates = offeredTwice.filter(open), repeatCandidates = offeredRepeats.filter(open);
       const sourceExcerpts = await excerpts(assigned);
       // Only the first page writes the summary note; a note from another page is dropped.
       const allowSummary = index === 0 && !summaryWritten;
       const payload = await planningInput(review, store, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, evidence: evidence(), adjustments });
+        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
       const scoped = async answer => {
@@ -237,11 +353,11 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, sources: sourceExcerpts, discussions, allowSummary });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, allowSummary });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, sources: sourceExcerpts, discussions, allowSummary });
+          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, allowSummary });
           return { ...result, corrections };
         },
       });

@@ -1626,9 +1626,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         }
         // Planning pages run side by side, never more than the configured sessions.
         const parallelPages = Math.min(PLANNING_PARALLEL_PAGES, settings.workflow.parallelSessions);
+        // The grouping pass, which looks for one defect at several places before the pages are made, is a stage like a page.
         review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler,
-          { label: `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
-          { progress: message => progress(run, message), discussions, parallel: parallelPages,
+          { label: payload.commentWork.kind === 'group' ? 'grouping' : `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
+          { progress: message => progress(run, message), discussions, parallel: parallelPages, active: () => run.active,
             fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
         planning = false;

@@ -1,6 +1,6 @@
 // Comment plans: per-item validation, stable markers and saved publication text.
 import { createHash } from 'node:crypto';
-import { renderReviewSummary, describeReview } from './attribution.mjs';
+import { renderReviewSummary, renderOtherPlaces, describeReview } from './attribution.mjs';
 import { targetKey } from './azure.mjs';
 import { parseModelJSON, canonicalKey, parseRepairPrompt } from './output.mjs';
 
@@ -55,6 +55,13 @@ export function parseLocation(location) {
   return { side: match[1] ?? 'head', path: match[2], start, end: match[4] ? Number(match[4]) : start };
 }
 
+/** A finding's place as a comment lists it: "/src/a.ts:12-14". */
+export function placeOf(finding) {
+  const at = parseLocation(finding.location);
+  if (!at) return String(finding.location ?? '');
+  return `${at.path}${at.start ? `:${at.start}${at.end !== at.start ? `-${at.end}` : ''}` : ''}`;
+}
+
 /**
  * Why findings may not share one comment; [] when they may. Members must be
  * inline-eligible quick findings of different sessions with the same
@@ -76,6 +83,30 @@ export function combinationProblems(members) {
   const lines = { path: at[0].path, start: Math.max(...at.map(location => location.start)), end: Math.min(...at.map(location => location.end)) };
   if (lines.start > lines.end) problems.push('the findings share no common line');
   return { problems, lines };
+}
+
+/**
+ * Why findings may not share one comment as one defect made at several places;
+ * [] when they may. Members are high or medium findings of one severity, each
+ * on lines of a HEAD file, and no two of them share a line: findings on the
+ * same lines are not another place.
+ */
+export function repeatProblems(members) {
+  const problems = [];
+  if (new Set(members.map(member => member.severity)).size !== 1) problems.push('combined findings must have the same severity');
+  else if (!['high', 'medium'].includes(members[0].severity)) problems.push('only high and medium findings get inline comments');
+  if (members.some(member => member.inline === false)) problems.push('a combined finding has no inline location');
+  const at = members.map(member => parseLocation(member.location));
+  if (at.some(location => location?.side !== 'head' || !location.start)) {
+    problems.push('every combined finding must be located on lines of a HEAD file');
+    return { problems };
+  }
+  for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
+    if (at[i].path === at[j].path && at[i].start <= at[j].end && at[j].start <= at[i].end) {
+      problems.push(`${members[i].id} and ${members[j].id} are on the same lines, which is not another place`);
+    }
+  }
+  return { problems };
 }
 
 // A finding ID as a text names it (F-1, Q-1001, V-2).
@@ -671,13 +702,17 @@ const aliases = (value, names) => {
  * @returns {{result: object, issues: string[], corrections: object[]}}
  * With `final`, every remaining problem becomes a local skip instead of an issue.
  * `candidates` lists the groups of a quick review whose findings one comment
- * may combine (`findingIds`); the runtime never combines findings itself.
+ * may combine (`findingIds`): one defect reported twice on the same lines.
+ * `repeats` lists the groups, of any review, whose findings may be one defect
+ * made at several places; a comment that combines some of them stands at one
+ * place and carries the others as `otherPlaces`, which the runtime renders.
+ * The runtime never combines findings itself.
  * `sources` are the page's source excerpts and `discussions` the live threads
  * the runtime read (null when it could not): skip causes are checked against them.
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
-export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], sources = [], discussions = null, allowSummary = true }) {
+export function evaluatePlanPage(answerText, { review, assigned, final = false, candidates = [], repeats = [], sources = [], discussions = null, allowSummary = true }) {
   const corrections = [], issues = [];
   const parsed = parseModelJSON(answerText, { keys: ['status', 'comments', 'skipped'] });
   if (!parsed.value) {
@@ -753,27 +788,41 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     if (body.length > INLINE_SOFT_LIMIT) corrections.push({ action: 'accept-long-body', findingId: label, characters: body.length });
     return { problems, comment: { severity, path, startLine: restored.startLine, endLine: restored.endLine, anchor: restored.anchor, body } };
   }
-  // One comment for findings of a listed candidate group. The planner decides
-  // whether they state one defect; the runtime checks only the group rules.
+  // One comment for findings of a listed group: one defect reported twice on
+  // the same lines (`candidates`, quick reviews) or made at several places
+  // (`repeats`). The planner decides whether they state one defect; the runtime
+  // checks only the group rules.
   function combine(c, ids) {
     const label = ids.join('+');
     const members = ids.map(id => eligible.get(id));
     const problems = [];
+    const listed = group => ids.every(id => group.includes(id));
+    const twice = quick && candidates.some(listed), repeated = !twice && repeats.some(listed);
     let lines;
-    if (!quick || !candidates.length) problems.push('findingIds may combine only the findings of a listed mergeCandidates group');
+    if (!(quick && candidates.length) && !repeats.length) problems.push('findingIds may combine only the findings of one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => !member)) problems.push(`${ids.filter(id => !eligible.has(id)).join(', ')} not assigned to this page`);
-    else if (!candidates.some(group => ids.every(id => group.includes(id)))) problems.push('the findings are not all in one mergeCandidates group');
+    else if (!twice && !repeated) problems.push('the findings are not all in one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => handled.has(member.id))) problems.push('a combined finding already has a comment or skip');
     else {
-      const checked = combinationProblems(members);
+      const checked = twice ? combinationProblems(members) : repeatProblems(members);
       problems.push(...checked.problems);
       lines = checked.lines;
+      // Every place a comment lists is a place of this PR's changes.
+      const elsewhere = twice ? [] : members.filter(member => !changed.has(parseLocation(member.location)?.path));
+      if (elsewhere.length) problems.push(`${elsewhere.map(member => member.id).join(', ')} ${elsewhere.length === 1 ? 'is' : 'are'} not on a changed file of this PR`);
       if (!nonempty(c.mergeReason)) problems.push('a combined comment needs a mergeReason');
     }
-    let drafted;
+    let drafted, first;
     if (!problems.length) {
       drafted = draft(c, label, members[0].severity, lines);
       problems.push(...drafted.problems);
+    }
+    if (!problems.length && repeated) {
+      // The comment stands at one of the places: the finding whose lines its anchor touches
+      // (members never share a line, so the first such finding of the page is the place).
+      const { path, startLine, endLine } = drafted.comment;
+      first = assigned.find(finding => members.includes(finding) && (at => at.path === path && startLine <= at.end && endLine >= at.start)(parseLocation(finding.location)));
+      if (!first) problems.push(`the anchor must lie on the lines of one of the combined findings (${members.map(member => `${member.id} at ${placeOf(member)}`).join(', ')})`);
     }
     if (problems.length) {
       if (!final) {
@@ -788,7 +837,13 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       return;
     }
     for (const id of ids) handled.add(id);
-    comments.push({ findingId: ids[0], findingIds: ids, ...drafted.comment, mergeReason: c.mergeReason.trim() });
+    if (!repeated) { comments.push({ findingId: ids[0], findingIds: ids, ...drafted.comment, mergeReason: c.mergeReason.trim() }); return; }
+    // The place of the comment first, the others in the order of the page; their
+    // locations are the findings' own, never text the planner wrote.
+    const position = new Map(assigned.map((finding, index) => [finding.id, index]));
+    const others = members.filter(member => member !== first).sort((a, b) => position.get(a.id) - position.get(b.id));
+    comments.push({ findingId: first.id, findingIds: [first.id, ...others.map(member => member.id)], ...drafted.comment, mergeReason: c.mergeReason.trim(),
+      otherPlaces: others.map(member => ({ findingId: member.id, place: placeOf(member) })) });
   }
   for (const [index, raw] of (Array.isArray(value.comments) ? value.comments : []).entries()) {
     if (!isObject(raw)) { corrections.push({ action: 'drop-non-object-comment', index }); continue; }
@@ -823,8 +878,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     const cited = citedFindings(reason, s.findingId, findingIds);
     if (cited.length && !final) {
       issues.push(quick
-        ? `skip for ${s.findingId} relies on ${cited.join(', ')}: another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates group holds both and they state one defect, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`
-        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
+        ? `skip for ${s.findingId} relies on ${cited.join(', ')}: another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates or repeatCandidates group holds both and they state one defect, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`
+        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
       reported.add(s.findingId);
       continue;
     }
@@ -875,6 +930,56 @@ export function planRepairPrompt(issues, { parseOnly = false } = {}) {
   return `AZPR runtime: this comment plan page needs correction before it can be saved.\n${listed}\n\nReturn the complete corrected JSON object for this page (status, comments, skipped, optional summary and summaryDetails). Keep valid comments unchanged.`;
 }
 
+/**
+ * Validate the grouping pass: which findings may be one defect made at several
+ * places. Only a proposal: each planning page still decides whether a group
+ * gets one comment, and the runtime checks that comment's rules. A group holds
+ * two or more of `findings` (the high and medium ones on lines of a HEAD file)
+ * under `repeatProblems`, and a finding belongs to at most one group. With
+ * `final`, a group that breaks a rule is dropped instead of reported.
+ * @returns {{result: {status: string, groups: string[][]}|null, issues: string[], corrections: object[]}}
+ */
+export function evaluateGrouping(answerText, { findings, final = false }) {
+  const corrections = [], issues = [];
+  const parsed = parseModelJSON(answerText, { keys: ['status', 'groups'] });
+  if (!parsed.value) {
+    if (!final) return { result: null, issues: [`Your answer could not be used: ${parsed.problem}.`], corrections };
+    return { result: { status: 'READY', groups: [] }, issues: [], corrections: [{ action: 'no-usable-grouping' }] };
+  }
+  if (parsed.corrections) corrections.push(...parsed.corrections);
+  const value = aliases(parsed.value, ['status', 'groups']);
+  const order = new Map(findings.map((finding, index) => [finding.id, index]));
+  const byId = new Map(findings.map(finding => [finding.id, finding]));
+  const taken = new Set(), groups = [];
+  const refuse = (ids, problem) => {
+    if (final) corrections.push({ action: 'drop-invalid-group', findingIds: ids, problem });
+    else issues.push(`group ${ids.join(', ')}: ${problem}. Correct it or leave it out.`);
+  };
+  if (value.groups !== undefined && !Array.isArray(value.groups) && !final) issues.push('groups must be an array of {"findingIds": [...], "reason": "..."}; use [] when nothing repeats.');
+  for (const [index, raw] of (Array.isArray(value.groups) ? value.groups : []).entries()) {
+    const group = Array.isArray(raw) ? { findingIds: raw } : isObject(raw) ? aliases(raw, ['findingIds', 'reason']) : {};
+    const ids = Array.isArray(group.findingIds) ? [...new Set(group.findingIds.map(id => String(id)))] : [];
+    if (ids.length < 2) { corrections.push({ action: 'drop-group-without-two-findings', index }); continue; }
+    const unknown = ids.filter(id => !byId.has(id));
+    if (unknown.length) { refuse(ids, `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in findings`); continue; }
+    const again = ids.filter(id => taken.has(id));
+    if (again.length) { refuse(ids, `${again.join(', ')} already ${again.length === 1 ? 'belongs' : 'belong'} to another group`); continue; }
+    const { problems } = repeatProblems(ids.map(id => byId.get(id)));
+    if (problems.length) { refuse(ids, problems.join('; ')); continue; }
+    for (const id of ids) taken.add(id);
+    // In the order of the findings, so that pages and their comments do not depend on how the answer listed them.
+    groups.push(ids.sort((a, b) => order.get(a) - order.get(b)));
+  }
+  groups.sort((a, b) => order.get(a[0]) - order.get(b[0]));
+  return { result: { status: 'READY', groups }, issues, corrections };
+}
+
+export function groupingRepairPrompt(issues, { parseOnly = false } = {}) {
+  if (parseOnly) return parseRepairPrompt(issues);
+  const listed = issues.slice(0, 25).map(issue => `- ${issue}`).join('\n');
+  return `AZPR runtime: this grouping needs correction before it can be used.\n${listed}\n\nReturn the complete corrected JSON object (status, groups). When unsure whether findings are one defect, leave them out of every group.`;
+}
+
 function summaryComment(review, note, details, inlineMarkers, groups = []) {
   const chinese = /^zh(?:-|$)/i.test(review.outputLanguage ?? '');
   const traditional = chinese && new Intl.Locale(review.outputLanguage).maximize().script === 'Hant';
@@ -899,12 +1004,16 @@ export function assemblePlan(review, pages) {
     const marker = inlineMarker(review.target, c, ordinal);
     // Azure positions are one-based UTF-16 offsets within their lines.
     const endOffset = Math.max(1, c.anchor.split('\n').at(-1).length);
+    // One defect made at several places: the runtime lists the other places under the comment's own text.
+    const places = c.otherPlaces?.length ? `\n\n${escapeComments(renderOtherPlaces(c.otherPlaces, review.outputLanguage ?? 'en'))}` : '';
     return { ...c, kind: 'inline', startOffset: 1, endOffset, marker,
-      content: `${c.body}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${marker}` };
+      content: `${c.body}${places}${review.attribution ? `\n\n---\n${review.attribution}` : ''}\n\n${marker}` };
   });
   const skipped = pages.flatMap(page => page.skipped);
   const intro = pages.map(page => page.summary).find(Boolean);
   const details = [...new Set(pages.map(page => page.summaryDetails).filter(nonempty))].join('\n\n');
-  const groups = comments.filter(c => c.findingIds?.length > 1).map(c => c.findingIds);
+  // Findings reported twice on the same lines share an index row; the places of
+  // one repeated defect are findings of their own and keep their rows.
+  const groups = comments.filter(c => c.findingIds?.length > 1 && !c.otherPlaces).map(c => c.findingIds);
   return { summary: summaryComment(review, intro, details, comments.map(c => c.marker), groups), comments, skipped };
 }

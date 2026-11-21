@@ -26,6 +26,8 @@ One general PR summary plus inline comments for high and medium findings:
 <!-- azpr:end -->
 - Each inline comment discusses one root cause on a changed HEAD file, with the
   smallest useful RIGHT-side line range.
+- One mistake made at several places gets one comment at one of them; the
+  runtime lists the other places under it.
 - Low-severity findings are not inline; they appear in the summary index.
 - Skip a finding (with a local reason) when it cannot be anchored reliably, its
   claim cannot be stated faithfully within the length limit, or an existing

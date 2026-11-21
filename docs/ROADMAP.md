@@ -178,6 +178,12 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   reads the panel does not watch, and with an ID to copy. While a run is
   under way the panel's foot now offers **Stop this run…**: it asks first,
   with "no" first, and sends `/pr-stop` for that run.
+- **One comment for one defect at several places.** A mistake repeated in
+  several files was several findings and so several inline threads with the
+  same text, each to be read and resolved. The comment planner may now give
+  them one comment at the clearest place, and AZPR lists every other place
+  under it from the findings' own locations. The review still has one finding
+  per place.
 
 ## Planned
 
@@ -395,6 +401,11 @@ These stood under Planned until the work on 0.3.7 examined them (see
    the regression outside the diff. A prompt sentence asking to continue
    unfinished checks made such answers rarer on PR #4 for 37% more input there
    and was not adopted (see [validation](VALIDATION.md)).
+7. One comment for one defect at several places (0.4.6) ran with fake models
+   on a real host. Still open with real models: how often the planner
+   combines the right findings, combines different defects or leaves repeats
+   apart, and a later plan of a PR that already carries such a comment (see
+   [validation](VALIDATION.md#limits-of-this-candidate)).
 
 ## Quality principles
 

@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.4.5, the move to OpenCode 2.3.0, a run of Martian's public code review
+0.4.6, the move to OpenCode 2.3.0, a run of Martian's public code review
 benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
 of 0.3.7 run on ReviewBench's test set. Host
@@ -58,6 +58,100 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.4.6 release candidate acceptance (2026-11-21)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.0 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
+Azure DevOps services. No real model ran for this candidate; what that leaves
+open is under [limits](#limits-of-this-candidate).
+
+0.4.6 lets one inline comment hold one defect that a pull request makes at
+several places (see
+[one defect at several places](COMMENTING.md#one-defect-at-several-places)).
+`comment-work.mjs` settles before the planning pages which findings may be
+such repeats, with a grouping pass when there are several pages, and reads the
+list of places back from AZPR's own comments on the PR. `comments.mjs` checks
+the groups and the comments that combine them, `attribution.mjs` renders the
+list of other places, and `runtime.mjs` labels the grouping pass's stage. Of
+the prompts, `comment-plan.md` and `comment-policy.md` changed: the hash test
+shows the two comment-plan roles changed and the ten other review roles
+(reviewers, verifier, duplicate check, rating) byte-identical. No setting and
+no file of the package is new.
+
+### Offline
+
+`npm run check` passes, and `npm test` runs 670 tests (654 for 0.4.5), all
+passing.
+
+| Tests | What they establish |
+| ---: | --- |
+| 5 | The rules (`tests/comments.test.mjs`): a comment that names several findings of a listed group stands at the finding whose lines hold its anchor and carries the others as places, in the order of the page, whatever order the planner wrote; nothing is combined unless the planner says so. A combination is refused outside a listed group, across two groups, without a reason, across severities, for findings on the same lines, for a finding on a file the PR does not change, and when the anchor touches no member's lines (one that reaches beyond a finding's lines still stands at that finding); after the correction turns it is dropped and every finding it named is skipped with that reason. A quick review keeps both kinds apart (the same lines twice, and several places). The assembled text is the planner's text, the list, the attribution and the marker, in English and Chinese; the marker formula is unchanged; each place keeps its row and its count in the summary index; and automatic publication holds nothing of the list. The grouping pass's answer is checked by the same rules: unknown findings, a finding in two groups, mixed severities and findings on the same lines are reported, then dropped. |
+| 8 | Planning (`tests/comment-work.test.mjs`): which findings are eligible (high and medium, on lines of a changed HEAD file, not already a quick merge candidate) and which sets can hold a repeat (one severity, two places or more). On one page those sets are offered without a grouping pass and the page keeps its order; findings that share lines are offered nothing, and their planning input is as before. With several pages one pass runs first, sees only the high and medium findings and six fields of each, and its group shares a page of five findings; a pass that finds nothing leaves the pages exactly as without it. The pass gets two correction turns like a page, and a group that stays wrong is dropped. A pass that fails costs only the grouping, with a progress notice; a stopped run starts no page. A group larger than a page's text is planned in parts of two or more findings. A posted comment's list is read back for a later plan, in three languages, only from a comment that carries AZPR's marker. |
+| 1 | The list (`tests/attribution.test.mjs`): one row per place with its ID, in English, Traditional and Simplified Chinese; a path stays inside its code span whatever characters it holds; nothing is collapsed or linked. |
+| 2 | The runtime (`tests/runtime.test.mjs`): a review whose reviewers report one defect in three files plans its comments with a grouping stage of its own (titled "Comment plan grouping") and two pages; the preview shows one comment for the three places with the two others listed, four inline comments instead of six and six rows in the index; `/pr-comment --publish` posts that text, and the receipt names the three findings of the shared thread. A grouping pass that the provider refuses leaves a preview of six separate comments and a FAILED stage; `/pr-stop` during the pass ends the run as CANCELLED with no page session made and no "grouping failed" notice. |
+
+The other changed expectations are in existing tests: the two comment-plan
+prompt hashes (`tests/config.test.mjs`), the message for a combination outside
+a listed group, and three runtime tests whose reviews now run a grouping pass
+before their pages.
+
+### On the real host
+
+The eleven host fixture runs passed on one tree (the hash of the code and
+tests was the same before and after).
+
+- **One defect in three files, at scale** (`tests/host-v2-comment-scale.mjs`,
+  with debug on and off). The review of 120 files leaves 29 findings: 19
+  high ones in different files and 10 low ones. Their plan has eight pages,
+  so a grouping pass runs first, in a session of its own; the fake planner
+  answers that the first three high findings are one lost guard in three
+  files. The three share a page and one comment. Publication creates 18
+  threads where 0.4.5 created 20: 17 inline comments and the summary. The
+  shared thread stands at the first finding's file and lists the two other
+  files with their lines and finding IDs; the receipt names the three
+  findings together; and each of them still has its row in the summary
+  index. A second publish writes nothing. The run made 35 model requests
+  (34 for 0.4.5: the pass) and 73 Azure DevOps requests (75: two threads
+  fewer), with at most two planning pages in flight. With debug off, the
+  planner's sessions, the pass's included, are gone when the preview's run
+  ends, and the host lists the report session alone (35 model and 69 Azure
+  DevOps requests).
+- **The terminal panel** (`tests/host-v2-tui-panel.mjs`, from source and as
+  the package). Its four previews each have two pages and findings in several
+  files, so each now starts with a grouping pass, which finds nothing there;
+  the panel lists the pass's session like a page's, and every step of the
+  fixture passes as for 0.4.5. The runs made 30 model requests by AZPR's
+  sessions (26 for 0.4.5: the four passes), 57 Azure DevOps requests and
+  still exactly 1 request of the conversation's own model.
+- **Unchanged**: setup no model request and 16 Azure DevOps requests; smoke
+  fresh 110 model and 194 Azure DevOps requests, replacement 92 and 164,
+  native 110 and 201; and background compaction 8 model requests in both
+  runs, all as for 0.4.5. Their plans fit one page with a single finding, so
+  no pass runs there.
+
+`npm pack --dry-run` lists 38 files, as for 0.4.5. `package.json` has no
+dependency and no lifecycle script.
+
+### Limits of this candidate
+
+- **No real model.** The fake planner groups what the fixture tells it to.
+  How well a model's planner tells one repeated defect from findings that
+  only resemble each other, how often it combines two different defects, and
+  how often it leaves repeats apart is not measured. The runtime cannot tell
+  a well-formed but wrong combination; the preview shows each shared comment
+  with its findings and the planner's reason, and each finding keeps its row.
+- **The grouping pass reads finding text only**, not source. The page that
+  writes the comment sees the source of every place and decides again.
+- **One severity.** Places of one defect that were given different severities
+  are not combined, and low findings have no inline comment to share.
+- **Large groups.** A group larger than a page's text is planned in parts, so
+  it gets a comment per part, each listing the places of its part.
+- **One thread, several places.** A thread's status cannot say which of its
+  places were fixed. A comment that was posted is never changed, so a place
+  fixed later stays in its list.
+- **Re-reviews.** A later plan is told which places a posted shared comment
+  covers; whether a real planner then skips those places was not run.
 
 ## 0.4.5 after publication (2026-11-20)
 

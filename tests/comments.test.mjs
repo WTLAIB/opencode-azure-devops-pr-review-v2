@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
-  publishableFindings, reviewVerification, combinationProblems, automaticPublicationProblems, automaticPublicationRepeats,
+  publishableFindings, reviewVerification, combinationProblems, repeatProblems, placeOf, evaluateGrouping, groupingRepairPrompt,
+  automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
   everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken,
 } from '../src/comments.mjs';
@@ -282,10 +283,10 @@ test('one comment may combine a listed candidate group only under the combinatio
   const refused = (page, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, candidates, ...options }).issues.join('\n');
   assert.match(refused([combined(['Q-1', 'Q-1001'], { mergeReason: '' })]), /needs a mergeReason/);
   assert.match(refused([combined(['Q-1', 'Q-1001'], { startLine: 4, endLine: 4, anchor: 'line four' })]), /anchor must lie within lines 2-2/);
-  assert.match(refused([combined(['Q-1', 'Q-1001'])], { candidates: [] }), /only the findings of a listed mergeCandidates group/);
-  // Verified reviews never combine findings.
+  assert.match(refused([combined(['Q-1', 'Q-1001'])], { candidates: [] }), /only the findings of one listed group \(mergeCandidates or repeatCandidates\)/);
+  // A verified review has no merge candidates: its verifier already merged what was reported twice.
   const verified = review([finding('F-1'), finding('F-2')], [{ input: { path: '/src/a.ts', version: head }, output: lines }]);
-  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'], { severity: 'high' })]), { review: verified, assigned: confirmedFindings(verified), candidates }).issues.join('\n'), /only the findings of a listed mergeCandidates group/);
+  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'], { severity: 'high' })]), { review: verified, assigned: confirmedFindings(verified), candidates }).issues.join('\n'), /only the findings of one listed group/);
 });
 
 test('combination rules: different sessions, one severity and a shared line for every member', () => {
@@ -333,6 +334,128 @@ test('the summary index follows accepted combinations only, and old plan records
   const old = assemblePlan(review([finding('F-1')]), [{ status: 'READY', comments: [{ findingId: 'F-1', severity: 'high', path: '/src/a.ts', startLine: 2, endLine: 2, anchor: 'x', body: '🔴 high: T\n\nB.' }], skipped: [], summaryDetails: '' }]);
   assert.equal(old.comments[0].findingIds, undefined);
   assert.match(old.summary.content, /\| 🔴 high \| F-1 — Defect F-1 \|/);
+});
+
+// ------------------------------------------------------------ one defect at several places
+const twoFiles = [{ input: { path: '/src/a.ts', version: head }, output: lines }, { input: { path: '/src/b.ts', version: head }, output: 'first\nsecond\nthird\n' }];
+// F-1 at /src/a.ts:2, F-2 at /src/b.ts:2-3, F-3 at /src/a.ts:4: three places, one severity.
+const repeated = (extra = []) => review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }),
+  finding('F-3', 'medium', { location: 'head:/src/a.ts:4' }), ...extra], twoFiles);
+const third = comment({ findingId: 'F-3', severity: 'medium', startLine: 4, endLine: 4, anchor: 'line four', body: '🟡 medium: Other defect\n\nBody.' });
+
+test('one comment may hold one defect made at several places: it stands at one place and carries the others', () => {
+  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+  // The planner names F-2 first, but the anchor lies in F-1's lines: the comment stands there.
+  const ok = evaluatePlanPage(answer([combined(['F-2', 'F-1']), third]), { review: r, assigned, repeats });
+  assert.deepEqual(ok.issues, []);
+  assert.deepEqual(ok.result.comments.map(c => [c.findingId, c.findingIds ?? null, c.otherPlaces ?? null]),
+    [['F-1', ['F-1', 'F-2'], [{ findingId: 'F-2', place: '/src/b.ts:2-3' }]], ['F-3', null, null]]);
+  assert.equal(ok.result.comments[0].mergeReason, 'Both describe the dropped load result.');
+  assert.deepEqual(ok.result.skipped, []);
+  // The whole group in one comment: the other places follow the order of the page, whatever order the planner wrote.
+  const all = evaluatePlanPage(answer([combined(['F-3', 'F-2', 'F-1'])]), { review: r, assigned, repeats });
+  assert.deepEqual(all.issues, []);
+  assert.deepEqual(all.result.comments[0].otherPlaces, [{ findingId: 'F-2', place: '/src/b.ts:2-3' }, { findingId: 'F-3', place: '/src/a.ts:4' }]);
+  // Anchored at the other file, the same findings stand there instead.
+  const elsewhere = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { path: '/src/b.ts', startLine: 3, endLine: 3, anchor: 'third' }), third]), { review: r, assigned, repeats });
+  assert.deepEqual(elsewhere.issues, []);
+  assert.deepEqual([elsewhere.result.comments[0].findingId, elsewhere.result.comments[0].otherPlaces], ['F-2', [{ findingId: 'F-1', place: '/src/a.ts:2' }]]);
+  // Nothing is combined unless the planner says so: separate comments stay separate.
+  const apart = evaluatePlanPage(answer([comment({ severity: 'medium', body: '🟡 medium: One\n\nBody.' }),
+    comment({ findingId: 'F-2', severity: 'medium', path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second', body: '🟡 medium: Two\n\nBody.' }), third]), { review: r, assigned, repeats });
+  assert.deepEqual(apart.result.comments.map(c => [c.findingId, c.otherPlaces]), [['F-1', undefined], ['F-2', undefined], ['F-3', undefined]]);
+});
+
+test('rules of a comment for several places: a listed group, one severity, different lines, an anchor in one member\'s lines', () => {
+  const low = finding('F-4', 'low', { location: 'head:/src/b.ts:1' }), high = finding('F-5', 'high', { location: 'head:/src/b.ts:1' }), same = finding('F-6', 'medium');
+  const r = repeated([low, high, same]), assigned = confirmedFindings(r);
+  const refused = (page, repeats, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, ...options }).issues.join('\n');
+  assert.match(refused([combined(['F-1', 'F-2'])], []), /only the findings of one listed group \(mergeCandidates or repeatCandidates\)/);
+  assert.match(refused([combined(['F-1', 'F-3'])], [['F-1', 'F-2'], ['F-3', 'F-6']]), /not all in one listed group/);
+  assert.match(refused([combined(['F-1', 'F-2'], { mergeReason: ' ' })], [['F-1', 'F-2']]), /needs a mergeReason/);
+  assert.match(refused([combined(['F-1', 'F-2'], { startLine: 3, endLine: 3, anchor: 'line three' })], [['F-1', 'F-2']]),
+    /anchor must lie on the lines of one of the combined findings \(F-1 at \/src\/a\.ts:2, F-2 at \/src\/b\.ts:2-3\)/);
+  // An anchor that reaches beyond a finding's lines still stands at that finding.
+  const plain = repeated();
+  const wide = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { startLine: 1, endLine: 2, anchor: 'line one\nconst value = load();' }), third]), { review: plain, assigned: confirmedFindings(plain), repeats: [['F-1', 'F-2']] });
+  assert.deepEqual([wide.issues, wide.result.comments[0].findingId, wide.result.comments[0].startLine, wide.result.comments[0].endLine], [[], 'F-1', 1, 2]);
+  assert.match(refused([combined(['F-1', 'F-5'])], [['F-1', 'F-5']]), /must have the same severity/);
+  assert.match(refused([combined(['F-1', 'F-6'])], [['F-1', 'F-6']]), /F-1 and F-6 are on the same lines, which is not another place/);
+  assert.match(refused([combined(['F-1', 'F-9'])], [['F-1', 'F-9']]), /F-9 not assigned to this page/);
+  const outside = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/unchanged.ts:7' })], twoFiles);
+  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: outside, assigned: confirmedFindings(outside), repeats: [['F-1', 'F-2']] }).issues.join('\n'), /F-2 is not on a changed file of this PR/);
+  assert.deepEqual(repeatProblems([low, { ...low, id: 'F-7', location: 'head:/src/b.ts:3' }]).problems, ['only high and medium findings get inline comments']);
+  assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'base:/src/b.ts:3' })]).problems, ['every combined finding must be located on lines of a HEAD file']);
+  assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/b.ts' })]).problems, ['every combined finding must be located on lines of a HEAD file']);
+  assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/a.ts:3-9' })]).problems, []);
+  assert.equal(placeOf({ location: 'head:/src/a.ts:12-14' }), '/src/a.ts:12-14');
+  assert.equal(placeOf({ location: '/src/a.ts:7' }), '/src/a.ts:7');
+  // After the repair turns a comment that still breaks a rule is dropped; every finding it named stays accounted for.
+  const final = evaluatePlanPage(answer([combined(['F-1', 'F-6']), third]), { review: r, assigned: assigned.filter(f => ['F-1', 'F-3', 'F-6'].includes(f.id)), repeats: [['F-1', 'F-6']], final: true });
+  assert.deepEqual(final.result.comments.map(c => c.findingId), ['F-3']);
+  assert.deepEqual(final.result.skipped.map(s => s.findingId).sort(), ['F-1', 'F-6']);
+  assert.ok(final.result.skipped.every(s => /did not meet the combination rules \(F-1 and F-6 are on the same lines/.test(s.reason)));
+  // A skip that leans on another finding's comment is sent back with the way to combine them.
+  const leaning = evaluatePlanPage(answer([combined(['F-1'], { findingId: 'F-1', findingIds: undefined }), third], [{ findingId: 'F-2', reason: 'Covered by the comment for F-1.' }]),
+    { review: repeated(), assigned: confirmedFindings(repeated()), repeats: [['F-1', 'F-2']] });
+  assert.match(leaning.issues.join('\n'), /skip for F-2 relies on F-1[\s\S]*give one comment findingIds with both only when a listed repeatCandidates group holds them/);
+});
+
+test('a quick review keeps both kinds apart: the same lines twice, and one defect at several places', () => {
+  const r = quickReview([reported('Q-1', '1/2', 'head:/src/a.ts:2'), reported('Q-1001', '2/2', 'head:/src/a.ts:1-3'), reported('Q-2', '1/2', 'head:/src/b.ts:2'), reported('Q-3', '1/2', 'head:/src/a.ts:4')], twoFiles);
+  const assigned = publishableFindings(r);
+  const page = [combined(['Q-1', 'Q-1001']), combined(['Q-2', 'Q-3'], { path: '/src/b.ts', anchor: 'second' })];
+  const ok = evaluatePlanPage(answer(page), { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']] });
+  assert.deepEqual(ok.issues, []);
+  assert.deepEqual(ok.result.comments.map(c => [c.findingIds, c.otherPlaces ?? null]), [[['Q-1', 'Q-1001'], null], [['Q-2', 'Q-3'], [{ findingId: 'Q-3', place: '/src/a.ts:4' }]]]);
+  // A quick comment for several places needs its anchor in the HEAD source like any other.
+  assert.match(evaluatePlanPage(answer([page[0], combined(['Q-2', 'Q-3'], { path: '/src/b.ts', anchor: 'not there' })]),
+    { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']] }).issues.join('\n'), /anchor text was not found in the HEAD source/);
+});
+
+test('the plan lists the other places under the comment, from the findings\' own locations, and every place keeps its index row', () => {
+  const r = repeated();
+  const page = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2', 'F-3']] }).result;
+  const plan = assemblePlan(r, [page]);
+  const item = plan.comments[0];
+  assert.equal(item.content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 Also at** (the same defect; fix these places with it):\n- \`/src/b.ts:2-3\` (F-2)\n- \`/src/a.ts:4\` (F-3)\n\n---\n${r.attribution}\n\n${item.marker}`);
+  assert.equal(item.marker, inlineMarker(r.target, item, 0), 'The marker is that of the place where the comment stands; the formula is unchanged.');
+  assert.equal(item.body, '🟡 medium: Value is lost\n\nBody.', 'The planner\'s text is kept as it was written.');
+  assert.match(plan.summary.content, /medium: 3 · low: 0/);
+  for (const id of ['F-1', 'F-2', 'F-3']) assert.match(plan.summary.content, new RegExp(`\\| 🟡 medium \\| ${id} — Defect ${id} \\|`), 'Each place is a finding of its own in the index.');
+  assert.deepEqual(automaticPublicationProblems(plan), [], 'The list holds nothing that waits for a person.');
+  // Text of a place never closes or opens an HTML comment next to the marker.
+  const odd = assemblePlan(r, [{ ...page, comments: [{ ...page.comments[0], otherPlaces: [{ findingId: 'F-2', place: '/src/x-->y<!--.ts:2' }] }] }]);
+  assert.match(odd.comments[0].content, /- `\/src\/x--&gt;y&lt;!--\.ts:2` \(F-2\)/);
+  // In the review's language, and nothing but the list when no attribution is set.
+  const local = assemblePlan({ ...r, outputLanguage: 'zh-TW', attribution: undefined }, [page]);
+  assert.equal(local.comments[0].content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 其他位置**（同一個問題，請一併修正）：\n- \`/src/b.ts:2-3\`（F-2）\n- \`/src/a.ts:4\`（F-3）\n\n${local.comments[0].marker}`);
+});
+
+test('the grouping pass proposes groups under the same rules; what breaks one is reported, then dropped', () => {
+  const findings = [finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }), finding('F-3', 'medium', { location: 'head:/src/a.ts:4' }),
+    finding('F-4', 'high', { location: 'head:/src/b.ts:1' }), finding('F-5', 'medium'), finding('F-6', 'high', { location: 'head:/src/a.ts:9' })];
+  const grouping = groups => JSON.stringify({ status: 'READY', groups });
+  const ok = evaluateGrouping(grouping([{ findingIds: ['F-6', 'F-4'], reason: 'Same unchecked call.' }, ['F-3', 'F-1']]), { findings });
+  assert.deepEqual(ok.issues, []);
+  assert.deepEqual(ok.result, { status: 'READY', groups: [['F-1', 'F-3'], ['F-4', 'F-6']] }, 'Groups and their members follow the order of the findings.');
+  assert.deepEqual(evaluateGrouping(grouping([]), { findings }).result.groups, []);
+  assert.deepEqual(evaluateGrouping(JSON.stringify({ status: 'READY' }), { findings }).result.groups, [], 'No groups is a valid answer.');
+  const issues = groups => evaluateGrouping(grouping(groups), { findings }).issues.join('\n');
+  assert.match(issues([{ findingIds: ['F-1', 'F-9'] }]), /group F-1, F-9: F-9 is not in findings/);
+  assert.match(issues([{ findingIds: ['F-1', 'F-2'] }, { findingIds: ['F-2', 'F-3'] }]), /group F-2, F-3: F-2 already belongs to another group/);
+  assert.match(issues([{ findingIds: ['F-1', 'F-4'] }]), /must have the same severity/);
+  assert.match(issues([{ findingIds: ['F-1', 'F-5'] }]), /F-1 and F-5 are on the same lines, which is not another place/);
+  assert.match(evaluateGrouping(JSON.stringify({ status: 'READY', groups: 'F-1, F-2' }), { findings }).issues.join('\n'), /groups must be an array/);
+  assert.equal(evaluateGrouping('not json', { findings }).result, null);
+  // A group of one finding, or of the same finding twice, is nothing to correct.
+  assert.deepEqual(evaluateGrouping(grouping([{ findingIds: ['F-1'] }, { findingIds: ['F-2', 'F-2'] }]), { findings }).issues, []);
+  // After the repair turns the valid groups stand and the others are dropped; an unusable answer groups nothing.
+  const final = evaluateGrouping(grouping([{ findingIds: ['F-1', 'F-5'] }, { findingIds: ['F-4', 'F-6'] }, { findingIds: ['F-2', 'F-9'] }]), { findings, final: true });
+  assert.deepEqual([final.result.groups, final.issues], [[['F-4', 'F-6']], []]);
+  assert.deepEqual(final.corrections.map(c => c.action), ['drop-invalid-group', 'drop-invalid-group']);
+  assert.deepEqual(evaluateGrouping('not json', { findings, final: true }).result, { status: 'READY', groups: [] });
+  assert.match(groupingRepairPrompt(['group F-1, F-9: F-9 is not in findings.']), /this grouping needs correction[\s\S]*- group F-1, F-9[\s\S]*leave them out of every group/);
 });
 
 test('automatic publication posts ordinary links and markup in examples, and leaves mentions, images, embedded content and script links to a person', () => {

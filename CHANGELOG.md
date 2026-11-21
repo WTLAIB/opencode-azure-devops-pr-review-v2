@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.4.6 — 2026-11-21
+
+One defect that a pull request makes at several places now gets one inline
+comment that lists the other places, where each place had a thread of its own.
+The reviewer and verifier instructions are those of 0.4.5, so a review finds
+and verifies as before; the comment planner's instructions changed, and no
+setting is new.
+
+Comments:
+
+- A mistake repeated in several places (the same wrong call in each handler,
+  the same stale text in each copy) is one finding per place, since each place
+  needs its own correction. Each of them used to get an inline thread with
+  much the same text: twelve moved files with one inherited defect were twelve
+  threads to read and resolve. The comment planner may now write one comment
+  for such findings, at the place that shows the mistake most clearly.
+- AZPR lists every other place under that comment, in a section
+  `**📍 Also at** (the same defect; fix these places with it):` (in Chinese
+  `**📍 其他位置**`): one row per other finding with its file, its lines and
+  its ID. The rows are the findings' own locations, not text the planner
+  wrote, and the list is plain: nothing is collapsed, and nothing in it waits
+  for a person in automatic publication.
+- Findings share a comment only when they have the same severity (high or
+  medium), lie on different lines of files the pull request changes, and the
+  planner says they are the same mistake with the same correction. Places
+  that need different corrections keep their own comments, and when unsure
+  the planner keeps findings apart. The preview shows a shared comment with
+  all its findings and the planner's reason.
+- The review is unchanged: it still has one finding per place. Each keeps
+  its row in the summary index, its ID, and can be left out or given another
+  severity after a preview. The comment's marker is that of the place where
+  it stands, by the same formula as before.
+- Which findings may be such repeats is settled before the planning pages are
+  made. When all findings fit one page, that page is offered its findings of
+  equal severity at different places. Otherwise a grouping pass runs first:
+  one more session of the comment planner, which reads only the high and
+  medium findings and says which are one mistake at several places. A group
+  then shares a page. A pass that fails costs only the grouping (a progress
+  notice says so, and every finding gets its own comment), and a run that is
+  stopped during it plans nothing more.
+- On a pull request where an earlier version already posted a thread per
+  place, nothing posted is changed, and an item the PR already has is skipped
+  as always. When a pull request with such a shared comment is planned again,
+  the planner is told which other places that thread covers, so they get no
+  thread of their own.
+
+The README's benchmark section now says what each precision measures: the
+share of comments on Martian's list of issues, next to the share of findings
+that ReviewBench's judge rated valid.
+
 ## 0.4.5 — 2026-11-20
 
 While a run is under way, the terminal panel offers to stop it. The reviewer,

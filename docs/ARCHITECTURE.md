@@ -425,6 +425,33 @@ anchor lies on the shared lines; a refused combination falls back to the valid
 single comments and reasoned skips. The summary index gives an accepted
 combination one row. The assembled plan stores exact content, offsets and markers.
 
+One defect made at several places is several findings (a reviewer files one
+for each place that needs its own correction), and one comment may hold them.
+Before the pages are made, `prepareComments` settles which findings may be
+such repeats: `repeatEligible` takes the high and medium findings on lines of
+a changed HEAD file (a quick finding that is a merge candidate is left to that
+rule), and `severitySets` the sets of one severity that lie at two places or
+more. When every finding fits one page, the page is offered those sets as
+they are. Otherwise a grouping pass runs first: one stage of the comment-plan
+role whose input is `commentWork: { kind: "group" }` and the eligible
+findings' text, and whose answer `evaluateGrouping` checks (`repeatProblems`:
+one severity, high or medium, lines of a HEAD file, no two findings on the
+same lines; a finding in one group at most), with repair turns like a page;
+`boundedGroups` cuts a group to a page's text and `candidatePages` keeps each
+group on one page. A page receives its groups as `repeatCandidates`. A
+combined comment for one names findings of one listed group, of one severity,
+on different lines of changed files, and its anchor touches the lines of one
+of them: that finding is the comment's place (`findingId`), the others
+become `otherPlaces`. `assemblePlan` renders them under the planner's text
+with `renderOtherPlaces` (`attribution.mjs`): the findings' own locations and
+IDs as a plain list, never text a model wrote. The summary index keeps one
+row per place; only findings reported twice on the same lines share a row. A
+grouping pass that fails is said in a progress notice and planning goes on
+without groups; a stopped run starts no page. `discussionDigest` reads the
+list back from a comment that carries AZPR's marker (`listedPlaces`) and gives
+the planner those places as `alsoAt`, since the list lies beyond the excerpt
+of a thread: a later plan then sees them as discussed.
+
 The runtime gives each page what it normally needs: the HEAD source around
 each finding (the whole file when small) and a digest of every live thread, both
 read deterministically; findings are inline. A page usually

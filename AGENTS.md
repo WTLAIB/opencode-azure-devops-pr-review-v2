@@ -249,6 +249,24 @@ settings, backups and failure records. Never upload `.local/`.
   may depend on which page finishes first: only the first page writes the
   summary note, each page keeps its own continuation state and evidence, and
   pages are assembled in page order (ordinals follow page order).
+- One defect made at several places is several findings and may be one
+  comment. Whether findings are the same defect is the planner's judgment (a
+  grouping pass before the pages, then the page that writes the comment).
+  Where the comment stands and what it lists is the runtime's: the finding
+  whose lines hold the anchor, and under the planner's text the other
+  findings' own locations (`renderOtherPlaces`), never locations a model
+  wrote, as a plain list (nothing collapsed or linked: automatic publication
+  holds text that hides). Settle the groups before the pages are made, so
+  that no page depends on another; a grouping pass that fails costs only the
+  grouping, and a stopped run starts no page. The review keeps every finding:
+  each place keeps its row in the summary index, its ID and its adjustments.
+  The list is read back only from a comment that carries AZPR's marker
+  (`listedPlaces`), to tell a later plan which places a thread covers; change
+  `renderOtherPlaces` and `listedPlaces` together.
+  The runtime checks only the rules of a combination (`repeatProblems`: one
+  severity, high or medium, different lines of changed HEAD files, the anchor
+  on one member's lines); it never combines findings by itself and never
+  proposes a group from how alike two texts are.
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory
