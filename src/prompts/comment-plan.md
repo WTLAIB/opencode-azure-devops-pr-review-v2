@@ -31,15 +31,17 @@ one instruction corrects every place: anchor it at the place that shows the
 mistake most clearly, quoting lines of that one finding only, give it
 `findingIds` with every finding it covers and a `mergeReason`, and word the
 body so that it holds for each of them. Do not list the other places: the
-runtime adds each other finding's file and lines under your text. The runtime
-puts no second comment on lines that already carry a comment of AZPR's: when
-the place you would choose has a thread with `azpr: true` in
-`existingDiscussions`, anchor the comment at another of its places, or leave
-that finding out of it. Findings that only resemble each other, that follow
-from one another, or whose places need different corrections keep their own
-comments; when unsure, comment on each finding separately. A combined comment
-accounts for every finding it names; never combine findings outside a listed
-group.
+runtime adds each other finding's file and lines under your text. A thread of
+AZPR's in `existingDiscussions` (`azpr: true`) that already covers findings,
+at its own place or in its `alsoAt`, settles them: skip them with cause
+`existing-thread`, and do not write the comment again at another place. The
+runtime puts no second comment on lines that carry a different comment of
+AZPR's: when the place you would choose has such a thread, anchor the comment
+at another of its places, or leave that finding out of it. Findings that only
+resemble each other, that follow from one another, or whose places need
+different corrections keep their own comments; when unsure, comment on each
+finding separately. A combined comment accounts for every finding it names;
+never combine findings outside a listed group.
 
 The runtime already read what this page normally needs, so most pages need no
 tool call at all:

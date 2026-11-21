@@ -1057,7 +1057,14 @@ export function evaluateGrouping(answerText, { findings, final = false }) {
     : 'groups must be an array of {"findingIds": [...], "reason": "..."}; use [] when nothing repeats.');
   for (const [index, raw] of (Array.isArray(value.groups) ? value.groups : []).entries()) {
     const group = Array.isArray(raw) ? { findingIds: raw } : isObject(raw) ? aliases(raw, ['findingIds', 'reason']) : {};
-    const ids = Array.isArray(group.findingIds) ? [...new Set(group.findingIds.map(id => String(id)))] : [];
+    // An entry that is no group at all (its findings are not a list) is a mistake to correct; a list of fewer
+    // than two findings is a group of nothing, and nothing to correct.
+    if (!Array.isArray(group.findingIds)) {
+      if (final) corrections.push({ action: 'drop-malformed-group', index });
+      else issues.push(`group ${index + 1}: findingIds must be an array of finding IDs, as in {"findingIds": ["F-2", "F-5"], "reason": "..."}.`);
+      continue;
+    }
+    const ids = [...new Set(group.findingIds.map(id => String(id)))];
     if (ids.length < 2) { corrections.push({ action: 'drop-group-without-two-findings', index }); continue; }
     const unknown = ids.filter(id => !byId.has(id));
     if (unknown.length) { refuse(ids, `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in findings`); continue; }

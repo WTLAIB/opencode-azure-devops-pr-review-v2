@@ -581,6 +581,12 @@ test('the grouping pass proposes groups under the same rules; what breaks one is
   assert.equal(evaluateGrouping('not json', { findings }).result, null);
   // A group of one finding, or of the same finding twice, is nothing to correct.
   assert.deepEqual(evaluateGrouping(grouping([{ findingIds: ['F-1'] }, { findingIds: ['F-2', 'F-2'] }]), { findings }).issues, []);
+  // An entry whose findings are no list is a mistake the planner gets to correct; after the turns it is dropped.
+  for (const entry of [{ findingIds: 'F-1,F-2' }, 'F-1, F-2', { ids: ['F-1', 'F-3'] }, 7]) {
+    assert.match(evaluateGrouping(grouping([entry, { findingIds: ['F-4', 'F-6'] }]), { findings }).issues.join('\n'), /^group 1: findingIds must be an array of finding IDs/, JSON.stringify(entry));
+    const dropped = evaluateGrouping(grouping([entry, { findingIds: ['F-4', 'F-6'] }]), { findings, final: true });
+    assert.deepEqual([dropped.result.groups, dropped.issues, dropped.corrections.map(c => c.action)], [[['F-4', 'F-6']], [], ['drop-malformed-group']]);
+  }
   // After the repair turns the valid groups stand and the others are dropped; an unusable answer groups nothing.
   const final = evaluateGrouping(grouping([{ findingIds: ['F-1', 'F-5'] }, { findingIds: ['F-4', 'F-6'] }, { findingIds: ['F-2', 'F-9'] }]), { findings, final: true });
   assert.deepEqual([final.result.groups, final.issues], [[['F-4', 'F-6']], []]);

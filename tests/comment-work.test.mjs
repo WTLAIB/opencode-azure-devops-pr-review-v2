@@ -696,7 +696,7 @@ test('the list of other places is read back only in the form the runtime writes 
   assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(F-2)', '(withdrawn)')}${tail}`), []);
   assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('(Q-1003)', '(Q-1003, fixed)')}${tail}`), []);
   // ... and a place is a path with its lines, as a finding's place is written: one row of another form makes the whole list none.
-  for (const other of ['not a location', '/src/b.ts', '/src/b.ts:0', '/src/b.ts:3-', 'src/b.ts:3', '/src/b.ts:3-x', '/src/b.ts:12-7', '/src/a.ts:1` or `/src/b.ts:2', '/src/b.ts:3\ttab']) {
+  for (const other of ['not a location', '/src/b.ts', '/src/b.ts:0', '/src/b.ts:3-', 'src/b.ts:3', '/src/b.ts:3-x', '/src/b.ts:12-7', '/src/a.ts:1` or `/src/b.ts:2', '/src/b.ts:3\ttab', '/src/a.ts:4 corrected to /src/b.ts:8', '/:3']) {
     assert.deepEqual(listedPlaces(`Body.\n\n${list.replace('/src/b.ts:30-34', other)}${tail}`), [], other);
   }
   // A row is the row the runtime writes for that place and ID, to the character: other spacing or brackets are not.
@@ -957,6 +957,11 @@ test('publication knows a comment for several places by its own marker: it is sk
   assert.deepEqual([counted.counts, counted.otherComments], [{ ALREADY_PRESENT: 1 }, 1], 'The comment for F-1 alone is the other one.');
   const outside = await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts, compare: true });
   assert.equal(outside.otherComments, 1, 'The shared comment, with its two markers, is one comment.');
+  // A reply in the preview's own thread that quotes another thread's marker does not hide that thread.
+  azure.state.threads[0].comments.push({ id: 2, parentCommentId: 1, content: `See also ${item.marker}`, commentType: 'text' });
+  const quoted = await publishPlan({ run, review: only(separate.comments.slice(0, 1)), azure: api, attempts, compare: true });
+  assert.equal(quoted.otherComments, 1, 'The shared comment\'s thread is still another comment.');
+  azure.state.threads[0].comments.pop();
   // Two defects at the same places are two comments on the PR.
   const twin = { ...item, findingId: 'F-9', findingIds: ['F-9', 'F-8'], marker: sharedMarker(review.target, item, 1) };
   twin.content = item.content.replace(item.marker, twin.marker);
@@ -1081,6 +1086,14 @@ test('a grouping pass that fails costs only the grouping; a stopped run is not c
     return later.invoke(payload, handler);
   }, { fetchSource: sourceOf }), /Review stopped/);
   assert.equal(later.payloads.length, 0, 'No page starts after a stop.');
+  // A stop that arrives while the pass is ending, so that it still answers: no page is prepared, and no further file is read.
+  const late = await placedSetup(t, [...findings, placed('F-6', 'F', 'low')]), after = stages(async payload => groupwise(payload)), files = [];
+  let running = true;
+  await assert.rejects(prepareComments(late.review, late.store, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') { running = false; return { status: 'READY', groups: [['F-1', 'F-2']], corrections: [] }; }
+    return after.invoke(payload, handler);
+  }, { active: () => running, fetchSource: async path => { files.push(path); return 'line one\nline two\nline three\n'; } }), /Comment planning was stopped/);
+  assert.deepEqual([after.payloads.length, files.includes('/src/F.java')], [0, false], 'The low finding\'s file is read for its page only, and no page is prepared.');
   // Stopped while the files are read ahead of the pages: no further file is read, no pass is asked and no page starts.
   for (const stopAfter of [0, 2]) {
     const early = await placedSetup(t, findings), none = stages(async payload => groupwise(payload)), read = [];

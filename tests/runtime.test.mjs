@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
 import { ROLES } from '../src/config.mjs';
+import { inlineMarker } from '../src/comments.mjs';
 import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
 import { buildPanel, nextOf, opensPanel } from '../src/tui-model.mjs';
@@ -1859,13 +1860,17 @@ test('a comment for several places is its own comment on the PR: posted in full 
   const initial = input => input.role === 'azpr-review-risk' ? { ...functional(input), findings: [] } : functional(input);
   const f = await fixture(t, { files, answer: input => initial(input) ?? repeating(input) });
   const id = reviewId(await f.command());
-  const saved = async () => JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body).plan.comments.find(item => item.otherPlaces);
+  const record = async () => JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
+  const saved = async () => (await record()).plan.comments.find(item => item.otherPlaces);
   assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
   const planned = await saved();
   assert.deepEqual([planned.path, planned.findingIds], ['/src/A.java', ['F-1', 'F-2', 'F-3']]);
   assert.ok(planned.content.endsWith(`\n\n${planned.linesMarker}\n\n${planned.marker}`), 'The comment ends with the marker of its lines and its own.');
-  // Meanwhile the PR got a comment for that place alone (an earlier plan, posted from another machine).
-  const single = `${planned.body}\n\n<!-- azpr-comment:${'5'.repeat(32)} -->`;
+  // Meanwhile the PR got a comment for that place alone (an earlier plan, posted from another machine): it has the
+  // marker any comment for one place on those quoted lines has, which is not the shared comment's.
+  const place = inlineMarker((await record()).target, planned, 0);
+  assert.equal([planned.marker, planned.linesMarker].includes(place), false);
+  const single = `${planned.body}\n\n${place}`;
   f.azure.state.threads.push({ id: 77, status: 'active', isDeleted: false, comments: [{ id: 1, parentCommentId: 0, commentType: 'text', author: { displayName: 'AZPR fixture' }, content: single }],
     threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
   // The saved preview is posted as it was read: the shared comment is another comment than the one found there, so it

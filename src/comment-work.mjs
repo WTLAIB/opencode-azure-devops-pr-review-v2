@@ -1,7 +1,7 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
-import { markersInThreads, markerTexts, deletedThreads } from './azure.mjs';
+import { markersInThreads, markerTexts, deletedThreads, markedThreads } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
 
@@ -322,6 +322,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
             return { ...result, corrections };
           },
         });
+        // A stop that arrived while the pass was ending: no page is prepared.
+        if (!active()) throw new Error('Comment planning was stopped.');
         repeats = boundedGroups(grouped.groups, all);
         if (repeats.length) paged = candidatePages(all, [...twice, ...repeats]);
       } catch (error) {
@@ -574,12 +576,11 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const status = succeeded === items.length ? 'POSTED' : succeeded ? 'PARTIALLY_POSTED' : 'FAILED';
   const uncertain = states.filter(state => state === 'UNCERTAIN').length;
   const reason = halted || (uncertain ? `${uncertain} item(s) may still be created by an earlier attempt whose outcome is unknown; they are not posted again until their marker appears or ${Math.round(settleMs / 60000)} minutes have passed since that attempt. Run the same command again later.` : undefined);
-  // The other AZPR comments on the PR, counted by comment: one that stands for several places has two
-  // markers, and a comment of this preview is not another one whatever further marker it carries.
-  const planned = new Set(items.map(item => item.marker));
+  // The other AZPR comments on the PR, counted by thread: a comment for several places has two markers,
+  // a reply may quote another thread's, and a thread that holds a comment of this preview is not another
+  // one whatever further marker it carries.
   const own = new Set(items.map(item => present.get(item.marker)).filter(threadId => threadId !== undefined));
-  const others = new Set([...present].filter(([marker, threadId]) => !planned.has(marker) && !own.has(threadId)).map(([, threadId]) => threadId));
   return { status, readBack, ...(reason ? { reason } : {}), ...(current.status !== 'active' ? { prStatus: current.status } : {}),
     counts: Object.fromEntries([...new Set(states)].map(state => [state, states.filter(s => s === state).length])),
-    ...(compare ? { otherComments: others.size } : {}) };
+    ...(compare ? { otherComments: [...markedThreads(listed)].filter(threadId => !own.has(threadId)).length } : {}) };
 }

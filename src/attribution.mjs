@@ -205,7 +205,7 @@ export function listedPlaces(content) {
     const line = lines[next], fence = /^`+/.exec(line.slice(2))[0], id = /[（(]([A-Za-z]+-\d+)[)）]$/.exec(line);
     const inner = id && line.slice(2 + fence.length, id.index).trimEnd();
     const place = inner && inner.endsWith(fence) ? inner.slice(0, -fence.length).trim() : '';
-    const at = /^\/.*:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
+    const at = /^\/[^:]+:([1-9]\d*)(?:-([1-9]\d*))?$/.exec(place);
     // A place as a finding's is written (lines in order), in the row the runtime writes for it.
     if (!at || Number(at[2] ?? at[1]) < Number(at[1]) || !listablePlace(place) || !ROW_BRACKETS.some(brackets => placeRow(place, id[1], brackets) === line)) return [];
     places.push(place);

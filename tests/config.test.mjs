@@ -283,13 +283,13 @@ test('prompts: review stays byte-identical and deep shares it; quick never claim
     'deny/en/azpr-review-verifier': '1e5886b0b7de5b0f8c056a5fb61bfcc6fc8f4356cc90c579b95b874595d53971',
     'deny/en/azpr-review-dedupe': '95bd1d48ff6fcc4802576854e591909d5bbf0101079a8ea11cacb45115069303',
     'deny/en/azpr-review-rating': 'ce9b0cc6de07e877f224bfb0c658c941e062145d0c6d60c9eeb0c8ab5f36d899',
-    'deny/en/azpr-review-comment-plan': '8d0579dbfc9229dcc131b046df0a2ac08ab43e2ebb963ea7e5e0d5f3f35fa3c3',
+    'deny/en/azpr-review-comment-plan': 'd725b456618e26cc1140f8997f9db36cfb8e20add65c533151da54ba6b46fc15',
     'ask/zh-TW/azpr-review-functional': 'c5e8f32697d3ebe9028926f55fe6ec60b5b389374721f3a472a7823345c1427a',
     'ask/zh-TW/azpr-review-risk': '1947a4209eacbfb628deec3aa07dac0d1d98412b13bab9b4027e664e83140cbf',
     'ask/zh-TW/azpr-review-verifier': 'c6ee1fba842a998d830502c3bab85e316307adc45e947c8ba1b71c5540a0f739',
     'ask/zh-TW/azpr-review-dedupe': 'f4ee9194952f7a6ffa752c5f54eac6012d5c380fe91d6223c64f4a3dd9632afc',
     'ask/zh-TW/azpr-review-rating': '520ba5dbabde44dab1d37f7936a03f7c1b9b00b87ff9c7f443e940b95e55a62e',
-    'ask/zh-TW/azpr-review-comment-plan': 'd1ee9ee788506b5323599a5b9395a1b45516762a7b4a10ff2377d10527e1c8e2',
+    'ask/zh-TW/azpr-review-comment-plan': 'f0393eeddb2dd8fd54beea3adcb6dfa74c499922f24129487aa138abeeb552ea',
   };
   const models = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v', rater: 'p/x' }, deep: { functional: 'p/df', risk: 'p/dr', verifier: 'p/dv', rater: 'p/dx' }, quick: { reviewer: 'p/q' } };
   for (const [shell, outputLanguage] of [['deny', 'en'], ['ask', 'zh-TW']]) {
