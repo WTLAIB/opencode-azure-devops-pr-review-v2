@@ -263,10 +263,11 @@ settings, backups and failure records. Never upload `.local/`.
   The list is read back (`listedPlaces`) to tell a later plan which places a
   thread covers, and to tell what a comment on the PR stands for. Read it
   only in the form the runtime writes: in the comment that opened a thread
-  and carries AZPR's marker, under the list's own heading, followed by
-  nothing but the attribution (its one line, which ends with the models)
-  and the marker; a reply that quotes such a comment says nothing about its
-  thread, and a planner's text that writes the heading is refused. Change
+  on a file and carries AZPR's marker, under the list's own heading, in rows
+  of a place and a finding ID, followed by nothing but the attribution (its
+  one line, which ends with the word for the models and the models) and the
+  marker; a reply that quotes such a comment says nothing about its thread,
+  and a planner's text that writes the heading is refused. Change
   `renderOtherPlaces`, the form of `commentAttribution` and `listedPlaces`
   together (a test reads back what the first two write), and list only a
   place that reads back as it was written (`listablePlace`).
@@ -278,7 +279,8 @@ settings, backups and failure records. Never upload `.local/`.
   never proposes a group from how alike two texts are. The grouping pass has
   one answer and reads its findings inline: no continuation, no reference it
   would need a tool for; it is asked only where two findings could share a
-  page. The files it needs are read a few at a time, like the pages'.
+  page, and no file is read ahead of the pages where none could. The files
+  it needs are read a few at a time, like the pages'.
 - A marker is a file and quoted lines, and a posted comment is neither
   changed nor posted again. A comment for several places that meets a
   comment the PR already has under its marker must not make the receipt say
@@ -286,18 +288,24 @@ settings, backups and failure records. Never upload `.local/`.
   comments are known (the planner then moves it), and at publication say for
   which findings the comment found there lists no place (`unlisted` in the
   item's entry, `uncovered` in the result, the receipt's "This preview's
-  comment was not posted for …"), from the last listing of the PR that shows
-  the marker and whoever wrote that comment. What a comment lists is read
-  only from the comment that opened a thread and ends with the marker
-  (`postedComments`), and the thread named is that comment's; a marker that
-  only a reply holds is present, as publication has always taken it, and
-  lists nothing. Claim what was established and no more: one comment's list
-  says nothing about other threads, and the place where a comment stands is
-  known by its marker alone, as for every comment (thread positions go stale
-  when lines move, so they are not compared). A page knows the markers of
-  its own comments only: on the first page a refusal stands, on a later one
-  it is a request that never costs the comment, since a comment of an
-  earlier page on the same lines would give it another marker.
+  comment was not posted for …"), whoever wrote that comment. What it lists
+  is what the last listing of the PR that shows the marker says, and for a
+  comment no listing shows, the record of the attempt that created it
+  (`places`; a record without them is of a comment for one place). Make the
+  note when an item is first found, so that a publication that is stopped
+  leaves it, and anew after the read-back. What a comment lists is read
+  only from the comment that opened a thread on a file and ends with the
+  marker (`postedComments`), and the thread named is that comment's; a
+  marker that only a reply holds is present, as publication has always
+  taken it, and lists nothing. Claim what was established and no more: one
+  comment's list says nothing about anything else on the PR, and the place
+  where a comment stands is known by its marker alone, as for every comment
+  (thread positions go stale when lines move, so they are not compared). A
+  page knows the markers of its own comments only: on the first page a
+  refusal stands, on a later one it is a request that never costs the
+  comment (also not when the correction turns bring nothing usable), since
+  a comment of an earlier page on the same lines would give it another
+  marker.
 
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory

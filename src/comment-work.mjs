@@ -59,15 +59,15 @@ export function discussionDigest(threads) {
  * the thread, and the other places the comment there lists. A marker counts
  * as present wherever a live comment holds it, as publication skips such an
  * item. What a comment lists is read only from the comment that opened a
- * thread and ends with that marker, as AZPR posts it: a marker that only a
- * reply holds, or that stands inside another text, lists nothing (`opening`
- * false).
+ * thread on a file and ends with that marker, as AZPR posts an inline
+ * comment: a marker that only a reply holds, that opens a thread without a
+ * file, or that stands inside another text, lists nothing (`opening` false).
  * @returns {Map<string, {threadId: number, places: string[], opening: boolean}>}
  */
 export function postedComments(threads) {
   const found = new Map();
   for (const thread of threads ?? []) {
-    if (thread?.isDeleted === true || !Array.isArray(thread?.comments)) continue;
+    if (thread?.isDeleted === true || !Array.isArray(thread?.comments) || !thread.threadContext?.filePath) continue;
     const opening = thread.comments.find(comment => !(comment?.parentCommentId > 0));
     if (!opening || opening.isDeleted === true || typeof opening.content !== 'string') continue;
     const marker = closingMarker(opening.content);
@@ -294,7 +294,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   // listed as the finding states it, and a file that is deleted or shorter has no such lines. The
   // files are read only when findings could share a comment at all; the pages read them anyway.
   let eligible = repeatEligible(all, twice, review.snapshot.files);
-  if (severitySets(eligible).length) {
+  // With several pages a group must share one, so nothing is read ahead where no two findings could.
+  if (severitySets(eligible).length && (paged.pages.length <= 1 || pairFits(eligible))) {
     // As many reads at a time as pages are planned, so that one preview never puts all its files
     // ahead of what other conversations ask of Azure DevOps.
     const paths = [...new Set(eligible.map(finding => parseLocation(finding.location).path))];
@@ -403,13 +404,20 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         }
         return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head)] };
       };
+      const options = { assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, earlier, firstPage: index === 0, allowSummary };
+      // An answer that was sent back only for a collision that may be none (see `evaluatePlanPage`): it stands
+      // as it was when the correction turns end without a usable answer.
+      let standby;
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, earlier, firstPage: index === 0, allowSummary });
+          const review = await scoped(answer);
+          const { result, issues, corrections, tentative } = evaluatePlanPage(answer, { review, ...options });
+          if (tentative) standby = evaluatePlanPage(answer, { review, ...options, final: true });
           return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
-          const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), assigned, final: true, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, earlier, firstPage: index === 0, allowSummary });
+          const last = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });
+          const { result, corrections } = standby && last.corrections.some(correction => correction.action === 'skip-unparsed-plan') ? standby : last;
           return { ...result, corrections };
         },
       });
@@ -492,14 +500,19 @@ export const UNCERTAIN_SETTLE_MS = 15 * 60 * 1000;
  *   marker is that of the one place where it stands. The comment the PR has
  *   under that marker may list fewer places: an earlier comment for that place
  *   alone, one that lists other places, or text the service returned changed.
- *   For every such item found on the PR, the places that comment does not
- *   list are named in the item's entry (`unlisted`, the findings) and in the
- *   result (`uncovered`), from the last listing of the PR this call read,
- *   whoever created the comment: the receipt says of no finding that the
- *   comment covers it when the comment's text does not. Planning refuses such
- *   a comment where it can (`evaluatePlanPage`); this is the check of what the
- *   PR holds when posting. What one comment lists is all that is established:
- *   whether those findings have threads of their own is not looked up.
+ *   For every such item that is on the PR, or that an earlier attempt put
+ *   there, the places that comment does not list are named in the item's
+ *   entry (`unlisted`, the findings, and `unlistedThread`) and in the result
+ *   (`uncovered`), whoever created the comment: the receipt says of no
+ *   finding that the comment covers it when nothing shows that. What the
+ *   comment lists is what the last listing that shows its marker says (the
+ *   read-back, else the first listing), else what the attempt record of its
+ *   creation holds (`places`; a record without them is of a comment for one
+ *   place). The note is made when the item is first found, so that a
+ *   publication that is stopped leaves it, and made anew after the read-back.
+ *   Planning refuses such a comment where it can (`evaluatePlanPage`); this
+ *   is the check of what the PR holds when posting. What one comment lists is
+ *   all that is established: nothing else on the PR is looked at.
  */
 export async function publishPlan({ run, review, azure, attempts, progress, persist, now = () => Date.now(), settleMs = UNCERTAIN_SETTLE_MS, only, compare = false }) {
   const items = publicationItems(review.plan).filter(item => !only || only.has(item.marker));
@@ -515,18 +528,36 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
   const record = (item, entry) => ledger.set(item.marker, {
     ...(item.kind === 'summary' ? { kind: 'summary' } : { kind: 'inline', findingId: item.findingId, ...(item.findingIds ? { findingIds: item.findingIds } : {}), path: item.path, startLine: item.startLine }),
     ...entry, at: at() });
+  // What a comment for several places stands for on the PR is what the comment under its marker lists,
+  // whoever wrote that comment: the last listing that shows the marker says it, and for a comment no
+  // listing shows, the record of the attempt that created it (one without places was for one place).
+  const listings = [postedComments(listed)];
+  const placesOf = item => item.otherPlaces?.length ? { places: item.otherPlaces.map(other => other.place) } : {};
+  const note = item => {
+    const entry = ledger.get(item.marker);
+    delete entry.unlisted; delete entry.unlistedThread;
+    if (!item.otherPlaces?.length || ['FAILED', 'UNCERTAIN', 'SENDING'].includes(entry.state)) return;
+    const earlier = attempts.get(item.marker);
+    const on = listings.map(listing => listing.get(item.marker)).find(Boolean) ?? (earlier?.state === 'CREATED' ? { threadId: earlier.threadId, places: earlier.places ?? [] } : undefined);
+    const missing = on ? item.otherPlaces.filter(other => !on.places.includes(other.place)).map(other => other.findingId) : [];
+    if (missing.length) Object.assign(entry, { unlisted: missing, unlistedThread: on.threadId });
+  };
   // Remember the thread of every item found on the PR (also one an uncertain create or an earlier
   // version left without a record), so a comment deleted there later is not posted again.
   for (const item of items) {
     const threadId = present.get(item.marker), earlier = attempts.get(item.marker);
     if (threadId === undefined || (earlier?.state === 'CREATED' && earlier.threadId === threadId)) continue;
-    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}) }).catch(() => {});
+    // With the places its comment lists, where the listing shows them.
+    const seen = listings[0].get(item.marker);
+    await attempts.set(item.marker, { state: 'CREATED', threadId, at: earlier?.at ?? at(), ...(earlier?.review ? { review: earlier.review } : {}),
+      ...(seen?.opening && seen.places.length ? { places: seen.places } : {}) }).catch(() => {});
   }
   let written = 0, halted = '';
   for (const [index, item] of items.entries()) {
     if (!run.active) throw new Error(run.reason || 'Publication stopped.');
     if (present.has(item.marker)) {
       record(item, { state: 'ALREADY_PRESENT', threadId: present.get(item.marker), ...(texts && texts.get(item.marker) !== item.content ? { earlierText: true } : {}) });
+      note(item);
       continue;
     }
     if (halted) { record(item, { state: 'FAILED', error: halted }); continue; }
@@ -535,6 +566,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
       // Azure DevOps returned a thread for it; a lagging thread list is no reason to send it again,
       // and a comment someone deleted on the PR stays deleted (read-back reports it).
       record(item, { state: 'POSTED', threadId: earlier.threadId, earlierAttempt: earlier.review ?? true });
+      note(item);
       continue;
     }
     if (earlier?.state === 'SENDING' && !(now() - Date.parse(earlier.at) >= settleMs)) {
@@ -552,7 +584,7 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     try {
       const created = await azure.createThread(run, review.snapshot, item);
       record(item, { state: 'POSTED', threadId: created.threadId, ...(created.contentMatches === false ? { contentMismatch: true } : {}) });
-      try { await attempts.set(item.marker, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id }); }
+      try { await attempts.set(item.marker, { state: 'CREATED', threadId: created.threadId, at: at(), review: review.id, ...placesOf(item) }); }
       catch (error) { halted = `The created thread could not be recorded (${String(error?.message ?? error).slice(0, 200)}); publication stopped.`; }
     } catch (error) {
       if (!run.active) throw error;
@@ -588,19 +620,13 @@ export async function publishPlan({ run, review, azure, attempts, progress, pers
     if (!run.active) throw error;
     readBack = `unavailable: ${String(error?.message ?? error).slice(0, 300)}`;
   }
-  // What a comment for several places stands for on the PR is what the comment found under its marker
-  // lists, whoever wrote that comment: an earlier publication's, one a write of this run met, or this
-  // run's own as the service kept it. Taken from the last listing that shows the marker: the read-back,
-  // or the first listing for a marker that the read-back does not show (or when there was none). The
-  // thread named is that comment's own, which a quoting reply elsewhere does not change.
-  const first = postedComments(listed), last = latest === listed ? first : postedComments(latest);
+  // The notes anew, now that the read-back is known: it comes first where it shows a marker.
+  if (latest !== listed) listings.unshift(postedComments(latest));
   const uncovered = [];
   for (const item of items) {
-    const on = item.otherPlaces?.length ? last.get(item.marker) ?? first.get(item.marker) : undefined;
-    const missing = on ? item.otherPlaces.filter(other => !on.places.includes(other.place)).map(other => other.findingId) : [];
-    if (!missing.length) continue;
-    Object.assign(ledger.get(item.marker), { unlisted: missing, unlistedThread: on.threadId });
-    uncovered.push({ marker: item.marker, findingIds: missing, path: item.path, startLine: item.startLine, threadId: on.threadId });
+    note(item);
+    const { unlisted, unlistedThread } = ledger.get(item.marker);
+    if (unlisted) uncovered.push({ marker: item.marker, findingIds: unlisted, path: item.path, startLine: item.startLine, threadId: unlistedThread });
   }
   await persist?.();
   const states = items.map(item => ledger.get(item.marker).state);

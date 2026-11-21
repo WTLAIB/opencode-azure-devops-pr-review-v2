@@ -42,9 +42,10 @@ Comments:
   made, and only when at least two of them have one severity and lie at
   different places. When all findings fit one page (at most four, within a
   page's text), that page is offered its findings of equal severity at
-  different places. Otherwise a grouping pass runs first: one more session
-  of the comment planner, which reads only those high and medium findings
-  and says which are one mistake at several places. A group then shares a
+  different places. Otherwise, where two of them fit one page together, a
+  grouping pass runs first: one more stage of the comment planner, usually
+  one request, whose input is those high and medium findings and which says
+  which are one mistake at several places. A group then shares a
   page, which can hold more than four findings. A pass that fails costs only
   the grouping (a progress notice says so, and every finding gets its own
   comment), and a run that is stopped during it plans nothing more.

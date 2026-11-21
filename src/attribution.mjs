@@ -189,7 +189,7 @@ export function listedPlaces(content) {
   const places = [];
   let next = heading + 1;
   for (; next < lines.length; next++) {
-    const row = /^- (`+) ?(.+?) ?\1 ?[（(][A-Za-z0-9_-]+[)）]$/.exec(lines[next]);
+    const row = /^- (`+) ?(.+?) ?\1 ?[（(][A-Za-z]+-\d+[)）]$/.exec(lines[next]);
     if (!row) break;
     places.push(row[2]);
   }
@@ -197,9 +197,13 @@ export function listedPlaces(content) {
   while (rest.length && rest.at(-1) === '') rest.pop();
   if (!places.length || rest.shift() !== '' || !COMMENT_MARKER_LINE.test(rest.pop() ?? '')) return [];
   if (!rest.length) return places;
-  // The attribution: a rule, its one line (which ends with the models, each in a code span) and a blank line.
-  return rest.length === 3 && rest[0] === '---' && /`[^`]+`$/.test(rest[1]) && rest[2] === '' ? places : [];
+  // The attribution: a rule, its one line and a blank line. The line ends with the word for the models and
+  // the models themselves, each in a code span, with nothing after them.
+  return rest.length === 3 && rest[0] === '---' && ATTRIBUTION_MODELS.test(rest[1]) && rest[2] === '' ? places : [];
 }
+
+/** How the attribution line of a comment ends in each language (`commentAttribution`): "Models: `a`, `b`". */
+const ATTRIBUTION_MODELS = new RegExp(`(?:${[...new Set(Object.values(vocabulary).map(words => words.models))].map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}) \`[^\`]+\`(?:, \`[^\`]+\`)*$`);
 
 /** The line a posted comment of AZPR's ends with; its marker. */
 const COMMENT_MARKER_LINE = /^<!-- azpr-comment:[a-f0-9]{32} -->$/;

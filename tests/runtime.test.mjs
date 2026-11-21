@@ -1867,7 +1867,7 @@ test('a shared comment that meets an earlier comment at its place: the receipt n
     content: `${planned.body}\n\n${planned.marker}` }], threadContext: { filePath: '/src/A.java', rightFileStart: { line: 1, offset: 1 }, rightFileEnd: { line: 1, offset: 13 } } });
   const posted = await f.command('pr-comment', '--publish');
   assert.match(posted, /\] POSTED/);
-  assert.match(posted, new RegExp(`\\nThis preview's comment was not posted for F-2, F-3 \\(the PR already has a comment under the marker of /src/A\\.java:1, thread 77, which is not changed and does not list their places\\)\\. Other threads were not looked at: unless one of them covers these findings, they have no comment on the PR; /pr-comment ${id} plans the preview again\\.\\n`));
+  assert.match(posted, new RegExp(`\\nThis preview's comment was not posted for F-2, F-3 \\(the PR already has a comment under the marker of /src/A\\.java:1, thread 77, which is not changed and does not list their places\\)\\. Whether anything else on the PR covers these findings was not checked; /pr-comment ${id} plans the preview again\\.\\n`));
   assert.match(posted, /- F-1, F-2, F-3 \(\/src\/A\.java:1\): ALREADY_PRESENT; thread=77; the comment there does not list F-2, F-3\n/);
   assert.equal(f.azure.state.threads.find(thread => thread.id === 77).comments[0].content, `${planned.body}\n\n${planned.marker}`, 'The earlier comment is as it was.');
   assert.equal(f.azure.state.threads.filter(thread => /Also at/.test(thread.comments[0].content)).length, 0, 'The shared comment was not posted; the summary was.');

@@ -381,8 +381,8 @@ export function describeEarlierText(review, otherComments = 0) {
  * neither changes a posted comment nor posts one again. Says for which
  * findings the preview's comment was therefore not posted and what plans them
  * again. Only what that one comment lists is established: no other thread
- * was looked at, and the line says so instead of saying that the findings
- * have no comment. '' when none.
+ * or reply was looked at, and the line says so instead of saying that the
+ * findings have no comment. '' when none.
  */
 export function describeUncovered(review, uncovered = []) {
   if (!uncovered.length) return '';
@@ -390,7 +390,7 @@ export function describeUncovered(review, uncovered = []) {
   // An adjusted preview is not planned again once its publication started.
   const again = everAdjusted(review) ? 'an adjusted preview is not planned again once its publication started, so a new review plans these comments anew'
     : `/pr-comment ${review.id} plans the preview again`;
-  return `This preview's comment was not posted for ${rows.join('; ')}. Other threads were not looked at: unless one of them covers these findings, they have no comment on the PR; ${again}.\n`;
+  return `This preview's comment was not posted for ${rows.join('; ')}. Whether anything else on the PR covers these findings was not checked; ${again}.\n`;
 }
 
 /**
@@ -743,8 +743,12 @@ const aliases = (value, names) => {
  * its earlier sessions (`earlier`) and of this answer. On the first page
  * (`firstPage`) that is the marker the plan gives it. On a later page a
  * comment of an earlier page may quote the same lines and move it on, which
- * no page can know: there the comment is sent back all the same, but after
- * the correction turns it is kept, and publication looks at the PR again.
+ * no page can know: there the comment is sent back all the same, as a
+ * collision that may be one, but after the correction turns it is kept, and
+ * publication looks at the PR again. An answer whose only issues are of that
+ * kind is `tentative`: it is good as it stands, should the correction turns
+ * bring nothing usable.
+ * @returns {{result: object, issues: string[], corrections: object[], tentative?: boolean}}
  * With `allowSummary: false` a summary note is dropped, never repaired: only
  * the page the runtime chose writes it.
  */
@@ -781,6 +785,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   // checked location and an anchor found in source text the runtime read.
   const quick = reviewVerification(review) === 'none';
   const comments = [], skipped = [], handled = new Set(), reported = new Set(), refusedCombinations = [];
+  // Issues that ask for a correction which may not be needed (a collision on a later page).
+  let tentativeIssues = 0;
   const skip = (findingId, reason, extra = {}) => { if (!handled.has(findingId)) { handled.add(findingId); skipped.push({ findingId, reason, ...extra }); } };
   // A location that can carry an inline comment: on a changed HEAD file whose text the page shows.
   const inlineEligible = finding => {
@@ -893,7 +899,12 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       const existing = !final || firstPage ? posted.get(inlineMarker(review.target, drafted.comment, ordinal)) : undefined;
       const missing = existing ? members.filter(member => member !== first && !existing.places.includes(placeOf(member))) : [];
       if (missing.length) {
-        problems.push(`the PR already has a comment under the marker of these lines${existing.threadId ? ` (thread ${existing.threadId})` : ''}, which is neither changed nor posted again, and it does not list ${missing.map(member => `${member.id} at ${placeOf(member)}`).join(', ')}: this comment would not be posted, and ${missing.length === 1 ? 'that place' : 'those places'} would get nothing from it. Anchor it on the lines of another of its findings, or leave ${first.id} out of it; a finding that already has a thread of its own is skipped with cause existing-thread`);
+        const thread = existing.threadId ? ` (thread ${existing.threadId})` : '', places = missing.map(member => `${member.id} at ${placeOf(member)}`).join(', ');
+        const ways = `Anchor it on the lines of another of its findings, or leave ${first.id} out of it; a finding that already has a thread of its own is skipped with cause existing-thread`;
+        problems.push(firstPage
+          ? `the PR already has a comment under the marker of these lines${thread}, which is neither changed nor posted again, and it does not list ${places}: this comment would not be posted, and ${missing.length === 1 ? 'that place' : 'those places'} would get nothing from it. ${ways}`
+          : `the PR has a comment on these quoted lines${thread}, which is neither changed nor posted again, and it does not list ${places}: unless an earlier page's comment quotes the same lines, this comment would not be posted. ${ways}`);
+        if (!firstPage) tentativeIssues++;
       }
     }
     if (problems.length) {
@@ -993,7 +1004,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     else if (field === 'summary') { summary = undefined; corrections.push({ action: 'drop-summary-note-naming-excluded', findingIds: named }); }
     else { summaryDetails = ''; corrections.push({ action: 'drop-summary-details-naming-excluded', findingIds: named }); }
   }
-  return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections };
+  return { result: { status, comments, skipped, summary, summaryDetails, ...(continuation ? { continuation } : {}) }, issues, corrections,
+    ...(issues.length && tentativeIssues === issues.length ? { tentative: true } : {}) };
 }
 
 export function planRepairPrompt(issues, { parseOnly = false } = {}) {

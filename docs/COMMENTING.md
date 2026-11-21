@@ -286,7 +286,9 @@ all its findings and the planner's reason (`Combined: …`).
 
 A grouping pass that fails, for instance on a provider error, costs only the
 grouping: a `PROGRESS` notice says so, and every finding gets its own comment.
-The pass is one more model request of the comment planner's model, and its
+The pass is one more stage of the comment planner's model: usually one
+request, since its input holds the findings and it needs no tool, though it
+has the planner's read-only tools and correction turns like a page. Its
 session is listed and deleted like a page's. The runtime cannot tell a
 well-formed but wrong combination of two different defects, so the prompt
 says to keep findings apart when unsure, and each finding's own summary stays
@@ -323,26 +325,33 @@ it. AZPR deals with this twice:
   combination, and its findings are skipped with that reason. On a later
   page it is kept: comments that quote the same lines get their markers in
   the order of the plan, so one of an earlier page would give this one
-  another marker, which no page can know.
+  another marker, which no page can know. An answer that was sent back for
+  this alone also stands when the correction turns bring nothing usable.
 - **When posting**, the pull request is read again, and what the comment
-  found under the marker lists is taken from the last reading that shows
-  it. The item is reported as usual (`ALREADY_PRESENT`, or `VERIFIED` when a
-  write of this run met it), its row adds `the comment there does not list
-  F-2, F-3`, and a line of the receipt says so: `This preview's comment was
-  not posted for F-2, F-3 (…)`. `/pr-comment` plans the preview again; a
-  review whose adjusted preview began publication needs a new review for
-  that.
+  under the marker lists is taken from the last reading that shows it; for
+  a comment that no reading shows (deleted on the pull request since AZPR
+  created it), from the record of its creation. The item is reported as
+  usual (`ALREADY_PRESENT`, `VERIFIED` when a write of this run met it,
+  `DELETED`), its row adds `the comment there does not list F-2, F-3`, and a
+  line of the receipt says so: `This preview's comment was not posted for
+  F-2, F-3 (…)`. For a review without adjustments, `/pr-comment` plans the
+  preview again; one whose adjusted preview began publication is not
+  planned again and needs a new review.
 
-What is established is what that one comment lists. No other thread is
-looked at, so the receipt says "unless one of them covers these findings":
-an earlier version may have posted a thread for each place, or another
-comment may list them. What a comment lists is read only from the comment
-that opened its thread, and that thread is the one the receipt names; a
-marker that only a reply holds counts as present, as it always has, and
-lists nothing. And the place where a comment stands is known by its marker,
-as for every comment: the same quoted lines elsewhere in the same file share
-a marker, so a comment at one of them counts for the other. Thread positions
-are not compared, because they go stale when lines move.
+What is established is what that one comment lists. Nothing else on the pull
+request is looked at, so the receipt says "whether anything else on the PR
+covers these findings was not checked": an earlier version may have posted a
+thread for each place, another comment may list them, or a reply may discuss
+them. What a comment lists is read only from the comment that opened its
+thread on a file, and that thread is the one the receipt names; a marker
+that only a reply holds, or that opens a thread without a file, counts as
+present, as it always has, and lists nothing. A list counts only while it
+has the form the runtime wrote (rows of a place and a finding ID, then the
+attribution with its models, then the marker); it is not a defence against
+someone who rewrites a place. And the place where a comment stands is known
+by its marker, as for every comment: the same quoted lines elsewhere in the
+same file share a marker, so a comment at one of them counts for the other.
+Thread positions are not compared, because they go stale when lines move.
 
 ## Planning
 
