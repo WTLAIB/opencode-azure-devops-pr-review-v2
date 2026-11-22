@@ -2,10 +2,11 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.4.6, the move to OpenCode 2.3.0, a run of Martian's public code review
-benchmark, the instruction
-changes of 0.3.6 measured on it and on ReviewBench, and the severity changes
-of 0.3.7 run on ReviewBench's test set. Host
+0.5.0, the moves to OpenCode 2.3.0 and 2.3.2, a run of Martian's public code
+review benchmark, the instruction
+changes of 0.3.6 measured on it and on ReviewBench, the severity changes
+of 0.3.7 run on ReviewBench's test set, and the runs behind the single
+pipeline of 0.5.0. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -15,16 +16,17 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  eleven runs on the real OpenCode 2.3.0 host with isolated profiles and fake
-  model and Azure DevOps services: fresh, replacement and native installation
-  (including an authenticating proxy, a custom CA certificate, a foreign MCP
-  server behind CodeMode and an image model), a 120-file
-  review in shards with a context-overflow split and idempotent publication,
-  a refused background summary followed by a permanent failure, the last
-  two once more with debug off, where a run deletes its sessions when it ends,
-  and, in the real terminal UI, the review panel and a setup from a profile
-  without settings, each installed from source and as OpenCode's plugin
-  manager installs the package.
+  thirteen runs on the real OpenCode 2.3.2 host with isolated profiles and
+  fake model and Azure DevOps services: fresh, replacement and native
+  installation (including an authenticating proxy, a custom CA certificate, a
+  foreign MCP server behind CodeMode and an image model), a 120-file review
+  in shards and two passes with a context-overflow split and idempotent
+  publication, a refused background summary and a pass that fails while the
+  other completes, the last two once more with debug off, where a run deletes
+  its sessions when it ends, and, in the real terminal UI, the review panel, a
+  setup from a profile without settings and the confirmed update of settings
+  of 0.4.x, each installed from source and as OpenCode's plugin manager
+  installs the package.
 - **Live, with real models on Azure DevOps Services.** Reviews, comment
   previews and publication on three test PRs with 1, 35 and 316 changed
   files. On OpenCode 2.1.4 with gpt-6-luna, all six quick and review runs
@@ -44,7 +46,11 @@ acceptance runs, including the MCP-based runs, are preserved in
   gpt-6-luna review of the 35-file PR stopped from the terminal panel, and a
   second one to its preview. With the 0.4.6 candidate, 62 reviews of public
   pull requests with three models, each followed by its comment preview,
-  against a local stand-in for Azure DevOps.
+  against a local stand-in for Azure DevOps. With the 0.5.0 candidate, 24
+  reviews of ReviewBench's test set with two passes of GPT-6.1 Terra, against
+  the same kind of stand-in, after the
+  [development runs](#one-pipeline-passes-instead-of-roles-2026-11-22-and-23)
+  that the single pipeline rests on.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -58,12 +64,365 @@ acceptance runs, including the MCP-based runs, are preserved in
   The 0.4.6 candidate, [measured the same way](#martians-code-review-bench-measured-again)
   on 2026-11-21, found 67.1% and 75.8%, again the highest recall, with an F2
   that would place eighth: one run each, and within one run's sampling error
-  of 0.3.5.
+  of 0.3.5. Both reviewed with two reviewers and a verifier; 0.5.0 has not
+  been scored on that benchmark, and its own runs were scored by our local
+  judge.
 
 The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.0 release candidate acceptance (2026-11-23)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.2 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
+Azure DevOps services for the tests and host fixtures. Real models ran
+afterwards against the Git-backed stand-in for Azure DevOps of the
+[research page](#one-pipeline-passes-instead-of-roles-2026-11-22-and-23).
+
+0.5.0 replaces the reviewer roles and the verifier with one pipeline for every
+mode (see [how reviews work](../README.md#how-reviews-work)). `review-work.mjs`
+runs the passes of every shard in one session pool, numbers the findings once
+all passes have answered, removes identical records, runs the duplicate check
+per file and side, and the rating; `output.mjs` refuses a merge that would
+join two findings of one session; `comments.mjs` tells the three kinds of
+saved review apart (`reviewMethod`); `config.mjs` has the version-3 settings
+and the pure update of a version-2 file (`migrateSettings`), which
+`setup.mjs` shows and writes only for the word that names it, and
+`tui-setup.mjs` asks for in the terminal UI. Of the prompts, `review.md` is
+new (the reviewer prompt of the development builds), `functional.md`,
+`risk.md`, `final.md` and `quick.md` are gone, and `common.md`, `dedupe.md`,
+`rating.md`, `comment-plan.md` and `comment-policy.md` changed. The hash test
+holds the system prompts of five review roles in two configurations; the
+verified planner's two hashes are those of 0.4.6's comment planner. The tested
+host moves to OpenCode 2.3.2.
+
+### Offline
+
+`npm run check` passes, and `npm test` runs 764 tests (686 for 0.4.6), all
+passing. Among them, for what is new: the order of finding IDs whichever
+session answers first (`tests/review-work.test.mjs`, `tests/runtime.test.mjs`);
+the duplicate check's refusal of a merge within one session, directly and
+through a third finding (`tests/output.test.mjs`); the rating's input, which
+holds no level, session or count, its three states and what a failed rating
+keeps; the coverage numbers with one and with several passes; a mode that is
+off; the three kinds of saved review, what each may comment on and with which
+planner and disclosure line (`tests/comments.test.mjs`,
+`tests/comment-work.test.mjs`); a review of this version that finds the
+comments a review of 0.4.x posted and posts none of them again; and the
+update of settings of 0.4.x (`tests/setup.test.mjs`,
+`tests/tui-setup.test.mjs`): only the confirmed word rewrites such a file,
+also one with a fault; a word holds only for the file it was shown for and
+for the process that showed it; the update is written under the setup lock,
+in one step and owner-only; what it shows names every change in behaviour;
+no value that is not a model ID, and no token, leaves a model row; and the
+installer carries such a file over byte for byte (`tests/install.test.mjs`).
+
+### On the real host
+
+The thirteen host fixture runs passed on one tree, among them two new ones.
+
+- **Two passes of two models** (`tests/host-v2-smoke.mjs`, fresh,
+  `--replace` and `--native`). A review runs four private sessions of their
+  own (both passes, the duplicate check of the file both reported, which
+  merges their finding after a correction turn, and the rating on its own
+  model without tools); the comments are previewed, posted, found after a
+  host restart and not posted twice. `/pr-quick` runs one reviewer session
+  and its rating, `/pr-deep` without reviewer models is refused before any
+  request, and the native installation's first setup writes the model twice
+  for `/pr-review` and once for `/pr-quick`. The fixture's other checks
+  (automatic comments, cancellation, a provider 503 and a cut stream that
+  OpenCode retries in place, the inactivity watchdog, the proxy) passed as
+  before.
+- **At scale** (`tests/host-v2-comment-scale.mjs`, with debug on and off).
+  120 files in two passes: the first pass's 24-file first shard reaches its
+  context and is split in two (`pass 1/2 shard 1/5a`, `1/5b`); the duplicate
+  check merges the one finding both passes report at one place (31 reports,
+  30 findings); the rating sets every level (20 high, 10 low, from reviewers
+  that filed all of them as medium); 18 inline comments, three high findings
+  sharing one, and the summary are posted, and a second publication finds
+  all 19. With debug off the run's 15 sessions are deleted but the one
+  holding the report.
+- **A pass that fails** (`tests/host-v2-background-compaction.mjs`, with
+  debug on and off). The first pass's reviewer fails with HTTP 401 after the
+  host asked for a background summary, which AZPR refused: no split and no
+  retry. The second pass completes, so the review is COMPLETE, and its
+  receipt says `coverage complete, 0/4 file(s) in every pass`. OpenCode
+  2.3.2 has no `experimental.background_compaction`: its background summary
+  is `compaction.background`, on by default, so the fixture now runs with the
+  host's defaults. Measured on 2.3.2 with a 100,000-token window: a summary
+  from about 42,000 tokens, an in-turn compaction (the shard split) at
+  84,000, the same rule as 2.3.0's. With debug off, a second review in which
+  no session gives a usable answer is PARTIAL and keeps the session holding
+  its draft on the run's record.
+- **The terminal panel** (`tests/host-v2-tui-panel.mjs`, from source and
+  `--native`). The panel opens on STARTED with the four reviewer sessions of
+  two passes over two shards, shows the report from the rating's session,
+  counts the five deleted sessions, and posts and adjusts from its foot as
+  before.
+- **Setup and its update** (`tests/host-v2-tui-setup.mjs`, from source and
+  `--native`, each without and with the new `--migrate`). The first setup
+  writes the lists, and a model row's editor asks for one model and then for
+  its passes. With `--migrate` the profile starts with a settings file of
+  0.4.6: nothing rewrites it by itself (from source the installer carries it
+  over unchanged), AZPR's commands say only that the settings need an update,
+  `/pr-setup` shows the change and a list whose first row keeps the file
+  (leaving and that row write nothing), and confirming writes the complete
+  file of this version, which AZPR loads at once: `/pr-check` is READY
+  without a restart. Neither run makes a model request.
+
+### With real models
+
+Before the rest of the release work, one pull request of ReviewBench's test
+set (PierreJanineh/TechDebtMCP#135) was reviewed with two passes of
+GPT-6.1 Terra: COMPLETE in 54 seconds, two duplicate checks that merged three
+reports, the rating, 4 findings, and a report and receipt that state the
+method and both coverage numbers.
+
+Then the candidate reviewed the 24 pull requests of the research page with
+two passes of GPT-6.1 Terra and the default rating (the first reviewer model),
+scored by the same local judge:
+
+| Per pull request | Findings | Judged valid | Reference issues found | High and medium found | Cost | Time |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.4.6, Terra in all three roles | 7.3 | 90.2% | 29.5% | 50.3% | US$0.15 | 94 s |
+| Development build, two passes of Terra, no rating | 7.5 | 91.1% | 29.2% | 48.5% | US$0.13 | 73 s |
+| **This candidate, two passes of Terra** | **7.2** | **93.0%** | **29.8%** | **50.9%** | **US$0.12** | **67 s** |
+
+- All 24 reviews completed. 54 reviewer sessions filed 295 reports; the
+  duplicate check (68 sessions) merged 123 of them, refused no merge and did
+  not fail; 24 rating sessions rated the 172 findings that were left. No
+  stage needed a correction turn; two reviewer sessions answered PARTIAL with
+  named gaps, got their one follow-up turn and stayed PARTIAL.
+- The candidate matches the development build within the variation between
+  runs, and 0.4.6's three roles at 80% of their cost.
+- The rating, by the same model that reviewed, changed the level of 22 of the
+  102 findings that match a reference issue but the inline decision of only
+  4, two of them rightly (inline F1 91.0 before, 90.9 after; reference high
+  or medium issues labelled low 4 and 5 of 85). That is what the research
+  page found for a model whose scale is sound: the rating makes no measurable
+  difference there, at US$0.005 per pull request.
+
+The duplicate check was also replayed with the candidate on the stored
+reviewer findings of the three development runs of the research page, which
+had been replayed with a build that split a file's findings into batches of
+15. Without batches: 684 of the 695 stored merge groups unchanged (98.4%,
+against 98.7% with batches), 1.5% more findings kept, the wrong merge of
+three places in one workflow file kept apart, no merge refused, no check
+failed, and no further reference issue lost.
+
+Cost of these runs at list prices: US$6.10 (the benchmark run 2.94, the
+replays 3.05, the single review 0.11).
+
+### Limits of this candidate
+
+- One run of the candidate with real models, with one model; the rows it is
+  compared with are one run each as well. The local judge, not
+  ReviewBench's: none of the public benchmark numbers of the README was
+  measured anew.
+- The passes of different models, the two-pass deep default and the rating
+  by a different model were measured with the development builds, not with
+  the candidate.
+- The host fixtures prove orchestration with fake models, not review quality;
+  the terminal fixtures read the screen of one terminal size.
+- An update of settings of 0.4.x was checked with fixtures and fake services;
+  no live settings file was updated.
+
+## One pipeline: passes instead of roles (2026-11-22 and 23)
+
+0.5.0 replaces the two reviewer roles and the verifier with independent
+passes of one reviewer prompt, a duplicate check across reviewer sessions and
+a severity rating. These are the runs that decision rests on. They are
+development measurements scored by our own judge: none is a leaderboard
+result, and no benchmark's own judge scored any of them.
+
+**Setup.** ReviewBench's test set, 24 of its 25 pull requests: one
+(`simnaut/emdash#2`) was left out of every comparison after a single
+configuration needed an hour for it. OpenCode 2.3.2 with an isolated profile
+and a Git-backed stand-in for Azure DevOps that serves each PR's commits, as
+in the earlier ReviewBench runs. Models: GPT-6 Luna, GPT-6.1 Terra and
+GPT-6.2 Sol at their default reasoning effort unless a variant is named, and
+Claude Sonnet 5.5 at medium effort through OpenCode's `claude-agent`
+provider. The pipeline with a verifier ran as AZPR 0.4.6. The new one ran as
+development builds of this change: one reviewer prompt (0.4.6's quick prompt
+with the guidance paragraphs of the two roles), N passes per shard, a
+duplicate check per file and no rating; later builds added a model per pass
+and a rating that was only recorded. The release candidate's own run is under
+[0.5.0 release candidate acceptance](#050-release-candidate-acceptance-2026-11-23).
+
+**Judge and measures.** The local judge of the earlier ReviewBench pages:
+Claude Opus 5.5 subagents applying ReviewBench's matcher and classifier
+rubric. *Reference recall* is the share of the reference issues that a run's
+findings matched, *high and medium recall* the same for the reference issues
+of those levels, and *judged valid* the share of a run's findings that
+matched a reference issue or were rated valid against the code. GPT-6.2 Sol
+files about 25 findings per PR, so its findings without a match were sampled
+for classification (120 to 170 per run); its valid shares are estimates,
+within about 6 points. Costs are list prices from the token records. Each
+configuration ran once; single Terra passes differed by 0.4 to 0.8 points of
+reference recall.
+
+### What the verifier did
+
+The same model in all three roles of 0.4.6's `/pr-review`:
+
+| Model | Reviewers' candidates | Rejected by the verifier | Added by the verifier | Findings | Judged valid | Reference recall | Verifier's share of cost | Time per PR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| GPT-6.1 Terra | 280 | 0 | 5 | 174 | 90.2% | 29.5 | 30% | 94 s, 42 of them verifying |
+| GPT-6.2 Sol | 1,185 | 3 | 98 | 819 | about 74% | 50.6 | 54% | 369 s, 151 of them verifying |
+
+The two reviewers' findings without any verification, after a duplicate
+check, were 170 findings at 90.0% and recall 29.2 for Terra, and 728 at about
+73% and 48.6 for Sol. So a verifier of the reviewers' own strength rejected
+almost nothing; what it contributed was its own additions (0.3 and 2.0 points
+of recall), which no stage checked and which were reported as verified.
+
+A verifier stronger than the reviewers did filter, where the reviewers were
+weak. With GPT-6 Luna as both reviewers, a Terra verifier raised the valid
+share from 59% to 89% and a Sol verifier from 62% to 88%, rejecting about 20
+findings each, of which 83% to 90% were rightly rejected. With Terra as the
+reviewers, whose findings were about 90% valid already, a Sol verifier
+rejected 3 of them, two wrongly, and added 173 findings of its own: the valid
+share fell from 89.5% to 86.5% and the review cost 2.3 times as much. The
+same money spent on the stronger model as a reviewer bought more: one Terra
+pass cost about US$0.06 per PR and reached a reference recall of 25, against
+13.4 for Luna reviewers with a Terra verifier at US$0.05.
+
+**What 0.5.0 gives up with the verifier:** those additions; the filter for
+reviewers whose own findings often do not hold, for which the answer is now a
+better reviewer model; and the verifier's rewrite of each finding. To size
+the last one, 104 pairs of a reviewer's text and the verifier's version of
+the same finding were judged blind (two versions in random order, against the
+code): the verifier moved a finding to a correct place that its reviewer had
+missed in 0 of 169 Terra findings and 6 of 721 Sol findings, and its wording
+was the better one in about one Sol finding in eight and in no measurable
+share of Terra's. The wording comparison rests on small samples: for Sol,
+38 pairs stand for the 692 findings whose place had not moved or still
+overlapped. No step was added for either.
+
+### Passes of one prompt
+
+| Configuration | Findings per PR | Judged valid | Reference recall | High and medium recall | Cost per PR | Time per PR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.4.6, Terra in three roles | 7.3 | 90.2% | 29.5 | 50.3 | US$0.15 | 94 s |
+| Terra, two passes | 7.5 | 91.1% | 29.2 | 48.5 | US$0.13 | 73 s |
+| Terra, four passes | 7.8 | about 89% | 30.6 | 52.7 | US$0.23 | 73 s |
+| 0.4.6, Sol in three roles | 34.1 | about 74% | 50.6 | 59.9 | US$1.30 | 369 s |
+| Sol, two passes | 27.7 | about 86% | 47.7 | 58.1 | US$0.72 | 257 s |
+| Terra and Claude Sonnet 5.5, one pass each | 7.3 | 93.7% | 35.0 | 52.1 | US$0.22 | 58 s |
+| Claude Sonnet 5.5, two passes | 5.1 | 91.9% | 28.6 | 41.9 | US$0.38 | 53 s |
+
+- Two passes of the one prompt matched Terra's three roles within the
+  variation between runs, at 87% of the cost and 78% of the time. With Sol
+  the new pipeline reported fewer findings and a larger share of them was
+  valid (about 3.7 invalid findings per PR against about 9), for 2.9 points
+  less reference recall, 55% of the cost and 70% of the time.
+- A single pass of the one prompt found slightly less than a single role
+  reviewer (Terra 25.4 against 26.6; Sol 44.5 against 46.1) and, with Sol,
+  far more of it was valid (about 85% against 76%): the prompt keeps the
+  quick prompt's rule that a reviewer checks each finding against the source
+  before filing it, which the role prompts left to the verifier.
+- From seven single Terra passes, the union before the duplicate check
+  reached 25.4, 28.8, 30.6 and 31.8 points of reference recall with one to
+  four passes: the second pass adds about 13%, the third 6%, the fourth 4%.
+  The valid share of what is reported fell slightly with more passes (about
+  92%, 91% and 89% at one, two and four), because a later pass mostly adds
+  findings that only it reports. Passes run side by side, so four took as
+  long as two.
+- Passes of two vendors' models found more than passes of one: Terra and
+  Sonnet together reached 35.0, against 29.2 and 28.6 for two passes of
+  either and 30.6 for four Terra passes, at 93.7% valid.
+- Whether several passes reported a finding did not tell valid findings from
+  invalid ones at two passes (92% against 89% for Terra), so nothing is
+  dropped for being reported once, and the rating is not told.
+
+Reasoning effort, one pass each: Luna at its default effort reasoned for
+about 200 tokens per session and filed 1.5 findings per PR (reference recall
+9.2); at `xhigh` it filed 6.5 (23.1) and took 405 seconds per PR instead
+of 33. Terra's `medium` and `high` changed nothing measurable; its `xhigh`
+(29.8, 102 s) was worth about a second pass.
+
+### The duplicate check
+
+In four pilot runs the duplicate check merged 1,064 findings. Of the 558
+merged findings that matched a reference issue, 556 were merged into a
+finding that matched the same issue; two reference issues were lost. It took
+5% to 14% of a run's cost.
+
+Reading the 47 merges whose two findings lay on lines that do not overlap
+showed 41 that were one defect placed at different lines and 6 that were the
+same kind of mistake at several places (three steps of one workflow file,
+five `break` statements of one function), which AZPR treats as one finding
+per place. The check was then replayed on the stored reviewer findings of
+three runs with Terra and Sol (695 merge groups) with four variants of its
+instructions:
+
+| Variant | The two wrongly merged Terra findings | Groups unchanged | Findings left | Sound merges across lines kept (of 39) |
+| --- | --- | ---: | ---: | ---: |
+| 0.4.6's rule, run again | merged again | 99.3% | +0.2% | 37 |
+| The rule rewritten around "one change fixes both" | apart | 96.5% | +3.2% | 31 |
+| **0.4.6's rule plus one sentence** (released) | apart | 98.7% | +1.1% | 37 |
+| Merging only findings on overlapping lines, enforced | apart | 91% (two runs) | +7% | 0 of 26 |
+
+The released sentence is "The same kind of mistake made at several places,
+each needing its own change, is several findings, however alike their texts
+are." Feeding one PR's stored findings in two random orders gave identical
+requests, so the check does not depend on which session finished first. In
+the 1,064 merges no two findings of one reviewer session had been merged
+with each other; the release refuses such a merge in the program, which on
+these runs would have changed nothing. The replays ran on a build that also
+split a file's findings into batches of 15; the release does not, since the
+control showed no effect of it.
+
+### The rating without the earlier level
+
+117 findings of one mixed run (Terra and Sonnet, one pass each) that matched
+a reference issue were rated again by three models that saw the finding's
+text and not its level. The inline decision is whether a finding is high or
+medium, and so gets an inline comment, or low:
+
+| Level set by | Level equal to the reference | Inline decision (F1) | Reference high or medium issues labelled low |
+| --- | ---: | ---: | ---: |
+| The reviewers themselves | 63.2% | 87.0 | 12 of 89 |
+| Terra | 68.4% | 89.4 | 9 of 89 |
+| GPT-6.2 Sol | 61.5% | 90.1 | 7 of 89 |
+| Claude Sonnet 5.5 | 65.8% | 87.9 | 13 of 89 |
+
+The models scale severity differently: of the reference's high and medium
+issues, Sonnet labelled about a third low in its own findings (10 of 28
+here, 21 of 66 in two runs of its own), Terra 2.5% to 4.5% and Sol 7.5%. On
+the 44 findings Sonnet wrote, its own blind rating raised the inline F1 from
+75.0 to 82.4, Terra's to 84.0 and Sol's to 88.9; on the 73 Terra wrote
+(91.5), Terra's rating changed no inline decision, and Sonnet's lowered it
+to 90.2. Each rater changed 6 to 10 of the 117 inline decisions (Terra 5
+right and 1 wrong, Sol 6 and 1, Sonnet 6 and 4), so this run alone is weak
+evidence: Terra's 5 to 1 is within chance (sign test, p = 0.22). The rating
+is on by default because three observations point the same way (this run,
+Sonnet's second run, and 0.3.7's measurement that a verifier that did not see
+the reviewer's level raised the inline F1 from 65.5 to 83.0), it cost
+US$0.005 to 0.018 and 6 to 14 seconds per PR, and it did not harm the model
+that rated well. A model that underrates lowers other models' findings too,
+which is why the first entry of a list, or the named rater, matters.
+
+### Limits
+
+- One benchmark, 24 pull requests with about 14 reference issues each, which
+  are larger and hold more issues than most pull requests. One run per
+  configuration.
+- Our judge, not ReviewBench's; the same judge and procedure for every row,
+  so rows compare with each other and not with a leaderboard. The labels of
+  the 47 merges across lines are our own reading.
+- GPT models of three strengths and one Claude model. Nothing here was
+  measured with Claude Opus, the model of the README's benchmark results.
+- The pilot builds are not the release: their reviewer prompt was edited
+  into the released `review.md`, the duplicate check was regrouped by side
+  and file, and the rating was switched on. The acceptance section has one
+  run of the release candidate.
+- A session of a `claude-agent` model keeps a local process of about 215 MB
+  until the OpenCode process ends (OpenCode 2.3.2). A Sonnet run with four
+  PRs at a time exhausted the 8 GB of the test machine; the rest of the
+  Sonnet runs used a new host process for every one to six PRs.
 
 ## 0.4.6 after publication (2026-11-21)
 
@@ -4950,11 +5309,17 @@ transient failure, and its error names the last activity.
 
 ## Known limitations
 
-- **Tested environment.** OpenCode CLI 2.3.0 (V2 plugin API) on Ubuntu 22.04
-  under WSL2. Other OpenCode 2.x versions get an OpenCode WARNING row in
-  `/pr-check` and are not validated, apart from the host fixtures of 0.4.1,
-  which also passed on 2.2.4; OpenCode 1.x is not supported. Other operating systems
-  are not validated yet.
+- **Tested environment.** OpenCode CLI 2.3.2 (V2 plugin API) on Ubuntu 22.04
+  under WSL2 since 0.5.0 (2.3.0 for 0.4.1 to 0.4.6). Other OpenCode 2.x
+  versions get an OpenCode WARNING row in `/pr-check` and are not validated,
+  apart from the host fixtures of 0.4.1, which also passed on 2.2.4; OpenCode
+  1.x is not supported. Other operating systems are not validated yet.
+- **0.5.0 with real models.** The candidate's real-model runs reviewed public
+  pull requests against a local stand-in for Azure DevOps (see
+  [the record](#050-release-candidate-acceptance-2026-11-23)); no 0.5.0 review
+  has run against Azure DevOps Services or posted there, and no real settings
+  file of 0.4.x has been updated. Its review quality rests on one benchmark,
+  scored by our local judge.
 - **OpenCode 2.3.0 with real models.** On 2.3.0, AZPR 0.4.1 has reviewed and
   previewed the 1-file and the 35-file test PR with gpt-6-luna, once each
   (see [the record](#041-after-publication-live-reviews-and-session-cleanup-on-real-hosts-2026-11-16)).
@@ -4963,7 +5328,7 @@ transient failure, and its error names the last activity.
   prompt cache is not measured: one run per case cannot separate it from the
   variation between runs.
 - **The terminal panel.** It is part of OpenCode's terminal UI and was
-  exercised on OpenCode 2.3.0 inside tmux with fake services (see
+  exercised on OpenCode 2.3.0 and, since 0.5.0, 2.3.2 inside tmux with fake services (see
   [the record](#042-release-candidate-acceptance-2026-11-17)). No review with
   a real model has run with it, other terminal emulators and their mouse
   reporting are untested, and the desktop app does not load it. The package
@@ -4973,7 +5338,7 @@ transient failure, and its error names the last activity.
   before that OpenCode becomes the tested one.
 - **Setup in the terminal UI.** The dialogs of `/pr-setup` exist in
   OpenCode's terminal UI only; the desktop app and other clients get the
-  instructions and the options. They were exercised on OpenCode 2.3.0 inside
+  instructions and the options. They were exercised on OpenCode 2.3.0 and 2.3.2 inside
   tmux with fake services (see
   [the record](#043-release-candidate-acceptance-2026-11-18)): pasting and
   typing in other terminal emulators are untested, and the dialogs have not
