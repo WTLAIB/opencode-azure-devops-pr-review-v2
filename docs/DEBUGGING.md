@@ -25,9 +25,9 @@ conversations and verifies that `/pr-stop` cancels from that same TUI.
 
 | Location | Contents |
 | --- | --- |
-| Receipt in the invoking conversation | Status, per-stage rows (role, shard, session, model, attempts, repair turns, tool errors/timeouts, failure class) and notices. |
-| `PROGRESS` notices | Phases of the run: snapshot, shard counts, verification, retries, planning pages, posting. |
-| The last review session (a verifier, the duplicate check when one ran, or the severity rating when a rater is configured; the receipt names it) | The rendered report (`# AZPR <id> — <status>`). |
+| Receipt in the invoking conversation | Status, coverage and `verification none` in its first line, per-stage rows (role, pass and shard, session, model, attempts, repair turns, tool errors/timeouts, failure class) and notices. |
+| `PROGRESS` notices | Phases of the run: snapshot, session counts, the duplicate check, the severity rating, retries, planning pages, posting. |
+| The last review session (a severity rating when one ran, otherwise a duplicate check or a reviewer; the receipt names it) | The rendered report (`# AZPR <id> — <status>`). |
 | `${XDG_STATE_HOME:-~/.local/state}/opencode/azpr-v2/reviews/` | Persisted completed reviews (plans and publication ledgers included). |
 | `…/azpr-v2/receipts/` | Receipts that could not be queued to the conversation after three attempts. |
 | `…/azpr-v2/data/` | Private source excerpts and large comment inputs for persisted reviews. |
@@ -117,9 +117,9 @@ session holding the report or draft stays.
 | File | What it records |
 | --- | --- |
 | `run.json` | Run identity, relevant settings and start time. |
-| `readiness.json` | Checked model slots, the Azure DevOps organization and api-version, and host capabilities. |
+| `readiness.json` | The models that were checked (`reviewers[0]`, `reviewers[1]`, …, and `rater` when one is named), the Azure DevOps organization and api-version, and host capabilities. |
 | `NN-ROLE.request.json` | Stage identity, the literal payload and the role instructions. |
-| `NN-ROLE.response.json`, `NN-ROLE.response-repairN.json`, `NN-ROLE.response-follow-upN.json` | Visible answers of the first turn, each correction turn and a quick review's follow-up turn. |
+| `NN-ROLE.response.json`, `NN-ROLE.response-repairN.json`, `NN-ROLE.response-follow-upN.json` | Visible answers of the first turn, each correction turn and a reviewer's follow-up turn. |
 | `NN-ROLE.result.json` | Status, repairs, unresolved issues, corrections, tool observations, failure class, timing and `tokens`: the token usage OpenCode reported for each model request of the stage (`input` without cached input, `cacheRead`, `cacheWrite`, `output`, `reasoning`), their sums and `cachedInputShare`. |
 | `report.md` / `draft.md` | Rendered report or unconfirmed draft. |
 | `comment-plan.json` | The saved plan with exact content, anchors, offsets and markers. |
@@ -128,8 +128,11 @@ session holding the report or draft stays.
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
 | `conversation-name.json` | For a check or a review, written a few seconds after the command: how naming the conversation ended. `named` (with AZPR's own name for it), `kept` (it had a name, or got one meanwhile), `restored` (a name given in that moment was written back), `unconfirmed` (a name was written, but OpenCode did not report the rename in time) or `failed` (OpenCode refused the write and reported no rename). A name that is not AZPR's own is never recorded. |
 
-The numeric prefix is stage creation order; shards and verification sessions run
-in parallel.
+The numeric prefix is stage creation order; the reviewer sessions of all
+passes and shards run in parallel, and so do the duplicate checks and the
+rating sessions. `ROLE` is the private agent: `azpr-<mode>-reviewer` for the
+first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
+`-dedupe`, `-rating` and `-comment-plan`.
 
 ## Diagnosis order
 
@@ -159,10 +162,15 @@ in parallel.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a
-   quick review, `sessionReads` counts the file contents that session's own
+   reviewer, `sessionReads` counts the file contents that session's own
    `azpr_read_diff` and `azpr_read_file` calls showed, the reads its location
-   checks accept; the result's `checks` hold each finding's location check.
-   `followUp` records a quick follow-up turn: the turn, the gaps the answer
+   checks accept; the result's `checks` hold each finding's location check,
+   under the ID the answer gave it (the review's own IDs, `F-1 … F-n`, are
+   given once every session has answered). A duplicate check's result lists
+   its `merges` and counts those the runtime `refused` because they would
+   have joined two findings of one session; a rating's result lists each
+   level with its reason.
+   `followUp` records a reviewer's follow-up turn: the turn, the gaps the answer
    named, how many assigned files it did not list as reviewed and the outcome
    (`completed`, `still-partial`, `unusable`, or `failed` with its failure class
    and error); the receipt shows `follow-up=<outcome>`.
@@ -194,8 +202,17 @@ Common receipts:
 | `azpr_read_file failed: …` in a stage's tool errors | The model asked for a missing path or invalid range; the review continues and reports the gap. |
 | `permission.rejected` … `cannot use paths outside the local OpenCode project` | A reviewer used a native tool on a repository path; it was refused instead of waiting for an approval and the model was pointed to the azpr tools. |
 | `settings.json changed since OpenCode loaded it` | Restart the OpenCode service. Running commands were unaffected. |
+| `/pr-deep is off: models.deep.reviewers names no model` (or `/pr-quick`) | That mode's list of reviewer models is empty, and no mode falls back to another mode's models. List at least one with `/pr-setup` (`--deep-model`, `--quick-model`) or in the settings file, then restart the OpenCode service. |
+| `The selected review.reviewers[1] model (…) is unavailable in the host catalog` (or `rater`) | The entry at that position of `models.review.reviewers` (positions count from 0), or the named rater, is not a model OpenCode offers; no fallback was selected. Correct it and restart the OpenCode service. |
+| Review warning: `The review pass 2/2 shard 1/3 failed (…); its 25 file(s) were not reviewed in this pass` | One reviewer session failed, after a retry where the failure was transient. The other sessions' work is kept: the files count as reviewed when another pass reviewed them, and the second coverage number (files reviewed in every pass) is lower. |
+| Review warning: `The duplicate check of /path failed (…); its N findings stay reported and may include duplicates` | The session that compares what different reviewer sessions reported in that file failed. No finding was lost; read those findings for repeats before publishing, or exclude a repeat with `/pr-comment --exclude`. |
+| Review warning: `The severity rating failed (…); its N finding(s) keep their reviewer's severity` | A rating session failed, after a retry where the failure was transient. The findings are complete; their levels are the reviewers' own, which other models may have set on another scale. `/pr-comment --severity` changes a level for publication. |
+| Review warning: `Removed N exact duplicate finding(s)` | Sessions reported records that are identical in every field; the runtime kept one of each. Nothing needs doing. |
+| `[AZPR <run>] INCOMPLETE` with `Every review session failed: …` | No reviewer session produced an answer; the reason names the first failures (a provider error, a model that is not available). Fix the cause and run the review again. |
 | `Host configuration changed private agent …` | Another config or plugin changed an `azpr-*` agent; resolve it and reload. |
 | `No completed review is available for this conversation` | Run the comment command in the review's conversation, or run a new review. `/pr-comment --list` shows what is saved for a conversation. |
+| `Review <id> does not say how its findings were produced in a way this version knows` | The saved review's record is of no kind this version knows (not a review of this version, nor a `/pr-review`, `/pr-deep` or `/pr-quick` that 0.4.x saved). It can be listed and shown, but not planned, adjusted or published; run a new review. |
+| `Review <id> is a /pr-deep review, and models.deep.reviewers names no model to plan its comments with` | Comments are planned by the first reviewer model of the review's mode, and that mode is off now (after an update of 0.4.x settings in which `/pr-deep` stayed off, for instance). List a model there and restart the OpenCode service; a saved preview can be posted without one (`/pr-comment <id> --publish`). |
 | A `/pr-comment` command acted on another review than you meant | Without an ID it acts on the conversation's current review, the one completed or used there last; the `STARTED` notice and the receipt name it (`Acted on review …`). Put the ID of the one you mean first (`/pr-comment --list` shows them); an adjustment is undone with `--reset`, and a preview posts nothing. |
 | `PR source commit changed after the review` | The PR got new commits; run a new review before commenting. |
 | `[AZPR <run>] REPLACED; source review=<id>` (`This run's preview was replaced before its receipt: …`) | Another `/pr-comment` command adjusted, planned again or posted this review's preview while that run's sessions were cleaned up. What the run planned is no longer what would be posted, so it is not shown; read the other command's receipt, or `/pr-comment --show`. |
@@ -207,8 +224,12 @@ Common receipts:
 | `Automatic … skipped: another AZPR command is running in this conversation or on this PR` | Wait for that command, then run the `/pr-comment` command the notice names. |
 | `Automatic comments are off for this review (stopped: …)` on a COMPLETE receipt | `/pr-stop`, a timeout or an unload arrived while the finished review's report was delivered. The review is kept; no comment step started. Run `/pr-comment <id>` to preview it. |
 | `Unknown option after the PR URL` / `Use at most one of --preview, --publish or --no-comment` | Only these flags may follow the URL, at most one; start your context with a word. Nothing was started. |
-| The command list describes the review commands as `AZPR is not ready here; run /pr-setup to see what it needs` | This OpenCode process found no usable settings for this project directory when it loaded AZPR: none yet, settings it cannot use, or settings that were saved from another project directory since. `/pr-setup` says which, and running a review command answers with one of the next rows. |
+| The command list describes the review commands as `AZPR is not ready here; run /pr-setup to see what it needs` | This OpenCode process found no usable settings for this project directory when it loaded AZPR: none yet, settings it cannot use, settings of 0.4.x that wait for their update, or settings that were saved from another project directory since. `/pr-setup` says which, and running a review command answers with one of the next rows. |
 | `SETUP REQUIRED` … `could not be used when OpenCode loaded AZPR: …` | The reason names the problem (no file yet, an unreadable file, invalid JSON, a setting that fails validation or an unusable PAT file) without its value. Fix it, then restart the OpenCode service. |
+| `SETTINGS UPDATE REQUIRED` … `settings.json is from AZPR 0.4.x (settings version 2)` | The settings file has the layout of 0.4.x, which this version does not use, and nothing was changed. Do not repair it by hand: run `/pr-setup`, which shows what the update changes and writes the new file after you confirm (see [upgrading from 0.4.x](../README.md#upgrading-from-04x)). Every other option of `/pr-setup` answers that the update comes first. |
+| `That word names no update of the settings file as it is now` | `/pr-setup --migrate <word>` was given a word that belongs to another state of the file: the file changed since the update was shown, or OpenCode was restarted. Run `/pr-setup` alone and use the word it shows now. |
+| `--migrate stands alone` / `These settings need no update` | `--migrate` confirms the update of settings of 0.4.x and nothing else: give it without other options, and only where `/pr-setup` offered the update. |
+| `SETTINGS UPDATED` … `The settings file now has the layout of this version, and still cannot be used: …` (in the dialogs: `It still cannot be used:`) | The file of 0.4.x had a fault, such as a placeholder where a model belongs, and the update kept it: it changes the layout and nothing else. The update's summary said so in its last line (`After the update the settings still cannot be used: …`). Run `/pr-setup` again; it now sets what is missing. |
 | `No --pat-file was given, and the default PAT file … could not be used` | `/pr-setup` looked for the PAT in `${XDG_CONFIG_HOME:-~/.config}/azpr/pat` (or, with `--replace`, the PAT file already set). Create it as the [quickstart](QUICKSTART.md#save-the-pat-in-a-private-file-terminal) shows, or name your file with `--pat-file`. Nothing was saved. |
 | `RESTART REQUIRED` … `can be used now, but AZPR found no usable settings when OpenCode loaded it for this project directory` | Settings were saved after this OpenCode process loaded AZPR, by a setup in another project directory or by hand. A first setup is loaded at once only where it ran; restart the OpenCode service here. |
 | `RESTART REQUIRED` … `are saved, but AZPR could not load them: …` | A first setup was saved, but loading it failed for the reason named (another plugin's command with a reserved name, for example). Remove the cause and run `/pr-setup` again, or restart the OpenCode service. |
@@ -229,4 +250,4 @@ Common receipts:
 | `PROGRESS — Planning comments: N findings are too many to look through for one defect at several places; planning goes on without grouping them.` | The pass reads its findings inline, and their summaries and suggestions alone are longer than it takes (60,000 characters). No pass ran; the comments are planned one per place. |
 | Skipped finding: `… the PR already has a comment of AZPR's on these quoted lines (thread N), and a second one is not put on them` (for a combined comment: `A combined comment for … did not meet the combination rules (…)`) | A comment for several places and a comment for one place do not find each other on the pull request, so neither is planned onto quoted lines that carry the other kind. The planner kept the comment there also after the correction turns. The finding stays in the summary index. `/pr-comment` plans again; where the existing thread covers the finding, the planner should skip it as discussed. |
 | Skipped finding: `The comment planner repeated a checkpoint without progress` or `did not finish the page in 4 sessions` | The planner kept asking for more reading on that page; the finding has no inline comment but stays in the summary index, and the other comments were planned as usual. Inspect the page's planning stages; `/pr-comment <id>` (a preview) plans again. |
-| `Stage inactivity watchdog stopped this stage: no activity for … s after …` (`failure=idle`, plus an inactivity notice) | The model stream, a tool or OpenCode stopped responding for `workflow.stageIdleSeconds`; the stage ran again in a new session. Repeated stops after `model request N was sent` point at the provider. Raise the setting only if a model really needs longer for one answer (live stages so far stayed under 151 s without any event). |
+| `Stage inactivity watchdog stopped this stage: no activity for … s after …` (`failure=idle`, plus an inactivity notice) | The model stream, a tool or OpenCode stopped responding for `workflow.stageIdleSeconds`; the stage ran again in a new session. Repeated stops after `model request N was sent` point at the provider. Raise the setting only if a model really needs longer for one answer (the live stages recorded before 0.5.0 stayed under 151 s without any event). |

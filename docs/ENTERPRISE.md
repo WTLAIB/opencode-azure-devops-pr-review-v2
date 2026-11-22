@@ -6,7 +6,7 @@ MCP dependency. Start with the [quickstart](QUICKSTART.md), then use
 this page to understand access, data flow and local retention before reviewing
 your team's repositories.
 
-The tested environment is **OpenCode V2 `@opencode/cli` 2.3.0 on Ubuntu
+The tested environment is **OpenCode V2 `@opencode/cli` 2.3.2 on Ubuntu
 22.04**. Azure DevOps Server URLs are not supported. See
 [current validation](VALIDATION.md) for the distinction between isolated tests
 with fake services and runs against real Azure DevOps and model providers.
@@ -64,10 +64,16 @@ itself writes to the file in two cases only: `/pr-setup` (its options or its
 dialogs), and the first time
 OpenCode loads a version that brings a setting the file leaves out, which is
 then added at its default (the file is replaced atomically, with mode `600`).
+A settings file of 0.4.x (`"version": 2`) is the exception: 0.5.0 leaves it
+byte for byte and does not use it until someone confirms its update in
+`/pr-setup`, which shows the change first (see
+[upgrading from 0.4.x](../README.md#upgrading-from-04x)).
 A settings file that configuration management owns can stay untouched: keep
 it complete (the settings example names every setting), or make it a symbolic
 link, which AZPR reads and never replaces; `/pr-check` then names the
-settings it leaves out. Keep the file outside shared profiles and Git, and
+settings it leaves out. Setup does not replace a symbolic link either, so
+where such a file is still of 0.4.x, ship a version-3 file in its place; the
+settings example shows the layout. Keep the file outside shared profiles and Git, and
 restart the OpenCode service (`opencode service restart`) after changing it. A file only its owner can read protects the
 PAT from other accounts, not from programs that run as the same user (an
 agent's shell commands, for example), so keep the PAT's scopes minimal and its
@@ -85,11 +91,17 @@ not control their retention or training policies.
 | Route | Data involved |
 | --- | --- |
 | Azure DevOps → AZPR runtime | PR identity and description, changed-file inventory, commit messages, discussions, source files at exact commits, and a repository archive when content search needs one. |
-| AZPR → selected models through OpenCode | PR context, assigned paths, commit messages for reviewers, supplementary text after the PR URL, tool results, findings and verification reports. Planning also receives source excerpts and existing-discussion digests, including author names and comment excerpts. |
+| AZPR → selected models through OpenCode | PR context, assigned paths, commit messages for reviewers, supplementary text after the PR URL, tool results and findings. Planning also receives source excerpts and existing-discussion digests, including author names and comment excerpts. |
 | AZPR runtime → Azure DevOps | Saved summary and inline comment text, including AI/model disclosure and anchors, only during publication you asked for: `/pr-comment --publish`, or automatic publication after a COMPLETE review when `afterReview` or the review command's `--publish` flag says so. |
 
-The severity rating runs only when `models.<mode>.rater` names a model. It
-receives only the confirmed findings' text and the PR title and description; it
+Every model in a mode's list (`models.<mode>.reviewers`) is one review pass
+over every changed file, so each of those providers receives the PR's source.
+The first model of the list also receives the other passes' findings: it runs
+the duplicate check, which may read the source again, and plans the comments.
+
+The severity rating runs unless `models.<mode>.rater` is `false`, with the
+first reviewer model or with the model `rater` names. It
+receives only the reported findings' text and the PR title and description; it
 has no tools, so it reads nothing else. A finding's text quotes the source it
 is about.
 
@@ -125,17 +137,27 @@ Start in one OpenCode conversation with a small PR:
 /pr-comment
 ```
 
-`/pr-quick` runs one reviewer per shard and no independent verifier. Its
-findings are **reported, not verified**; inspect the coverage and limitations
-as well as the findings. Use `/pr-review` or `/pr-deep` when you want separate
-functional and risk reviewers followed by verification; `/pr-deep` runs the
-same review with the stronger models you set in `models.deep`, so its cost
-depends on those models. None of these commands
+Every mode runs the same review with the models listed for it: `/pr-quick`
+usually one pass of a fast model, `/pr-review` the passes of
+`models.review.reviewers` (two after a first setup), and `/pr-deep` the
+stronger models, or the additional passes, of `models.deep.reviewers`. In
+every mode findings are **reported, not verified**: each reviewer checks its
+own findings against the source, the runtime checks only their form and
+source, and no stage re-checks them. Inspect the coverage and limitations
+as well as the findings. None of these commands
 posts to Azure DevOps by default: a COMPLETE review is followed by a comment
 preview, which uses a model and posts nothing. `afterReview` (per mode) or a
 flag after the PR URL changes that to nothing (`none`, `--no-comment`) or to
 publication (`publish`, `--publish`); see
 [automatic comments](COMMENTING.md#automatic-comments-after-a-review).
+
+**Cost follows the lists.** Each entry of a mode's list is one more reviewer
+session per shard, and the duplicate checks, the rating and comment planning
+run with the first entry (the rating with `rater`, where one is named).
+Passes run side by side, so more passes mainly cost more. With OpenCode's
+`claude-agent` provider, each session keeps a local process until OpenCode
+exits (observed on OpenCode 2.3.2), so a service that runs many passes over
+many shards with such models needs memory for them until it is restarted.
 
 **Preview uses a model.** `/pr-comment` reads live discussions and plans the
 comments; each new preview replans and can incur provider charges. One session
@@ -165,9 +187,10 @@ and mentions also when encoded with escapes or character references, and
 script links also with a tab or line break inside, which a browser drops from
 a URL). Literal code is skipped where its reading is certain,
 except for mentions. Held items wait in the saved preview for a person; the
-others, ordinary web links included, are posted. A quick review's comments
-carry the disclosure that they were not independently verified; teams that
-want a person to read them first leave `afterReview.quick` at `preview`.
+others, ordinary web links included, are posted. Every comment carries the
+disclosure that its findings were checked by their reviewer and that no
+separate verification ran; teams that want a person to read comments first
+leave `afterReview` at `preview`.
 Automatic publication posts nothing for a review without findings to comment
 on, or when every finding is already discussed on the PR. `/pr-check` lists
 the `afterReview` setting of each mode and who posts. An automatic preview

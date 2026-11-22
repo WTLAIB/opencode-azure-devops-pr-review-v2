@@ -13,19 +13,19 @@ repository through AZPR's own read-only tools, which use the same client.
 | File | Responsibility |
 | --- | --- |
 | `src/plugin.js` | V2 plugin definition and setup entry. |
-| `src/setup.mjs` | Native package bootstrap, external settings selection, the completion of the settings file at load, and [setup](#setup): the `/pr-setup` command, the RPC of the terminal UI's dialogs, the access check, the only writers of the settings file and the token file, and the loading of a first setup. |
+| `src/setup.mjs` | Native package bootstrap, external settings selection, the completion of the settings file at load, and [setup](#setup): the `/pr-setup` command, the RPC of the terminal UI's dialogs, the access check, the only writers of the settings file and the token file, the update of a settings file of 0.4.x that a person confirms, and the loading of a first setup. |
 | `src/runtime.mjs` | Registration, hooks, grants, workflows, stage attempts (repair turns and retries), notices, cancellation and lifecycle. |
 | `src/host.mjs` | OpenCode compatibility layer: response-shape normalization, capability detection and host constants. |
-| `src/config.mjs` | Settings validation and defaults (`SETTING_DEFAULTS`), roles, native tool rules, shared prompt policies, prompt variants per mode and agent compilation. |
+| `src/config.mjs` | Settings validation and defaults (`SETTING_DEFAULTS`), what a settings file of 0.4.x becomes (`migrateSettings`), roles (one reviewer role per position of a mode's model list), native tool rules, shared prompt policies, the two wordings of the comment prompts and agent compilation. |
 | `src/session.mjs` | Session create/admit/wait/correlate, host stream continuations and retried steps, failure classification, interrupt and synthetic notices. |
 | `src/tool-queue.mjs` | Bounded Azure DevOps concurrency with per-call timeouts that abort the request, shared by reviewer tools and runtime calls. |
 | `src/azure.mjs` | PR URL parsing, the REST client (PR, iterations, changes, items, threads, thread creation, and setup's access check), error classification, retries, the per-run file cache and snapshot construction. The only place with REST paths and the api-version. |
 | `src/review-tools.mjs` | The reviewers' read-only tools (`azpr_read_diff`, `azpr_read_file`, `azpr_search_code`, `azpr_find_files`, `azpr_list_files`, `azpr_pr_threads`): definitions, argument validation and bounded output. |
 | `src/diff.mjs` | Line diffs (Myers) with both line numbers, more context before a change than after, the enclosing block's start, and folding of repeated changes. |
 | `src/search.mjs` | Content search: reads the repository zip of one commit once per run (stored or deflated entries; bounded inflation; ZIP64 and encrypted archives refused), keeps its text files in memory and finds literal text, bounded per file and in total. An archive it cannot search is remembered for the run, which states the limit in the review's warnings and the receipt. |
-| `src/review-work.mjs` | Sharded initial reviews, overflow splitting, sharded verification, the same-file duplicate check, merge and the final version recheck; the quick review and its location and source checks. |
-| `src/output.mjs` | Strict model JSON extraction, review acceptance with per-item degradation, and repair prompts. |
-| `src/comments.mjs` | Publishable findings per mode, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
+| `src/review-work.mjs` | The review of every mode: sharded reviewer passes, overflow splitting, the checks of each finding's location and source, the review's finding IDs, the duplicate check across reviewer sessions, the severity rating and the final version recheck. |
+| `src/output.mjs` | Strict model JSON extraction, the acceptance of reviewer, duplicate-check and rating answers with per-item degradation, and repair prompts. |
+| `src/comments.mjs` | How a saved review's findings were produced (`reviewMethod`) and which of them may be published, comment-plan validation, title/anchor normalization, stable markers, plan assembly and the safeguards of automatic publication. |
 | `src/comment-work.mjs` | Comment planning pages and deterministic, idempotent publication. |
 | `src/comment-data.mjs` | Private content-addressed data files for large inputs and observed source. |
 | `src/store.mjs` | Persistent reviews (each with the reviewer sessions it still keeps; a review's record goes only after its sessions were dealt with), data cleanup, fallback receipt files and the session records: the sessions an unfinished run keeps on purpose, due beyond the review limit, and apart from them the sessions that should be gone and could not be deleted, due at every pass; the per-review queue that keeps writes of one record from overlapping. |
@@ -56,7 +56,10 @@ active grants do not change in place. While settings are missing or
 unusable, the review commands answer `SETUP REQUIRED` and name the problem
 found at load (no file yet, an unreadable file's error code, invalid JSON, a
 validation error or an unusable PAT file), never a setting value; an unknown
-key is named only when it looks like a setting name.
+key is named only when it looks like a setting name. A settings file of AZPR
+0.4.x is another case, whatever else it holds: the review commands answer
+`SETTINGS UPDATE REQUIRED`, and `/pr-setup` shows its update, which comes
+before any repair (see [setup](#setup)).
 
 **Settings a version brings.** Every setting with a default is in
 `SETTING_DEFAULTS` (`config.mjs`), which the settings example and the schema
@@ -72,7 +75,8 @@ The lock keeps AZPR's own writers apart, not a person's editor, so the file
 is compared with the text that was read once more after the new text is
 ready, right before the rename: a save made meanwhile is kept, and the
 completion starts again from it. A file switched off meanwhile is left as
-saved. A file that cannot be completed is used as it is and never fails the
+saved, and a file of AZPR 0.4.x (`version: 2`), which is no valid file of this
+version, is left byte for byte. A file that cannot be completed is used as it is and never fails the
 load; `/pr-check` then names what it leaves out and why, and otherwise lists
 what was added.
 
@@ -89,7 +93,7 @@ the defaults written in (it compares with the completion of what it loaded)
 and accepts it, so commands are not refused over AZPR's own completion; any
 other difference blocks new runs as before. A source installation's settings
 are completed by the installer as before (`scripts/merge-settings.py`), from
-the same example.
+the same example; a version-2 file is carried over exactly as it is.
 
 `ctx.command.transform` registers `/pr-check`, `/pr-review`, `/pr-deep`,
 `/pr-quick`, `/pr-stop` and `/pr-comment`. A command that starts a workflow (a
@@ -104,8 +108,8 @@ with what the command is for and the options are in `--help`. The final
 receipt is queued to the invoking conversation with up to three attempts and is
 written to `receipts/` in the state directory if the conversation cannot be
 reached.
-`PROGRESS` notices report phases (snapshot, shard counts, verification,
-planning pages, posting).
+`PROGRESS` notices report phases (snapshot, session counts, the duplicate
+check, the severity rating, planning pages, posting).
 
 A notice starts no model response: it is left in the conversation's inbox
 with `resume: false`, where it waits while the conversation is idle, also
@@ -147,16 +151,31 @@ unloading plugin start nothing.
 
 Each workflow first runs one **preflight**: `settings.json`, and the PAT file
 when `azure.patFile` is set, must be unchanged since load, reserved commands must still be ours, the private agents of the
-command's profile are pinned and the models the command uses must exist and
-support tools (and offer the variant when a model is set as
-`provider/model#variant`). Pinning and the model check are per profile, so a
+command's profile are pinned and the models the command uses must exist
+(and offer the variant when a model is set as
+`provider/model#variant`): every reviewer model, which must support tools, and
+a named rater, which needs none. A comment run that plans needs the first
+reviewer model of the review's mode; one that only posts a saved preview
+checks no model and needs no enabled mode. Pinning and the model check are per profile, so a
 problem with the quick (or deep) roles or models blocks only the commands that
-use them; `/pr-check` reports configured quick and deep models as warnings and says
-when the deep models are unset or repeat the review models. Review commands refuse a PR
+use them; `/pr-check` lists each mode's passes and which model rates, reports
+configured quick and deep models as warnings and says
+when the deep models are unset or repeat the review models. A review command
+of a mode whose list is empty is refused (`/pr-deep is off:
+models.deep.reviewers names no model. …`); no mode falls back to another
+mode's models. Review commands refuse a PR
 URL whose organization differs from `azure.organization` before any request.
 After preflight, hooks never re-read settings or catalogs.
 
 ### Review
+
+`/pr-review`, `/pr-deep` and `/pr-quick` run one pipeline, `runReview` in
+`review-work.mjs`, with the same stages and system prompts. A mode is its
+models: the list `models.<mode>.reviewers` (one to four entries, which may
+repeat) and `models.<mode>.rater`. An empty list leaves `/pr-deep` or
+`/pr-quick` off. No stage verifies a finding: a reviewer checks its own
+findings against the source, and the runtime checks their form and source,
+never whether a defect is real.
 
 1. **Snapshot** — the PR (identity, status, title, description, repository and
    project IDs), its iterations and every page of the latest iteration's
@@ -169,13 +188,23 @@ After preflight, hooks never re-read settings or catalogs.
    does not get them. A complete change list without files ends the command
    before any session (INCOMPLETE, nothing to review); a partial one asks the
    reviewers to find the remaining paths.
-2. **Initial reviews** — changed files are sorted and cut into shards of
-   `workflow.shardFiles`. For each role and shard a private session reviews the
-   assigned files with a finding-ID range (`F-1…`, `F-1001…`) so IDs never
-   collide. Up to `workflow.parallelSessions` sessions run at once. Each
-   reviewer files every concrete defect it finds as a finding: a role's focus
-   orders its attention and is not a filter, and `report` carries exclusions,
-   advice and limitations only. Severity follows the harm the evidence shows
+2. **Reviewer passes** — changed files are sorted and cut into shards of
+   `workflow.shardFiles`. Each entry of the mode's list is one pass: for every
+   shard, a private session with that entry's model reviews the assigned
+   files. Pass i runs with the role of position i (`azpr-<mode>-reviewer`,
+   `-reviewerb`, `-reviewerc`, `-reviewerd`), since a private agent is pinned
+   to one model; all of them have one system prompt (`common.md` and
+   `review.md`). A pass receives what any other pass receives: nothing says
+   which pass it is or what another one found. Every pass of every shard shares one pool of up to
+   `workflow.parallelSessions` sessions. Each answer numbers its own findings
+   from `F-1`; the review's IDs are given later (step 5). A reviewer has two
+   focuses, functional correctness and failure behaviour, which order its
+   attention and are not a filter: it files every concrete defect it finds as
+   a finding, and `report` carries exclusions, advice, open questions and
+   limitations only. No stage checks a finding after its reviewer, so the
+   reviewer checks each one against source it read in its own session before
+   it answers; a concern it could not confirm from source goes to `report`
+   as an open question. Severity follows the harm the evidence shows
    and how often realistic use reaches it: high must be fixed before merging,
    medium should be fixed in this change and low can wait; a rare trigger
    lowers the severity instead of keeping a defect out, but a change that
@@ -185,7 +214,7 @@ After preflight, hooks never re-read settings or catalogs.
    carries it over), and behavior that is wrong only if the author did not mean
    it, with nothing showing whether they did, is a low finding whose summary
    and suggestion ask about the intent; neither a possible intention nor
-   identical BASE code is a reason to reject a finding in verification. A
+   identical BASE code keeps a defect out of the findings. A
    reviewer looks for a statement of the intent (tests, nearby comments and
    documents, the PR description, commit messages) before asking about it. A
    finding states one defect: a second one the reviewer notices is filed on its
@@ -200,127 +229,167 @@ After preflight, hooks never re-read settings or catalogs.
    that each need their own fix is one finding per place. Identical copies of
    one file count as one place within one reviewer's assigned files; shards are
    cut by path, so copies in different shards can each produce a finding, and
-   the cross-shard duplicate check compares only findings in the same file.
+   the duplicate check compares only findings in the same file.
 3. **Overflow** — private sessions may not compact. A compaction the host
    attempts in a reviewer's turn opens its message first and is refused, which
    ends the turn; that message (or a 413) marks the stage as `overflow`, and the
-   runtime splits that shard in half and runs both halves (labels
-   `shard 1/5a`, `1/5b`). OpenCode's opt-in `experimental.background_compaction`
-   (2.1.4 and later) asks for a summary through the same request before the context is
-   full and publishes nothing; it is refused before anything is sent and the
+   runtime splits that shard in half and runs both halves as parts of the
+   same pass (labels `shard 1/5a`, `1/5b`; with several passes
+   `pass 2/2 shard 1/5a`). OpenCode's background summary (`compaction.background`,
+   on by default in 2.3.2; `experimental.background_compaction`, opt-in, in
+   earlier releases from 2.1.4) asks for a summary through the same request before the context is
+   full and publishes nothing; it is refused before anything is sent and that
+   refusal ends nothing: the
    turn goes on, so a later failure is classified by its own cause.
-4. **Verification** — findings are grouped by file into shards of at most
-   `workflow.shardFindings`; shards end only between files, so every finding on
-   a file reaches the same verifier (a file is split only when it alone has
-   more findings than a shard holds). Each verifier decides its assigned IDs and may
-   merge into any original ID; merging is the only place duplicates are
-   resolved, and a merge keeps nothing of the merged finding's text, so a
-   finding that names a defect the kept one does not state is confirmed on its
-   own. Candidates reach the verifier without the reviewer's severity; a
-   confirmation carries the verifier's own, set from the harm and trigger it
-   verified. NEEDS_INFO is for behavior the verifier could not establish; when
-   the behavior is verified and only the author or a specification outside the
-   repository can say whether it is meant, the finding is confirmed as a
-   question. A decision row is judged by its own fields (an explicit status,
-   or a merge target on a row without a finding) even when it sits in another
-   list. A confirmation that moves its finding to another file must say so
-   with `movedFrom`; otherwise the verifier is asked to confirm or undo the
-   move, and an unconfirmed move is kept with a warning. The report shows a
-   moved finding's initial location. A confirmation whose suggestion is only
-   a placeholder ("N/A", "No correction needed.") contradicts itself: the
-   verifier is asked to state the correction or reject the finding, and one
-   left as it is becomes NEEDS_INFO. Missing or invalid decisions trigger a
-   repair turn asking only for those IDs; leftovers become UNREVIEWED (or
-   NEEDS_INFO for incomplete confirmations). A merge whose chain ends at a
-   finding the same answer rejected or marked NEEDS_INFO gets a repair turn
-   for the pair; left unresolved, the merged finding is UNREVIEWED. After the
-   shards are combined the same rule settles merges into findings another
-   verifier did not confirm, with a warning.
-   Without candidate findings one verifier still runs: it checks the initial
-   reports and condenses them into the report's checks and limitations, which
-   comment planning also uses for the PR summary.
-5. **Duplicate check** — the runtime groups confirmed findings by their final
-   file. A file whose findings different verifiers confirmed (a verifier moved
-   one there, or a crowded file was split) lost the one-verifier-per-file
-   guarantee, so one `dedupe` session per such file, using the verifier model,
-   compares them and may only merge a finding into another of that file (same
-   root cause and same correction). Invalid merges get a correction turn and are
-   otherwise ignored; chains end at the finding that stays; a failed check keeps
-   every finding and adds a warning. Usually no file qualifies and nothing runs.
-6. **Severity rating** (optional) — runs only where `models.<mode>.rater`
-   names a model; otherwise the verifier's severity is final and no `rating`
-   role is registered. `rating` sessions (25 findings each) set the final
-   severity of every finding that is still confirmed, verifier-added ones
-   included. The role has no tools and its system prompt is its own text and
-   the Severity rules; its input is the finding text without any earlier level,
-   plus the PR title and description, with no PR identity, commit or file list.
-   It is meant for a rater stronger than the reviewers' model: in live runs a
-   stronger rater separated levels that a weaker verifier left together, while
-   a model rating its own review changed little and made the high label less
-   stable, which is why the stage is off by default. An unusable answer gets a
-   correction turn; a finding without a usable rating, and every finding of a
-   failed session, keeps the verifier's severity with a warning. Nothing runs
-   when nothing is confirmed.
-7. **Recheck** — a fresh PR and iteration read compares versions. A changed
+4. **The runtime's checks** — `evaluateReview` accepts each answer by its form
+   and source only, never by whether a defect is real:
+   - the answer contract with a required `location`; a parsed answer is a
+     usable result only with a `findings` array and at least one reviewed
+     file or accepted finding;
+   - the location (`head:` by default, `base:` for content that exists only in
+     BASE) must exist at that commit with the lines in range, in a file whose
+     content this session's own `azpr_read_diff` or `azpr_read_file` calls showed
+     (not the run's cache, another session's reads or the runtime's own checks).
+     Only answers that show source count: a binary or oversized side, an empty
+     file, identical versions or a line, column or hunk past the end show none;
+     a diff reads a version only through the rows it shows after paging and byte
+     cuts ("-" BASE, "+" HEAD, a blank mark both; folded repeats none), and an
+     answer cut to the tool-output limit is no read;
+   - problems the reviewer can fix get the normal correction turns, with hints
+     for deleted and renamed files; what is still wrong afterwards becomes
+     NEEDS_INFO. Passing findings are REPORTED, each with whether its location
+     can carry an inline comment (a changed HEAD file);
+   - a usable answer that is PARTIAL and names unfinished work (coverage gaps or
+     assigned files it did not list as reviewed), with nothing left to correct,
+     gets one **follow-up** turn in the same session within the
+     `workflow.repairAttempts` budget: continue where the source is readable,
+     keep a gap only for a limit it cannot close, and return the whole answer
+     again. A second PARTIAL stands. When the follow-up, or a correction turn
+     after it, fails or gives no usable answer, the answer it followed stands;
+     cancellation and context overflow keep their usual handling (overflow
+     splits the shard). The stage record keeps the outcome (`followUp`).
+5. **The review's finding IDs** — once every session has answered, the runtime
+   sorts the findings by side (HEAD before BASE), path and lines, then by
+   pass, shard, part of a split shard and place in the answer
+   (`byPlaceAndSource`), and numbers them `F-1 … F-n`. Nothing a later stage
+   or a person sees depends on which session finished first or on an ID a
+   model wrote; a finding keeps the ID of its answer as `localId`, and the
+   runtime records the session that reported it (`shard`, such as
+   `1/3a pass 2`). Records identical in every field, whitespace aside, are
+   then merged: the first in that order stays and stands for the sessions
+   that reported it, the others become MERGED. Findings on the same lines
+   that differ in any field stay separate.
+6. **Duplicate check** — `duplicateGroups` takes the findings that are still
+   REPORTED on one side of one file, where two of them share no reviewer
+   session; one pass over one shard gives none. Each such group is one
+   `dedupe` session with the first reviewer model, which gets the file, the
+   side and the findings, each with its session, and may read the source. It
+   only merges. Two findings are duplicates only when they state the same
+   root cause and need the same correction; the same kind of mistake at
+   several places is several findings (one comment may still cover them, see
+   [Comments](#comments)). `evaluateDuplicates` applies the merges in the
+   answer's order and refuses one that would put two findings of one session
+   into one finding, directly or through a third: a session files one
+   finding per place that needs its own correction, and that rule is the
+   program's, whatever model checks. Invalid and refused merges get a
+   correction turn and are otherwise left out; chains end at the finding that
+   stays, and a cycle merges nothing. The finding that stays keeps its own
+   text and records what it stands for (`alsoReported`: each merged report
+   with its sessions and its reviewer's level; `sessions`: all of them). A
+   failed check keeps every finding of its file and adds a warning.
+7. **Severity rating** — unless `models.<mode>.rater` is `false`, `rating`
+   sessions (25 findings each) set the severity of every finding that is
+   still REPORTED, so that the findings of different reviewers stand on one
+   scale. They run with the model `rater` names, or with the first reviewer
+   model where it is `""`, the default. The role has no tools and its system
+   prompt is its own text and the Severity rules; its input is the finding
+   text (`RATED_FIELDS`: summary, location, evidence, counterevidence and
+   suggestion) plus the PR title and the first 4,000 characters of its
+   description, with no PR identity, commit, file list, earlier level,
+   session or count of reports: whether several passes reported a finding
+   never reaches the rating. An unusable answer gets a correction turn; a
+   finding without a usable rating, and every finding of a failed session,
+   keeps its reviewer's severity with a warning. The rating never drops, adds
+   or rewrites a finding, and the record keeps the reviewer's own level
+   beside it (`reviewerSeverity`; the report shows both where they differ).
+   With `rater: false` the stage does not run and its role is not
+   registered. Nothing runs when nothing is reported. The stage is on by
+   default because the models measured for this release scaled severity very
+   differently (see [validation](VALIDATION.md)); a model that underrates
+   lowers other models' findings too, so the first reviewer model, or the
+   named rater, should be one whose scale is sound.
+8. **Recheck** — a fresh PR and iteration read compares versions. A changed
    head is STALE; a changed base only adds a warning. A failed recheck is a
    warning because publication rechecks the head anyway.
 
-COMPLETE reviews are cached (newest 20) and persisted with the source the
-reviewers read, so `/pr-comment` works after a restart in the same conversation.
+A review states its status, its coverage and its method separately:
 
-### Quick review
-
-`/pr-quick` uses the same snapshot, file shards, overflow splitting, stage
-retries, watchdog and final version recheck, with one role,
-`azpr-quick-reviewer`, per shard (IDs `Q-1`, `Q-1001`, …) and no verifier,
-duplicate check, severity rating or summary session. The reviewer covers the functional and
-the risk focus and checks each finding against source it read in its own
-session. A defect its files lead it to in another changed file is filed at
-that file's defective lines (never at a line that only uses the code), so two
-shards can report one defect; comment planning may combine such repeats. The runtime then checks only form and source, never whether a defect
-is real:
-
-- the answer contract of an initial review with a required `location`; a
-  parsed answer is a usable result only with a `findings` array and at least
-  one reviewed file or accepted finding;
-- the location (`head:` by default, `base:` for content that exists only in
-  BASE) must exist at that commit with the lines in range, in a file whose
-  content this session's own `azpr_read_diff` or `azpr_read_file` calls showed
-  (not the run's cache, another shard's reads or the runtime's own checks).
-  Only answers that show source count: a binary or oversized side, an empty
-  file, identical versions or a line, column or hunk past the end show none;
-  a diff reads a version only through the rows it shows after paging and byte
-  cuts ("-" BASE, "+" HEAD, a blank mark both; folded repeats none), and an
-  answer cut to the tool-output limit is no read;
-- problems the reviewer can fix get the normal correction turns, with hints
-  for deleted and renamed files; what is still wrong afterwards becomes
-  NEEDS_INFO. Passing findings are REPORTED; only records identical in every
-  field are merged (findings on the same lines stay separate);
-- a usable answer that is PARTIAL and names unfinished work (coverage gaps or
-  assigned files it did not list as reviewed), with nothing left to correct,
-  gets one **follow-up** turn in the same session within the
-  `workflow.repairAttempts` budget: continue where the source is readable,
-  keep a gap only for a limit it cannot close, and return the whole answer
-  again. A second PARTIAL stands. When the follow-up, or a correction turn
-  after it, fails or gives no usable answer, the answer it followed stands;
-  cancellation and context overflow keep their usual handling (overflow
-  splits the shard). The stage record keeps the outcome (`followUp`). Review
-  and deep shards have two reviewers and get no follow-up.
+- **Status.** COMPLETE needs at least one reviewer session with a usable
+  answer and an unchanged head. When sessions answered but none was usable,
+  the review is PARTIAL and cannot be commented on; a changed head makes it
+  STALE. When every reviewer session failed, the run ends INCOMPLETE. A pass
+  that fails leaves the others' work.
+- **Findings.** A disposition is REPORTED (the finding passed the runtime's
+  checks), NEEDS_INFO (it did not, also after the correction turns, or its
+  answer was not usable) or MERGED (`mergedInto` names the finding that
+  stays). The statuses CONFIRMED, REJECTED and UNREVIEWED exist only in
+  reviews saved by 0.4.x.
+- **Coverage.** `coverageSummary` has two numbers of the changed files Azure
+  listed: those a usable answer reported as reviewed in at least one pass
+  (`reviewedOnce`) and in every pass (`reviewedByAll`). Retries, follow-ups
+  and the parts of a split shard belong to their pass. A pass that fails
+  costs depth, which the second number and a warning show; only a file that
+  no pass reviewed is unreviewed. Coverage is complete when no file is
+  unreviewed and no fixed reason applies: a failed session that left files
+  unreviewed, a partial change list, reviewer-reported gaps. Zero findings
+  never hide unreviewed files.
+- **Method.** Every review records `verification: "none"` and `method`
+  (`kind: "reviewers"`, `version: 1`): the models asked for (`requested`),
+  for each pass its model, its sessions and how many of them failed
+  (`passes`), how many duplicate checks ran, failed, merged and were refused
+  (`duplicateCheck`), and of the rating its state (`first`, `named` or
+  `off`), its model, its sessions and how many findings it rated or left
+  (`rating`). A result that does not state both is not saved as a review.
+  The report, the receipt and the disclosure line of comments are written
+  from this record, and none of them says that a finding was verified.
 
 A location on a changed HEAD file may carry an inline comment; a BASE location
-or unchanged code stays in the summary index. Shard reports are joined by the
-runtime. The review records `verification: "none"` and a coverage summary
-(complete, or the number of unreviewed files when it is known and fixed
-reasons: a failed shard, a partial change list, reviewer-reported gaps).
-COMPLETE needs at least one usable shard; without one the review is PARTIAL
-and cannot be commented on.
+or unchanged code stays in the summary index. Session reports are joined by
+the runtime. COMPLETE reviews are cached (newest 20) and persisted with the
+source the reviewers read, so `/pr-comment` works after a restart in the same
+conversation.
 
-Shared prompts mark the passages about where findings come from with
-`<!-- azpr:verified -->` and `<!-- azpr:quick -->` blocks. Review and deep
-agents get the verified text, so their system prompts are byte-identical to
-the files without markers; quick agents get the quick text, which never claims
-that findings were verified, confirmed or de-duplicated. A deep agent's system
-prompt is the review agent's; only its model (from `models.deep`) differs.
+### Reviews saved by 0.4.x
+
+A review that 0.4.x saved stays what it was: a review whose findings a
+verifier confirmed, or a quick review. `reviewMethod` (`comments.mjs`) is the
+one place that tells the kinds apart, from the record alone, and every reader
+of a saved review goes through it:
+
+| Kind | The record | Findings that may become comments | Disclosure line of its comments |
+| --- | --- | --- | --- |
+| `reviewers` | `method.kind: "reviewers"`, `method.version: 1` and `verification: "none"`; both must be there | REPORTED findings that were not merged | The method: findings checked by their reviewer against the source, no separate verification; in the summary also incomplete coverage |
+| `verified` | Profile review or deep, no `method`, `verification: "independent"` or no such field | The verifier's CONFIRMED findings and its additions | The line 0.4.x wrote: AI-generated review and the models |
+| `quick` | Profile quick, no `method`, `verification: "none"` | Its REPORTED findings | The line 0.4.x wrote for a quick review: quick review, not independently verified |
+| none | Anything else: a method this version does not know, or fields that contradict each other | None | — |
+
+A record of no known kind can be listed and shown; it is never planned,
+adjusted or published. A verified review is planned by a role of its own,
+`azpr-<mode>-comment-plan-verified`, with the mode's first reviewer model.
+The comment prompts (`comment-policy.md`, `comment-plan.md`) are the only
+prompts that keep passages in two wordings, marked `<!-- azpr:verified -->`
+and `<!-- azpr:reviewers -->`: the `verified` wording is the text 0.4.6 had
+and speaks of the verifier's findings; the `reviewers` wording, which every
+other role gets, never says that findings were verified or confirmed. Only a
+quick review of 0.4.x is offered `mergeCandidates` in comment planning (see
+[Comments](#comments)). Posted comments are never edited, so a comment keeps
+the line it was posted with, and `listedPlaces` recognises all three
+wordings as AZPR's.
+
+The review system prompts are one set for every mode and every pass: a deep
+or quick agent's system prompt is the review agent's, and only its model
+differs. A hash test (`tests/config.test.mjs`) locks them, so a change to
+them is deliberate.
 
 ### Stage attempts
 
@@ -358,10 +427,11 @@ for 600 s after model request 3 was sent`; the receipt adds an inactivity
 notice. It is retried in a new session like a transient failure. Any activity
 restarts the window, so this is not the whole-run timeout or step cap the
 [roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is never
-stopped. The longest quiet stretch in 1,097 normal live stages was 151 s.
+stopped. The longest quiet stretch in 1,097 normal live stages was 151 s
+(stages of versions before 0.5.0).
 
 An interrupted model stream that OpenCode recovers by itself costs no new
-session, whatever the provider. OpenCode 2.3.0 retries the interrupted step:
+session, whatever the provider. OpenCode 2.3.0 and later retry the interrupted step:
 the errored assistant message stays, marked for retry, and the retried step
 answers in the next assistant message. The retry is sent with what the step
 had finished (its tool calls that ran and what came before them) and without
@@ -383,10 +453,12 @@ object.
 
 ### Comments
 
-`publishableFindings` supplies the findings: CONFIRMED ones and verifier
-additions for review and deep, REPORTED ones for a quick review. A saved
-review without a verification field is trusted only when its profile is review
-or deep. `commentFindings` hands them to planning as a person adjusted them
+`publishableFindings` supplies the findings by the review's kind (see
+[reviews saved by 0.4.x](#reviews-saved-by-04x)): for a review of this
+pipeline the REPORTED findings that were not merged; for a verified review of
+0.4.x the CONFIRMED ones and the verifier's additions; for a quick review of
+0.4.x its REPORTED ones; for a record of no known kind none. The first
+reviewer model of the review's mode plans. `commentFindings` hands the findings to planning as a person adjusted them
 after a preview (see below); without adjustments they are exactly the
 publishable findings. Planning (model) uses pages of at most four findings (more only where
 one defect at several places keeps its findings on one page) plus report segments
@@ -413,25 +485,28 @@ observed during the review; real problems get a repair turn; what remains is
 skipped with a reason. A planner skip names one cause, and the runtime checks
 the facts it states against the finding, the page's source excerpts and the
 live threads it read (a `cannot-anchor` skip whose lines the page showed goes
-back for correction). For a quick review an inline comment also needs a
+back for correction). For a review of this pipeline, as for a quick review of
+0.4.x, an inline comment also needs a
 finding located on a changed HEAD file and an anchor found in the observed HEAD
 source; otherwise the finding stays in the summary index. The disclosure line
-of a quick review's comments names its method (and, in the summary, incomplete
-coverage). For a quick review the runtime also groups findings of different
+of their comments names the review's method (and, in the summary, incomplete
+coverage). For a quick review of 0.4.x, which merged no duplicates, the
+runtime also groups findings of different
 sessions with the same severity on overlapping lines of one HEAD file into
 `mergeCandidates`, keeps each group on one page, and accepts a planner's
 combined comment (`findingIds`, `mergeReason`) only when its members are in one
 group, come from different sessions, share a severity and a line, and the
 anchor lies on the shared lines; a refused combination falls back to the valid
 single comments and reasoned skips. The summary index gives an accepted
-combination one row. The assembled plan stores exact content, offsets and markers.
+combination one row. A review of this pipeline is offered no such candidates:
+it had its duplicate check, and what that kept apart stays apart. The assembled plan stores exact content, offsets and markers.
 
 One defect made at several places is several findings (a reviewer files one
 for each place that needs its own correction), and one comment may hold them.
 Before the pages are made, `prepareComments` settles which findings may be
 such repeats: `repeatEligible` takes the high and medium findings on lines of
 a changed HEAD file whose place a list can hold as it is (`listablePlace`; a
-quick finding that is a merge candidate is left to that rule), and
+finding of a 0.4.x quick review that is a merge candidate is left to that rule), and
 `severitySets` the sets of one severity that lie at two places or more. Where
 there is such a set, the HEAD text of those findings' files is read, and only
 a finding whose lines the file has stays eligible: a place is listed as its
@@ -562,10 +637,15 @@ an `adjustments` field only while some are active. Two states matter:
 
 ## Authorization and isolation
 
-Private roles (`azpr-<mode>-functional|risk|verifier|dedupe|comment-plan`,
-`azpr-<mode>-rating` where a rater is configured, and
-`azpr-quick-reviewer|comment-plan`) are hidden
-primary agents with explicit models (and variants, when configured). Every
+Private roles are hidden primary agents with explicit models (and variants,
+when configured): `azpr-<mode>-reviewer`, `-reviewerb`, `-reviewerc` and
+`-reviewerd`, one per entry of the mode's list; `-dedupe`; `-rating` unless
+`rater` is `false`; `-comment-plan`; and, for review and deep,
+`-comment-plan-verified`, which plans the comments of verified reviews saved
+by 0.4.x. A role is registered only where its mode has reviewers and the role
+has a model. The role names of 0.4.x
+(`azpr-<review|deep>-functional|risk|verifier`) stay reserved, so that
+sessions which saved reviews still name remain AZPR's private sessions. Every
 private session gets a grant with the run, role, model and a pending prompt
 (text + nonce); a request on another model or variant is refused, also when
 the host itself resolved the configured entry to another model, as a routing
@@ -805,7 +885,16 @@ a person gives it and writes it. The dialogs draw whatever rows the server
 part describes, and the options of `/pr-setup` are the same rows, so an answer
 is checked the same way wherever it comes from. Everything else stays in the
 settings file, which the list names; `shell` and `azure.verifyTls` are
-deliberately not rows.
+deliberately not rows, and `rater` has none either.
+
+A mode's models are one row whose value is a list (`reviewersFrom`). As text,
+which an option and a dialog give alike, one model alone stands for the
+mode's usual number of passes (`USUAL_PASSES`: two for `/pr-review` and
+`/pr-deep`, one for `/pr-quick`), `MODEL*N` for N passes, and entries
+separated by commas for different models, at most four passes in all; `off`
+empties the list of quick or deep. The dialog asks for one model first and
+then for the passes, in a list whose first row takes what is shown; the other
+rows add a pass of the same or of another model, or take the last one away.
 
 The RPC has four methods, and none of them throws: what went wrong is an
 answer in AZPR's own words that never quotes the value it refused. Their
@@ -814,23 +903,64 @@ quote the input.
 
 | Method | What it does |
 | --- | --- |
-| `status` | The rows with their values, the settings file, and `state`: `required` (there are no usable settings), `ready`, or `restart`. For settings in use, `restart` is the loaded runtime's own answer, by the rule of its preflight: the settings text differs by more than the defaults a load wrote into it, or the PAT file holds another token, whoever changed them. For a process that found no usable settings, it means that there are usable ones now which it did not load. Never the token, and a proxy without its user name and password. |
+| `status` | The rows with their values, the settings file, and `state`: `required` (there are no usable settings), `migrate` (the settings are of 0.4.x, with or without a fault: the answer then carries what the update changes, as lines, and the word that confirms it; the rows are shown as they will be and cannot be edited before), `ready`, or `restart`. For settings in use, `restart` is the loaded runtime's own answer, by the rule of its preflight: the settings text differs by more than the defaults a load wrote into it, or the PAT file holds another token, whoever changed them. For a process that found no usable settings, it means that there are usable ones now which it did not load. Never the token, and a proxy without its user name and password. |
 | `validate` | Whether answers can be used, their saved form and how they may be shown, without saving anything. For a proxy with a user name and password only how it may be shown comes back; the dialog keeps what was typed. |
 | `check` | Asks Azure DevOps once whether a token works for an organization (`access` in `azure.mjs`: at most one pull request of the organization; not repeated, since a person waits), with the token given or else the saved one, and the proxy and CA file given or else the saved ones. The saved token is the one the settings name (`azure.patFile`, else `azure.pat`), as the runtime reads it; the default PAT file is none unless they name it. It goes only where the saved settings send it: to the organization it was saved for, through the saved proxy and with the saved CA file; anything else needs the token entered with it. The answer says what was refused and which answer to ask for again: the token, the organization, the proxy or the CA file. |
-| `save` | Applies answers and, when one was given, the token. Organization and token change in one step, the write of the settings file. A token is saved with the organization it was checked for: the one this save sets, or the one the request names, which must still be the one in the settings; and the organization of settings that name a token (usable at the moment or not; also from no organization to one) changes only together with a token of the new one. Setup takes as a token one word of letters, digits, `-` and `_` of 20 to 1,024 characters, which is also what it requires of a token file before it replaces it, so that it can replace what it wrote. A token of the organization the settings named already replaces the token file they name. Every other token (a first setup's, another organization's, and one for settings that name the default PAT file of setup with options, which every settings file a person has may use) gets a file that did not exist: `pat-<organization>`, or that name with the first free number, beside the file the settings name or in AZPR's directory, taken in one step that refuses a name which exists; the settings name it in the same write. Setup thus overwrites no file but the one these settings name for this organization, whatever other settings files share the directory, and a reader of the settings and the file they name always has a pair that belongs together. A file a save made is removed again when its settings are not written, and only then: a settings file that is in place stays reported as written when a temporary file or the lock cannot be removed after it. Where the token these settings had before stays in its file, the answer says where. Both files are written under the setup lock, after the settings file was compared once more with what the answers were checked against: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one such token, since settings can name any path), then the settings, through the same atomic, owner-only writer as before. A save that finds the lock held writes neither. |
+| `save` | Applies answers and, when one was given, the token. Organization and token change in one step, the write of the settings file. A token is saved with the organization it was checked for: the one this save sets, or the one the request names, which must still be the one in the settings; and the organization of settings that name a token (usable at the moment or not; also from no organization to one) changes only together with a token of the new one. Setup takes as a token one word of letters, digits, `-` and `_` of 20 to 1,024 characters, which is also what it requires of a token file before it replaces it, so that it can replace what it wrote. A token of the organization the settings named already replaces the token file they name. Every other token (a first setup's, another organization's, and one for settings that name the default PAT file of setup with options, which every settings file a person has may use) gets a file that did not exist: `pat-<organization>`, or that name with the first free number, beside the file the settings name or in AZPR's directory, taken in one step that refuses a name which exists; the settings name it in the same write. Setup thus overwrites no file but the one these settings name for this organization, whatever other settings files share the directory, and a reader of the settings and the file they name always has a pair that belongs together. A file a save made is removed again when its settings are not written, and only then: a settings file that is in place stays reported as written when a temporary file or the lock cannot be removed after it. Where the token these settings had before stays in its file, the answer says where. Both files are written under the setup lock, after the settings file was compared once more with what the answers were checked against: the token file first (created or replaced in one step, mode 600, in a directory no one else can write to; an existing file is replaced only when it is a regular file of the user's own that is empty or holds one such token, since settings can name any path), then the settings, through the same atomic, owner-only writer as before. A save that finds the lock held writes neither. A save with `migrate`, the word `status` gave, writes the update of settings of 0.4.x and nothing else: with anything else in the request, or with another word, nothing is written. While such settings wait for their update, every other `save`, and `validate` and `check`, answer that they need it. |
 
 A proxy that a dialog shows without its user name and password stands for
 the saved one when it comes back unchanged, so those never leave the server
 part.
 
 **What is asked, and when.** A first setup asks for what a review cannot run
-without: organization, token, model. The proxy is asked before the token,
+without: organization, token, model (one model, which the server part lists
+twice for `/pr-review` and once for `/pr-quick`). The proxy is asked before the token,
 because the token is checked over the network, and it can be skipped; the CA
 certificate file follows only a proxy. When the check cannot reach Azure
 DevOps, or a certificate is refused, the dialogs show the reason and offer
 the proxy or the CA file again before the same token is checked once more;
 the token can also be saved unchecked. Posting comments without a preview is
 confirmed in a list whose first row keeps the current setting.
+
+**Settings of 0.4.x are updated only on a confirmation.** A settings file
+with `version: 2` is no settings file of this version: validation refuses it
+(`needsMigration`), so the process has no usable settings, its review
+commands answer `SETTINGS UPDATE REQUIRED`, and the completion of missing
+settings leaves the file byte for byte. Nothing rewrites such a file but the
+update a person confirms. `/pr-setup` alone shows what the update changes
+(`migrationLines`): for each mode the models it had and the passes it gets,
+what becomes of the rating, the settings that are dropped, and every change
+in behaviour nobody asked for (a rating that now runs; automatic publication
+that now posts findings no verifier confirmed). In the terminal UI the
+dialogs show those lines and ask in a list whose first row keeps the file;
+other clients confirm with `/pr-setup --migrate <word>`. The word is a keyed
+digest of the text the update replaces and the text it writes, with a key of
+the process (`migrationOf`), so a confirmation holds only for the change that
+was shown: a file that changed since, or a restart, needs another look. No
+other option, save or load implies that consent: not the options of a first
+setup, not the completion of missing settings, not the installer, which
+carries such a file over byte for byte.
+
+What the update writes is `migrateSettings` in `config.mjs`, a pure function
+that loses and invents no value. The functional and the risk model of a mode
+become its two reviewer entries, in that order, where all three models of
+the mode were set; anything less was off and stays off. The verifier model is
+dropped, the quick reviewer becomes a list of one, a named rater stays (an
+empty one now lets the first reviewer model rate), `models._help` and
+`workflow.shardFindings` are dropped, and every other value keeps its place.
+The file is written by the same writer, under the same lock and comparison,
+as every save, and a process that had no usable settings loads it at once, by
+the rule of a first setup.
+
+A version-2 file with a fault, or one that was never completed, is no
+exception: the update comes first and the repair after it, since a repair
+that rewrote the file in this version's layout would convert it unseen.
+Validation refuses a version-2 file before it reads anything else of it, and
+every other option of `/pr-setup` answers that the settings need the update
+first. Where the updated file still cannot be used (a placeholder for a
+model, an invalid value), the lines the update shows end with `After the
+update the settings still cannot be used: …`, and after the update
+`/pr-setup` sets what is missing.
 
 **A first setup is loaded at once.** A process that found no usable settings
 registered only `/pr-setup` and the commands that answer `SETUP REQUIRED`.
@@ -928,7 +1058,7 @@ preview, is no document: the report of the review it acted on stays in view.
   at work. Otherwise it is what the run's receipt says of that stage
   (`complete`, `failed`), and `finished` until a receipt names it: the host
   calls such a session idle, which reads like a fault for a reviewer that has
-  answered while the verifier still works. A session no receipt names, such
+  answered while another session still works. A session no receipt names, such
   as the planner of a comment run that `debug.enabled` kept, stays `finished`.
 - A receipt is a notice whose status word is followed by `;`, a line break or
   the end. A run also says other things under its ID, such as `Automatic
@@ -1240,7 +1370,7 @@ and warns about any other AZPR entry the host configured but does not run,
 such as a second version that OpenCode 2.1.4 through 2.3.0 list as a duplicate plugin ID;
 a host without it gets an information row.
 `/pr-check` names the detected OpenCode version in a row of its own and warns
-when it is not the tested one (`TESTED_HOST_VERSION`, 2.3.0); reviews still
+when it is not the tested one (`TESTED_HOST_VERSION`, 2.3.2); reviews still
 run, and other receipts do not repeat it.
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.

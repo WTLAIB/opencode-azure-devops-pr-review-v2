@@ -138,10 +138,10 @@ publication after a review:
    The receipt says `Automatic
    publication held back N item(s) for a person: …` with each item and why;
    when every item is held, nothing is posted and the status is `PREVIEW`
-   (`held back every item`). A quick review's findings are posted with its
-   disclosure (`quick review, not independently verified`; the summary also
-   names incomplete coverage), also a high-severity finding: its verification
-   hint is advisory. When the plan has no inline comment and the planner
+   (`held back every item`). Every comment is posted with the disclosure of
+   its review's method (findings checked by their reviewer, no separate
+   verification; the summary also names incomplete coverage), a high-severity
+   finding included. When the plan has no inline comment and the planner
    skipped every finding as `existing-thread` with a thread the runtime found
    live before planning, typically AZPR's own comment from an earlier run,
    there is nothing new to post: status `NOTHING_TO_POST`, `Automatic
@@ -152,21 +152,22 @@ publication after a review:
    none of these safeguards: it posts every item of the saved preview, and
    items already posted are `ALREADY_PRESENT`.
 
-Publication then follows the usual rules below (PR active, unchanged head,
-markers, read-back). Automatic publication posts as the PAT owner, like
+Publication then follows the usual rules below (unchanged head, markers,
+read-back). Automatic publication posts as the PAT owner, like
 `/pr-comment --publish`.
 
 ## What is posted
 
 - **One summary thread** (no file anchor): a 🤖 AI/model disclosure, optional
   review notes (the change's purpose or what changed), an index of every
-  confirmed finding with 🔴 high / 🟡 medium / 🔵 low labels, and optional
-  details: confirmed findings without an inline comment and retained
-  improvement suggestions from the final report.
-- **Inline threads** for confirmed high and medium findings, on the right side
+  finding the review can publish with 🔴 high / 🟡 medium / 🔵 low labels, and
+  optional details: findings without an inline comment and retained
+  improvement suggestions from the report.
+- **Inline threads** for high and medium findings, on the right side
   of a changed file at the reviewed head. Titles start with `🔴 high:` or
   `🟡 medium:`; bodies use **📝 Summary**, **🔎 Evidence** and
-  **💡 Suggested fix**, followed by the model attribution and a hidden marker.
+  **💡 Suggested fix**, followed by the disclosure line (the review's method
+  and its models) and a hidden marker.
 
 Low findings, findings that cannot be anchored, and issues that an existing
 discussion on the PR already covers are skipped with a local reason; skips are
@@ -176,31 +177,60 @@ listed in the preview and receipt. Each planner skip names one cause
 the severity, whether the location can carry an inline comment, that the
 thread is live, and that the finding's lines were not in the page's source
 excerpts. Whether a finding deserves a comment stays the planner's call. Findings of the same review never cover each
-other: the verifier already merged duplicates, so each confirmed high or medium
+other: duplicates were merged before planning, so each high or medium
 finding gets its own comment unless one of those reasons applies, or it shares
 a comment with the other places of the same defect
 ([below](#one-defect-at-several-places)).
 
-### Quick reviews
+### The disclosure line
 
-A `/pr-quick` review is commented on with the same planner, preview,
-publication and markers, so its comments have the same layout. Its REPORTED
-findings take the place of confirmed ones; they were not independently
-verified, which the disclosure line says in both the summary and every inline
-comment, for example `AI-generated review; not human review or approval.
-Review method: quick review, not independently verified. Models: …` (in zh-TW
-`AI 審查，非人工審查或核准。審查方式：快速審查，未經獨立驗證。模型：…`). When the
-review's coverage was incomplete, the summary's disclosure line adds
-`coverage incomplete (…)` with the number of unreviewed changed files when it
-is known and fixed short reasons otherwise; reviewer text never goes there.
+Every comment says how its review was made. The summary starts with this
+line, and every inline comment ends with it:
 
-Inline comments of a quick review are stricter: the finding's location must be
-on a changed file at HEAD (a BASE location or unchanged code stays in the
-summary index), and the planner's anchor must be found in the HEAD source the
-runtime read. The quick reviewer's model plans the comments.
+```text
+AI-generated review; not human review or approval. Review method: findings checked by their reviewer against the source, no separate verification. Models: …
+```
 
-Without a verifier, two shards of a quick review can report one defect, for
-example when a shard's tests lead its reviewer into another shard's changed
+In zh-TW it reads:
+
+```text
+AI 審查，非人工審查或核准。審查方式：發現由審查者依原始碼自行查證，沒有另外的驗證。模型：…
+```
+
+The models are those of the review's stages and of
+comment planning. When the review's coverage was incomplete, the summary's
+line adds `coverage incomplete (…)` with the number of unreviewed changed
+files when it is known and fixed short reasons otherwise; reviewer text never
+goes there.
+
+The findings are the review's REPORTED ones. Each was checked by its reviewer
+against the source and by the runtime for form and source; nothing verified
+it afterwards, and no comment says otherwise. An inline comment needs a
+finding whose location is on a changed file at HEAD (a BASE location or
+unchanged code stays in the summary index), and the planner's anchor must be
+found in the HEAD source the runtime read.
+
+### Reviews saved by 0.4.x
+
+A review that 0.4.x saved can still be previewed, adjusted and published. Its
+comments say what was true of the pipeline that made it:
+
+- **A `/pr-review` or `/pr-deep` of 0.4.x**, whose findings a verifier
+  confirmed. Its comments are planned from the confirmed findings and the
+  verifier's additions, with the planner instructions of 0.4.6, and carry the
+  line 0.4.x wrote: `AI-generated review; not human review or approval.
+  Models: …`. Its finding IDs are those of its report (`F-1`, `R-2`, `V-1`).
+- **A `/pr-quick` of 0.4.x.** Its comments are planned from its REPORTED
+  findings (`Q-1`, `Q-1001`, …) and carry `Review method: quick review, not
+  independently verified`.
+- **A record of no known kind** (it does not say how its findings were
+  produced in a way this version knows) can be listed and shown. It is never
+  planned, adjusted or published; `/pr-comment` says so and asks for a new
+  review.
+
+A quick review of 0.4.x merged no duplicates, so two of its shards can have
+reported one defect, for
+example when a shard's tests led its reviewer into another shard's changed
 file. The runtime offers the planner such findings as `mergeCandidates`:
 inline-eligible high or medium findings of different review sessions (recorded
 by the runtime, not derived from IDs) with the same severity on overlapping
@@ -216,9 +246,11 @@ the rest with a reason (they stay in the summary index; it never splits one
 text into several). The summary index gives an accepted combination one row
 with all its IDs, and the counts follow the rows; the review keeps every
 finding. The runtime cannot tell a well-formed but wrong combination of two
-different defects, so the prompt says to keep findings apart when unsure. No
-dedicated duplicate stage runs, although planning pages, corrections or
-continuations can still add sessions and model requests.
+different defects, so the prompt says to keep findings apart when unsure.
+
+A review of 0.5.0 is offered no such candidates. Its duplicate check already
+compared what different sessions reported in one file, and what that kept
+apart stays apart in comment planning.
 
 ### One defect at several places
 
@@ -281,7 +313,7 @@ the reviewed commit, and the anchor touches the lines of exactly one of them;
 that finding is where the comment stands. An anchor that reaches from one
 finding's lines into another's names no place, and the runtime does not
 choose one. A refused combination goes back for correction and then falls
-back to single comments and reasoned skips, as for quick reviews. A page
+back to single comments and reasoned skips. A page
 that continues in another session is still offered what is open of a group,
 while two or more of its findings are. The preview shows such a comment with
 all its findings and the planner's reason (`Combined: …`).
@@ -374,11 +406,13 @@ places moved is another comment than the one posted before.
 
 ## Planning
 
-Planning uses the review's risk model (the quick reviewer's model for a quick review) in pages of at most four findings
+Planning uses the first reviewer model of the review's mode (a review whose
+mode is off by now, with an empty `reviewers` list, is not planned until that
+list names a model; posting a saved preview needs no model). It works in pages of at most four findings
 (more only where one defect at several places keeps its findings together, see above), plus
-segments of the final report for the summary details. Before planning, the
+segments of the review's report for the summary details. Before planning, the
 runtime reads every live thread once and fetches the HEAD source of each
-finding's file. Each page then receives, inline: the verified findings,
+finding's file. Each page then receives, inline: the findings,
 `sourceExcerpts` (numbered HEAD lines around each finding, the whole file when it
 has at most 400 lines), `existingDiscussions` (live threads with path, line,
 author and the start of the first comment) and the report segment. The
@@ -431,7 +465,7 @@ Every page is validated item by item:
 | Planner returns INCOMPLETE | Finished comments are kept; the rest are skipped with the planner's reason. |
 | A summary note from a page other than the first | Dropped (`drop-unallowed-summary`), without a correction turn; the page's details are kept. |
 
-A low finding never becomes an inline comment, and the verified severity always
+A low finding never becomes an inline comment, and the finding's severity always
 wins over the planner's label.
 
 ## Adjusting findings after a preview
@@ -440,9 +474,9 @@ After reading a preview, a person can leave findings out of publication or
 change their severity, and plan the preview again:
 
 ```text
-/pr-comment --exclude F-1,R-2                     leave F-1 and R-2 out
-/pr-comment --severity F-3=low,Q-1001=medium      publish F-3 as low and Q-1001 as medium
-/pr-comment --exclude F-1,R-2 --severity F-3=low  both in one command
+/pr-comment --exclude F-1,F-2                     leave F-1 and F-2 out
+/pr-comment --severity F-3=low,F-4=medium         publish F-3 as low and F-4 as medium
+/pr-comment --exclude F-1,F-2 --severity F-3=low  both in one command
 /pr-comment --reset                               undo every adjustment
 /pr-comment --show                                the saved preview again, without a model
 /pr-comment <review-id> --exclude F-1             the same for a review named by its ID
@@ -453,8 +487,9 @@ change their severity, and plan the preview again:
   receipt names it. Every review has its own F-1, so a finding ID that the
   current review does not have refuses the command and names that review.
   IDs are those of the review report and the preview (`f1` reads as F-1). Only findings the review can publish
-  are accepted: confirmed and verifier-added ones of a review or deep review,
-  reported ones of a quick review. A merged duplicate names the finding it was
+  are accepted: its reported findings (for a review saved by 0.4.x, the
+  confirmed and verifier-added ones, or a quick review's reported ones). A
+  merged duplicate names the finding it was
   merged into; any other ID refuses the whole command and changes nothing.
 - Each list is complete and replaces the saved one (`none` empties it): after
   `--exclude F-1`, a later `--exclude F-2` excludes only F-2 and restores F-1,
@@ -466,7 +501,7 @@ change their severity, and plan the preview again:
   both saved lists as they are changes nothing: AZPR answers at once, plans
   nothing and keeps the saved preview.
 - A changed severity changes how a finding is published (its title, whether it
-  can get an inline comment, the summary counts); it does not verify the
+  can get an inline comment, the summary counts); it does not check the
   finding again or change its evidence, trigger or impact. When the finding
   itself is wrong, exclude it.
 - Each change plans the preview again with a model, unless it excludes every
@@ -594,19 +629,21 @@ Each item ends with `<!-- azpr-comment:<32 hex> -->`:
   with the same comments does not post a second summary.
 
 A combined comment is one inline item, known by one marker: one that combines
-a quick review's findings on the same lines by the marker of those lines, one
-for several places by its own. The publication ledger
+the findings of a 0.4.x quick review on the same lines by the marker of those
+lines, one for several places by its own. The publication ledger
 records all finding IDs of a combined comment (`findingIds`), and ledgers and
 plans saved before that field existed are read as before.
 
 Only an identical complete marker counts as already present. Neither the
 review mode, the finding IDs nor the disclosure text is part of a marker, so a
-`/pr-review` published after a `/pr-quick` of the same head finds the quick
-comments: an inline comment on the same anchor with the same ordinal is
-`ALREADY_PRESENT` (it keeps its quick disclosure; AZPR never edits it), a
+review published after another review of the same head finds that review's
+comments, whatever mode or version made them: an inline comment on the same
+anchor with the same ordinal is `ALREADY_PRESENT` (it keeps the disclosure
+line it was posted with; AZPR never edits it), a
 second issue on that anchor has ordinal 1 and is posted, and the summary is
-posted again only when the set of inline markers differs. A later review
-therefore does not guarantee a summary that says it was verified.
+posted again only when the set of inline markers differs. A pull request can
+therefore carry comments with different disclosure lines, such as those of a
+0.4.x review beside those of a later one.
 
 A comment someone deletes on the PR stays deleted. Azure DevOps keeps listing
 its thread, flagged deleted and without the comment's text, so the marker is

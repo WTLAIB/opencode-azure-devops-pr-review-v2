@@ -1,7 +1,7 @@
 # AI development guide
 
 This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.3.0`), the Azure DevOps Services REST API (api-version 7.1)
+`@opencode/cli@2.3.2`), the Azure DevOps Services REST API (api-version 7.1)
 and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
@@ -30,63 +30,114 @@ settings, backups and failure records. Never upload `.local/`.
   `review-tools.mjs`, registered with `codemode: false`; private roles see an
   explicit tool allowlist (empty for the `rating` role) and ordinary sessions
   never see AZPR's tools.
-- Models review, verify and plan comment text. They never echo identity or SHAs
-  and never write to Azure DevOps.
+- Models review, compare, rate and plan comment text. They never echo identity
+  or SHAs and never write to Azure DevOps.
 
-**Quick reviews are not verified, and say so.**
-- `/pr-quick` runs one reviewer per shard and no verifier or duplicate check.
-  The runtime checks only the form and source of its findings (fields, a
-  location that exists at that commit, a file this session's own tools read);
-  it never judges whether a defect is real. Passing findings are `REPORTED`,
-  the rest `NEEDS_INFO`, and the review records `verification: "none"`.
-- Never present quick findings as verified: shared prompts carry
-  `<!-- azpr:verified -->` / `<!-- azpr:quick -->` variants for the passages
-  about where findings come from, the report and receipt state status,
+**Every mode runs one pipeline and differs only in its models.**
+- `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
+  system prompts: reviewer passes, a duplicate check, a severity rating and
+  comment planning. A mode's models are a list (`models.<mode>.reviewers`, one
+  to four entries, which may repeat): pass i of every shard is a session of
+  its own with entry i, so each position has a role of its own
+  (`reviewerRoles` in `config.mjs`), and the first entry also checks duplicates
+  and plans the comments. An empty list leaves `/pr-deep` or `/pr-quick` off;
+  no mode ever falls back to another mode's models.
+- A pass receives what any other pass receives: nothing says which pass it is
+  or what another one found. Every pass of every shard shares one session pool
+  (`workflow.parallelSessions`).
+- The review's finding IDs are the runtime's: every answer numbers its own
+  findings, and once all passes have answered the runtime numbers them by
+  place and source (`byPlaceAndSource` in `review-work.mjs`). Nothing a
+  later stage or a person sees may depend on which session finished first or
+  on an ID a model wrote.
+- Add mode-specific or pass-specific instructions only with a measured
+  benefit: deep-only prompt text and the split into a functional and a risk
+  reviewer were both removed after runs showed no gain over repeating one
+  reviewer prompt.
+- Judge a change to a prompt, a stage or a check on models of the strength
+  people review with. Never add prompt text, a check or a stage to steady a
+  weaker model: that cost falls on every review, and the stronger models
+  showed no need for it.
+
+**No stage verifies a finding, and every review says so.**
+- A reviewer checks each of its findings against source it read, since
+  nothing does afterwards. The runtime checks only the form and source of a
+  finding (fields, a location that exists at that commit, a file this
+  session's own tools read); it never judges whether a defect is real.
+  Passing findings are `REPORTED`, the rest `NEEDS_INFO`, and the review
+  records `verification: "none"` and how its findings were produced (`method`).
+- Never present findings as verified: the report and receipt state status,
   coverage and verification separately, and the comment disclosure line names
-  the quick method. The review system prompts, which deep shares, stay
-  byte-identical unless a change to them is deliberate (a hash test locks them).
-- Only records identical in every field are merged as duplicates; findings on
-  the same lines stay separate. A parsed answer without a usable review never
-  makes a commentable COMPLETE, and zero findings never hide unreviewed files.
+  the method. The review system prompts stay byte-identical unless a change to
+  them is deliberate (a hash test locks them).
+- Reviews saved by 0.4.x stay what they were: a review whose findings a
+  verifier confirmed, or a quick review. `reviewMethod` in `comments.mjs` is
+  the one place that tells the kinds apart, from the record alone; a record of
+  no known kind offers nothing to comment on. Only the comment prompts keep a
+  second wording (`<!-- azpr:verified -->` / `<!-- azpr:reviewers -->`), for
+  planning the comments of a verified review, with a planner role of its own
+  whose text is the one 0.4.6 had.
+- A parsed answer without a usable review never makes a commentable COMPLETE,
+  and zero findings never hide unreviewed files. Coverage is two numbers of
+  the changed files: reviewed in at least one pass, and reviewed in every
+  pass. A pass that fails costs depth, which the second number shows; only a
+  file that no pass reviewed is unreviewed.
 
-**The verifier sets severity; a rating is optional.**
-- The verifier receives candidates without the reviewer's severity and sets the
-  level from what it verified. That level is final unless `models.<mode>.rater`
-  names a model. `/pr-quick` keeps the reviewer's severity.
-- With a rater, the `rating` stage sets the final severity of every confirmed
-  finding from its text alone, with no tools and no earlier level. Without one
-  the stage does not run and its role is not registered. It is off by default
-  because live runs showed a gain only when the rater was stronger than the
-  reviewers' model and none when a model rated its own review; make it a
-  default only with a measured benefit.
+**Duplicates: the runtime removes identical records; a model merges repeated reports.**
+- The runtime itself merges only records identical in every field; findings
+  on the same lines stay separate.
+- The duplicate check compares what different reviewer sessions reported on
+  one side of one file, one session per such file, and only merges: every
+  finding it does not merge stays reported, and a failed check keeps them
+  all with a warning. Two findings are duplicates only with the same root
+  cause and the same correction; the same kind of mistake at several places
+  is several findings (one comment may still cover them: see Publication).
+- A reviewer session files one finding per place that needs its own
+  correction, so the runtime refuses a merge that would put two findings of
+  one session into one finding, directly or through a third
+  (`evaluateDuplicates` in `output.mjs`). That rule is the program's, not the
+  prompt's: it holds whatever model checks.
+- The finding that stays keeps its own text and records what it stands for
+  (`alsoReported`, `sessions`). Whether several passes reported a finding is
+  never shown to the rating.
+
+**A blind rating sets the final severity.**
+- After the duplicate check, the `rating` stage sets the severity of every
+  reported finding from its text alone, with no tools and no earlier level,
+  so that the findings of different reviewers stand on one scale. It runs
+  with `models.<mode>.rater`, or with the first reviewer model where that is
+  empty. `rater: false` turns it off: its role is not registered and the
+  reviewers' levels stay.
+- It is on by default because the measured models scaled severity very
+  differently, and a rating that does not see the earlier level corrected a
+  model that underrated its own findings while changing nothing for one that
+  rated well, at a small cost (docs/VALIDATION.md; one run, so keep the
+  default under review). A model that underrates lowers other models'
+  findings too: the first reviewer model, or the named rater, should be one
+  whose scale is sound.
 - The rating only sets levels: a finding without a usable rating, and every
-  finding of a failed rating session, keeps the verifier's severity with a
-  warning. It never drops, adds or rewrites a finding.
-- Its input is finding text plus the PR title and description: no PR identity,
-  commits, file list or tool data.
-
-**Deep reviews differ only in their models.**
-- `/pr-deep` runs the review's stages and system prompts with the models of
-  `models.deep`, which are meant to be stronger than the review models, and
-  never falls back to the review models. Deep-only prompt text was removed
-  after live runs showed it changed neither model's results; add
-  mode-specific instructions only with a measured benefit.
+  finding of a failed rating session, keeps its reviewer's severity with a
+  warning. It never drops, adds or rewrites a finding, and the reviewer's own
+  level stays on record beside it (`reviewerSeverity`).
+- Its input is finding text (`RATED_FIELDS` in `review-work.mjs`) plus the PR
+  title and description: no PR identity, commits, file list, tool data,
+  earlier level, session or count of reports.
 
 **Keep useful work; degrade per item.**
 - Answers that break the output contract get a correction turn in the same
   session (`workflow.repairAttempts`) listing concrete problems. After that,
-  degrade the affected item (UNREVIEWED, NEEDS_INFO, skipped comment) and keep the
-  rest. Never discard a whole review for one bad item, and never invent a
-  decision, evidence or a location.
-- A quick reviewer whose usable answer is PARTIAL with named unfinished work
+  degrade the affected item (NEEDS_INFO, a merge left out, a level kept, a
+  skipped comment) and keep the rest. Never discard a whole review for one bad
+  item or one failed pass, and never invent a decision, evidence or a location.
+- A reviewer whose usable answer is PARTIAL with named unfinished work
   gets one follow-up turn in the same session, within the same budget; a
   follow-up that fails or gives no usable answer never replaces the answer it
   followed.
 - Transient execution failures retry once in a new session; overflow splits the
   shard. Permanent failures and cancellations are not retried.
 - An interrupted stream that OpenCode recovered by itself costs no new session:
-  a step it retried (OpenCode 2.3.0) or a continuation it queued (earlier
-  hosts). Accept an errored assistant message only with the host's retry mark
+  a step it retried (OpenCode 2.3.0 and later) or a continuation it queued
+  (earlier hosts). Accept an errored assistant message only with the host's retry mark
   and a complete, successful final answer on the granted agent and model; a
   retried step's answer is the final message alone.
 - Only a changed source commit makes a review STALE.
@@ -99,7 +150,8 @@ settings, backups and failure records. Never upload `.local/`.
   share (a file, a recursive listing, the repository archive) goes on.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
   compact, and a compaction the host attempts in a reviewer's turn means "split
-  this shard". A refused background summary (`experimental.background_compaction`)
+  this shard". A refused background summary (OpenCode's `compaction.background`, on
+  by default in 2.3.2; `experimental.background_compaction` in earlier releases)
   ends nothing, so the turn's own failure decides its class.
 - There is deliberately no default whole-run timeout and no per-stage step cap;
   see the roadmap's Deferred section before adding either.
@@ -189,6 +241,23 @@ settings, backups and failure records. Never upload `.local/`.
   the completed text when it appears later (the preflight compares with the
   completion of what it loaded), so its commands are never refused over
   defaults another load wrote. Any other difference still blocks new runs.
+- Settings of AZPR 0.4.x (`version: 2`) are no settings of this version: a
+  process that finds them has none, and its commands say so. Nothing rewrites
+  such a file but the update a person confirms in `/pr-setup`: in the terminal
+  UI in a list whose first row keeps the file, elsewhere with
+  `/pr-setup --migrate <word>`. The word is a keyed digest of the text the
+  update replaces and the text it writes (`migrationOf` in `setup.mjs`, with a
+  key of the process), so a confirmation holds only for the change that was
+  shown: a file that changed since, or a restart, needs another look. No
+  other option, save or load implies that consent: not the completion of
+  missing settings, not the options of a first setup, not the installer,
+  which carries such a file over byte for byte. What the update writes is
+  `migrateSettings` in `config.mjs`, a pure function that loses and invents no
+  value. What it shows names every change in behaviour, also those nobody
+  asked for (a rating that now runs, automatic publication that now posts
+  findings no verifier confirmed). A version-2 file with a fault is no
+  exception: the update comes first and the repair after it, since a repair
+  that rewrote the file in this version's layout would convert it unseen.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,
@@ -536,6 +605,13 @@ settings, backups and failure records. Never upload `.local/`.
   between the name and the value and cuts what does not fit, so a few words
   only; `prompt` and `variantPrompt` in the search line of its dialogs, where
   there is room (the deep model: a stronger model, or a higher variant).
+- A mode's models are one row whose value is a list (`reviewersFrom` in
+  `setup.mjs`): one model alone stands for the mode's usual number of passes
+  (`USUAL_PASSES`: two for `/pr-review` and `/pr-deep`, one for `/pr-quick`),
+  `MODEL*N` for N passes, and entries separated by commas for different
+  models. A first setup asks for one model and writes it twice for
+  `/pr-review` and once for `/pr-quick`. The dialog asks for one model first
+  and then for the passes, in a list whose first row takes what is shown.
 - The dialogs (`src/tui-setup.mjs`, which imports nothing so that its order
   is tested with scripted answers, and the token field in `tui-view.jsx`) use
   the host's own dialogs and hand every answer to the server part over the
@@ -653,7 +729,9 @@ For changes touching the terminal part, or the text of notices and receipts,
 also run `node tests/host-v2-tui-panel.mjs <opencode binary>` and the same with
 `--native`; for changes touching setup, the terminal part or the settings
 path, also `node tests/host-v2-tui-setup.mjs <opencode binary>` and the same
-with `--native`. They drive the real terminal UI in `tmux`, which they need.
+with `--native`, and both again with `--migrate` (the confirmed update of
+settings of AZPR 0.4.x). They drive the real terminal UI in `tmux`, which they
+need.
 Installer tests must preserve unrelated files and private settings, reject
 conflicts and test rollback and archival uninstall. Keep the README manual-copy
 list exact.

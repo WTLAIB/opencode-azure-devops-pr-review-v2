@@ -29,7 +29,7 @@ can go straight to a pull request.
 ## Work locally
 
 Use Node.js 22.12 or later, POSIX `sh`, Python 3 and Git. The current host
-acceptance target is OpenCode V2 `@opencode/cli@2.3.0` on Ubuntu 22.04; other
+acceptance target is OpenCode V2 `@opencode/cli@2.3.2` on Ubuntu 22.04; other
 environments are not yet validated. The installed plugin has no npm
 dependencies and is not built at installation. The checkout has one
 development dependency, the compiler of the terminal panel's JSX, which
@@ -53,8 +53,12 @@ draws nothing (which server part the dialogs talk to, when they open).
 
 Read [AGENTS.md](AGENTS.md) for the design rules and change-specific checks.
 Keep deterministic PR facts and Azure writes in the runtime; models supply
-review judgment and comment text. Preserve the distinction between quick
-findings and independently verified findings. Add a focused regression test
+review judgment and comment text. Never present findings as verified: every
+mode runs one pipeline in which a reviewer checks its own findings and no
+stage verifies them afterwards, and reports, receipts and comments say so.
+The review system prompts are locked by a hash test
+(`tests/config.test.mjs`), so a change to them is deliberate: update the
+hashes together with the validation notes. Add a focused regression test
 when fixing behavior, and update the relevant documentation when it changes.
 
 Changes to hooks, sessions, tools, Azure access or publication also need the
@@ -63,7 +67,7 @@ text of notices and receipts, which the panel reads, need the last two. Install 
 without changing your everyday OpenCode installation:
 
 ```sh
-npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund @opencode/cli@2.3.0
+npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund @opencode/cli@2.3.2
 AZPR_TEST_HOST="$PWD/.local/contributor-host/node_modules/.bin/opencode"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --replace
