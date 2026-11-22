@@ -6,7 +6,7 @@
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
  */
-export const TESTED_HOST_VERSION = '2.3.0';
+export const TESTED_HOST_VERSION = '2.3.2';
 
 // Text OpenCode 2.0.32 through 2.2.7 queue after resuming an interrupted text stream. OpenCode 2.3.0 retries the
 // interrupted step instead and queues nothing (see `retriedSteps` in session.mjs).

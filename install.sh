@@ -11,11 +11,13 @@ replace=0
 usage() {
   cat <<'TXT'
 Usage: sh install.sh [--settings FILE] [--replace] [--config-dir DIR]
-  --settings    Select a trusted version-2 JSON profile and add missing defaults.
+  --settings    Select a trusted JSON profile in the current layout (settings version 3)
+                and add missing defaults. A version-2 profile of AZPR 0.4.x is installed
+                exactly as it is; /pr-setup then shows what an update changes.
   --replace     Replace this V2 integration without keeping an installation backup.
-                Preserve operational settings and add missing defaults.
+                Preserve operational settings and add missing defaults (version-2
+                settings of AZPR 0.4.x stay as they are, for /pr-setup to update).
   --config-dir  OpenCode configuration directory (default: XDG_CONFIG_HOME/opencode).
-Retired models._help documentation is omitted with a notice.
 Python 3 (standard library only) is required to merge JSON safely.
 No npm install, pip packages, jq, sudo, or network access is required.
 README.md, docs/, CHANGELOG.md, uninstall.sh, and config/settings.schema.json are optional.
@@ -35,7 +37,7 @@ while [ "$#" -gt 0 ]; do
 done
 command -v python3 >/dev/null 2>&1 || die 'Python 3 is required for safe JSON settings merging. Install python3 and retry; no installation files were changed.'
 runtime_files='session.mjs runtime.mjs comment-data.mjs comment-work.mjs comments.mjs config.mjs output.mjs diagnostics.mjs attribution.mjs host.mjs tool-queue.mjs azure.mjs diff.mjs search.mjs review-tools.mjs review-work.mjs store.mjs setup.mjs plugin.js tui-model.mjs tui-setup.mjs tui-actions.mjs tui.js'
-prompt_names='common functional risk final dedupe rating quick comment-policy comment-plan'
+prompt_names='common review dedupe rating comment-policy comment-plan'
 command_names='pr-setup pr-check pr-review pr-deep pr-quick pr-stop pr-comment'
 require_file() { [ -f "$src/$1" ] && [ -r "$src/$1" ] || die "Incomplete package: $1 is missing or unreadable."; }
 for file in LICENSE scripts/merge-settings.py config/settings.example.json; do require_file "$file"; done
@@ -159,10 +161,10 @@ mv -- "$stage/new/$target" "$root/$target"
 success=1
 # Informational output only; an unwritable output must not fail a completed install.
 {
-printf '\nAzure PR Review installed (target host: @opencode/cli 2.3.0; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
+printf '\nAzure PR Review installed (target host: @opencode/cli 2.3.2; Ubuntu 22.04).\nSettings: %s\n' "$root/plugins/azpr-v2/settings.json"
 printf 'No installation backup is retained after success. Existing older backups are untouched.\n'
 cat <<'TXT'
-1. Configure models.review.functional/risk/verifier. Configure all three models.deep roles to enable /pr-deep, the same review with models stronger than models.review for the PRs that need them, and models.quick.reviewer to enable /pr-quick.
+1. Set models.review.reviewers: one model per review pass of /pr-review (the same model twice gives two passes). List models in models.deep.reviewers to enable /pr-deep, the same review with stronger models or more passes for the PRs that need them, and in models.quick.reviewers to enable /pr-quick.
 2. Set azure.organization and the PAT: an Azure DevOps PAT for that organization with Code (Read) and Pull Request Threads (Read & write), alone in a file only you can read (chmod 600) named by azure.patFile (recommended), or in azure.pat. AZPR calls the Azure DevOps REST API (api-version 7.1) itself; no MCP server is needed.
 3. Fully restart OpenCode and run /pr-check on a small, known PR.
 Alternatively, run /pr-setup --help in OpenCode for guided configuration.

@@ -15,12 +15,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, modelSlots, configuredOptionalSlots, stageModel, commentSlot, patProblem } from './config.mjs';
+import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
-import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewVerification,
+import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewMethod,
   everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
 import { createToolQueue } from './tool-queue.mjs';
 import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCertificates, proxyLabel, restBaseUrl, targetKey } from './azure.mjs';
@@ -245,9 +245,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   // is; the options are in --help.
   const COMMAND_DESCRIPTIONS = {
     'pr-check': 'Azure DevOps PR access check, no model; --help. READY means AZPR can read the PR (explicit invocation only)',
-    'pr-review': 'Verified Azure DevOps PR review; --help for options. Two reviewers, then separate verification; --preview/--publish/--no-comment after the URL (explicit invocation only)',
-    'pr-deep': 'Azure DevOps PR review, stronger models; --help. The verified review with the models of models.deep; --preview/--publish/--no-comment after the URL (explicit invocation only)',
-    'pr-quick': 'Quick Azure DevOps PR review, not verified; --help. One reviewer per shard, findings not independently verified; --preview/--publish/--no-comment after the URL (explicit invocation only)',
+    'pr-review': 'Azure DevOps PR review; --help for options. One pass per model of models.review.reviewers, a duplicate check and a rating; --preview/--publish/--no-comment after the URL (explicit invocation only)',
+    'pr-deep': 'Azure DevOps PR review, stronger models; --help. The same review with the models of models.deep.reviewers; --preview/--publish/--no-comment after the URL (explicit invocation only)',
+    'pr-quick': 'Quick Azure DevOps PR review; --help. The same review with the models of models.quick.reviewers, usually one fast pass; --preview/--publish/--no-comment after the URL (explicit invocation only)',
     'pr-stop': "Cancel this conversation's AZPR command; --help (explicit invocation only)",
     'pr-comment': 'Preview, adjust or publish review comments; --help. Acts on the current review: --publish posts (safe to repeat), --show, --list, --exclude, --severity, --reset. Optional review ID.',
   };
@@ -261,16 +261,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     'Then: /pr-comment --help. Stop a running command with /pr-stop.';
   const COMMAND_HELP = {
     'pr-check': () => '[AZPR] /pr-check <Azure DevOps PR URL>\n\nChecks that AZPR can read the PR with the configured PAT and that the review models exist. No model runs and nothing is posted; READY is not a review.',
-    'pr-review': () => reviewHelp('pr-review', 'Functional and risk reviewers read the changed files, then separate sessions verify every finding.'),
-    'pr-deep': () => reviewHelp('pr-deep', 'The same verified review as /pr-review, run with the stronger models of models.deep.'),
-    'pr-quick': () => reviewHelp('pr-quick', 'One reviewer per shard and no verifier: the findings are reported, not independently verified, and their comments say so.'),
+    'pr-review': () => reviewHelp('pr-review', 'Each model of models.review.reviewers reviews the changed files on its own and checks its findings against the source. The runtime checks the form and source of every finding, a duplicate check merges repeated reports and a rating sets the severities. No separate verification runs, and the comments say so.'),
+    'pr-deep': () => reviewHelp('pr-deep', 'The same review as /pr-review, run with the models of models.deep.reviewers: stronger models, or more passes.'),
+    'pr-quick': () => reviewHelp('pr-quick', 'The same review as /pr-review, run with the models of models.quick.reviewers: usually one pass of a fast model.'),
     'pr-stop': () => '[AZPR] /pr-stop [run-id]\n\nCancels the AZPR command running in this conversation, or the run whose ID its STARTED notice gave. Requests already sent may still be billed.',
     'pr-comment': () => '[AZPR] /pr-comment [review-id] [--publish | --show | --exclude IDs | --severity ID=level,… | --reset], or /pr-comment --list\n\n' +
       "Without a review ID the command acts on this conversation's current review: the one most recently completed or used here. A review's own sessions always mean that review.\n\n" +
       '  /pr-comment                                  plan a comment preview (a model runs; nothing is posted)\n' +
       '  /pr-comment --show                           show the saved preview again (no model)\n' +
-      '  /pr-comment --exclude F-1,R-2                leave findings out, then read the new preview\n' +
-      '  /pr-comment --severity F-3=low,R-4=medium    change levels, then read the new preview\n' +
+      '  /pr-comment --exclude F-1,F-2                leave findings out, then read the new preview\n' +
+      '  /pr-comment --severity F-3=low,F-4=medium    change levels, then read the new preview\n' +
       '  /pr-comment --exclude F-1 --severity F-3=low both in one command (one planning run)\n' +
       '  /pr-comment --exclude none                   put every finding back; --severity none and --reset work alike\n' +
       '  /pr-comment --publish                        post the saved preview as the PAT owner; safe to repeat\n' +
@@ -336,15 +336,24 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return g;
   }
 
-  function modelProblems(modelRows, profile, slots, { tools = true } = {}) {
+  /**
+   * The models a mode's stages run with, as the settings name them: every reviewer (the first also checks
+   * duplicates and plans the comments), and the rater where one is named. A rater that is the first reviewer
+   * model is that entry; a rating session has no tools, so a named rater needs none.
+   */
+  const modelChecks = mode => [
+    ...settings.models[mode].reviewers.map((model, index) => ({ label: `reviewers[${index}]`, model, tools: true })),
+    ...(raterState(settings, mode) === 'named' ? [{ label: 'rater', model: settings.models[mode].rater, tools: false }] : [])];
+
+  function modelProblems(modelRows, profile, checks) {
     const problems = [];
-    for (const slot of slots) {
-      const selected = settings.models[profile][slot], { providerID, id, variant } = modelRef(selected);
+    for (const { label, model: selected, tools } of checks) {
+      const { providerID, id, variant } = modelRef(selected);
       const matches = modelRows.filter(model => model.providerID === providerID && model.id === id && model.enabled !== false);
       const variants = (Array.isArray(matches[0]?.variants) ? matches[0].variants : []).map(item => item?.id).filter(text);
-      if (matches.length !== 1) problems.push(`The selected ${profile}.${slot} model (${selected}) is unavailable in the host catalog.`);
-      else if (variant !== undefined && variant !== 'default' && !variants.includes(variant)) problems.push(`The selected ${profile}.${slot} model has no variant ${variant}${variants.length ? `; it offers ${variants.join(', ')}` : ''}.`);
-      else if (tools && matches[0].capabilities?.tools !== true) problems.push(`The selected ${profile}.${slot} model does not advertise tool support.`);
+      if (matches.length !== 1) problems.push(`The selected ${profile}.${label} model (${selected}) is unavailable in the host catalog.`);
+      else if (variant !== undefined && variant !== 'default' && !variants.includes(variant)) problems.push(`The selected ${profile}.${label} model has no variant ${variant}${variants.length ? `; it offers ${variants.join(', ')}` : ''}.`);
+      else if (tools && matches[0].capabilities?.tools !== true) problems.push(`The selected ${profile}.${label} model does not advertise tool support.`);
     }
     return problems;
   }
@@ -352,23 +361,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   /**
    * The model catalog only; no inference is submitted. A command checks only
    * the models it uses, so an unavailable optional model never blocks another
-   * mode; /pr-check reports configured quick and deep models as warnings.
+   * mode; /pr-check reports configured quick and deep models as warnings. A
+   * comment command that only posts a saved preview uses no model at all.
    */
   async function readiness(run) {
     requireMethods(context, ['model.list'], 'readiness checks');
     const modelRows = listOf(await bounded(() => context.model.list(), run.controller.signal));
     if (!modelRows) throw new Error('[AZPR] Invalid model catalog.');
-    // An optional slot is checked only where it is set; the rater runs without tools.
-    const checked = mode => {
-      const extra = configuredOptionalSlots(settings, mode);
-      return { checkedModelSlots: [...modelSlots(mode), ...extra],
-        modelProblems: [...modelProblems(modelRows, mode, modelSlots(mode)), ...modelProblems(modelRows, mode, extra, { tools: false })] };
-    };
-    const own = run.mode === 'comment'
-      ? { checkedModelSlots: [commentSlot(run.profile)], modelProblems: modelProblems(modelRows, run.profile, [commentSlot(run.profile)]) }
-      : checked(run.profile);
+    const checked = (mode, list = modelChecks(mode)) => ({ checkedModelSlots: list.map(item => item.label), modelProblems: modelProblems(modelRows, mode, list) });
+    // Comment planning runs with the first reviewer model of the review's mode.
+    const own = run.mode !== 'comment' ? checked(run.profile)
+      : run.planning === false ? { checkedModelSlots: [], modelProblems: [] } : checked(run.profile, modelChecks(run.profile).slice(0, 1));
     const problems = own.modelProblems;
-    const optional = mode => run.mode === 'check' && settings[`${mode}Ready`] ? checked(mode) : undefined;
+    const optional = mode => run.mode === 'check' && modeReady(settings, mode) ? checked(mode) : undefined;
     const deep = optional('deep'), quick = optional('quick');
     run.readiness = { profile: run.profile, ...own, ...(deep ? { deep } : {}), ...(quick ? { quick } : {}),
       azure: { organization: settings.azure.organization, apiVersion: API_VERSION, ...network } };
@@ -1027,7 +1032,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       outcome.failure = run.controller.signal.aborted ? run.reason : errorText(error);
       outcome.status = run.controller.signal.aborted ? run.stopStatus : 'INCOMPLETE';
       if (outcome.status === 'INCOMPLETE' && ['review', 'deep', 'quick'].includes(run.mode)) {
-        outcome.report = renderIncompleteDraft(run.stages, outcome.failure, settings.outputLanguage, { quick: run.mode === 'quick' });
+        outcome.report = renderIncompleteDraft(run.stages, outcome.failure, settings.outputLanguage);
         run.draft = Boolean(outcome.report);
         if (run.draft && run.active) await displayReport(run, outcome.report, outcome.status);
       }
@@ -1081,10 +1086,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     for (const problem of run.readiness?.deep?.modelProblems ?? []) {
       checks.push({ name: 'Deep model', ok: true, warning: true, detail: `${problem} /pr-deep is unavailable until it is fixed; other commands are not affected.` });
     }
-    if (settings.deepPartial) checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'Only some models.deep roles are set; /pr-deep needs all three.' });
-    else if (!settings.deepReady) checks.push({ name: 'Deep models', ok: true, detail: 'Not set: /pr-deep stays off until all three models.deep roles name models stronger than models.review: another model, or the same one with a higher variant.' });
-    else if (modelSlots('deep').every(slot => settings.models.deep[slot] === settings.models.review[slot])) {
-      checks.push({ name: 'Deep models', ok: true, warning: true, detail: 'models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models there (another model, or a higher variant) for the PRs that need them.' });
+    // What each mode runs with: its passes in order (a model without a variant runs at its provider's default),
+    // and which model rates. /pr-deep and /pr-quick are the same review with other models; an empty list leaves one off.
+    const passesOf = mode => { const list = settings.models[mode].reviewers; return `${list.length} pass${list.length === 1 ? '' : 'es'}: ${list.join(', ')}`; };
+    const ratingOf = mode => raterState(settings, mode) === 'off' ? 'no severity rating (rater: false)' : `severity rating by ${stageModel(settings, roleFor(mode, 'rating'))}${raterState(settings, mode) === 'first' ? ' (the first reviewer model)' : ''}`;
+    checks.push({ name: 'Review models', ok: true, detail: `${passesOf('review')}; ${ratingOf('review')}.` });
+    for (const [mode, name, what] of [['deep', 'Deep models', 'stronger models than models.review.reviewers, or more passes'], ['quick', 'Quick models', 'usually one fast model']]) {
+      if (!modeReady(settings, mode)) checks.push({ name, ok: true, detail: `Not set: /pr-${mode} stays off until models.${mode}.reviewers names at least one model (${what}).` });
+      else if (mode === 'deep' && JSON.stringify(settings.models.deep) === JSON.stringify(settings.models.review)) {
+        checks.push({ name, ok: true, warning: true, detail: `${passesOf(mode)}; ${ratingOf(mode)}. models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models or more passes there for the PRs that need them.` });
+      } else checks.push({ name, ok: true, detail: `${passesOf(mode)}; ${ratingOf(mode)}.` });
     }
     // One OpenCode release is validated; on others, reviews still run and what AZPR needs is detected at runtime.
     const host = capabilities.version === 'unknown' ? 'OpenCode did not report its version' : `OpenCode ${capabilities.version}`;
@@ -1336,8 +1347,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (request.target.organization.toLowerCase() !== settings.azure.organization.toLowerCase()) {
       throw new Error(`[AZPR] The PR belongs to organization "${request.target.organization}", but azure.organization is "${settings.azure.organization}". Use a PAT and settings for that organization.`);
     }
-    if (mode === 'deep' && !settings.deepReady) throw new Error(`[AZPR] /pr-deep runs the review with the models of models.deep: set all three roles${settings.deepPartial ? ' (only some are set)' : ''}, preferably to models stronger than models.review, then restart the OpenCode service (opencode service restart). No fallback to review models.`);
-    if (mode === 'quick' && !settings.quickReady) throw new Error('[AZPR] Set models.quick.reviewer before /pr-quick. No fallback to other models.');
+    if (mode !== 'check' && !modeReady(settings, mode)) throw new Error(`[AZPR] /pr-${mode} is off: models.${mode}.reviewers names no model. Name at least one with /pr-setup or in the settings file${mode === 'deep' ? ' (stronger than those of models.review, or more passes)' : ''}, then restart the OpenCode service (opencode service restart). No fallback to the models of another mode.`);
     // /pr-check checks the review profile's models.
     const profile = mode === 'check' ? 'review' : mode;
     // The comment step after a COMPLETE review: this command's flag, otherwise afterReview.
@@ -1346,22 +1356,25 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const shown = after && (after.mode !== 'none' || request.flag) ? after : undefined;
     const startNote = after?.mode === 'preview' ? ` After a COMPLETE review it previews the comments automatically (${after.source}); nothing is posted.`
       : after?.mode === 'publish' ? ` After a COMPLETE review it plans the comments and posts them automatically as the PAT owner (${after.source}); a comment that a safeguard holds back waits for a person.` : '';
+    // What the run starts with, in its first notice: how many passes, with which models.
+    const reviewers = mode === 'check' ? [] : settings.models[mode].reviewers;
+    const startLabel = reviewers.length ? `(${reviewers.length} pass${reviewers.length === 1 ? '' : 'es'}: ${reviewers.join(', ')})` : '';
     const { run, status, report, failure, review, stopped } = await workflow({ origin: input.sessionID, notifySession: input.sessionID, mode, profile,
-      userContext: request.userContext, prUrl: request.prUrl, ...(shown ? { afterReview: shown } : {}), ...(startNote ? { startNote } : {}) }, async run => {
+      userContext: request.userContext, prUrl: request.prUrl, ...(shown ? { afterReview: shown } : {}), ...(startNote ? { startNote } : {}), ...(startLabel ? { startLabel } : {}) }, async run => {
       nameConversation(run, request.target);
       if (mode === 'check') { run.phase = 'source check'; return runCheck(run, request); }
       run.phase = 'review';
       const final = await runReview({ azure, runStage, progress, settings, dataFor }, run, request);
-      if (final.verification === 'none') {
-        run.quickSummary = { coverage: final.coverageSummary,
-          high: final.dispositions.filter(d => d.status === 'REPORTED' && d.finding?.severity === 'high').length };
-      }
+      // Every later reader of this review goes by what it says of itself: no separate verification, and the
+      // method that produced it. A result that does not say both is not saved as a review.
+      if (final.verification !== 'none' || final.method?.kind !== 'reviewers') throw new Error('[AZPR] The review did not state how its findings were produced; nothing was saved.');
+      run.reviewSummary = { coverage: final.coverageSummary };
       const provenance = reviewProvenance(run);
       const rendered = `${renderFinalReport(final, settings.outputLanguage)}\n\n---\n\n${provenanceReport(provenance, final, settings.outputLanguage)}${final.status === 'COMPLETE' ? '\n\n' + renderCommentActions(run.id, settings.outputLanguage, shown) : ''}`;
       const completedReview = final.status !== 'COMPLETE' ? undefined : {
         id: run.id, origin: run.origin, status: final.status, completedAt: stamp(),
         reportSessions: new Set(run.stages.map(stage => stage.sessionID)), profile: run.profile,
-        verification: final.verification ?? 'independent',
+        verification: final.verification, method: clone(final.method),
         request: input.arguments, prUrl: request.prUrl, target: request.target, snapshot: final.snapshot,
         outputLanguage: settings.outputLanguage, provenance, final: clone({ ...final, initialReports: undefined }),
         toolText: [...run.toolText.values()], dataDirectory: undefined, plan: null, publication: new Map(), commentEvidence: [],
@@ -1578,13 +1591,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
   }
   async function commentRun(review, { publish, notifySession, auto, adjust, seen }, output, dispatch) {
-    // A saved review whose verification cannot be established is never commented on.
-    const verification = reviewVerification(review);
-    if (!verification) throw new Error(`[AZPR] Review ${review.id} does not say whether its findings were verified; run a new review before commenting.`);
-    if (review.profile === 'quick' && !settings.quickReady) throw new Error(`[AZPR] Review ${review.id} is a quick review; set models.quick.reviewer, which plans its comments, before /pr-comment.`);
-    let planning = false, held = [], nothingNew = '', discussions = null, changed = [], earlier = '', hold = '', shown;
+    // A saved review whose method cannot be established is never commented on.
+    const method = reviewMethod(review);
+    if (!method) throw new Error(`[AZPR] Review ${review.id} does not say how its findings were produced in a way this version knows; run a new review before commenting.`);
+    // Planning needs the first reviewer model of the review's mode; posting a saved preview needs no model.
+    const planning = !publish || !review.plan || Boolean(adjust);
+    if (planning && !modeReady(settings, review.profile)) throw new Error(`[AZPR] Review ${review.id} is a /pr-${review.profile} review, and models.${review.profile}.reviewers names no model to plan its comments with. Name one there (its first entry plans the comments) and restart the OpenCode service${review.plan ? `, or post the saved preview with /pr-comment ${review.id} --publish` : ''}.`);
+    let planningNow = false, held = [], nothingNew = '', discussions = null, changed = [], earlier = '', hold = '', shown;
     const step = auto && `(automatic ${auto.mode === 'publish' ? 'publication' : 'preview'} after review ${review.id} completed; ${auto.source})`;
-    const { run, status, report, failure } = await workflow({ origin: review.origin, notifySession, mode: 'comment',
+    const { run, status, report, failure } = await workflow({ origin: review.origin, notifySession, mode: 'comment', planning,
       profile: review.profile, review, lockKey: targetKey(review.target), startNote: ` It acts on ${describeReview(review)}.`,
       ...(auto ? { auto, startLabel: step } : adjust ? { startLabel: `(adjusting the findings of review ${review.id})` } : {}) }, async run => {
       run.snapshot = review.snapshot;
@@ -1610,14 +1625,16 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         review.planCreatedAt = new Date().toISOString();
         await savePreview(review);
       } else if (!publish || !review.plan) {
-        planning = true;
+        planningNow = true;
         run.phase = 'comment planning';
         review.plan = null; // Never leave an obsolete preview after a failed refresh.
         review.commentEvidence = []; // Evidence belongs to the plan being made.
-        // The disclosure names the method (and, in the summary, incomplete coverage) of a quick review.
-        const commentModel = settings.models[review.profile][commentSlot(review.profile)];
-        review.attribution = commentAttribution(review.provenance, review.outputLanguage, commentModel, { verification });
-        review.summaryAttribution = commentAttribution(review.provenance, review.outputLanguage, commentModel, { verification, coverage: review.final.coverageSummary });
+        // The disclosure names the review's method and, in the summary, incomplete coverage; a verified review
+        // saved by 0.4.x keeps its own line, and is planned by the role whose wording describes it.
+        const commentModel = firstModel(settings, review.profile);
+        const planner = roleFor(run.profile, method === 'verified' ? 'comment-plan-verified' : 'comment-plan');
+        review.attribution = commentAttribution(review.provenance, review.outputLanguage, commentModel, { method });
+        review.summaryAttribution = commentAttribution(review.provenance, review.outputLanguage, commentModel, { method, coverage: review.final.coverageSummary });
         const data = await dataFor(run);
         // Read live discussions once for the planner's duplicate checks; the
         // planner can still read threads itself if this read fails.
@@ -1636,12 +1653,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // Planning pages run side by side, never more than the configured sessions.
         const parallelPages = Math.min(PLANNING_PARALLEL_PAGES, settings.workflow.parallelSessions);
         // The grouping pass, which looks for one defect at several places before the pages are made, is a stage like a page.
-        review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, roleFor(run.profile, 'comment-plan'), payload, handler,
+        review.plan = await prepareComments(review, data, (payload, handler) => runStage(run, planner, payload, handler,
           { label: payload.commentWork.kind === 'group' ? 'grouping' : `page ${payload.commentWork.page}/${payload.commentWork.pages}` }),
           { progress: message => progress(run, message), discussions, posted, parallel: parallelPages, active: () => run.active,
             fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
-        planning = false;
+        planningNow = false;
         if (everAdjusted(review)) await savePreview(review);
         else await persistReview(review);
         await run.debug.write('comment-plan.json', { sourceReview: review.id, snapshot: review.snapshot, parallelPages, ...review.plan });
@@ -1683,7 +1700,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // What this run decides about the review's preview and its own sessions is settled here, before anything is
     // awaited: the command locks are released already, so a later command may be planning or saving while this
     // run's sessions are deleted.
-    if (planning) review.plan = null;
+    if (planningNow) review.plan = null;
     // A comment run keeps none of its sessions; the record names them before they are deleted.
     const obsolete = scheduleCleanup(run, review);
     await persistReview(review);
@@ -1858,7 +1875,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       touch(g, `tool ${name} ended`);
     }
     let observation;
-    if (outcome.observation && ['initial', 'final'].includes(ROLES[g.role].format)) {
+    if (outcome.observation && ROLES[g.role].format === 'initial') {
       // Keep observed source text with its request for anchor checks in comment planning. A stopped call does not
       // wait for that save, which finishes by itself.
       try {
@@ -1924,7 +1941,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Show only the tools this role may run, so the model does not waste turns on others.
       const allowed = new Set(allowedTools(g.role, settings.shell));
       if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
-      if (ROLES[g.role].stage === 'comment-plan' && (g.checkpointRequested || g.calls >= 12)) {
+      if (commentRole(g.role) && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
         event.system?.push?.({ type: 'text', text: g.grouping
           ? 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.'
@@ -2044,7 +2061,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
             visible = notice;
           }
           g.visibleCharacters += visible.length + (g.toolArgumentCharacters.get(call) ?? 0);
-          if (ROLES[g.role].stage === 'comment-plan' && g.visibleCharacters >= COMMENT_TURN_CHARACTERS) g.checkpointRequested = true;
+          if (commentRole(g.role) && g.visibleCharacters >= COMMENT_TURN_CHARACTERS) g.checkpointRequested = true;
         } catch {
           g.run.debug.warnings.push('A comment tool result could not be saved privately; it stays in the session.');
         }

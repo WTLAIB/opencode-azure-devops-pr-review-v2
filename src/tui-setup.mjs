@@ -19,7 +19,7 @@ const anyObject = Object.freeze({ type: 'object' });
 export const SETUP_RPC = Object.freeze({
   id: 'azpr.setup',
   methods: Object.freeze({
-    /** What is set, as rows, and whether AZPR can run (`state`: required, ready or restart). */
+    /** What is set, as rows, and whether AZPR can run (`state`: required, migrate, ready or restart). */
     status: Object.freeze({ input: anyObject, output: anyObject }),
     /** Whether answers can be used, and their saved form, without saving anything. */
     validate: Object.freeze({ input: anyObject, output: anyObject }),
@@ -43,6 +43,7 @@ export const isSetupNotice = metadata => metadata !== null && typeof metadata ==
   typeof metadata.azpr === 'object' && metadata.azpr.setup === true;
 
 const NOT_SET_UP = 'AZPR is not set up yet. Type /pr-setup to set it up.';
+const NOT_UPDATED = 'AZPR\'s settings are from an earlier version. Type /pr-setup to see what changes and update them.';
 const CANCELLED = 'AZPR setup: left before the end; nothing was saved.';
 const STOPPED = 'AZPR setup stopped: the OpenCode server did not answer as expected. What was saved before stays; run /pr-setup again.';
 const UNAVAILABLE = 'AZPR setup is not available: this OpenCode server did not answer for AZPR. Restart the OpenCode service and try again; /pr-setup --help shows the options.';
@@ -120,24 +121,61 @@ export function createSetup(host) {
   }
 
   /** A model of the host's list, with its variant when it has some; '' when the row may be off; undefined when left. */
-  async function askModel(row) {
+  async function askOneModel(row, { start = row.current, title = row.title, off = Boolean(row.optional) } = {}) {
     const list = await models();
     // A row that may be off can still be switched off when OpenCode offers no model; a row that needs one cannot be answered.
-    if (!list.length && !row.optional) {
+    if (!list.length && !off) {
       await dialog.alert({ title: 'No model available', message: 'OpenCode offers no model that can call tools. Connect a model provider first (/connect), then run /pr-setup again.' });
       return undefined;
     }
-    const current = baseModel(row.current);
+    const current = baseModel(start);
     // Where a row says what to look for (the deep model: a stronger one, or a higher variant), the search line says it.
-    const picked = await dialog.select({ title: row.title, placeholder: text(row.prompt) || 'Search models', current: row.optional && !current ? '' : current || undefined,
-      options: [...(row.optional ? [{ title: row.optional.label, value: '', description: row.optional.description, category: 'Off' }] : []),
+    const picked = await dialog.select({ title, placeholder: text(row.prompt) || 'Search models', current: off && !current ? '' : current || undefined,
+      options: [...(off ? [{ title: row.optional.label, value: '', description: row.optional.description, category: 'Off' }] : []),
         ...list.map(model => ({ title: model.name, value: model.id, description: model.id, category: model.provider }))] });
     if (picked === undefined || picked === '') return picked;
     const variants = list.find(model => model.id === picked)?.variants ?? [];
     if (!variants.length) return picked;
-    const variant = await dialog.select({ title: `Variant of ${picked}`, ...(text(row.variantPrompt) ? { placeholder: row.variantPrompt } : {}), current: picked === current ? variantOf(row.current) : '',
+    const variant = await dialog.select({ title: `Variant of ${picked}`, ...(text(row.variantPrompt) ? { placeholder: row.variantPrompt } : {}), current: picked === current ? variantOf(start) : '',
       options: [{ title: 'Default', value: '', description: 'The model\'s own default' }, ...variants.map(name => ({ title: name, value: name }))] });
     return variant === undefined ? undefined : variant ? `${picked}#${variant}` : picked;
+  }
+
+  // A list of models as the server part takes it as text: MODEL*N for passes in a row, entries separated by commas.
+  const passesText = passes => passes.reduce((runs, model) => { if (runs.at(-1)?.[0] === model) runs.at(-1)[1]++; else runs.push([model, 1]); return runs; }, [])
+    .map(([model, count]) => `${model}*${count}`).join(',');
+  const shortModel = model => text(model).slice(text(model).indexOf('/') + 1);
+
+  /**
+   * A mode's review passes: a model, then how often and with which other models it reviews. One model becomes
+   * the mode's usual number of passes (`row.usual`); the first row of the second dialog keeps that, and the
+   * others add a pass (the same model again, or another one) or take the last one away, between one pass and
+   * `row.most`. The answer is the list as text; '' when the row may be off; undefined when left.
+   */
+  async function askModel(row) {
+    const saved = Array.isArray(row.entries) ? row.entries.filter(item => typeof item === 'string' && item) : [];
+    const first = await askOneModel(row, { start: saved[0] ?? '' });
+    if (first === undefined || first === '') return first;
+    const usual = Number.isInteger(row.usual) && row.usual > 0 ? row.usual : 1, most = Number.isInteger(row.most) && row.most >= usual ? row.most : usual;
+    // The saved first model picked again: the saved passes are what the first row keeps, so that looking at a
+    // row and taking what it shows changes nothing. Another model starts with the mode's usual passes of it.
+    let passes = first === saved[0] && saved.length <= most ? [...saved] : Array(usual).fill(first);
+    for (;;) {
+      const shown = passes.map(shortModel).join(', ');
+      const choice = await dialog.select({ title: `${row.title}: ${passes.length} pass${passes.length === 1 ? '' : 'es'}`, options: [
+        { title: `Use ${passes.length === 1 ? 'this pass' : `these ${passes.length} passes`}`, value: 'done', description: shown },
+        ...(passes.length < most ? [{ title: 'Add a pass of the same model', value: 'same', description: `${shortModel(passes.at(-1))} once more` },
+          { title: 'Add a pass of another model', value: 'other', description: 'Different models find different defects' }] : []),
+        ...(passes.length > 1 ? [{ title: 'Take the last pass away', value: 'less', description: `Without ${shortModel(passes.at(-1))}` }] : [])] });
+      if (choice === undefined) return undefined;
+      if (choice === 'done') return passesText(passes);
+      if (choice === 'same') passes = [...passes, passes.at(-1)];
+      else if (choice === 'less') passes = passes.slice(0, -1);
+      else {
+        const another = await askOneModel(row, { start: '', title: `Model of pass ${passes.length + 1}`, off: false });
+        if (another) passes = [...passes, another];
+      }
+    }
   }
 
   /**
@@ -213,12 +251,15 @@ export function createSetup(host) {
       problem = answer.organization;
       if (!(await ask('organization'))) return false;
     }
-    const model = await askModel(rows('reviewModel'));
+    // One model for a start: the server part gives it the usual passes of /pr-review and of /pr-quick. Where the
+    // settings name review models already, the dialog starts on the first of them.
+    const reviewRow = rows('reviewModel');
+    const model = await askOneModel(reviewRow, { start: Array.isArray(reviewRow?.entries) && typeof reviewRow.entries[0] === 'string' ? reviewRow.entries[0] : '', off: false });
     if (model === undefined) return false;
     const yes = await dialog.confirm({ title: 'Save AZPR\'s settings?', label: { confirm: 'Save', cancel: 'Leave' },
       message: [`Organization: ${answers.organization}`, `Proxy: ${shown.proxy || 'none'}`, ...(answers.caFile ? [`CA certificate file: ${answers.caFile}`] : []),
         `Token: ${token === undefined ? 'the saved one' : 'the one just entered, in a file only you can read'}`,
-        `Model: ${model} (reviewers, verifier and /pr-quick)`, '', 'Other settings keep their values (the defaults in a new file); /pr-setup changes them later.'].join('\n') });
+        `Model: ${model} (two passes of /pr-review, one of /pr-quick)`, '', 'Other settings keep their values (the defaults in a new file); /pr-setup changes them later.'].join('\n') });
     if (!yes) return false;
     const saved = await call('save', { changes: { organization: answers.organization, proxy: answers.proxy, ...(answers.caFile === undefined ? {} : { caFile: answers.caFile }), model },
       ...(token === undefined ? {} : { token }) });
@@ -229,6 +270,30 @@ export function createSetup(host) {
       : `The settings are saved${text(saved.status?.problem) ? `, but AZPR could not load them: ${saved.status.problem.replace(/\.$/, '')}` : ''}.\n\nRestart the OpenCode service (opencode service restart), then run /pr-check <PR URL>.`) +
       // What the server part adds: where the token of an earlier organization still is.
       (text(saved.note) ? `\n\n${saved.note}` : '') });
+    return true;
+  }
+
+  /**
+   * Settings of an earlier version: what the update changes, then a list whose first row keeps the file as it
+   * is. The server part writes the file only for the word that names what was shown here.
+   */
+  async function update(status) {
+    const lines = Array.isArray(status.migration?.lines) ? status.migration.lines.filter(line => typeof line === 'string') : [];
+    await dialog.alert({ title: 'AZPR\'s settings are from an earlier version', message: `${lines.map(line => `- ${line}`).join('\n')}\n\nNothing is changed until you confirm in the next step.` });
+    const choice = await dialog.select({ title: 'Update AZPR\'s settings file?', options: [
+      { title: 'Not now', value: 'keep', description: 'The file stays as it is; reviews do not run until it is updated' },
+      { title: 'Update the settings file', value: 'update', description: text(status.settingsFileShown) || text(status.settingsFile) }] });
+    if (choice !== 'update') return false;
+    const saved = await call('save', { migrate: text(status.migration?.word) });
+    if (!saved?.ok) { failed(saved); return true; }
+    if (saved.status?.state === 'ready') loaded();
+    // A file that had a fault before the update still has it: say what is missing, and where it is set.
+    const remaining = text(saved.remaining);
+    await dialog.alert({ title: 'AZPR\'s settings are updated', message: saved.status?.state === 'ready'
+      ? 'Reviews run again:\n\n/pr-check <PR URL>\n/pr-review <PR URL>\n\n/pr-setup shows the models of each mode and changes them.'
+      : remaining ? `The settings file has the layout of this version now. It still cannot be used:\n\n${remaining}\n\nSet that right with /pr-setup or in the settings file.`
+        : text(saved.status?.problem) ? `The settings file is updated, but AZPR could not load it: ${saved.status.problem.replace(/\.$/, '')}.\n\nSet that right, then restart the OpenCode service (opencode service restart) and run /pr-check <PR URL>.`
+          : 'The settings file is updated.\n\nRestart the OpenCode service (opencode service restart), then run /pr-check <PR URL>.' });
     return true;
   }
 
@@ -317,6 +382,11 @@ export function createSetup(host) {
         let status;
         try { status = await call('status', {}); } catch { toast({ title: 'AZPR setup', message: UNAVAILABLE, variant: 'error', duration: 10000 }); return; }
         if (!status || !Array.isArray(status.rows)) { toast({ title: 'AZPR setup', message: text(status?.problem) || UNAVAILABLE, variant: 'error', duration: 10000 }); return; }
+        // Before anything else: settings of an earlier version are neither missing nor in need of repair.
+        if (status.state === 'migrate') {
+          if (!(await update(status))) toast({ message: 'AZPR setup: the settings file was left as it is.', variant: 'info' });
+          return;
+        }
         if (status.editable === false) {
           await dialog.alert({ title: 'AZPR\'s settings file needs repair', message: `${text(status.fileProblem) || 'The settings file cannot be changed here.'}\n\n${text(status.settingsFile)}\n\nRepair it by hand, then run /pr-setup again.` });
           return;
@@ -336,9 +406,9 @@ export function createSetup(host) {
       if (hinted || stopped) return;
       let status;
       try { status = await call('status', {}); } catch { return; }
-      if (hinted || status?.state !== 'required') return;
+      if (hinted || !['required', 'migrate'].includes(status?.state)) return;
       hinted = true;
-      toast({ message: NOT_SET_UP, variant: 'info', duration: 8000 });
+      toast({ message: status.state === 'migrate' ? NOT_UPDATED : NOT_SET_UP, variant: 'info', duration: 8000 });
     },
     get running() { return running; },
     /** The terminal part is being unloaded: a setup that is open ends at its next step, and none opens after it. */

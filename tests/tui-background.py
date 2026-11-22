@@ -65,8 +65,9 @@ for existing in [False, True]:
             if not menu_requested and b'ctrl+p' in captured and b'commands' in captured:
                 os.write(fd, b'\x15/pr-rev')
                 menu_requested = True
-            # The start of /pr-review's description, which the command list shows whatever its width.
-            if menu_requested and command_typed_at is None and b'Verified Azure DevOps PR review' in captured:
+            # The start of /pr-review's description, which the command list shows whatever its width (as far as
+            # no other command's description reads: /pr-quick's goes on with "; --help. The same").
+            if menu_requested and command_typed_at is None and b'Azure DevOps PR review; --help for' in captured:
                 os.write(fd, b'\x15' + (prompt + ' ').encode())
                 command_typed_at = time.monotonic()
             if command_typed_at is not None and not command_submitted and time.monotonic() - command_typed_at > 1:
@@ -95,7 +96,8 @@ for existing in [False, True]:
                 # Enter first accepts the slash-command completion, then sends.
                 os.write(fd, b'\x1b[13u')
                 stop_confirmed = True
-            if stop_sent and any('] CANCELLED\n' in text for text in notices):
+            # A review's receipt states its verification next to its status, whatever the status is.
+            if stop_sent and any('] CANCELLED; verification none\n' in text for text in notices):
                 cancelled = True
                 break
         assert command_typed_at is not None, 'TUI never showed the native pr-review command suggestion'

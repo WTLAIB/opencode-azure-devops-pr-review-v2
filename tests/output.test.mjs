@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseModelJSON, parseUniqueJSON, evaluateInitial, evaluateFinal, initialRepairPrompt, finalRepairPrompt, assignIds,
-  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt, quickRepairPrompt,
-  evaluateRatings, ratingRepairPrompt, givesNoCorrection,
+  parseModelJSON, parseUniqueJSON, evaluateInitial, assignIds,
+  escapeCodeSpanQuotes, parseRepairPrompt, syntaxProblem, evaluateDuplicates, duplicateRepairPrompt, reviewRepairPrompt, reviewFollowUpPrompt,
+  evaluateRatings, ratingRepairPrompt,
   parseCommentRequest, normalizeFindingId,
 } from '../src/output.mjs';
 
@@ -100,17 +100,22 @@ test('evaluateInitial lists repairable problems and still returns a usable PARTI
   const bad = JSON.stringify({ status: 'COMPLETE', findings: [{ id: 'F-1', summary: 'only summary', severity: 'critical' }], report: 'r' });
   const { result, issues } = evaluateInitial(bad, { prefix: 'F', assigned: ['/src/a.ts'] });
   assert.ok(issues.some(issue => /coverage/.test(issue)));
-  assert.ok(issues.some(issue => /missing evidence, counterevidence, suggestion/.test(issue)));
-  assert.ok(issues.some(issue => /severity must be high, medium or low/.test(issue)));
+  // Every field of a finding is needed, the location included: nothing after the reviewer supplies one.
+  assert.ok(issues.some(issue => /^findings\[0\] \(F-1\): missing evidence, counterevidence, location, suggestion; severity must be high, medium or low\.$/.test(issue)));
   assert.equal(result.status, 'PARTIAL');
   assert.equal(result.findings.length, 1);
-  assert.match(initialRepairPrompt(issues), /complete corrected JSON object/);
+  assert.deepEqual(result.invalid, { 'F-1': ['missing evidence, counterevidence, location, suggestion', 'severity must be high, medium or low'] });
+  assert.match(reviewRepairPrompt(issues), /complete corrected JSON object/);
 });
 
-test('evaluateInitial keeps unstructured text for verification', () => {
-  const { result, issues } = evaluateInitial('I found a race in /src/a.ts when two writers overlap.', { prefix: 'R', assigned: ['/src/a.ts'] });
+test('evaluateInitial keeps unstructured text as the report: it is no review, and nothing in it is a finding', () => {
+  const { result, issues } = evaluateInitial('I found a race in /src/a.ts when two writers overlap.', { prefix: 'F', assigned: ['/src/a.ts'] });
   assert.equal(result.structured, false);
+  assert.equal(result.status, 'PARTIAL');
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.coverage, { files: [], gaps: ['The reviewer answer was not structured JSON.'] });
   assert.match(result.report, /race/);
+  assert.deepEqual(result.warnings, ['The reviewer answer was not structured; its text is kept as it is.']);
   assert.match(issues[0], /could not be used/);
 });
 
@@ -130,212 +135,102 @@ test('assignIds keeps valid IDs and renumbers missing or repeated ones', () => {
   assert.equal(warnings.size, 1);
 });
 
-test('evaluateFinal: complete decisions are accepted as-is', () => {
-  const originals = [finding('F-1'), finding('R-1')];
-  const answer = JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'Checked.' }], merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause.' }], rejected: [], needsInfo: [], newFindings: [finding('V-1')], report: 'Report' });
-  const { result, issues } = evaluateFinal(answer, { originals });
-  assert.deepEqual(issues, []);
-  assert.deepEqual(result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'R-1:MERGED']);
-  assert.equal(result.newFindings.length, 1);
-});
-
-test('evaluateFinal: missing decisions become a supplement request and are merged back', () => {
-  const originals = [finding('F-1'), finding('F-2'), finding('R-1')];
-  const first = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Report' }), { originals });
-  assert.deepEqual(first.repairIds.sort(), ['F-2', 'R-1']);
-  assert.match(first.issues[0], /No decision was given for: F-2, R-1/);
-  const prompt = finalRepairPrompt(first.issues, first.repairIds);
-  assert.match(prompt, /decisions only for: F-2, R-1/);
-  const second = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'F-2', status: 'REJECTED', reason: 'Guarded.' }, { id: 'R-1', status: 'merged', mergedInto: 'F-1', reason: 'Same.' }] }),
-    { originals, previous: first.result, supplement: true });
-  assert.deepEqual(second.issues, []);
-  assert.deepEqual(second.result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'F-2:REJECTED', 'R-1:MERGED']);
-  assert.equal(second.result.report, 'Report', 'A supplement keeps the earlier report.');
-});
-
-test('evaluateFinal degrades per item after repairs: UNREVIEWED and NEEDS_INFO, never discarding the rest', () => {
-  const originals = [finding('F-1'), finding('F-2'), finding('F-3')];
-  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE',
-    confirmed: [{ id: 'F-1', summary: 'Only a summary', reason: 'ok' }, { ...finding('F-2'), reason: 'ok' }],
-    merged: [], rejected: [], needsInfo: [], newFindings: [{ id: 'V-1', summary: 'incomplete' }], report: 'r' }), { originals });
-  assert.ok(issues.some(issue => /F-1: the confirmed finding is missing/.test(issue)));
-  assert.ok(issues.some(issue => /newFindings\[0\]/.test(issue)));
-  const statuses = Object.fromEntries(result.dispositions.map(d => [d.id, d.status]));
-  assert.deepEqual(statuses, { 'F-1': 'NEEDS_INFO', 'F-2': 'CONFIRMED', 'F-3': 'UNREVIEWED' });
-  assert.equal(result.newFindings.length, 0);
-  assert.equal(result.incompleteNewFindings.length, 1);
-  assert.ok(result.warnings.some(w => /UNREVIEWED/.test(w)));
-});
-
-test('evaluateFinal: a confirmation whose suggestion gives no correction is sent back, then is not eligible for comments', () => {
-  // The three confirmations of this kind in the stored live runs, all from gpt-6-luna: the reason refutes the claim.
-  for (const placeholder of ['N/A', 'Not applicable.', 'No correction needed.']) assert.ok(givesNoCorrection(placeholder), placeholder);
-  for (const placeholder of ['n/a', 'N.A.', '(none)', 'None.', '—', 'No change is required.', 'No changes are necessary', 'No fix needed', '不適用', '無', '不需要修正。', '无需修改'])
-    assert.ok(givesNoCorrection(placeholder), placeholder);
-  // Only the whole field counts: a correction that mentions such words is a correction.
-  for (const real of ['Restore the guard.', 'No change is needed in the parser; fix the caller to pass the length.', 'Return None when the list is empty.', 'Remove the N/A branch.', 'Use `n / a`.', '-'.repeat(61), ''])
-    assert.equal(Boolean(givesNoCorrection(real)), false, real);
-  const originals = [finding('F-1'), finding('F-2')];
-  const refuted = { ...finding('F-1', { suggestion: 'N/A' }), reason: 'Rejected because the callback installed at lines 638-647 contradicts the claim.' };
-  const first = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [refuted, { ...finding('F-2'), reason: 'Checked.' }], merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals });
-  assert.deepEqual(first.issues, ['F-1: confirmed, but its suggestion gives no correction ("N/A"). If the defect stands, state the correction; if your check refutes the claim, list F-1 under rejected with the refutation.']);
-  assert.deepEqual(first.repairIds, ['F-1'], 'Only that finding is asked about again.');
-  // The verifier decides which it meant; the runtime does not.
-  const rejected = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'F-1', status: 'REJECTED', reason: 'The callback at lines 638-647 enqueues the query.' }] }), { originals, previous: first.result, supplement: true });
-  assert.deepEqual(rejected.issues, []);
-  assert.deepEqual(rejected.result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:REJECTED', 'F-2:CONFIRMED']);
-  const corrected = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1', { suggestion: 'Enqueue the query before returning the promise.' }), status: 'CONFIRMED', reason: 'The promise path skips the queue.' }] }),
-    { originals, previous: first.result, supplement: true });
-  assert.deepEqual(corrected.issues, []);
-  assert.equal(corrected.result.dispositions[0].verifiedFinding.suggestion, 'Enqueue the query before returning the promise.');
-  // Left as it is after the correction turns, it stays in the report and out of the comments.
-  const left = first.result.dispositions[0];
-  assert.equal(left.status, 'NEEDS_INFO');
-  assert.match(left.reason, /^Rejected because .* \[Runtime: the confirmation lacks a correction in suggestion, so it is not eligible for comments\.\]$/);
-  assert.equal(left.partialFinding.suggestion, 'N/A');
-  assert.equal(first.result.dispositions[1].status, 'CONFIRMED', 'The other finding is kept.');
-});
-
-test('evaluateFinal rejects invalid merges and cycles per item', () => {
-  const originals = [finding('F-1'), finding('F-2'), finding('F-3')];
-  const { result } = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [], rejected: [], needsInfo: [], newFindings: [], report: 'r',
-    merged: [{ id: 'F-1', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' }, { id: 'F-3', mergedInto: 'F-9', reason: 'c' }] }), { originals });
-  assert.deepEqual(result.dispositions.map(d => d.status), ['UNREVIEWED', 'UNREVIEWED', 'UNREVIEWED']);
-});
-
-test('evaluateFinal asks for a consistent decision when a merge chain ends at a rejected target, then degrades to UNREVIEWED', () => {
-  const originals = [finding('F-1'), finding('R-1'), finding('R-2')];
-  const first = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [],
-    merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause.' }, { id: 'R-2', mergedInto: 'R-1', reason: 'Same cause.' }],
-    rejected: [{ id: 'F-1', reason: 'The candidate itself is valid; see the F-1 confirmation.' }], needsInfo: [], newFindings: [], report: 'r' }), { originals });
-  assert.ok(first.issues.some(issue => issue.startsWith('R-1: merged into F-1, which this answer marks REJECTED')));
-  assert.ok(first.issues.some(issue => issue.startsWith('R-2: merged into F-1, which this answer marks REJECTED')));
-  assert.deepEqual([...first.repairIds].sort(), ['F-1', 'R-1', 'R-2']);
-  // Left unresolved, the merged rows are shown as UNREVIEWED instead of vanishing behind the rejected target.
-  assert.deepEqual(first.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'REJECTED'], ['R-1', 'UNREVIEWED'], ['R-2', 'UNREVIEWED']]);
-  assert.match(first.result.dispositions[1].reason, /merged into F-1, which is REJECTED/);
-  assert.ok(first.result.warnings.some(w => /name a target that was not confirmed/.test(w)));
-  // A confirmation that lacks fields becomes NEEDS_INFO after normalization; a merge into it is settled on that final status.
-  const degraded = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ id: 'F-1', summary: 'Only a summary', reason: 'ok' }],
-    merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'Same cause.' }], rejected: [{ id: 'R-2', reason: 'Guarded.' }], needsInfo: [], newFindings: [], report: 'r' }), { originals });
-  assert.deepEqual(degraded.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'NEEDS_INFO'], ['R-1', 'UNREVIEWED'], ['R-2', 'REJECTED']]);
-  // A supplement that confirms the target clears the issue and keeps the merges.
-  const second = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1'), status: 'CONFIRMED', reason: 'Checked in source.' }] }),
-    { originals, previous: first.result, supplement: true });
-  assert.deepEqual(second.issues, []);
-  assert.deepEqual(second.result.dispositions.map(d => [d.id, d.status]), [['F-1', 'CONFIRMED'], ['R-1', 'MERGED'], ['R-2', 'MERGED']]);
-  // Merges into a confirmed finding or into another shard's finding raise nothing.
-  const fine = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }],
-    merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'same' }, { id: 'R-2', mergedInto: 'X-9', reason: 'same' }], rejected: [], needsInfo: [], newFindings: [], report: 'r' }),
-    { originals, allIds: ['F-1', 'R-1', 'R-2', 'X-9'] });
-  assert.deepEqual(fine.issues, []);
-});
-
-test('evaluateFinal: cross-shard merge targets are allowed when listed in allIds', () => {
-  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'R-7', reason: 'Same.' }], confirmed: [], rejected: [], needsInfo: [], newFindings: [], report: '' }),
-    { originals: [finding('F-1')], allIds: ['F-1', 'R-7'] });
-  assert.deepEqual(issues, []);
-  assert.equal(result.dispositions[0].status, 'MERGED');
-});
-
-test('evaluateFinal judges a decision row by its own fields, not only by the list it is in', () => {
-  const originals = [finding('F-1'), finding('F-2'), finding('R-1'), finding('R-2'), finding('R-3')];
-  // As in a live PR #3 verifier: merges written into "confirmed" next to a real confirmation.
-  const { result, issues } = evaluateFinal(JSON.stringify({ status: 'COMPLETE',
-    confirmed: [{ ...finding('F-1'), reason: 'Checked.' }, { id: 'R-1', mergedInto: 'F-1', reason: 'Same cause and fix.' }],
-    merged: [{ ...finding('F-2'), status: 'CONFIRMED', reason: 'Checked.' }],
-    rejected: [{ id: 'R-2', status: 'merged', mergedInto: 'F-2', reason: 'Same cause.' }, { id: 'R-3', mergedInto: 'F-1', reason: 'Guarded elsewhere.' }],
-    needsInfo: [], newFindings: [], report: 'r' }), { originals });
-  assert.deepEqual(issues, []);
-  assert.deepEqual(result.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:CONFIRMED', 'F-2:CONFIRMED', 'R-1:MERGED', 'R-2:MERGED', 'R-3:REJECTED']);
-  assert.equal(result.dispositions.find(d => d.id === 'F-2').verifiedFinding.summary, 'Defect F-2');
-  assert.equal(Object.hasOwn(result.dispositions.find(d => d.id === 'F-2').verifiedFinding, 'status'), false);
-  assert.ok(result.warnings.some(w => /3 decision\(s\) placed under another category were classified by their own fields/.test(w)));
-  // A confirmation that also names mergedInto stays a confirmation; a bare row without a merge target is still repaired.
-  const kept = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), mergedInto: 'F-2', reason: 'ok' }, { id: 'F-2', reason: 'ok' }],
-    merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals: [finding('F-1'), finding('F-2')] });
-  assert.equal(kept.result.dispositions[0].status, 'CONFIRMED');
-  assert.ok(kept.issues.some(issue => /F-2: the confirmed finding is missing/.test(issue)));
-  // A corrected disposition may carry the finding fields directly instead of a verifiedFinding wrapper.
-  const inline = evaluateFinal(JSON.stringify({ dispositions: [{ ...finding('F-1'), status: 'CONFIRMED', reason: 'ok' }] }), { originals: [finding('F-1')] });
-  assert.deepEqual(inline.issues, []);
-  assert.equal(inline.result.dispositions[0].verifiedFinding.evidence, 'HEAD drops the guard.');
-});
-
-test('evaluateFinal asks a verifier to confirm moving a finding to another file and records the initial location', () => {
-  const originals = [finding('R-1', { location: 'head:/tests/test_a.ts:11-13' }), finding('F-1')];
-  const answer = (rows, extra = {}) => JSON.stringify({ status: 'COMPLETE', confirmed: rows, merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'r', ...extra });
-  // Same-file line corrections need nothing, and a stray movedFrom is not kept.
-  const lines = evaluateFinal(answer([{ ...finding('R-1', { location: 'head:/tests/test_a.ts:12' }), reason: 'ok' }, { ...finding('F-1', { location: 'head:/src/a.ts:14', movedFrom: 'x' }), reason: 'ok' }]), { originals });
-  assert.deepEqual(lines.issues, []);
-  assert.equal(lines.result.dispositions.some(d => Object.hasOwn(d.verifiedFinding, 'movedFrom')), false);
-  // A silent move to another file gets one correction turn; the result already records where it came from.
-  const moved = evaluateFinal(answer([{ ...finding('R-1', { location: 'head:/src/a.ts:18-19' }), reason: 'ok' }, { ...finding('F-1'), reason: 'ok' }]), { originals });
-  assert.deepEqual(moved.repairIds, ['R-1']);
-  assert.match(moved.issues[0], /R-1: the location moved to another file \(head:\/tests\/test_a\.ts:11-13 → head:\/src\/a\.ts:18-19\)/);
-  assert.match(finalRepairPrompt(moved.issues, moved.repairIds), /movedFrom/);
-  const unconfirmed = moved.result.dispositions.find(d => d.id === 'R-1');
-  assert.equal(unconfirmed.status, 'CONFIRMED');
-  assert.equal(unconfirmed.verifiedFinding.movedFrom, 'head:/tests/test_a.ts:11-13');
-  assert.ok(moved.result.warnings.some(w => /R-1 \(from head:\/tests\/test_a\.ts:11-13\) to another file without confirming the move/.test(w)));
-  // Confirming the move keeps it; the runtime's record of the initial location wins over the model's text.
-  const confirmed = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The defect is in a.ts.', movedFrom: 'the test',
-    verifiedFinding: finding('R-1', { location: 'head:/src/a.ts:18-19' }) }] }), { originals, previous: moved.result, supplement: true });
-  assert.deepEqual(confirmed.issues, []);
-  assert.equal(confirmed.result.dispositions.find(d => d.id === 'R-1').verifiedFinding.movedFrom, 'head:/tests/test_a.ts:11-13');
-  assert.equal(confirmed.result.warnings.some(w => /without confirming the move/.test(w)), false);
-  // Returning to the candidate's file is not a move.
-  const restored = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'CONFIRMED', reason: 'The test expects the wrong value.',
-    verifiedFinding: finding('R-1', { location: 'head:/tests/test_a.ts:12-13' }) }] }), { originals, previous: moved.result, supplement: true });
-  assert.deepEqual(restored.issues, []);
-  assert.equal(Object.hasOwn(restored.result.dispositions.find(d => d.id === 'R-1').verifiedFinding, 'movedFrom'), false);
-});
-
 test('evaluateDuplicates only merges within the checked file and never loses a finding', () => {
-  const ids = ['F-1', 'R-2', 'R-3', 'V-1'];
-  const clean = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'R-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }], report: 'r' }), { ids });
+  const ids = ['F-1', 'F-2', 'F-3', 'F-4'];
+  const clean = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }], report: 'r' }), { ids });
   assert.deepEqual(clean.issues, []);
-  assert.deepEqual(clean.result.merges, [{ id: 'R-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }]);
+  assert.deepEqual(clean.result.merges, [{ id: 'F-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }]);
+  assert.deepEqual([clean.result.refused, clean.result.warnings, clean.result.report, clean.result.structured], [0, [], 'r', true]);
   assert.deepEqual(evaluateDuplicates('{"status":"COMPLETE","merged":[],"report":""}', { ids }).result.merges, []);
   // A chain ends at the finding that stays; invalid rows are reported and left out.
   const chained = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [
-    { id: 'R-3', mergedInto: 'R-2', reason: 'a' }, { id: 'R-2', mergedInto: 'F-1', reason: 'b' },
-    { id: 'X-9', mergedInto: 'F-1', reason: 'c' }, { id: 'V-1', mergedInto: 'V-1', reason: 'd' }, { id: 'F-1', mergedInto: 'R-2' } ], report: '' }), { ids });
-  assert.deepEqual(chained.result.merges.map(m => `${m.id}>${m.mergedInto}`), ['R-3>F-1', 'R-2>F-1']);
+    { id: 'F-3', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' },
+    { id: 'X-9', mergedInto: 'F-1', reason: 'c' }, { id: 'F-4', mergedInto: 'F-4', reason: 'd' }, { id: 'F-1', mergedInto: 'F-2' }, { id: 'F-3', mergedInto: 'F-1', reason: 'e' }], report: '' }), { ids });
+  assert.deepEqual(chained.result.merges.map(m => `${m.id}>${m.mergedInto}`), ['F-3>F-1', 'F-2>F-1']);
   assert.ok(chained.issues.some(issue => /merged\[2\]: id "X-9" is not an assigned finding/.test(issue)));
   assert.ok(chained.issues.some(issue => /merged\[3\]: mergedInto must name another assigned finding/.test(issue)));
   assert.ok(chained.issues.some(issue => /merged\[4\]: give a concrete reason/.test(issue)));
-  assert.ok(chained.result.warnings.some(w => /stay confirmed/.test(w)));
-  assert.match(duplicateRepairPrompt(chained.issues), /same root cause and need the same correction/);
-  // A cycle names no survivor: nothing in it is merged.
-  const cycle = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'R-2', reason: 'a' }, { id: 'R-2', mergedInto: 'F-1', reason: 'b' }], report: '' }), { ids });
-  assert.deepEqual(cycle.result.merges, []);
-  assert.ok(cycle.issues.some(issue => /form a cycle/.test(issue)));
+  assert.ok(chained.issues.some(issue => /merged\[5\]: F-3 is merged more than once/.test(issue)));
+  assert.equal(chained.issues.length, 4);
+  assert.deepEqual(chained.result.warnings, ['Some duplicate-check merges were invalid and were not applied; those findings stay reported.']);
+  assert.match(duplicateRepairPrompt(chained.issues), /only when both state the same root cause and need the same correction; two findings of one session stay separate\.$/);
+  assert.equal(duplicateRepairPrompt(chained.issues, { parseOnly: true }), parseRepairPrompt(chained.issues));
+  // A cycle names no survivor: nothing in it is merged, and a merge outside it still is.
+  const cycle = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' },
+    { id: 'F-4', mergedInto: 'F-3', reason: 'c' }], report: '' }), { ids });
+  assert.deepEqual(cycle.result.merges.map(m => `${m.id}>${m.mergedInto}`), ['F-4>F-3']);
+  assert.equal(cycle.issues.filter(issue => /form a cycle/.test(issue)).length, 2);
+  // A merge that leads into a cycle has no finding that stays either: it is left out with the cycle, and all three stay reported.
+  const intoCycle = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' },
+    { id: 'F-3', mergedInto: 'F-1', reason: 'c' }], report: '' }), { ids });
+  assert.deepEqual(intoCycle.result.merges, []);
+  assert.deepEqual(intoCycle.issues.map(issue => issue.slice(0, 4)), ['F-1:', 'F-2:', 'F-3:']);
   // No usable JSON: a correction turn, and no merge on its own.
-  const prose = evaluateDuplicates('R-2 repeats F-1.', { ids });
+  const prose = evaluateDuplicates('F-2 repeats F-1.', { ids });
   assert.equal(prose.result.structured, false);
   assert.deepEqual(prose.result.merges, []);
   assert.match(prose.issues[0], /could not be used/);
+  assert.deepEqual(prose.result.warnings, ['The duplicate check gave no usable answer; no finding was merged.']);
+  assert.ok(evaluateDuplicates('{"status":"COMPLETE","merged":"none","report":""}', { ids }).issues.some(issue => /"merged" must be an array/.test(issue)));
 });
 
-test('evaluateRatings only sets levels: a finding without a usable rating keeps the verifier\'s severity', () => {
-  const ids = ['F-1', 'R-2', 'V-1'];
+test('evaluateDuplicates never puts two findings of one reviewer session into one finding, directly or through a third', () => {
+  const ids = ['F-1', 'F-2', 'F-3', 'F-4'];
+  const merged = (rows, sessions) => evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: rows.map(([id, mergedInto]) => ({ id, mergedInto, reason: 'Same cause and fix.' })), report: '' }), { ids, sessions });
+  const pairs = result => result.merges.map(m => `${m.id}>${m.mergedInto}`);
+  // F-1 and F-3 come from one session, which filed them as two findings.
+  const sessions = { 'F-1': ['pass 1'], 'F-2': ['pass 2'], 'F-3': ['pass 1'], 'F-4': ['pass 3'] };
+  const across = merged([['F-2', 'F-1'], ['F-4', 'F-1']], sessions);
+  assert.deepEqual([pairs(across.result), across.issues, across.result.refused], [['F-2>F-1', 'F-4>F-1'], [], 0], 'Findings of different sessions merge as before.');
+  const direct = merged([['F-3', 'F-1'], ['F-2', 'F-1']], sessions);
+  assert.deepEqual(pairs(direct.result), ['F-2>F-1'], 'The refused merge is left out; the others are applied.');
+  assert.deepEqual(direct.issues, ['F-3 into F-1: F-3 and F-1 were both reported by the session "pass 1", which filed them as separate findings, so they cannot end up in one finding. Merge only the one that repeats the other session\'s finding, if any, and leave the other separate.']);
+  assert.equal(direct.result.refused, 1);
+  assert.deepEqual(direct.result.warnings, ['Some duplicate-check merges were invalid and were not applied (1 would have joined two findings of one reviewer session); those findings stay reported.']);
+  // Through a third finding: F-1 joins F-2, then F-3 may not join them. The answer's order decides which merge stands.
+  const through = merged([['F-1', 'F-2'], ['F-3', 'F-2']], sessions);
+  assert.deepEqual(pairs(through.result), ['F-1>F-2']);
+  assert.match(through.issues[0], /^F-3 into F-2: F-3 and F-1 were both reported by the session "pass 1"/);
+  const other = merged([['F-3', 'F-2'], ['F-1', 'F-2']], sessions);
+  assert.deepEqual(pairs(other.result), ['F-3>F-2']);
+  assert.match(other.issues[0], /^F-1 into F-2: F-1 and F-3 were both reported by the session "pass 1"/);
+  // A chain whose later link is refused keeps its earlier link, with the target it had.
+  const chain = merged([['F-4', 'F-3'], ['F-3', 'F-1']], sessions);
+  assert.deepEqual([pairs(chain.result), chain.result.refused], [['F-4>F-3'], 1]);
+  // A chain that is applied in full ends at the finding that stays, whichever order its links come in.
+  const free = { 'F-1': ['pass 1'], 'F-2': ['pass 2'], 'F-3': ['pass 3'], 'F-4': ['pass 4'] };
+  assert.deepEqual(pairs(merged([['F-3', 'F-2'], ['F-2', 'F-1'], ['F-4', 'F-3']], free).result), ['F-3>F-1', 'F-2>F-1', 'F-4>F-1']);
+  assert.deepEqual(pairs(merged([['F-2', 'F-1'], ['F-3', 'F-2'], ['F-4', 'F-3']], free).result), ['F-2>F-1', 'F-3>F-1', 'F-4>F-1']);
+  // A finding that stands for identical findings of two sessions counts for both.
+  const stands = merged([['F-2', 'F-1'], ['F-3', 'F-1']], { 'F-1': ['pass 1', 'pass 2'], 'F-2': ['pass 2'], 'F-3': ['pass 3'] });
+  assert.deepEqual([pairs(stands.result), stands.result.refused], [['F-3>F-1'], 1]);
+  assert.match(stands.issues[0], /^F-2 into F-1: F-2 and F-1 were both reported by the session "pass 2"/);
+  // The sessions of a group are those of all its members: after F-3 joined F-1, a finding of pass 3 may not join.
+  const grown = merged([['F-3', 'F-1'], ['F-4', 'F-1']], { 'F-1': ['pass 1'], 'F-3': ['pass 3'], 'F-4': ['pass 3'] });
+  assert.deepEqual(pairs(grown.result), ['F-3>F-1']);
+  assert.match(grown.issues[0], /^F-4 into F-1: F-4 and F-3 were both reported by the session "pass 3"/);
+  // Without session names nothing is refused: the rule needs to know who reported what.
+  assert.deepEqual(pairs(merged([['F-3', 'F-1'], ['F-2', 'F-1']]).result), ['F-3>F-1', 'F-2>F-1']);
+});
+
+test('evaluateRatings only sets levels: a finding without a usable rating keeps its reviewer\'s severity', () => {
+  const ids = ['F-1', 'F-2', 'F-3'];
   const clean = evaluateRatings(JSON.stringify({ status: 'COMPLETE', report: 'r', ratings: [
-    { id: 'F-1', severity: 'HIGH', reason: 'Data people keep is lost in ordinary use.' }, { id: 'R-2', severity: 'low', reason: 'A rare trigger, and the failure is recoverable.' },
-    { id: 'V-1', severity: 'medium', reason: 'A call that BASE handled now fails.' }] }), { ids });
+    { id: 'F-1', severity: 'HIGH', reason: 'Data people keep is lost in ordinary use.' }, { id: 'F-2', severity: 'low', reason: 'A rare trigger, and the failure is recoverable.' },
+    { id: 'F-3', severity: 'medium', reason: 'A call that BASE handled now fails.' }] }), { ids });
   assert.deepEqual(clean.issues, []);
   assert.equal(clean.result.structured, true);
-  assert.deepEqual(clean.result.ratings.map(row => `${row.id}:${row.severity}`), ['F-1:high', 'R-2:low', 'V-1:medium']);
+  assert.deepEqual(clean.result.ratings.map(row => `${row.id}:${row.severity}`), ['F-1:high', 'F-2:low', 'F-3:medium']);
   assert.deepEqual(clean.result.warnings, []);
   // Invalid rows are reported and left out, and every finding without a usable rating is named.
   const partial = evaluateRatings(JSON.stringify({ status: 'COMPLETE', report: '', ratings: [
-    { id: 'F-1', severity: 'critical', reason: 'a' }, { id: 'X-9', severity: 'low', reason: 'b' }, { id: 'R-2', severity: 'low', reason: 'c' }, { id: 'R-2', severity: 'high', reason: 'd' }] }), { ids });
-  assert.deepEqual(partial.result.ratings.map(row => `${row.id}:${row.severity}`), ['R-2:low']);
+    { id: 'F-1', severity: 'critical', reason: 'a' }, { id: 'X-9', severity: 'low', reason: 'b' }, { id: 'F-2', severity: 'low', reason: 'c' }, { id: 'F-2', severity: 'high', reason: 'd' }] }), { ids });
+  assert.deepEqual(partial.result.ratings.map(row => `${row.id}:${row.severity}`), ['F-2:low']);
   assert.ok(partial.issues.some(issue => /ratings\[0\]: severity must be high, medium or low/.test(issue)));
   assert.ok(partial.issues.some(issue => /ratings\[1\]: id "X-9" is not an assigned finding/.test(issue)));
-  assert.ok(partial.issues.some(issue => /ratings\[3\]: R-2 is rated more than once/.test(issue)));
-  assert.ok(partial.issues.some(issue => /No usable rating for F-1, V-1\./.test(issue)));
-  assert.ok(partial.result.warnings.some(warning => /2 finding\(s\) got no usable rating and keep the verifier's severity/.test(warning)));
+  assert.ok(partial.issues.some(issue => /ratings\[3\]: F-2 is rated more than once/.test(issue)));
+  assert.ok(partial.issues.some(issue => /No usable rating for F-1, F-3\./.test(issue)));
+  assert.deepEqual(partial.result.warnings, ['2 finding(s) got no usable rating and keep their reviewer\'s severity.']);
   assert.match(ratingRepairPrompt(partial.issues), /exactly one rating \(high, medium or low\) for every ID in assignment\.findingIds/);
   assert.ok(evaluateRatings('{"status":"COMPLETE","ratings":"none","report":""}', { ids }).issues.some(issue => /"ratings" must be an array/.test(issue)));
   // No usable JSON: a correction turn, and no level changes on its own.
@@ -343,16 +238,8 @@ test('evaluateRatings only sets levels: a finding without a usable rating keeps 
   assert.equal(prose.result.structured, false);
   assert.deepEqual(prose.result.ratings, []);
   assert.match(prose.issues[0], /could not be used/);
-  assert.match(prose.result.warnings[0], /the verifier's severities are kept/);
+  assert.deepEqual(prose.result.warnings, ['The severity rating gave no usable answer; the reviewers\' severities are kept.']);
   assert.equal(ratingRepairPrompt(prose.issues, { parseOnly: true }), parseRepairPrompt(prose.issues));
-});
-
-test('evaluateFinal keeps an unstructured verifier answer visible and asks for the full object', () => {
-  const { result, issues, repairIds } = evaluateFinal('The guard is missing; I confirm F-1.', { originals: [finding('F-1')] });
-  assert.equal(result.structured, false);
-  assert.equal(result.dispositions[0].status, 'UNREVIEWED');
-  assert.deepEqual(repairIds, ['F-1']);
-  assert.match(finalRepairPrompt(issues, repairIds, { full: true }), /complete verification JSON object/);
 });
 
 test('unescaped quotes inside inline code are repaired locally and disclosed', () => {
@@ -369,48 +256,34 @@ test('unescaped quotes inside inline code are repaired locally and disclosed', (
   assert.equal(escapeCodeSpanQuotes('{"a":"plain"}'), null);
 });
 
-test('a verifier resend after an unparsable answer carries no stale warnings (B1)', () => {
-  const originals = [finding('F-1'), finding('R-1')];
-  const first = evaluateFinal('{"status":"COMPLETE","confirmed":[{"id":"F-1" "summary": "x"}]}', { originals });
-  assert.equal(first.result.structured, false);
-  assert.ok(syntaxProblem(first.issues));
-  assert.match(parseRepairPrompt(first.issues), /identical content: do not shorten/);
-  const resend = evaluateFinal(JSON.stringify({ status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: [{ id: 'R-1', mergedInto: 'F-1', reason: 'same' }],
-    rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals, previous: first.result, supplement: Boolean(first.result.structured) });
-  assert.deepEqual(resend.issues, []);
-  assert.deepEqual(resend.result.warnings, [], 'Warnings from the failed first answer must not survive.');
-});
-
-test('a supplement keeps normalization notes but recomputes derived warnings', () => {
-  const originals = [finding('F-1'), finding('R-1')];
-  const first = evaluateFinal(JSON.stringify({ Status: 'COMPLETE', confirmed: [{ ...finding('F-1'), reason: 'ok' }], merged: 'not-an-array', rejected: [], needsInfo: [], newFindings: [], report: 'r' }), { originals });
-  assert.ok(first.result.warnings.some(w => /UNREVIEWED/.test(w)));
-  const merged = evaluateFinal(JSON.stringify({ dispositions: [{ id: 'R-1', status: 'MERGED', mergedInto: 'F-1', reason: 'same' }] }),
-    { originals, previous: first.result, supplement: true });
-  assert.equal(merged.result.warnings.some(w => /UNREVIEWED/.test(w)), false, 'Resolved items no longer count as unreviewed.');
-  assert.ok(merged.result.warnings.some(w => /non-array review section/i.test(w) || /kept as one entry/.test(w)), 'Normalization notes carry over.');
-});
-
-test('repair prompts: syntax errors ask for the same content; missing JSON asks for the full object', () => {
+test('repair prompts: syntax errors ask for the same content; other problems ask for the corrected object', () => {
   assert.equal(syntaxProblem(['Your answer could not be used: no JSON object was found.']), false);
-  assert.match(initialRepairPrompt(['x could not be parsed'], { parseOnly: true }), /not valid JSON[\s\S]*identical content/);
-  assert.match(initialRepairPrompt(['coverage missing']), /keep the existing wording/);
-  assert.match(finalRepairPrompt(['no JSON object was found'], ['F-1'], { full: true }), /complete verification JSON object/);
-  assert.match(finalRepairPrompt(['bad'], ['F-1'], { parseOnly: true }), /identical content/);
+  // An answer whose JSON does not parse is asked for again as it was; nothing of it is taken meanwhile.
+  const broken = evaluateInitial('{"status":"COMPLETE","findings":[{"id":"F-1" "summary": "x"}]}', { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.equal(broken.result.structured, false);
+  assert.ok(syntaxProblem(broken.issues));
+  assert.match(parseRepairPrompt(broken.issues), /identical content: do not shorten/);
+  assert.equal(reviewRepairPrompt(broken.issues, { parseOnly: true }), parseRepairPrompt(broken.issues));
+  assert.match(reviewRepairPrompt(['x could not be parsed'], { parseOnly: true }), /not valid JSON[\s\S]*identical content/);
+  assert.match(reviewRepairPrompt(['coverage missing']), /^AZPR runtime: your previous answer needs correction before it can be used\.\n- coverage missing\n\nReturn the complete corrected JSON object/);
+  assert.match(reviewRepairPrompt(['F-1: x']), /read the file with azpr_read_diff or azpr_read_file and correct the location/);
+  assert.match(reviewRepairPrompt(['F-1: x']), /keep the existing wording of fields that need no correction\.$/);
+  // The one follow-up turn of a reviewer that named unfinished work.
+  const followUp = reviewFollowUpPrompt({ gaps: ['The retry path was not traced.'], uncovered: ['/src/b.ts'] });
+  assert.match(followUp, /^AZPR runtime: your answer is PARTIAL and names work that is not finished\.\n- The retry path was not traced\.\n- Assigned files not listed as reviewed: \/src\/b\.ts\n/);
+  assert.match(followUp, /Keep a gap only for a limit you cannot close[\s\S]*status COMPLETE only when every assigned file is reviewed and no gap remains\.$/);
+  assert.match(reviewFollowUpPrompt({ uncovered: Array.from({ length: 23 }, (_, index) => `/src/f${index}.ts`) }), /\/src\/f19\.ts, and 3 more\n/);
 });
 
-test('evaluateInitial can require locations and tells item problems from the answer envelope', () => {
-  const { result, issues } = evaluateInitial(initialAnswer([finding('Q-1'), finding('Q-2', { location: '' })]), { prefix: 'Q', assigned: ['/src/a.ts'], requireLocation: true });
-  assert.deepEqual(result.invalid, { 'Q-2': ['missing location'] });
-  assert.match(issues.join('\n'), /findings\[1\] \(Q-2\): missing location/);
+test('evaluateInitial requires a location for every finding and tells item problems from the answer envelope', () => {
+  const { result, issues } = evaluateInitial(initialAnswer([finding('F-1'), finding('F-2', { location: '' })]), { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.deepEqual(result.invalid, { 'F-2': ['missing location'] });
+  assert.match(issues.join('\n'), /findings\[1\] \(F-2\): missing location/);
   assert.deepEqual(result.envelope, { findings: true, coverage: true });
-  // The verified modes still let the verifier settle a missing location.
-  assert.deepEqual(evaluateInitial(initialAnswer([finding('F-1', { location: '' })]), { prefix: 'F', assigned: ['/src/a.ts'] }).result.invalid, {});
+  assert.deepEqual(result.findings.map(row => row.id), ['F-1', 'F-2'], 'The finding stays in the answer: what becomes of it is the review\'s decision.');
   // Parsed JSON is not a usable review by itself.
-  const odd = evaluateInitial(JSON.stringify({ status: 'COMPLETE', findings: { summary: 'x' }, coverage: 'all', report: 'r' }), { prefix: 'Q' });
+  const odd = evaluateInitial(JSON.stringify({ status: 'COMPLETE', findings: { summary: 'x' }, coverage: 'all', report: 'r' }), { prefix: 'F' });
   assert.equal(odd.result.structured, true);
   assert.deepEqual(odd.result.envelope, { findings: false, coverage: false });
-  assert.deepEqual(evaluateInitial('no json here', { prefix: 'Q' }).result.envelope, { findings: false, coverage: false });
-  assert.match(quickRepairPrompt(['Q-1: x']), /read the file with azpr_read_diff or azpr_read_file and correct the location/);
-  assert.match(quickRepairPrompt(['the JSON could not be parsed (x)'], { parseOnly: true }), /not valid JSON/);
+  assert.deepEqual(evaluateInitial('no json here', { prefix: 'F' }).result.envelope, { findings: false, coverage: false });
 });

@@ -210,8 +210,9 @@ export function restartIndex(texts) {
 /**
  * Classify a failed stage for the runtime's retry policy.
  * - overflow: the host attempted compaction in the failed turn (context full) or
- *   the provider rejected size. A refused background summary
- *   (`experimental.background_compaction`) is not evidence: the turn went on, so
+ *   the provider rejected size. A refused background summary (OpenCode's
+ *   `compaction.background`, on by default in 2.3.2; before that
+ *   `experimental.background_compaction`) is not evidence: the turn went on, so
  *   its own failure decides.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
  *   unexpected host messages.

@@ -2,22 +2,62 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
-  publishableFindings, reviewVerification, combinationProblems, repeatProblems, placeOf, evaluateGrouping, groupingRepairPrompt,
+  publishableFindings, reviewMethod, reviewVerification, combinationProblems, repeatProblems, placeOf, evaluateGrouping, groupingRepairPrompt,
   automaticPublicationProblems, automaticPublicationRepeats,
   INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
   everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken, sharedMarker, linesMarker,
 } from '../src/comments.mjs';
+import { commentAttribution } from '../src/attribution.mjs';
 import { parsePullRequestUrl } from '../src/azure.mjs';
 
 const target = parsePullRequestUrl('https://dev.azure.com/org/proj/_git/repo/pullrequest/7');
 const head = 'b'.repeat(40);
 const finding = (id, severity = 'high', extra = {}) => ({ id, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', location: 'head:/src/a.ts:2', severity, suggestion: 's', ...extra });
+const body = id => { const { id: _id, ...rest } = finding(id); return rest; };
+
+// Comments are planned for three kinds of saved review (`reviewMethod`), and the fixtures below are one of each.
+// What the kinds share is tested once per kind (`eachKind`); the finding IDs are a test's own, since nothing here
+// depends on their letters (a review of 0.4.x has F-, R-, V- and Q- IDs, a review of this pipeline F- only).
+
+// A verified review as 0.4.x saved it: the findings its verifier confirmed are CONFIRMED rows with `verifiedFinding`.
+// The record says `verification: 'independent'` (0.4.6; older ones have no such field) and names no method.
 const review = (findings = [finding('F-1')], toolText = []) => ({
-  id: 'abcdef12', target, outputLanguage: 'en', attribution: 'AI-generated review; Models: `x/y`',
+  id: 'abcdef12', target, outputLanguage: 'en', attribution: 'AI-generated review; Models: `x/y`', profile: 'review', verification: 'independent',
   snapshot: { head, base: 'a'.repeat(40), files: ['/src/a.ts', '/src/b.ts'] },
   final: { dispositions: findings.map(f => ({ id: f.id, status: 'CONFIRMED', reason: 'ok', verifiedFinding: f })), newFindings: [] },
   toolText,
 });
+// A quick review as 0.4.x saved it: REPORTED rows that say which session reported them (`shard`), and no method.
+const quickReview = (dispositions, toolText = []) => ({ ...review([]), profile: 'quick', verification: 'none', toolText,
+  attribution: 'AI-generated review; not human review or approval. Review method: quick review, not independently verified. Models: `x/y`',
+  final: { dispositions, newFindings: [], coverageSummary: { complete: true, unreviewedFiles: 0, filesComplete: true, reasons: [] } } });
+// A review of this pipeline: each finding that passed the runtime's checks is a REPORTED row with the level in effect,
+// its reviewer's own level and the sessions that reported it. The record says `verification: 'none'` and its method.
+const METHOD = Object.freeze({ kind: 'reviewers', version: 1, requested: ['x/y', 'x/y'], passes: [{ pass: 1, model: 'x/y', sessions: 1, failed: 0 }, { pass: 2, model: 'x/y', sessions: 1, failed: 0 }],
+  duplicateCheck: { groups: 0, failed: 0, merged: 0, refused: 0 }, rating: { state: 'first', model: 'x/y', sessions: 1, failed: 0, rated: 0, kept: 0 } });
+const row = ({ id, ...own }, extra = {}) => ({ id, status: 'REPORTED', reason: 'r', finding: own, inline: true, reviewerSeverity: own.severity, shard: '1/1 pass 1', pass: 1, localId: id, sessions: ['1/1 pass 1'], ...extra });
+const reviewersRows = (dispositions, toolText = []) => ({ ...review([]), verification: 'none', method: METHOD, toolText,
+  attribution: 'AI-generated review; not human review or approval. Review method: findings checked by their reviewer against the source, no separate verification. Models: `x/y`',
+  final: { dispositions, newFindings: [], verification: 'none', method: METHOD,
+    coverageSummary: { complete: true, unreviewedFiles: 0, filesComplete: true, reasons: [], files: 2, passes: 2, reviewedOnce: 2, reviewedByAll: 2, failedSessions: 0 } } });
+
+// What a reviewer session read of /src/a.ts at HEAD. A finding whose reviewer alone checked it gets an inline comment
+// only on a quote found in such text, so the two kinds without a verifier have this read on record by default.
+const observed = [{ input: { path: '/src/a.ts', version: head }, output: 'line one\nconst value = load();\nline three\nline four\nline five\nline six\n' }];
+// `make(findings, toolText)` builds a review of one kind whose findings can all be published.
+const KINDS = {
+  verified: review,
+  reviewers: (findings = [finding('F-1')], toolText = observed) => reviewersRows(findings.map(f => row(f)), toolText),
+  quick: (findings = [finding('F-1')], toolText = observed) => quickReview(findings.map(({ id, ...own }) => ({ id, status: 'REPORTED', reason: 'r', finding: own, inline: true, shard: '1/1' })), toolText),
+};
+/**
+ * One test per kind of review, for what the kinds share: `run(t, { kind, make, none })`, where `none` says that no
+ * stage verified the findings (every kind but the verified one). By default the verified kind of 0.4.x and this
+ * pipeline's; a quick review of 0.4.x takes the same paths as the latter and is named where a test is about it.
+ */
+const eachKind = (name, run, kinds = ['verified', 'reviewers']) => {
+  for (const kind of kinds) test(`${name} [${kind}]`, t => run(t, { kind, make: KINDS[kind], none: kind !== 'verified' }));
+};
 const comment = (extra = {}) => ({ findingId: 'F-1', severity: 'high', path: '/src/a.ts', startLine: 2, endLine: 2, anchor: 'const value = load();', body: '🔴 high: Value is lost\n\nBody.', ...extra });
 const answer = (comments, skipped = [], extra = {}) => JSON.stringify({ status: 'READY', comments, skipped, ...extra });
 
@@ -28,24 +68,24 @@ test('titles are normalized to the verified severity label without double prefix
   assert.equal(normalizeTitle('Plain title', 'medium'), '🟡 medium: Plain title');
 });
 
-test('a clean page is accepted; formatting slips are corrected instead of failing the page', () => {
-  const r = review([finding('F-1'), finding('F-2', 'medium')]);
+eachKind('a clean page is accepted; formatting slips are corrected instead of failing the page', (t, { make }) => {
+  const r = make([finding('F-1'), finding('F-2', 'medium')]);
   const { result, issues, corrections } = evaluatePlanPage(answer([
     comment({ severity: 'HIGH', path: 'src/a.ts', body: 'High: lost value <!-- hidden -->' }),
     comment({ findingId: 'F-2', severity: 'high', startLine: 5, endLine: 9, anchor: 'line five\nline six', body: 'Medium thing' }),
-  ]), { review: r, assigned: r.final.dispositions.map(d => d.verifiedFinding) });
+  ]), { review: r, assigned: publishableFindings(r) });
   assert.deepEqual(issues, []);
   assert.equal(result.comments[0].path, '/src/a.ts');
   assert.equal(result.comments[0].body, '🔴 high: lost value &lt;!-- hidden --&gt;');
-  assert.equal(result.comments[1].severity, 'medium', 'The verified severity wins.');
+  assert.equal(result.comments[1].severity, 'medium', 'The severity of the review\'s finding wins.');
   assert.equal(result.comments[1].endLine, 6, 'The end line follows the quoted anchor.');
   assert.ok(corrections.some(c => c.action === 'use-verified-severity'));
   assert.ok(corrections.some(c => c.action === 'derive-end-line-from-anchor'));
 });
 
-test('real problems become repair issues first, then per-item skips on the final pass', () => {
-  const r = review([finding('F-1'), finding('F-2'), finding('F-3')]);
-  const assigned = r.final.dispositions.map(d => d.verifiedFinding);
+eachKind('real problems become repair issues first, then per-item skips on the final pass', (t, { make }) => {
+  const r = make([finding('F-1'), finding('F-2'), finding('F-3')]);
+  const assigned = publishableFindings(r);
   const text = answer([
     comment({ body: '🔴 high: ' + 'x'.repeat(INLINE_SOFT_LIMIT + 10) }),
     comment({ findingId: 'F-2', path: '/not/changed.ts' }),
@@ -59,13 +99,13 @@ test('real problems become repair issues first, then per-item skips on the final
   assert.deepEqual(final.result.comments.map(c => c.findingId), ['F-1'], 'A long body under the hard limit is kept on the final pass.');
   assert.deepEqual(final.result.skipped.map(s => s.findingId).sort(), ['F-2', 'F-3']);
   assert.match(final.result.skipped.find(s => s.findingId === 'F-2').reason, /not a changed file/);
-  const huge = evaluatePlanPage(answer([comment({ body: 'x'.repeat(INLINE_HARD_LIMIT + 1) })]), { review: review(), assigned: [finding('F-1')], final: true });
+  const huge = evaluatePlanPage(answer([comment({ body: 'x'.repeat(INLINE_HARD_LIMIT + 1) })]), { review: make(), assigned: [finding('F-1')], final: true });
   assert.equal(huge.result.comments.length, 0);
   assert.match(huge.result.skipped[0].reason, /exceeds/);
 });
 
-test('low-severity and unknown findings never become inline comments', () => {
-  const r = review([finding('F-1', 'low')]);
+eachKind('low-severity and unknown findings never become inline comments', (t, { make }) => {
+  const r = make([finding('F-1', 'low')]);
   const { result, issues, corrections } = evaluatePlanPage(answer([comment(), comment({ findingId: 'R-9' })]), { review: r, assigned: [finding('F-1', 'low')] });
   assert.deepEqual(issues, []);
   assert.equal(result.comments.length, 0);
@@ -73,26 +113,32 @@ test('low-severity and unknown findings never become inline comments', () => {
   assert.ok(corrections.some(c => c.action === 'drop-unassigned-comment'));
 });
 
-test('a skip that relies on another finding of this review gets a correction turn', () => {
+eachKind('a skip that relies on another finding of this review gets a correction turn', (t, { make, kind }) => {
   // As in a live PR #3 plan: R-12001 skipped because F-1009's comment on an earlier page "covered" it.
-  const r = review([finding('F-1009'), finding('R-12001', 'medium'), finding('F-1'), finding('F-10')]);
+  const r = make([finding('F-1009'), finding('R-12001', 'medium'), finding('F-1'), finding('F-10')]);
   const assigned = [finding('R-12001', 'medium'), finding('F-10')];
   const text = answer([], [{ findingId: 'R-12001', cause: 'existing-thread', reason: '已由先前頁面的F-1009 inline 留言覆蓋相同根因。' }, { findingId: 'F-10', cause: 'existing-thread', threadId: 42, reason: 'Already discussed in thread 42; F-10 is UTF-8 safe there (TF401174).' }]);
   const first = evaluatePlanPage(text, { review: r, assigned });
   assert.equal(first.issues.length, 1, 'Only the skip that names another finding is sent back; F-10 may name itself and is not read as F-1.');
-  assert.match(first.issues[0], /skip for R-12001 relies on F-1009: findings of this review are separate issues/);
+  // Either way another finding's comment covers nothing. A review whose duplicates were merged before planning
+  // (by this pipeline's duplicate check, or by the verifier of 0.4.x) is told so; a quick review of 0.4.x, which
+  // merged none, that findings share a comment only through a group the runtime lists.
+  const ways = 'or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).';
+  assert.equal(first.issues[0], kind === 'quick'
+    ? `skip for R-12001 relies on F-1009: another finding's comment does not cover it. Comment on R-12001 at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates or repeatCandidates group holds both and they state one defect, ${ways}`
+    : `skip for R-12001 relies on F-1009: findings of this review are separate issues (duplicates were merged before planning), so another finding's comment does not cover it. Comment on R-12001 at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, ${ways}`);
   assert.deepEqual(first.result.skipped.map(s => s.findingId), ['F-10']);
   const final = evaluatePlanPage(text, { review: r, assigned, final: true });
   assert.deepEqual(final.issues, []);
   assert.deepEqual(final.result.skipped.map(s => s.findingId), ['R-12001', 'F-10']);
   assert.match(final.result.skipped[0].reason, /\[Runtime: other findings of this review do not cover this one; it remains in the summary index\.\]$/);
   assert.ok(final.corrections.some(c => c.action === 'keep-skip-citing-other-finding' && c.cited.join() === 'F-1009'));
-});
+}, ['verified', 'reviewers', 'quick']);
 
-test('a skip names its cause, and the runtime checks the facts the cause states', () => {
+eachKind('a skip names its cause, and the runtime checks the facts the cause states', (t, { make }) => {
   // As in a live PR #3 plan: F-1 skipped for "no source passage" while the page showed its whole file.
-  const r = review([finding('F-1', 'medium', { location: 'head:/src/a.ts:18' }), finding('F-2', 'low'), finding('F-3'), finding('F-4'), finding('F-5', 'high', { location: 'head:/src/b.ts:2' })]);
-  const assigned = r.final.dispositions.map(d => d.verifiedFinding);
+  const r = make([finding('F-1', 'medium', { location: 'head:/src/a.ts:18' }), finding('F-2', 'low'), finding('F-3'), finding('F-4'), finding('F-5', 'high', { location: 'head:/src/b.ts:2' })]);
+  const assigned = publishableFindings(r);
   const sources = [{ path: '/src/a.ts', version: head, findingIds: ['F-1', 'F-3', 'F-4'], firstLine: 1, lastLine: 18, totalLines: 18, text: '1 | ...' }];
   const discussions = [{ threadId: 42, path: '/src/a.ts', line: 2 }];
   const text = answer([], [
@@ -130,9 +176,9 @@ test('confirmed findings for planning and the summary carry the final location o
   assert.deepEqual(confirmedFindings(r).map(f => [f.location, Object.hasOwn(f, 'movedFrom')]), [['head:/src/a.ts:18', false]]);
 });
 
-test('CONTINUE checkpoints, INCOMPLETE pages and unparseable answers degrade safely', () => {
-  const r = review([finding('F-1'), finding('F-2')]);
-  const assigned = r.final.dispositions.map(d => d.verifiedFinding);
+eachKind('CONTINUE checkpoints, INCOMPLETE pages and unparseable answers degrade safely', (t, { make }) => {
+  const r = make([finding('F-1'), finding('F-2')]);
+  const assigned = publishableFindings(r);
   const checkpoint = evaluatePlanPage(JSON.stringify({ status: 'CONTINUE', comments: [comment()], skipped: [], reason: 'Read page 3 of discussions next.' }), { review: r, assigned });
   assert.equal(checkpoint.result.status, 'CONTINUE');
   assert.equal(checkpoint.result.continuation, 'Read page 3 of discussions next.');
@@ -154,9 +200,12 @@ test('anchors are restored from observed HEAD text; ambiguous quotes are reporte
   assert.deepEqual({ startLine: restored.startLine, anchor: restored.anchor, found: restored.found }, { startLine: 2, anchor: 'const value = load();', found: true });
   const ambiguous = restoreAnchor({ path: '/src/a.ts', startLine: 9, endLine: 9, anchor: 'x' }, { snapshot: { head }, toolText: [{ input: { path: 'src/a.ts', v: head }, output: 'x\nx\n' }] });
   assert.equal(ambiguous.ambiguous, true);
-  const r = review([finding('F-1')], [{ input: { path: '/src/a.ts', version: head }, output: 'x\nx\n' }]);
-  const page = evaluatePlanPage(answer([comment({ anchor: 'x', startLine: 9, endLine: 9 })]), { review: r, assigned: [finding('F-1')] });
-  assert.ok(page.issues.some(issue => /appears several times/.test(issue)));
+  // A quote that is in the source twice is sent back, whatever kind of review it is planned for.
+  for (const [kind, make] of Object.entries(KINDS)) {
+    const r = make([finding('F-1')], [{ input: { path: '/src/a.ts', version: head }, output: 'x\nx\n' }]);
+    const page = evaluatePlanPage(answer([comment({ anchor: 'x', startLine: 9, endLine: 9 })]), { review: r, assigned: [finding('F-1')] });
+    assert.ok(page.issues.some(issue => /appears several times/.test(issue)), kind);
+  }
 });
 
 test('inline markers depend on PR, path and anchor only; summaries on head and inline markers', () => {
@@ -171,16 +220,19 @@ test('inline markers depend on PR, path and anchor only; summaries on head and i
   assert.notEqual(summaryMarker(target, head, [a]), summaryMarker(target, head, []));
 });
 
-test('assemblePlan builds exact saved content, offsets, ordinals and one summary', () => {
-  const r = review([finding('F-1'), finding('F-2'), finding('F-3', 'low')]);
-  const plan = assemblePlan(r, [
+eachKind('assemblePlan builds exact saved content, offsets, ordinals and one summary', (t, { make }) => {
+  const findings = [finding('F-1'), finding('F-2'), finding('F-3', 'low')];
+  const pages = [
     { comments: [comment(), comment({ findingId: 'F-2', body: '🔴 high: Second issue on the same line' })], skipped: [{ findingId: 'F-3', reason: 'Low severity.' }], summary: 'Purpose of the change.', summaryDetails: '### 💡 Improvement suggestions\n\n- Idea.' },
-  ]);
+  ];
+  const r = make(findings);
+  const plan = assemblePlan(r, pages);
   assert.equal(plan.comments.length, 2);
   assert.notEqual(plan.comments[0].marker, plan.comments[1].marker, 'Two comments on identical lines get distinct ordinals.');
   for (const item of plan.comments) {
     assert.ok(item.content.endsWith(item.marker));
     assert.match(item.content, /AI-generated review/);
+    assert.equal(item.content, `${item.body}\n\n---\n${r.attribution}\n\n${item.marker}`, 'The planner\'s text, the review\'s own disclosure line and the marker.');
     assert.equal(item.startOffset, 1);
     assert.equal(item.endOffset, 'const value = load();'.length);
   }
@@ -190,16 +242,15 @@ test('assemblePlan builds exact saved content, offsets, ordinals and one summary
   assert.match(plan.summary.content, /F-3/, 'Low findings stay in the index.');
   assert.match(plan.summary.content, /Improvement suggestions/);
   assert.deepEqual(publicationItems(plan).map(item => item.kind), ['summary', 'inline', 'inline']);
-  assert.equal(confirmedFindings(r).length, 3);
+  assert.equal(publishableFindings(r).length, 3);
+  // A marker is made of the PR, the file and the quoted lines, never of the review: a review of this pipeline
+  // finds the comment a review of 0.4.x posted on unchanged code, and the summary of the same comments.
+  const earlier = assemblePlan(review(findings), pages);
+  assert.deepEqual(publicationItems(plan).map(item => item.marker), publicationItems(earlier).map(item => item.marker));
 });
 
-const body = id => { const { id: _id, ...rest } = finding(id); return rest; };
-const quickReview = (dispositions, toolText = []) => ({ ...review([]), profile: 'quick', verification: 'none', toolText,
-  attribution: 'AI-generated review; not human review or approval. Review method: quick review, not independently verified. Models: `x/y`',
-  final: { dispositions, newFindings: [], coverageSummary: { complete: true, unreviewedFiles: 0, filesComplete: true, reasons: [] } } });
-
-test('a summary note from a page that may not write one is dropped, not repaired', () => {
-  const r = review();
+eachKind('a summary note from a page that may not write one is dropped, not repaired', (t, { make }) => {
+  const r = make();
   const text = answer([comment()], [], { summary: 'Not this page.', summaryDetails: '### Details' });
   const page = evaluatePlanPage(text, { review: r, assigned: [finding('F-1')], allowSummary: false });
   assert.deepEqual(page.issues, []);
@@ -228,38 +279,138 @@ test('publishable findings: confirmations for verified reviews, REPORTED for qui
   assert.deepEqual(confirmedFindings(quick), [], 'Quick findings are never confirmations.');
 });
 
-test('quick inline comments need a checked location and an anchor found in the HEAD source', () => {
-  const observed = [{ input: { path: '/src/a.ts', version: head }, output: 'line one\nconst value = load();\n' }];
-  const quick = quickReview([
-    { id: 'Q-1', status: 'REPORTED', reason: 'r', finding: body('Q-1'), inline: true },
-    { id: 'Q-2', status: 'REPORTED', reason: 'r', finding: body('Q-2'), inline: false },
-  ], observed);
-  const assigned = publishableFindings(quick);
-  const page = answer([comment({ findingId: 'Q-1' }), comment({ findingId: 'Q-2' })]);
-  const accepted = evaluatePlanPage(page, { review: quick, assigned });
-  assert.deepEqual(accepted.issues, []);
-  assert.deepEqual(accepted.result.comments.map(c => c.findingId), ['Q-1']);
-  assert.match(accepted.result.skipped.find(s => s.findingId === 'Q-2').reason, /cannot carry an inline comment/);
-  assert.ok(accepted.corrections.some(c => c.action === 'skip-location-without-inline'));
-  // An anchor that is not in the source is a correction turn, then a skip.
-  const unfound = answer([comment({ findingId: 'Q-1', anchor: 'not in the source' })], [{ findingId: 'Q-2', cause: 'no-inline-location', reason: 'Summary only.' }]);
-  assert.match(evaluatePlanPage(unfound, { review: quick, assigned }).issues.join('\n'), /anchor text was not found in the HEAD source/);
-  const final = evaluatePlanPage(unfound, { review: quick, assigned, final: true });
-  assert.deepEqual(final.result.comments, []);
-  assert.match(final.result.skipped.find(s => s.findingId === 'Q-1').reason, /No inline comment: the anchor text was not found/);
-  // Verified reviews keep their behavior.
-  const verified = review([finding('F-1')], observed);
-  assert.deepEqual(evaluatePlanPage(answer([comment({ anchor: 'not in the source' })]), { review: verified, assigned: confirmedFindings(verified) }).issues, []);
+test('a saved review says how its findings were produced: this pipeline, a verified or a quick review of 0.4.x, or nothing this version knows', () => {
+  const method = { kind: 'reviewers', version: 1 };
+  // This pipeline, whatever the mode: the record names its method and says that nothing verified its findings.
+  for (const profile of ['review', 'deep', 'quick']) assert.equal(reviewMethod({ profile, verification: 'none', method }), 'reviewers', profile);
+  // 0.4.x: a /pr-review or /pr-deep, whose verifier confirmed the findings (0.4.6 wrote "independent", records
+  // older than that field nothing), and a /pr-quick, which wrote "none" and no method.
+  for (const profile of ['review', 'deep']) for (const record of [{ profile }, { profile, verification: 'independent' }]) assert.equal(reviewMethod(record), 'verified', JSON.stringify(record));
+  assert.equal(reviewMethod({ profile: 'quick', verification: 'none' }), 'quick');
+  assert.deepEqual([reviewMethod(review()), reviewMethod(KINDS.reviewers()), reviewMethod(KINDS.quick())], ['verified', 'reviewers', 'quick'], 'The fixtures of this file.');
+  // Any other record is of no known kind. It is not taken for the nearest one.
+  const unknown = [
+    // Signals that contradict each other: a method beside a verified review's word, or without the word a method goes with.
+    { profile: 'review', verification: 'independent', method }, { profile: 'deep', method }, { profile: 'review', verification: 'bogus', method }, { profile: 'quick', verification: 'independent', method },
+    // A method or a version of it that this version does not know, or no usable method at all.
+    { profile: 'review', verification: 'none', method: { kind: 'verified', version: 1 } }, { profile: 'review', verification: 'none', method: { kind: 'panel', version: 1 } },
+    { profile: 'review', verification: 'none', method: { kind: 'reviewers', version: 2 } }, { profile: 'review', verification: 'none', method: { kind: 'reviewers', version: '1' } },
+    { profile: 'review', verification: 'none', method: { kind: 'reviewers' } }, { profile: 'review', verification: 'none', method: {} }, { profile: 'review', verification: 'none', method: null },
+    { profile: 'review', verification: 'none', method: 'reviewers' }, { profile: 'review', verification: 'none', method: [method] },
+    // A /pr-review or /pr-deep that says "none" without a method is neither verified nor a quick review of 0.4.x;
+    // a /pr-quick that claims verification, or says nothing, never existed.
+    { profile: 'review', verification: 'none' }, { profile: 'deep', verification: 'none' }, { profile: 'quick', verification: 'independent' }, { profile: 'quick' },
+    // No profile, or one that is no review mode.
+    { verification: 'none', method }, { verification: 'none' }, { verification: 'independent' }, {}, { profile: 'mystery', verification: 'none', method }, { profile: 'mystery' }, { profile: 'comment', verification: 'none' },
+    // A word for the verification that no version wrote.
+    { profile: 'review', verification: 'bogus' }, { profile: 'review', verification: null }, { profile: 'review', verification: false },
+    undefined, null,
+  ];
+  for (const record of unknown) assert.deepEqual([reviewMethod(record), reviewVerification(record)], [null, null], JSON.stringify(record));
+  // What a review's comments disclose follows its kind: only a verified review of 0.4.x was independently verified.
+  assert.deepEqual([reviewVerification(review()), reviewVerification(KINDS.reviewers()), reviewVerification(KINDS.quick())], ['independent', 'none', 'none']);
+  assert.deepEqual([reviewVerification({ profile: 'deep', verification: 'none', method }), reviewVerification({ profile: 'review' })], ['none', 'independent']);
 });
 
-test('a quick summary uses the quick disclosure and says no defects were reported', () => {
+test('what may become comments follows the kind of review: confirmations, or the REPORTED findings that were not merged; an unknown kind has none', () => {
+  // A verified review of 0.4.x: what its verifier confirmed and what it added, never a rejected or a merged candidate.
+  const verified = review([finding('F-1'), finding('R-1', 'medium')]);
+  verified.final.dispositions.push({ id: 'F-2', status: 'REJECTED', reason: 'Not reachable.' }, { id: 'R-2', status: 'MERGED', mergedInto: 'F-1', reason: 'Same cause.' }, { id: 'F-3', status: 'UNREVIEWED', reason: 'No decision.' });
+  verified.final.newFindings.push(finding('V-1', 'low'));
+  assert.deepEqual(publishableFindings(verified).map(f => f.id), ['F-1', 'R-1', 'V-1']);
+  assert.deepEqual(publishableFindings({ ...verified, verification: undefined }).map(f => f.id), ['F-1', 'R-1', 'V-1'], 'A record older than the field.');
+  // A review of this pipeline: the REPORTED rows. A report that an identical record or the duplicate check merged
+  // into another is no finding of its own, and a finding the runtime could not check is none.
+  const rows = [
+    row(finding('F-1'), { reviewerSeverity: 'medium', ratedSeverity: 'high', sessions: ['1/1 pass 1', '1/1 pass 2'], alsoReported: [{ id: 'F-2', sessions: ['1/1 pass 2'], severity: 'low' }] }),
+    { id: 'F-2', status: 'MERGED', mergedInto: 'F-1', reason: 'One defect. [Runtime: merged by the duplicate check of independent reviewer sessions.]', mergedFinding: body('F-2'), reviewerSeverity: 'low', shard: '1/1 pass 2', pass: 2, localId: 'F-1', sessions: ['1/1 pass 2'] },
+    row(finding('F-3', 'low'), { inline: false, shard: '1/1 pass 2', pass: 2, sessions: ['1/1 pass 2'] }),
+    { id: 'F-4', status: 'NEEDS_INFO', reason: 'The location check failed. [Runtime: not eligible for comments.]', partialFinding: body('F-4'), shard: '1/1 pass 1', pass: 1, localId: 'F-3', sessions: ['1/1 pass 1'] },
+    { id: 'F-5', status: 'MERGED', mergedInto: 'F-3', reason: 'Identical in every field to F-3. [Runtime: exact duplicate.]', mergedFinding: body('F-3'), shard: '1/1 pass 1', pass: 1, localId: 'F-4', sessions: ['1/1 pass 1'] },
+  ];
+  const current = reviewersRows(rows);
+  // Each carries the finding's own fields with the level in effect, whether it can stand inline and its session;
+  // nothing else of the record (the reviewer's level, the sessions that also reported it) reaches the planner.
+  assert.deepEqual(publishableFindings(current), [{ ...body('F-1'), id: 'F-1', shard: '1/1 pass 1' }, { ...body('F-3'), severity: 'low', id: 'F-3', inline: false, shard: '1/1 pass 2' }]);
+  assert.deepEqual(confirmedFindings(current), [], 'Nothing of it is a confirmation.');
+  for (const profile of ['deep', 'quick']) assert.deepEqual(publishableFindings({ ...current, profile }).map(f => f.id), ['F-1', 'F-3'], profile);
+  // A record whose kind is not known has nothing to publish, whatever rows it holds: it is never read as the kind its rows look like.
+  for (const [name, record] of [
+    ['a record of this pipeline without its method', { ...current, method: undefined }], ['one with an unknown method', { ...current, method: { kind: 'reviewers', version: 2 } }],
+    ['one that claims verification', { ...current, verification: 'independent' }], ['one without a profile', { ...current, profile: undefined }],
+    ['a verified record that names a method', { ...verified, method: METHOD }], ['a verified record that says "none"', { ...verified, verification: 'none' }],
+    ['a verified record without a profile', { ...verified, profile: undefined }], ['a verified record as a quick review', { ...verified, profile: 'quick' }],
+    ['a record without its findings', { id: 'abcdef12', profile: 'quick' }],
+  ]) {
+    assert.equal(reviewMethod(record), null, name);
+    assert.deepEqual([publishableFindings(record), commentFindings(record), everyFindingExcluded(record)], [[], [], false], name);
+  }
+  // So nothing of it can be adjusted either, and an offer for it lists no finding.
+  const lost = { ...current, method: undefined };
+  assert.throws(() => resolveAdjustments(lost, { exclude: ['F-1'] }), /^Error: \[AZPR\] Nothing was changed: F-1 is REPORTED, not a finding this review can publish\. Findings of review abcdef12 you can adjust: none\.$/);
+  assert.deepEqual(previewActions(lost).findings, []);
+});
+
+eachKind('inline comments on findings that no stage verified need a checked location and an anchor found in the HEAD source', (t, { kind }) => {
+  const source = [{ input: { path: '/src/a.ts', version: head }, output: 'line one\nconst value = load();\n' }];
+  // One finding on a changed HEAD file, one whose location cannot carry an inline comment.
+  const [one, other] = kind === 'quick' ? ['Q-1', 'Q-2'] : ['F-1', 'F-2'];
+  const dispositions = kind === 'quick'
+    ? [{ id: one, status: 'REPORTED', reason: 'r', finding: body(one), inline: true }, { id: other, status: 'REPORTED', reason: 'r', finding: body(other), inline: false }]
+    : [row(finding(one)), row(finding(other), { inline: false })];
+  const r = kind === 'quick' ? quickReview(dispositions, source) : reviewersRows(dispositions, source);
+  const assigned = publishableFindings(r);
+  const page = answer([comment({ findingId: one }), comment({ findingId: other })]);
+  const accepted = evaluatePlanPage(page, { review: r, assigned });
+  assert.deepEqual(accepted.issues, []);
+  assert.deepEqual(accepted.result.comments.map(c => c.findingId), [one]);
+  assert.match(accepted.result.skipped.find(s => s.findingId === other).reason, /cannot carry an inline comment/);
+  assert.ok(accepted.corrections.some(c => c.action === 'skip-location-without-inline'));
+  // An anchor that is not in the source is a correction turn, then a skip.
+  const unfound = answer([comment({ findingId: one, anchor: 'not in the source' })], [{ findingId: other, cause: 'no-inline-location', reason: 'Summary only.' }]);
+  assert.match(evaluatePlanPage(unfound, { review: r, assigned }).issues.join('\n'), /anchor text was not found in the HEAD source/);
+  const final = evaluatePlanPage(unfound, { review: r, assigned, final: true });
+  assert.deepEqual(final.result.comments, []);
+  assert.match(final.result.skipped.find(s => s.findingId === one).reason, /No inline comment: the anchor text was not found/);
+  // Without any source on record there is no text to find the quote in: the comment is refused, not taken on trust.
+  assert.match(evaluatePlanPage(page, { review: { ...r, toolText: [] }, assigned }).issues.join('\n'), new RegExp(`comment for ${one}: the anchor text was not found in the HEAD source`));
+  // Verified reviews of 0.4.x keep their behavior: the declared lines stand.
+  const verified = review([finding('F-1')], source);
+  assert.deepEqual(evaluatePlanPage(answer([comment({ anchor: 'not in the source' })]), { review: verified, assigned: confirmedFindings(verified) }).issues, []);
+}, ['reviewers', 'quick']);
+
+test('a summary carries the disclosure of its review and speaks of confirmed defects only for a verified review', () => {
+  const empty = [{ status: 'READY', comments: [], skipped: [], summaryDetails: '' }];
   const quick = { ...quickReview([]), summaryAttribution: 'AI-generated review; not human review or approval. Review method: quick review, not independently verified; coverage incomplete (1 changed file(s) not reviewed). Models: `x/y`' };
-  const plan = assemblePlan(quick, [{ status: 'READY', comments: [], skipped: [], summaryDetails: '' }]);
+  const plan = assemblePlan(quick, empty);
   assert.match(plan.summary.content, /^🤖 AI-generated review; not human review or approval\. Review method: quick review, not independently verified; coverage incomplete \(1 changed file\(s\) not reviewed\)\./);
   assert.match(plan.summary.content, /No defects reported; this does not establish that the code is bug-free\./);
   assert.doesNotMatch(plan.summary.content, /confirmed/i);
   // The marker depends on the PR, head and inline markers only, never on the disclosure.
   assert.equal(plan.summary.marker, summaryMarker(quick.target, quick.snapshot.head, []));
+  // A review of this pipeline: its own disclosure, with the coverage in the summary, and the same wording for no findings.
+  const current = { ...reviewersRows([]), summaryAttribution: 'AI-generated review; not human review or approval. Review method: findings checked by their reviewer against the source, no separate verification; coverage incomplete (1 changed file(s) not reviewed). Models: `x/y`' };
+  const now = assemblePlan(current, empty);
+  assert.equal(now.summary.content, `🤖 ${current.summaryAttribution}\n\n## PR Review Summary\n\nhigh: 0 · medium: 0 · low: 0\n\nNo defects reported; this does not establish that the code is bug-free.\n\n${now.summary.marker}`);
+  assert.equal(now.summary.marker, plan.summary.marker, 'The same summary marker, whatever the review says of itself.');
+  // Without a line of its own the summary uses the comments' disclosure.
+  assert.match(assemblePlan(reviewersRows([]), empty).summary.content, /^🤖 AI-generated review; not human review or approval\. Review method: findings checked by their reviewer against the source, no separate verification\. Models: `x\/y`\n\n/);
+  // A verified review of 0.4.x keeps its words.
+  const before = assemblePlan(review([]), empty);
+  assert.equal(before.summary.content, `🤖 AI-generated review; Models: \`x/y\`\n\n## PR Review Summary\n\nhigh: 0 · medium: 0 · low: 0\n\nNo confirmed defects found; this does not establish that the code is bug-free.\n\n${before.summary.marker}`);
+  assert.equal(before.summary.marker, plan.summary.marker);
+});
+
+test('the disclosure line of every kind of review, in each language, holds nothing that automatic publication leaves to a person', () => {
+  const provenance = { stages: [{ model: 'provider/reviewer' }, { model: 'provider/other-reviewer#high' }] };
+  const gaps = [undefined, { complete: false, unreviewedFiles: 2, filesComplete: true, reasons: ['shard-failed'] }, { complete: false, unreviewedFiles: 3, filesComplete: false, reasons: ['partial-file-list', 'reviewer-gaps', 'shard-failed'] }];
+  for (const [kind, make] of Object.entries(KINDS)) for (const language of ['en', 'zh-TW', 'zh-CN']) for (const coverage of gaps) {
+    const line = commentAttribution(provenance, language, 'provider/planner', { method: kind, coverage });
+    const r = { ...make([finding('F-1')]), outputLanguage: language, attribution: commentAttribution(provenance, language, 'provider/planner', { method: kind }), summaryAttribution: line };
+    const plan = assemblePlan(r, [{ comments: [comment()], skipped: [], summary: 'Purpose of the change.' }]);
+    assert.ok(plan.summary.content.startsWith(`🤖 ${line}\n\n`) && plan.comments[0].content.includes(`\n\n---\n${r.attribution}\n\n`), `${kind} ${language}`);
+    assert.deepEqual(automaticPublicationProblems(plan), [], `${kind} ${language}: ${line}`);
+  }
 });
 
 // ------------------------------------------------------------ combined comments
@@ -287,6 +438,10 @@ test('one comment may combine a listed candidate group only under the combinatio
   // A verified review has no merge candidates: its verifier already merged what was reported twice.
   const verified = review([finding('F-1'), finding('F-2')], [{ input: { path: '/src/a.ts', version: head }, output: lines }]);
   assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'], { severity: 'high' })]), { review: verified, assigned: confirmedFindings(verified), candidates }).issues.join('\n'), /only the findings of one listed group/);
+  // A group that names its two findings changes nothing for it, also on a page that lists other groups.
+  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'], { severity: 'high' })]), { review: verified, assigned: confirmedFindings(verified), candidates: [['F-1', 'F-2']] }).issues.join('\n'), /only the findings of one listed group/);
+  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'], { severity: 'high' })]), { review: verified, assigned: confirmedFindings(verified), candidates: [['F-1', 'F-2']], repeats: [['F-3', 'F-4']] }).issues.join('\n'),
+    /combined comment for F-1, F-2: the findings are not all in one listed group \(mergeCandidates or repeatCandidates\)/);
 });
 
 test('combination rules: different sessions, one severity and a shared line for every member', () => {
@@ -338,15 +493,16 @@ test('the summary index follows accepted combinations only, and old plan records
 
 // ------------------------------------------------------------ one defect at several places
 const twoFiles = [{ input: { path: '/src/a.ts', version: head }, output: lines }, { input: { path: '/src/b.ts', version: head }, output: 'first\nsecond\nthird\n' }];
-// F-1 at /src/a.ts:2, F-2 at /src/b.ts:2-3, F-3 at /src/a.ts:4: three places, one severity.
-const repeated = (extra = []) => review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }),
+// F-1 at /src/a.ts:2, F-2 at /src/b.ts:2-3, F-3 at /src/a.ts:4: three places, one severity. A review of the kind
+// `make` builds, with both files on record as read at HEAD.
+const repeated = (make, extra = []) => make([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }),
   finding('F-3', 'medium', { location: 'head:/src/a.ts:4' }), ...extra], twoFiles);
 const third = comment({ findingId: 'F-3', severity: 'medium', startLine: 4, endLine: 4, anchor: 'line four', body: '🟡 medium: Other defect\n\nBody.' });
 // What a page shows of the two files as the runtime read them at HEAD: four lines and three.
 const shown = [{ path: '/src/a.ts', firstLine: 1, lastLine: 4, totalLines: 4 }, { path: '/src/b.ts', firstLine: 1, lastLine: 3, totalLines: 3 }];
 
-test('one comment may hold one defect made at several places: it stands at one place and carries the others', () => {
-  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+eachKind('one comment may hold one defect made at several places: it stands at one place and carries the others', (t, { make }) => {
+  const r = repeated(make), assigned = publishableFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   // The planner names F-2 first, but the anchor lies in F-1's lines: the comment stands there.
   const ok = evaluatePlanPage(answer([combined(['F-2', 'F-1']), third]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual(ok.issues, []);
@@ -368,9 +524,9 @@ test('one comment may hold one defect made at several places: it stands at one p
   assert.deepEqual(apart.result.comments.map(c => [c.findingId, c.otherPlaces]), [['F-1', undefined], ['F-2', undefined], ['F-3', undefined]]);
 });
 
-test('rules of a comment for several places: a listed group, one severity, different lines, an anchor in one member\'s lines', () => {
+eachKind('rules of a comment for several places: a listed group, one severity, different lines, an anchor in one member\'s lines', (t, { make, none }) => {
   const low = finding('F-4', 'low', { location: 'head:/src/b.ts:1' }), high = finding('F-5', 'high', { location: 'head:/src/b.ts:1' }), same = finding('F-6', 'medium');
-  const r = repeated([low, high, same]), assigned = confirmedFindings(r);
+  const r = repeated(make, [low, high, same]), assigned = publishableFindings(r);
   const refused = (page, repeats, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, ...options }).issues.join('\n');
   assert.match(refused([combined(['F-1', 'F-2'])], []), /only the findings of one listed group \(mergeCandidates or repeatCandidates\)/);
   assert.match(refused([combined(['F-1', 'F-3'])], [['F-1', 'F-2'], ['F-3', 'F-6']]), /not all in one listed group/);
@@ -378,27 +534,27 @@ test('rules of a comment for several places: a listed group, one severity, diffe
   assert.match(refused([combined(['F-1', 'F-2'], { startLine: 3, endLine: 3, anchor: 'line three' })], [['F-1', 'F-2']]),
     /anchor must lie on the lines of one of the combined findings \(F-1 at \/src\/a\.ts:2, F-2 at \/src\/b\.ts:2-3\)/);
   // An anchor that reaches beyond a finding's lines still stands at that finding.
-  const plain = repeated();
-  const wide = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { startLine: 1, endLine: 2, anchor: 'line one\nconst value = load();' }), third]), { review: plain, assigned: confirmedFindings(plain), repeats: [['F-1', 'F-2']], sources: shown });
+  const plain = repeated(make);
+  const wide = evaluatePlanPage(answer([combined(['F-1', 'F-2'], { startLine: 1, endLine: 2, anchor: 'line one\nconst value = load();' }), third]), { review: plain, assigned: publishableFindings(plain), repeats: [['F-1', 'F-2']], sources: shown });
   assert.deepEqual([wide.issues, wide.result.comments[0].findingId, wide.result.comments[0].startLine, wide.result.comments[0].endLine], [[], 'F-1', 1, 2]);
   // Quoted lines that reach from one finding's lines into another's name no place, and the runtime chooses none.
   const both = evaluatePlanPage(answer([combined(['F-1', 'F-3'], { startLine: 2, endLine: 4, anchor: 'const value = load();\nline three\nline four' }),
     comment({ findingId: 'F-2', severity: 'medium', path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second', body: '🟡 medium: Two\n\nBody.' })]),
-  { review: plain, assigned: confirmedFindings(plain), repeats: [['F-1', 'F-2', 'F-3']], sources: shown });
+  { review: plain, assigned: publishableFindings(plain), repeats: [['F-1', 'F-2', 'F-3']], sources: shown });
   assert.match(both.issues.join('\n'), /the anchor \(lines 2-4\) touches the lines of F-1 at \/src\/a\.ts:2 and F-3 at \/src\/a\.ts:4; quote lines of one of them only/);
   assert.match(refused([combined(['F-1', 'F-5'])], [['F-1', 'F-5']]), /must have the same severity/);
   assert.match(refused([combined(['F-1', 'F-6'])], [['F-1', 'F-6']]), /F-1 and F-6 are on the same lines, which is not another place/);
   assert.match(refused([combined(['F-1', 'F-9'])], [['F-1', 'F-9']]), /F-9 not assigned to this page/);
-  const outside = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/unchanged.ts:7' })], twoFiles);
-  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: outside, assigned: confirmedFindings(outside), repeats: [['F-1', 'F-2']], sources: [...shown, { path: '/src/unchanged.ts', firstLine: 1, lastLine: 9, totalLines: 9 }] }).issues.join('\n'),
+  const outside = make([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/unchanged.ts:7' })], twoFiles);
+  assert.match(evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: outside, assigned: publishableFindings(outside), repeats: [['F-1', 'F-2']], sources: [...shown, { path: '/src/unchanged.ts', firstLine: 1, lastLine: 9, totalLines: 9 }] }).issues.join('\n'),
     /F-2 \(\/src\/unchanged\.ts:7\) is not on lines of a changed file as the runtime read it at HEAD/);
   // A place is listed as its finding states it, so its lines must be in the file as the runtime read it at HEAD:
   // not beyond its end, not in a file the page could not read (deleted in this PR, say).
-  const beyond = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:40' })], twoFiles);
-  const placesOf = (r, sources) => evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2']], sources }).issues.join('\n');
+  const beyond = make([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:40' })], twoFiles);
+  const placesOf = (r, sources) => evaluatePlanPage(answer([combined(['F-1', 'F-2'])]), { review: r, assigned: publishableFindings(r), repeats: [['F-1', 'F-2']], sources }).issues.join('\n');
   assert.match(placesOf(beyond, shown), /F-2 \(\/src\/b\.ts:40\) is not on lines of a changed file as the runtime read it at HEAD/);
-  assert.match(placesOf(repeated(), shown.slice(0, 1)), /F-2 \(\/src\/b\.ts:2-3\) is not on lines of a changed file as the runtime read it at HEAD/);
-  assert.equal(placesOf(repeated(), shown.map(({ totalLines: _all, ...window }) => window)).includes('not on lines'), false, 'A window that ends at the lines is enough.');
+  assert.match(placesOf(repeated(make), shown.slice(0, 1)), /F-2 \(\/src\/b\.ts:2-3\) is not on lines of a changed file as the runtime read it at HEAD/);
+  assert.equal(placesOf(repeated(make), shown.map(({ totalLines: _all, ...window }) => window)).includes('not on lines'), false, 'A window that ends at the lines is enough.');
   assert.deepEqual(repeatProblems([low, { ...low, id: 'F-7', location: 'head:/src/b.ts:3' }]).problems, ['only high and medium findings get inline comments']);
   assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'base:/src/b.ts:3' })]).problems, ['every combined finding must be located on lines of a HEAD file']);
   assert.deepEqual(repeatProblems([finding('F-1'), finding('F-2', 'high', { location: 'head:/src/b.ts' })]).problems, ['every combined finding must be located on lines of a HEAD file']);
@@ -418,8 +574,10 @@ test('rules of a comment for several places: a listed group, one severity, diffe
   assert.ok(final.result.skipped.every(s => /did not meet the combination rules \(F-1 and F-6 are on the same lines/.test(s.reason)));
   // A skip that leans on another finding's comment is sent back with the way to combine them.
   const leaning = evaluatePlanPage(answer([combined(['F-1'], { findingId: 'F-1', findingIds: undefined }), third], [{ findingId: 'F-2', reason: 'Covered by the comment for F-1.' }]),
-    { review: repeated(), assigned: confirmedFindings(repeated()), repeats: [['F-1', 'F-2']], sources: shown });
-  assert.match(leaning.issues.join('\n'), /skip for F-2 relies on F-1[\s\S]*give one comment findingIds with both only when a listed repeatCandidates group holds them/);
+    { review: repeated(make), assigned: publishableFindings(repeated(make)), repeats: [['F-1', 'F-2']], sources: shown });
+  // Both kinds had their duplicates merged before planning, so both are pointed at the groups of repeats alone.
+  assert.match(leaning.issues.join('\n'), /skip for F-2 relies on F-1: findings of this review are separate issues \(duplicates were merged before planning\)[\s\S]*give one comment findingIds with both only when a listed repeatCandidates group holds them/);
+  assert.doesNotMatch(leaning.issues.join('\n'), /mergeCandidates/);
 });
 
 test('a quick review keeps both kinds apart: the same lines twice, and one defect at several places', () => {
@@ -434,9 +592,9 @@ test('a quick review keeps both kinds apart: the same lines twice, and one defec
     { review: r, assigned, candidates: [['Q-1', 'Q-1001']], repeats: [['Q-2', 'Q-3']], sources: shown }).issues.join('\n'), /anchor text was not found in the HEAD source/);
 });
 
-test('the plan lists the other places under the comment, from the findings\' own locations, and every place keeps its index row', () => {
-  const r = repeated();
-  const page = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'])]), { review: r, assigned: confirmedFindings(r), repeats: [['F-1', 'F-2', 'F-3']], sources: shown }).result;
+eachKind('the plan lists the other places under the comment, from the findings\' own locations, and every place keeps its index row', (t, { make }) => {
+  const r = repeated(make);
+  const page = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'])]), { review: r, assigned: publishableFindings(r), repeats: [['F-1', 'F-2', 'F-3']], sources: shown }).result;
   const plan = assemblePlan(r, [page]);
   const item = plan.comments[0];
   assert.equal(item.content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 Also at** (the same defect; fix these places with it):\n- \`/src/b.ts:2-3\` (F-2)\n- \`/src/a.ts:4\` (F-3)\n\n---\n${r.attribution}\n\n${item.linesMarker}\n\n${item.marker}`);
@@ -453,8 +611,8 @@ test('the plan lists the other places under the comment, from the findings\' own
   assert.equal(local.comments[0].content, `🟡 medium: Value is lost\n\nBody.\n\n**📍 其他位置**（同一個問題，請一併修正）：\n- \`/src/b.ts:2-3\`（F-2）\n- \`/src/a.ts:4\`（F-3）\n\n${local.comments[0].linesMarker}\n\n${local.comments[0].marker}`);
 });
 
-test('a comment for several places has a marker of its own, and one that says such a comment stands on its quoted lines', () => {
-  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+eachKind('a comment for several places has a marker of its own, and one that says such a comment stands on its quoted lines', (t, { make }) => {
+  const r = repeated(make), assigned = publishableFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   const planned = (page, extra = {}) => assemblePlan(r, [evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, ...extra }).result]);
   const [shared] = planned([combined(['F-1', 'F-2', 'F-3'])]).comments;
   // Its own marker follows the file, the quoted lines and the other places; the other one only the file and the quoted lines.
@@ -475,17 +633,17 @@ test('a comment for several places has a marker of its own, and one that says su
   assert.equal(single.summary.marker, summaryMarker(r.target, r.snapshot.head, single.comments.map(c => c.marker)));
   // Two comments that quote the same lines, one of each kind: the comment for one place has the first marker of
   // those lines whether it comes before the shared one or after it.
-  const twin = finding('F-4', 'medium'), both = repeated([twin]);
+  const twin = finding('F-4', 'medium'), both = repeated(make, [twin]);
   const alone = comment({ findingId: 'F-4', severity: 'medium', body: '🟡 medium: Twin\n\nBody.' });
   for (const page of [[alone, combined(['F-1', 'F-2', 'F-3'])], [combined(['F-1', 'F-2', 'F-3']), alone]]) {
-    const stacked = assemblePlan(both, [evaluatePlanPage(answer(page), { review: both, assigned: confirmedFindings(both), repeats, sources: shown }).result]).comments;
+    const stacked = assemblePlan(both, [evaluatePlanPage(answer(page), { review: both, assigned: publishableFindings(both), repeats, sources: shown }).result]).comments;
     assert.deepEqual(Object.fromEntries(stacked.map(c => [c.findingId, c.marker])), { 'F-4': inlineMarker(both.target, shared, 0), 'F-1': shared.marker });
   }
   // Two defects at the same places: each has a finding on the same lines of both files, their comments quote the same
   // line and list the same place. They are two comments, told apart by their order in the plan.
-  const twins = review([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }), finding('F-3', 'medium'), finding('F-4', 'medium', { location: 'head:/src/b.ts:2-3' })], twoFiles);
+  const twins = make([finding('F-1', 'medium'), finding('F-2', 'medium', { location: 'head:/src/b.ts:2-3' }), finding('F-3', 'medium'), finding('F-4', 'medium', { location: 'head:/src/b.ts:2-3' })], twoFiles);
   const pair = assemblePlan(twins, [evaluatePlanPage(answer([combined(['F-1', 'F-2']), combined(['F-3', 'F-4'], { body: '🟡 medium: Another defect\n\nBody.' })]),
-    { review: twins, assigned: confirmedFindings(twins), repeats: [['F-1', 'F-2'], ['F-3', 'F-4']], sources: shown }).result]).comments;
+    { review: twins, assigned: publishableFindings(twins), repeats: [['F-1', 'F-2'], ['F-3', 'F-4']], sources: shown }).result]).comments;
   assert.deepEqual(pair.map(c => c.findingIds), [['F-1', 'F-2'], ['F-3', 'F-4']]);
   assert.deepEqual(pair.map(c => c.marker), [sharedMarker(twins.target, pair[0], 0), sharedMarker(twins.target, pair[0], 1)]);
   assert.equal(pair[0].linesMarker, pair[1].linesMarker);
@@ -496,8 +654,8 @@ test('a comment for several places has a marker of its own, and one that says su
   assert.deepEqual(mixed.map(c => c.marker), [sharedMarker(r.target, one, 0), sharedMarker(r.target, other, 0)]);
 });
 
-test('a comment for several places and a comment for one place are not put on the same quoted lines of the PR', () => {
-  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+eachKind('a comment for several places and a comment for one place are not put on the same quoted lines of the PR', (t, { make }) => {
+  const r = repeated(make), assigned = publishableFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   const whole = [combined(['F-1', 'F-2', 'F-3'])];
   const [shared] = assemblePlan(r, [evaluatePlanPage(answer(whole), { review: r, assigned, repeats, sources: shown }).result]).comments;
   const plan = (posted, page = whole, options = {}) => evaluatePlanPage(answer(page), { review: r, assigned, repeats, sources: shown, posted, ...options });
@@ -535,14 +693,14 @@ test('a comment for several places and a comment for one place are not put on th
   assert.deepEqual([final.result.comments, final.result.skipped.map(s => s.findingId), final.issues], [[], ['F-1', 'F-2', 'F-3'], []]);
   assert.match(final.result.skipped[0].reason, /did not meet the combination rules \(the PR already has a comment of AZPR's on these quoted lines/);
   // Comments of this very plan are no comments of the PR: both kinds are planned on one line, as two comments always were.
-  const twin = finding('F-4', 'medium'), both = repeated([twin]);
+  const twin = finding('F-4', 'medium'), both = repeated(make, [twin]);
   const side = evaluatePlanPage(answer([comment({ findingId: 'F-4', severity: 'medium', body: '🟡 medium: Twin\n\nBody.' }), combined(['F-1', 'F-2', 'F-3'])]),
-    { review: both, assigned: confirmedFindings(both), repeats, sources: shown, posted: new Map() });
+    { review: both, assigned: publishableFindings(both), repeats, sources: shown, posted: new Map() });
   assert.deepEqual([side.issues, side.result.comments.map(c => c.findingId)], [[], ['F-4', 'F-1']]);
 });
 
-test('a planner\'s text never holds the heading of the list of other places, however it is written', () => {
-  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+eachKind('a planner\'s text never holds the heading of the list of other places, however it is written', (t, { make }) => {
+  const r = repeated(make), assigned = publishableFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   const heading = '**📍 Also at** (the same defect; fix these places with it):', row = '- `/src/unrelated.ts:25` (F-9)';
   const others = [combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })];
   for (const text of [`${heading}\n${row}`, ` ${heading}\n${row}`, `\t${heading}\n${row}`, `> ${heading}\n> ${row}`, `- ${heading}`, `See ${heading} for the rest.`,
@@ -561,8 +719,8 @@ test('a planner\'s text never holds the heading of the list of other places, how
   assert.deepEqual(plain.issues, []);
 });
 
-test('a comment for several places leaves no block open that would take the list of other places in', () => {
-  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+eachKind('a comment for several places leaves no block open that would take the list of other places in', (t, { make }) => {
+  const r = repeated(make), assigned = publishableFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   // The list follows the body after a blank line. A block that goes on over a blank line would take it in, so
   // such a body is sent back; the text after the title is the planner's.
   const planned = (text, options = {}) => evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { body: `🟡 medium: Value is lost\n\nSuggested fix:\n\n${text}` })]), { review: r, assigned, repeats, sources: shown, ...options });
@@ -618,16 +776,19 @@ test('a comment for several places leaves no block open that would take the list
   assert.deepEqual([single.issues, single.result.comments.map(c => c.findingId)], [[], ['F-1', 'F-2']]);
 });
 
-test('a comment for several places quotes lines the file has, also in a review whose single comments need not', () => {
-  const r = repeated(), assigned = confirmedFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
+eachKind('a comment for several places quotes lines the file has, also in a review whose single comments need not', (t, { make, none }) => {
+  const r = repeated(make), assigned = publishableFindings(r), repeats = [['F-1', 'F-2', 'F-3']];
   // /src/b.ts has three lines; the comment claims lines 3-4 and invents the fourth. Its lines would touch F-2 (lines 2-3).
   const invented = combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 3, endLine: 4, anchor: 'third\nfourth' });
   const refused = evaluatePlanPage(answer([invented]), { review: r, assigned, repeats, sources: shown });
   assert.match(refused.issues.join('\n'), /combined comment for F-1, F-2, F-3: the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts/);
-  // A single comment of an independently verified review keeps its declared lines when the quote is not found, as before.
+  // A single comment of an independently verified review keeps its declared lines when the quote is not found, as
+  // before; in a review whose findings no stage verified it needs the quote like the comment for several places.
   const single = evaluatePlanPage(answer([comment({ severity: 'medium', startLine: 9, endLine: 9, anchor: 'not in the file', body: '🟡 medium: One\n\nBody.' }), combined(['F-2', 'F-3'], { path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'second' })]),
     { review: r, assigned, repeats, sources: shown });
-  assert.deepEqual([single.issues, single.result.comments.map(c => [c.findingId, c.startLine])], [[], [['F-1', 9], ['F-2', 2]]]);
+  assert.deepEqual([single.issues, single.result.comments.map(c => [c.findingId, c.startLine])], none
+    ? [['comment for F-1: the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts.'], [['F-2', 2]]]
+    : [[], [['F-1', 9], ['F-2', 2]]]);
   // A quote that is found at other lines than declared is moved there, and the comment stands where the quote is.
   const moved = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { startLine: 1, endLine: 1, anchor: 'line four' })]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual([moved.issues, moved.result.comments[0].findingId, moved.result.comments[0].startLine], [[], 'F-3', 4]);
@@ -679,8 +840,8 @@ test('the grouping pass proposes groups under the same rules; what breaks one is
   assert.match(groupingRepairPrompt(['group F-1, F-9: F-9 is not in findings.']), /this grouping needs correction[\s\S]*- group F-1, F-9[\s\S]*leave them out of every group/);
 });
 
-test('automatic publication posts ordinary links and markup in examples, and leaves mentions, images, embedded content and script links to a person', () => {
-  const plan = texts => assemblePlan(review(texts.map((_, index) => finding(`F-${index + 1}`))),
+eachKind('automatic publication posts ordinary links and markup in examples, and leaves mentions, images, embedded content and script links to a person', (t, { make }) => {
+  const plan = texts => assemblePlan(make(texts.map((_, index) => finding(`F-${index + 1}`))),
     [{ comments: texts.map((text, index) => comment({ findingId: `F-${index + 1}`, anchor: `line ${index}`, body: `🔴 high: Issue ${index}\n\n${text}` })), skipped: [] }]);
   const plain = [
     '`List<String>` drops `Map<String, List<Integer>>` entries when `i < a && j > b`.',
@@ -747,16 +908,16 @@ test('automatic publication posts ordinary links and markup in examples, and lea
     assert.deepEqual(automaticPublicationProblems(plan([text])), [], text);
   }
   // Each problem names its item; the summary is checked like an inline comment, and several kinds are named together.
-  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Ask @<6D6A2A6A-0000-0000-0000-000000000000> and see ![i](y)' }]);
+  const noted = assemblePlan(make([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Ask @<6D6A2A6A-0000-0000-0000-000000000000> and see ![i](y)' }]);
   assert.deepEqual(automaticPublicationProblems(noted), [{ marker: noted.summary.marker, reason: 'the PR summary contains an @mention and an image' }]);
-  const combined = assemblePlan(review([finding('F-1'), finding('F-2')]), [{ comments: [comment({ findingIds: ['F-1', 'F-2'], body: '🔴 high: x\n\n<b onmouseover=x>' })], skipped: [] }]);
+  const combined = assemblePlan(make([finding('F-1'), finding('F-2')]), [{ comments: [comment({ findingIds: ['F-1', 'F-2'], body: '🔴 high: x\n\n<b onmouseover=x>' })], skipped: [] }]);
   assert.deepEqual(automaticPublicationProblems(combined), [{ marker: combined.comments[0].marker, reason: 'the comment for F-1, F-2 (/src/a.ts:2) contains HTML that embeds content or runs a script' }]);
   const mixed = plan(['Plain text.', '![d](d.png)']);
   assert.deepEqual(automaticPublicationProblems(mixed).map(problem => problem.marker), [mixed.comments[1].marker], 'Only the item with the image is held.');
 });
 
-test('automatic publication posts literal code, and checks code it cannot tell apart from markup', () => {
-  const held = text => automaticPublicationProblems(assemblePlan(review([finding('F-1')]), [{ comments: [comment({ body: `🔴 high: Issue\n\n${text}` })], skipped: [] }]))
+eachKind('automatic publication posts literal code, and checks code it cannot tell apart from markup', (t, { make }) => {
+  const held = text => automaticPublicationProblems(assemblePlan(make([finding('F-1')]), [{ comments: [comment({ body: `🔴 high: Issue\n\n${text}` })], skipped: [] }]))
     .map(problem => problem.reason.replace('the comment for F-1 (/src/a.ts:2) contains ', ''));
   // Fenced code blocks and code spans render as text.
   for (const text of [
@@ -797,7 +958,7 @@ test('automatic publication posts literal code, and checks code it cannot tell a
     ['`@<6D6A2A6A-0000-0000-0000-000000000000>` and\n```\n@<6D6A2A6A-0000-0000-0000-000000000000>\n```', 'an @mention'],
   ]) assert.deepEqual(held(text), [kind], text);
   // The summary is read the same way.
-  const noted = assemblePlan(review([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Escape `<script>` in templates.' }]);
+  const noted = assemblePlan(make([finding('F-1')]), [{ comments: [], skipped: [{ findingId: 'F-1', reason: 'x' }], summary: 'Escape `<script>` in templates.' }]);
   assert.deepEqual(automaticPublicationProblems(noted), []);
 });
 
@@ -830,9 +991,11 @@ test('automatic publication finds nothing new when every finding is already disc
 });
 
 const page = (extra = {}) => ({ status: 'READY', comments: [], skipped: [], summary: 'Purpose.', summaryDetails: '', ...extra });
+// The finding a row of a review's record holds: `verifiedFinding` in a verified review of 0.4.x, `finding` otherwise.
+const ownFinding = disposition => disposition.verifiedFinding ?? disposition.finding;
 
-test('without adjustments the comment findings, planner input and summary are exactly those of the review', () => {
-  const r = review([finding('F-1'), finding('F-2', 'low')]);
+eachKind('without adjustments the comment findings, planner input and summary are exactly those of the review', (t, { make }) => {
+  const r = make([finding('F-1'), finding('F-2', 'low')]);
   assert.deepEqual(commentFindings(r), publishableFindings(r));
   assert.equal(adjustmentInput(r), undefined);
   assert.equal(describeAdjustments(r), '');
@@ -846,8 +1009,8 @@ test('without adjustments the comment findings, planner input and summary are ex
   assert.deepEqual(assemblePlan(reset, [page()]), assemblePlan(r, [page()]));
 });
 
-test('adjusted findings: excluded ones are left out and a changed severity replaces the review\'s, also in the summary', () => {
-  const r = { ...review([finding('F-1'), finding('F-2'), finding('F-3', 'low')]), adjustments: { excluded: ['F-1'], severity: { 'F-2': 'low', 'F-3': 'medium' } } };
+eachKind('adjusted findings: excluded ones are left out and a changed severity replaces the review\'s, also in the summary', (t, { make }) => {
+  const r = { ...make([finding('F-1'), finding('F-2'), finding('F-3', 'low')]), adjustments: { excluded: ['F-1'], severity: { 'F-2': 'low', 'F-3': 'medium' } } };
   assert.equal(hasAdjustments(r), true);
   assert.deepEqual(commentFindings(r).map(f => [f.id, f.severity]), [['F-2', 'low'], ['F-3', 'medium']]);
   assert.equal(publishableFindings(r).find(f => f.id === 'F-2').severity, 'high', 'The review itself keeps its severities.');
@@ -860,11 +1023,11 @@ test('adjusted findings: excluded ones are left out and a changed severity repla
   assert.match(plan.summary.content, /high: 0 · medium: 1 · low: 1/);
   assert.match(describeAdjustments(r), /^Adjusted by a person after the preview \(not stated on the PR\):\n- Excluded from publication: F-1\n- F-2: severity high → low\n- F-3: severity low → medium$/);
   assert.equal(everyFindingExcluded({ ...r, adjustments: { excluded: ['F-1', 'F-2', 'F-3'], severity: {} } }), true);
-  assert.equal(everyFindingExcluded({ ...review([]), adjustments: { excluded: ['F-1'], severity: {} } }), false, 'A review without findings is not an excluded one.');
+  assert.equal(everyFindingExcluded({ ...make([]), adjustments: { excluded: ['F-1'], severity: {} } }), false, 'A review without findings is not an excluded one.');
 });
 
-test('published text that names an excluded finding gets a correction turn, then is dropped', () => {
-  const r = { ...review([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
+eachKind('published text that names an excluded finding gets a correction turn, then is dropped', (t, { make }) => {
+  const r = { ...make([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
   const assigned = [finding('F-2')];
   const text = answer([comment({ findingId: 'F-2', body: '🔴 high: Value is lost\n\nThe same cause as F-1.' })], [],
     { summary: 'Fixes F-1 and F-2.', summaryDetails: '### Additional finding details\n\nF-1 matters too.' });
@@ -886,16 +1049,20 @@ test('published text that names an excluded finding gets a correction turn, then
   assert.deepEqual(stray.result.comments.map(c => c.findingId), ['F-2']);
   assert.ok(stray.corrections.some(c => c.action === 'drop-unassigned-comment'));
   // Without adjustments the same text is accepted as before.
-  assert.deepEqual(evaluatePlanPage(text, { review: review([finding('F-1'), finding('F-2')]), assigned }).issues, []);
+  assert.deepEqual(evaluatePlanPage(text, { review: make([finding('F-1'), finding('F-2')]), assigned }).issues, []);
 });
 
-test('adjustment requests name publishable findings and replace whole lists', () => {
-  const base = review([finding('F-1'), finding('F-2'), finding('R-1', 'medium')]);
-  base.final.dispositions.push({ id: 'R-2', status: 'MERGED', mergedInto: 'F-1', reason: 'Same cause.' }, { id: 'F-9', status: 'REJECTED', reason: 'Not reachable.' });
+eachKind('adjustment requests name publishable findings and replace whole lists', (t, { make, none }) => {
+  const base = make([finding('F-1'), finding('F-2'), finding('R-1', 'medium')]);
+  // Rows that are no findings to adjust: a report merged into another one, and a claim the review did not let
+  // through (a verifier's rejection in 0.4.x; in this pipeline one the runtime could not check).
+  const refused = none ? { id: 'F-9', status: 'NEEDS_INFO', reason: 'The location check failed. [Runtime: not eligible for comments.]', partialFinding: body('F-9') }
+    : { id: 'F-9', status: 'REJECTED', reason: 'Not reachable.' };
+  base.final.dispositions.push({ id: 'R-2', status: 'MERGED', mergedInto: 'F-1', reason: 'Same cause.' }, refused);
   assert.throws(() => resolveAdjustments(base, { exclude: ['F-7'] }),
     /^Error: \[AZPR\] Nothing was changed: F-7 is not a finding of review abcdef12\. Findings of review abcdef12 you can adjust: F-1, F-2, R-1\.$/);
   assert.throws(() => resolveAdjustments(base, { exclude: ['R-2'] }), /R-2 was merged into F-1; adjust F-1 instead/);
-  assert.throws(() => resolveAdjustments(base, { severity: { 'F-9': 'low' } }), /F-9 is REJECTED, not a finding this review can publish/);
+  assert.throws(() => resolveAdjustments(base, { severity: { 'F-9': 'low' } }), new RegExp(`F-9 is ${none ? 'NEEDS_INFO' : 'REJECTED'}, not a finding this review can publish`));
   assert.throws(() => resolveAdjustments(base, { exclude: ['F-1'], severity: { 'F-1': 'low' } }), /F-1 cannot be excluded and given a severity at once/);
   const first = resolveAdjustments(base, { exclude: ['R-1', 'F-1'], severity: { 'F-2': 'medium' } });
   assert.deepEqual(first.next, { excluded: ['F-1', 'R-1'], severity: { 'F-2': 'medium' } });
@@ -928,8 +1095,8 @@ test('publication has started once an item was sent, may have landed or was foun
   }
 });
 
-test('adjustments never change the review: its final record and findings stay as the review left them', () => {
-  const r = { ...review([finding('F-1'), finding('F-2', 'low')]), adjustments: { excluded: ['F-1'], severity: { 'F-2': 'high' } } };
+eachKind('adjustments never change the review: its final record and findings stay as the review left them', (t, { make }) => {
+  const r = { ...make([finding('F-1'), finding('F-2', 'low')]), adjustments: { excluded: ['F-1'], severity: { 'F-2': 'high' } } };
   const before = structuredClone(r.final);
   commentFindings(r);
   adjustmentInput(r);
@@ -940,7 +1107,7 @@ test('adjustments never change the review: its final record and findings stay as
   evaluatePlanPage(answer([comment({ findingId: 'F-2' })]), { review: r, assigned: commentFindings(r), final: true });
   assert.deepEqual(r.final, before);
   assert.equal(commentFindings(r)[0].severity, 'high', 'The adjusted copy carries the new severity.');
-  assert.equal(r.final.dispositions[1].verifiedFinding.severity, 'low', 'The verified finding keeps its own.');
+  assert.equal(ownFinding(r.final.dispositions[1]).severity, 'low', 'The review\'s finding keeps its own.');
   assert.deepEqual(r.adjustments, { excluded: ['F-1'], severity: { 'F-2': 'high' } }, 'Resolving a request saves nothing by itself.');
 });
 
@@ -955,25 +1122,25 @@ test('the receipt note about earlier publications is empty unless the PR keeps s
   assert.match(describeEarlierText({ ...r, adjustments: { excluded: ['F-1'], severity: {} }, publication: new Map() }, 2), /^The PR has 2 other AZPR comment\(s\) from earlier publications/);
 });
 
-test('posted text that names an excluded finding is found, also in the summary rows the runtime renders', () => {
-  const cross = review([finding('F-1'), finding('F-2', 'low', { summary: 'Retry failure continues after the F-1 guard is restored' })]);
+eachKind('posted text that names an excluded finding is found, also in the summary rows the runtime renders', (t, { make }) => {
+  const cross = make([finding('F-1'), finding('F-2', 'low', { summary: 'Retry failure continues after the F-1 guard is restored' })]);
   const adjusted = { ...cross, adjustments: { excluded: ['F-1'], severity: {} } };
   adjusted.plan = assemblePlan(adjusted, [page()]);
   assert.deepEqual(excludedReferences(adjusted), ['the PR summary names F-1 (in the summary row of F-2)']);
   // Without exclusions, or without a reference, nothing holds the preview.
   assert.deepEqual(excludedReferences({ ...cross, plan: assemblePlan(cross, [page()]) }), []);
-  const clean = { ...review([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
+  const clean = { ...make([finding('F-1'), finding('F-2')]), adjustments: { excluded: ['F-1'], severity: {} } };
   clean.plan = assemblePlan(clean, [page()]);
   assert.deepEqual(excludedReferences(clean), []);
   // A comment's text is checked as well, as a last line behind the planner checks.
   const comment = { kind: 'inline', findingId: 'F-2', path: '/src/a.ts', startLine: 2, marker: 'm', content: 'Same cause as F-1.' };
   assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-1']);
-  assert.equal(cross.final.dispositions[1].verifiedFinding.summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
+  assert.equal(ownFinding(cross.final.dispositions[1]).summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
 });
 
-test('next steps after a preview need no review ID, use the finding IDs of the review and keep what is already adjusted', () => {
+eachKind('next steps after a preview need no review ID, use the finding IDs of the review and keep what is already adjusted', (t, { make }) => {
   const commands = text => text.split('\n').slice(1, -1).map(line => line.trim().split(/\s{2,}/)[0]);
-  const three = review([finding('F-1'), finding('R-2', 'medium'), finding('F-3', 'low')]);
+  const three = make([finding('F-1'), finding('R-2', 'medium'), finding('F-3', 'low')]);
   const plain = previewNextSteps(three);
   assert.match(plain, /^Next \(no review ID is needed while abcdef12 is this conversation's current review\):\n/);
   assert.match(plain, /\nEach --exclude or --severity list replaces the saved one\. For another review add its ID; \/pr-comment --list shows them\.$/);
@@ -984,21 +1151,21 @@ test('next steps after a preview need no review ID, use the finding IDs of the r
   assert.match(previewNextSteps(adjusted), /leave R-2 out as well, then read the new preview/);
   assert.match(previewNextSteps(adjusted), /publish F-3 as medium, then read the new preview/, 'A low finding is offered the next level up.');
   // Every remaining finding already has a changed level: the example changes the first again and keeps the other.
-  const both = { ...review([finding('F-1'), finding('R-2')]), adjustments: { excluded: [], severity: { 'F-1': 'low', 'R-2': 'medium' } } };
+  const both = { ...make([finding('F-1'), finding('R-2')]), adjustments: { excluded: [], severity: { 'F-1': 'low', 'R-2': 'medium' } } };
   assert.ok(commands(previewNextSteps(both)).includes('/pr-comment --severity R-2=medium,F-1=medium'));
   // A held preview is not offered for publication; nothing left to post offers only the way back.
   assert.equal(commands(previewNextSteps(three, { held: true })).includes('/pr-comment --publish'), false);
-  const none = { ...review([finding('F-1')]), adjustments: { excluded: ['F-1'], severity: {} } };
+  const none = { ...make([finding('F-1')]), adjustments: { excluded: ['F-1'], severity: {} } };
   assert.deepEqual(commands(previewNextSteps(none)), ['/pr-comment --reset', '/pr-comment --show']);
   // A review without findings previews a summary only.
-  assert.deepEqual(commands(previewNextSteps(review([]))), ['/pr-comment --publish', '/pr-comment --show']);
+  assert.deepEqual(commands(previewNextSteps(make([]))), ['/pr-comment --publish', '/pr-comment --show']);
 });
 
-test('the same next steps travel as data for the terminal panel: what can be posted, and each finding as it is adjusted', () => {
-  const three = { ...review([finding('F-1'), finding('R-2', 'medium', { summary: 'A summary\nover two lines   with spaces' }), finding('F-3', 'low')]),
+eachKind('the same next steps travel as data for the terminal panel: what can be posted, and each finding as it is adjusted', (t, { make }) => {
+  const three = { ...make([finding('F-1'), finding('R-2', 'medium', { summary: 'A summary\nover two lines   with spaces' }), finding('F-3', 'low')]),
     snapshot: { head, base: 'a'.repeat(40), files: ['/src/a.ts'], prId: 7, project: 'proj', repository: 'repo' },
     plan: { summary: { kind: 'summary', marker: 's' }, comments: [{ marker: 'a' }, { marker: 'b' }], skipped: [] } };
-  assert.deepEqual(previewActions(three), { review: 'abcdef12', state: commentToken(three), target: 'review abcdef12 (/pr-undefined) of PR #7 in proj/repo', plan: false, publish: true, posts: 3, adjust: true, findings: [
+  assert.deepEqual(previewActions(three), { review: 'abcdef12', state: commentToken(three), target: 'review abcdef12 (/pr-review) of PR #7 in proj/repo', plan: false, publish: true, posts: 3, adjust: true, findings: [
     { id: 'F-1', severity: 'high', summary: 'Defect F-1' }, { id: 'R-2', severity: 'medium', summary: 'A summary over two lines with spaces' }, { id: 'F-3', severity: 'low', summary: 'Defect F-3' }] });
   // A person's adjustments: the level a finding is published at, the review's own beside it, and what is left out.
   const adjusted = { ...three, adjustments: { excluded: ['F-1'], severity: { 'R-2': 'low' } } };
@@ -1006,23 +1173,23 @@ test('the same next steps travel as data for the terminal panel: what can be pos
     { id: 'R-2', severity: 'low', original: 'medium', summary: 'A summary over two lines with spaces' }, { id: 'F-3', severity: 'low', summary: 'Defect F-3' }]);
   // What the text leaves out, the data leaves out: a held preview, and one with nothing left to post.
   assert.equal(previewActions(three, { held: true }).publish, false);
-  assert.equal(previewActions({ ...review([finding('F-1')]), adjustments: { excluded: ['F-1'], severity: {} }, plan: { summary: null, comments: [], skipped: [] } }).publish, false);
+  assert.equal(previewActions({ ...make([finding('F-1')]), adjustments: { excluded: ['F-1'], severity: {} }, plan: { summary: null, comments: [], skipped: [] } }).publish, false);
   // A review that has no preview yet: one is planned first, so nothing can be posted, and its findings can be adjusted before it.
-  const unplanned = previewActions(review([finding('F-1')]));
+  const unplanned = previewActions(make([finding('F-1')]));
   assert.deepEqual([unplanned.plan, unplanned.publish, unplanned.posts, unplanned.adjust, unplanned.findings.map(item => item.id)], [true, false, 0, true, ['F-1']]);
   // Once publication has started the findings are not adjusted any more.
   assert.equal(previewActions({ ...three, publication: new Map([['s', { state: 'POSTED' }]]) }).adjust, false);
   assert.equal(previewActions({ ...three, publication: new Map([['s', { state: 'FAILED' }]]) }).adjust, true, 'A definite failure created nothing.');
   // A summary is cut, never a list: a review with more findings than the panel lists is adjusted with typed commands.
-  assert.equal(previewActions(review([finding('F-1', 'high', { summary: 'x'.repeat(500) })])).findings[0].summary.length, 160);
-  assert.equal(previewActions(review(Array.from({ length: 200 }, (_, index) => finding(`F-${index + 1}`)))).findings.length, 200);
-  assert.equal(previewActions(review(Array.from({ length: 201 }, (_, index) => finding(`F-${index + 1}`)))), undefined);
+  assert.equal(previewActions(make([finding('F-1', 'high', { summary: 'x'.repeat(500) })])).findings[0].summary.length, 160);
+  assert.equal(previewActions(make(Array.from({ length: 200 }, (_, index) => finding(`F-${index + 1}`)))).findings.length, 200);
+  assert.equal(previewActions(make(Array.from({ length: 201 }, (_, index) => finding(`F-${index + 1}`)))), undefined);
   // No model reads it, and it holds nothing but what the review's own text says of each finding.
   assert.deepEqual(Object.keys(previewActions(three).findings[0]), ['id', 'severity', 'summary']);
 });
 
-test('one word names a review\'s preview and adjustments: another preview or another adjustment is another word', () => {
-  const planned = { ...review([finding('F-1'), finding('R-2', 'medium')]), plan: { summary: null, comments: [], skipped: [] }, planCreatedAt: '2026-11-19T01:02:03.004Z' };
+eachKind('one word names a review\'s preview and adjustments: another preview or another adjustment is another word', (t, { make }) => {
+  const planned = { ...make([finding('F-1'), finding('R-2', 'medium')]), plan: { summary: null, comments: [], skipped: [] }, planCreatedAt: '2026-11-19T01:02:03.004Z' };
   const word = commentToken(planned);
   assert.match(word, /^[a-f0-9]{12}$/);
   // The same review says the same word, also from its saved record after a restart, and whatever else it holds.

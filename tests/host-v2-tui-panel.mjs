@@ -2,12 +2,19 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /** Opt-in exact-host fixture for the terminal panel. Fake loopback models and Azure DevOps REST only.
  * node tests/host-v2-tui-panel.mjs /absolute/path/opencode [--native [--package SPEC]]
  * The real TUI runs in a detached tmux session (tmux is required): the fixture reads its screen and
- * drives its keyboard and mouse. A review of six files starts from the TUI, and its reviewers are
- * held until the panel was seen with them running. Checked on the screen: while a run is under way
+ * drives its keyboard and mouse. A review of six files starts from the TUI: two passes (two models
+ * in models.review.reviewers) over two shards, so four reviewer sessions, which are held until the
+ * panel was seen with them running under the names the runtime gave them (pass 1/2 shard 1/2 and so
+ * on). The second pass files one finding per file and the first pass one more on the last file, so
+ * the review goes through every stage of the pipeline: a duplicate check merges that one, and the
+ * severity rating (rater: "", the default: the first reviewer model rates) sets every level, which
+ * the counts of the report and the preview then show. Checked on the screen: while a run is under way
  * the panel offers to stop it, which asks first and then sends /pr-stop for that run (a first review
  * is stopped that way, with a click and with the key); the panel opens by itself
  * and leaves the keyboard with the prompt; a click on a row opens that session, and the panel is
- * back with the conversation; the report and the comment preview are rendered Markdown; /pr-panel,
+ * back with the conversation; the report and the comment preview are rendered Markdown, the report
+ * read from the session of the last stage (the rating), which is the one session the review keeps;
+ * /pr-panel,
  * the panel's one command; a terminal too narrow for two panes is not taken over; after a review or
  * a preview the panel lists what can be done next in one row at its foot, level with the host's
  * status bar, and one that is picked asks first and then sends the command: findings are left out
@@ -17,8 +24,10 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * restarted with terminalPanel: manual: the notices carry the setting, and the panel opens only when
  * asked. The settings file starts without the settings newer versions brought: loading AZPR adds
  * them, and commands start all the same.
- * With --native the package is installed by OpenCode's plugin manager, where OpenCode 2.3.0 compiles
- * no JSX: the compiled view must load from there, and the compiler must not be installed with it.
+ * With --native the package is installed by OpenCode's plugin manager: the compiled view must load
+ * from there, and the compiler must not be installed with it (the package ships the compiled view
+ * because OpenCode 2.3.0 compiled no JSX of an installed package; this fixture does not try whether
+ * 2.3.2 would).
  * --package SPEC installs a published package (an npm version or a public Git commit) instead of
  * the one packed from this checkout.
  * Synthetic completions test the panel and the host, not model review quality.
@@ -48,8 +57,15 @@ const requests = [];
 let child, logs = '';
 // The reviewers' answers wait here until the panel was seen with their sessions running.
 let release; const held = new Promise(resolveHeld => { release = resolveHeld; });
-const levelOf = id => (Number(id.split('-')[1]) - 1) % 1000 % 3 === 2 ? 'low' : 'high';
+// The level the rating gives a finding of the review: every third one low, the others high. The reviewers file
+// everything as medium, so a count without a medium finding is the rating's.
+const levelOf = id => (Number(id.split('-')[1]) - 1) % 3 === 2 ? 'low' : 'high';
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
+// The two reviewer models of models.review.reviewers, one per pass: a request says which model it is for, never
+// which role. The first one also checks duplicates, rates and plans the comments, which its payload tells apart.
+const FIRST = 'first', SECOND = 'second';
+// Shards are made of the sorted paths, and findings are numbered by path: the last file holds the last findings.
+const LAST_FILE = [...files].sort().at(-1);
 const provider = createServer(async (request, response) => {
   try {
     let body = ''; for await (const chunk of request) body += chunk;
@@ -57,21 +73,31 @@ const provider = createServer(async (request, response) => {
     const users = input.messages.filter(m => m.role === 'user');
     let payload; try { payload = JSON.parse(textOf(users[0]?.content)); } catch { /* an ordinary conversation */ }
     const results = input.messages.filter(m => m.role === 'tool').length;
-    requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: payload?.assignment?.files?.length, work: payload?.commentWork?.kind, toolResults: results });
-    const fileTool = input.tools?.find(t => t.function.name === (input.model === 'risk' ? 'azpr_read_diff' : 'azpr_read_file'))?.function.name;
+    const assignment = payload?.assignment;
+    requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: assignment?.files?.length, stage: assignment?.kind ?? (assignment?.files ? 'review' : undefined), work: payload?.commentWork?.kind, tools: input.tools?.length ?? 0, toolResults: results });
+    const fileTool = input.tools?.find(t => t.function.name === (input.model === SECOND ? 'azpr_read_diff' : 'azpr_read_file'))?.function.name;
     let call, final;
-    if (payload?.assignment?.files && !payload.assignment.findingIds) {
-      const assigned = payload.assignment.files;
-      if (!results && fileTool) call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[0] } : { path: assigned[0], version: 'head' } };
+    if (assignment?.kind === 'duplicates') {
+      // What two sessions reported in one file: the later findings repeat the first one.
+      const [kept, ...repeated] = assignment.findingIds;
+      final = { status: 'COMPLETE', merged: repeated.map(id => ({ id, mergedInto: kept, reason: 'The same missing guard, reported by the other pass.' })), report: `Duplicates of ${assignment.file} merged.` };
+    } else if (assignment?.kind === 'rating') {
+      final = { status: 'COMPLETE', ratings: assignment.findingIds.map(id => ({ id, severity: levelOf(id), reason: 'Rated from the finding\'s text.' })), report: 'Levels set from the texts alone.' };
+    } else if (assignment?.files) {
+      const assigned = assignment.files;
+      // A finding counts only where its own session read the file: one read per assigned file, then the answer.
+      if (results < assigned.length && fileTool) call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[results] } : { path: assigned[results], version: 'head' } };
       else {
         await held;
-        const first = Number(payload.assignment.firstFindingId.split('-')[1]);
-        const findings = input.model === 'risk' ? assigned.map((path, i) => ({ id: `R-${first + i}`, summary: `\`${path.split('/').at(-1).replace('.ts', '')}\` drops the guard before it changes state`,
-          evidence: 'HEAD removes `if (!ready) return`, so **a second caller** sees the half-written state.', counterevidence: 'No caller re-checks the flag.', location: `head:${path}:1`, severity: i % 3 === 2 ? 'low' : 'high', suggestion: 'Restore the guard.' })) : [];
-        final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings, report: `Shard ${payload.assignment.shard} reviewed.` };
+        const named = path => path.split('/').at(-1).replace('.ts', '');
+        const finding = (id, path, line, summary) => ({ id, summary, evidence: 'HEAD removes `if (!ready) return`, so **a second caller** sees the half-written state.',
+          counterevidence: 'No caller re-checks the flag.', location: `head:${path}:${line}`, severity: 'medium', suggestion: 'Restore the guard.' });
+        // The second pass files one finding per file. The first pass files one, on the last file of the review and
+        // in other words: the one thing two sessions report, which the duplicate check then has to merge.
+        const findings = input.model === SECOND ? assigned.map((path, i) => finding(`F-${i + 1}`, path, 1, `\`${named(path)}\` drops the guard before it changes state`))
+          : assigned.filter(path => path === LAST_FILE).map(path => finding('F-1', path, 2, `\`${named(path)}\` is written without the guard`));
+        final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings, report: `Shard ${assignment.shard} reviewed.` };
       }
-    } else if (payload?.assignment?.findingIds) {
-      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, severity: levelOf(f.id), reason: 'Verified against HEAD and BASE.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: 'Advice: extract the guard into **one helper**.' };
     } else if (payload?.commentWork?.kind === 'group') {
       // The pass before several planning pages: nothing repeats in this review.
       final = { status: 'READY', groups: [] };
@@ -91,12 +117,19 @@ const provider = createServer(async (request, response) => {
 });
 provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
 const providerURL = `http://127.0.0.1:${provider.address().port}/v1`;
-const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 321, files, sources: Object.fromEntries(files.map(path => [path, 'fixture code\nsecond line\n'])) });
+// Each file loses a line between BASE and HEAD. A finding counts only where its own session read the file, and a
+// diff shows source only where the two versions differ: the pass that reads diffs would otherwise have read nothing.
+const BASE = 'a'.repeat(40), HEAD = 'b'.repeat(40);
+const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 321, files, base: BASE, head: HEAD,
+  sources: Object.fromEntries(files.flatMap(path => [[`${HEAD}:${path}`, 'fixture code\nsecond line\n'], [`${BASE}:${path}`, 'fixture code\nif (!ready) return\nsecond line\n']])) });
 const adoServer = createServer((request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
 adoServer.listen(0, '127.0.0.1'); await once(adoServer, 'listening');
 const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
 const settings = JSON.parse(await readFile(join(root, 'config/settings.example.json'), 'utf8'));
-for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
+// Two passes, each with a model of its own. The rater stays as the example has it ("": the first reviewer model
+// rates), so the review runs every stage a default setup runs.
+settings.models.review = { ...settings.models.review, reviewers: [`fixture/${FIRST}`, `fixture/${SECOND}`] };
+assert.equal(settings.models.review.rater, '');
 settings.workflow = { ...settings.workflow, shardFiles: 3, parallelSessions: 4 };
 // Each comment step is typed here; debug stays off, as installed, so a run deletes its sessions when it ends.
 settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
@@ -106,7 +139,7 @@ const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TERM: 'xterm-256color', CO
 const run = (command, args, options = {}) => { const result = spawnSync(command, args, { encoding: 'utf8', timeout: 180000, ...options }); assert.equal(result.status, 0, `${command} ${args.join(' ')}\n${result.stderr}${result.stdout}`); return result.stdout; };
 const config = { update: 'disable', snapshots: false, warming: false, model: 'fixture/chat',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
-    models: Object.fromEntries(['functional', 'risk', 'verifier', 'chat'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } };
+    models: Object.fromEntries([FIRST, SECOND, 'chat'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } };
 await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify(config));
 if (native) {
   let spec = published;
@@ -129,11 +162,15 @@ if (native) {
   await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
   run('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')]);
 }
-// The settings file as a version before these settings existed left it: loading AZPR writes them into it.
+// The settings file without some of the settings that have a default, as a version before those settings existed
+// would have left it: loading AZPR writes them into it. Without them it is still a file of this layout
+// (version 3, a list of reviewer models), which AZPR loads: the reviews below run with it.
 const settingsFile = native ? join(fixture, 'xdg-config', 'azpr', 'settings.json') : join(dirs.config, 'plugins', 'azpr-v2', 'settings.json');
 const newer = ['terminalPanel', 'deletePrivateSessions', 'progressNotices'];
 const older = JSON.parse(await readFile(settingsFile, 'utf8'));
+assert.deepEqual([older.version, older.models.review], [3, { reviewers: [`fixture/${FIRST}`, `fixture/${SECOND}`], rater: '' }]);
 for (const name of newer) { assert.ok(Object.hasOwn(older, name), name); delete older[name]; }
+assert.ok(Object.hasOwn(older.workflow, 'stageIdleSeconds'));
 delete older.workflow.stageIdleSeconds;
 await writeFile(settingsFile, JSON.stringify(older, null, 2) + '\n', { mode: 0o600 });
 
@@ -220,6 +257,32 @@ async function suggested(prefix, expected) {
   return shown;
 }
 
+/** The reviewer sessions of a review here, by the names the runtime gives them: two passes over two shards. */
+const REVIEWER_ROWS = ['Review pass 1/2 shard 1/2', 'Review pass 1/2 shard 2/2', 'Review pass 2/2 shard 1/2', 'Review pass 2/2 shard 2/2'];
+/** Whether the panel lists exactly those four as running, each with the session it opens. */
+const reviewersRunning = shown => JSON.stringify([...shown.matchAll(/● (\S[^\n]*?) running ses_[A-Za-z0-9]+/g)].map(match => match[1]).sort()) === JSON.stringify(REVIEWER_ROWS);
+/**
+ * A sentence as the panel draws it: it may be broken after any word (and, as the host breaks rows, inside a word
+ * after a slash or a hyphen), and the rest of the row and the start of the next one then belong to whatever is
+ * beside it (the conversation is on the panel's left).
+ */
+const BREAK = '[^\\n]*\\n[^\\n]{0,140}?';
+const wrapped = text => new RegExp(text.split(' ').map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[/-](?=.)/g, `$&(?:${BREAK})?`)).join(`(?: |${BREAK})`));
+/**
+ * A receipt's stage lines without what differs from run to run: each stage's role, the name of its session, its
+ * status and its model. Reviewer sessions start side by side, so their lines are sorted; the stages after them
+ * keep the order they ran in.
+ */
+const stageLines = receipt => {
+  const lines = [...receipt.matchAll(/^- (azpr-[a-z-]+(?: \[[^\]]+\])?: [A-Z_]+); session=ses_[A-Za-z0-9]+; (model=[^;\n]+)/gm)].map(match => `${match[1]}; ${match[2]}`);
+  const reviewer = line => /^azpr-review-reviewer[b-d]? /.test(line);
+  return [...lines.filter(reviewer).sort(), ...lines.filter(line => !reviewer(line))];
+};
+const REVIEWER_STAGES = status => [1, 2].flatMap(pass => [1, 2].map(shard => `azpr-review-reviewer${pass === 2 ? 'b' : ''} [pass ${pass}/2 shard ${shard}/2]: ${status}; model=fixture/${pass === 2 ? SECOND : FIRST}`));
+// /pr-review's description begins with these words; the command list shows the beginning of it.
+const REVIEW_SUGGESTION = 'Azure DevOps PR review; --help for options';
+const PR_URL = 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321';
+
 const result = { status: 'PASS', installation: published ? `native ${published}` : native ? 'native' : 'source' };
 let diagnose = async () => {};
 try {
@@ -277,9 +340,9 @@ try {
   // 0. A review under way can be stopped from the panel: its foot offers that, and nothing else, for as long as
   // the run has no receipt. Picking it asks first, with "no" first; "yes" sends /pr-stop for that run to the
   // session on screen, which the runtime takes like a typed command.
-  await command('pr-review', 'Verified Azure DevOps PR review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321');
+  await command('pr-review', REVIEW_SUGGESTION, PR_URL);
   const stopped = (await see(/AZPR ([a-f0-9]{8}) · RUNNING/, 'A review that starts did not open the panel.'))[1];
-  await see(shown => (shown.match(/● Initial [FR] shard [12]\/2 running ses_/g) ?? []).length === 4, 'The panel does not list the four reviewer sessions of the first review as running.');
+  await see(reviewersRunning, 'The panel does not list the four reviewer sessions of the first review (two passes over two shards) as running.');
   await see(/\[s\] Stop this run…/, 'While a review is under way the panel does not offer to stop it.');
   assert.doesNotMatch(screen(), /\[c\] Preview comments|\[p\] Post \d+ comments?|\[a\] Adjust findings…/, 'A run under way offers only to be stopped.');
   // The step is where the steps of a preview are: on the line of the host's status bar, under a line that crosses the panel.
@@ -287,8 +350,10 @@ try {
   const stopRow = during.findIndex(line => /\[s\] Stop this run…/.test(line));
   assert.match(during[stopRow], /ctrl\+p\s+commands\s+\[s\] Stop this run…/, 'The step is not level with the status bar.');
   assert.match(during[stopRow - 1], /─{40,}/, 'No line separates the step from what is above it.');
-  // The start notice says that the run can be stopped, as data: that is what the panel offers.
-  const startedNotice = (await queued()).find(item => (item.payload?.text ?? '').startsWith(`[AZPR ${stopped}] STARTED /pr-review`));
+  // The start notice names the passes and their models, and says that the run can be stopped, as data: that is
+  // what the panel offers.
+  const startedNotice = (await queued()).find(item => (item.payload?.text ?? '').startsWith(`[AZPR ${stopped}] STARTED `));
+  assert.equal(startedNotice.payload.text, `[AZPR ${stopped}] STARTED /pr-review (2 passes: fixture/${FIRST}, fixture/${SECOND}). Work continues in this OpenCode process; the result will return to this conversation. Stop with /pr-stop ${stopped}.`);
   assert.deepEqual(startedNotice.payload.metadata, { azpr: { next: { stop: stopped } } });
   // A click asks first; Enter alone takes the first row, and the run goes on. The click left the keyboard with the prompt.
   await click('Stop this run…');
@@ -325,11 +390,16 @@ try {
   await see(new RegExp(`AZPR ${stopped} · CANCELLED`), 'The run that was stopped from the panel did not end as CANCELLED.', 60000);
   result.stopSeconds = Math.round((Date.now() - answered) / 100) / 10;
   await see(shown => !/\[s\] Stop this run…/.test(shown), 'A run that has ended is still offered to be stopped.');
-  // Nothing more is coming of that run, and the panel does not say "yet" of it.
+  // Nothing more is coming of that run, and the panel does not say "yet" of it. It was stopped while its four
+  // reviewer sessions were at work: no later stage had a session, and none of the four holds a report to keep.
   await see(shown => /4 session\(s\) were deleted when their run ended\./.test(shown) && /This run ended with no report or preview to show\./.test(shown), 'The panel does not say that the stopped run left nothing to show.');
   const afterStop = await inbox();
   assert.ok(afterStop.some(text => text.startsWith(`[AZPR ${stopped}] Authorization revoked and cancellation requested`)), 'The runtime did not take the step like a typed /pr-stop, in the session on screen.');
-  assert.ok(afterStop.some(text => text.startsWith(`[AZPR ${stopped}] CANCELLED`)), 'The stopped run has no receipt in the conversation.');
+  const cancelled = afterStop.find(text => text.startsWith(`[AZPR ${stopped}] CANCELLED`));
+  assert.ok(cancelled, 'The stopped run has no receipt in the conversation.');
+  assert.equal(cancelled.split('\n')[0], `[AZPR ${stopped}] CANCELLED; verification none`);
+  assert.deepEqual(stageLines(cancelled), REVIEWER_STAGES('FAILED'));
+  assert.match(cancelled, /\nSession notice: 4 reviewer session\(s\) of this run were deleted when it ended; only a session that holds the report or draft is kept \(deletePrivateSessions\)\. debug\.enabled keeps them all\.\n/);
   assert.equal(azure.state.threads.length, 0);
   // The next review starts with the panel closed, as a first one does.
   await click('close');
@@ -337,18 +407,21 @@ try {
   result.stop = 'a run under way is stopped from the panel: asked first with "no" first, by a click and by its key';
 
   // 1. A review that starts opens the panel by itself, with its sessions running, and the prompt keeps the keyboard.
-  await command('pr-review', 'Verified Azure DevOps PR review', 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321');
+  await command('pr-review', REVIEW_SUGGESTION, PR_URL);
   const review = (await see(/AZPR ([a-f0-9]{8}) · RUNNING/, 'A review that starts did not open the panel.'))[1];
   assert.notEqual(review, stopped);
-  await see(shown => /Sessions \(click one to open it\)/.test(shown) && (shown.match(/● Initial [FR] shard [12]\/2 running ses_/g) ?? []).length === 4, 'The panel does not list the four reviewer sessions as running.');
+  await see(shown => /Sessions \(click one to open it\)/.test(shown) && reviewersRunning(shown), 'The panel does not list the four reviewer sessions as running.');
   type('typed-while-the-panel-opened');
   await see(/┃\s+typed-while-the-panel-opened/, 'The keyboard left the prompt when the panel opened by itself.');
   key('C-u');
-  result.opensByItself = 'on STARTED, four sessions running, the prompt keeps the keyboard';
+  result.opensByItself = 'on STARTED, the four reviewer sessions of two passes over two shards running, the prompt keeps the keyboard';
 
   // 2. A click on a row opens that session in a tab; back in the conversation the panel is there again.
-  await click('Initial R shard 1/2');
-  await see(new RegExp(`^.*Panel fixture.*\\[AZPR ${review}\\] Initial R sh`, 'm'), 'A click on a session row did not open that session.');
+  await click('Review pass 2/2 shard 1/2');
+  // The tab shows the beginning of the session's title, which names the pass; the session's own view has the title
+  // in full, over two rows beside the session's first message.
+  await see(new RegExp(`^.*Panel fixture.*\\[AZPR ${review}\\] Review pass 2`, 'm'), 'A click on a session row did not open that session in a tab.');
+  await see(new RegExp(`\\[AZPR ${review}\\] Review pass 2/2 *\\n[^\\n]*\\bshard 1/2`), 'The session that opened is not the one whose row was clicked.');
   await see(shown => !panelOpen(shown), 'The panel followed into the reviewer session.');
   await click('Panel fixture');
   await see(panelOpen, 'Back in the conversation the panel did not return.');
@@ -360,16 +433,27 @@ try {
   // The conversation shows the table as Markdown source (| Severity | Summary |); the panel draws it as a grid.
   await see(/│ Severity\s+│ Summary/, 'The report\'s table is not rendered in the panel.');
   // The cells show the characters the runtime escaped for Azure DevOps as themselves, backticks included.
-  await see(/R-1 — `invoice` drops the guard/, 'The summary cell does not show its text literally.');
-  await see(/○ Verification \(report\) complete ses_/, 'The session that holds the report is not listed.');
-  await see(/4 session\(s\) were deleted when their run ended\./, 'The panel does not say that the reviewer sessions were deleted.');
+  await see(/F-1 — `invoice` drops the guard/, 'The summary cell does not show its text literally.');
+  // The report waits in the session of the last stage, the severity rating: the one session the review keeps.
+  // The other five (four reviewer sessions and the duplicate check) were deleted, and are counted.
+  await see(/○ Severity rating \(report\) complete ses_/, 'The session that holds the report is not listed.');
+  await see(/5 session\(s\) were deleted when their run ended\./, 'The panel does not say that the sessions of the reviewers and of the duplicate check were deleted.');
+  assert.doesNotMatch(screen(), /[●○] (?:Review pass|Duplicate check)/, 'A deleted session is still listed.');
   // No preview follows this review by itself (afterReview is none in this fixture), so the panel offers one, and
   // the findings to adjust before it; nothing can be posted before a preview was read.
   await see(/\[c\] Preview comments\s+\[a\] Adjust findings…/, 'After a review that no preview follows the panel does not offer one, and the findings to adjust before it.');
   assert.doesNotMatch(screen(), /\[p\] Post \d+ comments?/);
   const receipt = (await inbox()).findLast(text => text.startsWith(`[AZPR ${review}] COMPLETE`));
   assert.doesNotMatch(receipt, /<azpr_report_data>/, 'With returnReport: receipt the report is only in its session; the panel read it there.');
-  result.report = 'rendered from the report session\'s inbox; deleted sessions counted';
+  // The receipt states status, coverage and verification apart, and names every stage that ran: the four
+  // reviewer sessions by their pass and shard, then the duplicate check and the rating, both with the first model.
+  assert.equal(receipt.split('\n')[0], `[AZPR ${review}] COMPLETE; coverage complete, 6/6 file(s) in every pass; verification none`);
+  assert.deepEqual(stageLines(receipt), [...REVIEWER_STAGES('COMPLETE'), `azpr-review-dedupe: COMPLETE; model=fixture/${FIRST}`, `azpr-review-rating: COMPLETE; model=fixture/${FIRST}`]);
+  assert.match(receipt, /\nSession notice: 5 reviewer session\(s\) of this run were deleted when it ended; only a session that holds the report or draft is kept \(deletePrivateSessions\)\. debug\.enabled keeps them all\.\n/);
+  const reportSession = /^- azpr-review-rating: COMPLETE; session=(ses_[A-Za-z0-9]+)/m.exec(receipt)[1];
+  assert.ok(receipt.includes(`\nReport delivery: report queued to session=${reportSession}.\n`), 'The report is not queued to the session of the rating.');
+  assert.match(screen(), new RegExp(`○ Severity rating \\(report\\) complete ${reportSession.slice(0, 12)}`), 'The row of the report session does not name that session.');
+  result.report = 'rendered from the inbox of the session that holds it, the rating\'s; the five deleted sessions counted';
 
   // 4. A comment preview: its run opens the panel as well, and the preview replaces the report.
   await click('close');
@@ -377,10 +461,13 @@ try {
   await command('pr-comment', 'Preview, adjust or publish review comments', '');
   const preview = (await see(/AZPR ([a-f0-9]{8}) · PREVIEW/, 'The preview did not open the panel.', 120000))[1];
   await see(new RegExp(`\\[AZPR ${preview}\\] PREVIEW; source review=${review}`), 'The panel does not name the preview it shows.');
-  // The preview as it would be posted, rendered: its disclosure line comes first (the conversation shows the model
-  // names in backticks, the panel draws them as code).
-  await see(/AI-generated review; not human review or approval\. Models: fixture\/functional/, 'The preview is not shown.');
-  await see(/high: 4 · medium: 0 · low: 2/, 'The preview\'s summary is not shown.');
+  // The preview as it would be posted, rendered: its disclosure line comes first, and names the method of this
+  // pipeline and the models of both passes (the conversation shows the model names in backticks, the panel draws
+  // them as code, so only the panel has the line in these words).
+  await see(wrapped(`AI-generated review; not human review or approval. Review method: findings checked by their reviewer against the source, no separate verification. Models: fixture/${FIRST}, fixture/${SECOND}`), 'The preview is not shown with its disclosure line.');
+  // The levels are the rating's: the reviewers filed every finding as medium, and the finding the duplicate check
+  // merged is not counted.
+  await see(/high: 4 · medium: 0 · low: 2/, 'The preview\'s summary is not shown, or its levels are not those of the rating.');
   assert.equal(azure.state.threads.length, 0, 'A preview posts nothing.');
   // What the preview offers next, as the receipt names it, is listed in the panel: the summary and four comments
   // can be posted, and the findings adjusted. Nothing was adjusted yet, so there is nothing to undo.
@@ -429,7 +516,7 @@ try {
   // start of a run (it can be stopped), the receipt of the review (no preview follows it by itself here), each
   // preview, and the saved preview shown again.
   for (const item of await queued()) {
-    const offers = /^\[AZPR [a-f0-9]{8}\] (?:STARTED \/pr-|PREVIEW;|COMPLETE\n)|^\[AZPR\] Saved preview /.test(item.payload?.text ?? '');
+    const offers = /^\[AZPR [a-f0-9]{8}\] (?:STARTED \/pr-|PREVIEW;|COMPLETE; coverage complete, 6\/6 file\(s\) in every pass; verification none\n)|^\[AZPR\] Saved preview /.test(item.payload?.text ?? '');
     assert.deepEqual(Object.keys(item.payload?.metadata?.azpr ?? {}), offers ? ['next'] : [], (item.payload?.text ?? '').slice(0, 60));
     assert.equal(item.payload?.metadata === undefined, !offers);
   }
@@ -481,7 +568,7 @@ try {
   // server, here after they were delivered. A command typed in that session is answered there, and the panel
   // shows it.
   const kept = (await api('/api/session')).data.filter(session => session.metadata?.azpr?.conversation === origin);
-  assert.deepEqual(kept.map(session => session.metadata.azpr.role), ['azpr-review-verifier'], 'The review keeps the session that holds its report.');
+  assert.deepEqual(kept.map(session => [session.metadata.azpr.role, session.id]), [['azpr-review-rating', reportSession]], 'The review keeps the session that holds its report: the one of the last stage, the rating.');
   tmux('kill-server');
   // A person talks to the conversation's own model: every notice that waited in its inbox is delivered, so the
   // inbox is empty and what AZPR told the conversation is among its messages. The notices are steered, so the
@@ -502,7 +589,7 @@ try {
   // The last thing the conversation was told is the saved preview shown again in step 8, which is about the review.
   await see(new RegExp(`AZPR ${review} · COMPLETE`), 'In the report session the panel does not show what the conversation was told last.');
   await see(new RegExp(`\\[AZPR\\] Saved preview of review ${review}`), 'It does not show the document read from the conversation\'s notices.');
-  await see(/○ Verification \(report\) complete ses_/, 'The session on screen is not listed as the one holding the report.');
+  await see(/○ Severity rating \(report\) complete ses_/, 'The session on screen is not listed as the one holding the report.');
   const own = async () => (await api(`/api/session/${kept[0].id}/inbox`)).data.map(item => item.payload?.text ?? '');
   // A comment run typed here: its notices arrive in this session, and the panel follows them.
   await command('pr-comment', 'Preview, adjust or publish review comments', '');
@@ -530,26 +617,27 @@ try {
   await see(/Adjust the findings before posting/, 'A click did not open the list of findings.');
   assert.doesNotMatch(screen(), /Apply, and plan the preview|apply ctrl\+s/, 'Something is to apply before anything was changed.');
   // Typing filters the list; the finding typed in full comes first.
-  type('R-1');
-  await see(/Findings\s+R-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings.');
+  type('F-1');
+  await see(/Findings\s+F-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings.');
   key('Enter');
-  await see(/R-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
-  await see(/The level the review gave it/, 'The review\'s own level is not marked.');
+  await see(/F-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
+  // The level the review gave it is the rating's: its reviewer filed it as medium.
+  await see(/As high +The level the review gave it/, 'The review\'s own level is not marked, or it is not the level the rating set.');
   type('Leave');
   await sleep(400);
   key('Enter');
   // The list is back: its last row applies the change and says what changes, and so does the foot of the dialog,
   // which stays in view however long the list is. A click there applies it.
   await see(/Apply, and plan the preview again/, 'The list did not come back with the row that applies the change.');
-  await see(/R-1 left out/, 'The row that applies the change does not say what changes.');
+  await see(/F-1 left out/, 'The row that applies the change does not say what changes.');
   await click('apply ctrl+s');
   const adjustedRun = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · PREVIEW/.exec(shown); return match && match[1] !== typedHere && match; }, 'The adjustment picked in the panel did not plan a new preview.', 120000))[1];
   // The preview that was planned again is shown from its beginning, though the one before it was read to its end.
   await see(/Sessions \(click one to open it\)/, 'The new preview is not shown from its beginning.');
-  await see(/Excluded from publication: R-1/, 'The new preview does not say what a person left out.');
+  await see(/Excluded from publication: F-1/, 'The new preview does not say what a person left out.');
   await see(/high: 3 · medium: 0 · low: 2/, 'The new preview still counts the finding that was left out.');
   await see(/\[p\] Post 4 comments…\s+\[a\] Adjust findings…\s+\[u\] Reset adjustments/, 'The row does not count what is left, or does not offer to reset the adjustment.');
-  assert.ok((await own()).some(text => text.startsWith(`[AZPR ${adjustedRun}] PREVIEW; source review=${review}`) && /Adjusted by a person: excluded R-1\./.test(text)), 'The runtime took the command as a typed one, in the session on screen.');
+  assert.ok((await own()).some(text => text.startsWith(`[AZPR ${adjustedRun}] PREVIEW; source review=${review}`) && /Adjusted by a person: excluded F-1\./.test(text)), 'The runtime took the command as a typed one, in the session on screen.');
   assert.equal(azure.state.threads.length, 0, 'An adjustment posts nothing.');
   // The clicks were buttons pressed: the prompt still has the keyboard.
   type('still-with-the-prompt');
@@ -572,17 +660,17 @@ try {
   await click('Sessions (click one to open it)');
   key('a');
   await see(/Adjust the findings before posting/, 'The key did not open the list of findings.');
-  type('R-2');
+  type('F-2');
   await sleep(400);
   key('Enter');
-  await see(/R-2: how is it published\?/, 'Picking the second finding did not ask what happens to it.');
+  await see(/F-2: how is it published\?/, 'Picking the second finding did not ask what happens to it.');
   type('Leave');
   await sleep(400);
   key('Enter');
   await see(/apply ctrl\+s/, 'The foot of the list does not offer to apply the change.');
   key('C-s');
   const secondRun = (await see(shown => { const match = /AZPR ([a-f0-9]{8}) · PREVIEW/.exec(shown); return match && match[1] !== adjustedRun && match[1] !== typedHere && match; }, 'The key at the foot of the list did not apply the adjustment.', 120000))[1];
-  await see(/Excluded from publication: R-1, R-2/, 'The second adjustment did not keep the first.');
+  await see(/Excluded from publication: F-1, F-2/, 'The second adjustment did not keep the first.');
   await see(/\[p\] Post 3 comments…/, 'The row does not count what is left after the second adjustment.');
   assert.ok((await own()).some(text => text.startsWith(`[AZPR ${secondRun}] PREVIEW; source review=${review}`)), 'The second adjustment has no receipt in the session on screen.');
   assert.equal(azure.state.threads.length, 0, 'An adjustment posts nothing.');
@@ -609,8 +697,16 @@ try {
 
   // What the panel must never do: ask a model, or fail to load.
   const conversationTurns = requests.filter(request => request.model === 'chat');
-  assert.deepEqual([...new Set(requests.map(request => request.model))].sort(), ['chat', 'functional', 'risk', 'verifier']);
-  assert.deepEqual(conversationTurns, turns, 'Only AZPR\'s reviewers, verifier and planner asked a model, and the fixture\'s own prompt the conversation\'s: the panel asked none.');
+  assert.deepEqual([...new Set(requests.map(request => request.model))].sort(), ['chat', FIRST, SECOND].sort());
+  assert.deepEqual(conversationTurns, turns, 'Only AZPR\'s reviewers, duplicate check, rating and planner asked a model, and the fixture\'s own prompt the conversation\'s: the panel asked none.');
+  // Which model each stage asked: the second reviewer model only reviews; the first one also checks the
+  // duplicates, rates (without tools) and plans the comments.
+  assert.deepEqual([...new Set(requests.filter(request => request.model === SECOND).map(request => request.stage))], ['review']);
+  // (A grouping pass before the planning pages runs only where findings could share a page; it is the planner's.)
+  assert.deepEqual([...new Set(requests.filter(request => request.model === FIRST).map(request => request.stage ?? request.work))].filter(kind => kind !== 'group').sort(), ['duplicates', 'plan', 'rating', 'review']);
+  const ratingRequests = requests.filter(request => request.stage === 'rating');
+  assert.deepEqual(ratingRequests.map(request => [request.model, request.tools, request.sessionID]), [[FIRST, 0, reportSession]], 'One rating request, of the first reviewer model, without tools, in the session that then holds the report.');
+  assert.equal(requests.filter(request => request.stage === 'duplicates').length, 1, 'One duplicate check: one file holds findings of two sessions.');
   const hostLog = await readFile(join(dirs.data, 'opencode', 'log', 'opencode.log'), 'utf8').catch(() => '');
   assert.doesNotMatch(hostLog, /plugin operation failed/, 'The TUI loaded the plugin\'s terminal part without an error.');
   if (native) {

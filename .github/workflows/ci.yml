@@ -20,8 +20,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - run: npm run check
       - run: npm test
-      - name: Install the tested host (OpenCode 2.3.0, TESTED_HOST_VERSION in src/host.mjs) into a disposable prefix
-        run: npm install --prefix "$RUNNER_TEMP/azpr-host" --no-audit --no-fund @opencode/cli@2.3.0
+      - name: Install the tested host (OpenCode 2.3.2, TESTED_HOST_VERSION in src/host.mjs) into a disposable prefix
+        run: npm install --prefix "$RUNNER_TEMP/azpr-host" --no-audit --no-fund @opencode/cli@2.3.2
       - name: Exercise fresh installed package and host lifecycle
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise replacement package and host lifecycle
@@ -30,11 +30,11 @@ jobs:
         run: node tests/host-v2-smoke.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --native
       - name: Exercise sharded review, overflow split and idempotent publication at scale
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
-      - name: Exercise a refused background summary followed by a permanent failure
+      - name: Exercise a refused background summary and a pass that fails permanently while the other completes
         run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise the scale review with debug off, where each run deletes its sessions when it ends
         run: node tests/host-v2-comment-scale.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup
-      - name: Exercise an unfinished review with debug off, which keeps only the session holding its draft
+      - name: Exercise reviews with debug off, one saved and one unfinished, which keep only the session holding their report
         run: node tests/host-v2-background-compaction.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --cleanup
       - name: Install tmux, in which the terminal fixtures run the real TUI
         run: command -v tmux >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq tmux; }
@@ -46,3 +46,7 @@ jobs:
         run: node tests/host-v2-tui-setup.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode"
       - name: Exercise setup in the real TUI as the plugin manager installs the package
         run: node tests/host-v2-tui-setup.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --native
+      - name: Exercise the confirmed update of settings of AZPR 0.4.x in the real TUI, installed from source
+        run: node tests/host-v2-tui-setup.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --migrate
+      - name: Exercise the confirmed update of settings of AZPR 0.4.x as the plugin manager installs the package
+        run: node tests/host-v2-tui-setup.mjs "$RUNNER_TEMP/azpr-host/node_modules/.bin/opencode" --migrate --native

@@ -15,6 +15,7 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const markerTag = fingerprint => `<!-- azpr-comment:${fingerprint} -->`;
 const escapeComments = value => value.replaceAll('<!--', '&lt;!--').replaceAll('-->', '--&gt;');
 
+/** The findings of a verified review saved by 0.4.x: what its verifier confirmed, and what it added. */
 export function confirmedFindings(review) {
   // Initial candidates remain audit data. Only verifier-corrected claims count;
   // a moved finding's initial location stays in the report, not in the claim.
@@ -24,25 +25,52 @@ export function confirmedFindings(review) {
 }
 
 /**
- * Whether a saved review's findings were independently verified: "none" for a
- * quick review, "independent" for review and deep. Reviews saved before this
- * field existed are known only by their profile; anything else is null and is
- * never commented on.
+ * How a saved review's findings were produced, which decides what of it may
+ * become comments and what its comments say about it:
+ * - 'reviewers': this pipeline (reviewer passes, a duplicate check, a rating; no
+ *   verification). The record says so itself, with `method` and
+ *   `verification: 'none'`, and both must be there.
+ * - 'verified': a /pr-review or /pr-deep saved by 0.4.x, whose findings a
+ *   verifier confirmed: `verification: 'independent'`, or no such field at all
+ *   in records older than it.
+ * - 'quick': a /pr-quick saved by 0.4.x (`verification: 'none'`, no method).
+ * - null: anything else: a method this version does not know, or fields that
+ *   contradict each other. Such a review can be listed and shown; it is never
+ *   planned, adjusted or published.
  */
-export function reviewVerification(review) {
-  if (review?.verification === 'none' || review?.verification === 'independent') return review.verification;
-  if (review?.verification === undefined && ['review', 'deep'].includes(review?.profile)) return 'independent';
+export function reviewMethod(review) {
+  const profile = review?.profile;
+  if (review?.method !== undefined) {
+    return isObject(review.method) && review.method.kind === 'reviewers' && review.method.version === 1 && review.verification === 'none'
+      && ['review', 'deep', 'quick'].includes(profile) ? 'reviewers' : null;
+  }
+  if (review?.verification === 'none') return profile === 'quick' ? 'quick' : null;
+  if (review?.verification === 'independent' || review?.verification === undefined) return ['review', 'deep'].includes(profile) ? 'verified' : null;
   return null;
 }
 
 /**
- * The findings comment planning may use: verified ones (CONFIRMED and verifier
- * additions) for review and deep; for a quick review the REPORTED ones, which
- * passed the runtime's checks but were not independently verified. A quick
- * finding whose location cannot carry an inline comment says `inline: false`.
+ * Whether a saved review's findings were independently verified, as its
+ * comments disclose it: "independent" for a verified review of 0.4.x, "none"
+ * for every other review whose method is known, null where it is not.
+ */
+export function reviewVerification(review) {
+  const method = reviewMethod(review);
+  return method === 'verified' ? 'independent' : method ? 'none' : null;
+}
+
+/**
+ * The findings comment planning may use. A review of this pipeline, and a
+ * quick review of 0.4.x: the REPORTED ones that were not merged, which passed
+ * the runtime's checks and were not independently verified; one whose location
+ * cannot carry an inline comment says `inline: false`. A verified review of
+ * 0.4.x: the verifier's CONFIRMED findings and its additions. A review whose
+ * method is unknown has none.
  */
 export function publishableFindings(review) {
-  if (reviewVerification(review) !== 'none') return confirmedFindings(review);
+  const method = reviewMethod(review);
+  if (method === 'verified') return confirmedFindings(review);
+  if (!method) return [];
   return review.final.dispositions.filter(d => d.status === 'REPORTED' && isObject(d.finding))
     .map(({ id, finding, inline, shard }) => ({ ...finding, id, ...(inline === false ? { inline: false } : {}), ...(shard ? { shard } : {}) }));
 }
@@ -115,12 +143,12 @@ export function repeatProblems(members) {
   return { problems };
 }
 
-// A finding ID as a text names it (F-1, Q-1001, V-2).
+// A finding ID as a text names it (F-1, and in reviews of 0.4.x also R-2, Q-1001, V-2).
 const FINDING_ID = /(?<![A-Za-z0-9_-])[A-Za-z]+-\d+(?!\d)/g;
 
 /**
- * Other findings of this review that a skip reason names. The verifier already
- * merged duplicates, so another finding's comment never covers a finding.
+ * Other findings of this review that a skip reason names. Duplicates were
+ * merged before planning, so another finding's comment never covers a finding.
  */
 function citedFindings(reason, own, findingIds) {
   const named = String(reason).match(FINDING_ID) ?? [];
@@ -910,9 +938,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   // Findings a person excluded after a preview: no published text may name them.
   const excluded = new Set(adjustmentsOf(review).excluded);
   const changed = new Set(review.snapshot.files.map(path => path.startsWith('/') ? path : '/' + path));
-  // Quick findings were not independently verified: an inline comment needs a
-  // checked location and an anchor found in source text the runtime read.
-  const quick = reviewVerification(review) === 'none';
+  // Findings that nothing verified after their reviewer (every review of this pipeline, and a quick review of
+  // 0.4.x): an inline comment needs a checked location and an anchor found in source text the runtime read.
+  const unverified = reviewVerification(review) === 'none';
   const comments = [], skipped = [], handled = new Set(), reported = new Set(), refusedCombinations = [];
   const skip = (findingId, reason, extra = {}) => { if (!handled.has(findingId)) { handled.add(findingId); skipped.push({ findingId, reason, ...extra }); } };
   // A location that can carry an inline comment: on a changed HEAD file whose text the page shows.
@@ -953,7 +981,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       restored = restoreAnchor({ path, startLine, endLine, anchor }, review);
       if (restored.startLine !== startLine) corrections.push({ action: 'restore-anchor-location', findingId: label, from: startLine, to: restored.startLine });
       if (restored.ambiguous && !final) problems.push('the anchor text appears several times in the observed source; quote more lines to make it unique');
-      else if (quick && !restored.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
+      else if (unverified && !restored.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
       else if (lines && (restored.startLine < lines.start || restored.endLine > lines.end)) problems.push(`the anchor must lie within lines ${lines.start}-${lines.end}, which every combined finding covers`);
     }
     if (problems.length) return { problems };
@@ -969,9 +997,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     const members = ids.map(id => eligible.get(id));
     const problems = [];
     const listed = group => ids.every(id => group.includes(id));
-    const twice = quick && candidates.some(listed), repeated = !twice && repeats.some(listed);
+    const twice = unverified && candidates.some(listed), repeated = !twice && repeats.some(listed);
     let lines;
-    if (!(quick && candidates.length) && !repeats.length) problems.push('findingIds may combine only the findings of one listed group (mergeCandidates or repeatCandidates)');
+    if (!(unverified && candidates.length) && !repeats.length) problems.push('findingIds may combine only the findings of one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => !member)) problems.push(`${ids.filter(id => !eligible.has(id)).join(', ')} not assigned to this page`);
     else if (!twice && !repeated) problems.push('the findings are not all in one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => handled.has(member.id))) problems.push('a combined finding already has a comment or skip');
@@ -1082,9 +1110,11 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     const reason = nonempty(s.reason) ? s.reason.trim() : 'Skipped by the comment planner without a stated reason.';
     const cited = citedFindings(reason, s.findingId, findingIds);
     if (cited.length && !final) {
-      issues.push(quick
+      // Only a quick review of 0.4.x reaches planning with repeated reports unmerged; every other review had its
+      // duplicates merged first, by the duplicate check or by its verifier.
+      issues.push(reviewMethod(review) === 'quick'
         ? `skip for ${s.findingId} relies on ${cited.join(', ')}: another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates or repeatCandidates group holds both and they state one defect, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`
-        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
+        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (duplicates were merged before planning), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
       reported.add(s.findingId);
       continue;
     }

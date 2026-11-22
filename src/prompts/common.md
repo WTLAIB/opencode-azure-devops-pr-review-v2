@@ -68,17 +68,11 @@ is its own finding; a wrong pattern is one finding at the code that produces
 or consumes it, not one per file. Large PRs are split across sessions and every
 changed file has its own reviewer. Follow your assigned files' leads wherever
 they go: a defect you reach in unchanged code is yours to file, since nobody
-<!-- azpr:verified -->
-else reviews it; other changed files are context only, their own sessions
-review them. If you cannot read something you need, say what is missing
-instead of guessing.
-<!-- azpr:quick -->
 else reviews it. When your files lead you to a defect in another changed file,
 file it at that file's defective lines, never at a line of your own files that
-only uses the code; its own reviewer may report it too, and comment planning
-combines such repeats. If you cannot read something you need, say what is
+only uses the code; its own reviewer may report it too, and a duplicate check
+merges such repeats. If you cannot read something you need, say what is
 missing instead of guessing.
-<!-- azpr:end -->
 
 ## Finding quality
 
@@ -116,13 +110,8 @@ file in several directories) are one finding at one copy, with the other copies
 listed in evidence. Copies assigned to other sessions are reviewed there; files
 whose content differs, such as each package's own manifest or configuration,
 are separate places.
-<!-- azpr:verified -->
-Only `findings` are verified and can become comments; a defect described only
-in `report` is lost. There is no maximum: do not sample, keep "the main ones" or
-<!-- azpr:quick -->
 Only `findings` can become comments; a defect described only in `report` is
 lost. There is no maximum: do not sample, keep "the main ones" or
-<!-- azpr:end -->
 summarize the rest in prose; a plain defect needs one sentence per field.
 
 Give each field one job:

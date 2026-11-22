@@ -1,5 +1,5 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
-import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
+import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewMethod, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
@@ -275,8 +275,9 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   // Adjusted by a person after a preview, if they did; otherwise the publishable findings unchanged.
   const all = commentFindings(review);
   const adjustments = adjustmentInput(review);
-  // Only a quick review, which has no verifier, offers candidate duplicates to the planner.
-  const twice = reviewVerification(review) === 'none' ? mergeCandidates(all) : [];
+  // Only a quick review saved by 0.4.x, which merged no duplicates, offers candidate duplicates to the planner:
+  // a review of this pipeline had its duplicate check, and what that kept apart stays apart.
+  const twice = reviewMethod(review) === 'quick' ? mergeCandidates(all) : [];
   // Pages as they are without any repeated defect; they change only when the grouping pass proposes a group.
   let paged = candidatePages(all, twice);
   const sourceText = new Map();

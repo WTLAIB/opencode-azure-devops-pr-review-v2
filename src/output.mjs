@@ -4,13 +4,10 @@
  * Parsing is strict JSON: the whole answer, one ```json fence or one embedded
  * object. Anything else is reported as a concrete problem that the runtime
  * sends back to the same session as a repair turn. After the configured repair
- * attempts, acceptance degrades per item instead of discarding the review:
- * missing verifier decisions become UNREVIEWED and incomplete confirmations
- * become NEEDS_INFO, while every other result stays usable.
- *
- * A verifier decision row is judged by its own fields, not only by the list it
- * was placed in, and a confirmation that moves its finding to another file
- * must say so (`movedFrom`); the runtime then records the candidate's location.
+ * attempts, acceptance degrades per item instead of discarding the review: a
+ * finding that still lacks a field or a checkable location becomes NEEDS_INFO,
+ * a merge or a rating that cannot be used is left out, and every other result
+ * stays usable.
  */
 import { parsePullRequestUrl } from './azure.mjs';
 
@@ -21,8 +18,6 @@ export const canonicalKey = key => String(key).trim().replace(/[_\s-]/g, '').toL
 const canonicalEnum = value => typeof value === 'string' ? value.trim().toUpperCase().replace(/[\s-]+/g, '_') : '';
 const SEVERITIES = ['high', 'medium', 'low'];
 export const FINDING_FIELDS = Object.freeze(['id', 'summary', 'evidence', 'counterevidence', 'location', 'severity', 'suggestion']);
-const DECISIONS = ['CONFIRMED', 'MERGED', 'REJECTED', 'NEEDS_INFO'];
-const DECISION_FIELDS = [...FINDING_FIELDS, 'status', 'reason', 'mergedInto', 'verifiedFinding', 'movedFrom'];
 const MAX_LISTED_ISSUES = 25;
 
 /** Path part of a location such as "head:/src/a.ts:12-14"; '' when there is none. */
@@ -219,19 +214,9 @@ function normalizeFinding(value, warnings) {
   return row;
 }
 
-/**
- * A suggestion that is only a placeholder ("N/A", "No correction needed.", "-"). A
- * confirmation states its correction, so one with such a suggestion contradicts
- * itself. This is a check of form on a few fixed spellings: the runtime does not
- * judge whether the defect is real, it asks the verifier which of the two it means.
- */
-const NO_CORRECTION = /^[\s\p{P}\p{S}]*(?:n[\s.\/]*a|none|nothing|not applicable|no (?:changes?|corrections?|fix(?:es)?|action)(?: (?:is|are))? (?:needed|required|necessary)|無|无|不適用|不适用|(?:不需要|無需|无需|不需)(?:修正|修改))?[\s\p{P}\p{S}]*$/iu;
-// Placeholders are short; the bound also keeps the match linear on long text.
-export const givesNoCorrection = suggestion => text(suggestion) && suggestion.trim().length <= 60 && NO_CORRECTION.test(suggestion.trim());
-
-/** Problems that make a finding unusable, phrased for a repair request. */
-function findingProblems(row, { requireLocation }) {
-  const missing = FINDING_FIELDS.filter(key => key !== 'id' && (key !== 'location' || requireLocation) && !text(row[key]));
+/** Problems that make a finding unusable, phrased for a repair request. Every field but the ID is needed, the location included. */
+function findingProblems(row) {
+  const missing = FINDING_FIELDS.filter(key => key !== 'id' && !text(row[key]));
   const problems = [];
   if (missing.length) problems.push(`missing ${missing.join(', ')}`);
   if (text(row.severity) && !SEVERITIES.includes(row.severity)) problems.push('severity must be high, medium or low');
@@ -260,15 +245,15 @@ const listIssues = issues => issues.slice(0, MAX_LISTED_ISSUES).map(issue => `- 
   (issues.length > MAX_LISTED_ISSUES ? `\n- ... and ${issues.length - MAX_LISTED_ISSUES} more` : '');
 
 /**
- * Accept one initial-review answer for an assigned set of files.
+ * Accept one reviewer answer for an assigned set of files.
  * Always returns a usable result; `issues` lists what a repair turn should fix.
  * `invalid` maps finding IDs to the field problems that make them unusable (a
  * plain object, so stage records keep it), and
  * `envelope` says whether `findings` was an array and `coverage` an object: a
  * parsed answer is not necessarily a usable review.
- * @param {{prefix: string, assigned?: string[], inventory?: string[], filesComplete?: boolean, requireLocation?: boolean}} options
+ * @param {{prefix: string, assigned?: string[], inventory?: string[], filesComplete?: boolean}} options
  */
-export function evaluateInitial(answerText, { prefix, assigned = [], inventory = [], filesComplete = true, requireLocation = false }) {
+export function evaluateInitial(answerText, { prefix, assigned = [], inventory = [], filesComplete = true }) {
   const warnings = new Set();
   const parsed = parseModelJSON(answerText, { keys: ['status', 'findings', 'coverage', 'report'] });
   if (!parsed.value) {
@@ -276,7 +261,7 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
     return {
       issues: [`Your answer could not be used: ${parsed.problem}.`],
       result: { status: 'PARTIAL', structured: false, coverage: { files: [], gaps: ['The reviewer answer was not structured JSON.'] },
-        additionalFiles: [], findings: [], report, warnings: ['The initial answer was not structured; its text is passed to verification as-is.'],
+        additionalFiles: [], findings: [], report, warnings: ['The reviewer answer was not structured; its text is kept as it is.'],
         invalid: {}, envelope: { findings: false, coverage: false } },
     };
   }
@@ -291,7 +276,7 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
   if (!envelope.coverage) issues.push('"coverage" must be an object with "files" (reviewed paths) and "gaps".');
   const findings = rows(source.findings, warnings, 'findings').map(row => normalizeFinding(row, warnings));
   const problems = findings.map((row, index) => {
-    const found = findingProblems(row, { requireLocation });
+    const found = findingProblems(row);
     if (found.length) issues.push(`findings[${index}]${text(row.id) ? ` (${row.id})` : ''}: ${found.join('; ')}.`);
     return found;
   });
@@ -302,7 +287,7 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
     .filter(path => text(path) && !/[\0\r\n]/.test(path)).map(path => path.startsWith('/') ? path : '/' + path))]
     .filter(path => !known.has(path));
   if (additionalFiles.length && filesComplete) {
-    warnings.add('The reviewer listed changed paths outside the complete inventory; they are kept for verification only.');
+    warnings.add('The reviewer listed changed paths outside the complete inventory; the report names them.');
   }
   const missingCoverage = assigned.filter(path => !covered.includes(path));
   let status = canonicalEnum(source.status) === 'COMPLETE' ? 'COMPLETE' : 'PARTIAL';
@@ -320,268 +305,24 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
   };
 }
 
-const hasFindingContent = row => FINDING_FIELDS.some(key => key !== 'id' && text(asText(row[key])));
-
 /**
- * The decision a row states itself. An explicit valid `status` wins over the
- * list the row was placed in, and a row under `confirmed` that names
- * `mergedInto` but carries no finding is a merge: it cannot be a confirmation.
- */
-function rowDecision(row, listed) {
-  const explicit = canonicalEnum(row.status);
-  if (DECISIONS.includes(explicit)) return explicit;
-  if (listed === 'CONFIRMED' && text(asText(row.mergedInto)) && !isObject(row.verifiedFinding) && !hasFindingContent(row)) return 'MERGED';
-  return listed;
-}
-
-/** A confirmation's finding is its `verifiedFinding`, otherwise the row's own finding fields. */
-function decisionRow(row, status) {
-  const id = asText(row.id ?? row.verifiedFinding?.id).trim();
-  if (status !== 'CONFIRMED') return { ...row, id, status };
-  const { reason, verifiedFinding, mergedInto, status: _stated, movedFrom, ...finding } = row;
-  return { id, status, reason, verifiedFinding: isObject(verifiedFinding) ? verifiedFinding : finding, ...(movedFrom !== undefined ? { movedFrom } : {}) };
-}
-
-function normalizeDecisionRows(value, warnings) {
-  const source = aliasFields(value, ['status', 'dispositions', 'confirmed', 'merged', 'rejected', 'needsInfo', 'newFindings', 'report'], warnings);
-  const fields = item => aliasFields(isObject(item) ? item : { reason: asText(item) }, DECISION_FIELDS, warnings);
-  const decisions = [];
-  for (const item of rows(source.dispositions, warnings, 'dispositions')) {
-    const row = fields(item);
-    decisions.push(decisionRow(row, canonicalEnum(row.status)));
-  }
-  let reclassified = 0;
-  for (const [category, listed] of Object.entries({ confirmed: 'CONFIRMED', merged: 'MERGED', rejected: 'REJECTED', needsInfo: 'NEEDS_INFO' })) {
-    for (const item of rows(source[category], warnings, category)) {
-      const row = fields(item);
-      const status = rowDecision(row, listed);
-      if (status !== listed) reclassified++;
-      decisions.push(decisionRow(row, status));
-    }
-  }
-  if (reclassified) warnings.add(`${reclassified} decision(s) placed under another category were classified by their own fields.`);
-  return { source, decisions };
-}
-
-/** A valid confirmation located in another file than its candidate; null when the file is unchanged. */
-function fileMove(original, row) {
-  const from = locationPath(original?.location), to = locationPath(row.verifiedFinding.location);
-  if (!from || !to || from === to) return null;
-  return { from: original.location.trim(), to: row.verifiedFinding.location, acknowledged: text(asText(row.movedFrom)) || text(asText(row.verifiedFinding.movedFrom)) };
-}
-
-/**
- * Accept one verifier answer for its assigned original findings.
+ * Accept one duplicate check of the findings different reviewer sessions
+ * reported in one file. The answer only merges: every finding it does not merge
+ * stays reported, so an invalid row is reported for a correction turn and
+ * otherwise ignored, never turning into a lost finding. Chains (A into B, B
+ * into C) end at the finding that stays; cycles name no survivor and are left
+ * unmerged.
+ * `sessions` names, per finding, the reviewer sessions that reported it (several
+ * for a finding that already stands for identical ones). A session files one
+ * finding per place that needs its own correction, so findings of one session
+ * never end up in one group, neither directly nor through a third finding:
+ * merges are applied in the answer's order, and one that would bring two
+ * findings of a session together is refused, reported for a correction turn and
+ * otherwise left out.
  * @param {string} answerText
- * @param {{originals: object[], allIds?: string[], previous?: object, supplement?: boolean}} options
+ * @param {{ids: string[], sessions?: Record<string, string[]>}} options the findings of the checked file
  */
-export function evaluateFinal(answerText, { originals, allIds = originals.map(f => f.id), previous, supplement = false }) {
-  // A supplement merges into the previous result and keeps its normalization
-  // notes; a full resend starts clean so a failed first answer leaves no trace.
-  const warnings = new Set(supplement && previous?.structured ? previous.baseWarnings ?? [] : []);
-  const parsed = parseModelJSON(answerText, { keys: ['status', 'confirmed', 'merged', 'rejected', 'needsinfo', 'newfindings', 'dispositions', 'report'] });
-  if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
-  const assignedIds = originals.map(f => f.id);
-  if (!parsed.value) {
-    if (previous?.structured) {
-      return { issues: [`Your correction could not be used: ${parsed.problem}.`], result: previous, repairIds: previous.pendingIds ?? [] };
-    }
-    return {
-      issues: [`Your answer could not be used: ${parsed.problem}.`],
-      repairIds: assignedIds,
-      result: finishFinal({ structured: false, modelStatus: 'UNSPECIFIED', decisions: new Map(), newFindings: [],
-        report: String(answerText ?? '').trim(), warnings: new Set(['The verifier answer was not structured; its text is shown as-is.']) }, originals),
-    };
-  }
-  const { source, decisions } = normalizeDecisionRows(parsed.value, warnings);
-  const byId = new Map(supplement && previous?.structured ? previous.decisionRows.map(row => [row.id, row]) : []);
-  const issues = [];
-  const assigned = new Set(assignedIds), all = new Set(allIds);
-  for (const row of decisions) {
-    if (!assigned.has(row.id)) { warnings.add(`Ignored a decision for unassigned ID ${row.id || '(blank)'}.`); continue; }
-    if (!supplement && byId.has(row.id)) { warnings.add(`Kept the first of several decisions for ${row.id}.`); continue; }
-    byId.set(row.id, row);
-  }
-  const repairIds = new Set(), invalid = { confirm: new Set(), merge: new Set() }, moves = new Map();
-  const candidates = new Map(originals.map(original => [original.id, original]));
-  for (const id of assignedIds) {
-    const row = byId.get(id);
-    if (!row) { repairIds.add(id); continue; }
-    if (!DECISIONS.includes(row.status)) { issues.push(`${id}: status must be one of ${DECISIONS.join(', ')}.`); repairIds.add(id); continue; }
-    if (!text(row.reason)) { issues.push(`${id}: give a concrete reason.`); repairIds.add(id); }
-    if (row.status === 'MERGED' && (!all.has(row.mergedInto) || row.mergedInto === id)) {
-      issues.push(`${id}: mergedInto must name another original finding ID.`); repairIds.add(id); invalid.merge.add(id);
-    }
-    if (row.status === 'CONFIRMED') {
-      row.verifiedFinding = normalizeFinding(row.verifiedFinding, warnings);
-      row.verifiedFinding.id = id;
-      const problems = findingProblems(row.verifiedFinding, { requireLocation: true });
-      if (problems.length) { issues.push(`${id}: the confirmed finding is ${problems.join('; ')}.`); repairIds.add(id); invalid.confirm.add(id); continue; }
-      if (givesNoCorrection(row.verifiedFinding.suggestion)) {
-        issues.push(`${id}: confirmed, but its suggestion gives no correction (${JSON.stringify(row.verifiedFinding.suggestion.slice(0, 40))}). If the defect stands, state the correction; if your check refutes the claim, list ${id} under rejected with the refutation.`);
-        repairIds.add(id); invalid.confirm.add(id); continue;
-      }
-      const move = fileMove(candidates.get(id), row);
-      if (move) moves.set(id, move);
-      if (move && !move.acknowledged) {
-        issues.push(`${id}: the location moved to another file (${move.from} → ${move.to}). Keep the candidate's file unless the defect stated in summary is in the other file; to keep the move, add "movedFrom": "${move.from}" and explain the move in reason.`);
-        repairIds.add(id);
-      }
-    }
-  }
-  // A merge whose chain ends at a finding this same answer rejected or left
-  // NEEDS_INFO takes both out without a refutation; ask for one consistent
-  // decision on the pair. Targets another shard decides are settled after the
-  // shards are combined (settleMergeTargets).
-  for (const id of assignedIds) {
-    const row = byId.get(id);
-    if (row?.status !== 'MERGED' || invalid.merge.has(id)) continue;
-    const seen = new Set([id]);
-    let target = byId.get(row.mergedInto);
-    while (target?.status === 'MERGED' && assigned.has(target.id) && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
-    if (!target || !assigned.has(target.id) || !['REJECTED', 'NEEDS_INFO'].includes(target.status)) continue;
-    issues.push(`${id}: merged into ${target.id}, which this answer marks ${target.status}. Confirm ${target.id} with the complete finding, or decide ${id} on its own evidence (confirmed, rejected or needsInfo).`);
-    repairIds.add(id); repairIds.add(target.id);
-  }
-  const missing = assignedIds.filter(id => !byId.has(id));
-  if (missing.length) issues.unshift(`No decision was given for: ${missing.join(', ')}.`);
-  const sourceNew = supplement && !Object.hasOwn(source, 'newFindings') ? null : source.newFindings;
-  const newFindings = sourceNew === null ? [...(previous?.newFindings ?? []), ...(previous?.incompleteNewFindings ?? [])]
-    : rows(sourceNew, warnings, 'newFindings').map(row => normalizeFinding(row, warnings));
-  if (sourceNew !== null) newFindings.forEach((row, index) => {
-    const problems = findingProblems(row, { requireLocation: true });
-    if (problems.length) issues.push(`newFindings[${index}]: ${problems.join('; ')}.`);
-  });
-  const report = supplement && !text(asText(source.report)) ? previous?.report ?? '' : asText(source.report).trim();
-  const modelStatus = supplement ? previous?.modelStatus ?? 'UNSPECIFIED' : canonicalEnum(source.status) || 'UNSPECIFIED';
-  const state = { structured: true, modelStatus, decisions: byId, newFindings, report, warnings, corrections: parsed.corrections, moves };
-  return { issues, repairIds: [...repairIds], result: finishFinal(state, originals, invalid, [...repairIds]) };
-}
-
-// The runtime records where a moved finding came from; a model's own value is not kept.
-function confirmedFinding(finding, move) {
-  const { movedFrom: _stated, ...rest } = finding;
-  return move ? { ...rest, movedFrom: move.from } : rest;
-}
-
-/** Degrade unresolved items per finding; nothing else is discarded. */
-/**
- * A merge chain must end at a non-merged decision; findings whose chain is a
- * cycle become UNREVIEWED. Runs per verifier answer and again over all shards,
- * since a merge may name a finding another shard decided. Returns their IDs.
- */
-export function breakMergeCycles(dispositions) {
-  const byId = new Map(dispositions.map(entry => [entry.id, entry]));
-  const cyclic = new Set();
-  for (const entry of dispositions) {
-    if (entry.status !== 'MERGED') continue;
-    const seen = new Set([entry.id]);
-    let target = byId.get(entry.mergedInto);
-    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byId.get(target.mergedInto); }
-    if (target?.status === 'MERGED') cyclic.add(entry.id);
-  }
-  for (const entry of dispositions) {
-    if (!cyclic.has(entry.id)) continue;
-    entry.status = 'UNREVIEWED';
-    entry.reason = `${entry.reason} [Runtime: the merge chain forms a cycle.]`;
-    delete entry.mergedInto;
-  }
-  return [...cyclic];
-}
-
-/**
- * A merge chain must end at a CONFIRMED finding; otherwise the merged finding
- * has no decision of its own and would vanish behind a rejection. Runs per
- * verifier answer after normalization (a confirmation that became NEEDS_INFO
- * counts) and again over all shards, since a verifier may merge into a
- * finding another shard decided. Call after breakMergeCycles. Targets absent
- * from `dispositions` belong to other shards unless `unknownIsDangling`;
- * `confirmedIds` names targets kept elsewhere (surviving verifier-added
- * findings, which the duplicate check may merge into). Dangling sources
- * become UNREVIEWED; returns them with the target they named.
- */
-export function settleMergeTargets(dispositions, { unknownIsDangling = false, confirmedIds = new Set() } = {}) {
-  const byId = new Map(dispositions.map(entry => [entry.id, entry]));
-  const lookup = id => byId.get(id) ?? (confirmedIds.has(id) ? { id, status: 'CONFIRMED' } : undefined);
-  const dangling = [];
-  for (const entry of dispositions) {
-    if (entry.status !== 'MERGED') continue;
-    const seen = new Set([entry.id]);
-    let target = lookup(entry.mergedInto);
-    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = lookup(target.mergedInto); }
-    if (target?.status === 'CONFIRMED' || target?.status === 'MERGED' || (!target && !unknownIsDangling)) continue;
-    dangling.push({ id: entry.id, target: target?.id ?? entry.mergedInto, status: target?.status ?? 'undecided' });
-  }
-  for (const row of dangling) {
-    const entry = byId.get(row.id);
-    entry.status = 'UNREVIEWED';
-    entry.reason = `${entry.reason} [Runtime: merged into ${row.target}, which is ${row.status}; no decision stands.]`;
-    delete entry.mergedInto;
-  }
-  return dangling;
-}
-
-function finishFinal(state, originals, invalid = { confirm: new Set(), merge: new Set() }, pendingIds = []) {
-  const { decisions } = state;
-  // Normalization notes carry over into a merged supplement; warnings derived
-  // from the current decisions are recomputed every time.
-  const base = [...state.warnings], derived = [];
-  const dispositions = [];
-  for (const original of originals) {
-    const row = decisions.get(original.id);
-    if (!row) {
-      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: 'The verifier gave no decision for this finding; it is not confirmed.' });
-      continue;
-    }
-    if (!DECISIONS.includes(row.status)) {
-      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: asText(row.reason) || 'The verifier decision was malformed.' });
-      continue;
-    }
-    if (row.status === 'CONFIRMED' && invalid.confirm.has(original.id)) {
-      const absent = FINDING_FIELDS.filter(key => !text(row.verifiedFinding?.[key]));
-      if (!absent.length && givesNoCorrection(row.verifiedFinding?.suggestion)) absent.push('a correction in suggestion');
-      dispositions.push({ id: original.id, status: 'NEEDS_INFO', reason: `${asText(row.reason)} [Runtime: the confirmation lacks ${absent.join(', ') || 'valid fields'}, so it is not eligible for comments.]`.trim(),
-        partialFinding: row.verifiedFinding });
-      continue;
-    }
-    if (row.status === 'MERGED' && invalid.merge.has(original.id)) {
-      dispositions.push({ id: original.id, status: 'UNREVIEWED', reason: `${asText(row.reason)} [Runtime: the merge target is invalid.]`.trim() });
-      continue;
-    }
-    const entry = { id: original.id, status: row.status, reason: asText(row.reason).trim() || 'No reason given.',
-      ...(row.status === 'MERGED' ? { mergedInto: row.mergedInto } : {}),
-      ...(row.status === 'CONFIRMED' ? { verifiedFinding: confirmedFinding(row.verifiedFinding, state.moves?.get(original.id)) } : {}) };
-    dispositions.push(entry);
-  }
-  breakMergeCycles(dispositions);
-  const dangling = settleMergeTargets(dispositions);
-  if (dangling.length) derived.push(`${dangling.length} merged finding(s) name a target that was not confirmed and are shown as UNREVIEWED.`);
-  const unreviewed = dispositions.filter(row => row.status === 'UNREVIEWED').length;
-  if (unreviewed) derived.push(`${unreviewed} finding(s) have no usable verifier decision and are shown as UNREVIEWED.`);
-  const unconfirmed = dispositions.filter(row => row.status === 'CONFIRMED' && state.moves?.get(row.id)?.acknowledged === false);
-  if (unconfirmed.length) derived.push(`Verification moved ${unconfirmed.map(row => `${row.id} (from ${row.verifiedFinding.movedFrom})`).join(', ')} to another file without confirming the move; check the location.`);
-  const newFindings = state.newFindings.filter(row => !findingProblems(row, { requireLocation: true }).length);
-  if (newFindings.length < state.newFindings.length) derived.push(`${state.newFindings.length - newFindings.length} new verifier finding(s) were incomplete and are listed in the report only.`);
-  return {
-    status: !state.structured ? 'PARTIAL' : state.modelStatus === 'INCOMPLETE' ? 'INCOMPLETE' : 'COMPLETE',
-    structured: state.structured, modelStatus: state.modelStatus, dispositions, newFindings,
-    incompleteNewFindings: state.newFindings.filter(row => !newFindings.includes(row)),
-    report: state.report, warnings: [...base, ...derived], baseWarnings: base,
-    ...(state.corrections ? { corrections: state.corrections } : {}),
-    decisionRows: [...decisions.values()], pendingIds,
-  };
-}
-
-/**
- * Accept one same-file duplicate check. The answer only merges: every finding
- * it does not merge stays confirmed, so an invalid row is reported for a
- * correction turn and otherwise ignored, never turning into a lost finding.
- * Chains (A into B, B into C) end at the finding that stays; cycles name no
- * survivor and are left unmerged.
- * @param {string} answerText
- * @param {{ids: string[]}} options the findings of the checked file
- */
-export function evaluateDuplicates(answerText, { ids }) {
+export function evaluateDuplicates(answerText, { ids, sessions = {} }) {
   const warnings = new Set();
   const parsed = parseModelJSON(answerText, { keys: ['status', 'merged', 'report'] });
   if (!parsed.value) {
@@ -602,23 +343,46 @@ export function evaluateDuplicates(answerText, { ids }) {
     if (problems.length) { issues.push(`merged[${index}]: ${problems.join('; ')}.`); continue; }
     rowsById.set(id, { id, mergedInto: into, reason: asText(row.reason).trim() });
   }
-  const merges = [];
+  // A cycle names no finding that stays: its rows are reported and left out.
+  const cyclic = new Set();
   for (const row of rowsById.values()) {
     const seen = new Set([row.id]);
     let target = row.mergedInto;
     while (rowsById.has(target) && !seen.has(target)) { seen.add(target); target = rowsById.get(target).mergedInto; }
-    if (rowsById.has(target)) { issues.push(`${row.id}: the merges form a cycle; keep one of these findings and merge the others into it.`); continue; }
-    merges.push({ ...row, mergedInto: target });
+    if (rowsById.has(target)) { cyclic.add(row.id); issues.push(`${row.id}: the merges form a cycle; keep one of these findings and merge the others into it.`); }
   }
-  const unmerged = issues.length ? ['Some duplicate-check merges were invalid and were not applied; those findings stay confirmed.'] : [];
-  return { issues, result: { status: 'COMPLETE', structured: true, merges, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
+  // The groups grow in the answer's order. Each has the finding that stays (`kept`), its members and the sessions
+  // that reported them; a merge whose group shares a session with the group it would join is refused.
+  const groupOf = new Map(ids.map(id => [id, { kept: id, members: [id], sessions: new Set(sessions[id] ?? []) }]));
+  const applied = [];
+  let refused = 0;
+  for (const row of rowsById.values()) {
+    if (cyclic.has(row.id)) continue;
+    const from = groupOf.get(row.id), into = groupOf.get(row.mergedInto);
+    if (from === into) continue;
+    const shared = [...from.sessions].find(session => into.sessions.has(session));
+    if (shared !== undefined) {
+      const own = from.members.find(id => (sessions[id] ?? []).includes(shared)), twin = into.members.find(id => (sessions[id] ?? []).includes(shared));
+      issues.push(`${row.id} into ${row.mergedInto}: ${own} and ${twin} were both reported by the session ${JSON.stringify(shared)}, which filed them as separate findings, so they cannot end up in one finding. Merge only the one that repeats the other session's finding, if any, and leave the other separate.`);
+      refused++;
+      continue;
+    }
+    for (const session of from.sessions) into.sessions.add(session);
+    into.members.push(...from.members);
+    for (const id of from.members) groupOf.set(id, into);
+    applied.push(row);
+  }
+  // Every merged finding names the finding its group keeps, also where its own target was merged later.
+  const merges = applied.map(row => ({ ...row, mergedInto: groupOf.get(row.id).kept }));
+  const unmerged = issues.length ? [`Some duplicate-check merges were invalid and were not applied${refused ? ` (${refused} would have joined two findings of one reviewer session)` : ''}; those findings stay reported.`] : [];
+  return { issues, result: { status: 'COMPLETE', structured: true, merges, refused, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
     ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
 }
 
 /**
  * Accept one severity rating. The answer only sets levels: a finding it does
- * not rate, or rates with something else than high, medium or low, keeps the
- * verifier's severity, so an invalid row is reported for a correction turn and
+ * not rate, or rates with something else than high, medium or low, keeps its
+ * reviewer's severity, so an invalid row is reported for a correction turn and
  * otherwise ignored.
  * @param {string} answerText
  * @param {{ids: string[]}} options the findings to rate
@@ -628,7 +392,7 @@ export function evaluateRatings(answerText, { ids }) {
   const parsed = parseModelJSON(answerText, { keys: ['status', 'ratings', 'report'] });
   if (!parsed.value) {
     return { issues: [`Your answer could not be used: ${parsed.problem}.`],
-      result: { status: 'COMPLETE', structured: false, ratings: [], report: '', warnings: ['The severity rating gave no usable answer; the verifier\'s severities are kept.'] } };
+      result: { status: 'COMPLETE', structured: false, ratings: [], report: '', warnings: ['The severity rating gave no usable answer; the reviewers\' severities are kept.'] } };
   }
   if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
   const source = aliasFields(parsed.value, ['status', 'ratings', 'report'], warnings);
@@ -645,7 +409,7 @@ export function evaluateRatings(answerText, { ids }) {
   }
   const missing = ids.filter(id => !byId.has(id));
   if (missing.length) issues.push(`No usable rating for ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? ', ...' : ''}.`);
-  const kept = missing.length ? [`${missing.length} finding(s) got no usable rating and keep the verifier's severity.`] : [];
+  const kept = missing.length ? [`${missing.length} finding(s) got no usable rating and keep their reviewer's severity.`] : [];
   return { issues, result: { status: 'COMPLETE', structured: true, ratings: [...byId.values()], report: asText(source.report).trim(), warnings: [...warnings, ...kept],
     ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
 }
@@ -657,7 +421,7 @@ export function ratingRepairPrompt(issues, { parseOnly = false } = {}) {
 
 export function duplicateRepairPrompt(issues, { parseOnly = false } = {}) {
   if (parseOnly) return parseRepairPrompt(issues);
-  return `AZPR runtime: your duplicate check needs correction.\n${listIssues(issues)}\n\nReturn the complete JSON object again (status, merged, report). Merge an assigned finding only into another assigned finding that stays, and only when both state the same root cause and need the same correction.`;
+  return `AZPR runtime: your duplicate check needs correction.\n${listIssues(issues)}\n\nReturn the complete JSON object again (status, merged, report). Merge an assigned finding only into another assigned finding that stays, and only when both state the same root cause and need the same correction; two findings of one session stay separate.`;
 }
 
 // When only the JSON syntax was wrong, the content must come back unchanged:
@@ -667,33 +431,20 @@ const VERBATIM = 'Send the same answer again with identical content: do not shor
 export const syntaxProblem = issues => issues.some(issue => /could not be parsed|repeats a key/.test(issue));
 export const parseRepairPrompt = issues => `AZPR runtime: your previous answer was not valid JSON.\n${listIssues(issues)}\n\n${VERBATIM}`;
 
-/** Repair request for an initial review: resend the whole corrected object. */
-export function initialRepairPrompt(issues, { parseOnly = false } = {}) {
-  if (parseOnly) return parseRepairPrompt(issues);
-  return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). Keep every finding you still stand behind and keep the existing wording of fields that need no correction; read more source only if a correction needs it.`;
-}
-
-/** Repair request for a quick review: the whole object, with what to do about failed locations. */
-export function quickRepairPrompt(issues, { parseOnly = false } = {}) {
+/** Repair request for a reviewer: the whole object, with what to do about failed locations. */
+export function reviewRepairPrompt(issues, { parseOnly = false } = {}) {
   if (parseOnly) return parseRepairPrompt(issues);
   return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete corrected JSON object for the same review (status, coverage, additionalFiles, findings, report). For a location problem, read the file with azpr_read_diff or azpr_read_file and correct the location, locate the finding at readable source that supports it, or move the concern to report. Keep every finding you still stand behind and keep the existing wording of fields that need no correction.`;
 }
 
 /**
- * The one follow-up turn for a quick review that is PARTIAL with work it named:
+ * The one follow-up turn for a reviewer whose answer is PARTIAL with work it named:
  * the same session continues where the source is readable and keeps honest limits.
  */
-export function quickFollowUpPrompt({ gaps = [], uncovered = [] }) {
+export function reviewFollowUpPrompt({ gaps = [], uncovered = [] }) {
   const listed = uncovered.slice(0, 20).join(', ') + (uncovered.length > 20 ? `, and ${uncovered.length - 20} more` : '');
   const items = [...gaps, ...(uncovered.length ? [`Assigned files not listed as reviewed: ${listed}`] : [])];
   return `AZPR runtime: your answer is PARTIAL and names work that is not finished.\n${listIssues(items)}\n\nWhere a check you need is unfinished and the source it needs is readable with AZPR's tools, continue it now. Keep a gap only for a limit you cannot close (binary, oversized or missing content, a tool that keeps failing) and say what stopped you. Then return the complete JSON object again (status, coverage, additionalFiles, findings, report): every finding you still stand behind and any you found now, with status COMPLETE only when every assigned file is reviewed and no gap remains.`;
-}
-
-/** Repair request for a verifier: only the decisions that are missing or invalid. */
-export function finalRepairPrompt(issues, ids, { includeNewFindings = false, full = false, parseOnly = false } = {}) {
-  if (parseOnly) return parseRepairPrompt(issues);
-  if (full) return `AZPR runtime: your previous answer needs correction before it can be used.\n${listIssues(issues)}\n\nReturn the complete verification JSON object (status, confirmed, merged, rejected, needsInfo, newFindings, report) with exactly one decision for each assigned finding ID.`;
-  return `AZPR runtime: some decisions need correction.\n${listIssues(issues)}\n\nReturn one JSON object {"dispositions": [...]${includeNewFindings ? ', "newFindings": [...]' : ''}} containing decisions only for: ${ids.join(', ')}. Each row has id, status (CONFIRMED, MERGED, REJECTED or NEEDS_INFO) and reason; CONFIRMED rows include "verifiedFinding" with summary, evidence, counterevidence, location, severity and suggestion (plus "movedFrom" when the location is in another file than the candidate's); MERGED rows include "mergedInto". Earlier decisions are kept.`;
 }
 
 /** The flags a review command takes right after the PR URL, and the afterReview mode each sets for that run. */

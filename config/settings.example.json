@@ -1,21 +1,21 @@
 {
   "$schema": "./settings.schema.json",
-  "version": 2,
+  "version": 3,
   "models": {
     "review": {
-      "functional": "REPLACE_PROVIDER/REPLACE_FUNCTIONAL",
-      "risk": "REPLACE_PROVIDER/REPLACE_RISK",
-      "verifier": "REPLACE_PROVIDER/REPLACE_VERIFIER",
+      "reviewers": [
+        "REPLACE_PROVIDER/REPLACE_MODEL",
+        "REPLACE_PROVIDER/REPLACE_MODEL"
+      ],
       "rater": ""
     },
     "deep": {
-      "functional": "",
-      "risk": "",
-      "verifier": "",
+      "reviewers": [],
       "rater": ""
     },
     "quick": {
-      "reviewer": ""
+      "reviewers": [],
+      "rater": ""
     }
   },
   "enabled": true,
@@ -49,7 +49,6 @@
   },
   "workflow": {
     "shardFiles": 25,
-    "shardFindings": 15,
     "parallelSessions": 8,
     "repairAttempts": 2,
     "stageRetries": 1,

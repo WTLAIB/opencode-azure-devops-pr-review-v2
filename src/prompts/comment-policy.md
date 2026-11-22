@@ -13,10 +13,10 @@ revive rejected claims, inflate severity or add new findings.
 
 One general PR summary plus inline comments for confirmed high and medium
 findings:
-<!-- azpr:quick -->
-The supplied findings come from a quick review: one reviewer per shard checked
-them against the source and no independent verifier re-checked them. They are
-this review's final findings and authoritative for trigger, impact, location,
+<!-- azpr:reviewers -->
+The supplied findings come from this review's reviewers: each checked its own
+findings against the source, and no separate verification re-checked them. They
+are this review's final findings and authoritative for trigger, impact, location,
 severity and qualifications. Do not judge them again, revive dispositions that
 are not findings, inflate severity or add new findings. A finding with
 `"inline": false` has no location that can carry an inline comment: put it in

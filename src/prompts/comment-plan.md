@@ -7,12 +7,12 @@
 The verifier already merged duplicate findings: each finding is a separate
 issue, so never skip one because another finding of this review has or will get
 a comment.
-<!-- azpr:quick -->
+<!-- azpr:reviewers -->
 Treat each finding as a separate issue, as the reviewer reported it: never skip
 one because another finding of this review has or will get a comment.
-Different sessions of a quick review can report one defect twice; the runtime
-lists such candidates in `mergeCandidates` (findings of different sessions on
-overlapping lines of one file, with the same severity). Combine findings of one
+Where the input has `mergeCandidates`, different sessions may have reported one
+defect twice: the runtime lists such candidates there (findings of different
+sessions on overlapping lines of one file, with the same severity). Combine findings of one
 group into one comment only when they state the same root cause, with
 compatible triggers and the same correction: give that comment `findingIds`
 with every finding it covers and a `mergeReason`, keep each trigger and the
@@ -82,7 +82,7 @@ priority if useful. No finding recap, counts, run IDs or SHAs.
 <!-- azpr:verified -->
 content, for example `### Additional finding details` (confirmed findings
 without an inline comment, including low severity) and
-<!-- azpr:quick -->
+<!-- azpr:reviewers -->
 content, for example `### Additional finding details` (findings without an
 inline comment, including low severity) and
 <!-- azpr:end -->
