@@ -1,5 +1,139 @@
 # Changelog
 
+## 0.5.0 — 2026-11-23
+
+Every review now runs one pipeline: independent review passes, a duplicate
+check and a severity rating, then comment planning as before. `/pr-review`,
+`/pr-deep` and `/pr-quick` differ only in the models listed for them. The
+verifier is gone, and so is the split into a functional and a risk reviewer.
+This release changes how findings are produced, what reports and comments say
+about them, and the layout of the settings file: the settings of 0.4.x are not
+used until you confirm an update that `/pr-setup` shows first (see Upgrading).
+
+Why: measured on ReviewBench's test set with two model strengths, a verifier
+of the reviewers' own strength rejected 0 of 280 and 3 of 1,185 candidate
+findings and added few of its own, for 30% and 54% of a review's cost; two
+passes of one reviewer prompt found about as much as the functional and the
+risk reviewer together. What is lost with the verifier is named there too:
+its additions, and for the stronger model a rewrite that read better in about
+one finding in eight. The runs, their judge (our own, not the benchmark's)
+and their limits are in the [validation record](docs/VALIDATION.md).
+
+Reviews:
+
+- **Passes instead of roles.** `models.<mode>.reviewers` lists one to four
+  models (`provider/model` or `provider/model#variant`); each entry is one
+  pass, and an entry may repeat. A pass is an independent reviewer session per
+  shard that covers function and failure behaviour, reads beyond the diff and
+  checks each of its findings against the source before it answers. Passes do
+  not see each other's work, and all sessions of a review share
+  `workflow.parallelSessions`.
+- **No verifier.** Nothing checks a finding after its reviewer. The runtime
+  checks what it can check without judging: every field is there, the
+  location exists at the reviewed commit, and the session that reports a
+  finding read that file. Findings that pass are `REPORTED`; the others are
+  `NEEDS_INFO` and never commented on.
+- **Finding IDs are `F-1`, `F-2`, … for the whole review**, numbered by place
+  (HEAD before BASE, then path and lines) and then by pass. The IDs no longer
+  say which reviewer found something, and they do not depend on which session
+  finished first.
+- **A duplicate check across sessions.** Where different reviewer sessions
+  reported findings on one side of one file, a session of the first reviewer
+  model compares them and merges repeated reports of one defect (the same root
+  cause and the same correction). The same kind of mistake at several places
+  stays several findings; one comment may still cover them, as since 0.4.6.
+  The check never merges two findings of one session, also not through a
+  third finding: the runtime refuses such a merge. A check that fails keeps
+  every finding. The finding that stays records the reports it stands for.
+- **A severity rating, on by default.** After the duplicate check, sessions
+  without tools rate the reported findings from their text alone, without the
+  level their reviewer gave them, so that the findings of different models
+  stand on one scale. `models.<mode>.rater` is `""` (the first reviewer model
+  rates), a model, or `false` (no rating; the reviewers' levels stay). The
+  report shows the reviewer's own level where the rating changed it. In 0.4.x
+  the rating ran only with a named rater.
+- **`/pr-deep` and `/pr-quick` are the same review with other models.** An
+  empty list leaves the mode off, which is the default for both; no mode falls
+  back to another mode's models. Deep is for stronger models, a higher
+  variant or more passes; quick is usually one pass of a fast model.
+- **Coverage is two numbers** when a mode has several passes: the changed
+  files reviewed in at least one pass, and those reviewed in every pass. A
+  pass that fails costs depth, which the second number and a warning show; a
+  file is unreviewed only when no pass reviewed it. A review is `COMPLETE`
+  when at least one session gave a usable answer, `PARTIAL` when answers came
+  but none was usable, and without a result when every session failed.
+
+Reports, receipts and comments:
+
+- A report states status, coverage and method separately, and says in its
+  first lines that findings were checked by their reviewer and that no
+  separate verification ran. A receipt's first line reads
+  `COMPLETE; coverage complete; verification none` (with several passes:
+  `coverage complete, 12/12 file(s) in every pass`).
+- Comments carry a new disclosure line: "Review method: findings checked by
+  their reviewer against the source, no separate verification", followed by
+  the models. Comments already on a pull request keep the line they were
+  posted with, and AZPR recognises all three wordings as its own.
+- Reviews saved by 0.4.x can still be shown, previewed and published. A
+  review whose findings a verifier confirmed is planned with the wording of
+  0.4.6 and its comments keep the old line.
+- Comment planning, previews, adjustments, automatic comments and publication
+  work as before, with the first reviewer model as the planner. A
+  `/pr-comment --publish` that only posts a saved preview needs no model.
+
+Settings (`version: 3`):
+
+- New: `models.review.reviewers`, `models.deep.reviewers`,
+  `models.quick.reviewers` (lists), and `models.<mode>.rater` for all three
+  modes (`""`, a model, or `false`).
+- Removed: `models.<mode>.functional`, `risk` and `verifier`,
+  `models.quick.reviewer`, the documentation-only `models._help`, and
+  `workflow.shardFindings`, which sized the verifier's batches.
+- `/pr-check` shows each mode's passes and which model rates.
+
+Upgrading from 0.4.x:
+
+- The settings of 0.4.x (`version: 2`) are kept as they are and not used.
+  Until they are updated, AZPR's commands only say that the settings need an
+  update; no review and no Azure request starts.
+- `/pr-setup` shows what the update changes before anything is written. In
+  OpenCode's terminal UI it asks, in a list whose first row keeps the file.
+  In other clients it prints the changes and the command that confirms them
+  (`/pr-setup --migrate <word>`); the word belongs to the file as it was
+  shown, so a file that changed meanwhile is shown again.
+- The update turns the functional and the risk model of a mode into its two
+  passes, in that order, and drops the verifier model. A quick reviewer
+  becomes a list of one. A named rater stays. `/pr-deep` stays off when it
+  was off, also when only some of its three models were set. Every other
+  setting keeps its value. A first setup's update is loaded at once; settings
+  that are in use wait for a restart, as always.
+- What changes without being asked for, and is named before you confirm: a
+  mode without a rater now gets its findings rated by its first reviewer
+  model (`"rater": false` turns that off), and with `afterReview` set to
+  `publish` the comments of the new reviews are posted automatically although
+  no verifier confirmed their findings.
+- Source installations: `install.sh --replace` carries a version-2 settings
+  file over byte for byte and says so; `/pr-setup` then updates it.
+
+Setup:
+
+- `--model M` on a first setup writes M twice for `/pr-review` and once for
+  `/pr-quick`. `--review-model`, `--quick-model` and `--deep-model` take one
+  model (the mode's usual passes: two, one and two), `M*N` for N passes, or
+  entries separated by commas for different models; `off` turns quick or deep
+  off.
+- In the terminal UI a model row asks for one model and then for the passes:
+  take what is shown, add a pass of the same or another model, or take the
+  last one away.
+
+Compatibility:
+
+- Tested with OpenCode 2.3.2 (was 2.3.0); `/pr-check` warns on other versions.
+- The private agents are now `azpr-<mode>-reviewer`, `-reviewerb`,
+  `-reviewerc`, `-reviewerd`, `-dedupe`, `-rating`, `-comment-plan` and, for
+  review and deep, `-comment-plan-verified`. The names of the 0.4.x roles
+  stay reserved.
+
 ## 0.4.6 — 2026-11-21
 
 One defect that a pull request makes at several places now gets one inline
