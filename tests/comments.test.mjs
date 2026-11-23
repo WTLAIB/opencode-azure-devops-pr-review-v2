@@ -1136,6 +1136,22 @@ eachKind('posted text that names an excluded finding is found, also in the summa
   const comment = { kind: 'inline', findingId: 'F-2', path: '/src/a.ts', startLine: 2, marker: 'm', content: 'Same cause as F-1.' };
   assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-1']);
   assert.equal(ownFinding(cross.final.dispositions[1]).summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
+  // Markdown emphasis is no name: _F-1_ names F-1, as F-1 does; a name that holds the ID does not.
+  for (const [content, held] of [['Same cause as _F-1_.', true], ['Same cause as __F-1__.', true], ['See check_F-1 in the log.', false]]) {
+    assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [{ ...comment, content }] } }), held ? ['the comment of F-2 at /src/a.ts:2 names F-1'] : [], content);
+  }
+});
+
+test('a text that names a finding merged into an excluded one is held as one that names the excluded finding', () => {
+  // F-3 was merged into F-1; a person excluded F-1. A comment that still names F-3 names what F-1 stands for.
+  const base = review([finding('F-1'), finding('F-2')]);
+  const merged = { id: 'F-3', status: 'MERGED', mergedInto: 'F-1', reason: 'Same defect.', mergedFinding: ownFinding(base.final.dispositions[0]), shard: '1/1 pass 2', pass: 2, localId: 'F-1001', sessions: ['1/1 pass 2'] };
+  const adjusted = { ...base, final: { ...base.final, dispositions: [...base.final.dispositions, merged] }, adjustments: { excluded: ['F-1'], severity: {} } };
+  adjusted.plan = assemblePlan(adjusted, [page()]);
+  const comment = { kind: 'inline', findingId: 'F-2', path: '/src/a.ts', startLine: 2, marker: 'm', content: 'The cause is F-3.' };
+  assert.deepEqual(excludedReferences({ ...adjusted, plan: { ...adjusted.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-3']);
+  // Without the exclusion of F-1, F-3 holds nothing.
+  assert.ok(!excludedReferences({ ...adjusted, adjustments: { excluded: ['F-2'], severity: {} }, plan: { ...adjusted.plan, comments: [comment] } }).some(row => /F-3/.test(row)));
 });
 
 eachKind('next steps after a preview need no review ID, use the finding IDs of the review and keep what is already adjusted', (t, { make }) => {

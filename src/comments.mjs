@@ -143,8 +143,9 @@ export function repeatProblems(members) {
   return { problems };
 }
 
-// A finding ID as a text names it (F-1, and in reviews of 0.4.x also R-2, Q-1001, V-2).
-const FINDING_ID = /(?<![A-Za-z0-9_-])[A-Za-z]+-\d+(?!\d)/g;
+// A finding ID as a text names it (F-1, and in reviews of 0.4.x also R-2, Q-1001, V-2): not inside a name, but
+// also where Markdown emphasis wraps it in underscores (_F-1_).
+const FINDING_ID = /(?<![A-Za-z0-9-])(?<![A-Za-z0-9]_+)[A-Za-z]+-\d+(?!\d)/g;
 
 /**
  * Other findings of this review that a skip reason names. Duplicates were
@@ -410,8 +411,18 @@ export function describeEarlierText(review, otherComments = 0) {
  * change. Only IDs written as the runtime writes them are found. Returns
  * readable rows; [] when nothing names an excluded finding.
  */
-export function excludedReferences(review) {
+/**
+ * The findings a person excluded, and those merged into one of them: a text that names a merged finding names
+ * the finding that stands for it.
+ */
+function excludedIds(review) {
   const excluded = new Set(adjustmentsOf(review).excluded);
+  for (const row of review?.final?.dispositions ?? []) if (row?.status === 'MERGED' && excluded.has(row.mergedInto)) excluded.add(row.id);
+  return excluded;
+}
+
+export function excludedReferences(review) {
+  const excluded = excludedIds(review);
   if (!excluded.size || !review?.plan) return [];
   const rows = [];
   for (const item of publicationItems(review.plan)) {
@@ -936,8 +947,8 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     status = 'READY';
   }
   const eligible = new Map(assigned.map(finding => [finding.id, finding]));
-  // Findings a person excluded after a preview: no published text may name them.
-  const excluded = new Set(adjustmentsOf(review).excluded);
+  // Findings a person excluded after a preview, and those merged into them: no published text may name them.
+  const excluded = excludedIds(review);
   const changed = new Set(review.snapshot.files.map(path => path.startsWith('/') ? path : '/' + path));
   // Findings that nothing verified after their reviewer (every review of this pipeline, and a quick review of
   // 0.4.x): an inline comment needs a checked location and an anchor found in source text the runtime read.

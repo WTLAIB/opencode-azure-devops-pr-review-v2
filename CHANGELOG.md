@@ -38,8 +38,9 @@ Reviews:
   say which reviewer found something, and they do not depend on which session
   finished first. A reviewer numbers its findings in a range of its shard
   (`F-1001`, …); where its text names one of its own findings, the text
-  names that finding's review ID afterwards. Code in the text (a code span,
-  a fenced block, an ID written between quotes) stays as written.
+  names that finding's review ID afterwards, or the finding it was merged
+  into. Code in the text (a code span, a fenced block, an ID written between
+  quotes) stays as written.
 - **A duplicate check across sessions.** Where different reviewer sessions
   reported findings on one side of one file, a session of the first reviewer
   model compares them and merges repeated reports of one defect (the same root

@@ -459,6 +459,10 @@ test('a mode\'s passes are set in a list after its first model: use them, add on
   const three = host(ready(), ['reviewModel', 'fixture/fast', 'other', 'fixture/strong', '', 'done', undefined]);
   await three.setup.open();
   assert.deepEqual([passes(three).at(-1).title, saves(three)], ['Model for /pr-review: 3 passes', [{ changes: { reviewModel: 'fixture/fast*2,fixture/strong*1' } }]]);
+  // A saved first model written with its default variant is that model: picked again, the saved passes stay.
+  const variantDefault = host(ready({ reviewModel: ['fixture/fast#default', 'fixture/strong'] }), ['reviewModel', 'fixture/fast', 'done', undefined]);
+  await variantDefault.setup.open();
+  assert.deepEqual([passes(variantDefault)[0].title, saves(variantDefault)], ['Model for /pr-review: 2 passes', [{ changes: { reviewModel: 'fixture/fast#default*1,fixture/strong*1' } }]]);
   // Two providers' models of one name keep their providers, where the names alone would read alike.
   const twins = host(ready(), ['reviewModel', 'fixture/fast', 'less', 'other', 'second/fast', 'done', undefined],
     { models: [...MODELS, { id: 'second/fast', name: 'Fast', provider: 'Second AI', variants: [] }] });

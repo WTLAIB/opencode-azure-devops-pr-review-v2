@@ -1066,6 +1066,15 @@ test('stale reviews are reported and cannot be commented on; a moved base stays 
   const drift = await fixture(t);
   drift.azure.state.afterVersions = { base: 'd'.repeat(40) };
   assert.match(await drift.command(), /\] COMPLETE/);
+  // A STALE review in which no session gave a usable answer says both, and nowhere that a reviewer checked its
+  // findings: the receipt speaks of REPORTED findings only, and the report and its provenance of attempts.
+  const garbledStale = await fixture(t, { settings: s => { s.returnReport = 'full'; }, answer: garbled });
+  garbledStale.azure.state.afterVersions = { head: 'c'.repeat(40) };
+  const unchecked = await garbledStale.command();
+  assert.match(unchecked, /^\[AZPR [a-f0-9]{8}\] STALE; /);
+  assert.match(unchecked, /\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*STALE: No review session produced a usable result\. These claims are provisional and cannot be used for PR comments\.\*\*/);
+  assert.match(unchecked, /2 independent reviewer passes were asked to review the changed files, each shard in a session of its own\. 2 of the 2 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed\. No reviewer session gave a usable review, so the findings on record are observations that nothing checked\./);
+  assert.doesNotMatch(unchecked, /Findings were checked by their reviewer|Each reviewer checked its own findings|Each finding was checked/);
 });
 
 test('a failed final version recheck keeps the review COMPLETE with a warning', async t => {
@@ -1076,7 +1085,7 @@ test('a failed final version recheck keeps the review COMPLETE with a warning', 
   const receipt = await f.command();
   assert.match(receipt, COMPLETE);
   assert.match(receipt, /The final version recheck failed \([^\n]*HTTP 404[^\n]*\); publication re-checks the source commit before posting\./);
-  assert.match(receipt, /Status: COMPLETE means at least one review session produced a usable result and no source-commit change was detected\. Each finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately, and findings that failed the runtime's checks are NEEDS_INFO\. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed\./);
+  assert.match(receipt, /Status: COMPLETE means at least one review session produced a usable result and no source-commit change was detected\. A REPORTED finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately\. A finding that failed the runtime's checks, or that comes from an answer that was not usable, is NEEDS_INFO\. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed\./);
   assert.match(receipt, /STALE means the PR source commit changed during the review\./);
 });
 
@@ -4058,7 +4067,7 @@ test('automatic publication of a review posts its findings with the disclosure o
   const f = await fixture(t, { settings: quickSettings });
   const receipt = await f.command('pr-quick', `${f.azure.prUrl()} --publish`);
   // The receipt says what the findings are and gives no advice to run another mode first: no mode verifies.
-  assert.match(receipt, /Each finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately/);
+  assert.match(receipt, /A REPORTED finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately/);
   assert.doesNotMatch(receipt, /Verification hint|consider \/pr-review/);
   const step = await commentStep(f, receipt);
   assert.match(step.receipt, new RegExp(`\\] POSTED; source review=${reviewId(receipt)}\\n`));

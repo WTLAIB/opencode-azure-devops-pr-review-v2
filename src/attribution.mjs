@@ -8,6 +8,7 @@ const vocabulary = {
     roles: { review: 'Review', dedupe: 'Duplicate check', rating: 'Severity rating' }, pass: n => ` (pass ${n})`, stage: 'Stage', model: 'Selected provider/model ID', sessions: 'Sessions', count: 'Findings reported', dispositions: 'Finding dispositions', finding: 'Finding', result: 'Result', merged: 'Merged into',
     note: 'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.', comment: 'AI-generated review; not human review or approval. Models:',
     method: { one: 'One reviewer session per shard reviewed the changed files.', several: n => `${n} independent reviewer passes reviewed the changed files, each shard in a session of its own.`,
+      oneAsked: 'One reviewer session per shard was asked to review the changed files.', severalAsked: n => `${n} independent reviewer passes were asked to review the changed files, each shard in a session of its own.`,
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
       checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding.',
       unchecked: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
@@ -21,6 +22,7 @@ const vocabulary = {
     roles: { review: '審查', dedupe: '重複檢查', rating: '嚴重度評定' }, pass: n => `（第 ${n} 次）`, stage: '階段', model: '實際選用的 provider/model ID', sessions: '工作階段數', count: '回報問題數', dispositions: '問題處置', finding: '問題', result: '結果', merged: '合併至',
     note: '此處記錄 OpenCode 實際選用的模型 ID，不是對供應商後端模型身分的獨立驗證；不包含主對話及宿主的輔助模型。', comment: 'AI 審查，非人工審查或核准。模型：',
     method: { one: '每個分片的變更檔由一個審查工作階段審查。', several: n => `變更檔由 ${n} 次獨立的審查各審一遍，每個分片各用一個工作階段。`,
+      oneAsked: '每個分片的變更檔交給一個審查工作階段審查。', severalAsked: n => `變更檔安排了 ${n} 次獨立的審查，每個分片各用一個工作階段。`,
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
       checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則發現的形式與來源。',
       unchecked: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
@@ -34,6 +36,7 @@ const vocabulary = {
     roles: { review: '审查', dedupe: '重复检查', rating: '严重度评定' }, pass: n => `（第 ${n} 次）`, stage: '阶段', model: '实际选用的 provider/model ID', sessions: '会话数', count: '报告问题数', dispositions: '问题处置', finding: '问题', result: '结果', merged: '合并至',
     note: '此处记录 OpenCode 实际选用的模型 ID，不是对供应商后端模型身份的独立验证；不包含主对话及宿主的辅助模型。', comment: 'AI 审查，非人工审查或批准。模型：',
     method: { one: '每个分片的变更文件由一个审查会话审查。', several: n => `变更文件由 ${n} 次独立的审查各审一遍，每个分片各用一个会话。`,
+      oneAsked: '每个分片的变更文件交给一个审查会话审查。', severalAsked: n => `变更文件安排了 ${n} 次独立的审查，每个分片各用一个会话。`,
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
       checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则发现的形式与来源。',
       unchecked: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
@@ -136,8 +139,10 @@ export function methodText(method, language) {
   const sessions = passes.reduce((sum, pass) => sum + (pass.sessions ?? 0), 0), failed = passes.reduce((sum, pass) => sum + (pass.failed ?? 0), 0);
   const checked = (check.groups ?? 0) - (check.failed ?? 0);
   const rated = rating.state && rating.state !== 'off' && rating.rated > 0;
-  // Reviewers checked their findings only where a session gave a usable review.
-  return [passes.length > 1 ? m.several(passes.length) : m.one, ...(failed ? [m.failed(failed, sessions)] : []), answered({ method }) ? m.checks : m.unchecked,
+  // Reviewers reviewed and checked their findings only where a session gave a usable review; otherwise they were
+  // asked to, and nothing on record was checked.
+  const ok = answered({ method });
+  return [passes.length > 1 ? (ok ? m.several : m.severalAsked)(passes.length) : ok ? m.one : m.oneAsked, ...(failed ? [m.failed(failed, sessions)] : []), ok ? m.checks : m.unchecked,
     ...(check.merged ? [m.dedupe] : checked > 0 ? [m.dedupeNone] : []), ...(check.failed ? [m.dedupeFailed(check.failed)] : []),
     rated ? m.rated : m.unrated, ...(rated && rating.kept ? [m.kept(rating.kept)] : []), m.end].join(pick(language, ' ', '', ''));
 }
@@ -329,7 +334,7 @@ export function renderReviewSummary(findings, language, introduction = '', { ver
   return `## PR Review Summary\n\n${introduction ? `${introduction}\n\n` : ''}${counts}\n\n${rows ? `| Severity | Summary | ${w.location} |\n| --- | --- | --- |\n${rows}` : empty}`;
 }
 
-const findingFields = ['id', 'summary', 'severity', 'reviewerSeverity', 'location', 'evidence', 'counterevidence', 'suggestion', 'origin', 'shardId', 'originalId'];
+const findingFields = ['id', 'summary', 'severity', 'reviewerSeverity', 'location', 'evidence', 'counterevidence', 'suggestion', 'origin', 'shardId', 'originalId', 'generatedId'];
 function extraOutput(value, known) {
   const entries = Object.entries(value ?? {}).filter(([key, content]) => !known.includes(key) && content !== '' && content !== null && content !== undefined);
   if (!entries.length) return '';
@@ -474,7 +479,7 @@ export function renderReceipt(run, report, status, error, settings) {
     ? '\nStatus: READY means AZPR can read the PR through the Azure DevOps REST API; it does not review or approve the PR.\n'
     : run.mode === 'comment'
       ? ''
-      : '\nStatus: COMPLETE means at least one review session produced a usable result and no source-commit change was detected. Each finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately, and findings that failed the runtime\'s checks are NEEDS_INFO. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed. STALE means the PR source commit changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n';
+      : '\nStatus: COMPLETE means at least one review session produced a usable result and no source-commit change was detected. A REPORTED finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately. A finding that failed the runtime\'s checks, or that comes from an answer that was not usable, is NEEDS_INFO. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed. STALE means the PR source commit changed during the review. PARTIAL means no session produced a usable result. None of these approves the PR.\n';
   if (run.userContext) body += '\nSupplementary context applies to this command only.\n';
   if (report) {
     const last = run.reportStage;

@@ -210,14 +210,18 @@ const findingOnly = finding => Object.fromEntries(FINDING_FIELDS.filter(key => k
 
 /** The fields of a finding whose text may name another finding of its answer. */
 const PROSE_FIELDS = ['summary', 'evidence', 'counterevidence', 'suggestion'];
-const ID_TOKEN = new RegExp(`(?<![\\w-])${LOCAL_PREFIX}-[1-9]\\d*(?![\\w-])`, 'g');
+// An ID as a text names it: not inside a name (a letter, digit or hyphen before or after it, or one before an
+// underscore that precedes it), but also where Markdown emphasis wraps it in underscores (_F-1_).
+const ID_TOKEN = new RegExp(`(?<![A-Za-z0-9-])(?<![A-Za-z0-9]_+)${LOCAL_PREFIX}-[1-9]\\d*(?![A-Za-z0-9-])(?!_+[A-Za-z0-9])`, 'g');
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /**
  * What an answer's text says of its own findings, by the IDs the answer gave them, with the review's IDs of those
- * findings (`ids`: the answer's ID -> the review's). Code stays as written: an inline code span or a fenced block
- * (from a run of backticks to the next run of the same length, or from a fence of tildes at a line's start to the
- * next one; without its end, to the end of the text), and an ID written directly between quotes, which is a
- * literal and no reference. Other IDs, and text without IDs of the answer, are left as they are.
+ * findings (`ids`: the answer's ID -> the review's). Code stays as written: a fenced block (from a line that opens
+ * with three or more backticks or tildes to a line of at least as many of the same and nothing else, or to the
+ * end of the text), an inline code span (from a run of backticks to the next run of the same length; without
+ * one, to the end of its paragraph), and an ID written directly between quotes, which is a literal and no
+ * reference. Other IDs, and text without IDs of the answer, are left as they are.
  */
 export function renameReferences(text, ids) {
   if (typeof text !== 'string' || !ids?.size) return text;
@@ -225,17 +229,40 @@ export function renameReferences(text, ids) {
     const before = whole[offset - 1], after = whole[offset + token.length];
     return !ids.has(token) || ((before === '"' || before === "'") && after === before) ? token : ids.get(token);
   });
-  const opener = /`+|(?<=^|\n)[ \t]{0,3}~{3,}/g;
-  let out = '', at = 0;
-  for (let match; (match = opener.exec(text));) {
-    const mark = match[0].trim();
-    const closer = mark[0] === '`' ? new RegExp('(?<!`)' + mark + '(?!`)', 'g') : new RegExp('(?<=^|\\n)[ \\t]{0,3}' + mark + '~*', 'g');
-    closer.lastIndex = match.index + match[0].length;
-    const end = closer.exec(text), stop = end ? end.index + end[0].length : text.length;
-    out += prose(text.slice(at, match.index)) + text.slice(match.index, stop);
-    at = opener.lastIndex = stop;
+  const spans = part => {
+    let out = '', at = 0;
+    const opener = /`+/g;
+    for (let match; (match = opener.exec(part));) {
+      const closer = new RegExp('(?<!`)' + match[0] + '(?!`)', 'g');
+      closer.lastIndex = match.index + match[0].length;
+      const end = closer.exec(part), stop = end ? end.index + end[0].length : part.length;
+      out += prose(part.slice(at, match.index)) + part.slice(match.index, stop);
+      at = opener.lastIndex = stop;
+    }
+    return out + prose(part.slice(at));
+  };
+  const out = [];
+  let paragraph = [], fence = null;
+  const flush = () => { if (paragraph.length) out.push(spans(paragraph.join('\n'))); paragraph = []; };
+  for (const line of text.split('\n')) {
+    if (fence) {
+      out.push(line);
+      if (fence.test(line)) fence = null;
+      continue;
+    }
+    const open = FENCE.exec(line);
+    // A fence of backticks has no backtick in its info string; one that does is inline code.
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+      flush();
+      out.push(line);
+      fence = new RegExp(`^ {0,3}${open[1][0]}{${open[1].length},}[ \\t]*\\r?$`);
+      continue;
+    }
+    if (!line.trim()) { flush(); out.push(line); continue; }
+    paragraph.push(line);
   }
-  return out + prose(text.slice(at));
+  flush();
+  return out.join('\n');
 }
 
 /**
@@ -434,7 +461,8 @@ export async function runReview(ctx, run, request) {
         : problems.length ? { status: 'NEEDS_INFO', reason: `The finding is ${problems.join('; ')} after the correction turns. [Runtime: not eligible for comments.]` }
           : !check?.ok ? { status: 'NEEDS_INFO', reason: `The location check failed: ${check?.problem ?? 'it was not checked.'} [Runtime: not eligible for comments.]` }
             : { status: 'REPORTED', reason: REPORTED_REASON, inline: check.inline };
-      collected.push({ ...verdict, finding: findingOnly(finding), localId: finding.id, task, session, position });
+      // An ID the parser had to give a finding (none, a malformed or a repeated one) is no ID the answer's text uses.
+      collected.push({ ...verdict, finding: findingOnly(finding), localId: finding.id, suppliedId: finding.generatedId ? undefined : finding.id, task, session, position });
     });
     initialReports.push({ role: task.role, shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, ...(passes > 1 ? { pass: task.pass + 1 } : {}), files: task.files.length, status: result.status,
       structured: result.structured, usable: isUsable, report: result.report, gaps: result.coverage.gaps, warnings: result.warnings });
@@ -444,25 +472,27 @@ export async function runReview(ctx, run, request) {
   // The review's IDs, in a fixed order, before anything is merged.
   collected.sort(byPlaceAndSource);
   const findings = [], dispositions = [];
-  // Where an answer's text names one of its own findings by the ID the answer gave it, it names that finding's
-  // review ID from now on: in the finding fields, the notes and the gaps, wherever they are shown or handed on.
-  // Code stays as written (`renameReferences`), and the answer's own ID stays on record (`localId`).
+  // Where an answer's text names one of its own findings by an ID the answer gave it, the review names that
+  // finding by its review ID: in the finding fields, the notes and the gaps. Code stays as written
+  // (`renameReferences`), and the answer's own ID stays on record (`localId`). Until the merges are settled a text
+  // names the ID its finding was given; once they are, it names the finding that stays, which is what the rating,
+  // the comments and every reader see.
   const ownIds = new Map();
   collected.forEach((entry, index) => {
     if (!ownIds.has(entry.session)) ownIds.set(entry.session, new Map());
-    ownIds.get(entry.session).set(entry.localId, `${LOCAL_PREFIX}-${index + 1}`);
+    const ids = ownIds.get(entry.session);
+    if (entry.suppliedId && !ids.has(entry.suppliedId)) ids.set(entry.suppliedId, `${LOCAL_PREFIX}-${index + 1}`);
   });
-  const rename = (session, value) => renameReferences(value, ownIds.get(session));
-  const reportOf = ({ session, label, text: body }) => label ? `### ${label}\n\n${rename(session, body)}` : rename(session, body);
-  reports.push(...answerReports.map(reportOf));
-  for (const { role, session, gaps } of answerGaps) coverage[role].gaps.push(...gaps.map(gap => rename(session, gap)));
-  // Records identical in every field as their answers wrote them are duplicates, whatever IDs their texts name.
+  const named = (session, survivorOf = id => id) => new Map([...(ownIds.get(session) ?? [])].map(([own, id]) => [own, survivorOf(id)]));
+  const proseOf = (finding, ids) => Object.fromEntries(Object.entries(finding).map(([key, value]) => [key, PROSE_FIELDS.includes(key) ? renameReferences(value, ids) : value]));
+  // Records identical in every field are duplicates, where what their texts name is the same: a finding that
+  // names itself names itself in each copy, and texts that name different other findings differ, for the
+  // duplicate check to decide about.
   const keys = new Map();
   collected.forEach((entry, index) => {
-    const id = `${LOCAL_PREFIX}-${index + 1}`;
-    keys.set(id, findingKey(entry.finding));
-    const finding = Object.fromEntries(Object.entries(entry.finding).map(([key, value]) => [key, PROSE_FIELDS.includes(key) ? rename(entry.session, value) : value]));
-    findings.push({ ...finding, id, origin: entry.task.role });
+    const id = `${LOCAL_PREFIX}-${index + 1}`, finding = proseOf(entry.finding, named(entry.session));
+    const self = new Map([...named(entry.session)].map(([own, review]) => [own, review === id ? '\u0000itself' : review]));
+    keys.set(id, findingKey(proseOf(entry.finding, self)));
     dispositions.push({ id, status: entry.status, reason: entry.reason,
       ...(entry.status === 'REPORTED' ? { finding, inline: entry.inline, reviewerSeverity: finding.severity } : { partialFinding: finding }),
       shard: entry.session, pass: entry.task.pass + 1, localId: entry.localId, sessions: [entry.session] });
@@ -551,6 +581,20 @@ export async function runReview(ctx, run, request) {
     while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byIdAll.get(target.mergedInto); }
     if (target && target.id !== row.mergedInto) row.mergedInto = target.id;
   }
+  // The merges are settled: a text that names a finding that was merged names the finding that stays, the one a
+  // person can see, adjust and exclude.
+  const survivorOf = id => byIdAll.get(id)?.status === 'MERGED' ? byIdAll.get(id).mergedInto : id;
+  collected.forEach((entry, index) => {
+    const id = `${LOCAL_PREFIX}-${index + 1}`, row = byIdAll.get(id), finding = proseOf(entry.finding, named(entry.session, survivorOf));
+    for (const key of ['finding', 'partialFinding', 'mergedFinding']) if (row[key]) row[key] = finding;
+    findings.push({ ...finding, id, origin: entry.task.role });
+  });
+  const reportOf = ({ session, label, text: body }) => {
+    const value = renameReferences(body, named(session, survivorOf));
+    return label ? `### ${label}\n\n${value}` : value;
+  };
+  reports.unshift(...answerReports.map(reportOf));
+  for (const { role, session, gaps } of answerGaps) coverage[role].gaps.push(...gaps.map(gap => renameReferences(gap, named(session, survivorOf))));
 
   const rating = await rateSeverities(ctx, run, { snapshot, dispositions, warnings });
 

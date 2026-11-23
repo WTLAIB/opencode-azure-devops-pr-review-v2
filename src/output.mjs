@@ -243,6 +243,8 @@ export function assignIds(findings, prefix, warnings) {
       if (text(row.id)) row.originalId = row.id;
       while (reserved.has(`${prefix}-${next}`)) next++;
       row.id = `${prefix}-${next++}`;
+      // An ID the answer did not write: nothing in its text can mean it.
+      row.generatedId = true;
       reserved.add(row.id);
       warnings.add('Runtime IDs replaced missing, malformed or repeated finding IDs.');
     }

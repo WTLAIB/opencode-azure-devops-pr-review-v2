@@ -52,7 +52,10 @@ const rowOf = (status, id) => (Array.isArray(status?.rows) ? status.rows : []).f
 const withProblem = (problem, description) => problem ? `${problem}\n\n${description}` : description;
 // A model as settings name it: provider/model, optionally with #variant.
 const baseModel = value => text(value).split('#')[0];
-const variantOf = value => text(value).includes('#') ? text(value).slice(text(value).indexOf('#') + 1) : '';
+// The variant a model names; "default" is the model's own default, as no variant is (the dialog's Default row).
+const variantOf = value => { const variant = text(value).includes('#') ? text(value).slice(text(value).indexOf('#') + 1) : ''; return variant === 'default' ? '' : variant; };
+// One model and variant however it is written: provider/model and provider/model#default are the same.
+const effective = value => text(value).replace(/#default$/, '');
 
 /**
  * @param {object} host
@@ -159,7 +162,7 @@ export function createSetup(host) {
     const usual = Number.isInteger(row.usual) && row.usual > 0 ? row.usual : 1, most = Number.isInteger(row.most) && row.most >= usual ? row.most : usual;
     // The saved first model picked again: the saved passes are what the first row keeps, so that looking at a
     // row and taking what it shows changes nothing. Another model starts with the mode's usual passes of it.
-    let passes = first === saved[0] && saved.length <= most ? [...saved] : Array(usual).fill(first);
+    let passes = effective(first) === effective(saved[0]) && saved.length <= most ? [...saved] : Array(usual).fill(first);
     for (;;) {
       // A model keeps its provider where another pass has one of the same name from another provider.
       const named = model => passes.some(other => other !== model && shortModel(other) === shortModel(model)) ? model : shortModel(model);

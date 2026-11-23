@@ -200,8 +200,10 @@ never whether a defect is real.
    in its shard's range (`F-1001` for the first shard, `F-2001` for the
    second, the same for every pass); the review's IDs are given later (step
    5), and where an answer's text names one of its own findings, that
-   finding's review ID takes the place of the answer's (code spans, fenced
-   blocks and IDs written between quotes stay as written). A reviewer has two
+   finding's review ID takes the place of the answer's: once the merges are
+   settled, the ID of the finding that stays (fenced blocks, code spans and
+   IDs written between quotes stay as written; an ID the parser had to give
+   is no reference). A reviewer has two
    focuses, functional correctness and failure behaviour, which order its
    attention and are not a filter: it files every concrete defect it finds as
    a finding, and `report` carries exclusions, advice, open questions and
@@ -288,8 +290,10 @@ never whether a defect is real.
    model wrote; a finding keeps the ID of its answer as `localId`, and the
    runtime records the session that reported it (`shard`, such as
    `1/3a pass 2`). Records identical in every field, character for
-   character as their answers wrote them, are then merged: the first in
-   that order stays and stands for the sessions
+   character, are then merged, where what their texts name is the same (a
+   finding that names itself names itself in each copy; copies that name
+   different findings go to the duplicate check): the first in that order
+   stays and stands for the sessions
    that reported it, the others become MERGED. Findings on the same lines
    that differ in any field stay separate.
 6. **Duplicate check** — `duplicateGroups` takes the findings that are still
@@ -640,7 +644,8 @@ an `adjustments` field only while some are active. Two states matter:
   must not name an excluded finding: the page checks repair or drop the
   planner's own text, and `excludedReferences` checks the assembled preview,
   including the summary rows rendered from the review's finding summaries,
-  and holds publication when one still names an excluded ID.
+  and holds publication when one still names an excluded ID, or the ID of a
+  finding merged into an excluded one.
 - **Ever adjusted** (also after `--reset`) keeps the stricter publication
   rules. An adjustment is saved together with dropping the earlier preview
   before anything else, and a failed save changes nothing; the new preview is

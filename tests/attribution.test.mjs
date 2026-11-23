@@ -392,6 +392,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
   // order: the passes, sessions that failed, the reviewers' own checks, the duplicate check, the rating, the end.
   const sentences = {
     en: { join: ' ', one: 'One reviewer session per shard reviewed the changed files.', several: n => `${n} independent reviewer passes reviewed the changed files, each shard in a session of its own.`,
+      oneAsked: 'One reviewer session per shard was asked to review the changed files.', severalAsked: n => `${n} independent reviewer passes were asked to review the changed files, each shard in a session of its own.`,
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
       checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding.',
       none: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
@@ -400,6 +401,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
       rated: 'A rating session without tools set the severities from the finding texts alone.', kept: count => `${count} finding(s) got no usable rating and keep their reviewer's level.`,
       own: 'The severities are the reviewers\' own.', end: 'No separate verification ran, and nothing was decided by voting.' },
     'zh-TW': { join: '', one: '每個分片的變更檔由一個審查工作階段審查。', several: n => `變更檔由 ${n} 次獨立的審查各審一遍，每個分片各用一個工作階段。`,
+      oneAsked: '每個分片的變更檔交給一個審查工作階段審查。', severalAsked: n => `變更檔安排了 ${n} 次獨立的審查，每個分片各用一個工作階段。`,
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
       checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則發現的形式與來源。',
       none: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
@@ -408,6 +410,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
       rated: '嚴重度由一個沒有工具的評定工作階段只依發現的文字評定。', kept: count => `${count} 則發現沒有可用的評定，沿用審查者給的等級。`,
       own: '嚴重度是審查者自己給的。', end: '沒有另外的驗證，也不是多數決。' },
     'zh-CN': { join: '', one: '每个分片的变更文件由一个审查会话审查。', several: n => `变更文件由 ${n} 次独立的审查各审一遍，每个分片各用一个会话。`,
+      oneAsked: '每个分片的变更文件交给一个审查会话审查。', severalAsked: n => `变更文件安排了 ${n} 次独立的审查，每个分片各用一个会话。`,
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
       checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则发现的形式与来源。',
       none: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
@@ -428,7 +431,8 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     ['every session of the second pass failed', passes([2, 0], [2, 2]), s => [s.several(2), s.failed(2, 4), s.checks, s.rated, s.end]],
     ['two of the only pass\'s three sessions failed', passes([3, 2]), s => [s.one, s.failed(2, 3), s.checks, s.rated, s.end]],
     // Where no session gave a usable review, no reviewer checked anything that is on record.
-    ['no session gave a usable review', { ...passes([2, 2], [2, 2]), ...rating('first', 0, 0) }, s => [s.several(2), s.failed(4, 4), s.none, s.own, s.end]],
+    ['no session gave a usable review', { ...passes([2, 2], [2, 2]), ...rating('first', 0, 0) }, s => [s.severalAsked(2), s.failed(4, 4), s.none, s.own, s.end]],
+    ['the one session gave no usable review', { ...passes([1, 1]), ...rating('first', 0, 0) }, s => [s.oneAsked, s.failed(1, 1), s.none, s.own, s.end]],
     // The duplicate check: it merged, it compared and merged nothing, it failed, or some of each; nothing is said when none started.
     ['a duplicate check that merged', check(2, 0, 3), s => [s.one, s.checks, s.merged, s.rated, s.end]],
     ['duplicate checks that merged nothing', check(2, 0, 0), s => [s.one, s.checks, s.nothing, s.rated, s.end]],
@@ -574,7 +578,7 @@ test('a review\'s receipt carries coverage and verification on its first line, i
   }
   const text = receipt('quick', missed);
   assert.match(text, /^\[AZPR 12345678\] COMPLETE; coverage incomplete, 2\/3 file\(s\) reviewed; verification none\n/);
-  assert.match(text, /\nStatus: COMPLETE means at least one review session produced a usable result and no source-commit change was detected\. Each finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately, and findings that failed the runtime's checks are NEEDS_INFO\. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed\. STALE means the PR source commit changed during the review\. PARTIAL means no session produced a usable result\. None of these approves the PR\.\n/);
+  assert.match(text, /\nStatus: COMPLETE means at least one review session produced a usable result and no source-commit change was detected\. A REPORTED finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately\. A finding that failed the runtime's checks, or that comes from an answer that was not usable, is NEEDS_INFO\. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed\. STALE means the PR source commit changed during the review\. PARTIAL means no session produced a usable result\. None of these approves the PR\.\n/);
   assert.match(text, /\/pr-comment 12345678 --publish/);
   // Nothing recommends another mode for verification any more, whatever the findings and the comment step.
   assert.doesNotMatch(text, /Verification hint|quick review|independently verified|verifier/i);

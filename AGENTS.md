@@ -50,11 +50,17 @@ settings, backups and failure records. Never upload `.local/`.
   differs), and once all passes have answered the runtime numbers them by
   place and source (`byPlaceAndSource` in `review-work.mjs`). Where an
   answer's text (its finding fields, notes and gaps) names one of its own
-  findings by the ID the answer gave it, the runtime puts that finding's
-  review ID in its place (`renameReferences`), so that every later stage and
-  every reader sees one set of IDs. Code stays as written: an inline code
-  span, a fenced block, and an ID written directly between quotes are quoted
-  text, not references. Nothing a later stage or a person sees may depend on
+  findings by an ID the answer gave it (not one the parser had to give), the
+  runtime puts that finding's review ID in its place (`renameReferences`):
+  until the merges are settled the ID the finding was given, afterwards the
+  finding that stays, so that the rating, the comments and every reader see
+  one set of IDs, each of a finding a person can see and exclude. Code stays
+  as written: a fenced block (closed by a line of its fence character), an
+  inline code span, and an ID written directly between quotes are quoted
+  text, not references; underscore emphasis is not a name. Exact duplicates
+  compare these texts with a finding's names of itself as itself, so copies
+  that name different findings go to the duplicate check. Nothing a later
+  stage or a person sees may depend on
   which session finished first or on an ID a model wrote: also not the tool
   observations and limitations the planner is given, which follow the order
   of their content.
@@ -343,7 +349,8 @@ settings, backups and failure records. Never upload `.local/`.
   neither adjusted nor planned again once its publication started. That save
   and the new preview's save must succeed; never let a failed save report an
   adjustment as applied. Text the runtime renders that names an excluded
-  finding holds publication. Items an earlier publication already put on the
+  finding, or a finding merged into one, holds publication. Items an earlier
+  publication already put on the
   PR are skipped as always; its receipt names those whose text differs, since
   posted comments are never changed.
 - Comment planning pages run side by side, so nothing a page sees or produces

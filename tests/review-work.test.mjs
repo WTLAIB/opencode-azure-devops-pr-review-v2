@@ -475,6 +475,14 @@ test('renameReferences: an answer\'s own IDs outside code become the review\'s; 
     ['A span of two: ``code `F-1001` inside`` then F-1001', 'A span of two: ``code `F-1001` inside`` then F-1'],
     ['An unclosed ` takes the rest as code: F-1001', 'An unclosed ` takes the rest as code: F-1001'],
     ['F-1001s F-10010 XF-1001 F-1001-x (F-1002), F-1002. F-1002\'s F-12', 'F-1001s F-10010 XF-1001 F-1001-x (F-2), F-2. F-2\'s F-12'],
+    // Emphasis is no name: _F-1001_ is the ID, foo_F-1001 and F-1001_bar are names.
+    ['Compare _F-1001_ and __F-1002__, not foo_F-1001 or F-1001_bar.', 'Compare _F-1_ and __F-2__, not foo_F-1001 or F-1001_bar.'],
+    // A fence ends at a line of its own character, as long as its opening or longer, and nothing else.
+    ['```js\nconst s = "```"; // F-1001\n```\nThen F-1001.', '```js\nconst s = "```"; // F-1001\n```\nThen F-1.'],
+    ['```\ncode F-1002\n````\nAfter the block F-1002.', '```\ncode F-1002\n````\nAfter the block F-2.'],
+    // An unclosed span is code to the end of its paragraph only; a text written next to the ID is no name.
+    ['Inline `F-1001` and F-1002; unclosed ` F-1001\n\nNext paragraph F-1001.', 'Inline `F-1001` and F-1002; unclosed ` F-1001\n\nNext paragraph F-1.'.replace('and F-1002;', 'and F-2;')],
+    ['見F-1002的說明。', '見F-2的說明。'],
   ]) assert.equal(renameReferences(text, ids), renamed, text);
   assert.deepEqual([renameReferences('F-1001', new Map()), renameReferences('F-1001', undefined), renameReferences(undefined, ids)], ['F-1001', 'F-1001', undefined]);
 });
@@ -514,14 +522,45 @@ test('findings on the same line stay separate; only records identical in every f
     finding('F-1', 'head:/src/pay.ts:1', 'A key the table lacks', { evidence: 'The table has no entry for `"a b"`.' }),
     finding('F-2', 'head:/src/pay.ts:1', 'A key the table lacks', { evidence: 'The table has no entry for `"a  b"`.' })]) });
   assert.deepEqual(rows(await runReview(keys.ctx, keys.run, keys.request)), ['F-1:REPORTED', 'F-2:REPORTED']);
-  // Two passes that file the same records, each naming its own other finding, file identical records: what each
-  // text names becomes that pass's own review ID afterwards, and the copies are still removed.
-  const chain = await context(t, { files: ['/src/pay.ts'], models: { reviewers: ['p/a', 'p/a'] }, dedupe: async () => { throw new Error('must not run'); },
+  // Two passes that file the same records, each naming its own other finding: each names a finding of its own pass,
+  // so the two texts name different findings, are no copies, and go to the duplicate check. Once the merges are
+  // settled, a text that names a merged finding names the one that stays.
+  const chain = await context(t, { files: ['/src/pay.ts'], models: { reviewers: ['p/a', 'p/a'] },
     behave: reviewer(payload => [finding(payload.assignment.firstFindingId, 'head:/src/pay.ts:1', 'The charge runs twice', { suggestion: 'Fix it with F-1002.' }),
       finding('F-1002', 'head:/src/pay.ts:2', 'The retry has no key')]) });
   const copies = await runReview(chain.ctx, chain.run, chain.request);
-  assert.deepEqual(rows(copies), ['F-1:REPORTED', 'F-2:MERGED>F-1', 'F-3:REPORTED', 'F-4:MERGED>F-3']);
-  assert.equal(copies.dispositions[0].finding.suggestion, 'Fix it with F-3.');
+  assert.deepEqual(rows(copies), ['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED', 'F-4:MERGED>F-3']);
+  assert.deepEqual([copies.dispositions[0].finding.suggestion, copies.dispositions[1].finding.suggestion, copies.dispositions[3].mergedFinding.suggestion], ['Fix it with F-3.', 'Fix it with F-3.', 'Restore the guard; add a regression case.']);
+  assert.equal(chain.of('dedupe').length, 1);
+  // A finding that names itself names itself in each copy: such copies are removed.
+  const selfish = await context(t, { files: ['/src/pay.ts'], models: { reviewers: ['p/a', 'p/a'] }, dedupe: async () => { throw new Error('must not run'); },
+    behave: reviewer(payload => [finding(payload.assignment.firstFindingId, 'head:/src/pay.ts:1', `${payload.assignment.firstFindingId}: the charge runs twice`)]) });
+  const itself = await runReview(selfish.ctx, selfish.run, selfish.request);
+  assert.deepEqual([rows(itself), itself.dispositions[0].finding.summary, itself.dispositions[1].mergedFinding.summary], [['F-1:REPORTED', 'F-2:MERGED>F-1'], 'F-1: the charge runs twice', 'F-1: the charge runs twice']);
+});
+
+test('a text that names a finding merged into another names the finding that stays, whichever merge it was', async t => {
+  // Pass 1 files the cause on line 1; pass 2 files the cause there too and, on line 2, an effect that names it. The
+  // review gives them F-1, F-2 (pass 2's cause) and F-3, and F-2 is merged into F-1: as an exact copy, or by the
+  // duplicate check. F-3 then names F-1, which a person can see and exclude.
+  const cause = (text = 'The guard is dropped') => finding('F-1001', 'head:/src/a.ts:1', text);
+  for (const [name, second, dedupe] of [
+    ['an exact copy', cause(), noDuplicates],
+    ['the duplicate check', cause('The same guard is missing'), async ({ payload }) => JSON.stringify({ status: 'COMPLETE', report: '',
+      merged: [{ id: 'F-2', mergedInto: 'F-1', reason: 'Same root cause and correction.' }].filter(() => payload.assignment.findingIds.includes('F-2')) })],
+  ]) {
+    const f = await context(t, { files: ['/src/a.ts'], models: { reviewers: ['p/a', 'p/b'] }, dedupe,
+      behave: reviewer((payload, pass) => pass === 0 ? [cause()] : [second, finding('F-1002', 'head:/src/a.ts:2', 'The retry runs twice', { evidence: 'See F-1001 for the cause.' })]) });
+    const final = await runReview(f.ctx, f.run, f.request);
+    assert.deepEqual(rows(final), ['F-1:REPORTED', 'F-2:MERGED>F-1', 'F-3:REPORTED'], name);
+    assert.equal(final.dispositions[2].finding.evidence, 'See F-1 for the cause.', name);
+    assert.equal(final.findings[2].evidence, 'See F-1 for the cause.', name);
+  }
+  // An ID the parser had to give a finding is none the answer's text can mean: "F-1" below names another review.
+  const g = await context(t, { files: ['/src/a.ts'], behave: reviewer(() => [{ ...finding('F-1001', 'head:/src/a.ts:1', 'A finding without an ID'), id: undefined },
+    finding('F-1001', 'head:/src/a.ts:2', 'Compare the earlier review\'s F-1')]) });
+  const generated = await runReview(g.ctx, g.run, g.request);
+  assert.deepEqual(generated.dispositions.map(d => [d.id, d.localId, d.finding.summary]), [['F-1', 'F-1', 'A finding without an ID'], ['F-2', 'F-1001', 'Compare the earlier review\'s F-1']]);
 });
 
 // ------------------------------------------------------------------ severity rating
