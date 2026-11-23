@@ -86,10 +86,12 @@ export function parseLocation(location) {
   let value = location;
   if (typeof value === 'string' && value.trim().startsWith('{')) { try { value = JSON.parse(value); } catch { /* A string location. */ } }
   if (value && typeof value === 'object') {
+    // Its path is a field of its own, so a colon in it is part of the name; its range is kept as written (a
+    // reversed one as the text form "3-2" is), and an end it leaves out is its start.
     const side = value.side ?? 'head';
-    if (!['head', 'base'].includes(side) || typeof value.path !== 'string' || !value.path.startsWith('/') || /[\0\r\n:]/.test(value.path)) return null;
+    if (!['head', 'base'].includes(side) || typeof value.path !== 'string' || !value.path.startsWith('/') || /[\0\r\n]/.test(value.path)) return null;
     const start = Number.isSafeInteger(value.lineStart) && value.lineStart > 0 ? value.lineStart : null;
-    return { side, path: value.path, start, end: start && Number.isSafeInteger(value.lineEnd) && value.lineEnd >= start ? value.lineEnd : start };
+    return { side, path: value.path, start, end: start && Number.isSafeInteger(value.lineEnd) ? value.lineEnd : start };
   }
   const text = String(value ?? '').trim();
   const side = /^(head|base):/.exec(text)?.[1], rest = side ? text.slice(side.length + 1) : text;

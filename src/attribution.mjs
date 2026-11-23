@@ -212,14 +212,16 @@ const reportVocabulary = {
 const reportWords = language => reportVocabulary[pick(language, 'en', 'tw', 'cn')];
 
 function displayLocation(value) {
-  try {
-    const p = JSON.parse(value);
-    if (p && ['head', 'base'].includes(p.side) && typeof p.path === 'string' && p.path.startsWith('/') &&
-        Number.isSafeInteger(p.lineStart) && p.lineStart > 0 && Number.isSafeInteger(p.lineEnd) && p.lineEnd >= p.lineStart) {
-      return `${p.side}:${p.path}:${p.lineStart}${p.lineEnd === p.lineStart ? '' : '-' + p.lineEnd}`;
-    }
-  } catch { /* Ordinary string locations stay literal. */ }
-  return value;
+  // A structured location (a JSON string or an object, as 0.4.x saved some) reads as the text form; an end it leaves
+  // out is its start. Anything else that is no text is shown as JSON, never as "[object Object]".
+  let p = value;
+  if (typeof p === 'string' && p.trim().startsWith('{')) { try { p = JSON.parse(p); } catch { return value; } }
+  if (!p || typeof p !== 'object') return value;
+  const side = p.side ?? 'head', end = Number.isSafeInteger(p.lineEnd) ? p.lineEnd : p.lineStart;
+  if (['head', 'base'].includes(side) && typeof p.path === 'string' && p.path.startsWith('/') && Number.isSafeInteger(p.lineStart) && p.lineStart > 0 && end >= p.lineStart) {
+    return `${side}:${p.path}:${p.lineStart}${end === p.lineStart ? '' : '-' + end}`;
+  }
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 /** The heading of the list of other places in each language it is written in; what reads the list back knows it by these lines. */

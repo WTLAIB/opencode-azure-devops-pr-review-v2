@@ -558,6 +558,12 @@ test('disclosure lines name the method of their review and, for the summary, inc
   assert.equal(coverageNote({ complete: false, unreviewedFiles: 0, filesComplete: true, reasons: ['reviewer-gaps'] }, 'zh-TW'), '審查者回報有未完成的檢查');
   assert.equal(coverageNote({ complete: true }, 'en'), '');
   assert.match(renderReviewSummary([], 'zh-TW', '', { verification: 'none' }), /未回報缺陷；這不保證程式沒有問題。/);
+  // A structured location of 0.4.x reads as the text form in a summary row, as an object or without its end too.
+  const located = [{ ...finding('F-1'), location: { side: 'head', path: '/a.ts', lineStart: 2, lineEnd: 2 } },
+    { ...finding('F-2'), location: JSON.stringify({ side: 'head', path: '/b.ts', lineStart: 4 }) }, { ...finding('F-3'), location: JSON.stringify({ side: 'head', path: '/c.ts', lineStart: 5, lineEnd: 7 }) }];
+  const rows = renderReviewSummary(located.map(f => ({ ...f, ids: [f.id] })), 'en', '', { verification: 'none' });
+  for (const place of ['head:/a.ts:2', 'head:/b.ts:4', 'head:/c.ts:5-7']) assert.ok(rows.includes(`| ${place} |`), `${place}: ${rows}`);
+  assert.doesNotMatch(rows, /\[object Object\]/);
   assert.match(renderReviewSummary([], 'zh-TW'), /未發現可確認缺陷/);
 });
 

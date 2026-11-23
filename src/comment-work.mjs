@@ -360,6 +360,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const text = await source(location.path);
       if (text === null) continue;
       const window = sourceWindow(text, location);
+      // A window with no line (a saved line past the end of the file) is no excerpt: the finding keeps its evidence index.
+      if (window.firstLine > window.lastLine) continue;
       const key = `${location.path}:${window.firstLine}-${window.lastLine}`;
       const entry = windows.get(key) ?? { path: location.path, version: review.snapshot.head, findingIds: [], ...window };
       entry.findingIds.push(finding.id);

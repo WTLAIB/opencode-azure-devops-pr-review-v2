@@ -850,6 +850,11 @@ test('locations and source windows', () => {
     ['base/a.ts:2', { side: 'head', path: '/base/a.ts', start: 2, end: 2 }],
   ]) assert.deepEqual(parseLocation(location), at, JSON.stringify(location));
   for (const nothing of ['', 'head:', JSON.stringify({ side: 'head', path: 'src/a.ts' }), JSON.stringify({ side: 'left', path: '/src/a.ts' })]) assert.equal(parseLocation(nothing), null, nothing);
+  // A structured path is a field of its own, so a colon in it is part of the name; a range stays as it was written,
+  // a reversed one as the text form "3-2" does, and an end left out is the start.
+  assert.deepEqual(parseLocation(JSON.stringify({ side: 'head', path: '/a:b.ts', lineStart: 2, lineEnd: 2 })), { side: 'head', path: '/a:b.ts', start: 2, end: 2 });
+  assert.deepEqual([parseLocation(JSON.stringify({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd: 2 })), parseLocation('head:/a.ts:3-2')],
+    [{ side: 'head', path: '/a.ts', start: 3, end: 2 }, { side: 'head', path: '/a.ts', start: 3, end: 2 }]);
   const small = sourceWindow('a\nb\nc\n', { start: 2 });
   assert.deepEqual({ ...small, text: small.text.split('\n') }, { firstLine: 1, lastLine: 3, totalLines: 3, text: ['1 | a', '2 | b', '3 | c'] });
   const big = sourceWindow(Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join('\n'), { start: 500, end: 502, context: 5 });
@@ -889,6 +894,13 @@ eachKind('planning payloads inline source excerpts and the discussion digest; to
   await prepareComments(other.review, other.store, second.invoke, {});
   assert.equal(second.payloads[0].discussionsRead, false);
   assert.ok(second.payloads[0].evidenceIndex, 'The evidence index remains available without excerpts.');
+  // A saved line past the end of a long file gives a window with no line: that is no excerpt, and the evidence
+  // index stays.
+  const long = Array.from({ length: 500 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+  const beyond = await setup(t, [{ ...finding('F-1'), location: JSON.stringify({ side: 'head', path: '/src/Main.java', lineStart: 600, lineEnd: 600 }) }], undefined, { kind });
+  const third = stages(async payload => JSON.stringify({ status: 'READY', comments: [], skipped: [{ findingId: 'F-1', cause: 'no-inline-location', reason: 'Its line is not in the file.' }] }));
+  await prepareComments(beyond.review, beyond.store, third.invoke, { discussions: [], fetchSource: async () => long });
+  assert.deepEqual([third.payloads[0].sourceExcerpts ?? [], Boolean(third.payloads[0].evidenceIndex)], [[], true]);
 });
 
 const quickFinding = (id, shard, location, severity = 'medium', extra = {}) => ({ id, shard, location, severity, summary: `Defect ${id}`, evidence: 'e', counterevidence: 'c', suggestion: 's', ...extra });
