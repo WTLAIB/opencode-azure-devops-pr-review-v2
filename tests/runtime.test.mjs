@@ -3084,6 +3084,36 @@ test('a run\'s sessions are on record before any is deleted, for a comment run a
   assert.deepEqual(await sessionRecords(g).then(({ kept, retried }) => ({ kept, retried })), { kept: [[draft]], retried: [] }, 'One record for the run, with what it keeps.');
 });
 
+test('a comment planning that failed leaves alone a preview that another command planned while it ended', async t => {
+  const original = fsPromises.writeFile, entered = deferred(), gate = deferred();
+  const restore = () => { fsPromises.writeFile = original; syncBuiltinESMExports(); };
+  t.after(() => { restore(); gate.resolve(); });
+  // The first planning session fails for good; the second plans as usual.
+  let planners = 0;
+  const f = await fixture(t, { files: ['/src/Main.java'], answer(input) {
+    if (input.role !== 'azpr-review-comment-plan' || input.turn) return undefined;
+    return ++planners === 1 ? { $provider: 401, $providerType: 'provider.auth' } : undefined;
+  } });
+  const id = reviewId(await f.command());
+  // The failed run's diagnostics are saved after its command locks were released: that save stalls.
+  let armed = true;
+  fsPromises.writeFile = async (file, data, ...rest) => {
+    if (armed && /[\\/]result\.json$/.test(String(file))) { armed = false; entered.resolve(); await gate.promise; }
+    return original(file, data, ...rest);
+  };
+  syncBuiltinESMExports();
+  const failing = f.command('pr-comment', id);
+  assert.equal(await within(entered.promise.then(() => true), 5000), true, 'The failed run is saving its diagnostics.');
+  const second = await within(f.command('pr-comment', id), 5000);
+  assert.match(second ?? 'timed out', /^\[AZPR [a-f0-9]{8}\] PREVIEW; source review=/);
+  restore();
+  gate.resolve();
+  assert.doesNotMatch(await failing, /\] PREVIEW;/);
+  // The preview the second command planned is the review's: shown again, and on record.
+  assert.match(await f.command('pr-comment', `${id} --show`), new RegExp(`^\\[AZPR\\] Saved preview of review ${id}`));
+  assert.ok((await savedReview(f, id)).plan, 'The saved review keeps the preview.');
+});
+
 test('a tool call stopped while its observation is saved ends at once and is credited with no read', async t => {
   const original = fsPromises.writeFile, entered = deferred(), gate = deferred(), outcomes = {};
   const restore = () => { fsPromises.writeFile = original; syncBuiltinESMExports(); };
@@ -3481,6 +3511,85 @@ test('a correction turn that fails leaves the answer before it standing where it
   assert.deepEqual((await savedReview(h, reviewId(partial))).final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED']]);
 });
 
+test('the latest usable answer stands: a correction after a follow-up keeps the follow-up\'s, and a correction that is not usable keeps the one it corrected', async t => {
+  // The first answer reviewed /a.ts and named unfinished work. Its follow-up reviewed both files, with a finding in
+  // each and one without a place; the correction turn for that one fails. The follow-up's answer stands, and the
+  // receipt names the correction turn as the one that failed, not the follow-up.
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, answer(input) {
+    if (input.role !== 'azpr-quick-reviewer') return undefined;
+    if (input.turn === 0) return { ...partialAnswer(input.packet, [ownFinding(input, '/a.ts')], ['/b.ts was not read yet.']), coverage: { files: ['/a.ts'], gaps: ['/b.ts was not read yet.'] } };
+    if (input.turn > 1) return { $provider: 401 };
+    const { location: _missing, ...unplaced } = ownFinding(input, '/a.ts', 'medium', 3);
+    return completeAnswer(input.packet, [ownFinding(input, '/a.ts'), ownFinding(input, '/b.ts', 'high', 2), { ...unplaced, summary: 'A defect without a place' }]);
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  assert.match(receipt, /\n- azpr-quick-reviewer: COMPLETE; [^\n]*repair-turns=1;[^\n]*follow-up=completed; repair=failed:permanent\n/);
+  assert.deepEqual([f.sessionsFor('azpr-quick-reviewer').length, f.sessionsFor('azpr-quick-reviewer')[0].turns], [1, 3]);
+  const saved = await savedReview(f, reviewId(receipt));
+  assert.deepEqual(saved.final.dispositions.map(row => [row.id, row.status, (row.finding ?? row.partialFinding).location ?? '']),
+    [['F-1', 'REPORTED', 'head:/a.ts:1'], ['F-2', 'REPORTED', 'head:/b.ts:1'], ['F-3', 'NEEDS_INFO', '']]);
+  const [stage] = await stageRecords(receipt);
+  assert.deepEqual([stage.followUp.outcome, stage.repairFailure.turn, stage.repairFailure.failureClass], ['completed', 2, 'permanent']);
+
+  // Prose in both correction turns of a usable answer: the answer they corrected stands, its unrepaired item degraded.
+  const g = await fixture(t, { settings: quickSettings, answer(input) {
+    if (input.role !== 'azpr-quick-reviewer') return undefined;
+    if (input.turn) return 'I fixed the location.';
+    const path = input.packet.assignment.files[0], { location: _missing, ...unplaced } = ownFinding(input, path, 'medium', 2);
+    return { ...defaultAnswer(input), findings: [ownFinding(input, path), { ...unplaced, summary: 'A defect without a place' }] };
+  } });
+  const prose = await g.command('pr-quick');
+  assert.match(prose, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  assert.match(prose, /\n- azpr-quick-reviewer: COMPLETE; [^\n]*repair-turns=2;[^\n]*repair=failed:unusable\n/);
+  assert.deepEqual((await savedReview(g, reviewId(prose))).final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED'], ['F-2', 'NEEDS_INFO']]);
+  const [corrected] = await stageRecords(prose);
+  assert.deepEqual([corrected.repairFailure.turn, corrected.repairFailure.failureClass, corrected.result.report], [2, 'unusable', 'REVIEW_REPORT']);
+});
+
+test('every stage keeps its usable items when a correction turn fails: ratings, merges and planned comments', async t => {
+  // The rating rates F-1 low and gives F-2 no level it knows; its correction turn fails. F-1's rating stands, and F-2
+  // keeps its reviewer's level.
+  const f = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, answer(input) {
+    if (ROLES[input.role].format === 'rating') return input.turn ? { $provider: 401 }
+      : { status: 'COMPLETE', report: '', ratings: [{ id: 'F-1', severity: 'low', reason: 'Minor.' }, { id: 'F-2', severity: 'critical', reason: 'Bad.' }] };
+    return findingPerFile(['/a.ts', '/b.ts'])(input);
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /\n- azpr-quick-rating: COMPLETE; [^\n]*repair-turns=1;[^\n]*repair=failed:permanent\n/);
+  const rated = (await savedReview(f, reviewId(receipt))).final.dispositions;
+  assert.deepEqual(rated.map(row => [row.id, row.finding.severity, row.reviewerSeverity]), [['F-1', 'low', 'high'], ['F-2', 'high', 'high']]);
+
+  // The duplicate check merges F-2 into F-1 and names a finding it was not given; its correction turn fails. The
+  // valid merge stands.
+  const g = await fixture(t, { answer(input) {
+    if (ROLES[input.role].format !== 'dedupe') return undefined;
+    const [first, second] = input.packet.assignment.findingIds;
+    return input.turn ? { $provider: 401 } : { status: 'COMPLETE', report: '', merged: [{ id: second, mergedInto: first, reason: 'Same defect.' }, { id: 'X-9', mergedInto: first, reason: 'Unknown.' }] };
+  } });
+  const merged = await g.command('pr-review');
+  assert.match(merged, /\n- azpr-review-dedupe[^\n]*: COMPLETE; [^\n]*repair-turns=1;[^\n]*repair=failed:permanent\n/);
+  const kept = (await savedReview(g, reviewId(merged))).final;
+  assert.deepEqual([kept.dispositions.map(row => `${row.id}:${row.status}${row.mergedInto ? `>${row.mergedInto}` : ''}`), kept.method.duplicateCheck],
+    [['F-1:REPORTED', 'F-2:MERGED>F-1'], { groups: 1, failed: 0, merged: 1, refused: 0 }]);
+
+  // A planning page with one comment whose anchor is not in the file: its correction turn fails, and the page's
+  // valid comment is planned.
+  const h = await fixture(t, { files: ['/a.ts', '/b.ts'], settings: quickSettings, answer(input) {
+    if (input.role !== 'azpr-quick-comment-plan') return findingPerFile(['/a.ts', '/b.ts'])(input);
+    if (input.turn) return { $provider: 401 };
+    const page = defaultAnswer(input);
+    return { ...page, comments: page.comments.map((comment, index) => index ? { ...comment, anchor: 'text that is nowhere in the file' } : comment) };
+  } });
+  await h.command('pr-quick');
+  const plan = await h.command('pr-comment', '');
+  const [planner] = (await stageRecords(plan)).filter(stage => stage.role === 'azpr-quick-comment-plan');
+  assert.deepEqual([planner.repairs.length, planner.repairFailure.failureClass], [1, 'permanent']);
+  assert.match(plan, /^\[AZPR [a-f0-9]{8}\] PREVIEW; source review=/);
+  assert.match(plan, /\nInline comments prepared: 1\n\n### F-1 — \/a\.ts:1-1\n/);
+  assert.match(plan, /\n- F-2: No inline comment: the anchor text was not found in the HEAD source;/);
+});
+
 test('sessions an earlier process created, and sessions of the roles of 0.4.x, run nothing without a grant', async t => {
   const f = await fixture(t);
   const id = reviewId(await f.command());
@@ -3499,6 +3608,11 @@ test('sessions an earlier process created, and sessions of the roles of 0.4.x, r
     }
   }
   await assert.rejects(g.emit('session', 'prompt', { sessionID: kept, prompt: { text: 'Explain this finding.' } }), /Only the exact plugin-started reviewer input is authorized/);
+  // A tool call in such a session, whatever agent the host names, runs nothing either: not even a native tool.
+  for (const [sessionID, agent] of [[kept, 'build'], ['ses_elsewhere', 'azpr-review-verifier']]) {
+    await assert.rejects(g.emit('tool', 'execute.before', { sessionID, agent, messageID: 'msg_tool', id: 'call_restored', tool: 'read', input: {} }), /Review tool authorization expired/, `${sessionID} ${agent}`);
+  }
+  await g.emit('tool', 'execute.before', { sessionID: 'ordinary', agent: 'build', messageID: 'msg_tool', id: 'call_ordinary', tool: 'read', input: {} });
   // An ordinary session runs as it always did; AZPR only takes its own tools out of it.
   const ordinary = await g.emit('session', 'context', { sessionID: 'ordinary', agent: 'build', model, tools: { azpr_read_file: {}, read: {} }, system: [] });
   assert.deepEqual(Object.keys(ordinary.tools), ['read']);
@@ -3524,6 +3638,12 @@ test('a saved preview of a review whose method this version does not know is sho
   assert.doesNotMatch(shown, /--publish/);
   assert.equal(g.notices.findLast(notice => notice.text === shown).metadata?.azpr?.next, undefined, 'No step is offered.');
   await assert.rejects(g.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: 'aaaa0012 --publish' } }), /does not say how its findings were produced in a way this version knows/);
+  // Without a saved preview it names no command that would refuse it: it says that only a new review helps.
+  await store.save({ ...saved, id: 'aaaa0013', completedAt: new Date().toISOString(), plan: null, method: { ...saved.method, kind: 'voting' } });
+  const h = await fixture(t, { directory: f.directory, azure: f.azure, files: ['/src/B.java', '/src/A.java', '/src/C.java'] });
+  const empty = await h.command('pr-comment', 'aaaa0013 --show');
+  assert.equal(empty, '[AZPR] Review aaaa0013 has no saved preview, and it does not say how its findings were produced in a way this version knows, so it cannot be planned or posted; run a new review.');
+  assert.equal(h.notices.findLast(notice => notice.text === empty).metadata?.azpr?.next, undefined, 'No step is offered.');
 });
 
 function savedBy04(review, id, kind) {

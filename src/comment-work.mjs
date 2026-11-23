@@ -326,7 +326,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         const grouped = await invoke({ reviewId: review.id, outputLanguage: review.outputLanguage, findings: listed, commentWork: { kind: 'group' } }, {
           async evaluate(answer) {
             const { result, issues, corrections } = evaluateGrouping(answer, { findings: eligible });
-            return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? groupingRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
+            // A parsed answer is usable: if a correction turn fails, it is finalized as it is.
+            return { result: result && { ...result, corrections }, issues, usable: Boolean(result), repairPrompt: issues.length ? groupingRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
           },
           async finalize(answer) {
             const { result, corrections } = evaluateGrouping(answer, { findings: eligible, final: true });
@@ -412,7 +413,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const page = await invoke(payload, {
         async evaluate(answer) {
           const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options });
-          return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
+          // A parsed page is usable: if a correction turn fails, it is finalized as it is, item by item.
+          return { result: result && { ...result, corrections }, issues, usable: Boolean(result), repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
           const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });

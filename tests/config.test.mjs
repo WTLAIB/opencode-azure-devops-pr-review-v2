@@ -319,6 +319,15 @@ test('migrateSettings: what a settings file of 0.4.x becomes, with no value lost
   // What no longer exists goes, whatever it held: a verifier, readable help texts, shardFindings.
   for (const models of [{ review: { ...usable.review, verifier: 7 } }, { ...usable, _help: { functional: 'notes' } }]) assert.equal(refused({ models, azure }), '', JSON.stringify(models));
   assert.equal(refused({ models: usable, azure, workflow: { shardFindings: 'many' } }), '');
+  // A group that names reviewers already was written for neither version: 0.4.x refused that key. The group is
+  // kept as it is, whatever reviewers holds, so that its models are not mixed with the ones the update would map,
+  // and the settings check names it.
+  const clash = migrateSettings({ version: 2, models: { review: { functional: 'p/a', risk: 'p/b', verifier: 'p/v', reviewers: ['p/other'] },
+    deep: { functional: 'p/d', risk: 'p/e', verifier: 'p/v', reviewers: null }, quick: { reviewer: 'p/q', reviewers: ['p/r'] } } });
+  assert.deepEqual(clash.settings.models, { review: { functional: 'p/a', risk: 'p/b', verifier: 'p/v', reviewers: ['p/other'] },
+    deep: { functional: 'p/d', risk: 'p/e', verifier: 'p/v', reviewers: null }, quick: { reviewer: 'p/q', reviewers: ['p/r'] } });
+  assert.deepEqual(['review', 'deep', 'quick'].map(mode => [clash.summary.modes[mode].state, clash.summary.modes[mode].clash]), [['kept', true], ['kept', true], ['kept', true]]);
+  assert.match(refused({ models: { review: { ...usable.review, reviewers: ['p/other'] } }, azure }), /^Unknown setting models\.review\.(functional|risk|verifier); check for a typo\.$/);
   // 0.4.x had no rater for /pr-quick; one the file names anyway is kept.
   assert.deepEqual(migrateSettings({ version: 2, models: { ...usable, quick: { reviewer: 'p/q', rater: 'p/r' } } }).settings.models.quick, { reviewers: ['p/q'], rater: 'p/r' });
   // A file without models gets the empty layout.

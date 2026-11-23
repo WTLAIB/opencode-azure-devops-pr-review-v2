@@ -324,9 +324,13 @@ export function migrateSettings(raw) {
     for (const mode of MODES) modes[mode] = { before: {}, after: empty, state: 'kept', value: true };
   } else {
     const groups = isObject(old) ? old : {};
+    // A group that names reviewers already was written for neither version: 0.4.x refused that key, and mapping its
+    // models would collide with it. Kept as it is, for the settings check to name.
+    const clashing = value => isObject(value) && Object.hasOwn(value, 'reviewers');
     for (const mode of ['review', 'deep']) {
       const value = groups[mode];
       if (value !== undefined && !isObject(value)) { models[mode] = value; modes[mode] = { before: {}, after: empty, state: 'kept', value: true }; continue; }
+      if (clashing(value)) { models[mode] = { ...value }; modes[mode] = { before: {}, after: empty, state: 'kept', clash: true }; continue; }
       const group = isObject(value) ? value : {}, optional = mode === 'deep';
       const before = Object.fromEntries(['functional', 'risk', 'verifier', 'rater'].map(role => [role, group[role] === undefined ? '' : group[role]]));
       // A reviewer model 0.4.x refused stays in the list, where the settings check names its entry. A missing one
@@ -341,6 +345,7 @@ export function migrateSettings(raw) {
     }
     const value = groups.quick;
     if (value !== undefined && !isObject(value)) { models.quick = value; modes.quick = { before: {}, after: empty, state: 'kept', value: true }; }
+    else if (clashing(value)) { models.quick = { ...value }; modes.quick = { before: {}, after: empty, state: 'kept', clash: true }; }
     else {
       const group = isObject(value) ? value : {}, reviewer = group.reviewer === undefined ? '' : group.reviewer;
       const faulty = !accepted(group.reviewer, true);

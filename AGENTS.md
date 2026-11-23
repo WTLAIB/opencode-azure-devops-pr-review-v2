@@ -48,11 +48,13 @@ settings, backups and failure records. Never upload `.local/`.
 - The review's finding IDs are the runtime's: every answer numbers its own
   findings in its shard's range (the same for every pass, so no pass's input
   differs), and once all passes have answered the runtime numbers them by
-  place and source (`byPlaceAndSource` in `review-work.mjs`) and renames what
-  an answer's text says of its own findings by those IDs. Nothing a later
-  stage or a person sees may depend on which session finished first or on an
-  ID a model wrote: also not the tool observations the planner is given,
-  which are saved in the order of their content.
+  place and source (`byPlaceAndSource` in `review-work.mjs`). What an answer
+  wrote stays as it wrote it, quoted code included: the runtime renames
+  nothing in it, and above an answer's notes it names the review ID of each
+  of that answer's own IDs the notes mention. Nothing a later stage or a
+  person sees may depend on which session finished first or on an ID a model
+  wrote: also not the tool observations and limitations the planner is
+  given, which follow the order of their content.
 - Add mode-specific or pass-specific instructions only with a measured
   benefit: deep-only prompt text and the split into a functional and a risk
   reviewer were both removed after runs showed no gain over repeating one
@@ -132,11 +134,16 @@ settings, backups and failure records. Never upload `.local/`.
   degrade the affected item (NEEDS_INFO, a merge left out, a level kept, a
   skipped comment) and keep the rest. Never discard a whole review for one bad
   item or one failed pass, and never invent a decision, evidence or a location.
-- A turn after the first that fails, a correction turn or a follow-up,
-  leaves the answer before it standing where that answer was usable; the
-  items it would have repaired stay degraded. Only a stopped run, and a
-  context that overflowed where the shard can still be split, keep their
-  rules (a shard of one file cannot be split).
+- Each stage's handler says which answers it can use (`usable`: a reviewer
+  answer that reviewed a file or holds a usable finding, a duplicate check
+  that returned its list of merges, a rating that rated a finding, a
+  grouping or planning page that parsed). A turn after the first that fails,
+  a correction turn or a follow-up, leaves the latest usable answer
+  standing, and so does a correction turn whose answer is not usable; the
+  items it would have repaired stay degraded, and the stage record names the
+  turn (`repairFailure`, or the follow-up's outcome). Only a stopped run, and
+  a context that overflowed where the handler can split its work
+  (`splittable`: a reviewer shard of several files), keep their rules.
 - A reviewer whose usable answer is PARTIAL with named unfinished work
   gets one follow-up turn in the same session, within the same budget; a
   follow-up that fails or gives no usable answer never replaces the answer it
@@ -272,7 +279,12 @@ settings, backups and failure records. Never upload `.local/`.
   roles runs, also a role of 0.4.x that no longer exists, and every session
   this process created or that a saved review or a session record names
   (`privateSession` in `runtime.mjs`): such a session runs nothing without
-  the grant of a command that is under way.
+  the grant of a command that is under way, and no tool call either
+  (`execute.before`), whatever agent the host names. A process without
+  usable settings (settings of 0.4.x waiting for their update among them)
+  loads no runtime and registers no hook, agent or tool: a session an
+  earlier process created runs there as it would without AZPR, with nothing
+  of AZPR's and no token, and the hooks come with the runtime.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,

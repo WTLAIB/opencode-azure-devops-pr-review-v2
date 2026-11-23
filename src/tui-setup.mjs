@@ -161,12 +161,14 @@ export function createSetup(host) {
     // row and taking what it shows changes nothing. Another model starts with the mode's usual passes of it.
     let passes = first === saved[0] && saved.length <= most ? [...saved] : Array(usual).fill(first);
     for (;;) {
-      const shown = passes.map(shortModel).join(', ');
+      // A model keeps its provider where another pass has one of the same name from another provider.
+      const named = model => passes.some(other => other !== model && shortModel(other) === shortModel(model)) ? model : shortModel(model);
+      const shown = passes.map(named).join(', ');
       const choice = await dialog.select({ title: `${row.title}: ${passes.length} pass${passes.length === 1 ? '' : 'es'}`, options: [
         { title: `Use ${passes.length === 1 ? 'this pass' : `these ${passes.length} passes`}`, value: 'done', description: shown },
-        ...(passes.length < most ? [{ title: 'Add a pass of the same model', value: 'same', description: `${shortModel(passes.at(-1))} once more` },
+        ...(passes.length < most ? [{ title: 'Add a pass of the same model', value: 'same', description: `${named(passes.at(-1))} once more` },
           { title: 'Add a pass of another model', value: 'other', description: 'Different models find different defects' }] : []),
-        ...(passes.length > 1 ? [{ title: 'Take the last pass away', value: 'less', description: `Without ${shortModel(passes.at(-1))}` }] : [])] });
+        ...(passes.length > 1 ? [{ title: 'Take the last pass away', value: 'less', description: `Without ${named(passes.at(-1))}` }] : [])] });
       if (choice === undefined) return undefined;
       if (choice === 'done') return passesText(passes);
       if (choice === 'same') passes = [...passes, passes.at(-1)];

@@ -138,6 +138,9 @@ test('a run whose content search was refused says so in its receipt, and names t
   assert.match(searchLimitation(zip64, azure(100)), /was unavailable: the repository archive needs ZIP64, which AZPR does not read\. Sessions could[^\n]*may not have been checked\.$/);
   const both = { ...run(), searchUnavailable: new Map([...large.searchUnavailable, ...zip64.searchUnavailable]) };
   assert.match(searchLimitation(both, azure(100)), /setting allows; the repository archive needs ZIP64, which AZPR does not read\. [^\n]*it accepts up to 1024\.$/);
+  // Which version's search was refused first changes nothing: the text is given to comment planning.
+  const reversed = { ...run(), searchUnavailable: new Map([...zip64.searchUnavailable, ...large.searchUnavailable]) };
+  assert.equal(searchLimitation(reversed, azure(100)), searchLimitation(both, azure(100)));
 });
 
 test('incomplete drafts stay unconfirmed and enclosed', () => {

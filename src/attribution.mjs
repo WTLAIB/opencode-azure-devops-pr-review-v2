@@ -494,7 +494,8 @@ export function searchLimitation(run, settings) {
   const setting = ![...refused.values()].some(Boolean) || !megabytes ? ''
     : megabytes < MAX_ARCHIVE_MEGABYTES ? ` azure.archiveMegabytes is ${megabytes}; it accepts up to ${MAX_ARCHIVE_MEGABYTES}.`
       : ` azure.archiveMegabytes is at its maximum of ${MAX_ARCHIVE_MEGABYTES}.`;
-  return `Content search (azpr_search_code) was unavailable: ${[...refused.keys()].join('; ')}. Sessions could find and read files but not search file contents, so callers and other uses of the changed code may not have been checked.${setting}`;
+  // In a fixed order: which read was refused first must not change the text the planner is given.
+  return `Content search (azpr_search_code) was unavailable: ${[...refused.keys()].sort().join('; ')}. Sessions could find and read files but not search file contents, so callers and other uses of the changed code may not have been checked.${setting}`;
 }
 
 export function renderDiagnosticNotices(run, settings) {

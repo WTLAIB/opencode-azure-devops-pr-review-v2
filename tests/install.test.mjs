@@ -304,6 +304,17 @@ test('settings of AZPR 0.4.x (version 2) are installed byte for byte, for /pr-se
     ok(install(s, replacing ? ['--replace'] : ['--settings', file]));
     assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), crlf, replacing ? '--replace' : '--settings');
   }
+  // A version written as 2.0 or 2e0 is 2, as JSON reads it and as 0.4.6 took it; a string is no version.
+  for (const written of ['2.0', '2e0']) {
+    const text = JSON.stringify(earlierSettings(), null, 2).replace('"version": 2', `"version": ${written}`) + '\n';
+    assert.ok(text.includes(`"version": ${written}`));
+    writeFileSync(installed(s, 'settings.json'), text);
+    const result = install(s, ['--replace']); ok(result);
+    assert.match(result.stdout, /settings version 2\) were kept exactly as they are/, written);
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), text, written);
+  }
+  writeFileSync(installed(s, 'settings.json'), JSON.stringify({ ...earlierSettings(), version: '2' }));
+  assert.notEqual(install(s, ['--replace']).status, 0, 'A version written as a string is refused.');
   // Whatever else a version-2 file holds is the person's and stays: retired sections, unknown names, odd values.
   for (const extra of [{ mcp: { server: 'ado', concurrency: 5 } }, { models: { freeB: 'private/old' } }, { models: 'private/old' }, { steps: { initial: 60 } }, { custom: { array: [1, 2], value: null } }]) {
     const odd = JSON.stringify({ version: 2, ...extra });

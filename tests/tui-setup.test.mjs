@@ -286,14 +286,9 @@ test('a first setup that the server part cannot load says so and names the resta
   assert.ok(!refused.shown.some(item => item.title === 'AZPR is set up'));
 });
 
-// SOURCE? This test fails against src/tui-setup.mjs as it is (2026-11-23), and is left failing on purpose.
-// Expected: where the settings already name review models (setup is required again because their token file is
-// gone, say), the first setup's model dialog starts on the first of them and its variant dialog on that
-// model's variant, as the list's dialog does (askModel passes `start: row.entries[0]`) and as 0.4.6 did.
-// Seen: firstSetup calls `askOneModel(rows('reviewModel'), { off: false })` (src/tui-setup.mjs:252), whose
-// `start` defaults to `row.current`. That is the list as text now ("fixture/fast*2"), not a model: the model
-// dialog marks no row ("fixture/fast*2" is no option's value), and for a model with a variant the variant
-// dialog is given "high*2". Enter then takes the first model of the host's list and its default variant.
+// Where the settings already name review models (setup is required again because their token file is gone, say),
+// the first setup's model dialog starts on the first of them and its variant dialog on that model's variant, as the
+// list's dialog does and as 0.4.6 did: the row's current value is the list as text ("fixture/fast*2"), no model.
 test('a first setup over settings that already name review models starts its model dialogs on the first of them', async () => {
   // No variant, and a variant: the settings as the server part describes them, with their list as text.
   const plain = host(server({ organization: 'fixture', reviewModel: ['fixture/fast', 'fixture/fast'], quickModel: ['fixture/fast'] }), ['fixture', '', TOKEN, 'fixture/fast', true]);
@@ -464,6 +459,12 @@ test('a mode\'s passes are set in a list after its first model: use them, add on
   const three = host(ready(), ['reviewModel', 'fixture/fast', 'other', 'fixture/strong', '', 'done', undefined]);
   await three.setup.open();
   assert.deepEqual([passes(three).at(-1).title, saves(three)], ['Model for /pr-review: 3 passes', [{ changes: { reviewModel: 'fixture/fast*2,fixture/strong*1' } }]]);
+  // Two providers' models of one name keep their providers, where the names alone would read alike.
+  const twins = host(ready(), ['reviewModel', 'fixture/fast', 'less', 'other', 'second/fast', 'done', undefined],
+    { models: [...MODELS, { id: 'second/fast', name: 'Fast', provider: 'Second AI', variants: [] }] });
+  await twins.setup.open();
+  assert.deepEqual(passes(twins).at(-1).options.map(option => [option.value, option.description]), [['done', 'fixture/fast, second/fast'], ['same', 'second/fast once more'], ['other', 'Different models find different defects'], ['less', 'Without second/fast']]);
+  assert.deepEqual(saves(twins), [{ changes: { reviewModel: 'fixture/fast*1,second/fast*1' } }]);
   const back = host(ready(), ['reviewModel', 'fixture/fast', 'less', 'other', 'fixture/strong', '', 'other', 'fixture/fast', 'same', 'done', undefined]);
   await back.setup.open();
   assert.deepEqual([passes(back).at(-1).options[0].description, passes(back).at(-1).options.map(option => option.value), saves(back)],

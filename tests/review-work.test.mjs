@@ -351,6 +351,13 @@ test('a failed duplicate check keeps every finding; findings of one session alon
   assert.deepEqual(rows(unmerged), ['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED']);
   assert.deepEqual(unmerged.reviewWarnings, ['Duplicate check of /src/a.ts: The duplicate check gave no usable answer; no finding was merged.']);
   assert.deepEqual(unmerged.method.duplicateCheck, { groups: 1, failed: 1, merged: 0, refused: 0 }, 'An answer without usable JSON compared nothing: the check failed.');
+  // JSON without a list of merges, also after the correction turns, decided nothing either: an empty list would
+  // have said that nothing repeats, a missing one says nothing.
+  const silent = await context(t, twice({ dedupe: async () => JSON.stringify({ status: 'COMPLETE' }) }));
+  const undecided = await runReview(silent.ctx, silent.run, silent.request);
+  assert.deepEqual([rows(undecided), undecided.method.duplicateCheck, silent.of('dedupe').length, silent.of('dedupe')[0].repairs.length],
+    [['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED'], { groups: 1, failed: 1, merged: 0, refused: 0 }, 1, 2]);
+  assert.match(silent.of('dedupe')[0].repairs[0], /"merged" must be an array/);
   // A check whose input cannot be prepared (its private data write fails) fails alone: every finding stays and the rating runs.
   const unwritable = await context(t, twice({ dedupe: async () => { throw new Error('must not run'); } }));
   const store = await unwritable.ctx.dataFor();
@@ -404,23 +411,37 @@ test('duplicateGroups: reported findings on one side of one file, where two coul
   assert.deepEqual(duplicateGroups([row('F-1', 'no place', ['1/1 pass 1']), row('F-2', 'no place', ['1/1 pass 2'])]), []);
 });
 
-test('what an answer says of its own findings, by the IDs of its range, names them by the review\'s IDs', async t => {
-  // Two passes over one file; each pass's first finding refers to its second by the ID the answer gave it.
+test('what an answer writes stays as written; its references to its own findings use IDs of its range, which no finding of the review has', async t => {
+  // Two passes over one file; each pass's first finding refers to its second by the ID the answer gave it, and quotes
+  // source that holds an ID of the same form.
   const f = await context(t, { files: ['/src/a.ts'], sources: { '/src/a.ts': lines(20) }, models: { reviewers: ['p/a', 'p/b'] }, behave: async ({ payload, pass, read }) => {
     read('/src/a.ts');
     const [first, second] = [payload.assignment.firstFindingId, `F-${Number(payload.assignment.firstFindingId.slice(2)) + 1}`];
     assert.equal(first, 'F-1001', 'Every pass of the shard gets its range.');
-    return answer(payload, [finding(first, `head:/src/a.ts:${pass ? 9 : 3}`, `Pass ${pass + 1}: the cause of ${second}`, { evidence: `See ${second}; \`F-1\` in the source is a constant.` }),
+    return answer(payload, [finding(first, `head:/src/a.ts:${pass ? 9 : 3}`, `Pass ${pass + 1}: the cause of ${second}`, { evidence: `See ${second}; the source has \`case "F-1001":\`.` }),
       finding(second, `head:/src/a.ts:${pass ? 12 : 6}`, `Pass ${pass + 1}: the effect`)], { report: `${first} and ${second} are one chain.` });
   } });
   const final = await runReview(f.ctx, f.run, f.request);
-  // By place: pass 1's findings on lines 3 and 6 are F-1 and F-2, pass 2's on lines 9 and 12 are F-3 and F-4.
+  // By place: pass 1's findings on lines 3 and 6 are F-1 and F-2, pass 2's on lines 9 and 12 are F-3 and F-4. The texts
+  // and the quoted source are unchanged, and the answer's own IDs stay on record beside the review's.
   assert.deepEqual(final.dispositions.map(d => [d.id, d.localId, d.finding.summary, d.finding.evidence]), [
-    ['F-1', 'F-1001', 'Pass 1: the cause of F-2', 'See F-2; `F-1` in the source is a constant.'],
+    ['F-1', 'F-1001', 'Pass 1: the cause of F-1002', 'See F-1002; the source has `case "F-1001":`.'],
     ['F-2', 'F-1002', 'Pass 1: the effect', 'HEAD `x` drops the guard; BASE kept it.'],
-    ['F-3', 'F-1001', 'Pass 2: the cause of F-4', 'See F-4; `F-1` in the source is a constant.'],
+    ['F-3', 'F-1001', 'Pass 2: the cause of F-1002', 'See F-1002; the source has `case "F-1001":`.'],
     ['F-4', 'F-1002', 'Pass 2: the effect', 'HEAD `x` drops the guard; BASE kept it.']]);
-  assert.match(final.report, /### pass 1\/2\n\nF-1 and F-2 are one chain\.\n\n### pass 2\/2\n\nF-3 and F-4 are one chain\./);
+  // Above each answer's notes, the runtime names the review IDs of the answer's own IDs that the notes mention.
+  assert.match(final.report, /### pass 1\/2\n\nFinding IDs in these notes are this session's own: F-1001 is F-1, F-1002 is F-2 in this review\.\n\nF-1001 and F-1002 are one chain\.\n\n### pass 2\/2\n\nFinding IDs in these notes are this session's own: F-1001 is F-3, F-1002 is F-4 in this review\.\n\nF-1001 and F-1002 are one chain\./);
+  assert.ok(final.dispositions.every(d => !/^F-1\d{3}$/.test(d.id)), 'No review ID is one of a range.');
+  // An answer that left its range and numbered from F-1 refers to its finding by an ID another finding of the review
+  // has: the line above its notes says which finding it means. Notes that mention none of the answer's IDs get none.
+  const left = await context(t, { files: ['/src/a.ts'], sources: { '/src/a.ts': lines(20) }, models: { reviewers: ['p/a', 'p/b'] }, behave: async ({ payload, pass, read }) => {
+    read('/src/a.ts');
+    return pass ? answer(payload, [finding('F-1', 'head:/src/a.ts:9', 'Pass 2 numbered from F-1')], { report: 'F-1 is the one that matters.' })
+      : answer(payload, [finding(payload.assignment.firstFindingId, 'head:/src/a.ts:3', 'Pass 1 kept its range')], { report: 'Nothing else stood out.' });
+  } });
+  const outside = await runReview(left.ctx, left.run, left.request);
+  assert.deepEqual(outside.dispositions.map(d => [d.id, d.localId]), [['F-1', 'F-1001'], ['F-2', 'F-1']]);
+  assert.match(outside.report, /### pass 1\/2\n\nNothing else stood out\.\n\n### pass 2\/2\n\nFinding IDs in these notes are this session's own: F-1 is F-2 in this review\.\n\nF-1 is the one that matters\./);
 });
 
 test('findings on the same line stay separate; only records identical in every field are removed, also across passes', async t => {
@@ -593,6 +614,18 @@ test('a parsed answer is not automatically usable: bad items degrade and a revie
   assert.deepEqual(rows(final), ['F-1:REPORTED', 'F-2:NEEDS_INFO']);
   assert.equal(final.dispositions[1].reason, 'The finding is missing location after the correction turns. [Runtime: not eligible for comments.]');
   assert.deepEqual([Object.hasOwn(final.dispositions[1], 'finding'), final.dispositions[1].partialFinding.summary], [false, 'Defect F-2']);
+  // A field that is not text is no text, however it would read once turned into one: the correction turn names it,
+  // and a finding that keeps it is NEEDS_INFO. An answer whose only finding is such, and that reviewed no file, is
+  // no usable review.
+  const typed = await context(t, { files: ['/src/a.ts'], behave: async ({ payload, read }) => {
+    read('/src/a.ts');
+    return JSON.stringify({ status: 'COMPLETE', coverage: { files: [], gaps: [] }, additionalFiles: [], report: '',
+      findings: [{ ...finding('F-1001', 'head:/src/a.ts:2'), summary: false, evidence: [], counterevidence: {}, suggestion: false }] });
+  } });
+  const untyped = await runReview(typed.ctx, typed.run, typed.request);
+  assert.match(typed.calls[0].repairs[0], /findings\[0\] \(F-1001\): missing summary, evidence, counterevidence, suggestion/);
+  assert.deepEqual([untyped.status, rows(untyped)], ['PARTIAL', ['F-1:NEEDS_INFO']]);
+  assert.equal(untyped.dispositions[0].reason, 'The finding comes from a reviewer answer that was not usable. [Runtime: not eligible for comments.]');
   // JSON that parses but carries no usable review never becomes a commentable COMPLETE.
   const g = await context(t, { files: ['/src/a.ts'], behave: async () => JSON.stringify({ status: 'COMPLETE', findings: { summary: 'not a list' }, coverage: 'everything', report: 'Looked around.' }) });
   const partial = await runReview(g.ctx, g.run, g.request);

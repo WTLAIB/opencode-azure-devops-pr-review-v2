@@ -2317,6 +2317,12 @@ test('what the update of 0.4.x settings changes is said line by line, with model
   assert.match(guide, /\n- \/pr-review: functional fixture\/model, risk fixture\/model#high, verifier \(not a model ID\) -> 2 passes: /);
   for (const said of [JSON.stringify(hidden), guide, await f.invoke('pr-review', f.azure.prUrl())]) assert.doesNotMatch(said, /PRIVATE_VALUE|fixture-pat|pw-secret/, 'Neither a value that is no model ID, nor the token, nor the proxy\'s password.');
 
+  // A group that names reviewers already, whatever they hold, is kept as it is and named: neither version could
+  // use it, and its models are not mixed with the ones the update would map.
+  const clashing = { ...legacy, models: { ...legacy.models, review: { ...legacy.models.review, reviewers: ['fixture/other'] }, deep: { functional: 'fixture/model', risk: 'fixture/model', verifier: 'fixture/verifier', reviewers: null } } };
+  assert.deepEqual((await offered(clashing)).migration.lines.slice(1, 3), ['/pr-review: its settings name reviewers, which 0.4.x did not know, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.',
+    '/pr-deep: its settings name reviewers, which 0.4.x did not know, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.']);
+
   // /pr-deep with two of its three models was off in 0.4.x and stays off: its list is empty, whatever its rater
   // was. /pr-quick was off as well; two modes post by themselves; no batch size was set.
   const partial = { ...legacy, models: { ...legacy.models, review: { ...legacy.models.review, rater: 'fixture/rater' }, deep: { functional: 'fixture/model', risk: 'fixture/model#high', verifier: '', rater: 'fixture/model#high' }, quick: { reviewer: '' } },
@@ -2353,16 +2359,10 @@ test('what the update of 0.4.x settings changes is said line by line, with model
   }
 });
 
-// SOURCE? This test fails against src/setup.mjs as it is (2026-11-23, with the change of 06:10), and is left failing on purpose.
-// Expected: what stands in a model's place and is no model ID is named, never returned, as the lines of an update
-// have it (`shownModel`): a token that was pasted into the wrong place is in no answer of the server part.
-// Seen: `status` returns a mode's entries as they are (src/setup.mjs:866 `value: row.show(row.get(view)), current:
-// row.current(row.get(view))`, and :871 `entries: row.get(view)`). For settings of 0.4.x the rows are made of what
-// the update will write, so a token in models.review.functional or models.quick.reviewer comes back as
-// "<token> + model#high" (value), "<token>*1,fixture/model#high*1" (current) and in `entries`, in the very answer
-// whose lines say "(not a model ID)" for it. An entry of `reviewers` in settings of this version comes back the
-// same way. No notice holds it, and the dialogs show no row while an update is offered; in the list of settings
-// the value is a row's footer. (0.4.6 returned such a value only where every role of a mode held the same one.)
+// What stands in a model's place and is no model ID is named, never returned, as the lines of an update have it: a
+// token that was pasted into the wrong place is in no answer of the server part, neither in a row's value, its
+// current text nor its entries, for settings of 0.4.x (whose rows are made of what the update will write) and of
+// this version alike.
 test('a token pasted where a model goes is named, never returned: also not in a row of the dialogs\' server part', async t => {
   /** The rows of a status answer that hold the token, with the fields it is in. */
   const echoed = status => status.rows.filter(row => JSON.stringify(row).includes(FAKE_PAT)).map(row => [row.id, Object.keys(row).filter(key => JSON.stringify(row[key]).includes(FAKE_PAT))]);

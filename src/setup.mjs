@@ -379,6 +379,7 @@ function migrationLines({ modes, shardFindings, publish }, problem = '') {
   // which the update keeps where they go now for the settings check to name.
   const unchosen = list => Array.isArray(list) && list.length > 0 && list.every(item => typeof item === 'string' && /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(item));
   const kept = mode => modes[mode].value ? `/pr-${mode}: its settings are not a group of models, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`
+    : modes[mode].clash ? `/pr-${mode}: its settings name reviewers, which 0.4.x did not know, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`
     : unchosen(modes[mode].after.reviewers) ? `/pr-${mode}: no model was chosen yet. Choose its models with /pr-setup after the update.`
       : `/pr-${mode}: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`;
   for (const mode of ['review', 'deep']) {

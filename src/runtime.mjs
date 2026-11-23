@@ -865,7 +865,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try {
       await run.debug.write(`${stem}.request.json`, { ...record, payload, instructions: state.agents[role].system });
       g.timing?.promptStarted();
-      let prompt = input, evaluation, answerText = '', followUp;
+      let prompt = input, evaluation, answerText = '', followUp, lastUsable = null;
       const repairs = [];
       // What the handler may know about this session: the contents its own tools showed.
       const session = { reads: g.reads };
@@ -873,17 +873,20 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         let answer;
         try { answer = await ask(g, made.id, prompt, signal); }
         catch (error) {
-          // A turn after the first that fails leaves the answer before it standing where that answer was usable: a
-          // follow-up is optional, and a correction turn only repairs items, which stay degraded instead. A stopped
-          // run, and a context that overflowed where the shard can still be split, keep their rules.
+          // A turn after the first that fails leaves the latest usable answer before it standing: a follow-up is
+          // optional, and a correction turn only repairs items, which stay degraded instead. A stopped run, and a
+          // context that overflowed where the handler can split its work (a reviewer shard of several files), keep
+          // their rules.
           const failureClass = runSignal.aborted ? 'cancelled' : watch.error ? 'idle' : classifyFailure(error);
-          const kept = turn > 0 && failureClass !== 'cancelled' && !(failureClass === 'overflow' && handler.splittable !== false);
-          if (!kept || (!followUp && evaluation?.usable !== true)) throw error;
+          const kept = turn > 0 && failureClass !== 'cancelled' && !(failureClass === 'overflow' && handler.splittable === true);
+          if (!kept || !lastUsable) throw error;
           const failure = { failureClass, error: errorText(watch.error ?? error).slice(0, 300) };
           if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response-${followUp?.turn === turn ? 'follow-up' : 'repair'}${turn}.json`, diagnosticResponse(error.response));
           await abortSession(run, made.id);
-          if (followUp) { Object.assign(followUp, { outcome: 'failed', ...failure }); ({ evaluation, answerText } = followUp.before); }
+          // The turn that failed is named: the follow-up itself, or a correction turn (also one after a follow-up).
+          if (followUp?.turn === turn) Object.assign(followUp, { outcome: 'failed', ...failure });
           else record.repairFailure = { turn, ...failure };
+          ({ evaluation, answerText } = lastUsable);
           break;
         }
         answerText = visibleText(answer);
@@ -894,6 +897,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         }
         if (answer.retriedSteps) record.hostStepRetries = (record.hostStepRetries ?? 0) + answer.retriedSteps;
         evaluation = await handler.evaluate(answerText, evaluation?.result, session);
+        // What a handler can still use of an answer, whatever its items need: kept if a later turn fails or is unusable.
+        if (evaluation.usable === true) lastUsable = { evaluation, answerText, turn };
         const budget = turn < settings.workflow.repairAttempts;
         if (evaluation.issues?.length && evaluation.repairPrompt && budget) {
           repairs.push({ issues: evaluation.issues.slice(0, 25) });
@@ -903,18 +908,21 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // One follow-up per session, within the same turn budget, for a usable
         // answer with nothing to repair that names unfinished work.
         if (!evaluation.issues?.length && evaluation.followUp && !followUp && budget) {
-          followUp = { turn: turn + 1, gaps: evaluation.followUp.gaps, uncovered: evaluation.followUp.uncovered, before: { evaluation, answerText } };
+          followUp = { turn: turn + 1, gaps: evaluation.followUp.gaps, uncovered: evaluation.followUp.uncovered };
           progress(run, `${spec.label}${label ? ` ${label}` : ''} reported unfinished work; asking the same session once to continue.`);
           prompt = evaluation.followUp.prompt;
           continue;
         }
         break;
       }
-      if (followUp && !followUp.outcome) {
-        // An answer that is not usable never replaces the usable one it followed.
-        if (evaluation.usable === false) { ({ evaluation, answerText } = followUp.before); followUp.outcome = 'unusable'; }
-        else followUp.outcome = evaluation.result?.status === 'COMPLETE' ? 'completed' : 'still-partial';
+      // An answer that is not usable never replaces a usable one before it: neither a follow-up's nor a correction's.
+      if (evaluation.usable !== true && lastUsable && evaluation !== lastUsable.evaluation) {
+        const unusableTurn = repairs.length + (followUp ? 1 : 0);
+        ({ evaluation, answerText } = lastUsable);
+        if (followUp && !followUp.outcome && lastUsable.turn < followUp.turn) followUp.outcome = 'unusable';
+        else record.repairFailure = { turn: unusableTurn, failureClass: 'unusable', error: 'The corrected answer was not usable; the answer before it stands.' };
       }
+      if (followUp && !followUp.outcome) followUp.outcome = evaluation.result?.status === 'COMPLETE' ? 'completed' : 'still-partial';
       if (followUp) {
         record.followUp = { turn: followUp.turn, gaps: followUp.gaps.slice(0, 10).map(gap => gap.slice(0, 300)), uncoveredFiles: followUp.uncovered.length,
           outcome: followUp.outcome, ...(followUp.failureClass ? { failureClass: followUp.failureClass, error: followUp.error } : {}) };
@@ -1472,7 +1480,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
 
   /** /pr-comment --show: the saved preview exactly as it would be posted, without a model or Azure DevOps request. */
   function renderSavedPreview(review) {
-    if (!review.plan) return `[AZPR] Review ${review.id} has no saved preview. /pr-comment ${review.id} plans one (a model runs; nothing is posted).`;
+    if (!review.plan) return reviewMethod(review) ? `[AZPR] Review ${review.id} has no saved preview. /pr-comment ${review.id} plans one (a model runs; nothing is posted).`
+      : `[AZPR] Review ${review.id} has no saved preview, and it does not say how its findings were produced in a way this version knows, so it cannot be planned or posted; run a new review.`;
     const hold = holdNote(review);
     // A review whose method this version does not know is shown and never offered for posting: commentRun refuses it.
     const state = !reviewMethod(review) ? `This review does not say how its findings were produced in a way this version knows, so it cannot be posted; run a new review.`
@@ -2034,7 +2043,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
     registrations.push(await context.tool.hook('execute.before', async event => {
       if (event.tool === 'subagent' && privateAgent(event.input?.agent)) throw new Error('[AZPR] Private reviewers cannot be delegated.');
-      if (!seenSessions.has(event.sessionID) && !privateAgent(event.agent)) return;
+      // A tool call in a private session, also one an earlier process created, needs the grant of a command under way.
+      if (!privateSession(event)) return;
       const g = grants.get(event.sessionID);
       if (!g?.run.active || g.role !== event.agent) throw new Error('[AZPR] Review tool authorization expired.');
       touch(g, `tool ${event.tool} started`);

@@ -106,6 +106,12 @@ test('evaluateInitial lists repairable problems and still returns a usable PARTI
   assert.equal(result.findings.length, 1);
   assert.deepEqual(result.invalid, { 'F-1': ['missing evidence, counterevidence, location, suggestion', 'severity must be high, medium or low'] });
   assert.match(reviewRepairPrompt(issues), /complete corrected JSON object/);
+  // A field that is not text is missing, however it would read once turned into text; the ID alone may be a number.
+  const typed = evaluateInitial(JSON.stringify({ status: 'COMPLETE', coverage: { files: ['/src/a.ts'], gaps: [] }, report: 'r', findings: [{ id: 'F-1', summary: false,
+    location: 'head:/src/a.ts:1', evidence: [], counterevidence: {}, severity: 'high', suggestion: 0 }] }), { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.deepEqual(typed.result.invalid, { 'F-1': ['missing summary, evidence, counterevidence, suggestion'] });
+  assert.ok(typed.result.warnings.includes('A finding field that was not text was left out; the correction turn names it.'));
+  assert.deepEqual([typed.result.findings[0].summary, typed.result.findings[0].evidence], ['', '']);
 });
 
 test('evaluateInitial keeps unstructured text as the report: it is no review, and nothing in it is a finding', () => {
@@ -142,6 +148,10 @@ test('evaluateDuplicates only merges within the checked file and never loses a f
   assert.deepEqual(clean.result.merges, [{ id: 'F-2', mergedInto: 'F-1', reason: 'Same cause and fix.' }]);
   assert.deepEqual([clean.result.refused, clean.result.warnings, clean.result.report, clean.result.structured], [0, [], 'r', true]);
   assert.deepEqual(evaluateDuplicates('{"status":"COMPLETE","merged":[],"report":""}', { ids }).result.merges, []);
+  // An empty list decides that nothing repeats; an answer without one decided nothing, and asks for it.
+  assert.deepEqual([evaluateDuplicates('{"status":"COMPLETE","merged":[],"report":""}', { ids }).result.decided, clean.result.decided], [true, true]);
+  const silent = evaluateDuplicates('{"status":"COMPLETE"}', { ids });
+  assert.deepEqual([silent.result.decided, silent.result.structured, silent.issues], [false, true, ['"merged" must be an array (use [] when none of the findings are duplicates).']]);
   // A chain ends at the finding that stays; invalid rows are reported and left out.
   const chained = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [
     { id: 'F-3', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' },

@@ -199,8 +199,9 @@ never whether a defect is real.
    `workflow.parallelSessions` sessions. Each answer numbers its own findings
    in its shard's range (`F-1001` for the first shard, `F-2001` for the
    second, the same for every pass); the review's IDs are given later (step
-   5), and what an answer's text says of its own findings by those IDs is
-   renamed to the review's IDs. A reviewer has two
+   5). What an answer wrote stays as it wrote it, quoted code included; above
+   an answer's notes in the report the runtime names the review ID of each
+   of that answer's own IDs the notes mention. A reviewer has two
    focuses, functional correctness and failure behaviour, which order its
    attention and are not a filter: it files every concrete defect it finds as
    a finding, and `report` carries exclusions, advice, open questions and
@@ -267,10 +268,18 @@ never whether a defect is real.
      gets one **follow-up** turn in the same session within the
      `workflow.repairAttempts` budget: continue where the source is readable,
      keep a gap only for a limit it cannot close, and return the whole answer
-     again. A second PARTIAL stands. When the follow-up, or a correction turn
-     after it, fails or gives no usable answer, the answer it followed stands;
-     cancellation and context overflow keep their usual handling (overflow
-     splits the shard). The stage record keeps the outcome (`followUp`).
+     again. A second PARTIAL stands. The stage record keeps the outcome
+     (`followUp`);
+   - in this stage and every other one, a turn after the first that fails,
+     or a correction turn whose answer is not usable, leaves the latest
+     usable answer standing (the follow-up's, where it had one), with the
+     items it would have repaired degraded; the stage record names the turn
+     (`repairFailure`, `repair=failed:<class>` in the receipt). What is
+     usable is the stage's own word: a reviewer answer that reviewed a file
+     or holds a usable finding, a duplicate check that returned its list of
+     merges, a rating that rated a finding, a grouping or planning page that
+     parsed. Cancellation keeps its handling, and so does an overflow where
+     the work can be split (a reviewer shard of several files).
 5. **The review's finding IDs** — once every session has answered, the runtime
    sorts the findings by side (HEAD before BASE), path and lines, then by
    pass, shard, part of a split shard and place in the answer
@@ -278,8 +287,8 @@ never whether a defect is real.
    or a person sees depends on which session finished first or on an ID a
    model wrote; a finding keeps the ID of its answer as `localId`, and the
    runtime records the session that reported it (`shard`, such as
-   `1/3a pass 2`). Records identical in every field, whitespace aside, are
-   then merged: the first in that order stays and stands for the sessions
+   `1/3a pass 2`). Records identical in every field (texts with each run of
+   whitespace taken as one space, the location exactly) are then merged: the first in that order stays and stands for the sessions
    that reported it, the others become MERGED. Findings on the same lines
    that differ in any field stay separate.
 6. **Duplicate check** — `duplicateGroups` takes the findings that are still
@@ -817,7 +826,17 @@ Hooks enforce the grant:
   unattended); only shell under `shell: "ask"` or `"inherit"` may wait. A
   native read, glob or grep on a repository path is refused with a pointer to
   the azpr tools.
-- `tool.execute.before`: refuses any tool outside the allowlist and delegation.
+- `tool.execute.before`: refuses any tool outside the allowlist and delegation,
+  and any tool call in a private session without an active grant, whatever
+  agent the host names.
+
+The hooks treat as private every session of an AZPR role (also a role of
+0.4.x) and every session this process created or a saved review or a session
+record names. A process without usable settings, settings of 0.4.x waiting
+for their update among them, loads no runtime: it registers placeholder
+commands only, and no hook, agent or tool. A session an earlier process
+created then runs as it would without AZPR installed, with nothing of AZPR's
+and no token; the hooks come with the runtime once the settings load.
 - `tool.execute.after`: records tool outcomes and pages large comment-tool
   results into private files.
 - `prompt`, `model.request`, `retry`, the tool hooks and a pending approval in

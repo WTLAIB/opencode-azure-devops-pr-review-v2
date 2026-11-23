@@ -37,8 +37,8 @@ Reviews:
   (HEAD before BASE, then path and lines) and then by pass. The IDs no longer
   say which reviewer found something, and they do not depend on which session
   finished first. A reviewer numbers its findings in a range of its shard
-  (`F-1001`, …), and what its text says of them is renamed to the review's
-  IDs.
+  (`F-1001`, …); its text stays as it wrote it, and above its notes the
+  report names the review ID of each of its own IDs the notes mention.
 - **A duplicate check across sessions.** Where different reviewer sessions
   reported findings on one side of one file, a session of the first reviewer
   model compares them and merges repeated reports of one defect (the same root
@@ -85,9 +85,11 @@ Reports, receipts and comments:
   work as before, with the first reviewer model as the planner. A
   `/pr-comment --publish` that only posts a saved preview needs no model and
   does not read the model catalog.
-- A correction turn that fails no longer costs a usable answer: the answer
-  before it stands, and the items it would have repaired stay degraded. So
-  does a follow-up whose context overflows on a shard of one file.
+- A correction turn that fails or gives no usable answer no longer costs a
+  usable one, in any stage: the latest usable answer stands (a follow-up's,
+  where it had one), and the items it would have repaired stay degraded. So
+  does a follow-up whose context overflows on a shard of one file. A
+  duplicate check that returns no list of merges counts as failed.
 
 Settings (`version: 3`):
 
@@ -115,15 +117,18 @@ Upgrading from 0.4.x:
   was off, also when only some of its three models were set. Every other
   setting keeps its value. The update repairs nothing: a value 0.4.x could
   not use stays where it goes now, and so does a setting this version does
-  not know, so that `/pr-setup` names it afterwards. A first setup's update is loaded at once; settings
-  that are in use wait for a restart, as always.
+  not know, so that `/pr-setup` names it afterwards; a mode whose models
+  already name `reviewers`, which 0.4.x refused, is kept as it is. A first
+  setup's update is loaded at once; settings that are in use wait for a
+  restart, as always.
 - What changes without being asked for, and is named before you confirm: a
   mode without a rater now gets its findings rated by its first reviewer
   model (`"rater": false` turns that off), and with `afterReview` set to
   `publish` the comments of the new reviews are posted automatically although
   no verifier confirmed their findings.
 - Source installations: `install.sh --replace` carries a version-2 settings
-  file over byte for byte and says so; `/pr-setup` then updates it.
+  file over byte for byte and says so (also one whose version reads `2.0`,
+  as 0.4.x accepted); `/pr-setup` then updates it.
 
 Setup:
 

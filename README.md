@@ -1211,7 +1211,10 @@ files; the second number says how many files every pass reviewed, which a
 failed pass lowers. A reviewer whose answer is PARTIAL and names unfinished
 work is asked once, in the same session, to continue (receipt
 `follow-up=completed`, `still-partial`, `unusable` or `failed`); a follow-up
-that fails or gives no usable answer keeps the answer it followed.
+that fails or gives no usable answer keeps the answer it followed. In every
+stage, a correction turn that fails or gives no usable answer keeps the
+latest usable answer, with the items it would have repaired degraded
+(`repair=failed:<class>`).
 
 A failed final version recheck adds a warning; it does not by itself prevent
 COMPLETE in any review mode. Read the receipt warnings. Publication separately

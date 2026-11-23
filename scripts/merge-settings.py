@@ -56,9 +56,10 @@ EARLIER_MODEL_KEYS = ("functional", "risk", "verifier", "reviewer")
 def settings_version(existing):
     """The layout of a settings file: 3, the current one (also for a file that names none), or 2 (AZPR 0.4.x)."""
     version = existing.get("version", 3)
-    if type(version) is not int or version not in (2, 3):
+    # A JSON number equal to 2 or 3 (2.0 and 2e0 are 2, as JSON.parse reads them); never a string or a boolean.
+    if isinstance(version, bool) or not isinstance(version, (int, float)) or version not in (2, 3):
         raise ValueError("Unsupported settings version.")
-    return version
+    return int(version)
 
 
 def current_settings(existing):

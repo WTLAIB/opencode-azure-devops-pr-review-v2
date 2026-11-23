@@ -209,7 +209,13 @@ function rows(value, warnings, label) {
 
 function normalizeFinding(value, warnings) {
   const row = isObject(value) ? aliasFields(value, FINDING_FIELDS, warnings) : { summary: asText(value) };
-  for (const key of FINDING_FIELDS) if (Object.hasOwn(row, key)) row[key] = asText(row[key]).trim();
+  for (const key of FINDING_FIELDS) {
+    if (!Object.hasOwn(row, key)) continue;
+    // A field is text or it is missing: false, a list or an object written where text goes is no text, however it
+    // would read once turned into one, so the finding names that field as missing for its correction turn.
+    if (key !== 'id' && typeof row[key] !== 'string') { row[key] = ''; warnings.add('A finding field that was not text was left out; the correction turn names it.'); continue; }
+    row[key] = asText(row[key]).trim();
+  }
   if (typeof row.severity === 'string') row.severity = row.severity.toLowerCase();
   return row;
 }
@@ -374,8 +380,10 @@ export function evaluateDuplicates(answerText, { ids, sessions = {} }) {
   }
   // Every merged finding names the finding its group keeps, also where its own target was merged later.
   const merges = applied.map(row => ({ ...row, mergedInto: groupOf.get(row.id).kept }));
+  // Whether the answer decided anything: a list of merges, also an empty one. Without one it compared nothing.
+  const decided = Array.isArray(source.merged);
   const unmerged = issues.length ? [`Some duplicate-check merges were invalid and were not applied${refused ? ` (${refused} would have joined two findings of one reviewer session)` : ''}; those findings stay reported.`] : [];
-  return { issues, result: { status: 'COMPLETE', structured: true, merges, refused, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
+  return { issues, result: { status: 'COMPLETE', structured: true, decided, merges, refused, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
     ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };
 }
 
