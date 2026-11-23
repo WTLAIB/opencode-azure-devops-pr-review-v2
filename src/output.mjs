@@ -186,13 +186,16 @@ function aliasFields(value, names, warnings) {
     const name = aliases.get(canonicalKey(key));
     if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
+  // Own data properties only, also for a key such as __proto__, which an assignment would take as the object's
+  // prototype: what is checked must be what is kept.
   const result = {};
+  const put = (key, content) => Object.defineProperty(result, key, { value: content, enumerable: true, writable: true, configurable: true });
   for (const [key, content] of Object.entries(value)) {
     const name = aliases.get(canonicalKey(key));
     if (name && counts.get(name) > 1) {
       warnings.add('Conflicting field spellings were kept as written.');
-      result[key] = content;
-    } else result[name ?? key] = content;
+      put(key, content);
+    } else put(name ?? key, content);
   }
   return result;
 }
@@ -338,13 +341,16 @@ export function evaluateDuplicates(answerText, { ids, sessions = {} }) {
   if (parsed.corrections) warnings.add('A JSON formatting slip (unescaped quotes in inline code) was repaired locally.');
   const source = aliasFields(parsed.value, ['status', 'merged', 'report'], warnings);
   const assigned = new Set(ids), issues = [], rowsById = new Map();
-  if (!Array.isArray(source.merged)) issues.push('"merged" must be an array (use [] when none of the findings are duplicates).');
-  for (const [index, item] of rows(source.merged, warnings, 'merged').entries()) {
+  // Only a list of merges decides anything: another value merges nothing, however it could be read as one.
+  const decided = Array.isArray(source.merged);
+  if (!decided) issues.push('"merged" must be an array (use [] when none of the findings are duplicates).');
+  for (const [index, item] of (decided ? source.merged : []).entries()) {
     const row = aliasFields(isObject(item) ? item : {}, ['id', 'mergedInto', 'reason'], warnings);
     const id = asText(row.id).trim(), into = asText(row.mergedInto).trim(), problems = [];
     if (!assigned.has(id)) problems.push(`id ${JSON.stringify(id)} is not an assigned finding`);
     if (!assigned.has(into) || into === id) problems.push('mergedInto must name another assigned finding');
-    if (!text(asText(row.reason))) problems.push('give a concrete reason');
+    // A reason is text: false or a list is none, however it would read once turned into text.
+    if (typeof row.reason !== 'string' || !text(row.reason)) problems.push('give a concrete reason');
     if (rowsById.has(id)) problems.push(`${id} is merged more than once`);
     if (problems.length) { issues.push(`merged[${index}]: ${problems.join('; ')}.`); continue; }
     rowsById.set(id, { id, mergedInto: into, reason: asText(row.reason).trim() });
@@ -380,8 +386,6 @@ export function evaluateDuplicates(answerText, { ids, sessions = {} }) {
   }
   // Every merged finding names the finding its group keeps, also where its own target was merged later.
   const merges = applied.map(row => ({ ...row, mergedInto: groupOf.get(row.id).kept }));
-  // Whether the answer decided anything: a list of merges, also an empty one. Without one it compared nothing.
-  const decided = Array.isArray(source.merged);
   const unmerged = issues.length ? [`Some duplicate-check merges were invalid and were not applied${refused ? ` (${refused} would have joined two findings of one reviewer session)` : ''}; those findings stay reported.`] : [];
   return { issues, result: { status: 'COMPLETE', structured: true, decided, merges, refused, report: asText(source.report).trim(), warnings: [...warnings, ...unmerged],
     ...(parsed.corrections ? { corrections: parsed.corrections } : {}) } };

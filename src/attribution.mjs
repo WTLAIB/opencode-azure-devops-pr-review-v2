@@ -10,6 +10,7 @@ const vocabulary = {
     method: { one: 'One reviewer session per shard reviewed the changed files.', several: n => `${n} independent reviewer passes reviewed the changed files, each shard in a session of its own.`,
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
       checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding.',
+      unchecked: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
       dedupe: 'A duplicate check merged repeated reports of one defect.', dedupeNone: 'A duplicate check compared what different sessions reported in one file and merged nothing.',
       dedupeFailed: count => `The duplicate check of ${count} file(s) failed, so their findings may repeat each other.`,
       rated: 'A rating session without tools set the severities from the finding texts alone.', kept: count => `${count} finding(s) got no usable rating and keep their reviewer's level.`, unrated: 'The severities are the reviewers\' own.',
@@ -22,6 +23,7 @@ const vocabulary = {
     method: { one: '每個分片的變更檔由一個審查工作階段審查。', several: n => `變更檔由 ${n} 次獨立的審查各審一遍，每個分片各用一個工作階段。`,
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
       checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則發現的形式與來源。',
+      unchecked: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
       dedupe: '重複檢查合併了同一個缺陷的重複回報。', dedupeNone: '重複檢查比對了不同工作階段在同一個檔案回報的發現，沒有合併任何一則。',
       dedupeFailed: count => `${count} 個檔案的重複檢查失敗，這些檔案的發現可能彼此重複。`,
       rated: '嚴重度由一個沒有工具的評定工作階段只依發現的文字評定。', kept: count => `${count} 則發現沒有可用的評定，沿用審查者給的等級。`, unrated: '嚴重度是審查者自己給的。',
@@ -34,6 +36,7 @@ const vocabulary = {
     method: { one: '每个分片的变更文件由一个审查会话审查。', several: n => `变更文件由 ${n} 次独立的审查各审一遍，每个分片各用一个会话。`,
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
       checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则发现的形式与来源。',
+      unchecked: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
       dedupe: '重复检查合并了同一个缺陷的重复报告。', dedupeNone: '重复检查比对了不同会话在同一个文件报告的发现，没有合并任何一则。',
       dedupeFailed: count => `${count} 个文件的重复检查失败，这些文件的发现可能彼此重复。`,
       rated: '严重度由一个没有工具的评定会话只依发现的文字评定。', kept: count => `${count} 则发现没有可用的评定，沿用审查者给的等级。`, unrated: '严重度是审查者自己给的。',
@@ -125,12 +128,16 @@ export function reviewProvenance(run) {
  * what ran, and what of it failed. A sentence says only what the record holds: sessions that failed, a
  * duplicate check that merged, merged nothing or failed, a rating that set every level, some or none.
  */
+/** Whether a review of this version had a session that gave a usable review; a record without passes is taken as it was. */
+export const answered = final => !Array.isArray(final?.method?.passes) || final.method.passes.some(pass => (pass.sessions ?? 0) > (pass.failed ?? 0));
+
 export function methodText(method, language) {
   const m = words(language).method, passes = method?.passes ?? [], check = method?.duplicateCheck ?? {}, rating = method?.rating ?? {};
   const sessions = passes.reduce((sum, pass) => sum + (pass.sessions ?? 0), 0), failed = passes.reduce((sum, pass) => sum + (pass.failed ?? 0), 0);
   const checked = (check.groups ?? 0) - (check.failed ?? 0);
   const rated = rating.state && rating.state !== 'off' && rating.rated > 0;
-  return [passes.length > 1 ? m.several(passes.length) : m.one, ...(failed ? [m.failed(failed, sessions)] : []), m.checks,
+  // Reviewers checked their findings only where a session gave a usable review.
+  return [passes.length > 1 ? m.several(passes.length) : m.one, ...(failed ? [m.failed(failed, sessions)] : []), answered({ method }) ? m.checks : m.unchecked,
     ...(check.merged ? [m.dedupe] : checked > 0 ? [m.dedupeNone] : []), ...(check.failed ? [m.dedupeFailed(check.failed)] : []),
     rated ? m.rated : m.unrated, ...(rated && rating.kept ? [m.kept(rating.kept)] : []), m.end].join(pick(language, ' ', '', ''));
 }
@@ -371,9 +378,10 @@ export function renderFinalReport(final, language) {
   // Two numbers of the changed files Azure listed: reviewed at least once, and reviewed in every pass.
   const counts = c && Number.isInteger(c.files) ? ` — ${w.once(c.reviewedOnce, c.files)}${c.passes > 1 ? `, ${w.every(c.reviewedByAll, c.files, c.passes)}` : ''}` : '';
   const coverageLine = `**${w.coverage}:** ${c?.complete ? w.complete : `${w.incomplete}${gap ? ` (${gap})` : ''}`}${counts}`;
-  // A review without a usable answer has no checked findings to speak of: it says only that, and its coverage.
-  const usable = final.status === 'COMPLETE' || final.status === 'STALE';
-  const banner = `${final.status === 'STALE' ? `**STALE: ${w.stale}**\n\n` : !usable ? `**${final.status}: ${w.partial}**\n\n` : ''}${usable ? `**${w.banner}**\n\n` : ''}${coverageLine}\n\n`;
+  // A review without a usable answer has no checked findings to speak of: it says only that, and its coverage. A
+  // STALE review says that its source changed, and whether a session gave a usable review.
+  const usable = final.status === 'COMPLETE' || (final.status === 'STALE' && answered(final));
+  const banner = `${final.status === 'STALE' ? `**STALE: ${w.stale}**\n\n` : ''}${usable ? `**${w.banner}**` : `**${final.status}: ${w.partial}**`}\n\n${coverageLine}\n\n`;
   const limitations = (final.reviewWarnings ?? []).map(message => `- ${message}`).join('\n');
   const reportedIds = reported.map(f => f.id);
   const decisions = [...(reportedIds.length ? [`- **${reportedIds.join(', ')} — REPORTED:** ${w.reported}`] : []),

@@ -199,9 +199,9 @@ never whether a defect is real.
    `workflow.parallelSessions` sessions. Each answer numbers its own findings
    in its shard's range (`F-1001` for the first shard, `F-2001` for the
    second, the same for every pass); the review's IDs are given later (step
-   5). What an answer wrote stays as it wrote it, quoted code included; above
-   an answer's notes in the report the runtime names the review ID of each
-   of that answer's own IDs the notes mention. A reviewer has two
+   5), and where an answer's text names one of its own findings, that
+   finding's review ID takes the place of the answer's (code spans, fenced
+   blocks and IDs written between quotes stay as written). A reviewer has two
    focuses, functional correctness and failure behaviour, which order its
    attention and are not a filter: it files every concrete defect it finds as
    a finding, and `report` carries exclusions, advice, open questions and
@@ -287,8 +287,9 @@ never whether a defect is real.
    or a person sees depends on which session finished first or on an ID a
    model wrote; a finding keeps the ID of its answer as `localId`, and the
    runtime records the session that reported it (`shard`, such as
-   `1/3a pass 2`). Records identical in every field (texts with each run of
-   whitespace taken as one space, the location exactly) are then merged: the first in that order stays and stands for the sessions
+   `1/3a pass 2`). Records identical in every field, character for
+   character as their answers wrote them, are then merged: the first in
+   that order stays and stands for the sessions
    that reported it, the others become MERGED. Findings on the same lines
    that differ in any field stay separate.
 6. **Duplicate check** — `duplicateGroups` takes the findings that are still

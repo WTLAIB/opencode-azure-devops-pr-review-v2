@@ -1613,18 +1613,19 @@ test('a new preview of an adjusted review that cannot be saved is dropped, also 
 });
 
 test('a summary row that names an excluded finding holds the adjusted preview until a person resolves it', async t => {
-  // The second pass's finding refers to the first pass's by the ID the review gives it: both stand on one line, and
-  // of two findings at one place the earlier pass's comes first, so that one is F-1.
+  // The second pass files two findings on one line, and the second names the first by the ID the answer gave it. The
+  // review gives them F-2 and F-3 (the first pass's finding on that line is F-1), and F-3's text names F-2.
   const f = await fixture(t, { files: ['/src/Main.java'], answer(input) {
     if (input.role !== 'azpr-review-reviewerb') return undefined;
-    return { ...defaultAnswer(input), findings: [finding('F-1', '/src/Main.java', 'high', `${defectOf(input)}, as in F-1`)] };
+    const first = input.packet.assignment.firstFindingId, next = `F-${Number(first.slice(2)) + 1}`;
+    return { ...defaultAnswer(input), findings: [finding(first, '/src/Main.java', 'high', `${defectOf(input)}: the cause`), finding(next, '/src/Main.java', 'high', `${defectOf(input)}, as in ${first}`)] };
   } });
   const review = reviewId(await f.command());
-  const [first, second] = previewIds(await f.command('pr-comment', ''));
-  assert.deepEqual([first, second], ['F-1', 'F-2']);
-  const held = await f.command('pr-comment', `${review} --exclude F-1`);
+  assert.deepEqual(previewIds(await f.command('pr-comment', '')), ['F-1', 'F-2', 'F-3']);
+  const [first, second] = ['F-2', 'F-3'];
+  const held = await f.command('pr-comment', `${review} --exclude ${first}`);
   assert.match(held, /\] PREVIEW/);
-  assert.match(held, new RegExp(`Nothing was posted\\. Publication is held because text it would post names a finding you excluded: the PR summary names F-1 \\(in the summary row of ${second}\\)\\. Exclude those findings as well or restore the excluded ones, then read the new preview\\.`));
+  assert.match(held, new RegExp(`Nothing was posted\\. Publication is held because text it would post names a finding you excluded: the PR summary names ${first} \\(in the summary row of ${second}\\)\\. Exclude those findings as well or restore the excluded ones, then read the new preview\\.`));
   assert.doesNotMatch(held, /To post this exact preview/);
   assert.match(await f.command('pr-comment', `${review} --show`), /Publication is held because text it would post names a finding you excluded/);
   const refused = await f.command('pr-comment', `${review} --publish`);
@@ -1632,8 +1633,8 @@ test('a summary row that names an excluded finding holds the adjusted preview un
   assert.match(refused, /Reason: Publication is held: text it would post names a finding you excluded; nothing was posted\./);
   assert.doesNotMatch(refused, /Fix the cause/);
   assert.equal(f.azure.callsTo('createThread').length, 0);
-  // The review itself is unchanged, and restoring F-1 lifts the hold.
-  assert.match((await savedReview(f, review)).final.dispositions.find(row => row.id === second).finding.summary, /as in F-1$/);
+  // The review itself is unchanged, and restoring F-2 lifts the hold.
+  assert.match((await savedReview(f, review)).final.dispositions.find(row => row.id === second).finding.summary, /as in F-2$/);
   assert.match(await f.command('pr-comment', `${review} --exclude none`), /To post this exact preview/);
   assert.match(await f.command('pr-comment', `${review} --publish`), /\] POSTED/);
 });
@@ -3375,7 +3376,7 @@ test('a follow-up without a usable answer keeps the answer it followed', async t
   } });
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /\] COMPLETE; coverage incomplete/);
-  assert.match(receipt, /azpr-quick-reviewer: PARTIAL;[^\n]*follow-up=unusable/);
+  assert.match(receipt, /azpr-quick-reviewer: PARTIAL;[^\n]*follow-up=unusable; repair=failed:unusable\n/);
   assert.equal(f.sessionsFor('azpr-quick-reviewer')[0].turns, 3, 'The follow-up, then one correction turn for its unusable answer.');
   const [saved] = await savedReviews(f);
   assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}`), ['F-1:REPORTED']);
@@ -3545,6 +3546,17 @@ test('the latest usable answer stands: a correction after a follow-up keeps the 
   assert.deepEqual((await savedReview(g, reviewId(prose))).final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED'], ['F-2', 'NEEDS_INFO']]);
   const [corrected] = await stageRecords(prose);
   assert.deepEqual([corrected.repairFailure.turn, corrected.repairFailure.failureClass, corrected.result.report], [2, 'unusable', 'REVIEW_REPORT']);
+
+  // A follow-up that answered prose, and whose correction turn then failed: the answer it followed stands, and the
+  // receipt says what became of each, the follow-up's answer and the correction turn.
+  const h = await fixture(t, { settings: quickSettings, answer(input) {
+    if (input.role !== 'azpr-quick-reviewer') return undefined;
+    return input.turn === 0 ? partialAnswer(input.packet, [ownFinding(input, input.packet.assignment.files[0])]) : input.turn === 1 ? 'Still reading the callers.' : { $provider: 401 };
+  } });
+  const both = await h.command('pr-quick');
+  assert.match(both, /\n- azpr-quick-reviewer: PARTIAL; [^\n]*repair-turns=1;[^\n]*follow-up=unusable; repair=failed:permanent\n/);
+  const [followed] = await stageRecords(both);
+  assert.deepEqual([followed.followUp.outcome, followed.repairFailure.turn, followed.repairFailure.failureClass, followed.result.report], ['unusable', 2, 'permanent', 'Stopped early.']);
 });
 
 test('every stage keeps its usable items when a correction turn fails: ratings, merges and planned comments', async t => {
@@ -3644,6 +3656,25 @@ test('a saved preview of a review whose method this version does not know is sho
   const empty = await h.command('pr-comment', 'aaaa0013 --show');
   assert.equal(empty, '[AZPR] Review aaaa0013 has no saved preview, and it does not say how its findings were produced in a way this version knows, so it cannot be planned or posted; run a new review.');
   assert.equal(h.notices.findLast(notice => notice.text === empty).metadata?.azpr?.next, undefined, 'No step is offered.');
+});
+
+test('a review whose mode has no models any more offers neither planning nor adjusting; its saved preview can still be posted', async t => {
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: quickSettings });
+  const planned = reviewId(await f.command('pr-quick'));
+  assert.match(await f.command('pr-comment', planned), /\] PREVIEW; source review=/);
+  const bare = reviewId(await f.command('pr-quick'));
+  await f.cleanup();
+  // After a restart /pr-quick has no model: nothing can plan the comments of a /pr-quick review.
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, files: ['/src/Main.java'] });
+  const empty = await g.command('pr-comment', `${bare} --show`);
+  assert.equal(empty, `[AZPR] Review ${bare} has no saved preview, and models.quick.reviewers names no model to plan its comments with. Name one there (its first entry plans the comments) and restart the OpenCode service; /pr-comment ${bare} then plans one.`);
+  assert.equal(g.notices.findLast(notice => notice.text === empty).metadata?.azpr?.next, undefined);
+  const shown = await g.command('pr-comment', `${planned} --show`);
+  assert.match(shown, new RegExp(`^\\[AZPR\\] Saved preview of review ${planned}[^\\n]*\\nNothing was posted\\. To post this exact preview: /pr-comment ${planned} --publish\\n`));
+  const next = g.notices.findLast(notice => notice.text === shown).metadata?.azpr?.next;
+  assert.deepEqual([next.plan, next.adjust, next.publish], [false, false, true], 'Posting is offered; what needs a model is not.');
+  await assert.rejects(g.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: `${planned} --exclude F-1` } }), /names no model to plan its comments with/);
+  assert.match(await g.command('pr-comment', `${planned} --publish`), /\] POSTED; source review=/);
 });
 
 function savedBy04(review, id, kind) {

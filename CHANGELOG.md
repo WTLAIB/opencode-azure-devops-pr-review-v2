@@ -37,8 +37,9 @@ Reviews:
   (HEAD before BASE, then path and lines) and then by pass. The IDs no longer
   say which reviewer found something, and they do not depend on which session
   finished first. A reviewer numbers its findings in a range of its shard
-  (`F-1001`, …); its text stays as it wrote it, and above its notes the
-  report names the review ID of each of its own IDs the notes mention.
+  (`F-1001`, …); where its text names one of its own findings, the text
+  names that finding's review ID afterwards. Code in the text (a code span,
+  a fenced block, an ID written between quotes) stays as written.
 - **A duplicate check across sessions.** Where different reviewer sessions
   reported findings on one side of one file, a session of the first reviewer
   model compares them and merges repeated reports of one defect (the same root
@@ -118,9 +119,10 @@ Upgrading from 0.4.x:
   setting keeps its value. The update repairs nothing: a value 0.4.x could
   not use stays where it goes now, and so does a setting this version does
   not know, so that `/pr-setup` names it afterwards; a mode whose models
-  already name `reviewers`, which 0.4.x refused, is kept as it is. A first
-  setup's update is loaded at once; settings that are in use wait for a
-  restart, as always.
+  already name `reviewers`, which 0.4.x refused, is kept as it is, and where
+  it is written as this version writes a mode, the update shows the passes
+  it then runs. A first setup's update is loaded at once; settings that are
+  in use wait for a restart, as always.
 - What changes without being asked for, and is named before you confirm: a
   mode without a rater now gets its findings rated by its first reviewer
   model (`"rater": false` turns that off), and with `afterReview` set to

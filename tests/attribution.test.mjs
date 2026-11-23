@@ -241,6 +241,12 @@ test('final reports show runtime-owned versions, coverage, warnings and what is 
   assert.match(renderFinalReport(unusable, 'zh-CN'), /\n\n## 审查观察（参考资料，非最终结论）\n\n### F-1 — /);
   assert.match(renderFinalReport(final('STALE'), 'zh-TW'), /STALE: PR 原始碼在審查期間已變更/);
   assert.match(renderFinalReport(final('PARTIAL'), 'en'), /PARTIAL: No review session produced a usable result/);
+  // A STALE review says that its source changed and, where a session gave a usable review, how its findings were
+  // checked; where none did, it says that instead.
+  assert.match(renderFinalReport(final('STALE'), 'en'), /^\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*Findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\*/);
+  const staleUnusable = renderFinalReport({ ...unusable, status: 'STALE', method: method({ passes: [{ pass: 1, model: 'p/a', sessions: 1, failed: 1 }] }) }, 'en');
+  assert.match(staleUnusable, /^\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*STALE: No review session produced a usable result\. These claims are provisional and cannot be used for PR comments\.\*\*\n\n\*\*Coverage:\*\*/);
+  assert.doesNotMatch(staleUnusable, /Findings were checked by their reviewer/);
 });
 
 test('provenance aggregates shard sessions per role and model: the passes in their order, then the duplicate check and the rating', () => {
@@ -388,6 +394,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     en: { join: ' ', one: 'One reviewer session per shard reviewed the changed files.', several: n => `${n} independent reviewer passes reviewed the changed files, each shard in a session of its own.`,
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
       checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding.',
+      none: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
       merged: 'A duplicate check merged repeated reports of one defect.', nothing: 'A duplicate check compared what different sessions reported in one file and merged nothing.',
       unchecked: count => `The duplicate check of ${count} file(s) failed, so their findings may repeat each other.`,
       rated: 'A rating session without tools set the severities from the finding texts alone.', kept: count => `${count} finding(s) got no usable rating and keep their reviewer's level.`,
@@ -395,6 +402,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     'zh-TW': { join: '', one: '每個分片的變更檔由一個審查工作階段審查。', several: n => `變更檔由 ${n} 次獨立的審查各審一遍，每個分片各用一個工作階段。`,
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
       checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則發現的形式與來源。',
+      none: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
       merged: '重複檢查合併了同一個缺陷的重複回報。', nothing: '重複檢查比對了不同工作階段在同一個檔案回報的發現，沒有合併任何一則。',
       unchecked: count => `${count} 個檔案的重複檢查失敗，這些檔案的發現可能彼此重複。`,
       rated: '嚴重度由一個沒有工具的評定工作階段只依發現的文字評定。', kept: count => `${count} 則發現沒有可用的評定，沿用審查者給的等級。`,
@@ -402,6 +410,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     'zh-CN': { join: '', one: '每个分片的变更文件由一个审查会话审查。', several: n => `变更文件由 ${n} 次独立的审查各审一遍，每个分片各用一个会话。`,
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
       checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则发现的形式与来源。',
+      none: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
       merged: '重复检查合并了同一个缺陷的重复报告。', nothing: '重复检查比对了不同会话在同一个文件报告的发现，没有合并任何一则。',
       unchecked: count => `${count} 个文件的重复检查失败，这些文件的发现可能彼此重复。`,
       rated: '严重度由一个没有工具的评定会话只依发现的文字评定。', kept: count => `${count} 则发现没有可用的评定，沿用审查者给的等级。`,
@@ -418,6 +427,8 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     ['one session of the second pass failed', passes([2, 0], [2, 1]), s => [s.several(2), s.failed(1, 4), s.checks, s.rated, s.end]],
     ['every session of the second pass failed', passes([2, 0], [2, 2]), s => [s.several(2), s.failed(2, 4), s.checks, s.rated, s.end]],
     ['two of the only pass\'s three sessions failed', passes([3, 2]), s => [s.one, s.failed(2, 3), s.checks, s.rated, s.end]],
+    // Where no session gave a usable review, no reviewer checked anything that is on record.
+    ['no session gave a usable review', { ...passes([2, 2], [2, 2]), ...rating('first', 0, 0) }, s => [s.several(2), s.failed(4, 4), s.none, s.own, s.end]],
     // The duplicate check: it merged, it compared and merged nothing, it failed, or some of each; nothing is said when none started.
     ['a duplicate check that merged', check(2, 0, 3), s => [s.one, s.checks, s.merged, s.rated, s.end]],
     ['duplicate checks that merged nothing', check(2, 0, 0), s => [s.one, s.checks, s.nothing, s.rated, s.end]],

@@ -274,7 +274,7 @@ export function commentToken(review) {
  * they are now (`commentToken`), which a command picked from this offer hands back. Undefined for a review
  * with more findings than the panel lists: half a list would let a person replace adjustments they cannot see.
  */
-export function previewActions(review, { held = false } = {}) {
+export function previewActions(review, { held = false, plannable = true } = {}) {
   const findings = publishableFindings(review);
   if (findings.length > ACTION_FINDINGS) return undefined;
   const { excluded, severity } = adjustmentsOf(review);
@@ -283,10 +283,11 @@ export function previewActions(review, { held = false } = {}) {
     review: review.id,
     state: commentToken(review),
     target: describeReview(review),
-    plan: !review.plan,
+    // Planning and adjusting need a model of the review's mode (`plannable`); posting a saved preview needs none.
+    plan: !review.plan && plannable,
     publish: Boolean(review.plan) && !held && !everyFindingExcluded(review),
     posts: publicationItems(review.plan).length,
-    adjust: !publicationStarted(review),
+    adjust: !publicationStarted(review) && plannable,
     findings: findings.map(finding => ({
       id: finding.id,
       severity: Object.hasOwn(severity, finding.id) ? severity[finding.id] : finding.severity,

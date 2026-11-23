@@ -325,12 +325,21 @@ export function migrateSettings(raw) {
   } else {
     const groups = isObject(old) ? old : {};
     // A group that names reviewers already was written for neither version: 0.4.x refused that key, and mapping its
-    // models would collide with it. Kept as it is, for the settings check to name.
+    // models would collide with it. It is kept as it is. One written wholly as this version writes a group (its
+    // reviewers as a list of model IDs, and a rater or none) runs as it is after the update, and the summary names
+    // its passes; the settings check names any other.
     const clashing = value => isObject(value) && Object.hasOwn(value, 'reviewers');
+    const asWritten = (mode, value) => {
+      const { reviewers } = value;
+      const current = Object.keys(value).every(key => key === 'reviewers' || key === 'rater') && Array.isArray(reviewers)
+        && reviewers.length <= MAX_REVIEWERS && reviewers.every(isModelReference) && (reviewers.length > 0 || mode !== 'review');
+      return current ? { before: {}, after: { reviewers: [...reviewers], rater: value.rater === undefined ? '' : value.rater }, state: reviewers.length ? 'on' : 'off', current: true }
+        : { before: {}, after: empty, state: 'kept', clash: true };
+    };
     for (const mode of ['review', 'deep']) {
       const value = groups[mode];
       if (value !== undefined && !isObject(value)) { models[mode] = value; modes[mode] = { before: {}, after: empty, state: 'kept', value: true }; continue; }
-      if (clashing(value)) { models[mode] = { ...value }; modes[mode] = { before: {}, after: empty, state: 'kept', clash: true }; continue; }
+      if (clashing(value)) { models[mode] = { ...value }; modes[mode] = asWritten(mode, value); continue; }
       const group = isObject(value) ? value : {}, optional = mode === 'deep';
       const before = Object.fromEntries(['functional', 'risk', 'verifier', 'rater'].map(role => [role, group[role] === undefined ? '' : group[role]]));
       // A reviewer model 0.4.x refused stays in the list, where the settings check names its entry. A missing one
@@ -345,7 +354,7 @@ export function migrateSettings(raw) {
     }
     const value = groups.quick;
     if (value !== undefined && !isObject(value)) { models.quick = value; modes.quick = { before: {}, after: empty, state: 'kept', value: true }; }
-    else if (clashing(value)) { models.quick = { ...value }; modes.quick = { before: {}, after: empty, state: 'kept', clash: true }; }
+    else if (clashing(value)) { models.quick = { ...value }; modes.quick = asWritten('quick', value); }
     else {
       const group = isObject(value) ? value : {}, reviewer = group.reviewer === undefined ? '' : group.reviewer;
       const faulty = !accepted(group.reviewer, true);
@@ -356,7 +365,10 @@ export function migrateSettings(raw) {
     // Groups the update does not know stay, and so does documentation that 0.4.x could not read either.
     const help = groups._help;
     const readableHelp = help === undefined || (isObject(help) && Object.entries(help).every(([key, text]) => ['functional', 'risk', 'verifier'].includes(key) && typeof text === 'string'));
-    Object.assign(models, unknown(groups, ['_help', ...MODES]), readableHelp ? {} : { _help: help });
+    // As own data properties, also a key such as __proto__, which an assignment would take as the prototype.
+    for (const [key, content] of Object.entries({ ...unknown(groups, ['_help', ...MODES]), ...(readableHelp ? {} : { _help: help }) })) {
+      Object.defineProperty(models, key, { value: content, enumerable: true, writable: true, configurable: true });
+    }
   }
   const settings = Object.fromEntries(Object.entries(raw).map(([key, value]) => key === 'version' ? [key, 3]
     : key === 'models' ? [key, isObject(value) ? models : value]

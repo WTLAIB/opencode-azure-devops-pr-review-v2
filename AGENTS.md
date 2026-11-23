@@ -48,13 +48,16 @@ settings, backups and failure records. Never upload `.local/`.
 - The review's finding IDs are the runtime's: every answer numbers its own
   findings in its shard's range (the same for every pass, so no pass's input
   differs), and once all passes have answered the runtime numbers them by
-  place and source (`byPlaceAndSource` in `review-work.mjs`). What an answer
-  wrote stays as it wrote it, quoted code included: the runtime renames
-  nothing in it, and above an answer's notes it names the review ID of each
-  of that answer's own IDs the notes mention. Nothing a later stage or a
-  person sees may depend on which session finished first or on an ID a model
-  wrote: also not the tool observations and limitations the planner is
-  given, which follow the order of their content.
+  place and source (`byPlaceAndSource` in `review-work.mjs`). Where an
+  answer's text (its finding fields, notes and gaps) names one of its own
+  findings by the ID the answer gave it, the runtime puts that finding's
+  review ID in its place (`renameReferences`), so that every later stage and
+  every reader sees one set of IDs. Code stays as written: an inline code
+  span, a fenced block, and an ID written directly between quotes are quoted
+  text, not references. Nothing a later stage or a person sees may depend on
+  which session finished first or on an ID a model wrote: also not the tool
+  observations and limitations the planner is given, which follow the order
+  of their content.
 - Add mode-specific or pass-specific instructions only with a measured
   benefit: deep-only prompt text and the split into a functional and a risk
   reviewer were both removed after runs showed no gain over repeating one

@@ -2323,6 +2323,13 @@ test('what the update of 0.4.x settings changes is said line by line, with model
   assert.deepEqual((await offered(clashing)).migration.lines.slice(1, 3), ['/pr-review: its settings name reviewers, which 0.4.x did not know, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.',
     '/pr-deep: its settings name reviewers, which 0.4.x did not know, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.']);
 
+  // A group written wholly as this version writes one runs as it is after the update: the lines name its passes,
+  // its rating and that it posts by itself, as for any mode that runs.
+  const asWritten = { ...legacy, models: { ...legacy.models, quick: { reviewers: ['fixture/other'] } }, afterReview: { quick: 'publish', review: 'none', deep: 'none' } };
+  const writtenLines = (await offered(asWritten)).migration.lines;
+  assert.deepEqual(writtenLines.filter(line => /\/pr-quick/.test(line)), ['/pr-quick: the file already names its reviewers as this version does, so they stay -> 1 pass: fixture/other.',
+    RATED_BY_FIRST('/pr-review, /pr-quick'), POSTS('/pr-quick', false)]);
+
   // /pr-deep with two of its three models was off in 0.4.x and stays off: its list is empty, whatever its rater
   // was. /pr-quick was off as well; two modes post by themselves; no batch size was set.
   const partial = { ...legacy, models: { ...legacy.models, review: { ...legacy.models.review, rater: 'fixture/rater' }, deep: { functional: 'fixture/model', risk: 'fixture/model#high', verifier: '', rater: 'fixture/model#high' }, quick: { reviewer: '' } },

@@ -203,10 +203,40 @@ export async function evaluateReview(answer, { task, snapshot, azure, run, reads
     ...(usable && !all.length && unfinished ? { followUp: { prompt: reviewFollowUpPrompt({ gaps: result.coverage.gaps, uncovered }), gaps: result.coverage.gaps, uncovered } } : {}) };
 }
 
-// Records identical in every field: prose may differ in its whitespace, a location (a path and its lines) may not.
-const findingKey = finding => JSON.stringify(FINDING_FIELDS.filter(key => key !== 'id').map(key => key === 'location'
-  ? String(finding?.[key] ?? '').trim() : String(finding?.[key] ?? '').replace(/\s+/g, ' ').trim()));
+// Records identical in every field, character for character (their fields are trimmed when an answer is read):
+// whitespace inside quoted code can tell two places apart, so it is not normalized.
+const findingKey = finding => JSON.stringify(FINDING_FIELDS.filter(key => key !== 'id').map(key => String(finding?.[key] ?? '')));
 const findingOnly = finding => Object.fromEntries(FINDING_FIELDS.filter(key => key !== 'id' && Object.hasOwn(finding, key)).map(key => [key, finding[key]]));
+
+/** The fields of a finding whose text may name another finding of its answer. */
+const PROSE_FIELDS = ['summary', 'evidence', 'counterevidence', 'suggestion'];
+const ID_TOKEN = new RegExp(`(?<![\\w-])${LOCAL_PREFIX}-[1-9]\\d*(?![\\w-])`, 'g');
+
+/**
+ * What an answer's text says of its own findings, by the IDs the answer gave them, with the review's IDs of those
+ * findings (`ids`: the answer's ID -> the review's). Code stays as written: an inline code span or a fenced block
+ * (from a run of backticks to the next run of the same length, or from a fence of tildes at a line's start to the
+ * next one; without its end, to the end of the text), and an ID written directly between quotes, which is a
+ * literal and no reference. Other IDs, and text without IDs of the answer, are left as they are.
+ */
+export function renameReferences(text, ids) {
+  if (typeof text !== 'string' || !ids?.size) return text;
+  const prose = part => part.replace(ID_TOKEN, (token, offset, whole) => {
+    const before = whole[offset - 1], after = whole[offset + token.length];
+    return !ids.has(token) || ((before === '"' || before === "'") && after === before) ? token : ids.get(token);
+  });
+  const opener = /`+|(?<=^|\n)[ \t]{0,3}~{3,}/g;
+  let out = '', at = 0;
+  for (let match; (match = opener.exec(text));) {
+    const mark = match[0].trim();
+    const closer = mark[0] === '`' ? new RegExp('(?<!`)' + mark + '(?!`)', 'g') : new RegExp('(?<=^|\\n)[ \\t]{0,3}' + mark + '~*', 'g');
+    closer.lastIndex = match.index + match[0].length;
+    const end = closer.exec(text), stop = end ? end.index + end[0].length : text.length;
+    out += prose(text.slice(at, match.index)) + text.slice(match.index, stop);
+    at = opener.lastIndex = stop;
+  }
+  return out + prose(text.slice(at));
+}
 
 /**
  * The order in which a review numbers its findings: by side (HEAD first), path
@@ -345,9 +375,9 @@ export async function runReview(ctx, run, request) {
   const roles = reviewerRoles(settings, run.profile), passes = roles.length;
   // One pool for every pass of every shard: the session limit holds for the review, not per pass.
   // A shard's sessions number their findings in a range of the shard's own (F-1001, F-2001, …), apart from the
-  // review's IDs, which the runtime gives once every pass has answered: a reference in an answer's text to one of its
-  // own findings can then not be taken for another finding of the review. Every pass of a shard gets the same range,
-  // so that no pass's input differs from another's.
+  // review's IDs, which the runtime gives once every pass has answered and then puts where an answer's text names
+  // one of its own findings. Every pass of a shard gets the same range, so that no pass's input differs from
+  // another's.
   const tasks = roles.flatMap((role, pass) => shards.map((files, index) => ({ role, pass, passes, files, index, count: shards.length, base: (index + 1) * 1000 + 1 })));
   progress(run, `Review: ${tasks.length} session(s) for ${shards.length} shard(s)${passes > 1 ? ` in ${passes} independent passes` : ''}; no separate verification follows.`);
   const reviewTask = reviewRunner(ctx, run, request, { snapshot, modelSnapshot, handlerFor: task => ({
@@ -359,7 +389,7 @@ export async function runReview(ctx, run, request) {
   if (!run.active) throw new Error(run.reason || 'Review stopped.');
   if (!outcomes.some(outcome => outcome.result)) throw new Error(`Every review session failed: ${[...new Set(outcomes.map(outcome => outcome.error?.message).filter(Boolean))].slice(0, 3).join(' | ')}`);
 
-  const collected = [], reports = [], answerReports = [], initialReports = [], unusableTexts = [], discovered = new Set();
+  const collected = [], reports = [], answerReports = [], answerGaps = [], initialReports = [], unusableTexts = [], discovered = new Set();
   // Per pass: the assigned paths a usable answer reported as reviewed. Retries, follow-ups and the parts of a
   // split shard belong to their pass; a path counts once per pass however often it is named.
   const reviewedBy = roles.map(() => new Set());
@@ -390,7 +420,7 @@ export async function runReview(ctx, run, request) {
       usable++;
       for (const path of reviewed) reviewedBy[task.pass].add(path);
       entry.covered += reviewed.length;
-      entry.gaps.push(...result.coverage.gaps);
+      answerGaps.push({ role: task.role, session: sessionOf(task), gaps: result.coverage.gaps });
       if (result.coverage.gaps.length) reviewerGaps = true;
       for (const path of result.additionalFiles) discovered.add(path);
       if (text(result.report)) answerReports.push({ session: sessionOf(task), label, text: result.report });
@@ -414,26 +444,27 @@ export async function runReview(ctx, run, request) {
   // The review's IDs, in a fixed order, before anything is merged.
   collected.sort(byPlaceAndSource);
   const findings = [], dispositions = [];
-  // What the answers wrote stays as they wrote it, quoted code included: a reference to one of an answer's own
-  // findings uses that answer's ID, of its shard's range (which no finding of the review is given) unless the answer
-  // left it. Above an answer's notes the runtime names the review ID of each of its own IDs the notes mention.
+  // Where an answer's text names one of its own findings by the ID the answer gave it, it names that finding's
+  // review ID from now on: in the finding fields, the notes and the gaps, wherever they are shown or handed on.
+  // Code stays as written (`renameReferences`), and the answer's own ID stays on record (`localId`).
   const ownIds = new Map();
   collected.forEach((entry, index) => {
     if (!ownIds.has(entry.session)) ownIds.set(entry.session, new Map());
     ownIds.get(entry.session).set(entry.localId, `${LOCAL_PREFIX}-${index + 1}`);
   });
-  const reportOf = ({ session, label, text: body }) => {
-    const ids = ownIds.get(session) ?? new Map();
-    const named = [...new Set(body.match(new RegExp(`\\b${LOCAL_PREFIX}-[1-9]\\d*\\b`, 'g')) ?? [])].filter(id => ids.has(id) && ids.get(id) !== id);
-    const key = named.length ? `Finding IDs in these notes are this session's own: ${named.map(id => `${id} is ${ids.get(id)}`).join(', ')} in this review.\n\n` : '';
-    return label ? `### ${label}\n\n${key}${body}` : `${key}${body}`;
-  };
+  const rename = (session, value) => renameReferences(value, ownIds.get(session));
+  const reportOf = ({ session, label, text: body }) => label ? `### ${label}\n\n${rename(session, body)}` : rename(session, body);
   reports.push(...answerReports.map(reportOf));
+  for (const { role, session, gaps } of answerGaps) coverage[role].gaps.push(...gaps.map(gap => rename(session, gap)));
+  // Records identical in every field as their answers wrote them are duplicates, whatever IDs their texts name.
+  const keys = new Map();
   collected.forEach((entry, index) => {
     const id = `${LOCAL_PREFIX}-${index + 1}`;
-    findings.push({ ...entry.finding, id, origin: entry.task.role });
+    keys.set(id, findingKey(entry.finding));
+    const finding = Object.fromEntries(Object.entries(entry.finding).map(([key, value]) => [key, PROSE_FIELDS.includes(key) ? rename(entry.session, value) : value]));
+    findings.push({ ...finding, id, origin: entry.task.role });
     dispositions.push({ id, status: entry.status, reason: entry.reason,
-      ...(entry.status === 'REPORTED' ? { finding: entry.finding, inline: entry.inline, reviewerSeverity: entry.finding.severity } : { partialFinding: entry.finding }),
+      ...(entry.status === 'REPORTED' ? { finding, inline: entry.inline, reviewerSeverity: finding.severity } : { partialFinding: finding }),
       shard: entry.session, pass: entry.task.pass + 1, localId: entry.localId, sessions: [entry.session] });
   });
   // Only records identical in every field are duplicates; findings on the same lines stay separate. The first in
@@ -441,7 +472,7 @@ export async function runReview(ctx, run, request) {
   const kept = new Map();
   let duplicates = 0;
   for (const status of ['REPORTED', 'NEEDS_INFO']) for (const entry of dispositions.filter(row => row.status === status)) {
-    const key = findingKey(entry.finding ?? entry.partialFinding);
+    const key = keys.get(entry.id);
     if (!kept.has(key)) { kept.set(key, entry); continue; }
     const first = kept.get(key);
     if (status === 'REPORTED' && first.status === 'REPORTED') first.sessions = [...new Set([...first.sessions, ...entry.sessions])];
@@ -491,10 +522,11 @@ export async function runReview(ctx, run, request) {
         continue;
       }
       // An answer without usable JSON, or without a list of merges, also after the correction turns, decided
-      // nothing: a failed check, whose findings stay as they are.
-      if (result.structured === false || result.decided !== true) duplicateCheck.failed++;
+      // nothing: a failed check, whose findings all stay as they are.
+      const decided = result.structured !== false && result.decided === true;
+      if (!decided) duplicateCheck.failed++;
       duplicateCheck.refused += result.refused ?? 0;
-      for (const merge of result.merges) {
+      for (const merge of decided ? result.merges : []) {
         const entry = byId.get(merge.id), target = byId.get(merge.mergedInto);
         if (entry?.status !== 'REPORTED' || target?.status !== 'REPORTED') continue;
         target.sessions = [...new Set([...target.sessions, ...entry.sessions])];

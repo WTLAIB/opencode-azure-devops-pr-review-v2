@@ -916,13 +916,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         break;
       }
       // An answer that is not usable never replaces a usable one before it: neither a follow-up's nor a correction's.
+      // The last turn is named where it was a correction turn; the follow-up's own outcome is said below.
       if (evaluation.usable !== true && lastUsable && evaluation !== lastUsable.evaluation) {
-        const unusableTurn = repairs.length + (followUp ? 1 : 0);
+        const lastTurn = repairs.length + (followUp ? 1 : 0);
         ({ evaluation, answerText } = lastUsable);
-        if (followUp && !followUp.outcome && lastUsable.turn < followUp.turn) followUp.outcome = 'unusable';
-        else record.repairFailure = { turn: unusableTurn, failureClass: 'unusable', error: 'The corrected answer was not usable; the answer before it stands.' };
+        if (followUp?.turn !== lastTurn) record.repairFailure = { turn: lastTurn, failureClass: 'unusable', error: 'The corrected answer was not usable; the usable answer before it stands.' };
       }
-      if (followUp && !followUp.outcome) followUp.outcome = evaluation.result?.status === 'COMPLETE' ? 'completed' : 'still-partial';
+      // What became of the follow-up itself, whatever its correction turns did: the answer that stands is its own
+      // (or a correction of it), or it gave none that was usable. A follow-up that failed says so already.
+      if (followUp && !followUp.outcome) {
+        followUp.outcome = lastUsable.turn < followUp.turn ? 'unusable' : evaluation.result?.status === 'COMPLETE' ? 'completed' : 'still-partial';
+      }
       if (followUp) {
         record.followUp = { turn: followUp.turn, gaps: followUp.gaps.slice(0, 10).map(gap => gap.slice(0, 300)), uncoveredFiles: followUp.uncovered.length,
           outcome: followUp.outcome, ...(followUp.failureClass ? { failureClass: followUp.failureClass, error: followUp.error } : {}) };
@@ -1480,8 +1484,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
 
   /** /pr-comment --show: the saved preview exactly as it would be posted, without a model or Azure DevOps request. */
   function renderSavedPreview(review) {
-    if (!review.plan) return reviewMethod(review) ? `[AZPR] Review ${review.id} has no saved preview. /pr-comment ${review.id} plans one (a model runs; nothing is posted).`
-      : `[AZPR] Review ${review.id} has no saved preview, and it does not say how its findings were produced in a way this version knows, so it cannot be planned or posted; run a new review.`;
+    if (!review.plan) return !reviewMethod(review) ? `[AZPR] Review ${review.id} has no saved preview, and it does not say how its findings were produced in a way this version knows, so it cannot be planned or posted; run a new review.`
+      : !modeReady(settings, review.profile) ? `[AZPR] Review ${review.id} has no saved preview, and models.${review.profile}.reviewers names no model to plan its comments with. Name one there (its first entry plans the comments) and restart the OpenCode service; /pr-comment ${review.id} then plans one.`
+        : `[AZPR] Review ${review.id} has no saved preview. /pr-comment ${review.id} plans one (a model runs; nothing is posted).`;
     const hold = holdNote(review);
     // A review whose method this version does not know is shown and never offered for posting: commentRun refuses it.
     const state = !reviewMethod(review) ? `This review does not say how its findings were produced in a way this version knows, so it cannot be posted; run a new review.`
@@ -1570,7 +1575,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // The preview shown again offers what its own receipt offered, as the review is now: both are read here,
       // before anything is awaited, so that what is offered is what the text shows.
       const saved = renderSavedPreview(review);
-      const next = review.plan && reviewMethod(review) && previewActions(review, { held: Boolean(holdNote(review)) });
+      const next = review.plan && reviewMethod(review) && previewActions(review, { held: Boolean(holdNote(review)), plannable: modeReady(settings, review.profile) });
       output.text = `${saved}${await kept ? '' : UNSAVED_CHOICE}`;
       if (next) output.extra = { next };
       return;

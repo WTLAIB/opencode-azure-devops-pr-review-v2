@@ -382,21 +382,28 @@ function migrationLines({ modes, shardFindings, publish }, problem = '') {
     : modes[mode].clash ? `/pr-${mode}: its settings name reviewers, which 0.4.x did not know, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`
     : unchosen(modes[mode].after.reviewers) ? `/pr-${mode}: no model was chosen yet. Choose its models with /pr-setup after the update.`
       : `/pr-${mode}: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`;
+  // A group the file already wrote as this version writes one runs as it is: what it runs is named.
+  const current = mode => {
+    const { reviewers } = modes[mode].after;
+    return reviewers.length ? `/pr-${mode}: the file already names its reviewers as this version does, so they stay -> ${reviewers.length} pass${reviewers.length === 1 ? '' : 'es'}: ${reviewers.map(shownModel).join(', ')}.`
+      : `/pr-${mode}: the file already names its reviewers as this version does, none, so it stays off.`;
+  };
   for (const mode of ['review', 'deep']) {
     const { before, after, state } = modes[mode];
-    if (state === 'kept') lines.push(kept(mode));
+    if (modes[mode].current) lines.push(current(mode));
+    else if (state === 'kept') lines.push(kept(mode));
     else if (state === 'on') lines.push(`/pr-${mode}: functional ${shownModel(before.functional)}, risk ${shownModel(before.risk)}, verifier ${shownModel(before.verifier)} -> ${after.reviewers.length} passes: ${after.reviewers.map(shownModel).join(', ')}. The verifier model is no longer used.`);
     else if (state === 'partial') lines.push(`/pr-${mode}: only some of its three models were set, so it was off and stays off (models.${mode}.reviewers is empty). Set it afterwards with /pr-setup.`);
     else lines.push(`/pr-${mode}: off, stays off.`);
   }
-  lines.push(modes.quick.state === 'kept' ? kept('quick') : modes.quick.state !== 'on' ? '/pr-quick: off, stays off.'
+  lines.push(modes.quick.current ? current('quick') : modes.quick.state === 'kept' ? kept('quick') : modes.quick.state !== 'on' ? '/pr-quick: off, stays off.'
     : `/pr-quick: reviewer ${shownModel(modes.quick.before.reviewer)} -> 1 pass: ${shownModel(modes.quick.after.reviewers[0])}.`);
   // The rating of every mode that runs, and a rater the file names wherever it is no model ID or false.
   const rated = MODES.filter(mode => modes[mode].state === 'on'), raterOf = mode => modes[mode].after.rater;
   const off = rated.filter(mode => raterOf(mode) === false), inherited = rated.filter(mode => raterOf(mode) === '');
   if (off.length) lines.push(`Severity rating of ${off.map(mode => `/pr-${mode}`).join(', ')}: off ("rater": false), as the file says.`);
   for (const mode of rated.filter(mode => isModelReference(raterOf(mode)))) {
-    lines.push(`Severity rating of /pr-${mode}: ${raterOf(mode)}, ${mode === 'quick' ? 'as the file names it (0.4.x had no rating for /pr-quick)' : 'as before'}.`);
+    lines.push(`Severity rating of /pr-${mode}: ${raterOf(mode)}, ${modes[mode].current ? 'as the file names it' : mode === 'quick' ? 'as the file names it (0.4.x had no rating for /pr-quick)' : 'as before'}.`);
   }
   for (const mode of MODES.filter(mode => modes[mode].state !== 'kept' && ![undefined, '', false].includes(raterOf(mode)) && !isModelReference(raterOf(mode)))) {
     lines.push(`Severity rating of /pr-${mode}: the rater the file names is no model ID; it is kept as it is, and the settings check names it after the update.`);

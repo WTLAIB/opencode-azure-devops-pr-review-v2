@@ -112,6 +112,11 @@ test('evaluateInitial lists repairable problems and still returns a usable PARTI
   assert.deepEqual(typed.result.invalid, { 'F-1': ['missing summary, evidence, counterevidence, suggestion'] });
   assert.ok(typed.result.warnings.includes('A finding field that was not text was left out; the correction turn names it.'));
   assert.deepEqual([typed.result.findings[0].summary, typed.result.findings[0].evidence], ['', '']);
+  // A key named __proto__ is a field like any other: no value it holds stands in for a field the finding lacks.
+  const inherited = evaluateInitial(`{"status":"COMPLETE","coverage":{"files":["/src/a.ts"],"gaps":[]},"report":"r","findings":[{"id":"F-1","summary":"s","location":"head:/src/a.ts:1",` +
+    `"counterevidence":"c","severity":"high","suggestion":"x","__proto__":{"evidence":"Inherited evidence."}}]}`, { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.deepEqual(inherited.result.invalid, { 'F-1': ['missing evidence'] });
+  assert.equal(Object.getPrototypeOf(inherited.result.findings[0]), Object.prototype);
 });
 
 test('evaluateInitial keeps unstructured text as the report: it is no review, and nothing in it is a finding', () => {
@@ -152,6 +157,14 @@ test('evaluateDuplicates only merges within the checked file and never loses a f
   assert.deepEqual([evaluateDuplicates('{"status":"COMPLETE","merged":[],"report":""}', { ids }).result.decided, clean.result.decided], [true, true]);
   const silent = evaluateDuplicates('{"status":"COMPLETE"}', { ids });
   assert.deepEqual([silent.result.decided, silent.result.structured, silent.issues], [false, true, ['"merged" must be an array (use [] when none of the findings are duplicates).']]);
+  // Nothing but a list merges: a single merge object, or a list inside a string, decides nothing and merges nothing.
+  for (const merged of [{ id: 'F-2', mergedInto: 'F-1', reason: 'Same.' }, JSON.stringify([{ id: 'F-2', mergedInto: 'F-1', reason: 'Same.' }])]) {
+    const odd = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged, report: '' }), { ids });
+    assert.deepEqual([odd.result.decided, odd.result.merges], [false, []], typeof merged);
+  }
+  // A reason is text.
+  const unreasoned = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-2', mergedInto: 'F-1', reason: false }], report: '' }), { ids });
+  assert.deepEqual([unreasoned.result.merges, unreasoned.issues[0]], [[], 'merged[0]: give a concrete reason.']);
   // A chain ends at the finding that stays; invalid rows are reported and left out.
   const chained = evaluateDuplicates(JSON.stringify({ status: 'COMPLETE', merged: [
     { id: 'F-3', mergedInto: 'F-2', reason: 'a' }, { id: 'F-2', mergedInto: 'F-1', reason: 'b' },

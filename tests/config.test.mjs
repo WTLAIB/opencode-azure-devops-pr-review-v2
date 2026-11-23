@@ -328,6 +328,21 @@ test('migrateSettings: what a settings file of 0.4.x becomes, with no value lost
     deep: { functional: 'p/d', risk: 'p/e', verifier: 'p/v', reviewers: null }, quick: { reviewer: 'p/q', reviewers: ['p/r'] } });
   assert.deepEqual(['review', 'deep', 'quick'].map(mode => [clash.summary.modes[mode].state, clash.summary.modes[mode].clash]), [['kept', true], ['kept', true], ['kept', true]]);
   assert.match(refused({ models: { review: { ...usable.review, reviewers: ['p/other'] } }, azure }), /^Unknown setting models\.review\.(functional|risk|verifier); check for a typo\.$/);
+  // A group written wholly as this version writes one (reviewers as model IDs, a rater or none) runs as it is after
+  // the update, and the summary names what it runs: here a /pr-quick that 0.4.x could not use.
+  const written = migrateSettings({ version: 2, models: { ...usable, quick: { reviewers: ['other/model'] } }, azure });
+  assert.deepEqual([written.settings.models.quick, written.summary.modes.quick], [{ reviewers: ['other/model'] }, { before: {}, after: { reviewers: ['other/model'], rater: '' }, state: 'on', current: true }]);
+  assert.equal(refused({ models: { ...usable, quick: { reviewers: ['other/model'] } }, azure }), '');
+  assert.deepEqual(migrateSettings({ version: 2, models: { ...usable, deep: { reviewers: [], rater: false } } }).summary.modes.deep, { before: {}, after: { reviewers: [], rater: false }, state: 'off', current: true });
+  // Anything else that names reviewers is no group of this version, and the settings check names it.
+  for (const review of [{ reviewers: [] }, { reviewers: ['Some Model'] }, { reviewers: ['p/a'], extra: 1 }, { reviewers: Array(5).fill('p/a') }, { reviewers: 'p/a' }]) {
+    assert.deepEqual(migrateSettings({ version: 2, models: { review } }).summary.modes.review, { before: {}, after: { reviewers: [], rater: '' }, state: 'kept', clash: true }, JSON.stringify(review));
+    assert.notEqual(refused({ models: { review }, azure }), '', JSON.stringify(review));
+  }
+  // A key named __proto__ is a key like any other: it stays, and the settings check names it.
+  const proto = migrateSettings(JSON.parse('{"version":2,"models":{"review":{"functional":"p/f","risk":"p/r","verifier":"p/v"},"__proto__":"text"}}'));
+  assert.deepEqual([Object.keys(proto.settings.models), Object.getPrototypeOf(proto.settings.models) === Object.prototype], [['review', 'deep', 'quick', '__proto__'], true]);
+  assert.throws(() => validateSettings(withMissingSettings({ ...proto.settings, azure }).settings), /^Error: Unknown setting models\.__proto__; check for a typo\.$/);
   // 0.4.x had no rater for /pr-quick; one the file names anyway is kept.
   assert.deepEqual(migrateSettings({ version: 2, models: { ...usable, quick: { reviewer: 'p/q', rater: 'p/r' } } }).settings.models.quick, { reviewers: ['p/q'], rater: 'p/r' });
   // A file without models gets the empty layout.
