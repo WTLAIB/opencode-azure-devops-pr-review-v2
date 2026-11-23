@@ -1,11 +1,56 @@
 # Roadmap
 
-Tested with OpenCode CLI 2.3.0, the Azure DevOps Services REST API
+Tested with OpenCode CLI 2.3.2, the Azure DevOps Services REST API
 (api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
 with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
 ## Implemented (stability revision)
 
+- **One pipeline for every mode (0.5.0).** `/pr-review`, `/pr-deep` and
+  `/pr-quick` run the same stages with the same prompts: reviewer passes, a
+  duplicate check, a severity rating and comment planning. A mode is its list
+  of models (`models.<mode>.reviewers`, one to four entries, which may
+  repeat); an empty list leaves `/pr-deep` or `/pr-quick` off, and no mode
+  falls back to another mode's models. It replaced the functional and the
+  risk reviewer, the verifier and the separate quick review of 0.4.x (see
+  [Deferred](#a-verifier-as-an-optional-stage)).
+- **Passes instead of roles (0.5.0).** Each entry of a mode's list is one
+  pass: an independent session per shard that covers function and failure
+  behaviour and checks each of its findings against the source it read.
+  Passes do not see each other's work and share one bound on parallel
+  sessions.
+- **No stage verifies a finding, and every review says so (0.5.0).** The
+  runtime checks only the form and source of a finding (a required location
+  that exists at that commit, in a file the session's own tools read):
+  passing findings are REPORTED, the rest NEEDS_INFO. A usable PARTIAL answer
+  that names unfinished work gets one follow-up turn in the same session. A
+  review records `verification: none` and how its findings were produced, and
+  reports, receipts and the disclosure line of comments state status,
+  coverage and method separately.
+- **A duplicate check across reviewer sessions (0.5.0).** The runtime numbers
+  the findings in a fixed order (`F-1 … F-n`, by place and then by pass) and
+  removes records identical in every field. Where different sessions
+  reported findings on one side of one file, a session of the first reviewer
+  model merges repeated reports of one defect (the same root cause and the
+  same correction); the runtime refuses a merge of two findings of one
+  session, and a failed check keeps every finding.
+- **A blind severity rating by default (0.5.0).** After the duplicate check,
+  sessions without tools set each reported finding's level from its text
+  alone, without the level its reviewer gave it, so that the findings of
+  different reviewers stand on one scale. The first reviewer model rates
+  unless `models.<mode>.rater` names another model or is `false`. From 0.3.7
+  to 0.4.6 the verifier set the level, and a rating ran only with a named
+  rater.
+- **Coverage in two numbers (0.5.0).** With several passes a review states
+  the changed files reviewed in at least one pass and those reviewed in
+  every pass. A pass that fails costs depth and leaves the others' work.
+- **Settings of 0.4.x are updated on a confirmation (0.5.0).** A version-2
+  settings file is left as it is and not used. `/pr-setup` shows what its
+  update changes and writes the new file only for a confirmation of that
+  very change: in the terminal UI in a list whose first row keeps the file,
+  elsewhere with `/pr-setup --migrate <word>`. Reviews saved by 0.4.x can
+  still be shown, previewed and published, with the comment wording of the
+  version that made them.
 - **Adjust findings before publishing.** After reading a preview, use
   `/pr-comment <review-id> --exclude` or `--severity` to choose which findings
   to publish and at what severity. The model plans a new preview while the
@@ -19,8 +64,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   the PR URL overrides it for one review. A COMPLETE review hands off to a separate, cancellable
   comment command. Automatic publication holds individual items with mentions,
   images or active content for inspection, posts ordinary text and links, and
-  skips a summary when every finding is already discussed. Quick comments
-  retain their unverified disclosure. See [commenting](COMMENTING.md).
+  skips a summary when every finding is already discussed. Every comment
+  discloses how its review was made. See [commenting](COMMENTING.md).
 - **Native installation and guided setup.** OpenCode's plugin manager loads
   the npm package or the versioned Git package through `server.js`. `/pr-setup` validates one
   configured model and an existing private PAT file, then writes an external,
@@ -60,28 +105,29 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   only the models were told.
 - **Only source changes are stale.** A moved base is a warning; a changed head
   is STALE. Publication rechecks the head before writing.
-- **Sharded reviews.** Initial reviews run per file shard with disjoint finding-ID
-  ranges; verification runs per finding shard; parallelism is bounded.
+- **Sharded reviews.** Every review pass runs per file shard, and all passes
+  of all shards share one bound on parallel sessions. The runtime gives the
+  review's finding IDs once every session has answered, so they do not depend
+  on which session finished first.
 - **Context overflow is recovered.** A compaction the host attempts in a
   reviewer's turn is refused, which ends the turn as overflow, and the shard is
   split and rerun (validated on the real host). A refused background summary
-  (`experimental.background_compaction`) leaves the turn's own failure to decide.
+  (OpenCode's `compaction.background`, on by default in 2.3.2;
+  `experimental.background_compaction` in earlier releases) ends nothing and
+  leaves the turn's own failure to decide.
 - **Correction turns.** Answers that break the output contract are corrected in
   the same session (`workflow.repairAttempts`); remaining problems degrade per
-  item (UNREVIEWED, NEEDS_INFO, skipped comments) instead of failing the review.
-- **One place for duplicates.** Only verification merges duplicates: each
-  verifier within its shard, and a duplicate check for files whose findings
-  different verifiers confirmed (a quick review, which has no verifier, merges
-  only records identical in every field). Verifier rows are judged by their own fields,
-  a move to another file must be declared and the report shows the initial
-  location, and the comment planner may not skip a finding because another
-  finding of the review is commented.
+  item (NEEDS_INFO, a merge left out, a level kept, a skipped comment) instead
+  of failing the review.
+- **Duplicates are settled before comments are planned.** The comment planner
+  may not skip a finding because another finding of the review is commented.
 - **Defects in moved code and unknown intent.** A correctness or security
   defect on lines the PR adds or moves is filed even when the base commit had
   the same code, and the finding says the PR carries it over. Behavior that is
   wrong only if the author did not mean it, with nothing showing whether they
-  did, is a low finding that asks the author. Neither is a reason for the
-  verifier to reject a finding. Measured on two benchmarks; see
+  did, is a low finding that asks the author. Neither keeps a defect out of
+  the findings. Measured on two benchmarks with 0.3.6, whose reviews had a
+  verifier; see
   [validation](VALIDATION.md#defects-in-moved-code-and-unknown-intent-2026-11-09).
 - **Stage retries.** Transient failures retry once in a new session
   (`workflow.stageRetries`); stream continuations work for every provider, and
@@ -93,22 +139,13 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   output, restarts the window.
 - **Nothing to review.** A PR whose complete change list is empty stops before
   any session.
-- **Quick review.** `/pr-quick` runs one reviewer per shard for both the
-  functional and the risk focus and no verifier, duplicate check or summary
-  session. The runtime checks only the form and source of its findings (a
-  required location that exists at that commit, in a file the session's own
-  tools read): passing findings are REPORTED, the rest NEEDS_INFO. A usable
-  PARTIAL answer that names unfinished work gets one follow-up turn in the
-  same session; a follow-up that fails or gives no usable answer keeps the
-  answer it followed. The review records `verification: none`, reports status, coverage and verification
-  separately, and its comments keep the layout with a disclosure line that
-  names the quick method. Shared prompts carry verified/quick variants; the
-  review prompts are byte-identical to before (hash-tested), and a command
-  checks only its own profile's agents and models.
 - **Deep means stronger models.** `/pr-deep` runs the same review as
-  `/pr-review` with the models of `models.deep`. Its extra prompt text was
-  dropped after it changed neither gpt-6-luna's nor gpt-6.1-sol's results on
-  the test PRs, so the deep profile is where a stronger, costlier model goes.
+  `/pr-review` with the models of `models.deep.reviewers`: stronger models, a
+  higher variant or more passes. Prompt text of its own was dropped in
+  October 2026, after it changed neither gpt-6-luna's nor gpt-6.1-sol's
+  results on the test PRs of that time, and the split into a functional and a
+  risk reviewer went in 0.5.0 for the same kind of reason: mode-specific or
+  pass-specific instructions come back only with a measured benefit.
 - **Bounded Azure calls.** One queue with configurable concurrency and a
   per-call timeout that aborts the request, for both tool and runtime calls;
   slots are released in `finally`.
@@ -129,20 +166,10 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   affects the caller's conversation.
 - **Maintainability.** Prompts are about a third of their former size, runtime is
   split into focused modules, host specifics live in `host.mjs`.
-- **Severity from what was verified.** The verifier receives candidates
-  without the reviewer's severity and sets the level itself. An optional
-  severity rating without tools (`models.<mode>.rater`) can set each confirmed
-  finding's final level from its text on a stronger model; it is off unless a
-  rater is named. A change that breaks what worked before is at least
-  medium, documented steps that stop working included. A finding states one
-  defect, a merge keeps no defect only the merged finding named, a reviewer
-  looks for stated intent before asking about it, and a verified behavior only
-  the author can call intended is confirmed as a question, not NEEDS_INFO.
-- **A confirmation states its correction.** A verifier that confirms a
-  finding with a suggestion such as "N/A" or "No correction needed." is asked
-  in the same session which it means; left unresolved, the finding is
-  NEEDS_INFO and gets no comment. Such confirmations came from GPT-6 Luna
-  verifiers whose own reason refuted the finding.
+- **Severity from the harm the evidence shows.** A change that breaks what
+  worked before is at least medium, documented steps that stop working
+  included. A finding states one defect, and a reviewer looks for stated
+  intent before asking about it.
 
 - **A panel in the terminal UI.** OpenCode shows a plugin's notices as plain
   text, so reports and comment previews appeared as Markdown source, and a
@@ -188,7 +215,7 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 ## Planned
 
 Nothing is scheduled at the moment. A change to what reviewers file or how
-findings are verified is listed here once a measurement on more than one
+findings are checked is listed here once a measurement on more than one
 benchmark supports it.
 
 A run of Martian's Code Review Bench, in which every expected issue that no
@@ -200,6 +227,31 @@ and are not planned; see
 [Deferred](#three-changes-the-martian-benchmark-run-pointed-to).
 
 ## Deferred
+
+### A verifier as an optional stage
+
+Through 0.4.6 a verifier re-checked every candidate finding of `/pr-review`
+and `/pr-deep`, set its severity and merged duplicates. 0.5.0 removed it,
+with the rules that existed only for it (decision rows, moved findings, a
+confirmation that states its correction, UNREVIEWED findings,
+`workflow.shardFindings`), and does not offer it as an option. The reason: in
+the runs behind 0.5.0 a verifier of the reviewers' own strength rejected
+almost none of their findings and added few, for a large share of a review's
+cost (see [validation](VALIDATION.md)).
+
+### Majority voting between passes
+
+Declined: keeping only the findings that more than one pass reported, or
+presenting them as more certain. Passes are run to find what another pass
+missed, so a vote would remove exactly those findings, and agreement between
+passes does not make a finding right. The record keeps which sessions
+reported a finding; it is never used to drop or to rate one.
+
+### Choosing the number of passes by PR size
+
+Not done: the number of passes is what a person lists per mode, and
+`/pr-deep` is where more passes go for the PRs that need them. There is no
+data yet that ties the useful number to a PR's size or risk.
 
 ### Shipping the terminal panel as JSX source
 
@@ -305,13 +357,16 @@ but PR URLs and the base URL are limited to Azure DevOps Services.
 
 A round that reviews each shard again in a new session, given the findings
 already filed on its files and asked only for defects they miss, was built and
-measured together with the changes for moved code and unknown intent. With
+measured together with the changes for moved code and unknown intent (0.3.6,
+whose reviews had a verifier). With
 Claude Opus 5.5 at medium effort on Martian's benchmark it found more of the
 golden issues, but its extra findings lowered precision more, so F2 fell; it
 posted 38% more comments and about doubled the tokens. It was removed. It
-helped GPT-6 Luna in `/pr-review` more, so it may return as an option for
-weaker models if a measurement on more than one benchmark supports it; see
+helped GPT-6 Luna in `/pr-review` more, which is no reason to bring it back:
+a stage is not added to steady a weaker model; see
 [validation](VALIDATION.md#a-second-initial-review-round-measured-and-removed).
+The passes of 0.5.0 are something else: independent sessions that are not
+given each other's findings.
 
 ### Three changes the Martian benchmark run pointed to
 
@@ -341,22 +396,29 @@ These stood under Planned until the work on 0.3.7 examined them (see
 
 ## Remaining validation work
 
+The numbers in this list were measured before 0.5.0, with reviews of two
+reviewers and a verifier, unless an item says otherwise. They are kept as the
+record of those versions; what was measured with 0.5.0 is in
+[validation](VALIDATION.md).
+
 1. Publication on other repositories and organizations. On the 316-file test
-   PR this revision published 24 items, all read back, re-ran without a write
+   PR an earlier revision published 24 items, all read back, re-ran without a write
    and reported comments deleted by hand as `DELETED`; the planner made no skip
    that relied on another finding there, and the correction turn for one was
-   seen live in a preview. Moved findings, decision rows in the wrong list and
-   the duplicate check worked in live reviews (see [validation](VALIDATION.md)).
+   seen live in a preview (see [validation](VALIDATION.md)).
 2. Measure how often correction turns and retries happen per model, and tune
    `workflow` defaults from those numbers. On the 316-file PR,
    `parallelSessions` 8 with `azure.concurrency` 6 cut the review from 719 s
    (4 / 3) to 393 s with no provider retry or throttling; 8 with a queue of 3
    made the REST queue the bottleneck. The defaults are 8 / 6 since then, on
    that one measurement: other providers, API keys with low rate limits and
-   other organizations have not been measured, and with OpenCode's
-   claude-agent provider each session keeps a process of about 200 MB for
-   minutes after it ends, so a large PR needs memory for them. Lower
-   `parallelSessions` there; change both values together.
+   other organizations have not been measured, and neither has a review of
+   several passes, whose sessions share `parallelSessions`. With OpenCode's
+   claude-agent provider each session keeps a local process: for minutes
+   after it ended on OpenCode 2.2.4 (about 200 MB each), and until OpenCode
+   exits on 2.3.2, so many passes over many shards need memory for them
+   whatever `parallelSessions` is. Change `parallelSessions` and
+   `azure.concurrency` together.
    Comment planning runs two pages at a time, which cut a nine-page plan from
    140–175 s to 71–90 s; more lanes were not measured.
 3. Reduce input tokens further. Reading diffs with folded repeats cut the
@@ -375,27 +437,28 @@ These stood under Planned until the work on 0.3.7 examined them (see
    the repository zip of the exact commit) by gpt-6.1-sol in 2 of 2 runs and
    missed by gpt-5.6-luna and gpt-6-luna, even with high reasoning effort and
    the defective line in a search result. It is a model limit, so no runtime
-   hints were added. A stronger verifier cannot make up for it: verifiers
-   judge the candidates and added 1 new finding in 616 decisions over 21 live
-   runs, so the initial reviewers' model decides what is found. `/pr-deep`
-   is for that: the review with the stronger models of `models.deep`, for
-   selected PRs. Confirm on other real PRs. A stronger verifier does keep
-   more of what the reviewers find: gpt-6-luna as verifier rejected 3 known
-   defects in 62 reviews, two of them with a reason that confirms the defect,
-   and gpt-6.1-sol none in 35; behind gpt-6-luna reviewers it cost 3–8 times
-   the luna review.
+   hints were added. The reviewers' model decides what is found, and
+   `/pr-deep` is for that: the review with the stronger models of
+   `models.deep.reviewers`, for selected PRs. Confirm on other real PRs. In
+   those versions a verifier could not make up for it either: verifiers
+   added 1 new finding in 616 decisions over 21 live runs, and gpt-6-luna as
+   verifier rejected 3 known defects in 62 reviews, two of them with a reason
+   that confirms the defect (gpt-6.1-sol none in 35).
 5. Repeat host acceptance for future OpenCode versions; `host.mjs` is the place
    for shape changes, `azure.mjs` for REST changes.
-6. Quick review: two runs per mode on the three test PRs with gpt-6-luna used
+6. One reviewer per shard without a verifier, which was `/pr-quick` in 0.4.x
+   and is a pass of every review since 0.5.0: two runs per mode on the three
+   test PRs with gpt-6-luna used
    36–50 % of the review's model requests and 34–68 % of its input with the
    same planted-defect results except one configuration defect (see
    [validation](VALIDATION.md)). A quick review of the 1-file test PR was
    published and read back. Still open: other PRs and models, a published
-   multi-shard quick review, and other multi-shard PRs: on the 316-file PR a
+   multi-shard review, and other multi-shard PRs: on the 316-file PR a
    shard's tests led its reviewer into another shard's changed files (8–9
    repeated defects in 32–35 findings), and comment planning combined 23 of 25
    such pairs into
-   one comment over three runs. The quick follow-up for unfinished work has
+   one comment over three runs; since 0.5.0 the duplicate check merges such
+   repeats before planning, which has not been measured on that PR. The follow-up for unfinished work has
    not run live yet (no PARTIAL answer in 24 runs); the larger loss is a
    reviewer that answers after reading only the diffs, which on PR #4 misses
    the regression outside the diff. A prompt sentence asking to continue
@@ -406,10 +469,16 @@ These stood under Planned until the work on 0.3.7 examined them (see
    combines the right findings, combines different defects or leaves repeats
    apart, and a later plan of a PR that already carries such a comment (see
    [validation](VALIDATION.md#limits-of-this-candidate)).
+8. The pipeline of 0.5.0 (passes, the duplicate check, the blind rating) was
+   measured with our own judge, not with the benchmarks' judges (see
+   [validation](VALIDATION.md)). Open: the benchmarks' own judges, and models
+   and pairs of models other than those measured.
 
 ## Quality principles
 
 Keep deterministic facts in code and judgment in models. Prefer a correction
 turn or a per-item downgrade over discarding useful work, and keep every
 downgrade visible in the report. Preserve failed samples; a COMPLETE status or a
-successful write does not prove factual quality.
+successful write does not prove factual quality. Say what was checked and no
+more: no stage verifies a finding, so no report, comment or document says
+that one was verified.

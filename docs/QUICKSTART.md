@@ -7,11 +7,13 @@ terminal UI (the desktop app, a script), set AZPR up as
 [without the terminal UI](#without-the-terminal-ui) shows instead of step 3.
 
 Already using an earlier version? Follow [upgrading](../README.md#upgrading)
-instead, to keep your configuration and one AZPR installation.
+instead, to keep your configuration and one AZPR installation. Coming from
+0.4.x, your settings need one update, which `/pr-setup` shows before it
+writes anything: see [upgrading from 0.4.x](../README.md#upgrading-from-04x).
 
 ## 1. Check the prerequisites (terminal)
 
-- **OpenCode CLI 2.3.0** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
+- **OpenCode CLI 2.3.2** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
   22.04.5 LTS (WSL2)**. Other host versions and operating systems are not
   validated; see [validation](VALIDATION.md). OpenCode 1.x is not supported.
 - An authenticated OpenCode model with tool support. AZPR uses your existing
@@ -32,7 +34,7 @@ opencode models
 ## 2. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.4.6
+opencode plugin add opencode-azure-devops-pr-review@0.5.0
 ```
 
 This is the host's native package installation; no npm account or separate
@@ -41,7 +43,7 @@ service within a few seconds, and otherwise when OpenCode next starts. The
 plugin exposes `/pr-setup` even before its review configuration exists.
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.4.6'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.0'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -59,9 +61,11 @@ and reopen OpenCode. Dialogs then ask for what a review cannot run without:
 
 ![The dialogs of a first setup in OpenCode's terminal UI, one after another: the organization, a proxy that Enter skips, the token in a field that shows only bullets and a count, a model from OpenCode's list, what will be saved, and "AZPR is set up".](assets/setup-dialogs.gif)
 
-*AZPR's dialogs in OpenCode 2.3.0's terminal UI, recorded with a test
-organization and token and a stand-in for Azure DevOps; waiting time is
+*AZPR's dialogs in OpenCode 2.3.0's terminal UI, recorded with AZPR 0.4.4, a
+test organization and token and a stand-in for Azure DevOps; waiting time is
 shortened, and the model list is the one of the OpenCode that was recorded.
+The questions are the same in 0.5.0; its summary now says that the model gets
+two passes of `/pr-review` and one of `/pr-quick`.
 The command palette (`ctrl+p`) opens the same dialogs with "AZPR: settings",
 which is how this recording starts.*
 
@@ -78,8 +82,9 @@ which is how this recording starts.*
    token works for your organization. A refused token is asked for again with
    the reason. If Azure DevOps cannot be reached, you can set the proxy or the
    CA file there and try the same token again.
-4. **Model.** Pick one from OpenCode's list (type to search). It fills the
-   reviewer and verifier roles and `/pr-quick`.
+4. **Model.** Pick one from OpenCode's list (type to search). AZPR lists it
+   twice for `/pr-review`, which then reviews in two passes, and once for
+   `/pr-quick`.
 
 After a summary, AZPR saves the token alone in a file only you can read
 (mode 600, `${XDG_CONFIG_HOME:-~/.config}/azpr/pat-<organization>`, a file
@@ -88,7 +93,8 @@ restart is needed. The token is not shown again and is in no conversation,
 notice or log.
 
 Run `/pr-setup` again at any time to see the settings as a list and change
-one: a model for `/pr-deep`, the output language, the proxy, a new token and
+one: the models of a mode (a second model for `/pr-review`, models for
+`/pr-deep`), the output language, the proxy, a new token and
 others (see [setup](../README.md#setup-in-the-terminal-ui)). A change to
 settings that are in use takes effect after `opencode service restart`; the
 list says so. What the list does not hold is in the settings file it names;
@@ -99,7 +105,9 @@ each one.
 
 *The list goes on below what is shown: the settings of reviews, of the terminal
 UI and of diagnostics, and the settings file. Recorded like the picture above,
-with test values.*
+with test values and AZPR 0.4.4, whose model rows read Review model, Quick
+model and Deep model. Since 0.5.0 they read Review models, Quick models and
+Deep models, and each shows its passes (`MODEL ×2` after a first setup).*
 
 ## 4. Check access without a model request (OpenCode)
 
@@ -114,14 +122,16 @@ changed files, sample source and discussions, and checks the model catalog;
 it neither runs a review nor tests model-provider authentication or Azure write
 permissions. Fix any `NOT_READY` result before continuing. A **Quick model
 WARNING** also needs fixing before `/pr-quick`, even if the overall result is
-`READY`; a **Deep model** WARNING likewise before `/pr-deep`. The **Deep models**
+`READY`; a **Deep model** WARNING likewise before `/pr-deep`. The **Review
+models** row shows the passes of `/pr-review` and which model rates the
+severities, the **Deep models**
 row says whether `/pr-deep` is set up (see below), and the **AZPR** row names
 the installation that answered. The **OpenCode** row names the host version; a
-WARNING there means it is not the tested 2.3.0, and reviews still run.
+WARNING there means it is not the tested 2.3.2, and reviews still run.
 
 On a host without `permission.hook`, **Project boundary WARNING** means the
 host's own permission rules control where native read tools can read; reviews
-remain available. The tested OpenCode 2.3.0 host has that hook. `READY` is an
+remain available. The tested OpenCode 2.3.2 host has that hook. `READY` is an
 access check, not a security audit or an approval of the PR.
 
 ## 5. Run a review and preview its comments (OpenCode)
@@ -130,10 +140,13 @@ access check, not a security audit or an approval of the PR.
 /pr-review https://dev.azure.com/YOUR_ORGANIZATION/YOUR_PROJECT/_git/YOUR_REPO/pullrequest/123
 ```
 
-This starts functional and risk reviewers, followed by separate verification.
-The starter setup uses the same model in separate sessions; you can assign
-models per role later. For a lighter pass, use `/pr-quick <PR URL>`
-instead: it runs one reviewer per shard without independent verification.
+This starts two review passes: two independent sessions of your model, each of
+which reviews the changed files and checks its own findings against the
+source. A duplicate check then merges what both reported, and a rating sets
+the severities. No stage verifies a finding afterwards, and the report, the
+receipt and the comments say so. You can list other models later (see
+[configuration](../README.md#configuration)). For a lighter pass, use
+`/pr-quick <PR URL>` instead: the same review with one pass.
 `/pr-review --help` (and every other command with `--help`) shows the options
 without running a model.
 
@@ -157,16 +170,19 @@ A review that is `PARTIAL` or `STALE` cannot be commented on; resolve the cause
 and run a new review.
 
 Inspect the report, proposed summary, inline comments and skipped findings.
-Check coverage and limitations: COMPLETE does not mean every file was reviewed
-or every finding confirmed. Quick findings are `REPORTED`, with `verification
-none`. The commands below are typed in the **same conversation** and need no
+Check coverage and limitations: COMPLETE does not mean that every file was
+reviewed, and no finding was verified. Findings are `REPORTED`, and the
+receipt says `verification none`. The commands below are typed in the **same
+conversation** and need no
 review ID: they act on its current review, the one completed or used there
 last, and each receipt names that review and its PR. The preview ends with
 the commands for the next step.
 
-For a small PR, `/pr-review` commonly uses two reviewer sessions, a verifier
-session and a comment-planning session; `/pr-quick` commonly uses one review
-session plus comment planning. **A session is not a single model request**:
+For a small PR with a few findings, `/pr-review` uses two reviewer sessions, a
+duplicate-check session for each file in which both reported, one rating
+session and one comment-planning session; `/pr-quick` uses one reviewer
+session, one rating session and comment planning. **A session is not a single
+model request**:
 tool reads, corrections, retries, more shards or planning pages add requests
 and cost. Refreshing a preview with `/pr-comment` runs planning
 again. Use the displayed `/pr-stop <run-id>` to cancel an active command, or
@@ -181,14 +197,14 @@ level), and **apply** at the foot of the list applies it all. With commands, use
 IDs go in one list, separated by commas:
 
 ```text
-/pr-comment --exclude F-1,R-2                     leave F-1 and R-2 out
-/pr-comment --severity F-3=low,R-4=medium         publish F-3 as low and R-4 as medium
-/pr-comment --exclude F-1,R-2 --severity F-3=low  both in one command
+/pr-comment --exclude F-1,F-2                     leave F-1 and F-2 out
+/pr-comment --severity F-3=low,F-4=medium         publish F-3 as low and F-4 as medium
+/pr-comment --exclude F-1,F-2 --severity F-3=low  both in one command
 ```
 
-With the last line, F-1 and R-2 are excluded from the new preview and F-3
+With the last line, F-1 and F-2 are excluded from the new preview and F-3
 appears as low in the summary, with no inline comment. The original review is
-preserved. A changed severity does not verify the finding again; exclude a
+preserved. A changed severity does not check the finding again; exclude a
 finding when it is wrong.
 
 AZPR uses a model to plan the comments again without rerunning the review, so
@@ -227,9 +243,10 @@ exists; use `/pr-comment` to prepare and inspect a preview first. See
 `afterReview` and the flags that override it for one review.
 
 For important changes, `/pr-deep` runs the same review as `/pr-review` with
-the models of `models.deep`. Put stronger (usually slower and costlier) models
-in all three deep slots, or the review's model with a higher variant
-(`provider/model#high`), which reasons longer, and keep it for changes that
+the models of `models.deep.reviewers`. List stronger (usually slower and
+costlier) models there, the review's model with a higher variant
+(`provider/model#high`), which reasons longer, or more passes, and keep it
+for changes that
 justify the cost; with the review's models as they are it would only repeat
 `/pr-review`, and `/pr-check` warns about that. All modes produce AI findings that require human judgment; see
 [commands](../README.md#commands).
@@ -282,10 +299,9 @@ created above. The command checks the model catalog and the PAT file, then saves
 configuration with owner-only permissions. It makes no model request and does
 not contact Azure.
 
-One model selection configures the quick reviewer and all three review roles.
-`/pr-quick` still runs only its own reviewer; `/pr-review` uses separate reviewer
-and verifier sessions. Deep models remain unset until you choose stronger
-models for that mode. Setup preserves other settings when explicitly replacing
+One model selection lists that model twice for `/pr-review`, which then
+reviews in two passes, and once for `/pr-quick`. Deep models remain unset
+until you list models for that mode. Setup preserves other settings when explicitly replacing
 an existing file with `--replace`, and then keeps the PAT file already set
 unless you name another one.
 
@@ -300,7 +316,8 @@ same command, so that the settings are complete when they are loaded:
 `--proxy http://proxy.example.com:8080` (and `--ca-file /absolute/path.pem`
 for a company CA), as described in
 [company networks](ENTERPRISE.md#company-networks). Other options change one
-setting each, such as `--language zh-TW` or `--deep-model PROVIDER/MODEL`; see
+setting each, such as `--language zh-TW`, `--deep-model PROVIDER/MODEL` or
+`--review-model PROVIDER_A/MODEL_A,PROVIDER_B/MODEL_B` (one pass each); see
 [setup with options](../README.md#setup-with-options). Leave `shell: "deny"`
 and TLS verification enabled, and see
 [all settings](../README.md#all-settings-and-defaults) for what the settings
@@ -323,10 +340,12 @@ background service.
 
 For an existing source installation, keep using `install.sh --replace`, or
 follow the migration notes in [installation](../README.md#native-package-npm-or-git).
+The installer carries a settings file of 0.4.x over exactly as it is;
+`/pr-setup` then shows its update.
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.4.6 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.4.6.tar.gz),
+[v0.5.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.0.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings: `/pr-setup` in the terminal UI

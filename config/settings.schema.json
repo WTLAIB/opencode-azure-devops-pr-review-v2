@@ -12,7 +12,8 @@
       "type": "string"
     },
     "version": {
-      "const": 2
+      "const": 3,
+      "description": "The settings layout of AZPR 0.5.0 and later. A file with version 2 (AZPR 0.4.x) is not used as it is: /pr-setup shows what an update changes and writes the new file after you confirm."
     },
     "models": {
       "type": "object",
@@ -20,82 +21,93 @@
       "required": [
         "review"
       ],
+      "description": "The models of each command. Every mode runs the same review; its list says how many passes review the changed files and with which model each.",
       "properties": {
-        "_help": {
-          "type": "object",
-          "additionalProperties": false,
-          "deprecated": true,
-          "description": "Legacy documentation only, accepted for existing files. Omitted from new settings and removed during installation. Read README model-selection guidance instead; this field never affects model instructions.",
-          "properties": {
-            "functional": {
-              "type": "string"
-            },
-            "risk": {
-              "type": "string"
-            },
-            "verifier": {
-              "type": "string"
-            }
-          }
-        },
         "review": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "functional",
-            "risk",
-            "verifier"
+            "reviewers"
           ],
           "properties": {
-            "functional": {
-              "type": "string",
-              "description": "Exact provider/model ID for independent correctness review. Select for code comprehension, project language, boundary behavior, and regressions."
-            },
-            "risk": {
-              "type": "string",
-              "description": "Exact provider/model ID for independent risk review and comment planning. Select for cross-path failure analysis and reliable MCP tool use."
-            },
-            "verifier": {
-              "type": "string",
-              "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization."
+            "reviewers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "description": "The review passes of /pr-review, in order: one exact provider/model ID (optionally provider/model#variant) per pass, 1 to 4. Each pass reviews every changed file on its own; an entry may repeat, and passes of different models find more than repeats of one. The first entry also merges repeated findings and plans the comments, and rates the severities unless rater names a model. Every reviewer needs tool support."
             },
             "rater": {
-              "type": "string",
-              "description": "Optional provider/model ID that turns on the severity rating: after verification, a session without tools rates the confirmed findings from their text alone, and its level is final. Empty or missing: no rating runs and the verifier's severity is final. Meant for a model stronger than the reviewers'; the step is small and needs no tool support."
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "const": false
+                }
+              ],
+              "default": "",
+              "description": "Which model rates the severities: after the duplicate check, sessions without tools rate the reported findings from their text alone, without the level their reviewer gave them, so that the findings of different reviewers are levelled on one scale. \"\" (the default): the first model of reviewers. A provider/model ID: that model (it needs no tool support). false: no rating; the reviewers' own levels stay."
             }
           }
         },
         "deep": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Optional models for /pr-deep, which runs the same review as /pr-review with them: choose models stronger than models.review for the PRs that need them: another model, or the same model with a higher variant (provider/model#high), which reasons longer. Missing or empty roles disable deep mode; it never falls back to review models.",
+          "description": "Optional models for /pr-deep, which runs the same review as /pr-review with them.",
           "properties": {
-            "functional": {
-              "type": "string",
-              "description": "Exact provider/model ID for independent correctness review. Select for code comprehension, project language, boundary behavior, and regressions. May be empty; deep runs only when all three IDs are configured."
-            },
-            "risk": {
-              "type": "string",
-              "description": "Exact provider/model ID for independent risk review and comment planning. Select for cross-path failure analysis and reliable MCP tool use. May be empty; deep runs only when all three IDs are configured."
-            },
-            "verifier": {
-              "type": "string",
-              "description": "Exact provider/model ID for source-based verification, counterevidence, duplicate merging, and the final report. Select for evidence judgment, long context, and instruction following, not just summarization. May be empty; deep runs only when all three IDs are configured."
+            "reviewers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 0,
+              "maxItems": 4,
+              "default": [],
+              "description": "The review passes of /pr-deep, as models.review.reviewers: stronger models, the same model with a higher variant (provider/model#high), or more passes, for the PRs that need them. An empty list (the default) leaves /pr-deep off; it never falls back to the review models."
             },
             "rater": {
-              "type": "string",
-              "description": "Optional provider/model ID that turns on the severity rating of /pr-deep. Empty or missing: no rating runs. It does not count toward the three roles that turn deep mode on."
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "const": false
+                }
+              ],
+              "default": "",
+              "description": "Which model rates the severities: after the duplicate check, sessions without tools rate the reported findings from their text alone, without the level their reviewer gave them, so that the findings of different reviewers are levelled on one scale. \"\" (the default): the first model of reviewers. A provider/model ID: that model (it needs no tool support). false: no rating; the reviewers' own levels stay."
             }
           }
         },
         "quick": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Optional quick profile for /pr-quick: one reviewer per shard covers functional and risk focus, with no independent verification. An empty reviewer disables /pr-quick; it never falls back to other models.",
+          "description": "Optional models for /pr-quick, which runs the same review as /pr-review with them.",
           "properties": {
-            "reviewer": {
-              "type": "string",
-              "description": "Exact provider/model ID (optionally provider/model#variant) for the quick reviewer, which also plans comments for quick reviews. Select for code comprehension, evidence judgment and reliable tool use. May be empty."
+            "reviewers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 0,
+              "maxItems": 4,
+              "default": [],
+              "description": "The review passes of /pr-quick, as models.review.reviewers: usually one pass of a fast model. An empty list (the default) leaves /pr-quick off; it never falls back to other models."
+            },
+            "rater": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "const": false
+                }
+              ],
+              "default": "",
+              "description": "Which model rates the severities: after the duplicate check, sessions without tools rate the reported findings from their text alone, without the level their reviewer gave them, so that the findings of different reviewers are levelled on one scale. \"\" (the default): the first model of reviewers. A provider/model ID: that model (it needs no tool support). false: no rating; the reviewers' own levels stay."
             }
           }
         }
@@ -117,7 +129,7 @@
         "ja",
         "zh-Hant-TW"
       ],
-      "description": "Language for human-facing initial and final reviews, comment bodies, skip reasons and AI attribution. IDs, JSON keys, code, paths, source quotes and severity tokens remain unchanged."
+      "description": "Language for human-facing findings and reports, comment bodies, skip reasons and AI attribution. IDs, JSON keys, code, paths, source quotes and severity tokens remain unchanged."
     },
     "returnReport": {
       "enum": [
@@ -160,7 +172,7 @@
       "minimum": 10,
       "maximum": 7200,
       "default": null,
-      "description": "Optional whole-command timeout covering all stages. Null or omitted disables it; an integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual /pr-stop and per-call MCP timeouts remain available. This is not a spending cap."
+      "description": "Optional whole-command timeout covering all stages. Null or omitted disables it; an integer from 10 to 7200 enables it. The deadline is not reset between stages. Manual /pr-stop and the per-call timeout of Azure DevOps requests (azure.callTimeoutSeconds) remain available. This is not a spending cap."
     },
     "shell": {
       "enum": [
@@ -182,29 +194,44 @@
       "description": "Delete AZPR's private reviewer sessions when a command ends, except the one holding the review's report or draft (a comment run keeps none; all are kept while debug is enabled). The kept session is deleted when its review is evicted (the newest 20 reviews are kept), or for an unfinished review within the same 20-run limit. false keeps every session."
     },
     "terminalPanel": {
-      "enum": ["auto", "manual"],
+      "enum": [
+        "auto",
+        "manual"
+      ],
       "default": "auto",
       "description": "The panel AZPR adds to OpenCode's terminal UI (the sessions of a run, and its report or comment preview as rendered Markdown). auto: it opens by itself in the conversation on screen when a review or comment command starts and when a report or preview arrives, and leaves the keyboard with the prompt. manual: it opens only with /pr-panel. Other OpenCode clients have no panel and ignore this."
     },
     "afterReview": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What AZPR does after a COMPLETE review of each mode. preview (default): plan a comment preview as a separate command with its own receipt; planning uses a model and nothing is posted. none: nothing; run /pr-comment yourself. publish: plan the comments and post them as the PAT owner; a comment whose text has an @mention, or outside literal code an image, HTML that embeds content, runs a script or hides text, or a javascript:, vbscript:, data: or file:// link, waits in the preview for a person, and nothing is posted when every finding is already discussed on the PR. Quick review comments are posted with their not-independently-verified disclosure. A review without findings to comment on gets neither. A flag right after the PR URL (--preview, --publish or --no-comment) overrides this for one run.",
+      "description": "What AZPR does after a COMPLETE review of each mode. preview (default): plan a comment preview as a separate command with its own receipt; planning uses a model and nothing is posted. none: nothing; run /pr-comment yourself. publish: plan the comments and post them as the PAT owner; a comment whose text has an @mention, or outside literal code an image, HTML that embeds content, runs a script or hides text, or a javascript:, vbscript:, data: or file:// link, waits in the preview for a person, and nothing is posted when every finding is already discussed on the PR. Every comment is posted with the disclosure of its review's method: findings checked by their reviewer, no separate verification. A review without findings to comment on gets neither. A flag right after the PR URL (--preview, --publish or --no-comment) overrides this for one run.",
       "properties": {
         "quick": {
-          "enum": ["none", "preview", "publish"],
+          "enum": [
+            "none",
+            "preview",
+            "publish"
+          ],
           "default": "preview",
           "description": "After /pr-quick."
         },
         "review": {
-          "enum": ["none", "preview", "publish"],
+          "enum": [
+            "none",
+            "preview",
+            "publish"
+          ],
           "default": "preview",
           "description": "After /pr-review."
         },
         "deep": {
-          "enum": ["none", "preview", "publish"],
+          "enum": [
+            "none",
+            "preview",
+            "publish"
+          ],
           "default": "preview",
-          "description": "After /pr-deep; its comments are planned with models.deep.risk."
+          "description": "After /pr-deep; its comments are planned with the first model of models.deep.reviewers."
         }
       }
     },
@@ -279,14 +306,7 @@
           "minimum": 1,
           "maximum": 1000,
           "default": 25,
-          "description": "Changed files per initial-review session. A shard that hits its context limit is split automatically."
-        },
-        "shardFindings": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 500,
-          "default": 15,
-          "description": "Candidate findings per verification session."
+          "description": "Changed files per reviewer session. A shard that hits its context limit is split automatically."
         },
         "parallelSessions": {
           "type": "integer",

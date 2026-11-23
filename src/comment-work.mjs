@@ -1,5 +1,5 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
-import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewVerification } from './comments.mjs';
+import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewMethod, reviewVerification } from './comments.mjs';
 import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
@@ -275,8 +275,9 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   // Adjusted by a person after a preview, if they did; otherwise the publishable findings unchanged.
   const all = commentFindings(review);
   const adjustments = adjustmentInput(review);
-  // Only a quick review, which has no verifier, offers candidate duplicates to the planner.
-  const twice = reviewVerification(review) === 'none' ? mergeCandidates(all) : [];
+  // Only a quick review saved by 0.4.x, which merged no duplicates, offers candidate duplicates to the planner:
+  // a review of this pipeline had its duplicate check, and what that kept apart stays apart.
+  const twice = reviewMethod(review) === 'quick' ? mergeCandidates(all) : [];
   // Pages as they are without any repeated defect; they change only when the grouping pass proposes a group.
   let paged = candidatePages(all, twice);
   const sourceText = new Map();
@@ -325,7 +326,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         const grouped = await invoke({ reviewId: review.id, outputLanguage: review.outputLanguage, findings: listed, commentWork: { kind: 'group' } }, {
           async evaluate(answer) {
             const { result, issues, corrections } = evaluateGrouping(answer, { findings: eligible });
-            return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? groupingRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
+            // A parsed answer is usable: if a correction turn fails, it is finalized as it is.
+            return { result: result && { ...result, corrections }, issues, usable: Boolean(result), repairPrompt: issues.length ? groupingRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
           },
           async finalize(answer) {
             const { result, corrections } = evaluateGrouping(answer, { findings: eligible, final: true });
@@ -358,6 +360,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const text = await source(location.path);
       if (text === null) continue;
       const window = sourceWindow(text, location);
+      // A window with no line (a saved line past the end of the file) is no excerpt: the finding keeps its evidence index.
+      if (window.firstLine > window.lastLine) continue;
       const key = `${location.path}:${window.firstLine}-${window.lastLine}`;
       const entry = windows.get(key) ?? { path: location.path, version: review.snapshot.head, findingIds: [], ...window };
       entry.findingIds.push(finding.id);
@@ -411,7 +415,8 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const page = await invoke(payload, {
         async evaluate(answer) {
           const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options });
-          return { result: result && { ...result, corrections }, issues, repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
+          // A parsed page is usable: if a correction turn fails, it is finalized as it is, item by item.
+          return { result: result && { ...result, corrections }, issues, usable: Boolean(result), repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
         async finalize(answer) {
           const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });

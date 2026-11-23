@@ -22,7 +22,7 @@ const requiredFiles = [
     // The terminal part: what the panel shows, what setup asks (the server part shares its RPC definition), what the
     // panel's rows do, and the compiled view OpenCode loads (its JSX source, tui-view.jsx, is not installed).
     'tui-model.mjs', 'tui-setup.mjs', 'tui-actions.mjs', 'tui.js'].map(name => 'src/' + name),
-  ...['common', 'functional', 'risk', 'final', 'dedupe', 'rating', 'quick', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
+  ...['common', 'review', 'dedupe', 'rating', 'comment-policy', 'comment-plan'].map(name => 'src/prompts/' + name + '.md'),
 ];
 const roots = [];
 test.after(() => {
@@ -70,12 +70,15 @@ async function installedAgents(s) {
   const settings = validateSettings(JSON.parse(readFileSync(join(s.root, destination, 'settings.json'), 'utf8')));
   const prompts = Object.fromEntries(names.map(name => [name, readFileSync(join(s.root, destination, 'prompts', name + '.md'), 'utf8')]));
   const agents = buildAgents(settings, prompts);
-  // Review, deep and quick roles; the two rating roles need a rater, which these settings leave empty.
-  assert.equal(Object.keys(agents).length, 10);
-  // The installed rating prompt compiles once a rater is named.
+  // Review and deep, two passes each: per mode two reviewers, the duplicate check, the rating and two planners. Quick is off.
+  assert.equal(Object.keys(agents).length, 12);
+  assert.deepEqual(agents['azpr-review-rating'].model, agents['azpr-review-reviewer'].model, 'Without a named rater the first reviewer model rates.');
+  // The installed rating prompt compiles with a named rater as well, and no rating role exists where the rating is off.
   const rated = structuredClone(settings);
   rated.models.review.rater = 'team/rater';
   assert.deepEqual(buildAgents(rated, prompts)['azpr-review-rating'].model, { providerID: 'team', id: 'rater' });
+  rated.models.review.rater = false;
+  assert.equal(Object.hasOwn(buildAgents(rated, prompts), 'azpr-review-rating'), false);
   return agents;
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr + (result.error ?? '')); }
@@ -88,8 +91,8 @@ function original(s) {
 function clean(s) { assert.ok(!readdirSync(s.root).some(name => name.startsWith('.azpr-'))); }
 function profile(s) {
   const settings = JSON.parse(readFileSync(join(pkg, 'config/settings.example.json'), 'utf8'));
-  Object.assign(settings.models.review, { functional: 'team/functional', risk: 'team/risk', verifier: 'team/verifier' });
-  Object.assign(settings.models.deep, { functional: 'team/deep-functional', risk: 'team/deep-risk', verifier: 'team/deep-verifier' });
+  Object.assign(settings.models.review, { reviewers: ['team/first', 'team/second'] });
+  Object.assign(settings.models.deep, { reviewers: ['team/deep-first', 'team/deep-second'] });
   Object.assign(settings.azure, { organization: 'team', pat: TEAM_PAT });
   const file = join(s.temp, 'team.json');
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
@@ -176,13 +179,13 @@ test('replacement replaces the temporary entry symlink with a generated regular 
   original(s); clean(s);
 });
 
-test('36-file manual source package installs and compiles every role without optional files or npm', async () => {
-  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 36);
+test('33-file manual source package installs and compiles every role without optional files or npm', async () => {
+  const s = setup(); minimalSource(s); assert.equal(requiredFiles.length, 33);
   ok(install(s, ['--settings', profile(s)]));
   for (const name of ['README.md', 'docs', 'uninstall.sh', 'settings.schema.json', 'node_modules']) assert.ok(!existsSync(installed(s, name)));
   const agents = await installedAgents(s);
-  assert.deepEqual(agents['azpr-review-functional'].model, { providerID: 'team', id: 'functional' });
-  assert.deepEqual(agents['azpr-deep-verifier'].model, { providerID: 'team', id: 'deep-verifier' });
+  assert.deepEqual(agents['azpr-review-reviewer'].model, { providerID: 'team', id: 'first' });
+  assert.deepEqual(agents['azpr-deep-reviewerb'].model, { providerID: 'team', id: 'deep-second' });
   const before = readFileSync(installed(s, 'settings.json'), 'utf8');
   ok(install(s, ['--replace']));
   assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), before);
@@ -212,7 +215,7 @@ test('a stale settings example cannot reintroduce removed settings into a curren
   const defaults = JSON.parse(readFileSync(defaultsPath, 'utf8')); defaults.structuredOutput = true;
   writeFileSync(defaultsPath, JSON.stringify(defaults));
   const result = install(s, ['--replace', '--settings', file]); bad(result);
-  assert.match(result.stderr, /current version-2 nested model layout/);
+  assert.match(result.stderr, /current version-3 layout/);
   assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), before); original(s); clean(s);
 });
 
@@ -222,7 +225,7 @@ test('optional copy failures warn without preventing a valid source installation
   chmodSync(join(bin, 'cp'), 0o755);
   const result = install(s, ['--settings', profile(s)], { env: { ...process.env, PATH: bin + ':' + process.env.PATH } });
   ok(result); assert.match(result.stderr, /WARNING: Could not copy optional/);
-  assert.deepEqual((await installedAgents(s))['azpr-review-risk'].model, { providerID: 'team', id: 'risk' });
+  assert.deepEqual((await installedAgents(s))['azpr-review-reviewerb'].model, { providerID: 'team', id: 'second' });
   original(s); clean(s);
 });
 
@@ -241,8 +244,8 @@ test('replacement preserves chosen model mappings, language and bytes without a 
   assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), readFileSync(file, 'utf8'));
   assert.ok(!existsSync(join(s.root, 'azpr-v2-backups')));
   const agents = await installedAgents(s);
-  assert.match(agents['azpr-review-verifier'].system, /outputLanguage: zh-TW/);
-  for (const role of ['functional', 'risk', 'verifier']) assert.deepEqual(agents['azpr-review-' + role].permissions.find(rule => rule.action === 'shell'), { action: 'shell', resource: '*', effect: 'deny' });
+  assert.match(agents['azpr-review-reviewer'].system, /outputLanguage: zh-TW/);
+  for (const role of ['reviewer', 'reviewerb', 'dedupe', 'comment-plan']) assert.deepEqual(agents['azpr-review-' + role].permissions.find(rule => rule.action === 'shell'), { action: 'shell', resource: '*', effect: 'deny' });
   original(s); clean(s);
 });
 
@@ -254,57 +257,108 @@ test('explicit current-layout settings replace the installed model mapping witho
   original(s); clean(s);
 });
 
-test('installation omits only legacy help from supplied and replacement settings, including stale defaults', async () => {
-  const s=setup(), file=profile(s), settings=JSON.parse(readFileSync(file,'utf8'));
-  settings.models._help={functional:'PRIVATE_HELP_TEXT',risk:'Risk documentation',verifier:'Verifier documentation'};
-  settings.outputLanguage='zh-TW';settings.debug={enabled:true,directory:'private diagnostics'};settings.runTimeoutSeconds=2400;
-  const raw=JSON.stringify(settings,null,2)+'\n';writeFileSync(file,raw);
+// What AZPR 0.4.x installed or a person kept from it: the two reviewers, the verifier, a rater, documentation-only help,
+// the verifier's batch size and private values, in a layout of its own.
+const earlierSettings = () => ({ $schema: './settings.schema.json', version: 2,
+  models: { _help: { functional: 'PRIVATE_HELP_TEXT', risk: 'Risk documentation', verifier: 'Verifier documentation' },
+    review: { functional: 'team/functional', risk: 'team/risk', verifier: 'team/verifier', rater: '' },
+    deep: { functional: 'team/deep-functional', risk: 'team/deep-risk', verifier: 'team/deep-verifier', rater: 'team/deep-rater' }, quick: { reviewer: 'team/quick' } },
+  outputLanguage: 'zh-TW', debug: { enabled: true, directory: 'private diagnostics' }, runTimeoutSeconds: 2400, afterReview: { review: 'publish' },
+  azure: { organization: 'team', pat: TEAM_PAT, proxy: 'http://user:PRIVATE_WORD@proxy.example.com:8080' }, workflow: { shardFiles: 10, shardFindings: 7 } });
+
+test('settings of AZPR 0.4.x (version 2) are installed byte for byte, for /pr-setup to update', async () => {
+  const s = setup(), file = join(s.temp, 'earlier.json');
+  // Bytes a formatter would change: nothing of the file is rewritten, whatever it looks like.
+  const raw = JSON.stringify(earlierSettings(), null, '\t').replace('"version": 2', '"version":   2') + '\n\n';
+  writeFileSync(file, raw);
   minimalSource(s);
-  const defaultsPath=join(s.source,'config/settings.example.json');
-  const defaults=JSON.parse(readFileSync(defaultsPath,'utf8'));defaults.models._help=settings.models._help;
-  const defaultsRaw=JSON.stringify(defaults);writeFileSync(defaultsPath,defaultsRaw);
-  const expected=structuredClone(settings);delete expected.models._help;expected.debug.keepRuns=20;
-  for(const replacing of [false,true]) {
-    if(replacing) writeFileSync(installed(s,'settings.json'),raw);
-    const result=install(s,replacing?['--replace']:['--settings',file]);ok(result);
-    assert.match(result.stdout,/Removed documentation-only models\._help/);
-    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_HELP_TEXT|team\/|private diagnostics|team-private-pat/);
-    assert.deepEqual(JSON.parse(readFileSync(installed(s,'settings.json'),'utf8')),expected);
-    assert.equal(readFileSync(file,'utf8'),raw);assert.equal(readFileSync(defaultsPath,'utf8'),defaultsRaw);
-    assert.equal(statSync(installed(s,'settings.json')).mode & 0o777,0o600);
-    const agents=await installedAgents(s);
-    assert.deepEqual(agents['azpr-review-risk'].model,{providerID:'team',id:'risk'});
-    assert.match(agents['azpr-review-verifier'].system,/outputLanguage: zh-TW/);
-    original(s);clean(s);
+  for (const replacing of [false, true]) {
+    const result = install(s, replacing ? ['--replace'] : ['--settings', file]); ok(result);
+    assert.match(result.stdout, /^Settings of AZPR 0\.4\.x \(settings version 2\) were kept exactly as they are\. This version does not use them until they are updated: restart OpenCode and run \/pr-setup, which shows what changes and writes the new file after you confirm\.$/m);
+    assert.doesNotMatch(result.stdout, /Settings defaults added/, 'No default of this version is merged into a file of the earlier layout.');
+    assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_HELP_TEXT|PRIVATE_WORD|team\/|private diagnostics|team-private-pat/);
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), raw);
+    assert.equal(readFileSync(file, 'utf8'), raw);
+    assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
+    original(s); clean(s);
   }
-  const cleanBytes=readFileSync(installed(s,'settings.json'),'utf8');
-  const result=install(s,['--replace']);ok(result);
-  assert.doesNotMatch(result.stdout,/Removed documentation-only/);
-  assert.equal(readFileSync(installed(s,'settings.json'),'utf8'),cleanBytes);
-  original(s);clean(s);
+  // The installed code does not run such a file, says what to do, and can turn it into the current layout.
+  const { validateSettings, migrateSettings, MIGRATION_NEEDED } = await import(pathToFileURL(installed(s, 'config.mjs')).href);
+  const kept = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
+  assert.throws(() => validateSettings(kept), error => error.needsMigration === true && error.message === MIGRATION_NEEDED);
+  const { settings } = migrateSettings(kept);
+  assert.deepEqual(settings.models, { review: { reviewers: ['team/functional', 'team/risk'], rater: '' }, deep: { reviewers: ['team/deep-functional', 'team/deep-risk'], rater: 'team/deep-rater' }, quick: { reviewers: ['team/quick'], rater: '' } });
+  assert.deepEqual(validateSettings(settings).workflow.shardFiles, 10);
+  // The file that the update writes is a current one: a later replacement only adds what it leaves out.
+  writeFileSync(installed(s, 'settings.json'), JSON.stringify(settings, null, 2) + '\n');
+  const later = install(s, ['--replace']); ok(later);
+  assert.match(later.stdout, /^Settings defaults added: enabled, returnReport, /m);
+  assert.doesNotMatch(later.stdout, /version 2/);
+  assert.deepEqual(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).models, settings.models);
+  // Line endings are bytes like any others: a file written with CRLF stays CRLF, by both ways in.
+  const crlf = JSON.stringify(earlierSettings(), null, 2).replace(/\n/g, '\r\n') + '\r\n';
+  writeFileSync(file, crlf);
+  for (const replacing of [false, true]) {
+    if (replacing) writeFileSync(installed(s, 'settings.json'), crlf);
+    else rmSync(installed(s, ''), { recursive: true, force: true });
+    ok(install(s, replacing ? ['--replace'] : ['--settings', file]));
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), crlf, replacing ? '--replace' : '--settings');
+  }
+  // A version written as 2.0 or 2e0 is 2, as JSON reads it and as 0.4.6 took it; a string is no version.
+  for (const written of ['2.0', '2e0']) {
+    const text = JSON.stringify(earlierSettings(), null, 2).replace('"version": 2', `"version": ${written}`) + '\n';
+    assert.ok(text.includes(`"version": ${written}`));
+    writeFileSync(installed(s, 'settings.json'), text);
+    const result = install(s, ['--replace']); ok(result);
+    assert.match(result.stdout, /settings version 2\) were kept exactly as they are/, written);
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), text, written);
+  }
+  writeFileSync(installed(s, 'settings.json'), JSON.stringify({ ...earlierSettings(), version: '2' }));
+  assert.notEqual(install(s, ['--replace']).status, 0, 'A version written as a string is refused.');
+  // Whatever else a version-2 file holds is the person's and stays: retired sections, unknown names, odd values.
+  for (const extra of [{ mcp: { server: 'ado', concurrency: 5 } }, { models: { freeB: 'private/old' } }, { models: 'private/old' }, { steps: { initial: 60 } }, { custom: { array: [1, 2], value: null } }]) {
+    const odd = JSON.stringify({ version: 2, ...extra });
+    writeFileSync(installed(s, 'settings.json'), odd);
+    const result = install(s, ['--replace']); ok(result);
+    assert.match(result.stdout, /settings version 2\) were kept exactly as they are/);
+    assert.doesNotMatch(result.stdout + result.stderr, /private\/old/);
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), odd);
+  }
+  original(s); clean(s);
 });
 
-test('malformed legacy help is preserved instead of discarding unrecognized settings data', () => {
-  const s=setup(), file=profile(s);ok(install(s,['--settings',file]));
-  const baseline=JSON.parse(readFileSync(file,'utf8'));
-  for(const help of [null,[],42,{risk:false},{unknown:'PRIVATE_HELP_VALUE'}]) {
-    const settings=structuredClone(baseline);settings.models._help=help;
-    const raw=JSON.stringify(settings);writeFileSync(installed(s,'settings.json'),raw);
-    const result=install(s,['--replace']);bad(result);
-    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_HELP_VALUE/);
-    assert.equal(readFileSync(installed(s,'settings.json'),'utf8'),raw);
-    original(s);clean(s);
+test('a current settings file with the model names of 0.4.x is refused and preserved, never stamped with this version', () => {
+  const s = setup(), file = profile(s); ok(install(s, ['--settings', file]));
+  const baseline = JSON.parse(readFileSync(file, 'utf8'));
+  const earlier = earlierSettings();
+  for (const change of [
+    // Documentation-only help is no setting of version 3, whatever it holds.
+    settings => { settings.models._help = { functional: 'PRIVATE_HELP_VALUE' }; }, settings => { settings.models._help = null; }, settings => { settings.models._help = []; },
+    // The earlier layout under this version's number, or under none: an update could no longer find it.
+    settings => { settings.models = earlier.models; }, settings => { settings.models = earlier.models; delete settings.version; },
+    settings => { settings.models.review.verifier = 'team/PRIVATE_HELP_VALUE'; }, settings => { settings.models.quick = { reviewer: 'team/PRIVATE_HELP_VALUE' }; },
+    settings => { settings.models.deep.reviewers = 'team/PRIVATE_HELP_VALUE'; },
+  ]) {
+    const settings = structuredClone(baseline); change(settings);
+    const raw = JSON.stringify(settings); writeFileSync(installed(s, 'settings.json'), raw);
+    const result = install(s, ['--replace']); bad(result);
+    assert.match(result.stderr, /current version-3 layout \(a list of reviewer models per mode\)/);
+    assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_HELP_VALUE|team\//);
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), raw);
+    original(s); clean(s);
   }
 });
 
 test('current partial settings merge only missing defaults and preserve existing values', () => {
   const s = setup(), file = join(s.temp, 'partial.json');
-  const partial = { version: 2, models: { review: { functional: 'team/new' } }, outputLanguage: 'zh-TW', enabled: false, debug: { enabled: true }, custom: { array: [1, 2], value: null } };
+  const partial = { version: 3, models: { review: { reviewers: ['team/new'] } }, outputLanguage: 'zh-TW', enabled: false, debug: { enabled: true }, custom: { array: [1, 2], value: null } };
   const raw = JSON.stringify(partial); writeFileSync(file, raw);
   const result = install(s, ['--settings', file]); ok(result);
   assert.doesNotMatch(result.stdout + result.stderr, /team\/new/);
   const merged = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
-  assert.equal(merged.models.review.functional, 'team/new');
+  // A list is one value: the chosen models are kept, never mixed with the example's placeholders.
+  assert.deepEqual(merged.models, { review: { reviewers: ['team/new'], rater: '' }, deep: { reviewers: [], rater: '' }, quick: { reviewers: [], rater: '' } });
+  assert.equal(merged.version, 3);
   assert.deepEqual(merged.debug, { enabled: true, directory: '', keepRuns: 20 });
   for(const key of ['comments','auxiliaryModels','outputRetries']) assert.equal(Object.hasOwn(merged,key),false);
   for (const key of ['enabled', 'outputLanguage', 'custom']) assert.deepEqual(merged[key], partial[key]);
@@ -313,23 +367,31 @@ test('current partial settings merge only missing defaults and preserve existing
   original(s); clean(s);
 });
 
-test('replacement adds an empty quick reviewer and an empty rater to settings without them and keeps every other value', () => {
+test('replacement adds the empty quick list and an empty rater to settings without them and keeps every other value', () => {
   const s = setup(); ok(install(s));
   const file = installed(s, 'settings.json'), settings = JSON.parse(readFileSync(file, 'utf8'));
   delete settings.models.quick;
-  settings.models.review = { functional: 'team/f', risk: 'team/r', verifier: 'team/v' };
+  settings.models.review = { reviewers: ['team/a', 'team/b'] };
   writeFileSync(file, JSON.stringify(settings));
   const result = install(s, ['--replace']); ok(result);
-  assert.match(result.stdout, /Settings defaults added: models\.review\.rater, models\.quick/);
+  assert.match(result.stdout, /Settings defaults added: models\.review\.rater, models\.quick\n/);
   const merged = JSON.parse(readFileSync(file, 'utf8'));
-  assert.deepEqual(merged.models.quick, { reviewer: '' }, '/pr-quick stays off until a model is chosen.');
-  // An empty rater leaves the severity rating off; the chosen models are untouched.
+  assert.deepEqual(merged.models.quick, { reviewers: [], rater: '' }, '/pr-quick stays off until a model is chosen.');
+  // An empty rater lets the first reviewer model rate; the chosen models are untouched.
   assert.deepEqual(merged.models.review, { ...settings.models.review, rater: '' });
-  // A configured quick reviewer is kept as it is.
-  merged.models.quick.reviewer = 'team/quick';
+  // Configured quick reviewers are kept as they are, and so is a rating that was turned off: false is a value.
+  merged.models.quick.reviewers = ['team/quick', 'team/quick'];
+  merged.models.review.rater = false;
   writeFileSync(file, JSON.stringify(merged));
-  ok(install(s, ['--replace']));
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).models.quick.reviewer, 'team/quick');
+  const again = install(s, ['--replace']); ok(again);
+  assert.match(again.stdout, /Settings defaults added: none\./);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).models, merged.models);
+  // A file that names no version is taken for a current one and gains the version with the other defaults.
+  const { version: _version, ...unversioned } = merged;
+  writeFileSync(file, JSON.stringify(unversioned));
+  const stamped = install(s, ['--replace']); ok(stamped);
+  assert.match(stamped.stdout, /Settings defaults added: version\n/);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { ...unversioned, version: 3 });
   for (const reserved of ['pr-quick']) {
     const t = setup(); writeFileSync(join(t.root, 'opencode.json'), JSON.stringify({ command: { [reserved]: { template: 'x' } } }));
     const refused = install(t); assert.notEqual(refused.status, 0); assert.match(refused.stderr, /Reserved command\/agent keys/);
@@ -348,7 +410,7 @@ for (const value of [undefined, null, 2400]) test(`current profile preserves tim
   original(s); clean(s);
 });
 
-for (const raw of ['{"private":"DO_NOT_PRINT",}', '{"version":2,"version":2}', '{"models":{"review":{},"review":{}}}', '[]', 'null', '{"value":NaN}', '{"value":1e999}']) {
+for (const raw of ['{"private":"DO_NOT_PRINT",}', '{"version":2,"version":2}', '{"version":3,"version":3}', '{"version":2,"models":{"review":{},"review":{}}}', '{"models":{"review":{},"review":{}}}', '[]', 'null', '{"value":NaN}', '{"version":2,"value":1e999}']) {
   test(`invalid JSON settings fail before replacing installed files: ${raw}`, () => {
     const s = setup(); ok(install(s)); const file = installed(s, 'settings.json'); writeFileSync(file, raw);
     const before = readFileSync(installed(s, 'runtime.mjs'), 'utf8');
@@ -360,14 +422,14 @@ for (const raw of ['{"private":"DO_NOT_PRINT",}', '{"version":2,"version":2}', '
 }
 
 for (const invalid of [
-  { version: 1 }, { version: 3 }, { version: true }, { version: '2' },
-  { models: { freeA: 'private/old' } }, { version: 2, models: { freeB: 'private/old' } },
-  { version: 2, models: { deep: 'private/old' } }, { models: null },
-  { steps: { initial: 60 } }, { maxStageCharacters: null }, { structuredOutput: false }, { mcp: 'legacy' }, { azure: 'legacy' },
+  { version: 1 }, { version: 4 }, { version: true }, { version: '2' }, { version: '3' }, { version: 2.5 }, { version: null },
+  { models: { freeA: 'private/old' } }, { version: 3, models: { freeB: 'private/old' } },
+  { version: 3, models: { deep: 'private/old' } }, { models: null },
+  { steps: { initial: 60 } }, { maxStageCharacters: null }, { structuredOutput: false }, { azure: 'legacy' },
   { comments: { enabled: false, maxComments: 5 } }, { auxiliaryModels: "preserve" }, { outputRetries: 0 },
-]) test(`removed settings and V1 profiles are rejected without migration: ${JSON.stringify(invalid)}`, () => {
+]) test(`removed settings, V1 profiles and unknown versions are rejected without migration: ${JSON.stringify(invalid)}`, () => {
   const s = setup(); ok(install(s)); const file = installed(s, 'settings.json'), raw = JSON.stringify(invalid); writeFileSync(file, raw);
-  const result = install(s, ['--replace']); bad(result); assert.match(result.stderr, /current version-2 nested model layout/);
+  const result = install(s, ['--replace']); bad(result); assert.match(result.stderr, /current version-3 layout/);
   assert.doesNotMatch(result.stdout + result.stderr, /private\/old/);
   assert.equal(readFileSync(file, 'utf8'), raw); assert.ok(existsSync(installed(s, 'runtime.mjs')));
   original(s); clean(s);
@@ -471,7 +533,7 @@ test('XDG paths with spaces work and JSON strings are never executed', () => {
 test('failed replacement restores the original package and settings exactly', () => {
   const s = setup(); ok(install(s, ['--settings', profile(s)]));
   const settings=JSON.parse(readFileSync(installed(s,'settings.json'),'utf8'));
-  settings.models._help={functional:'Legacy documentation must survive a failed replacement.'};
+  settings.debug={enabled:true,directory:'A private value that must survive a failed replacement.'};
   writeFileSync(installed(s,'settings.json'),JSON.stringify(settings,null,2)+'\n');
   const files = ['runtime.mjs', 'settings.json', 'plugin.js', 'server.js', 'package.json'];
   const before = files.map(file => readFileSync(installed(s, file), 'utf8'));
@@ -546,24 +608,14 @@ test('uninstall without a V2 installation preserves old integrations and creates
   assert.ok(!existsSync(join(s.root, 'azpr-v2-backups'))); original(s); clean(s);
 });
 
-test('replacement moves the retired mcp limits into azure and never prints the PAT', async () => {
+test('a configured PAT survives replacement byte for byte and is never printed', () => {
   const s = setup(), file = profile(s); ok(install(s, ['--settings', file]));
-  const settings = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
-  delete settings.azure;
-  settings.mcp = { server: 'ado', concurrency: 5, callTimeoutSeconds: 300 };
-  writeFileSync(installed(s, 'settings.json'), JSON.stringify(settings, null, 2));
-  const result = install(s, ['--replace']); ok(result);
-  assert.match(result.stdout, /Moved mcp\.concurrency\/callTimeoutSeconds to azure/);
-  const migrated = JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8'));
-  assert.equal(Object.hasOwn(migrated, 'mcp'), false);
-  assert.deepEqual(migrated.azure, { concurrency: 5, callTimeoutSeconds: 300, organization: '', pat: '', patFile: '', archiveMegabytes: 100, proxy: '', caFile: '', verifyTls: true });
-  assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
-  // A configured PAT survives replacement byte for byte and is never echoed.
-  migrated.azure.organization = 'team'; migrated.azure.pat = TEAM_PAT;
-  writeFileSync(installed(s, 'settings.json'), JSON.stringify(migrated, null, 2) + '\n');
+  const before = readFileSync(installed(s, 'settings.json'), 'utf8');
   const again = install(s, ['--replace']); ok(again);
   assert.doesNotMatch(again.stdout + again.stderr, /team-private-pat/);
-  assert.equal(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).azure.pat, TEAM_PAT);
+  assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), before);
+  assert.equal(JSON.parse(before).azure.pat, TEAM_PAT);
+  assert.equal(statSync(installed(s, 'settings.json')).mode & 0o777, 0o600);
   original(s); clean(s);
 });
 

@@ -148,7 +148,9 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 ## Who calls what
 
 - **Runtime** (deterministic code): the snapshot (PR, iterations, all change
-  pages, commit messages), the final version recheck and the pre-publication recheck (PR and
+  pages, commit messages), the check of every finding's location (the file at
+  the reviewed commit, from the run's cache where a session read it already),
+  the final version recheck and the pre-publication recheck (PR and
   iterations), `/pr-check` reads, the discussion digest for comment planning,
   HEAD source excerpts for planning, thread creation and marker read-back.
 - **Reviewers** (models) use six read-only AZPR tools, visible only in AZPR's
@@ -187,7 +189,9 @@ but AZPR accepts only Azure DevOps Services URLs (`dev.azure.com/<org>` and
 
   Ordinary OpenCode sessions do not see these tools, and private sessions see no
   other tools except native read/glob/grep (and shell when the `shell` setting
-  allows it). There are no write tools for models.
+  allows it). The duplicate check and the comment planner have the same tools
+  as the reviewers; the severity rating's sessions have none. There are no
+  write tools for models.
 
 ## Snapshot semantics
 

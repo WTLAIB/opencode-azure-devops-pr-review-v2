@@ -67,7 +67,7 @@ test('URL identity separates organization, project and repository and rejects un
 
 test('removed settings cannot configure a V1 transport; the retired mcp section names its replacement', async () => {
   const s = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
-  s.models = { review: { functional: 'fixture/a', risk: 'fixture/b', verifier: 'fixture/c' } };
+  s.models = { review: { reviewers: ['fixture/a', 'fixture/b'] } };
   s.azure = { organization: 'org', pat: 'fixture-pat-0123456789abcdef' };
   for (const key of ['structuredOutput', 'steps', 'maxStageCharacters']) {
     assert.throws(() => validateSettings({ ...s, [key]: false }), /Unknown setting/);
@@ -100,10 +100,10 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(listOf({}), null);
   assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
-  const capabilities = hostCapabilities({ app: { version: '2.3.0' }, permission: { hook() {} }, tool: { transform() {} } });
+  const capabilities = hostCapabilities({ app: { version: '2.3.2' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
-  assert.equal(TESTED_HOST_VERSION, '2.3.0');
-  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.1']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
+  assert.equal(TESTED_HOST_VERSION, '2.3.2');
+  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.0', '2.3.1', '2.3.3']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);

@@ -15,6 +15,7 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const markerTag = fingerprint => `<!-- azpr-comment:${fingerprint} -->`;
 const escapeComments = value => value.replaceAll('<!--', '&lt;!--').replaceAll('-->', '--&gt;');
 
+/** The findings of a verified review saved by 0.4.x: what its verifier confirmed, and what it added. */
 export function confirmedFindings(review) {
   // Initial candidates remain audit data. Only verifier-corrected claims count;
   // a moved finding's initial location stays in the report, not in the claim.
@@ -24,36 +25,89 @@ export function confirmedFindings(review) {
 }
 
 /**
- * Whether a saved review's findings were independently verified: "none" for a
- * quick review, "independent" for review and deep. Reviews saved before this
- * field existed are known only by their profile; anything else is null and is
- * never commented on.
+ * How a saved review's findings were produced, which decides what of it may
+ * become comments and what its comments say about it:
+ * - 'reviewers': this pipeline (reviewer passes, a duplicate check, a rating; no
+ *   verification). The record says so itself, with `method` and
+ *   `verification: 'none'`, and both must be there.
+ * - 'verified': a /pr-review or /pr-deep saved by 0.4.x, whose findings a
+ *   verifier confirmed: `verification: 'independent'`, or no such field at all
+ *   in records older than it.
+ * - 'quick': a /pr-quick saved by 0.4.x (`verification: 'none'`, no method).
+ * - null: anything else: a method this version does not know, or fields that
+ *   contradict each other. Such a review can be listed and shown; it is never
+ *   planned, adjusted or published.
  */
-export function reviewVerification(review) {
-  if (review?.verification === 'none' || review?.verification === 'independent') return review.verification;
-  if (review?.verification === undefined && ['review', 'deep'].includes(review?.profile)) return 'independent';
+export function reviewMethod(review) {
+  const profile = review?.profile;
+  if (review?.method !== undefined) {
+    return isObject(review.method) && review.method.kind === 'reviewers' && review.method.version === 1 && review.verification === 'none'
+      && ['review', 'deep', 'quick'].includes(profile) ? 'reviewers' : null;
+  }
+  if (review?.verification === 'none') return profile === 'quick' ? 'quick' : null;
+  if (review?.verification === 'independent' || review?.verification === undefined) return ['review', 'deep'].includes(profile) ? 'verified' : null;
   return null;
 }
 
 /**
- * The findings comment planning may use: verified ones (CONFIRMED and verifier
- * additions) for review and deep; for a quick review the REPORTED ones, which
- * passed the runtime's checks but were not independently verified. A quick
- * finding whose location cannot carry an inline comment says `inline: false`.
+ * Whether a saved review's findings were independently verified, as its
+ * comments disclose it: "independent" for a verified review of 0.4.x, "none"
+ * for every other review whose method is known, null where it is not.
+ */
+export function reviewVerification(review) {
+  const method = reviewMethod(review);
+  return method === 'verified' ? 'independent' : method ? 'none' : null;
+}
+
+/**
+ * The findings comment planning may use. A review of this pipeline, and a
+ * quick review of 0.4.x: the REPORTED ones that were not merged, which passed
+ * the runtime's checks and were not independently verified; one whose location
+ * cannot carry an inline comment says `inline: false`. A verified review of
+ * 0.4.x: the verifier's CONFIRMED findings and its additions. A review whose
+ * method is unknown has none.
  */
 export function publishableFindings(review) {
-  if (reviewVerification(review) !== 'none') return confirmedFindings(review);
+  const method = reviewMethod(review);
+  if (method === 'verified') return confirmedFindings(review);
+  if (!method) return [];
   return review.final.dispositions.filter(d => d.status === 'REPORTED' && isObject(d.finding))
     .map(({ id, finding, inline, shard }) => ({ ...finding, id, ...(inline === false ? { inline: false } : {}), ...(shard ? { shard } : {}) }));
 }
 
-/** "head:/src/a.ts:12-14" -> { side, path, start, end }; null when no path. A location without a side is HEAD. */
+/**
+ * Where a finding's location points, in every form a review of this version or of 0.4.x saved it:
+ * "head:/src/a.ts:12-14" -> { side, path, start, end }, also a structured location (JSON, or an object, with
+ * side, path, lineStart and lineEnd) and a path without its leading slash or with "./". A location without a side
+ * is HEAD, and a side is one only with its colon, so that "base/a.ts" is a path. null where it names no file.
+ * Every reading of a location goes through here: excerpts, skips, placement and the other places alike.
+ */
 export function parseLocation(location) {
-  const match = /^(?:(head|base):?)?:?(\/[^:]+?)(?::(\d+)(?:-(\d+))?)?\s*$/.exec(String(location ?? '').trim());
-  if (!match) return null;
-  const start = match[3] ? Number(match[3]) : null;
-  return { side: match[1] ?? 'head', path: match[2], start, end: match[4] ? Number(match[4]) : start };
+  let value = location;
+  if (typeof value === 'string' && value.trim().startsWith('{')) { try { value = JSON.parse(value); } catch { /* A string location. */ } }
+  if (value && typeof value === 'object') {
+    // Its path is a field of its own, so a colon in it is part of the name; its range is kept as written (a
+    // reversed one as the text form "3-2" is), and an end it leaves out is its start.
+    const side = value.side ?? 'head';
+    if (!['head', 'base'].includes(side) || typeof value.path !== 'string' || !value.path.startsWith('/') || /[\0\r\n]/.test(value.path)) return null;
+    // An end it leaves out is its start; an end it gives that is no line number leaves the range unknown, as a
+    // start that is none does: the file still takes a comment for one finding, and the place no other.
+    const start = Number.isSafeInteger(value.lineStart) && value.lineStart > 0 ? value.lineStart : null;
+    const end = value.lineEnd === undefined || value.lineEnd === null ? start : Number.isSafeInteger(value.lineEnd) && value.lineEnd > 0 ? value.lineEnd : null;
+    return { side, path: value.path, start: start && end ? start : null, end: start && end ? end : null };
+  }
+  const text = String(value ?? '').trim();
+  const side = /^(head|base):/.exec(text)?.[1], rest = side ? text.slice(side.length + 1) : text;
+  const match = /^([^:]+?)(?::(\d+)(?:-(\d+))?)?\s*$/.exec(rest.replace(/^(?:\.\/)+/, '').replace(/^\/+/, ''));
+  if (!match || /[\0\r\n]/.test(match[1])) return null;
+  // A bare word with neither a side, a leading slash or "./", a slash inside nor a line is no location.
+  if (!side && !/^(?:\.\/|\/)/.test(rest) && !match[2] && !match[1].includes('/')) return null;
+  const start = match[2] ? Number(match[2]) : null;
+  return { side: side ?? 'head', path: `/${match[1]}`, start, end: match[3] ? Number(match[3]) : start };
 }
+
+/** The file a finding's location names (`parseLocation`); null where it names none. */
+export const ownFile = location => parseLocation(location)?.path ?? null;
 
 /** A finding's place as a comment lists it: "/src/a.ts:12-14". */
 export function placeOf(finding) {
@@ -115,12 +169,13 @@ export function repeatProblems(members) {
   return { problems };
 }
 
-// A finding ID as a text names it (F-1, Q-1001, V-2).
-const FINDING_ID = /(?<![A-Za-z0-9_-])[A-Za-z]+-\d+(?!\d)/g;
+// A finding ID as a text names it (F-1, and in reviews of 0.4.x also R-2, Q-1001, V-2): not inside a name, but
+// also where Markdown emphasis wraps it in underscores (_F-1_).
+const FINDING_ID = /(?<![A-Za-z0-9-])(?<![A-Za-z0-9-]_+)[A-Za-z]+-\d+(?!\d)/g;
 
 /**
- * Other findings of this review that a skip reason names. The verifier already
- * merged duplicates, so another finding's comment never covers a finding.
+ * Other findings of this review that a skip reason names. Duplicates were
+ * merged before planning, so another finding's comment never covers a finding.
  */
 function citedFindings(reason, own, findingIds) {
   const named = String(reason).match(FINDING_ID) ?? [];
@@ -246,7 +301,7 @@ export function commentToken(review) {
  * they are now (`commentToken`), which a command picked from this offer hands back. Undefined for a review
  * with more findings than the panel lists: half a list would let a person replace adjustments they cannot see.
  */
-export function previewActions(review, { held = false } = {}) {
+export function previewActions(review, { held = false, plannable = true } = {}) {
   const findings = publishableFindings(review);
   if (findings.length > ACTION_FINDINGS) return undefined;
   const { excluded, severity } = adjustmentsOf(review);
@@ -255,10 +310,11 @@ export function previewActions(review, { held = false } = {}) {
     review: review.id,
     state: commentToken(review),
     target: describeReview(review),
-    plan: !review.plan,
+    // Planning and adjusting need a model of the review's mode (`plannable`); posting a saved preview needs none.
+    plan: !review.plan && plannable,
     publish: Boolean(review.plan) && !held && !everyFindingExcluded(review),
     posts: publicationItems(review.plan).length,
-    adjust: !publicationStarted(review),
+    adjust: !publicationStarted(review) && plannable,
     findings: findings.map(finding => ({
       id: finding.id,
       severity: Object.hasOwn(severity, finding.id) ? severity[finding.id] : finding.severity,
@@ -284,10 +340,14 @@ export function resolveAdjustments(review, { exclude, severity, reset = false })
   const findings = publishableFindings(review);
   const byId = new Map(findings.map(finding => [finding.id, finding]));
   const problems = [];
+  const rows = review.final?.dispositions ?? [];
   const check = id => {
     if (byId.has(id)) return;
-    const row = (review.final?.dispositions ?? []).find(item => item.id === id);
-    problems.push(row?.status === 'MERGED' && row.mergedInto ? `${id} was merged into ${row.mergedInto}; adjust ${row.mergedInto} instead`
+    const row = rows.find(item => item.id === id);
+    // A merged finding names the finding that stands for it, through every link of a chain (0.4.x saved some).
+    let target = row?.status === 'MERGED' ? row.mergedInto : undefined;
+    for (const seen = new Set([id]); target && !byId.has(target) && !seen.has(target);) { seen.add(target); target = rows.find(item => item.id === target)?.mergedInto; }
+    problems.push(row?.status === 'MERGED' && byId.has(target) ? `${id} was merged into ${target}; adjust ${target} instead`
       : row ? `${id} is ${row.status}, not a finding this review can publish` : `${id} is not a finding of review ${review.id}`);
   };
   for (const id of [...(exclude ?? []), ...Object.keys(severity ?? {})]) check(id);
@@ -381,8 +441,23 @@ export function describeEarlierText(review, otherComments = 0) {
  * change. Only IDs written as the runtime writes them are found. Returns
  * readable rows; [] when nothing names an excluded finding.
  */
-export function excludedReferences(review) {
+/**
+ * The findings a person excluded, and those merged into one of them: a text that names a merged finding names
+ * the finding that stands for it.
+ */
+function excludedIds(review) {
   const excluded = new Set(adjustmentsOf(review).excluded);
+  // Through every link of a chain (a review of 0.4.x may hold F-1 -> F-2 -> R-1), in whatever order the rows are.
+  const merged = (review?.final?.dispositions ?? []).filter(row => row?.status === 'MERGED');
+  for (let grown = true; grown;) {
+    grown = false;
+    for (const row of merged) if (excluded.has(row.mergedInto) && !excluded.has(row.id)) { excluded.add(row.id); grown = true; }
+  }
+  return excluded;
+}
+
+export function excludedReferences(review) {
+  const excluded = excludedIds(review);
   if (!excluded.size || !review?.plan) return [];
   const rows = [];
   for (const item of publicationItems(review.plan)) {
@@ -712,7 +787,10 @@ export function restoreAnchor(comment, review) {
   });
   const declared = new Map();
   for (const observation of observations) {
+    // Split only as far as the range needs; the empty element after a final line break is no line of the file,
+    // as in the search below.
     const lines = observation.output.split(/\r?\n/, comment.endLine + 1);
+    if (lines.at(-1) === '' && lines.length <= comment.endLine) lines.pop();
     const selected = lines.slice(comment.startLine - 1, comment.endLine), anchor = selected.join('\n');
     if (selected.length === count && forms.has(trim(anchor))) declared.set(JSON.stringify([anchor]), { anchor, startLine: comment.startLine, endLine: comment.endLine });
   }
@@ -907,12 +985,12 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     status = 'READY';
   }
   const eligible = new Map(assigned.map(finding => [finding.id, finding]));
-  // Findings a person excluded after a preview: no published text may name them.
-  const excluded = new Set(adjustmentsOf(review).excluded);
+  // Findings a person excluded after a preview, and those merged into them: no published text may name them.
+  const excluded = excludedIds(review);
   const changed = new Set(review.snapshot.files.map(path => path.startsWith('/') ? path : '/' + path));
-  // Quick findings were not independently verified: an inline comment needs a
-  // checked location and an anchor found in source text the runtime read.
-  const quick = reviewVerification(review) === 'none';
+  // Findings that nothing verified after their reviewer (every review of this pipeline, and a quick review of
+  // 0.4.x): an inline comment needs a checked location and an anchor found in source text the runtime read.
+  const unverified = reviewVerification(review) === 'none';
   const comments = [], skipped = [], handled = new Set(), reported = new Set(), refusedCombinations = [];
   const skip = (findingId, reason, extra = {}) => { if (!handled.has(findingId)) { handled.add(findingId); skipped.push({ findingId, reason, ...extra }); } };
   // A location that can carry an inline comment: on a changed HEAD file whose text the page shows.
@@ -924,7 +1002,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   // Body, path and anchor of one inline comment; `lines` bounds the anchor of a combined comment.
   function draft(c, label, severity, lines) {
     const problems = [];
-    if (String(c.severity ?? '').toLowerCase() !== severity) corrections.push({ action: 'use-verified-severity', findingId: label });
+    if (String(c.severity ?? '').toLowerCase() !== severity) corrections.push({ action: 'use-review-severity', findingId: label });
     const body = nonempty(c.body) ? escapeComments(normalizeTitle(c.body, severity)) : '';
     if (!body) problems.push('body is empty');
     else if (body.length > INLINE_SOFT_LIMIT && !final) problems.push(`body is ${body.length} characters; keep it within ${INLINE_SOFT_LIMIT}`);
@@ -953,7 +1031,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       restored = restoreAnchor({ path, startLine, endLine, anchor }, review);
       if (restored.startLine !== startLine) corrections.push({ action: 'restore-anchor-location', findingId: label, from: startLine, to: restored.startLine });
       if (restored.ambiguous && !final) problems.push('the anchor text appears several times in the observed source; quote more lines to make it unique');
-      else if (quick && !restored.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
+      else if (unverified && !restored.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
       else if (lines && (restored.startLine < lines.start || restored.endLine > lines.end)) problems.push(`the anchor must lie within lines ${lines.start}-${lines.end}, which every combined finding covers`);
     }
     if (problems.length) return { problems };
@@ -969,9 +1047,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     const members = ids.map(id => eligible.get(id));
     const problems = [];
     const listed = group => ids.every(id => group.includes(id));
-    const twice = quick && candidates.some(listed), repeated = !twice && repeats.some(listed);
+    const twice = unverified && candidates.some(listed), repeated = !twice && repeats.some(listed);
     let lines;
-    if (!(quick && candidates.length) && !repeats.length) problems.push('findingIds may combine only the findings of one listed group (mergeCandidates or repeatCandidates)');
+    if (!(unverified && candidates.length) && !repeats.length) problems.push('findingIds may combine only the findings of one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => !member)) problems.push(`${ids.filter(id => !eligible.has(id)).join(', ')} not assigned to this page`);
     else if (!twice && !repeated) problems.push('the findings are not all in one listed group (mergeCandidates or repeatCandidates)');
     else if (members.some(member => handled.has(member.id))) problems.push('a combined finding already has a comment or skip');
@@ -995,7 +1073,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       problems.push(...drafted.problems);
       // Where the comment stands follows from the lines it quotes, so they must be lines the file has:
       // the quote is found in the HEAD text, also for a review whose single comments need not be, and
-      // ends within the file (a quote that adds an empty line after the last one is found, but is no line).
+      // ends within the file (where the file's line count is known, it is checked below as well).
       if (!problems.length && repeated && !drafted.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
       // (An anchor in a file that holds none of the findings is refused below, where the place is looked for.)
       // The list follows the body: a block the body leaves open would take it in.
@@ -1063,6 +1141,11 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       continue;
     }
     const { problems, comment } = draft(c, finding.id, finding.severity);
+    // A comment for one finding stands in that finding's own file (`ownFile`): an excerpt of another file is
+    // another place. A location that names no file keeps the finding in the summary index.
+    const own = ownFile(finding.location);
+    if (!own) problems.push(`${finding.id}'s location names no file of its own to comment on`);
+    else if (comment?.path && comment.path !== own) problems.push(`path ${comment.path} is not ${finding.id}'s own file ${own}; quote lines of that file`);
     // A comment for one place is not put on quoted lines that carry a comment for several places.
     const taken = !problems.length && posted ? occupiedLines(review.target, comment, posted) : '';
     if (taken) problems.push(`${taken}. Skip ${finding.id} with cause existing-thread when that thread covers it, or quote other lines`);
@@ -1082,9 +1165,11 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
     const reason = nonempty(s.reason) ? s.reason.trim() : 'Skipped by the comment planner without a stated reason.';
     const cited = citedFindings(reason, s.findingId, findingIds);
     if (cited.length && !final) {
-      issues.push(quick
+      // Only a quick review of 0.4.x reaches planning with repeated reports unmerged; every other review had its
+      // duplicates merged first, by the duplicate check or by its verifier.
+      issues.push(reviewMethod(review) === 'quick'
         ? `skip for ${s.findingId} relies on ${cited.join(', ')}: another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, combine it with findingIds only when a listed mergeCandidates or repeatCandidates group holds both and they state one defect, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`
-        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (the verifier already merged duplicates), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
+        : `skip for ${s.findingId} relies on ${cited.join(', ')}: findings of this review are separate issues (duplicates were merged before planning), so another finding's comment does not cover it. Comment on ${s.findingId} at the lines of its own claim, give one comment findingIds with both only when a listed repeatCandidates group holds them and they are one defect made at several places, or skip it only when it cannot be anchored, cannot be stated faithfully within the limit, or an existing PR thread already covers it (name the thread, not a finding).`);
       reported.add(s.findingId);
       continue;
     }

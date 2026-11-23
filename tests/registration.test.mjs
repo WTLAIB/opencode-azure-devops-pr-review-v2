@@ -12,7 +12,8 @@ async function fixture(t, existingCommands = []) {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-v2-registration-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const raw = JSON.parse(await readFile(new URL('../config/settings.example.json', import.meta.url), 'utf8'));
-  raw.models.review = { functional: 'fixture/functional', risk: 'fixture/risk', verifier: 'fixture/verifier' };
+  // Two passes of two models: the example becomes a valid file once the review models, the organization and the PAT are set.
+  raw.models.review = { reviewers: ['fixture/first', 'fixture/second'], rater: '' };
   raw.azure = { ...raw.azure, organization: 'example', pat: FAKE_PAT };
   await writeFile(join(directory, 'settings.json'), JSON.stringify(raw));
   await mkdir(join(directory, 'prompts'));
@@ -90,7 +91,9 @@ test('post-config global permissions are preserved and all private definitions a
   for (const [role, agent] of f.agents) if (role.startsWith('azpr-')) agent.permissions.push(copy(global));
   const receipt = await f.invoke('pr-review');
   assert.match(receipt, /unavailable in the host catalog/);
-  assert.ok(f.calls.agents.includes('azpr-review-verifier'));
+  // Every role of the profile is pinned before first use: each pass's reviewer, the duplicate check, the rating and both planners.
+  for (const stage of ['reviewer', 'reviewerb', 'dedupe', 'rating', 'comment-plan', 'comment-plan-verified']) assert.ok(f.calls.agents.includes(`azpr-review-${stage}`), stage);
+  assert.equal(f.calls.agents.some(role => /^azpr-review-(reviewerc|reviewerd|functional|risk|verifier)$/.test(role)), false, 'Only roles that the settings give a model exist.');
   assert.equal(f.calls.reviewSessions, 0);
   for (const [role, agent] of f.agents) if (role.startsWith('azpr-')) {
     assert.deepEqual(agent.permissions.at(-1), global);
@@ -101,7 +104,7 @@ test('post-config global permissions are preserved and all private definitions a
 
 test('the deterministic source check needs no model session', async t => {
   const f = await fixture(t);
-  f.context.model.list = async () => ({ data: ['functional', 'risk', 'verifier'].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true } })) });
+  f.context.model.list = async () => ({ data: ['first', 'second'].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true } })) });
   t.after(await f.setup());
   const receipt = await f.invoke('pr-check');
   assert.match(receipt, /\] READY/);
@@ -123,8 +126,8 @@ test('post-config cannot replace protected role fields or native restrictions be
   for (const alter of alterations) {
     const f = await fixture(t);
     t.after(await f.setup());
-    alter(f.agents.get('azpr-review-functional'));
-    assert.match(await f.invoke('pr-check'), /Host configuration changed private agent azpr-review-functional/);
+    alter(f.agents.get('azpr-review-reviewerb'));
+    assert.match(await f.invoke('pr-check'), /Host configuration changed private agent azpr-review-reviewerb/);
     assert.equal(f.calls.reviewSessions, 0);
   }
 });
@@ -133,8 +136,8 @@ test('later host permission changes fail existing role fingerprints before creat
   const f = await fixture(t);
   t.after(await f.setup());
   await f.invoke('pr-check');
-  f.context.model.list = async () => ({ data: ['functional', 'risk', 'verifier'].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true } })) });
-  for (const role of ['azpr-review-functional', 'azpr-review-risk']) f.agents.get(role).permissions.push({ action: 'fixture_mcp_read', resource: '*', effect: 'deny' });
+  f.context.model.list = async () => ({ data: ['first', 'second'].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true } })) });
+  for (const role of ['azpr-review-reviewer', 'azpr-review-reviewerb']) f.agents.get(role).permissions.push({ action: 'fixture_mcp_read', resource: '*', effect: 'deny' });
   const receipt = await f.invoke('pr-review');
   assert.equal(f.calls.reviewSessions, 0);
   assert.match(receipt, /Private reviewer configuration changed/);

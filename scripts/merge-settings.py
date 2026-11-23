@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check settings, omit retired help and add defaults without exposing private values."""
+"""Check settings and add defaults without exposing private values; settings of AZPR 0.4.x are carried over unchanged."""
 import json
 import math
 import sys
@@ -26,7 +26,8 @@ def finite_float(value):
 
 
 def load(path):
-    with open(path, encoding="utf-8") as stream:
+    # newline="" keeps line endings as they are: a file that is carried over unchanged is carried over byte for byte.
+    with open(path, encoding="utf-8", newline="") as stream:
         raw = stream.read()
     value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant, parse_float=finite_float)
     if not isinstance(value, dict):
@@ -46,42 +47,46 @@ def merge(existing, defaults, prefix=""):
     return added
 
 
-def current_settings(existing):
-    """Accept the current layout only; this V2 package does not migrate V1."""
-    version = existing.get("version", 2)
-    if type(version) is not int or version != 2:
+REMOVED_SETTINGS = ("steps", "maxStageCharacters", "structuredOutput", "comments", "auxiliaryModels", "outputRetries", "verification", "shellToolPermission")
+MODES = ("review", "deep", "quick")
+# What the models of a mode were called before the reviewer lists (AZPR 0.4.x, settings version 2).
+EARLIER_MODEL_KEYS = ("functional", "risk", "verifier", "reviewer")
+
+
+def settings_version(existing):
+    """The layout of a settings file: 3, the current one (also for a file that names none), or 2 (AZPR 0.4.x)."""
+    version = existing.get("version", 3)
+    # A JSON number equal to 2 or 3 (2.0 and 2e0 are 2, as JSON.parse reads them); never a string or a boolean.
+    if isinstance(version, bool) or not isinstance(version, (int, float)) or version not in (2, 3):
         raise ValueError("Unsupported settings version.")
+    return int(version)
+
+
+def current_settings(existing):
+    """Accept the current layout only (reviewer lists per mode); no other layout gets this version's defaults."""
+    if settings_version(existing) != 3:
+        raise ValueError("Not the current settings version.")
     models = existing.get("models", {})
     if not isinstance(models, dict):
         raise ValueError("Models must be a current-layout JSON object.")
-    if any(key in models for key in ("freeA", "freeB", "final")):
+    if any(key in models for key in ("freeA", "freeB", "final", "_help")):
         raise ValueError("Legacy model settings are unsupported.")
-    if any(key in models and not isinstance(models[key], dict) for key in ("review", "deep", "quick")):
-        raise ValueError("Model roles must use the current nested layout.")
-    if "_help" in models:
-        help_text = models["_help"]
-        if not isinstance(help_text, dict) or any(
-            key not in ("functional", "risk", "verifier") or not isinstance(value, str)
-            for key, value in help_text.items()
-        ):
-            raise ValueError("Legacy model help must contain only role documentation strings.")
-    if any(key in existing for key in ("steps", "maxStageCharacters", "structuredOutput", "comments", "auxiliaryModels", "outputRetries", "verification", "shellToolPermission")):
+    for mode in MODES:
+        if mode not in models:
+            continue
+        group = models[mode]
+        if not isinstance(group, dict):
+            raise ValueError("Model settings must use the current nested layout.")
+        # A file that names no version and has the earlier model keys is of the earlier layout: stamping
+        # this version on it would hide it from the update that /pr-setup offers.
+        if any(key in group for key in EARLIER_MODEL_KEYS):
+            raise ValueError("Model settings of an earlier layout.")
+        if "reviewers" in group and not isinstance(group["reviewers"], list):
+            raise ValueError("Reviewers must be a list.")
+    if any(key in existing for key in REMOVED_SETTINGS):
         raise ValueError("Removed settings are unsupported.")
-    for key in ("azure", "mcp"):
-        if key in existing and not isinstance(existing[key], dict):
-            raise ValueError("Azure settings must be JSON objects.")
-
-
-def migrate(existing):
-    """AZPR calls Azure DevOps REST itself: move the retired mcp limits into azure."""
-    if "mcp" not in existing:
-        return False
-    mcp = existing.pop("mcp")
-    azure = existing.setdefault("azure", {})
-    for key in ("concurrency", "callTimeoutSeconds"):
-        if key in mcp and key not in azure:
-            azure[key] = mcp[key]
-    return True
+    if "azure" in existing and not isinstance(existing["azure"], dict):
+        raise ValueError("Azure settings must be a JSON object.")
 
 
 def main():
@@ -93,26 +98,26 @@ def main():
         _, defaults = load(defaults_path)
         raw, existing = load(source_path)
         current_settings(defaults)
-        current_settings(existing)
-        # Remove only the retired documentation, not model choices or other values.
-        # A stale defaults file must not add it back. Source files stay untouched.
-        removed_help = "_help" in existing.get("models", {})
-        existing.get("models", {}).pop("_help", None)
-        defaults.get("models", {}).pop("_help", None)
-        migrated = migrate(existing)
-        added = merge(existing, defaults)
-        content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added or removed_help or migrated else raw
-        with open(destination, "x", encoding="utf-8") as stream:
+        # Settings of AZPR 0.4.x are carried over byte for byte: this version does not use them until /pr-setup
+        # has updated them, which shows the change and needs the person's confirmation. Merging this version's
+        # defaults into them would leave a file of neither layout. Source files stay untouched in any case.
+        earlier = settings_version(existing) == 2
+        if earlier:
+            added, content = [], raw
+        else:
+            current_settings(existing)
+            added = merge(existing, defaults)
+            content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added else raw
+        with open(destination, "x", encoding="utf-8", newline="") as stream:
             stream.write(content)
     except (ValueError, OSError, UnicodeError, RecursionError):
         # Parser exceptions can contain secrets from the profile. Never print them.
-        print("ERROR: Settings must be readable, valid JSON objects with unique keys, finite numbers, and the current version-2 nested model layout without removed settings. No installed files were replaced. Fix the selected settings file or choose --settings FILE.", file=sys.stderr)
+        print("ERROR: Settings must be readable, valid JSON objects with unique keys, finite numbers, and the current version-3 layout (a list of reviewer models per mode) without removed settings; a version-2 file of AZPR 0.4.x is kept as it is. No installed files were replaced. Fix the selected settings file or choose --settings FILE.", file=sys.stderr)
         return 1
-    print("Settings defaults added: " + (", ".join(added) if added else "none."))
-    if removed_help:
-        print("Removed documentation-only models._help; see README.md for model-selection guidance.")
-    if migrated:
-        print("Moved mcp.concurrency/callTimeoutSeconds to azure; mcp.server is no longer used. Set azure.organization and azure.patFile (or azure.pat).")
+    if earlier:
+        print("Settings of AZPR 0.4.x (settings version 2) were kept exactly as they are. This version does not use them until they are updated: restart OpenCode and run /pr-setup, which shows what changes and writes the new file after you confirm.")
+    else:
+        print("Settings defaults added: " + (", ".join(added) if added else "none."))
     return 0
 
 

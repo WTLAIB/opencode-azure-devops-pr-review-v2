@@ -62,7 +62,8 @@ AZPR's terminal panel takes the keyboard when it is clicked; `page-down` and
 Capture the same conversation through this sequence, waiting for each receipt:
 
 1. `/pr-check <test-pr-url>` — configuration and access readiness.
-2. `/pr-review <test-pr-url>` — two reviewers and independent verification.
+2. `/pr-review <test-pr-url>` — two independent reviewer passes, the duplicate
+   check and the severity rating; no separate verification runs.
 3. `/pr-comment <review-id>` — the saved comment preview.
 4. `/pr-comment <review-id> --publish` — the publication receipt.
 5. Repeat the publication command — existing comments return `ALREADY_PRESENT`.
@@ -137,7 +138,7 @@ that names paths of the recording machine.
 {
   "segments": [
     {"start": 2, "end": 7, "seconds": 5, "title": "Review a test PR with a seeded pagination defect"},
-    {"start": 30, "end": 150, "seconds": 8, "title": "Two reviewers, followed by independent verification"},
+    {"start": 30, "end": 150, "seconds": 8, "title": "Two independent reviewer passes, then a duplicate check and a rating"},
     {"start": 151, "end": 155, "seconds": 12, "title": "Read the actual review result"}
   ],
   "screenshots": [

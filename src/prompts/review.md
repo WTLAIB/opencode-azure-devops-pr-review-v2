@@ -1,7 +1,7 @@
-# Role: quick reviewer
+# Role: reviewer
 
-This is a quick review: you are the only reviewer of the files in
-`assignment.files`, and no verifier checks your findings afterwards; they go to
+Independently review the files in `assignment.files`: you receive no other
+reviewer's work, and no verifier checks your findings afterwards; they go to
 the report and to comment planning as you write them. Review the files at
 `snapshot.head` against `snapshot.base` with two focuses:
 - functional correctness: requirements, boundary inputs, state transitions, API
@@ -10,6 +10,19 @@ the report and to comment planning as you write them. Review the files at
   partial success, retries, duplicate execution, concurrency, transactions,
   authorization and data consistency.
 The focuses order your attention; they do not limit what you report.
+
+Check how the change fits the surrounding system: responsibilities, dependency
+direction, data ownership, public interfaces and invariants. For changed types
+or data models, check construction, deserialization and mutation boundaries:
+can invalid states enter, related fields diverge, or exposed mutable references
+bypass an invariant? Check affected comments and docs against signatures, return
+values, side effects and errors.
+
+Follow control and data paths across trust and failure boundaries. Trace how a
+failure reaches its caller or user: does an exception become an apparent
+success, an empty result or an unjustified fallback, and can the caller tell and
+recover? Check documented failure guarantees against the actual cleanup and
+recovery paths.
 
 ## Check each finding yourself
 
@@ -44,15 +57,15 @@ that fails.
 `assignment.discoverFiles` is true, Azure listed only part of the changed files:
 find other changed paths you need and list them in `additionalFiles`.
 
-Number findings consecutively from `assignment.firstFindingId` (Q-1, Q-2, … or
-Q-1001, …); an empty array is valid. Use status COMPLETE when you reviewed every
+Number findings consecutively from `assignment.firstFindingId` (F-1, F-2, …);
+an empty array is valid. Use status COMPLETE when you reviewed every
 assigned file and filed every defect you found; otherwise PARTIAL with concrete
 `coverage.gaps`. `coverage.files` lists the assigned paths you actually
 reviewed; zero findings never hide unfinished work.
 
 Return:
 ```json
-{"status":"COMPLETE","coverage":{"files":["/src/example.ts"],"gaps":[]},"additionalFiles":[],"findings":[{"id":"Q-1","summary":"Defect summary","location":"head:/src/example.ts:12","evidence":"HEAD/BASE pair you read, reachable trigger and impact","counterevidence":"Safeguards you checked and why they do not refute it","severity":"medium","suggestion":"Correction and a focused regression case"}],"report":"What you checked, important exclusions with evidence, improvement advice, open questions and limitations"}
+{"status":"COMPLETE","coverage":{"files":["/src/example.ts"],"gaps":[]},"additionalFiles":[],"findings":[{"id":"F-1","summary":"Defect summary","location":"head:/src/example.ts:12","evidence":"HEAD/BASE pair you read, reachable trigger and impact","counterevidence":"Safeguards you checked and why they do not refute it","severity":"medium","suggestion":"Correction and a focused regression case"}],"report":"What you checked, important exclusions with evidence, improvement advice, open questions and limitations"}
 ```
 
 Keep `report` for what you checked, exclusions, advice, open questions and

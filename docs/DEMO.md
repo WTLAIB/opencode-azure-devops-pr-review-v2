@@ -1,5 +1,22 @@
 # See a review before installing
 
+The recordings and captures on this page were made with AZPR 0.1.0 to 0.4.5;
+each section names its version. They show what 0.5.0 keeps: the commands, the
+terminal panel, the comment preview, the adjustments and publication. They
+have not been made again with 0.5.0, in which a review itself is made
+differently:
+
+| | In the recordings (0.1.0 to 0.4.5) | Since 0.5.0 |
+| --- | --- | --- |
+| Who reviews | A functional and a risk reviewer, then a verifier that confirmed or rejected their findings | One or more independent passes of one reviewer, each checking its own findings against the source; then a duplicate check and a severity rating. No verifier |
+| Sessions the panel lists | The two reviewers per shard and the verifier | `Review pass 1/2`, `Review pass 2/2`, a `Duplicate check` per file that needs one, `Severity rating` |
+| Finding IDs | `F-1` and `R-1` by reviewer, `V-1` for the verifier's additions | `F-1 … F-n` for the whole review |
+| Disclosure line of comments | `AI-generated review; not human review or approval. Models: …` | The same, with the method named: `Review method: findings checked by their reviewer against the source, no separate verification.` |
+
+Where a caption below speaks of verified or confirmed findings, it describes
+what that version did. No finding of a 0.5.0 review is verified after its
+reviewer, and its report and comments say so.
+
 ## Actual Azure DevOps comments
 
 These are **real Azure DevOps browser captures** of comments published by AZPR,
@@ -16,7 +33,8 @@ state of the adjustment recording below.
 [![Actual PR summary: a review note, zero high, three medium and zero low findings, and all three findings with their source locations.](assets/azure-review-summary.png)](assets/azure-review-summary.png)
 
 The review and publication ran on **2026-10-29 (Asia/Taipei)** with **AZPR
-0.3.1**, **OpenCode CLI 2.1.4** and `openai/gpt-6-luna` for the review roles and
+0.3.1**, **OpenCode CLI 2.1.4** and `openai/gpt-6-luna` for the review roles
+(two reviewers and a verifier in that version) and
 comment planning. The runtime posted one summary and three inline comments and
 read all four back from Azure DevOps. Model IDs identify the configured
 selection, not an independently attested provider backend. The browser captures
@@ -39,7 +57,10 @@ cost. See [validation and limitations](VALIDATION.md).
 
 Each block is a published comment body exactly as posted, in Azure DevOps
 Markdown; hidden publication markers are omitted. In the summary table,
-`&#96;` is an escaped backtick, which Azure DevOps shows as `` ` ``.
+`&#96;` is an escaped backtick, which Azure DevOps shows as `` ` ``. The
+disclosure line is the one 0.3.1 wrote; a comment of 0.5.0 has the same
+layout and names the review method in that line (see
+[commenting](COMMENTING.md#the-disclosure-line)).
 
 **Inline comment** at `fulfillment.py:29`:
 
@@ -94,7 +115,7 @@ accuracy or a promise about the time or cost of another PR.
 
 Recorded on **2026-11-20**, on Ubuntu 22.04 under WSL2, using
 `openai/gpt-6-luna` for the functional reviewer, risk reviewer, verifier and
-comment planner. OpenCode's plugin manager had installed the plugin from
+comment planner, the stages of a review in that version. OpenCode's plugin manager had installed the plugin from
 public Git commit [`4427f75`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/4427f75828e66d2643128a45945c3d18aebaad96)
 of the 0.4.5 release candidate; the settings were `afterReview: preview`,
 `returnReport: receipt`, `outputLanguage: en` and no debug records. Model IDs
@@ -103,7 +124,9 @@ backend.
 
 The recording follows one conversation, to which `/pr-review <test-pr-url>`
 was sent twice. The teaser shows the second review; the first one was stopped
-from the panel, which the first picture below shows.
+from the panel, which the first picture below shows. The panel, its steps and
+the preview work the same in 0.5.0; the sessions it lists and the wording of
+the report are those of 0.4.5.
 
 1. A first review starts and the panel opens by itself beside the
    conversation, which the review names after the PR. It lists the four
@@ -158,12 +181,13 @@ benchmark of review accuracy or a promise about the time or cost of another PR.
 
 Recorded on **2026-10-26**, on Ubuntu 22.04 under WSL2, using
 `openai/gpt-6-luna` for the functional reviewer, risk reviewer, verifier and
-comment planner. The installed plugin matched all 27 runtime and prompt files
+comment planner, the stages of a review in that version. The installed plugin matched all 27 runtime and prompt files
 in public Git commit [`dfba561`](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/commit/dfba561840c0d61be6f8fc2e921507da8bbcbb11)
 of the 0.3.0 release candidate. Model IDs identify the configured selection,
 not an independently attested provider backend.
 
-The recording follows one conversation:
+The recording follows one conversation. The adjustment commands and
+publication work the same in 0.5.0, whose finding IDs all begin with `F-`:
 
 1. `/pr-review <test-pr-url> --preview` completes the review in 66 seconds. The
    verifier confirms three medium findings and merges two duplicate candidates.
@@ -259,9 +283,11 @@ published media. Raw recordings and connection files remain private. See the
 
 The example below is an **illustrative example / synthetic PR**, not an Azure
 DevOps screenshot or an OpenCode session recording. A hand-written pagination
-defect shows the quick-review comment format. No live model was called and no
+defect shows the comment format of a `/pr-quick` review as 0.4.x posted it.
+No live model was called and no
 Azure comment was published to make these illustrations; they are separate
-from the real verified review above.
+from the real reviews above. In 0.5.0 the layout is the same; the finding ID
+and the disclosure line differ, as [said below](#what-the-comments-look-like).
 
 ### A short walkthrough
 
@@ -278,10 +304,11 @@ for reading; it does not measure review latency. Prefer no animation? Use the
    does not call a review model.
 2. **Review:** run `/pr-quick <azure-pr-url>` for the same PR in your OpenCode
    conversation.
-   Wait for completion, then inspect findings and coverage gaps. Quick review
-   uses one reviewer per shard, without an independent verifier. Findings are
-   `REPORTED`, and verification is `none`; a session can make multiple model
-   requests.
+   Wait for completion, then inspect findings and coverage gaps. `/pr-quick`
+   runs the same review as `/pr-review` with the models listed for it,
+   usually one pass. Findings are `REPORTED`, and verification is `none`: no
+   stage re-checks a finding after its reviewer. A session can make multiple
+   model requests.
 3. **Preview:** run `/pr-comment` in the same conversation. A model plans the
    inline comments and summary; the preview does not write to Azure. Read the
    proposed text and skips before deciding whether to publish.
@@ -297,6 +324,12 @@ for publication details, retries, markers and their limits.
 ### What the comments look like
 
 ![Illustrative Azure DevOps-style layout: a medium pagination finding with Summary, Evidence and Suggested fix, followed by a PR summary index. Both show that quick review was not independently verified.](assets/review-example.svg)
+
+The illustration was generated with the 0.4.6 source and shows a quick review
+of that version: the finding ID `Q-1` and the disclosure line `Review method:
+quick review, not independently verified`. In 0.5.0 the ID is `F-1` and the
+line reads `Review method: findings checked by their reviewer against the
+source, no separate verification`.
 
 The layout, colors and spacing are illustrative. The comment text and summary
 index come from the project's comment-plan validator and renderer, supplied
@@ -314,7 +347,10 @@ actual tests and distinguishes simulated services from live runs.
 
 ### Reproduce these illustrations
 
-From the repository root, with Node.js 22.12 or later:
+The generator checks for the disclosure line of 0.4.x, so it reproduces these
+illustrations from a checkout of tag `v0.4.6`. Run on the 0.5.0 source it
+stops at that check, before it writes anything. From the root of that
+checkout, with Node.js 22.12 or later:
 
 ```sh
 node docs/assets/generate-demo.mjs

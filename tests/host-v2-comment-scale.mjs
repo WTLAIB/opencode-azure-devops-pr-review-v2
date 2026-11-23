@@ -2,14 +2,19 @@ import { privateSessions, withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /** Opt-in exact-host scale fixture. Fake loopback models and Azure DevOps REST only.
  * node tests/host-v2-comment-scale.mjs /absolute/path/opencode
- * 120 changed files are reviewed in shards; one shard reports a nearly full
+ * 120 changed files are reviewed in five shards by two passes, each pass with
+ * a model of its own. One shard of the first pass reports a nearly full
  * context so the host attempts compaction, which AZPR refuses and splits the
- * shard instead. 30 findings are verified in two sessions; the second verifier
- * moves one finding into a file of the first, so a duplicate-check session
- * merges it. The other 29 are planned in pages of four, two pages at a time,
- * and published; a second publish creates nothing. Before the pages a grouping
- * pass says that three high findings are one defect in three files: they share
- * a page and one comment, which lists the other two places.
+ * shard instead. The second pass reports six findings per shard, the first
+ * pass one, at a place where the second pass reports one too: a duplicate-check
+ * session for that file merges the two reports. The 30 findings that remain
+ * are rated in two sessions without tools by the first reviewer model (the
+ * default, rater: ""): the reviewers file every finding as medium and the
+ * rating makes every third one low and the others high, so every count below
+ * follows the rating. The 30 findings are planned in pages of four, two pages
+ * at a time, and published; a second publish creates nothing. Before the pages
+ * a grouping pass says that three high findings are one defect in three files:
+ * they share a page and one comment, which lists the other two places.
  * With --cleanup the same review runs with debug off, as installed by default.
  * A run then deletes its sessions when it ends, which debug prevents: the
  * fixture checks on the host that only the session holding the report is left
@@ -35,14 +40,17 @@ const fixture = await mkdtemp(join(root, '.local/host-v2-scale-'));
 const dirs = Object.fromEntries(['config', 'data', 'cache', 'state', 'tmp', 'home', 'work'].map(name => [name, join(fixture, name)]));
 await Promise.all(Object.values(dirs).map(path => mkdir(path, { recursive: true })));
 const files = Array.from({ length: 120 }, (_, i) => `/src/module-${String(Math.floor(i / 10)).padStart(2, '0')}/file-${String(i).padStart(3, '0')}.ts`);
-const requests = [];
-// A finding's level follows its place in its reviewer's list (every third one is low); the ID keeps that place.
-const levelOf = id => (Number(id.split('-')[1]) - 1) % 1000 % 3 === 2 ? 'low' : 'high';
+const requests = [], receipts = [];
+// The level the rating gives a finding follows the place of its file in its shard of 24 files: every third one is low.
+const levelOf = finding => Number(/file-(\d{3})\.ts/.exec(finding.location)[1]) % 24 % 3 === 2 ? 'low' : 'high';
+const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 let child, logs = '', overflowShards = 0;
 // Planning requests in flight: the first page waits for a second one, so two lanes must overlap.
 let planning = 0, planningMost = 0, planningGate = null;
-// The findings the grouping pass called one defect at several places.
+// The findings the grouping pass called one defect at several places, each with its location.
 let grouped = [];
+// What the duplicate checks and the rating sessions were given.
+const duplicateChecks = [], ratings = [];
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
 const provider = createServer(async (request, response) => {
   try {
@@ -51,39 +59,48 @@ const provider = createServer(async (request, response) => {
     const users = input.messages.filter(m => m.role === 'user');
     let payload; try { payload = JSON.parse(textOf(users[0]?.content)); } catch { /* summaries etc. */ }
     const results = input.messages.filter(m => m.role === 'tool').length;
-    requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: payload?.assignment?.files?.length, work: payload?.commentWork?.kind, toolResults: results, requestCharacters: body.length });
-    // Functional reviewers read whole files; risk reviewers read diffs.
-    const fileTool = input.tools?.find(t => t.function.name === (input.model === 'risk' ? 'azpr_read_diff' : 'azpr_read_file'))?.function.name;
-    let call, final, usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
-    if (payload?.assignment?.files && !payload.assignment.findingIds) {
-      const assigned = payload.assignment.files;
-      // The first functional shard is "too large": report a nearly full context after its read.
-      const tooLarge = input.model === 'functional' && assigned.length > 15 && assigned[0] === files[0];
-      if (!results && fileTool) {
-        call = { name: fileTool, arguments: fileTool === 'azpr_read_diff' ? { path: assigned[0] } : { path: assigned[0], version: 'head' } };
-        if (tooLarge) { usage = { prompt_tokens: 59000, completion_tokens: 10, total_tokens: 59010 }; overflowShards++; }
+    requests.push({ model: input.model, sessionID: request.headers['x-opencode-session-id'], files: payload?.assignment?.files?.length, kind: payload?.assignment?.kind, work: payload?.commentWork?.kind, toolResults: results, requestCharacters: body.length });
+    const offered = name => input.tools?.some(t => t.function.name === name);
+    let calls = [], final, usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+    if (payload?.assignment?.kind === 'duplicates') {
+      // One file holds a finding of each pass: the second report repeats the first.
+      const [kept, ...repeated] = payload.assignment.findings;
+      duplicateChecks.push({ file: payload.assignment.file, side: payload.assignment.side, sessions: payload.assignment.findings.map(f => f.session) });
+      final = { status: 'COMPLETE', merged: repeated.map(f => ({ id: f.id, mergedInto: kept.id, reason: 'Same guard lost in the same file.' })), report: '' };
+    } else if (payload?.assignment?.kind === 'rating') {
+      // The rating sees neither a tool nor the level a reviewer gave; it sets the level of every finding.
+      ratings.push({ findings: payload.assignment.findings.length, tools: input.tools?.length ?? 0, levels: payload.assignment.findings.filter(f => Object.hasOwn(f, 'severity')).length });
+      final = { status: 'COMPLETE', ratings: payload.assignment.findings.map(f => ({ id: f.id, severity: levelOf(f), reason: 'Rated from the text.' })), report: '' };
+    } else if (payload?.assignment?.files) {
+      const assigned = payload.assignment.files, first = Number(payload.assignment.firstFindingId.split('-')[1]);
+      const finding = (path, i, summary) => ({ id: `F-${first + i}`, summary, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.', location: `head:${path}:1`, severity: 'medium', suggestion: 'Restore the guard.' });
+      if (input.model === 'first') {
+        // The first pass reads its first file whole. Its first shard is "too large": with its read it reports a context
+        // of 59,000 tokens, past the 48,000 at which OpenCode 2.3.2 compacts a window of 64,000.
+        const tooLarge = assigned.length > 15 && assigned[0] === files[0];
+        if (!results && offered('azpr_read_file')) {
+          calls = [{ name: 'azpr_read_file', arguments: { path: assigned[0], version: 'head' } }];
+          if (tooLarge) { usage = { prompt_tokens: 59000, completion_tokens: 10, total_tokens: 59010 }; overflowShards++; }
+        } else {
+          // Its one finding is in the PR's first file, where the second pass reports the same defect in other words.
+          final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings: assigned[0] === files[0] ? [finding(files[0], 0, `Guard dropped in ${files[0]}`)] : [], report: `Shard ${payload.assignment.shard} reviewed.` };
+        }
       } else {
-        const prefix = input.model === 'functional' ? 'F' : 'R', first = Number(payload.assignment.firstFindingId.split('-')[1]);
-        const findings = input.model === 'risk' ? assigned.slice(0, 6).map((path, i) => ({ id: `${prefix}-${first + i}`, summary: `State lost in ${path}`, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.', location: `head:${path}:1`, severity: i % 3 === 2 ? 'low' : 'high', suggestion: 'Restore the guard.' })) : [];
-        final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings, report: `Shard ${payload.assignment.shard} reviewed.` };
+        // The second pass reads the diffs of its first six files in one step and reports a finding in each.
+        const reported = assigned.slice(0, 6);
+        if (!results && offered('azpr_read_diff')) calls = reported.map(path => ({ name: 'azpr_read_diff', arguments: { path } }));
+        else final = { status: 'COMPLETE', coverage: { files: assigned, gaps: [] }, findings: reported.map((path, i) => finding(path, i, `State lost in ${path}`)), report: `Shard ${payload.assignment.shard} reviewed.` };
       }
-    } else if (payload?.assignment?.kind === 'duplicates') {
-      const moved = payload.assignment.findings.find(f => f.movedFrom), kept = payload.assignment.findings.find(f => !f.movedFrom);
-      final = { status: 'COMPLETE', merged: [{ id: moved.id, mergedInto: kept.id, reason: 'Same guard lost in the same file.' }], report: '' };
-    } else if (payload?.assignment?.findingIds) {
-      // The second verifier moves its first high finding into a file the first verifier owns.
-      // Candidates arrive without the reviewer's severity; the verifier sets the level again.
-      const move = payload.assignment.shard === '2/2' ? payload.assignment.findings.find(f => levelOf(f.id) === 'high') : undefined;
-      final = { status: 'COMPLETE', confirmed: payload.assignment.findings.map(f => ({ ...f, severity: levelOf(f.id), ...(f === move ? { location: `head:${files[0]}:1`, movedFrom: f.location } : {}), reason: 'Verified.' })), merged: [], rejected: [], needsInfo: [], newFindings: [], report: `Advice for shard ${payload.assignment.shard}: extract the guard into one helper.` };
     } else if (payload?.commentWork?.kind === 'group') {
       // The pass before the pages: the first three high findings are the same lost guard in three files.
-      grouped = payload.findings.slice(0, 3).map(f => f.id);
-      final = { status: 'READY', groups: [{ findingIds: grouped, reason: 'The same guard is lost in each file.' }] };
+      grouped = payload.findings.slice(0, 3).map(({ id, location }) => ({ id, location }));
+      final = { status: 'READY', groups: [{ findingIds: grouped.map(f => f.id), reason: 'The same guard is lost in each file.' }] };
     } else if (payload?.commentWork?.kind === 'plan') {
       planningMost = Math.max(planningMost, ++planning);
       if (!planningGate) {
-        let open; planningGate = { promise: new Promise(resolve => { open = resolve; }), open };
-        await Promise.race([planningGate.promise, new Promise(resolve => setTimeout(resolve, 10000))]);
+        let open, limit; planningGate = { promise: new Promise(resolve => { open = resolve; }), open };
+        await Promise.race([planningGate.promise, new Promise(resolve => { limit = setTimeout(resolve, 10000); })]);
+        clearTimeout(limit); // Otherwise the timer keeps this process alive after the last assertion.
       } else planningGate.open();
       planning--;
       // One comment for a listed group of repeats, at its first finding; every other finding gets its own.
@@ -96,35 +113,45 @@ const provider = createServer(async (request, response) => {
     } else {
       final = 'Fixture summary.';
     }
-    const delta = call ? { tool_calls: [{ index: 0, id: 'fixture_' + requests.length, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { content: typeof final === 'string' ? final : JSON.stringify(final) };
     response.writeHead(200, { 'content-type': 'text/event-stream' });
-    const emit = value => response.write('data: ' + JSON.stringify(value) + '\n\n');
-    emit({ id: 'scale', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', ...delta }, finish_reason: null }] });
-    emit({ id: 'scale', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }], usage });
+    const emit = (delta, finish = null, rest = {}) => response.write('data: ' + JSON.stringify({ id: 'scale', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason: finish }], ...rest }) + '\n\n');
+    // Tool calls of one step arrive as one chunk each, as a provider streams parallel calls.
+    if (calls.length) calls.forEach((call, index) => emit({ ...(index ? {} : { role: 'assistant' }), tool_calls: [{ index, id: `fixture_${requests.length}_${index}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }));
+    else emit({ role: 'assistant', content: typeof final === 'string' ? final : JSON.stringify(final) });
+    emit({}, calls.length ? 'tool_calls' : 'stop', { usage });
     response.end('data: [DONE]\n\n');
   } catch (error) { logs += '\nPROVIDER: ' + error.stack; response.writeHead(400).end(JSON.stringify({ error: { message: String(error) } })); }
 });
 provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
 const providerURL = `http://127.0.0.1:${provider.address().port}/v1`;
-const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 321, files, sources: Object.fromEntries(files.map(path => [path, 'fixture code\nsecond line\n'])) });
+// Every file gains its second line in the PR: a diff of it shows HEAD source, which counts as that session's read of the file.
+const BASE = 'a'.repeat(40);
+const azure = fakeAzure({ org: 'fixture', project: 'project', repo: 'repository', prId: 321, files, base: BASE,
+  sources: Object.fromEntries(files.flatMap(path => [[path, 'fixture code\nsecond line\n'], [`${BASE}:${path}`, 'fixture code\n']])) });
 const adoServer = createServer((request, response) => { azure.serve(request, response).catch(error => { response.writeHead(500); response.end(String(error)); }); });
 adoServer.listen(0, '127.0.0.1'); await once(adoServer, 'listening');
 const azureURL = `http://127.0.0.1:${adoServer.address().port}`;
 const settings = JSON.parse(await readFile(join(root, 'config/settings.example.json'), 'utf8'));
-for (const role of ['functional', 'risk', 'verifier']) settings.models.review[role] = `fixture/${role}`;
+// Two passes, each with a model of its own so that the fake provider can tell them apart. The rater stays at its
+// default (""): the first reviewer model rates.
+settings.models.review = { reviewers: ['fixture/first', 'fixture/second'], rater: '' };
 settings.debug = { enabled: !cleanup, directory: join(fixture, 'debug') };
-settings.workflow = { ...settings.workflow, shardFiles: 24, shardFindings: 15, parallelSessions: 4 };
+settings.workflow = { ...settings.workflow, shardFiles: 24, parallelSessions: 4 };
 // These steps drive each comment step themselves; the default (a preview after every review) is covered by the runtime tests.
 settings.afterReview = { quick: 'none', review: 'none', deep: 'none' };
 settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });
 assert.equal(install.status, 0, install.stderr);
-await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/risk',
+// A window of 64,000 tokens: OpenCode 2.3.2 compacts in the turn once the context reaches the window less 16,000 tokens.
+await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/second',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
-    models: Object.fromEntries(['functional', 'risk', 'verifier'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } }));
+    models: Object.fromEntries(['first', 'second'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } }));
 const password = randomUUID();
 const env = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', XDG_CONFIG_HOME: join(fixture, 'xdg-config'), XDG_DATA_HOME: dirs.data, XDG_CACHE_HOME: dirs.cache, XDG_STATE_HOME: dirs.state, TMPDIR: dirs.tmp, OPENCODE_TEST_HOME: dirs.home, OPENCODE_CONFIG_DIR: dirs.config, OPENCODE_PASSWORD: password, OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_FILEWATCHER: '1', OPENCODE_DISABLE_FFF: '1', AZPR_TEST_AZURE_BASE_URL: azureURL };
+// The disclosure line of every comment of this review: its method and the models of its stages.
+const DISCLOSURE = 'AI-generated review; not human review or approval. Review method: findings checked by their reviewer against the source, no separate verification. Models: `fixture/first`, `fixture/second`';
+const THREADS = 19; // 20 high findings in 18 inline comments (three of them share one) plus one summary; 10 low findings stay in the summary.
 try {
   child = spawn(binary, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await Promise.race([new Promise((resolveReady, reject) => { child.once('error', reject); child.once('exit', code => reject(new Error('Host exited ' + code))); child.stdout.on('data', data => { logs += data; const match = logs.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/); if (match) resolveReady(match[1]); }); child.stderr.on('data', data => { logs += data; }); }),
@@ -132,81 +159,119 @@ try {
   const rawApi = async (path, body) => { const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Basic ${Buffer.from('opencode:' + password).toString('base64')}`, 'content-type': 'application/json', 'x-opencode-directory': dirs.work }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(300000) }); const raw = await response.text(); if (!response.ok) throw new Error(`${path}: ${response.status} ${raw}`); return raw ? JSON.parse(raw) : undefined; };
   const api = withCommandCompletion(rawApi, 300000);
   const origin = (await api('/api/session', { title: 'Scale fixture', location: { directory: dirs.work } })).data;
-  const latest = async () => (await api(`/api/session/${origin.id}/inbox`)).data.at(-1).payload.text;
+  const notices = async () => (await api(`/api/session/${origin.id}/inbox`)).data.map(item => item.payload?.text ?? '');
+  const latest = async () => { receipts.push((await notices()).at(-1)); return receipts.at(-1); };
   await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
-  const receipt = await latest();
-  assert.match(receipt, /\] COMPLETE\n/, receipt);
+  const receipt = await latest(), reviewId = /^\[AZPR ([a-f0-9]{8})\]/.exec(receipt)[1];
+  // The run's first notice names its passes and their models.
+  assert.ok((await notices()).includes(`[AZPR ${reviewId}] STARTED /pr-review (2 passes: fixture/first, fixture/second). Work continues in this OpenCode process; the result will return to this conversation. Stop with /pr-stop ${reviewId}.`), 'The STARTED notice names the two passes.');
+  // Both passes reviewed every file, the split shard in its two halves: coverage is complete, in every pass.
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete, 120\/120 file\(s\) in every pass; verification none\n/, receipt);
+  // One reviewer session of the first pass filled its context; its shard was reviewed in two halves instead.
+  const stageLines = receipt.split('\n').filter(line => line.startsWith('- azpr-'));
+  assert.deepEqual(stageLines.filter(line => line.includes('failure=')).map(line => line.replace(/session=ses_[A-Za-z0-9]+/, 'session=…')),
+    ['- azpr-review-reviewer [pass 1/2 shard 1/5]: FAILED; session=…; model=fixture/first; failure=overflow; error=[AZPR] Reviewer execution did not finish successfully (session=failed; terminal=failed; assistantResponses=1; finish=tool-calls).'],
+    'Exactly one stage failed: the shard that filled its context.');
+  for (const half of ['a', 'b']) assert.match(receipt, new RegExp(`^- azpr-review-reviewer \\[pass 1/2 shard 1/5${half}\\]: COMPLETE; session=ses_[A-Za-z0-9]+; model=fixture/first$`, 'm'), `The receipt names half ${half} of the split shard.`);
+  assert.equal((await notices()).filter(text => text === `[AZPR ${reviewId}] PROGRESS — Review pass 1/2 shard 1/5 reached its context limit on 24 files; splitting the shard in two.`).length, 1, 'The conversation was told once that the shard is split.');
+  assert.equal(overflowShards, 1, 'The fake provider reported a full context once: neither half does.');
+  // One role per entry of models.review.reviewers, and with the default rater a rating role; no role of a mode that is off.
+  assert.deepEqual((await api('/api/agent')).data.map(agent => agent.name).filter(name => name.startsWith('azpr-')).sort(),
+    ['azpr-review-comment-plan', 'azpr-review-comment-plan-verified', 'azpr-review-dedupe', 'azpr-review-rating', 'azpr-review-reviewer', 'azpr-review-reviewerb'],
+    'The private roles follow the settings.');
+  // The duplicate check compared the two reports in the PR's first file: one of each pass, the first pass's from the half that holds the file.
+  assert.deepEqual(duplicateChecks, [{ file: files[0], side: 'head', sessions: ['1/5a pass 1', '1/5 pass 2'] }], 'One duplicate check: one file holds findings of two reviewer sessions.');
+  // 31 reports less the merged one are rated, 25 to a session, without tools and without the reviewers' levels.
+  assert.deepEqual(ratings.map(rating => rating.findings).sort((a, b) => b - a), [25, 5], '30 findings are rated in two sessions.');
+  assert.ok(ratings.every(rating => rating.tools === 0 && rating.levels === 0), 'A rating session gets no tool and no level.');
   if (cleanup) {
     // Debug is off, as installed by default: a run's sessions are deleted when it ends.
     const sessions = privateSessions(rawApi, dirs.state);
     const created = sessions.named(receipt), report = /Report delivery: report queued to session=(\S+)\./.exec(receipt)[1];
     const left = [];
     for (const id of created) if (await sessions.exists(id)) left.push(id);
-    assert.ok(created.length > 10, 'The receipt names the session of every stage.');
+    assert.equal(created.length, 15, 'The receipt names the session of every stage: 7 and 5 reviewers, a duplicate check and 2 ratings.');
+    assert.match(receipt, new RegExp(`^- azpr-review-rating \\[[12]/2\\]: COMPLETE; session=${report}; model=fixture/first$`, 'm'), 'The report is in a session of the last stage, the rating.');
     assert.deepEqual(left, [report], 'After the review only the session holding the report exists on the host.');
     assert.equal(Number(/\nSession notice: (\d+) reviewer session\(s\) of this run were deleted/.exec(receipt)?.[1]), created.length - 1, 'The receipt counts the deleted sessions.');
+    assert.match((await rawApi(`/api/session/${report}/inbox`)).data.at(-1).payload.text, new RegExp(`^# AZPR ${reviewId} — COMPLETE\n`), 'The session that is left holds the report.');
     assert.equal((await sessions.listed()).length, 1, 'The host lists one private session, the report.');
     assert.deepEqual(await sessions.records(), {}, 'Nothing is left to delete, and no unfinished run keeps a session.');
     // A preview plans in nine sessions (the grouping pass and eight pages) and keeps none of them; the report session stays.
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '', delivery: 'steer' });
     assert.match(await latest(), /\] PREVIEW/);
+    assert.equal(requests.filter(r => r.work).length, 9, 'A grouping pass and eight pages.');
     assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
     assert.equal((await sessions.listed()).length, 1, 'A comment run keeps none of its sessions.');
     assert.ok(await sessions.exists(report), 'The report session is still there after the preview.');
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
     assert.match(await latest(), /\] POSTED/);
-    assert.equal(azure.state.threads.length, 18, 'The saved preview is posted as in the default mode.');
+    assert.equal(azure.state.threads.length, THREADS, 'The saved preview is posted as in the default mode.');
     // A command typed in the report session still acts on its review.
     await rawApi(`/api/session/${report}/command`, { name: 'pr-comment', text: '--show', delivery: 'steer' });
-    assert.match((await rawApi(`/api/session/${report}/inbox`)).data.at(-1).payload.text, /^\[AZPR\] Saved preview of review [a-f0-9]{8}/);
+    assert.match((await rawApi(`/api/session/${report}/inbox`)).data.at(-1).payload.text, new RegExp(`^\\[AZPR\\] Saved preview of review ${reviewId}`));
     assert.deepEqual([(await sessions.listed()).length, await sessions.records()], [1, {}]);
     console.log(JSON.stringify({ status: 'PASS', mode: 'cleanup', files: files.length, reviewSessions: created.length, deletedAfterReview: created.length - 1, privateSessionsLeft: 1,
       plannerSessionsLeft: 0, threads: azure.state.threads.length, providerRequests: requests.length, azureCalls: azure.state.calls.length }, null, 2));
   } else {
     const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
     const result = JSON.parse(await readFile(join(debug, 'result.json'), 'utf8'));
-    const stages = role => result.stages.filter(stage => stage.role === `azpr-review-${role}`);
-    const functional = stages('functional');
-    const overflowed = functional.filter(stage => stage.failureClass === 'overflow');
-    const compactionObserved = functional.some(stage => stage.requestObservations?.kinds?.compaction > 0);
-    assert.equal(stages('risk').filter(stage => stage.status !== 'FAILED').length, 5, 'Five risk shards of 24 files.');
-    assert.equal(overflowed.length, 1, 'Exactly one functional shard overflowed.');
-    assert.ok(compactionObserved, 'The host attempted compaction and AZPR refused it.');
-    assert.deepEqual(functional.filter(stage => stage.status !== 'FAILED').map(stage => stage.label).sort().slice(0, 2), ['shard 1/5a', 'shard 1/5b']);
-    assert.ok(stages('risk').every(stage => stage.status === 'FAILED' || stage.completedTools === 1), 'Each risk reviewer read its first file as a diff.');
-    assert.equal(stages('verifier').length, 2, '30 findings in two verification sessions.');
-    assert.deepEqual(stages('dedupe').map(stage => stage.status), ['COMPLETE'], 'One file holds findings of both verifiers.');
-    // These settings name no rater: no severity rating runs, no rating role is registered and the verifiers' levels are final.
-    assert.deepEqual(stages('rating'), [], 'No severity rating without models.review.rater.');
-    assert.doesNotMatch(receipt, /azpr-review-rating/);
-    assert.equal((await api('/api/agent')).data.some(agent => agent.name === 'azpr-review-rating'), false, 'The rating role is not registered without a rater.');
-    const merged = (await readFile(join(debug, 'report.md'), 'utf8')).match(/MERGED → R-1:\*\* Same guard lost in the same file\./g) ?? [];
-    assert.equal(merged.length, 1, 'The moved duplicate is merged into the finding that stays.');
-    const coverage = functional.filter(stage => stage.status !== 'FAILED').reduce((n, stage) => n + stage.result.coverage.files.length, 0);
-    assert.equal(coverage, 120, 'Every file is reviewed once by the functional role, including split shards.');
+    const stages = stage => result.stages.filter(record => record.role === `azpr-review-${stage}`);
+    const first = stages('reviewer'), second = stages('reviewerb'), reviewed = pass => pass.filter(stage => stage.status !== 'FAILED');
+    const overflowed = first.filter(stage => stage.failureClass === 'overflow');
+    assert.equal(overflowed.length, 1, 'Exactly one shard of the first pass overflowed.');
+    const compactionObserved = overflowed[0].requestObservations?.kinds?.compaction > 0 && overflowed[0].requestObservations.rejected > 0 && Boolean(overflowed[0].execution?.compaction);
+    assert.ok(compactionObserved, 'The host attempted compaction in the failed turn and AZPR refused it.');
+    assert.equal(result.stages.filter(stage => stage.requestObservations?.kinds?.compaction > 0).length, 1, 'No other session met a compaction or a background summary.');
+    assert.deepEqual(reviewed(first).map(stage => stage.label).sort(), ['pass 1/2 shard 1/5a', 'pass 1/2 shard 1/5b', 'pass 1/2 shard 2/5', 'pass 1/2 shard 3/5', 'pass 1/2 shard 4/5', 'pass 1/2 shard 5/5'], 'The first pass: the split shard in two halves, and four whole shards.');
+    assert.deepEqual(second.map(stage => [stage.label, stage.status]).sort(), [1, 2, 3, 4, 5].map(shard => [`pass 2/2 shard ${shard}/5`, 'COMPLETE']), 'The second pass: five shards of 24 files.');
+    assert.ok(first.every(stage => stage.completedTools === 1), 'Each reviewer of the first pass read its first file.');
+    assert.ok(second.every(stage => stage.completedTools === 6), 'Each reviewer of the second pass read its six files as diffs.');
+    for (const [name, pass] of [['first', first], ['second', second]]) {
+      assert.equal(reviewed(pass).reduce((n, stage) => n + stage.result.coverage.files.length, 0), 120, `Every file is reviewed once by the ${name} pass, including split shards.`);
+    }
+    assert.deepEqual(stages('dedupe').map(stage => [stage.label, stage.status, stage.model]), [['', 'COMPLETE', 'fixture/first']], 'One file holds findings of two reviewer sessions.');
+    // The settings name no rater, so the first reviewer model rates: 30 findings in two sessions.
+    assert.deepEqual(stages('rating').map(stage => [stage.label, stage.status, stage.model]).sort(), [['1/2', 'COMPLETE', 'fixture/first'], ['2/2', 'COMPLETE', 'fixture/first']], 'The first reviewer model rates in two sessions.');
+    assert.equal(result.stages.length, 15, 'Seven and five reviewer sessions, one duplicate check and two ratings.');
+    const report = await readFile(join(debug, 'report.md'), 'utf8');
+    assert.match(report, /^\*\*Coverage:\*\* complete — 120\/120 changed file\(s\) reviewed, 120\/120 in all 2 passes$/m);
+    // The second pass's report of the first file is merged into the first pass's, which stays.
+    assert.deepEqual(report.match(/^- \*\*F-\d+ — MERGED[^\n]*$/gm), ['- **F-2 — MERGED → F-1:** Same guard lost in the same file. [Runtime: merged by the duplicate check of independent reviewer sessions.]'], 'The repeated report is merged into the finding that stays.');
+    // Every level is the rating's: the reviewers filed medium, and the report shows both.
+    assert.match(report, /^high: 20 · medium: 0 · low: 10$/m);
+    assert.deepEqual(['high', 'low'].map(level => report.match(new RegExp(`^### F-\\d+ — [^\\n]* \\(${level}; reviewer: medium\\)$`, 'gm'))?.length), [20, 10], 'The rating set the level of all 30 findings.');
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
     const posted = await latest();
-    assert.match(posted, /\] POSTED/, posted);
+    assert.match(posted, new RegExp(`^\\[AZPR [a-f0-9]{8}\\] POSTED; source review=${reviewId}\n`), posted);
+    assert.match(posted, new RegExp(`\nPublication \\(VERIFIED=${THREADS}\\):\n`), 'Every item was created and read back.');
     const state = azure.state;
-    assert.equal(state.threads.length, 18, '19 high findings in 17 inline comments (three of them share one) plus one summary; 10 low findings stay in the summary.');
-    const stagesOfPlan = result.stages.length ? JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages.filter(s => s.stage === 'comment-plan') : [];
+    assert.equal(state.threads.length, THREADS, '20 high findings in 18 inline comments (three of them share one) plus one summary; 10 low findings stay in the summary.');
+    const inline = state.threads.filter(thread => thread.threadContext), summary = state.threads.find(thread => !thread.threadContext).comments[0].content;
+    assert.ok(inline.length === THREADS - 1 && inline.every(thread => thread.comments[0].content.includes(`\n\n---\n${DISCLOSURE}\n\n<!-- azpr-comment:`)), 'Every inline comment discloses the review method and the models.');
+    assert.ok(summary.startsWith(`🤖 ${DISCLOSURE}\n\n## PR Review Summary\n`), 'The summary begins with the same disclosure; with complete coverage it names no gap.');
+    const stagesOfPlan = JSON.parse(await readFile(join(/Private debug directory: ([^\n]+)/.exec(posted)[1], 'result.json'), 'utf8')).stages;
+    assert.ok(stagesOfPlan.length && stagesOfPlan.every(stage => stage.role === 'azpr-review-comment-plan' && stage.model === 'fixture/first'), 'The first reviewer model plans the comments of a review of this pipeline.');
     const passes = stagesOfPlan.filter(s => s.commentWork.kind === 'group'), planner = stagesOfPlan.filter(s => s.commentWork.kind === 'plan');
     assert.deepEqual(passes.map(s => [s.label, s.status]), [['grouping', 'READY']], 'One grouping pass before the pages.');
-    assert.equal(planner.length, 8, '29 findings in planning pages of four; the three repeats share a page.');
+    assert.equal(planner.length, 8, '30 findings in planning pages of four; the three repeats share a page.');
     // The three places of the one defect: a comment at the first, the two others listed under its text, each still a row of the index.
-    assert.equal(grouped.length, 3);
+    assert.deepEqual(grouped, [0, 1, 3].map((file, index) => ({ id: `F-${[1, 3, 5][index]}`, location: `head:${files[file]}:1` })), 'The grouping pass was given the high findings in the order of the review.');
     const shared = state.threads.filter(thread => /📍 Also at/.test(thread.comments[0].content));
     assert.equal(shared.length, 1, 'One comment covers the three places.');
-    assert.equal(shared[0].comments[0].content.match(/^- `\/src\/module-\d\d\/file-\d{3}\.ts:1` \((?:F|R|V)-\d+\)$/gm)?.length, 2, shared[0].comments[0].content);
-    assert.match(posted, new RegExp(`- ${grouped.join(', ')} \\(`), 'The receipt names the findings of the shared comment.');
-    const summary = state.threads.find(thread => !thread.threadContext).comments[0].content;
-    for (const id of grouped) assert.match(summary, new RegExp(`\\| 🔴 high \\| ${id} — `), `${id} keeps its row in the summary index.`);
+    assert.equal(shared[0].threadContext.filePath, files[0], 'The shared comment stands at the first place.');
+    assert.match(shared[0].comments[0].content, new RegExp('^' + escaped('🔴 high: State lost where the guard was dropped\n\nTrigger, evidence and correction.\n\n' +
+      '**📍 Also at** (the same defect; fix these places with it):\n' + grouped.slice(1).map(({ id, location }) => `- \`${location.replace(/^head:/, '')}\` (${id})`).join('\n') +
+      `\n\n---\n${DISCLOSURE}\n\n`) + '<!-- azpr-comment:[a-f0-9]{32} -->\n\n<!-- azpr-comment:[a-f0-9]{32} -->$'), shared[0].comments[0].content);
+    assert.match(posted, new RegExp(`^- ${grouped.map(f => f.id).join(', ')} \\(${escaped(files[0])}:1\\): VERIFIED; thread=\\d+$`, 'm'), 'The receipt names the findings of the shared comment.');
+    assert.match(summary, /^high: 20 · medium: 0 · low: 10$/m, 'The summary counts the rated levels.');
+    for (const { id } of grouped) assert.match(summary, new RegExp(`\\| 🔴 high \\| ${id} — `), `${id} keeps its row in the summary index.`);
     assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '--publish', delivery: 'steer' });
-    assert.match(await latest(), /ALREADY_PRESENT/);
-    assert.equal(azure.callsTo('createThread').length, 18, 'A second publish writes nothing.');
-    console.log(JSON.stringify({ status: 'PASS', files: files.length, functionalSessions: functional.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-      riskSessions: stages('risk').length, verifierSessions: stages('verifier').length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, groupingPasses: passes.length, plannerSessions: planner.length, planningInFlightMax: planningMost, sharedComments: shared.length, threads: state.threads.length, providerRequests: requests.length,
+    assert.match(await latest(), new RegExp(`\nPublication \\(ALREADY_PRESENT=${THREADS}\\):\n`), 'A second publication finds every item on the PR.');
+    assert.equal(azure.callsTo('createThread').length, THREADS, 'A second publish writes nothing.');
+    console.log(JSON.stringify({ status: 'PASS', files: files.length, firstPassSessions: first.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
+      secondPassSessions: second.length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, groupingPasses: passes.length, plannerSessions: planner.length, planningInFlightMax: planningMost, sharedComments: shared.length, threads: state.threads.length, providerRequests: requests.length,
       maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
   }
 } finally {
@@ -214,5 +279,6 @@ try {
   provider.closeAllConnections(); await new Promise(resolveDone => provider.close(resolveDone));
   adoServer.closeAllConnections(); await new Promise(resolveDone => adoServer.close(resolveDone));
   await writeFile(join(fixture, 'host.log'), logs); await writeFile(join(fixture, 'requests.json'), JSON.stringify(requests, null, 2));
+  await writeFile(join(fixture, 'receipts.txt'), receipts.join('\n\n==========\n\n'));
   console.error('Private scale evidence: ' + fixture);
 }
