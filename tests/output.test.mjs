@@ -116,6 +116,11 @@ test('evaluateInitial lists repairable problems and still returns a usable PARTI
   const inherited = evaluateInitial(`{"status":"COMPLETE","coverage":{"files":["/src/a.ts"],"gaps":[]},"report":"r","findings":[{"id":"F-1","summary":"s","location":"head:/src/a.ts:1",` +
     `"counterevidence":"c","severity":"high","suggestion":"x","__proto__":{"evidence":"Inherited evidence."}}]}`, { prefix: 'F', assigned: ['/src/a.ts'] });
   assert.deepEqual(inherited.result.invalid, { 'F-1': ['missing evidence'] });
+  // A coverage without its list of files is asked for one; an empty list stands.
+  const listless = evaluateInitial(JSON.stringify({ status: 'COMPLETE', coverage: { gaps: [] }, findings: [], report: 'r' }), { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.ok(listless.issues.includes('"coverage.files" must list the assigned paths you reviewed (use [] for none).'), JSON.stringify(listless.issues));
+  const empty = evaluateInitial(JSON.stringify({ status: 'PARTIAL', coverage: { files: [], gaps: ['Not reached.'] }, findings: [], report: 'r' }), { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.ok(!empty.issues.some(issue => /coverage\.files/.test(issue)), JSON.stringify(empty.issues));
   // Whether the parser gave an ID is its own mark: an answer that writes the mark has it removed.
   const marked = evaluateInitial(JSON.stringify({ status: 'COMPLETE', coverage: { files: ['/src/a.ts'], gaps: [] }, report: 'r', findings: [{ id: 'F-1', summary: 's', location: 'head:/src/a.ts:1',
     evidence: 'e', counterevidence: 'c', severity: 'high', suggestion: 'x', generatedId: true }, { summary: 's2', location: 'head:/src/a.ts:2', evidence: 'e', counterevidence: 'c', severity: 'low', suggestion: 'x' }] }), { prefix: 'F', assigned: ['/src/a.ts'] });

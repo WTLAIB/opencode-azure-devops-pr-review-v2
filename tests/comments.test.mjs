@@ -792,10 +792,10 @@ eachKind('a comment for several places quotes lines the file has, also in a revi
   // A quote that is found at other lines than declared is moved there, and the comment stands where the quote is.
   const moved = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { startLine: 1, endLine: 1, anchor: 'line four' })]), { review: r, assigned, repeats, sources: shown });
   assert.deepEqual([moved.issues, moved.result.comments[0].findingId, moved.result.comments[0].startLine], [[], 'F-3', 4]);
-  // A quote of the file's last line and a blank one after it matches the text (which ends with a line break), but the
-  // file has no such line: the range would end past its end.
+  // A quote of the file's last line and a blank one after it: the text ends with a line break, but the empty element
+  // after it is no line of the file, so the quote is not found at the declared lines nor anywhere else.
   const past = evaluatePlanPage(answer([combined(['F-1', 'F-2', 'F-3'], { path: '/src/b.ts', startLine: 3, endLine: 4, anchor: 'third\n ' })]), { review: r, assigned, repeats, sources: shown });
-  assert.match(past.issues.join('\n'), /combined comment for F-1, F-2, F-3: the anchor \(lines 3-4\) reaches past the end of \/src\/b\.ts, which has 3 line\(s\); quote lines the file has/);
+  assert.match(past.issues.join('\n'), /combined comment for F-1, F-2, F-3: the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts/);
 });
 
 test('the grouping pass proposes groups under the same rules; what breaks one is reported, then dropped', () => {
@@ -1062,6 +1062,10 @@ eachKind('adjustment requests name publishable findings and replace whole lists'
   assert.throws(() => resolveAdjustments(base, { exclude: ['F-7'] }),
     /^Error: \[AZPR\] Nothing was changed: F-7 is not a finding of review abcdef12\. Findings of review abcdef12 you can adjust: F-1, F-2, R-1\.$/);
   assert.throws(() => resolveAdjustments(base, { exclude: ['R-2'] }), /R-2 was merged into F-1; adjust F-1 instead/);
+  // Through a chain that a review of 0.4.x may hold (R-3 -> R-2 -> F-1), the finding named is the one that stands.
+  base.final.dispositions.push({ id: 'R-3', status: 'MERGED', mergedInto: 'R-2', reason: 'Same cause.' });
+  assert.throws(() => resolveAdjustments(base, { exclude: ['R-3'] }), /Nothing was changed: R-3 was merged into F-1; adjust F-1 instead\./);
+  base.final.dispositions.pop();
   assert.throws(() => resolveAdjustments(base, { severity: { 'F-9': 'low' } }), new RegExp(`F-9 is ${none ? 'NEEDS_INFO' : 'REJECTED'}, not a finding this review can publish`));
   assert.throws(() => resolveAdjustments(base, { exclude: ['F-1'], severity: { 'F-1': 'low' } }), /F-1 cannot be excluded and given a severity at once/);
   const first = resolveAdjustments(base, { exclude: ['R-1', 'F-1'], severity: { 'F-2': 'medium' } });
@@ -1160,6 +1164,27 @@ test('a text that names a finding merged into an excluded one is held as one tha
     assert.deepEqual(excludedReferences({ ...chained, plan: { ...adjusted.plan, comments: [naming] } }), ['the comment of F-2 at /src/a.ts:2 names F-4'], rows.map(row => row.id).join());
   }
 });
+
+eachKind('a location saved without its side or leading slash names its file; one that names none keeps the finding in the summary', (t, { make }) => {
+  const both = [...observed, { input: { path: '/src/b.ts', version: head }, output: 'b one\nconst other = load();\n' }];
+  for (const [location, problem] of [['src/a.ts:2', /path \/src\/b\.ts is not F-1's own file \/src\/a\.ts/], ['', /F-1's location names no file of its own to comment on/]]) {
+    const r = make([finding('F-1', 'high', { location })], both);
+    const page = evaluatePlanPage(answer([comment({ path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'const other = load();' })]), { review: r, assigned: publishableFindings(r) });
+    assert.ok(page.issues.some(issue => problem.test(issue)), `${location}: ${JSON.stringify(page.issues)}`);
+  }
+}, ['verified']);
+
+eachKind('a quote that adds the empty line after a file\'s last line is no quote of the file', (t, { make }) => {
+  // The text a session read has six lines and ends with a line break: the element after it is no line, so a quote
+  // of line six and an empty line after it, at lines 6-7, is not found; a quote with only the line break is line six.
+  const r = make([finding('F-1')]);
+  for (const anchor of ['line six\n\n', 'line six\n ']) {
+    const page = evaluatePlanPage(answer([comment({ startLine: 6, endLine: 7, anchor })]), { review: r, assigned: publishableFindings(r) });
+    assert.ok(page.issues.some(issue => /comment for F-1: the anchor text was not found in the HEAD source/.test(issue)), `${JSON.stringify(anchor)}: ${JSON.stringify(page.issues)}`);
+  }
+  const trimmed = evaluatePlanPage(answer([comment({ startLine: 6, endLine: 7, anchor: 'line six\n' })]), { review: r, assigned: publishableFindings(r) });
+  assert.deepEqual([trimmed.issues, trimmed.result.comments.map(c => [c.startLine, c.endLine])], [[], [[6, 6]]]);
+}, ['reviewers', 'quick']);
 
 eachKind('a comment for one finding stands in that finding\'s own file', (t, { make }) => {
   // F-1 is at /src/a.ts:2; the planner quotes a line of /src/b.ts, which a session read as well.

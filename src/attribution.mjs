@@ -12,6 +12,7 @@ const vocabulary = {
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
       checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every reported finding.',
       unchecked: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
+      checksSome: 'Each reviewer session that gave a usable review checked its own findings against the source it read, and the runtime checked the form and source of every reported finding.',
       dedupe: 'A duplicate check merged repeated reports of one defect.', dedupeNone: 'A duplicate check compared what different sessions reported in one file and merged nothing.',
       dedupeFailed: count => `The duplicate check of ${count} file(s) failed, so their findings may repeat each other.`,
       rated: 'A rating session without tools set the severities from the finding texts alone.', kept: count => `${count} finding(s) got no usable rating and keep their reviewer's level.`, unrated: 'The severities are the reviewers\' own.',
@@ -26,6 +27,7 @@ const vocabulary = {
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
       checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則回報的發現的形式與來源。',
       unchecked: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
+      checksSome: '給出可用審查的工作階段依自己讀到的原始碼查證自己的發現，runtime 檢查每則回報的發現的形式與來源。',
       dedupe: '重複檢查合併了同一個缺陷的重複回報。', dedupeNone: '重複檢查比對了不同工作階段在同一個檔案回報的發現，沒有合併任何一則。',
       dedupeFailed: count => `${count} 個檔案的重複檢查失敗，這些檔案的發現可能彼此重複。`,
       rated: '嚴重度由一個沒有工具的評定工作階段只依發現的文字評定。', kept: count => `${count} 則發現沒有可用的評定，沿用審查者給的等級。`, unrated: '嚴重度是審查者自己給的。',
@@ -40,6 +42,7 @@ const vocabulary = {
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
       checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则报告的发现的形式与来源。',
       unchecked: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
+      checksSome: '给出可用审查的会话依自己读到的源码查证自己的发现，runtime 检查每则报告的发现的形式与来源。',
       dedupe: '重复检查合并了同一个缺陷的重复报告。', dedupeNone: '重复检查比对了不同会话在同一个文件报告的发现，没有合并任何一则。',
       dedupeFailed: count => `${count} 个文件的重复检查失败，这些文件的发现可能彼此重复。`,
       rated: '严重度由一个没有工具的评定会话只依发现的文字评定。', kept: count => `${count} 则发现没有可用的评定，沿用审查者给的等级。`, unrated: '严重度是审查者自己给的。',
@@ -139,10 +142,10 @@ export function methodText(method, language) {
   const sessions = passes.reduce((sum, pass) => sum + (pass.sessions ?? 0), 0), failed = passes.reduce((sum, pass) => sum + (pass.failed ?? 0), 0);
   const checked = (check.groups ?? 0) - (check.failed ?? 0);
   const rated = rating.state && rating.state !== 'off' && rating.rated > 0;
-  // Reviewers reviewed and checked their findings only where a session gave a usable review; otherwise they were
-  // asked to, and nothing on record was checked.
-  const ok = answered({ method });
-  return [passes.length > 1 ? (ok ? m.several : m.severalAsked)(passes.length) : ok ? m.one : m.oneAsked, ...(failed ? [m.failed(failed, sessions)] : []), ok ? m.checks : m.unchecked,
+  // The passes reviewed the files where every session gave a usable review; otherwise they were asked to, and
+  // only the sessions that gave one checked their findings (none, where no session did).
+  const ok = answered({ method }), all = ok && !failed;
+  return [passes.length > 1 ? (all ? m.several : m.severalAsked)(passes.length) : all ? m.one : m.oneAsked, ...(failed ? [m.failed(failed, sessions)] : []), !ok ? m.unchecked : all ? m.checks : m.checksSome,
     ...(check.merged ? [m.dedupe] : checked > 0 ? [m.dedupeNone] : []), ...(check.failed ? [m.dedupeFailed(check.failed)] : []),
     rated ? m.rated : m.unrated, ...(rated && rating.kept ? [m.kept(rating.kept)] : []), m.end].join(pick(language, ' ', '', ''));
 }

@@ -287,6 +287,8 @@ export function evaluateInitial(answerText, { prefix, assigned = [], inventory =
   const envelope = { findings: Array.isArray(source.findings), coverage: isObject(source.coverage) };
   if (!envelope.findings) issues.push('"findings" must be an array (use [] when there are none).');
   if (!envelope.coverage) issues.push('"coverage" must be an object with "files" (reviewed paths) and "gaps".');
+  // A coverage without its list of files says nothing of what was reviewed: it is asked for (an empty list stands).
+  else if (!Array.isArray(coverage.files)) issues.push('"coverage.files" must list the assigned paths you reviewed (use [] for none).');
   const findings = rows(source.findings, warnings, 'findings').map(row => normalizeFinding(row, warnings));
   const problems = findings.map((row, index) => {
     const found = findingProblems(row);

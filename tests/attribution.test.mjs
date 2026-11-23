@@ -339,8 +339,9 @@ test('a report states status, coverage and method separately and keeps items tha
   assert.match(renderFinalReport({ ...review, status: 'PARTIAL', coverageSummary: { complete: true } }, 'zh-TW'),
     /^\*\*PARTIAL: 沒有任何審查工作階段產生可用結果，下列結論僅供檢視，不能用於 PR 留言。\*\*\n\n\*\*覆蓋範圍:\*\* 完整\n\n## 查證與限制\n/);
   const provenance = provenanceReport({ mode: 'quick', stages: [{ role: 'azpr-quick-reviewer', model: 'p/q', sessions: 1, findings: 2 }] }, review, 'en');
-  // The provenance under it says the same of the method: one pass, and the session that failed.
-  assert.match(provenance, /\n\nOne reviewer session per shard reviewed the changed files\. 1 of the 2 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed\. Each reviewer checked its own findings /);
+  // The provenance under it says the same of the method: one pass, asked to review, and the session that failed;
+  // only the session that gave a usable review checked its findings.
+  assert.match(provenance, /\n\nOne reviewer session per shard was asked to review the changed files\. 1 of the 2 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed\. Each reviewer session that gave a usable review checked its own findings /);
   assert.match(provenance, /\| Review \| `p\/q` \| 1 \| 2 \|/);
   assert.doesNotMatch(provenance, /New verifier findings|Quick review/);
 });
@@ -396,6 +397,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
       checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every reported finding.',
       none: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
+      some: 'Each reviewer session that gave a usable review checked its own findings against the source it read, and the runtime checked the form and source of every reported finding.',
       merged: 'A duplicate check merged repeated reports of one defect.', nothing: 'A duplicate check compared what different sessions reported in one file and merged nothing.',
       unchecked: count => `The duplicate check of ${count} file(s) failed, so their findings may repeat each other.`,
       rated: 'A rating session without tools set the severities from the finding texts alone.', kept: count => `${count} finding(s) got no usable rating and keep their reviewer's level.`,
@@ -405,6 +407,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
       checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則回報的發現的形式與來源。',
       none: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
+      some: '給出可用審查的工作階段依自己讀到的原始碼查證自己的發現，runtime 檢查每則回報的發現的形式與來源。',
       merged: '重複檢查合併了同一個缺陷的重複回報。', nothing: '重複檢查比對了不同工作階段在同一個檔案回報的發現，沒有合併任何一則。',
       unchecked: count => `${count} 個檔案的重複檢查失敗，這些檔案的發現可能彼此重複。`,
       rated: '嚴重度由一個沒有工具的評定工作階段只依發現的文字評定。', kept: count => `${count} 則發現沒有可用的評定，沿用審查者給的等級。`,
@@ -414,6 +417,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
       checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则报告的发现的形式与来源。',
       none: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
+      some: '给出可用审查的会话依自己读到的源码查证自己的发现，runtime 检查每则报告的发现的形式与来源。',
       merged: '重复检查合并了同一个缺陷的重复报告。', nothing: '重复检查比对了不同会话在同一个文件报告的发现，没有合并任何一则。',
       unchecked: count => `${count} 个文件的重复检查失败，这些文件的发现可能彼此重复。`,
       rated: '严重度由一个没有工具的评定会话只依发现的文字评定。', kept: count => `${count} 则发现没有可用的评定，沿用审查者给的等级。`,
@@ -426,10 +430,11 @@ test('the provenance says how the findings were produced, in fixed sentences fro
   const cases = [
     ['one pass, no file with findings of two sessions, every level rated', {}, s => [s.one, s.checks, s.rated, s.end]],
     ['three passes, each shard in a session of its own', passes([2, 0], [2, 0], [2, 0]), s => [s.several(3), s.checks, s.rated, s.end]],
-    // Sessions that failed or gave no usable review are counted against all reviewer sessions, right after the passes.
-    ['one session of the second pass failed', passes([2, 0], [2, 1]), s => [s.several(2), s.failed(1, 4), s.checks, s.rated, s.end]],
-    ['every session of the second pass failed', passes([2, 0], [2, 2]), s => [s.several(2), s.failed(2, 4), s.checks, s.rated, s.end]],
-    ['two of the only pass\'s three sessions failed', passes([3, 2]), s => [s.one, s.failed(2, 3), s.checks, s.rated, s.end]],
+    // Sessions that failed or gave no usable review are counted against all reviewer sessions, right after the passes,
+    // which were then asked to review; only the sessions that gave a usable review checked their findings.
+    ['one session of the second pass failed', passes([2, 0], [2, 1]), s => [s.severalAsked(2), s.failed(1, 4), s.some, s.rated, s.end]],
+    ['every session of the second pass failed', passes([2, 0], [2, 2]), s => [s.severalAsked(2), s.failed(2, 4), s.some, s.rated, s.end]],
+    ['two of the only pass\'s three sessions failed', passes([3, 2]), s => [s.oneAsked, s.failed(2, 3), s.some, s.rated, s.end]],
     // Where no session gave a usable review, no reviewer checked anything that is on record.
     ['no session gave a usable review', { ...passes([2, 2], [2, 2]), ...rating('first', 0, 0) }, s => [s.severalAsked(2), s.failed(4, 4), s.none, s.own, s.end]],
     ['the one session gave no usable review', { ...passes([1, 1]), ...rating('first', 0, 0) }, s => [s.oneAsked, s.failed(1, 1), s.none, s.own, s.end]],
@@ -447,7 +452,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     ['a rating that set some levels: the others keep their reviewer\'s', rating('named', 25, 5, 1), s => [s.one, s.checks, s.rated, s.kept(5), s.end]],
     ['a rating session that failed set no level', rating('first', 0, 3, 1), s => [s.one, s.checks, s.own, s.end]],
     ['nothing to rate', rating('first', 0, 0), s => [s.one, s.checks, s.own, s.end]],
-    ['all of it at once', { ...passes([2, 0], [2, 1]), ...check(3, 1, 2), ...rating('first', 4, 2) }, s => [s.several(2), s.failed(1, 4), s.checks, s.merged, s.unchecked(1), s.rated, s.kept(2), s.end]],
+    ['all of it at once', { ...passes([2, 0], [2, 1]), ...check(3, 1, 2), ...rating('first', 4, 2) }, s => [s.severalAsked(2), s.failed(1, 4), s.some, s.merged, s.unchecked(1), s.rated, s.kept(2), s.end]],
   ];
   for (const [language, s] of Object.entries(sentences)) for (const [name, record, expected] of cases) {
     assert.equal(methodText(method(record), language), expected(s).join(s.join), `${language}: ${name}`);
@@ -457,11 +462,11 @@ test('the provenance says how the findings were produced, in fixed sentences fro
   // The report puts the sentences between its disclaimer and the table, and the review's dispositions under it.
   const provenance = { mode: 'review', stages: [{ role: 'azpr-review-reviewer', model: 'p/a', sessions: 2, findings: 2 }, { role: 'azpr-review-reviewerb', model: 'p/b', sessions: 1, findings: 2 },
     { role: 'azpr-review-dedupe', model: 'p/a', sessions: 1, findings: 0 }, { role: 'azpr-review-rating', model: 'p/a', sessions: 1, findings: 0 }] };
-  const told = s => [s.several(2), s.failed(1, 4), s.checks, s.merged, s.rated, s.end].join(s.join);
+  const told = s => [s.severalAsked(2), s.failed(1, 4), s.some, s.merged, s.rated, s.end].join(s.join);
   assert.equal(provenanceReport(provenance, twoPasses(), 'en'), '## AI review provenance (review)\n\n' +
     'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.\n\n' +
-    '2 independent reviewer passes reviewed the changed files, each shard in a session of its own. 1 of the 4 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed. ' +
-    'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every reported finding. A duplicate check merged repeated reports of one defect. ' +
+    '2 independent reviewer passes were asked to review the changed files, each shard in a session of its own. 1 of the 4 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed. ' +
+    'Each reviewer session that gave a usable review checked its own findings against the source it read, and the runtime checked the form and source of every reported finding. A duplicate check merged repeated reports of one defect. ' +
     'A rating session without tools set the severities from the finding texts alone. No separate verification ran, and nothing was decided by voting.\n\n' +
     '| Stage | Selected provider/model ID | Sessions | Findings reported |\n| --- | --- | --- | --- |\n| Review (pass 1) | `p/a` | 2 | 2 |\n| Review (pass 2) | `p/b` | 1 | 2 |\n| Duplicate check | `p/a` | 1 | — |\n| Severity rating | `p/a` | 1 | — |\n\n' +
     'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.\n\n' +

@@ -314,10 +314,14 @@ export function resolveAdjustments(review, { exclude, severity, reset = false })
   const findings = publishableFindings(review);
   const byId = new Map(findings.map(finding => [finding.id, finding]));
   const problems = [];
+  const rows = review.final?.dispositions ?? [];
   const check = id => {
     if (byId.has(id)) return;
-    const row = (review.final?.dispositions ?? []).find(item => item.id === id);
-    problems.push(row?.status === 'MERGED' && row.mergedInto ? `${id} was merged into ${row.mergedInto}; adjust ${row.mergedInto} instead`
+    const row = rows.find(item => item.id === id);
+    // A merged finding names the finding that stands for it, through every link of a chain (0.4.x saved some).
+    let target = row?.status === 'MERGED' ? row.mergedInto : undefined;
+    for (const seen = new Set([id]); target && !byId.has(target) && !seen.has(target);) { seen.add(target); target = rows.find(item => item.id === target)?.mergedInto; }
+    problems.push(row?.status === 'MERGED' && byId.has(target) ? `${id} was merged into ${target}; adjust ${target} instead`
       : row ? `${id} is ${row.status}, not a finding this review can publish` : `${id} is not a finding of review ${review.id}`);
   };
   for (const id of [...(exclude ?? []), ...Object.keys(severity ?? {})]) check(id);
@@ -757,7 +761,9 @@ export function restoreAnchor(comment, review) {
   });
   const declared = new Map();
   for (const observation of observations) {
-    const lines = observation.output.split(/\r?\n/, comment.endLine + 1);
+    // The empty element after a final newline is no line of the file, as in the search below.
+    const lines = observation.output.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
     const selected = lines.slice(comment.startLine - 1, comment.endLine), anchor = selected.join('\n');
     if (selected.length === count && forms.has(trim(anchor))) declared.set(JSON.stringify([anchor]), { anchor, startLine: comment.startLine, endLine: comment.endLine });
   }
@@ -1108,9 +1114,12 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       continue;
     }
     const { problems, comment } = draft(c, finding.id, finding.severity);
-    // A comment for one finding stands in that finding's own file: an excerpt of another file is another place.
-    const own = parseLocation(finding.location);
-    if (own && comment?.path && comment.path !== own.path) problems.push(`path ${comment.path} is not ${finding.id}'s own file ${own.path}; quote lines of that file`);
+    // A comment for one finding stands in that finding's own file: an excerpt of another file is another place. A
+    // location 0.4.x saved without its side or leading slash names its file as well; one that names none keeps the
+    // finding in the summary index.
+    const own = parseLocation(finding.location) ?? parseLocation(`/${String(finding.location ?? '').trim().replace(/^(?:head|base):/, '').replace(/^\/+/, '')}`);
+    if (!own) problems.push(`${finding.id}'s location names no file of its own to comment on`);
+    else if (comment?.path && comment.path !== own.path) problems.push(`path ${comment.path} is not ${finding.id}'s own file ${own.path}; quote lines of that file`);
     // A comment for one place is not put on quoted lines that carry a comment for several places.
     const taken = !problems.length && posted ? occupiedLines(review.target, comment, posted) : '';
     if (taken) problems.push(`${taken}. Skip ${finding.id} with cause existing-thread when that thread covers it, or quote other lines`);
