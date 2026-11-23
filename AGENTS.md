@@ -349,7 +349,8 @@ settings, backups and failure records. Never upload `.local/`.
   neither adjusted nor planned again once its publication started. That save
   and the new preview's save must succeed; never let a failed save report an
   adjustment as applied. Text the runtime renders that names an excluded
-  finding, or a finding merged into one, holds publication. Items an earlier
+  finding, or a finding merged into one (through every link of a chain),
+  holds publication. Items an earlier
   publication already put on the
   PR are skipped as always; its receipt names those whose text differs, since
   posted comments are never changed.
@@ -360,8 +361,10 @@ settings, backups and failure records. Never upload `.local/`.
 - One defect made at several places is several findings and may be one
   comment. Whether findings are the same defect is the planner's judgment (a
   grouping pass before the pages, then the page that writes the comment).
-  Where the comment stands and what it lists is the runtime's: the finding
-  whose lines hold the anchor, and under the planner's text the other
+  Where the comment stands and what it lists is the runtime's: a comment for
+  one finding stands in that finding's own file (a quote of another file is
+  another place, sent back to the planner), a comment for several places at
+  the finding whose lines hold the anchor, and under the planner's text the other
   findings' own locations (`renderOtherPlaces`), never locations a model
   wrote, as a plain list (nothing collapsed or linked: automatic publication
   holds text that hides). Settle the groups before the pages are made, so

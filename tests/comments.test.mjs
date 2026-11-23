@@ -1137,7 +1137,7 @@ eachKind('posted text that names an excluded finding is found, also in the summa
   assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-1']);
   assert.equal(ownFinding(cross.final.dispositions[1]).summary, 'Retry failure continues after the F-1 guard is restored', 'The review keeps its own text.');
   // Markdown emphasis is no name: _F-1_ names F-1, as F-1 does; a name that holds the ID does not.
-  for (const [content, held] of [['Same cause as _F-1_.', true], ['Same cause as __F-1__.', true], ['See check_F-1 in the log.', false]]) {
+  for (const [content, held] of [['Same cause as _F-1_.', true], ['Same cause as __F-1__.', true], ['See check_F-1 in the log.', false], ['See branch topic-_F-1 in the log.', false]]) {
     assert.deepEqual(excludedReferences({ ...clean, plan: { ...clean.plan, comments: [{ ...comment, content }] } }), held ? ['the comment of F-2 at /src/a.ts:2 names F-1'] : [], content);
   }
 });
@@ -1152,6 +1152,25 @@ test('a text that names a finding merged into an excluded one is held as one tha
   assert.deepEqual(excludedReferences({ ...adjusted, plan: { ...adjusted.plan, comments: [comment] } }), ['the comment of F-2 at /src/a.ts:2 names F-3']);
   // Without the exclusion of F-1, F-3 holds nothing.
   assert.ok(!excludedReferences({ ...adjusted, adjustments: { excluded: ['F-2'], severity: {} }, plan: { ...adjusted.plan, comments: [comment] } }).some(row => /F-3/.test(row)));
+  // Through every link of a chain, whatever the order of the rows: a review of 0.4.x may hold F-4 -> F-3 -> F-1.
+  const link = { ...merged, id: 'F-4', mergedInto: 'F-3', localId: 'F-1002' };
+  for (const rows of [[link, merged], [merged, link]]) {
+    const chained = { ...adjusted, final: { ...adjusted.final, dispositions: [...base.final.dispositions, ...rows] } };
+    const naming = { ...comment, content: 'The cause is F-4.' };
+    assert.deepEqual(excludedReferences({ ...chained, plan: { ...adjusted.plan, comments: [naming] } }), ['the comment of F-2 at /src/a.ts:2 names F-4'], rows.map(row => row.id).join());
+  }
+});
+
+eachKind('a comment for one finding stands in that finding\'s own file', (t, { make }) => {
+  // F-1 is at /src/a.ts:2; the planner quotes a line of /src/b.ts, which a session read as well.
+  const both = [...observed, { input: { path: '/src/b.ts', version: head }, output: 'b one\nconst other = load();\n' }];
+  const r = make([finding('F-1')], both);
+  const text = answer([comment({ path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'const other = load();' })]);
+  const first = evaluatePlanPage(text, { review: r, assigned: publishableFindings(r) });
+  assert.ok(first.issues.some(issue => /^comment for F-1: [^\n]*path \/src\/b\.ts is not F-1's own file \/src\/a\.ts; quote lines of that file/.test(issue)), JSON.stringify(first.issues));
+  const final = evaluatePlanPage(text, { review: r, assigned: publishableFindings(r), final: true });
+  assert.deepEqual([final.result.comments, final.result.skipped.map(s => s.findingId)], [[], ['F-1']]);
+  assert.match(final.result.skipped[0].reason, /is not F-1's own file \/src\/a\.ts/);
 });
 
 eachKind('next steps after a preview need no review ID, use the finding IDs of the review and keep what is already adjusted', (t, { make }) => {

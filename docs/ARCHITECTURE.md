@@ -645,7 +645,7 @@ an `adjustments` field only while some are active. Two states matter:
   planner's own text, and `excludedReferences` checks the assembled preview,
   including the summary rows rendered from the review's finding summaries,
   and holds publication when one still names an excluded ID, or the ID of a
-  finding merged into an excluded one.
+  finding merged into an excluded one through any chain of merges.
 - **Ever adjusted** (also after `--reset`) keeps the stricter publication
   rules. An adjustment is saved together with dropping the earlier preview
   before anything else, and a failed save changes nothing; the new preview is

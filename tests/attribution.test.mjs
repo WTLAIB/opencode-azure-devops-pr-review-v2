@@ -233,7 +233,7 @@ test('final reports show runtime-owned versions, coverage, warnings and what is 
     initialObservations: [finding('F-1')], coverageSummary: coverage({ complete: false, unreviewedFiles: 1, reasons: ['shard-failed'], reviewedOnce: 0, reviewedByAll: 0, failedSessions: 1 }) });
   const partial = renderFinalReport(unusable, 'en');
   assert.match(partial, /^\*\*PARTIAL: No review session produced a usable result\. These claims are provisional and cannot be used for PR comments\.\*\*\n\n\*\*Coverage:\*\* incomplete \(1 changed file\(s\) not reviewed\) — 0\/1 changed file\(s\) reviewed\n\n## Checks and limitations\n/);
-  assert.doesNotMatch(partial, /Findings were checked by their reviewer/, 'No finding of it was checked by a reviewer whose answer could be used.');
+  assert.doesNotMatch(partial, /findings were checked by their reviewer/i, 'No finding of it was checked by a reviewer whose answer could be used.');
   assert.match(partial, /\n\n## Reported findings\n\nNone reported\.\n\n## Scope and versions\n/);
   assert.match(partial, /\n\n## Review observations \(reference only, not final conclusions\)\n\n### F-1 — Defect F-1 \(high\)\n/);
   assert.doesNotMatch(partial, /## PR Review Summary|need more information/, 'Only a COMPLETE review has a summary and items that wait for information.');
@@ -243,10 +243,10 @@ test('final reports show runtime-owned versions, coverage, warnings and what is 
   assert.match(renderFinalReport(final('PARTIAL'), 'en'), /PARTIAL: No review session produced a usable result/);
   // A STALE review says that its source changed and, where a session gave a usable review, how its findings were
   // checked; where none did, it says that instead.
-  assert.match(renderFinalReport(final('STALE'), 'en'), /^\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*Findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\*/);
+  assert.match(renderFinalReport(final('STALE'), 'en'), /^\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*Reported findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\*/);
   const staleUnusable = renderFinalReport({ ...unusable, status: 'STALE', method: method({ passes: [{ pass: 1, model: 'p/a', sessions: 1, failed: 1 }] }) }, 'en');
   assert.match(staleUnusable, /^\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*STALE: No review session produced a usable result\. These claims are provisional and cannot be used for PR comments\.\*\*\n\n\*\*Coverage:\*\*/);
-  assert.doesNotMatch(staleUnusable, /Findings were checked by their reviewer/);
+  assert.doesNotMatch(staleUnusable, /findings were checked by their reviewer/i);
 });
 
 test('provenance aggregates shard sessions per role and model: the passes in their order, then the duplicate check and the rating', () => {
@@ -307,7 +307,7 @@ test('a report states status, coverage and method separately and keeps items tha
     coverageSummary: coverage({ complete: false, unreviewedFiles: 1, reasons: ['shard-failed'], files: 2, reviewedOnce: 1, reviewedByAll: 1, failedSessions: 1 }) });
   const report = renderFinalReport(review, 'en');
   // First what the findings are, then the coverage: one number for one pass.
-  assert.match(report, /^\*\*Findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\* incomplete \(1 changed file\(s\) not reviewed\) — 1\/2 changed file\(s\) reviewed\n\n## PR Review Summary\n/);
+  assert.match(report, /^\*\*Reported findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\* incomplete \(1 changed file\(s\) not reviewed\) — 1\/2 changed file\(s\) reviewed\n\n## PR Review Summary\n/);
   assert.match(report, /## Reported findings\n\n### F-1/);
   assert.match(report, /## Findings that need more information \(not eligible for comments\)\n\n### F-2 — Unchecked claim/);
   assert.match(report, /- \*\*F-1 — REPORTED:\*\* passed the runtime's format and source checks; no separate verification ran\./);
@@ -320,7 +320,7 @@ test('a report states status, coverage and method separately and keeps items tha
   assert.match(clean, /\n\n## Finding decisions\n\nNone reported\.$/);
   // What a report opens with, paragraph by paragraph, in each language.
   const opening = (status, language, count) => renderFinalReport({ ...review, status }, language).split('\n\n').slice(0, count);
-  const banner = { en: '**Findings were checked by their reviewer against the source; no separate verification ran.**', 'zh-TW': '**發現由審查者依原始碼自行查證；沒有另外的驗證。**', 'zh-CN': '**发现由审查者依源码自行查证；没有另外的验证。**' };
+  const banner = { en: '**Reported findings were checked by their reviewer against the source; no separate verification ran.**', 'zh-TW': '**回報的發現由審查者依原始碼自行查證；沒有另外的驗證。**', 'zh-CN': '**报告的发现由审查者依源码自行查证；没有另外的验证。**' };
   const covered = { en: '**Coverage:** incomplete (1 changed file(s) not reviewed) — 1/2 changed file(s) reviewed', 'zh-TW': '**覆蓋範圍:** 不完整 (1 個變更檔未審查) — 已審查 1/2 個變更檔', 'zh-CN': '**覆盖范围:** 不完整 (1 个变更文件未审查) — 已审查 1/2 个变更文件' };
   for (const [language, stale, partial, overview] of [
     ['en', '**STALE: The PR source changed during the review. Run a new review before commenting.**', '**PARTIAL: No review session produced a usable result. These claims are provisional and cannot be used for PR comments.**', '## Checks and limitations'],
@@ -367,7 +367,7 @@ test('the coverage line gives two numbers for several passes: the files reviewed
 
 test('a report shows the level in effect with the reviewer\'s own where the rating changed it, and a merged report as a decision', () => {
   const report = renderFinalReport(twoPasses(), 'en');
-  assert.match(report, /^\*\*Findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\* complete — 3\/3 changed file\(s\) reviewed, 2\/3 in all 2 passes\n\n## PR Review Summary\n\nhigh: 1 · medium: 0 · low: 1\n\n/);
+  assert.match(report, /^\*\*Reported findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\* complete — 3\/3 changed file\(s\) reviewed, 2\/3 in all 2 passes\n\n## PR Review Summary\n\nhigh: 1 · medium: 0 · low: 1\n\n/);
   // The summary and the heading carry the rating's level; the heading adds the reviewer's own only where it differs.
   assert.match(report, /\n\| 🔴 high \| F-1 — Defect F-1 \| head:\/src\/a\.ts:3 \|\n\| 🔵 low \| F-3 — Defect F-3 \| head:\/src\/a\.ts:3 \|\n/);
   assert.match(report, /\n## Reported findings\n\n### F-1 — Defect F-1 \(high; reviewer: medium\)\n\n\*\*Location:\*\* head:\/src\/a\.ts:3\n/);
@@ -394,7 +394,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     en: { join: ' ', one: 'One reviewer session per shard reviewed the changed files.', several: n => `${n} independent reviewer passes reviewed the changed files, each shard in a session of its own.`,
       oneAsked: 'One reviewer session per shard was asked to review the changed files.', severalAsked: n => `${n} independent reviewer passes were asked to review the changed files, each shard in a session of its own.`,
       failed: (count, of) => `${count} of the ${of} reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed.`,
-      checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding.',
+      checks: 'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every reported finding.',
       none: 'No reviewer session gave a usable review, so the findings on record are observations that nothing checked.',
       merged: 'A duplicate check merged repeated reports of one defect.', nothing: 'A duplicate check compared what different sessions reported in one file and merged nothing.',
       unchecked: count => `The duplicate check of ${count} file(s) failed, so their findings may repeat each other.`,
@@ -403,7 +403,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     'zh-TW': { join: '', one: '每個分片的變更檔由一個審查工作階段審查。', several: n => `變更檔由 ${n} 次獨立的審查各審一遍，每個分片各用一個工作階段。`,
       oneAsked: '每個分片的變更檔交給一個審查工作階段審查。', severalAsked: n => `變更檔安排了 ${n} 次獨立的審查，每個分片各用一個工作階段。`,
       failed: (count, of) => `${of} 個審查工作階段中有 ${count} 個失敗或沒有可用的審查結果；因此沒審到的部分見覆蓋範圍。`,
-      checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則發現的形式與來源。',
+      checks: '審查者依自己讀到的原始碼查證自己的發現，runtime 檢查每則回報的發現的形式與來源。',
       none: '沒有任何審查工作階段給出可用的審查，紀錄中的發現只是未經查證的觀察。',
       merged: '重複檢查合併了同一個缺陷的重複回報。', nothing: '重複檢查比對了不同工作階段在同一個檔案回報的發現，沒有合併任何一則。',
       unchecked: count => `${count} 個檔案的重複檢查失敗，這些檔案的發現可能彼此重複。`,
@@ -412,7 +412,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
     'zh-CN': { join: '', one: '每个分片的变更文件由一个审查会话审查。', several: n => `变更文件由 ${n} 次独立的审查各审一遍，每个分片各用一个会话。`,
       oneAsked: '每个分片的变更文件交给一个审查会话审查。', severalAsked: n => `变更文件安排了 ${n} 次独立的审查，每个分片各用一个会话。`,
       failed: (count, of) => `${of} 个审查会话中有 ${count} 个失败或没有可用的审查结果；因此没审到的部分见覆盖范围。`,
-      checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则发现的形式与来源。',
+      checks: '审查者依自己读到的源码查证自己的发现，runtime 检查每则报告的发现的形式与来源。',
       none: '没有任何审查会话给出可用的审查，记录中的发现只是未经查证的观察。',
       merged: '重复检查合并了同一个缺陷的重复报告。', nothing: '重复检查比对了不同会话在同一个文件报告的发现，没有合并任何一则。',
       unchecked: count => `${count} 个文件的重复检查失败，这些文件的发现可能彼此重复。`,
@@ -461,7 +461,7 @@ test('the provenance says how the findings were produced, in fixed sentences fro
   assert.equal(provenanceReport(provenance, twoPasses(), 'en'), '## AI review provenance (review)\n\n' +
     'AI-generated review, not human approval. Posting through a user account does not imply that person verified these conclusions.\n\n' +
     '2 independent reviewer passes reviewed the changed files, each shard in a session of its own. 1 of the 4 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed. ' +
-    'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding. A duplicate check merged repeated reports of one defect. ' +
+    'Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every reported finding. A duplicate check merged repeated reports of one defect. ' +
     'A rating session without tools set the severities from the finding texts alone. No separate verification ran, and nothing was decided by voting.\n\n' +
     '| Stage | Selected provider/model ID | Sessions | Findings reported |\n| --- | --- | --- | --- |\n| Review (pass 1) | `p/a` | 2 | 2 |\n| Review (pass 2) | `p/b` | 1 | 2 |\n| Duplicate check | `p/a` | 1 | — |\n| Severity rating | `p/a` | 1 | — |\n\n' +
     'IDs identify the models selected in OpenCode, not independently verified provider backend identities. Host auxiliary models and the original chat model are not part of this ledger.\n\n' +

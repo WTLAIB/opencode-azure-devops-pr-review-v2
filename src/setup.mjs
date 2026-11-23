@@ -364,9 +364,11 @@ function migrationOf(previous) {
   if (raw.version !== 2) return null;
   let migrated, summary;
   try { ({ settings: migrated, summary } = migrateSettings(raw)); } catch { return null; }
-  const { settings } = withMissingSettings(migrated);
+  // The update repairs nothing: settings it leaves unusable are written as it leaves them, and the problem is
+  // named; only usable ones get what they leave out at its defaults, as the loader completes a valid file only.
   let problem = '';
-  try { validateSettings(settings); } catch (error) { problem = typeof error?.message === 'string' ? error.message : 'the settings could not be used.'; }
+  try { validateSettings(migrated); } catch (error) { problem = typeof error?.message === 'string' ? error.message : 'the settings could not be used.'; }
+  const settings = problem ? migrated : withMissingSettings(migrated).settings;
   const written = settingsText(settings);
   const word = createHmac('sha256', MIGRATION_KEY).update(previous).update('\0').update(written).digest('hex').slice(0, 12);
   return { migrated, settings, written, problem, word, lines: migrationLines(summary, problem) };

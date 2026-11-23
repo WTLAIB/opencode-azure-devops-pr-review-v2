@@ -116,6 +116,10 @@ test('evaluateInitial lists repairable problems and still returns a usable PARTI
   const inherited = evaluateInitial(`{"status":"COMPLETE","coverage":{"files":["/src/a.ts"],"gaps":[]},"report":"r","findings":[{"id":"F-1","summary":"s","location":"head:/src/a.ts:1",` +
     `"counterevidence":"c","severity":"high","suggestion":"x","__proto__":{"evidence":"Inherited evidence."}}]}`, { prefix: 'F', assigned: ['/src/a.ts'] });
   assert.deepEqual(inherited.result.invalid, { 'F-1': ['missing evidence'] });
+  // Whether the parser gave an ID is its own mark: an answer that writes the mark has it removed.
+  const marked = evaluateInitial(JSON.stringify({ status: 'COMPLETE', coverage: { files: ['/src/a.ts'], gaps: [] }, report: 'r', findings: [{ id: 'F-1', summary: 's', location: 'head:/src/a.ts:1',
+    evidence: 'e', counterevidence: 'c', severity: 'high', suggestion: 'x', generatedId: true }, { summary: 's2', location: 'head:/src/a.ts:2', evidence: 'e', counterevidence: 'c', severity: 'low', suggestion: 'x' }] }), { prefix: 'F', assigned: ['/src/a.ts'] });
+  assert.deepEqual(marked.result.findings.map(row => [row.id, row.generatedId]), [['F-1', undefined], ['F-2', true]]);
   assert.equal(Object.getPrototypeOf(inherited.result.findings[0]), Object.prototype);
 });
 

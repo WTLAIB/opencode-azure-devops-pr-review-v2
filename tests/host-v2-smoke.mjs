@@ -686,7 +686,7 @@ try {
   // effect next to the reviewer's own, and what the duplicate check merged. (Its sentences about the method are
   // written from the record's `method`, which is compared above; the unit tests hold their wording.)
   const report = await reportOf(receipt);
-  assert.ok(report.includes('\n\n**發現由審查者依原始碼自行查證；沒有另外的驗證。**\n\n**覆蓋範圍:** 完整 — 已審查 2/2 個變更檔, 2/2 個在全部 2 次審查都審過\n\n## PR Review Summary\n\n'), report);
+  assert.ok(report.includes('\n\n**回報的發現由審查者依原始碼自行查證；沒有另外的驗證。**\n\n**覆蓋範圍:** 完整 — 已審查 2/2 個變更檔, 2/2 個在全部 2 次審查都審過\n\n## PR Review Summary\n\n'), report);
   assert.ok(report.includes('\n\n### F-1 — 缺少防護會遺失狀態 (high; 審查者: medium)\n\n'), report);
   assert.ok(report.includes('\n- **F-2 — MERGED → F-1:** 相同根因與修正。 [Runtime: merged by the duplicate check of independent reviewer sessions.]'), report);
   const reviewStages = await stageRecords(receipt);

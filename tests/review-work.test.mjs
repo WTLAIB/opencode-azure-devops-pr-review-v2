@@ -483,6 +483,11 @@ test('renameReferences: an answer\'s own IDs outside code become the review\'s; 
     // An unclosed span is code to the end of its paragraph only; a text written next to the ID is no name.
     ['Inline `F-1001` and F-1002; unclosed ` F-1001\n\nNext paragraph F-1001.', 'Inline `F-1001` and F-1002; unclosed ` F-1001\n\nNext paragraph F-1.'.replace('and F-1002;', 'and F-2;')],
     ['見F-1002的說明。', '見F-2的說明。'],
+    // Text with CRLF line ends keeps its fences; an escaped backtick opens no span; a hyphen next to an underscore
+    // run makes the ID part of a name.
+    ['~~~\r\nF-1002 in code\r\n~~~\r\nafter F-1002', '~~~\r\nF-1002 in code\r\n~~~\r\nafter F-2'],
+    ['An escaped \\` then See F-1001.', 'An escaped \\` then See F-1.'],
+    ['topic-_F-1001 and x-_F-1001_-y, but _F-1001_.', 'topic-_F-1001 and x-_F-1001_-y, but _F-1_.'],
   ]) assert.equal(renameReferences(text, ids), renamed, text);
   assert.deepEqual([renameReferences('F-1001', new Map()), renameReferences('F-1001', undefined), renameReferences(undefined, ids)], ['F-1001', 'F-1001', undefined]);
 });
@@ -557,10 +562,17 @@ test('a text that names a finding merged into another names the finding that sta
     assert.equal(final.findings[2].evidence, 'See F-1 for the cause.', name);
   }
   // An ID the parser had to give a finding is none the answer's text can mean: "F-1" below names another review.
-  const g = await context(t, { files: ['/src/a.ts'], behave: reviewer(() => [{ ...finding('F-1001', 'head:/src/a.ts:1', 'A finding without an ID'), id: undefined },
-    finding('F-1001', 'head:/src/a.ts:2', 'Compare the earlier review\'s F-1')]) });
+  // The finding without an ID stands second, so the review gives its generated F-1 the ID F-2: a capture would show.
+  const g = await context(t, { files: ['/src/a.ts'], behave: reviewer(() => [finding('F-1001', 'head:/src/a.ts:1', 'Compare the earlier review\'s F-1'),
+    { ...finding('F-1001', 'head:/src/a.ts:2', 'A finding without an ID'), id: undefined }]) });
   const generated = await runReview(g.ctx, g.run, g.request);
-  assert.deepEqual(generated.dispositions.map(d => [d.id, d.localId, d.finding.summary]), [['F-1', 'F-1', 'A finding without an ID'], ['F-2', 'F-1001', 'Compare the earlier review\'s F-1']]);
+  assert.deepEqual(generated.dispositions.map(d => [d.id, d.localId, d.finding.summary]), [['F-1', 'F-1001', 'Compare the earlier review\'s F-1'], ['F-2', 'F-1', 'A finding without an ID']]);
+  // A text that only looks like a reference is no copy of one that is: the key tells them apart.
+  const looks = await context(t, { files: ['/src/a.ts'], sources: { '/src/a.ts': lines(20) }, models: { reviewers: ['p/a', 'p/b'] }, behave: reviewer((payload, pass) => pass === 0
+    ? [finding('F-1001', 'head:/src/a.ts:1', 'The cause'), finding('F-1002', 'head:/src/a.ts:3', 'The effect', { evidence: 'See F-1001.' })]
+    : [finding('F-1001', 'head:/src/a.ts:3', 'The effect', { evidence: 'See F-1.' })]) });
+  const apart = await runReview(looks.ctx, looks.run, looks.request);
+  assert.deepEqual(rows(apart), ['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED']);
 });
 
 // ------------------------------------------------------------------ severity rating

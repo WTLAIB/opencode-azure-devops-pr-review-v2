@@ -145,7 +145,7 @@ export function repeatProblems(members) {
 
 // A finding ID as a text names it (F-1, and in reviews of 0.4.x also R-2, Q-1001, V-2): not inside a name, but
 // also where Markdown emphasis wraps it in underscores (_F-1_).
-const FINDING_ID = /(?<![A-Za-z0-9-])(?<![A-Za-z0-9]_+)[A-Za-z]+-\d+(?!\d)/g;
+const FINDING_ID = /(?<![A-Za-z0-9-])(?<![A-Za-z0-9-]_+)[A-Za-z]+-\d+(?!\d)/g;
 
 /**
  * Other findings of this review that a skip reason names. Duplicates were
@@ -417,7 +417,12 @@ export function describeEarlierText(review, otherComments = 0) {
  */
 function excludedIds(review) {
   const excluded = new Set(adjustmentsOf(review).excluded);
-  for (const row of review?.final?.dispositions ?? []) if (row?.status === 'MERGED' && excluded.has(row.mergedInto)) excluded.add(row.id);
+  // Through every link of a chain (a review of 0.4.x may hold F-1 -> F-2 -> R-1), in whatever order the rows are.
+  const merged = (review?.final?.dispositions ?? []).filter(row => row?.status === 'MERGED');
+  for (let grown = true; grown;) {
+    grown = false;
+    for (const row of merged) if (excluded.has(row.mergedInto) && !excluded.has(row.id)) { excluded.add(row.id); grown = true; }
+  }
   return excluded;
 }
 
@@ -1103,6 +1108,9 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       continue;
     }
     const { problems, comment } = draft(c, finding.id, finding.severity);
+    // A comment for one finding stands in that finding's own file: an excerpt of another file is another place.
+    const own = parseLocation(finding.location);
+    if (own && comment?.path && comment.path !== own.path) problems.push(`path ${comment.path} is not ${finding.id}'s own file ${own.path}; quote lines of that file`);
     // A comment for one place is not put on quoted lines that carry a comment for several places.
     const taken = !problems.length && posted ? occupiedLines(review.target, comment, posted) : '';
     if (taken) problems.push(`${taken}. Skip ${finding.id} with cause existing-thread when that thread covers it, or quote other lines`);

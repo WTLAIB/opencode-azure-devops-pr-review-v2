@@ -360,7 +360,7 @@ test('two passes of two models make one review: its findings are numbered by pla
     assert.deepEqual(saved.final.shards, { initial: 2, passes: 2, duplicateChecks: 2, ratings: 1 });
     const report = f.notices.find(n => /^# AZPR [a-f0-9]{8} — COMPLETE/.test(n.text)).text;
     assert.match(report, /\| Review \(pass 1\) \| `fixture\/review-a` \| 2 \| 5 \|\n\| Review \(pass 2\) \| `fixture\/review-b` \| 2 \| 4 \|\n\| Duplicate check \| `fixture\/review-a` \| 2 \| — \|\n\| Severity rating \| `fixture\/review-a` \| 1 \| — \|\n/);
-    assert.match(report, /\n\n2 independent reviewer passes reviewed the changed files, each shard in a session of its own\. Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every finding\. A duplicate check compared what different sessions reported in one file and merged nothing\. A rating session without tools set the severities from the finding texts alone\. No separate verification ran, and nothing was decided by voting\.\n\n/);
+    assert.match(report, /\n\n2 independent reviewer passes reviewed the changed files, each shard in a session of its own\. Each reviewer checked its own findings against the source it read, and the runtime checked the form and source of every reported finding\. A duplicate check compared what different sessions reported in one file and merged nothing\. A rating session without tools set the severities from the finding texts alone\. No separate verification ran, and nothing was decided by voting\.\n\n/);
   }
   // A finding on BASE cannot carry an inline comment, and says so in the record.
   assert.deepEqual(first.saved.final.dispositions.map(row => row.inline), [true, true, true, true, true, true, true, true, false]);
@@ -1074,7 +1074,7 @@ test('stale reviews are reported and cannot be commented on; a moved base stays 
   assert.match(unchecked, /^\[AZPR [a-f0-9]{8}\] STALE; /);
   assert.match(unchecked, /\*\*STALE: The PR source changed during the review\. Run a new review before commenting\.\*\*\n\n\*\*STALE: No review session produced a usable result\. These claims are provisional and cannot be used for PR comments\.\*\*/);
   assert.match(unchecked, /2 independent reviewer passes were asked to review the changed files, each shard in a session of its own\. 2 of the 2 reviewer sessions failed or gave no usable review; the coverage says what that left unreviewed\. No reviewer session gave a usable review, so the findings on record are observations that nothing checked\./);
-  assert.doesNotMatch(unchecked, /Findings were checked by their reviewer|Each reviewer checked its own findings|Each finding was checked/);
+  assert.doesNotMatch(unchecked, /findings were checked by their reviewer|Each reviewer checked its own findings|Each finding was checked/i);
 });
 
 test('a failed final version recheck keeps the review COMPLETE with a warning', async t => {
@@ -1750,6 +1750,10 @@ test('/pr-check says what each mode runs with, and whether /pr-deep is off, woul
   const repeated = await checkWith(t, s => { s.models.deep = structuredClone(s.models.review); });
   assert.match(repeated, /\] READY/);
   assert.match(repeated, /\| Deep models \| WARNING \| 2 passes: fixture\/review-a, fixture\/review-b; severity rating by fixture\/review-a \(the first reviewer model\)\. models\.deep repeats models\.review, so \/pr-deep would only repeat \/pr-review; set stronger models or more passes there for the PRs that need them\. \|/);
+  // What runs is compared, however it is written: a model at #default is that model, and a rater named as the first
+  // reviewer model is the rater an empty one means.
+  const written = await checkWith(t, s => { s.models.deep = { reviewers: s.models.review.reviewers.map(model => `${model}#default`), rater: s.models.review.reviewers[0] }; });
+  assert.match(written, /\| Deep models \| WARNING \| [^|]*models\.deep repeats models\.review/);
   // The same models with a higher variant are a stronger setting, not a repeat; so are one model that differs, one
   // more pass and another rater.
   for (const stronger of [
@@ -3264,7 +3268,7 @@ test('/pr-quick is the same review with its own models: one pass per shard, the 
   assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}:${d.shard}`), ['F-1:REPORTED:1/2', 'F-2:REPORTED:2/2']);
   assert.deepEqual(saved.final.coverageSummary, { complete: true, unreviewedFiles: 0, filesComplete: true, reasons: [], files: 2, passes: 1, reviewedOnce: 2, reviewedByAll: 2, failedSessions: 0 });
   const report = f.notices.find(n => /^# AZPR [a-f0-9]{8} — COMPLETE/.test(n.text)).text;
-  assert.match(report, /^# AZPR [a-f0-9]{8} — COMPLETE\n\n\*\*Findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\* complete — 2\/2 changed file\(s\) reviewed\n\n/);
+  assert.match(report, /^# AZPR [a-f0-9]{8} — COMPLETE\n\n\*\*Reported findings were checked by their reviewer against the source; no separate verification ran\.\*\*\n\n\*\*Coverage:\*\* complete — 2\/2 changed file\(s\) reviewed\n\n/);
   assert.match(report, /One reviewer session per shard reviewed the changed files\. /);
   const preview = await f.command('pr-comment', '');
   assert.match(preview, /\] PREVIEW; source review=/);

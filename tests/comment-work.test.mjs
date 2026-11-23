@@ -389,17 +389,17 @@ test('a page still preparing its input when another page fails starts no model w
   assert.deepEqual(started, [1]);
 });
 
-test('a page treats the HEAD source of its own and earlier pages as observed, whichever fetch finishes first', async t => {
-  // Page 1 (F-1 to F-4, in A) quotes a line of B; page 2 (F-5, in B) quotes a line of A; both declare line 20.
-  // F-5 has a severity of its own, so no two places could share a comment and no file is read before the pages:
-  // the fetches below are the pages' own.
+test('a comment stands in its own finding\'s file, and a page\'s plan is the same whichever fetch finishes first', async t => {
+  // Page 1 (F-1 to F-4, in A) quotes a line of B for F-1; page 2 (F-5, in B) quotes a line of its own file. F-5 has
+  // a severity of its own, so no two places could share a comment and no file is read before the pages: the
+  // fetches below are the pages' own.
   const findings = [...Array.from({ length: PLANNING_FINDINGS_PER_PAGE }, (_, i) => ({ ...finding(`F-${i + 1}`), location: 'head:/src/A.java:2' })),
     { ...finding('F-5', 'medium'), location: 'head:/src/B.java:2' }];
   const sources = { '/src/A.java': 'a0\nonly in A\n', '/src/B.java': 'b0\nonly in B\n' };
   const answer = payload => JSON.stringify(payload.commentWork.page === 1
-    ? { status: 'READY', comments: [{ ...comment('F-1'), path: '/src/B.java', startLine: 20, endLine: 20, anchor: 'only in B' }],
+    ? { status: 'READY', comments: [{ ...comment('F-1'), path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'only in B' }],
       skipped: ['F-2', 'F-3', 'F-4'].map(findingId => ({ findingId, cause: 'too-long', reason: 'Too long to state faithfully.' })) }
-    : { status: 'READY', comments: [{ ...comment('F-5'), path: '/src/A.java', startLine: 20, endLine: 20, anchor: 'only in A' }], skipped: [] });
+    : { status: 'READY', comments: [{ ...comment('F-5'), path: '/src/B.java', startLine: 2, endLine: 2, anchor: 'only in B' }], skipped: [] });
   for (const kind of ['verified', 'reviewers', 'quick']) {
     const plans = [];
     for (const parallel of [1, 2]) {
@@ -423,14 +423,11 @@ test('a page treats the HEAD source of its own and earlier pages as observed, wh
       }, { fetchSource, parallel }));
     }
     assert.deepEqual(plans[1], plans[0], kind);
-    if (kind !== 'verified') {
-      // Findings that no stage verified: a quote must be found in observed text, and page 1 never saw B.
-      assert.deepEqual(plans[0].comments.map(c => [c.findingId, c.path, c.startLine]), [['F-5', '/src/A.java', 2]], `${kind}: page 1 never saw B, so its quote was not found.`);
-      assert.match(plans[0].skipped.find(s => s.findingId === 'F-1').reason, /anchor text was not found in the HEAD source/, kind);
-    } else {
-      assert.deepEqual(plans[0].comments.map(c => [c.findingId, c.path, c.startLine]), [['F-1', '/src/B.java', 20], ['F-5', '/src/A.java', 2]],
-        'Page 2 saw A and moved its quote to line 2; page 1 never saw B.');
-    }
+    // F-1's comment quotes another file, an excerpt of another place, in every kind of review; F-5's stands. Where
+    // findings need an anchor in text the runtime read, page 1 has not read B, which is said first.
+    assert.deepEqual(plans[0].comments.map(c => [c.findingId, c.path, c.startLine]), [['F-5', '/src/B.java', 2]], kind);
+    assert.match(plans[0].skipped.find(s => s.findingId === 'F-1').reason, kind === 'verified' ? /path \/src\/B\.java is not F-1's own file \/src\/A\.java; quote lines of that file/
+      : /anchor text was not found in the HEAD source/, kind);
   }
 });
 

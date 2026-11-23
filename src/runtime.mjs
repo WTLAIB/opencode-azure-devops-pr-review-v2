@@ -1115,10 +1115,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // and which model rates. /pr-deep and /pr-quick are the same review with other models; an empty list leaves one off.
     const passesOf = mode => { const list = settings.models[mode].reviewers; return `${list.length} pass${list.length === 1 ? '' : 'es'}: ${list.join(', ')}`; };
     const ratingOf = mode => raterState(settings, mode) === 'off' ? 'no severity rating (rater: false)' : `severity rating by ${stageModel(settings, roleFor(mode, 'rating'))}${raterState(settings, mode) === 'first' ? ' (the first reviewer model)' : ''}`;
+    // What a mode runs, however its settings write it: a model at #default is that model, and a rater left empty is
+    // the first reviewer model.
+    const effective = model => String(model ?? '').replace(/#default$/, '');
+    const effectiveModels = mode => ({ reviewers: settings.models[mode].reviewers.map(effective),
+      rater: raterState(settings, mode) === 'off' ? false : effective(stageModel(settings, roleFor(mode, 'rating'))) });
     checks.push({ name: 'Review models', ok: true, detail: `${passesOf('review')}; ${ratingOf('review')}.` });
     for (const [mode, name, what] of [['deep', 'Deep models', 'stronger models than models.review.reviewers, or more passes'], ['quick', 'Quick models', 'usually one fast model']]) {
       if (!modeReady(settings, mode)) checks.push({ name, ok: true, detail: `Not set: /pr-${mode} stays off until models.${mode}.reviewers names at least one model (${what}).` });
-      else if (mode === 'deep' && JSON.stringify(settings.models.deep) === JSON.stringify(settings.models.review)) {
+      else if (mode === 'deep' && JSON.stringify(effectiveModels('deep')) === JSON.stringify(effectiveModels('review'))) {
         checks.push({ name, ok: true, warning: true, detail: `${passesOf(mode)}; ${ratingOf(mode)}. models.deep repeats models.review, so /pr-deep would only repeat /pr-review; set stronger models or more passes there for the PRs that need them.` });
       } else checks.push({ name, ok: true, detail: `${passesOf(mode)}; ${ratingOf(mode)}.` });
     }

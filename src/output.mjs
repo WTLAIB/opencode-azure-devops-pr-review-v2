@@ -235,6 +235,8 @@ function findingProblems(row) {
 /** Give missing, malformed or repeated IDs stable runtime IDs. */
 export function assignIds(findings, prefix, warnings) {
   const pattern = new RegExp(`^${prefix}-[1-9][0-9]*$`);
+  // Whether the parser gave an ID is its own mark: one an answer wrote is no mark.
+  for (const row of findings) if (isObject(row)) delete row.generatedId;
   const reserved = new Set(findings.map(row => row.id).filter(id => typeof id === 'string' && pattern.test(id)));
   const used = new Set();
   let next = 1;

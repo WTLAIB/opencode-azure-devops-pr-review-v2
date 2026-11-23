@@ -210,9 +210,9 @@ const findingOnly = finding => Object.fromEntries(FINDING_FIELDS.filter(key => k
 
 /** The fields of a finding whose text may name another finding of its answer. */
 const PROSE_FIELDS = ['summary', 'evidence', 'counterevidence', 'suggestion'];
-// An ID as a text names it: not inside a name (a letter, digit or hyphen before or after it, or one before an
-// underscore that precedes it), but also where Markdown emphasis wraps it in underscores (_F-1_).
-const ID_TOKEN = new RegExp(`(?<![A-Za-z0-9-])(?<![A-Za-z0-9]_+)${LOCAL_PREFIX}-[1-9]\\d*(?![A-Za-z0-9-])(?!_+[A-Za-z0-9])`, 'g');
+// An ID as a text names it: not inside a name (a letter, digit or hyphen before or after it, also across a run of
+// underscores), but where Markdown emphasis wraps it in underscores (_F-1_).
+const ID_TOKEN = new RegExp(`(?<![A-Za-z0-9-])(?<![A-Za-z0-9-]_+)${LOCAL_PREFIX}-[1-9]\\d*(?![A-Za-z0-9-])(?!_+[A-Za-z0-9-])`, 'g');
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /**
@@ -231,7 +231,8 @@ export function renameReferences(text, ids) {
   });
   const spans = part => {
     let out = '', at = 0;
-    const opener = /`+/g;
+    // A backtick a backslash escapes opens no span.
+    const opener = /(?<!\\)`+/g;
     for (let match; (match = opener.exec(part));) {
       const closer = new RegExp('(?<!`)' + match[0] + '(?!`)', 'g');
       closer.lastIndex = match.index + match[0].length;
@@ -250,7 +251,8 @@ export function renameReferences(text, ids) {
       if (fence.test(line)) fence = null;
       continue;
     }
-    const open = FENCE.exec(line);
+    // A fence line is read without its carriage return (CRLF text); the line itself stays as it is.
+    const open = FENCE.exec(line.replace(/\r$/, ''));
     // A fence of backticks has no backtick in its info string; one that does is inline code.
     if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
       flush();
@@ -491,7 +493,8 @@ export async function runReview(ctx, run, request) {
   const keys = new Map();
   collected.forEach((entry, index) => {
     const id = `${LOCAL_PREFIX}-${index + 1}`, finding = proseOf(entry.finding, named(entry.session));
-    const self = new Map([...named(entry.session)].map(([own, review]) => [own, review === id ? '\u0000itself' : review]));
+    // In the key, a reference reads as what it names, apart from any text that only looks like an ID.
+    const self = new Map([...named(entry.session)].map(([own, review]) => [own, review === id ? '\u0000itself' : `\u0000${review}`]));
     keys.set(id, findingKey(proseOf(entry.finding, self)));
     dispositions.push({ id, status: entry.status, reason: entry.reason,
       ...(entry.status === 'REPORTED' ? { finding, inline: entry.inline, reviewerSeverity: finding.severity } : { partialFinding: finding }),

@@ -208,7 +208,9 @@ against the source and by the runtime for form and source; nothing verified
 it afterwards, and no comment says otherwise. An inline comment needs a
 finding whose location is on a changed file at HEAD (a BASE location or
 unchanged code stays in the summary index), and the planner's anchor must be
-found in the HEAD source the runtime read.
+found in the HEAD source the runtime read, in that finding's own file: a
+quote of another file is another place, and the planner is asked to correct
+it.
 
 ### Reviews saved by 0.4.x
 

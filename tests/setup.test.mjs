@@ -1954,7 +1954,13 @@ function updatedSettings(f) {
     models: { review: { reviewers: ['fixture/model', 'fixture/model#high'], rater: '' }, deep: { reviewers: [], rater: '' }, quick: { reviewers: ['fixture/model#high'], rater: '' } } };
 }
 /** The text of an update as src/config.mjs defines it: what migrateSettings makes of the file, with every setting of this version. */
-const updatedText = legacy => settingsText(withMissingSettings(migrateSettings(legacy).settings).settings);
+// What the update writes: the migrated settings, completed with what they leave out only where they are usable (the
+// update repairs nothing, and the loader completes a valid file only).
+const updatedText = legacy => {
+  const { settings } = migrateSettings(legacy);
+  try { validateSettings(settings); } catch { return settingsText(settings); }
+  return settingsText(withMissingSettings(settings).settings);
+};
 // What /pr-setup and the dialogs say that update changes: one line per point.
 const UPDATE_FIRST = 'This version reviews with a list of reviewer models per mode: each entry reviews the changed files on its own, one pass each. There is no verifier any more: the first entry also merges repeated findings and plans the comments, and a rating sets the severities.';
 const UPDATE_LAST = 'Every other setting stays as it is, also one that is not a setting of this version: the settings check then names it.';
@@ -2701,6 +2707,8 @@ test('every settings file of 0.4.x, whatever else is wrong with it, is offered i
     [{ ...complete, mcp: { concurrency: 2 } }, 'settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.patFile (or azure.pat), and remove mcp.'],
     [{ ...complete, azure: { ...complete.azure, concurrency: 99 } }, 'azure.concurrency must be an integer from 1 to 8.'],
     [{ ...complete, azure: 'fixture' }, 'azure must be a JSON object.'],
+    // A group that lacks what 0.4.x required is not completed by the update either.
+    [{ ...complete, debug: { directory: 'trace' } }, 'debug requires enabled (boolean) and an optional directory path; use an absolute path or a project-relative path, not ~.'],
     [{ ...complete, models: [] }, 'models must be a JSON object.', '/pr-review: its settings are not a group of models, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.'],
     // A value in a model's place that is none: named, not shown, also where it stays in the file.
     [{ ...complete, models: { ...complete.models, review: { ...complete.models.review, rater: 'Fixture Rater' } } }, NO_MODEL('models.review.rater'), 'Severity rating of /pr-review: the rater the file names is no model ID; it is kept as it is, and the settings check names it after the update.'],
