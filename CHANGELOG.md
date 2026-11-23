@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — 2026-11-23
+## 0.5.0 — 2026-11-24
 
 Every review now runs one pipeline: independent review passes, a duplicate
 check and a severity rating, then comment planning as before. `/pr-review`,
@@ -18,6 +18,14 @@ risk reviewer together. What is lost with the verifier is named there too:
 its additions, and for the stronger model a rewrite that read better in about
 one finding in eight. The runs, their judge (our own, not the benchmark's)
 and their limits are in the [validation record](docs/VALIDATION.md).
+
+Measured before the release with ReviewBench's own judge, against 0.4.6 with
+GPT-6.2 Sol on 24 pull requests of its test set: two passes found about as
+many reference issues (49.1% against 51.5%) at 58% of the cost, with 89.7% of
+their findings judged valid against 93.2%; three passes matched 0.4.6 (51.2%,
+93.2%) at 78% of the cost; four found more (54.8%, and 65.6% of the high and
+medium ones against 60.6%) at about the same cost
+([validation record](docs/VALIDATION.md#050-against-046-on-reviewbench-with-its-own-judge-2026-11-24)).
 
 Reviews:
 

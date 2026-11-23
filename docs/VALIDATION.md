@@ -5,8 +5,9 @@ This page records validation of the Azure DevOps REST implementation, the
 0.5.0, the moves to OpenCode 2.3.0 and 2.3.2, a run of Martian's public code
 review benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, the severity changes
-of 0.3.7 run on ReviewBench's test set, and the runs behind the single
-pipeline of 0.5.0. Host
+of 0.3.7 run on ReviewBench's test set, the runs behind the single
+pipeline of 0.5.0, and 0.5.0 against 0.4.6 scored by ReviewBench's own
+judge. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -50,7 +51,9 @@ acceptance runs, including the MCP-based runs, are preserved in
   reviews of ReviewBench's test set with two passes of GPT-6.1 Terra, against
   the same kind of stand-in, after the
   [development runs](#one-pipeline-passes-instead-of-roles-2026-11-22-and-23)
-  that the single pipeline rests on.
+  that the single pipeline rests on; with the release's review stages, the
+  same 24 pull requests with one to four passes of GPT-6.2 Sol, all 96
+  reviews COMPLETE.
 - **Every release.** Following the [releasing guide](RELEASING.md), the
   candidate is installed from a clean source archive and from its public Git
   commit before it is tagged, and the published npm package is installed from
@@ -65,13 +68,164 @@ acceptance runs, including the MCP-based runs, are preserved in
   on 2026-11-21, found 67.1% and 75.8%, again the highest recall, with an F2
   that would place eighth: one run each, and within one run's sampling error
   of 0.3.5. Both reviewed with two reviewers and a verifier; 0.5.0 has not
-  been scored on that benchmark, and its own runs were scored by our local
-  judge.
+  been run on that benchmark. On 24 pull requests of ReviewBench's test set,
+  [scored by ReviewBench's own judge](#050-against-046-on-reviewbench-with-its-own-judge-2026-11-24)
+  against 0.4.6 with GPT-6.2 Sol, 0.5.0's two passes found about as many
+  reference issues (49.1% against 51.5%) at 58% of the cost, with 89.7% of
+  their findings judged valid against 93.2%; three passes matched 0.4.6, and
+  four found more (54.8%) at about the same cost.
 
 The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.0 against 0.4.6 on ReviewBench with its own judge (2026-11-24)
+
+Before the release, 0.5.0 and 0.4.6 reviewed the same pull requests of
+ReviewBench's test set with the same model, and ReviewBench's own judging
+pipeline scored every run. The configurations, the measures and how a
+difference is read were written down before any result, and the results are
+reported as they came out.
+
+**Configurations.** GPT-6.2 Sol at its default reasoning effort in every role:
+
+| Run | AZPR | Reviewers |
+| :--- | :--- | :--- |
+| 0.4.6 | 0.4.6 from npm, run 2026-11-22 | a functional and a risk reviewer and a verifier; no rating |
+| Two passes | 0.5.0 at commit `e6f7332`, run 2026-11-24 | two passes and the rating by the first model, the default |
+| Three passes | the same | three passes |
+| Four passes | the same | four passes, the most a mode takes |
+
+A run with one pass was reviewed as well (23.4 findings and US$0.33 per pull
+request, a median of 253 s) but not judged: the judge's budget did not cover
+another run.
+
+The three commits from `e6f7332` to the release's `e560de3` change only
+`src/attribution.mjs`, `src/comment-work.mjs` and `src/comments.mjs`: how
+comment planning and the report read locations that 0.4.x saved, and places
+whose path holds a colon. The prompts and the review stages are the
+release's, byte for byte, and the scored findings are a review's `REPORTED`
+findings (for 0.4.6, its `CONFIRMED` findings in the verifier's wording and
+the verifier's own), so they are what the release produces.
+
+Everything else is as on the
+[research page](#one-pipeline-passes-instead-of-roles-2026-11-22-and-23):
+OpenCode 2.3.2 with an isolated profile, the Git-backed stand-in for Azure
+DevOps, four reviews at a time, and 24 of the 25 test pull requests.
+`simnaut/emdash#2` was left out of every run: its head merges about 100
+upstream commits, 0.4.6 filed 449 findings there (35% of its run) in 52
+minutes, and the judge reads all findings of a pull request in one session,
+which for that many would pass its model's context window or cost an
+estimated US$50 to 300 a run.
+
+**Judge.** ReviewBench's `npm run judge` at its upstream commit `082f65f`
+(2026-11-18) rather than the pinned `228f2a8` of the earlier pages: upstream
+had removed same-file duplicates from 47 reference files (#107) and made the
+judges read JavaScript-style escapes (#117). The judge model is Claude Sonnet
+5, the model that judges the leaderboard, four pull requests at a time. Each
+run was judged once. These numbers are not compared with those judged with
+`228f2a8` (the 0.3.5 to 0.3.7 table).
+
+**Measures.** Per pull request: findings; *judged valid*, the share of
+findings that matched a true reference issue or that the judge rated valid
+(ReviewBench's augmented precision); *reference issues found*, the share of
+the true reference issues that some finding covered (grounded recall, pooled
+over the pull requests); the same for the high and medium reference issues;
+*inline decisions*, the F1 of AZPR's medium or high against the judge's level
+on valid findings; cost at GPT-6.2 Sol's list price (US$2 per million input
+tokens, 0.10 cached, 10 output with reasoning) from each run's token counts;
+and the median time of a review. A difference is read as one when it is
+larger than the falls allowed in the earlier ReviewBench comparisons (2.8
+points of reference issues found, 2.0 of judged valid, 3.6 of high and medium
+found, 5.8 of inline decisions: twice the variation of two runs of one setup
+when their results are swapped pull request by pull request). The plan written
+before the results gave 1.3 and 3.9 for the second and third; no reading below
+changes with them.
+
+| Per pull request | Findings | Judged valid | Reference issues found | High and medium found | Inline decisions (F1) | Cost | Time |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.4.6 | 34.1 | 93.2% | 51.5% | 60.6% | 75.4 | US$1.30 | 367 s |
+| Two passes | 27.8 | 89.7% | 49.1% | 61.9% | 77.2 | US$0.76 | 293 s |
+| Three passes | 31.1 | 93.2% | 51.2% | 63.7% | 76.2 | US$1.01 | 290 s |
+| Four passes | 33.7 | 91.0% | 54.8% | 65.6% | 78.3 | US$1.36 | 338 s |
+
+The differences to 0.4.6, each with its standard deviation when the two runs
+are swapped pull request by pull request (2,000 swaps):
+
+| Against 0.4.6 | Reference issues found | Judged valid | High and medium found | Inline decisions |
+| :--- | ---: | ---: | ---: | ---: |
+| Two passes | −2.4 (sd 2.3) | −3.5 (2.3) | +1.3 (1.8) | +1.9 (2.4) |
+| Three passes | −0.3 (1.8) | 0.0 (0.9) | +3.1 (1.6) | +0.9 (2.9) |
+| Four passes | +3.3 (1.6) | −2.2 (1.4) | +5.0 (2.2) | +2.9 (2.5) |
+
+ReviewBench's own four measures, with F1 and F2 computed from them, pooled
+over the 24 pull requests; the last column averages F1 per pull request, as
+the leaderboard does. Grounded precision counts only the findings that matched
+a reference entry, true or false; augmented recall adds each run's own valid
+findings to its reference set, so ReviewBench advises against ranking by it.
+
+| | Grounded precision | Grounded recall | F1 | F2 | Augmented precision | Augmented recall | F1 | F2 | Augmented F1 per PR |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.4.6 | 84.7 | 51.5 | 64.0 | 55.9 | 93.2 | 82.5 | 87.5 | 84.5 | 83.2 |
+| Two passes | 81.5 | 49.1 | 61.3 | 53.4 | 89.7 | 78.0 | 83.4 | 80.1 | 81.2 |
+| Three passes | 83.8 | 51.2 | 63.6 | 55.5 | 93.2 | 81.1 | 86.7 | 83.2 | 84.3 |
+| Four passes | 81.0 | 54.8 | 65.3 | 58.6 | 91.0 | 83.0 | 86.8 | 84.4 | 84.5 |
+
+What the runs show:
+
+- **Two passes.** Reference issues found −2.4 and high and medium +1.3: the
+  same as 0.4.6, at 58% of its cost and 80% of its time. Judged valid −3.5: a
+  difference. All four runs reported one defect at the same 12 places
+  (frontmatter that does not parse as YAML, in agent files that
+  `scotthamilton77/agents-config#1` moves); the judge accepted the 12 findings
+  of 0.4.6 and of three and four passes and rejected those of two passes.
+  Decided as in the other runs, they would give two passes 91.5%. Beyond that
+  case, the judge's verdicts at one place vary between runs: 44 of the 69
+  findings of two passes it rejected lie where 0.4.6 had a finding it
+  accepted, and 29 of 0.4.6's 56 where two passes had one.
+- **Three passes.** Every difference within the allowed falls: the same as
+  0.4.6, at 78% of its cost and 79% of its time.
+- **Four passes.** Reference issues found +3.3 and high and medium +5.0, both
+  beyond the allowed falls and about two standard deviations of the swap:
+  more than 0.4.6, at 105% of its cost and 92% of its time. Judged valid
+  −2.2: a difference.
+- **More passes find more.** Reference issues found 49.1, 51.2 and 54.8%,
+  high and medium 61.9, 63.7 and 65.6% with two, three and four passes. Each
+  pass adds US$0.25 to 0.35 per pull request; the passes run side by side, so
+  time grows little.
+- **Severity.** The rating marks about 20% of 0.5.0's findings high (0.4.6:
+  9.3%); of the valid ones, the judge rated 27% to 33% high (0.4.6: 47%). The
+  inline decision, medium or high against low, agrees with the judge as well
+  as before (F1 76.2 to 78.3 against 75.4), and fewer of the findings the
+  judge rated medium or high carry AZPR's low (10.7 to 13.0% against 16.6%).
+- **Two roles against one prompt.** 0.4.6's output without the verifier's own
+  98 findings is what its two role prompts reported, merged and in the
+  verifier's wording: 30.0 findings per pull request, 92.5% judged valid,
+  49.7% of the reference issues and 60.6% of the high and medium ones, as
+  much as two passes of the one prompt found (49.1% and 61.9%). The verifier's
+  own findings covered 6 more reference issues (1.8 points), none of them high
+  or medium.
+
+**Cost of judging.** At the judge model's list price, from its session
+records: US$38.71 for 0.4.6, and 28.03, 32.95 and 34.35 for two, three and
+four passes, plus the matching step, which keeps no record (about US$1 to 2 a
+run, from the account's balance). About 98% of the judge's prompt tokens were
+read from its cache.
+
+**Limits.**
+
+- One run per configuration. The allowed falls come from an earlier setup
+  scored by the local judge; no run-to-run variation of this judge with this
+  model is known.
+- The judge's verdicts on single findings vary between runs (above), so
+  differences of a few points of judged valid are partly the judge's.
+- 24 of the 25 test pull requests, one model at its default effort. The 0.4.6
+  run was made two days before the 0.5.0 runs, with the same OpenCode,
+  profile and stand-in.
+- Times depend on four reviews running at once and on the provider's load.
+- We ran the judging pipeline ourselves; this is not a leaderboard entry, and
+  the leaderboard averages per pull request over all 25.
 
 ## 0.5.0 release candidate acceptance (2026-11-23)
 
@@ -100,8 +254,8 @@ host moves to OpenCode 2.3.2.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 769 tests (686 for 0.4.6), all
-passing. Among them, for what is new: the order of finding IDs whichever
+`npm run check` passes, and `npm test` runs 783 tests (686 for 0.4.6), all
+passing, on the final code (commit `e560de3`, 2026-11-24). Among them, for what is new: the order of finding IDs whichever
 session answers first (`tests/review-work.test.mjs`, `tests/runtime.test.mjs`);
 the duplicate check's refusal of a merge within one session, directly and
 through a third finding (`tests/output.test.mjs`); the rating's input, which
@@ -121,7 +275,9 @@ installer carries such a file over byte for byte (`tests/install.test.mjs`).
 
 ### On the real host
 
-The thirteen host fixture runs passed on one tree, among them two new ones.
+The thirteen host fixture runs passed on the final code (commit `e560de3`,
+2026-11-24), as on every commit of the review that led to it; two of them are
+new.
 
 - **Two passes of two models** (`tests/host-v2-smoke.mjs`, fresh,
   `--replace` and `--native`). A review runs four private sessions of their

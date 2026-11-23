@@ -14,10 +14,14 @@ Earlier releases were measured on two public benchmarks: on Martian's open
 [Code Review Bench](#benchmark-results), 0.3.5's `/pr-deep` found more of the
 listed issues in 50 real pull requests than any of the 21 tools on the
 benchmark's dashboard, and on ReviewBench's test set, which scores each finding
-on its own merits, 97.4% of 0.3.7's findings were judged valid. Since 0.5.0 a
-review is made differently, with independent passes in place of two reviewers
-and a verifier; [what was measured for it](#benchmark-results) was scored by
-our own judge so far, not by the benchmarks'.
+on its own merits, 97.4% of 0.3.7's findings were judged valid. 0.5.0 makes a
+review differently, with independent passes in place of two reviewers and a
+verifier ([what changed](#what-changed-in-050)). Scored by ReviewBench's own
+judge against 0.4.6 with the same model, its default two passes found about
+as many of the listed issues at 58% of the cost, with somewhat fewer findings
+judged valid; three passes matched 0.4.6 at about three quarters of its cost,
+and four found more at about the same cost
+([the measurement](#what-was-measured-for-050)).
 
 AZPR is an independent community project. It is not built by or affiliated with
 the OpenCode team.
@@ -167,6 +171,24 @@ to your selected model providers, and review records are saved locally. See
 [team setup and data handling](docs/ENTERPRISE.md) and
 [content-search limits](docs/AZURE_DEVOPS.md#who-calls-what).
 
+## What changed in 0.5.0
+
+0.5.0 changes how a review is made, not only its options. If you used 0.4.x:
+
+| | 0.4.x | 0.5.0 |
+| :--- | :--- | :--- |
+| Who reviews | `/pr-review` and `/pr-deep`: a functional and a risk reviewer, each with a prompt of its own. `/pr-quick`: one reviewer. | Every mode: one reviewer prompt that covers both, run once per model you list (one to four passes). Each pass reviews every changed file on its own. |
+| Checking findings | A verifier checked every finding with tools and could reject, merge, rewrite or add findings. | Each reviewer checks its own findings against the source before it answers. No stage checks them afterwards, and the report, the receipt and every comment say so. |
+| Repeated findings | Merged by the verifier, with a short duplicate check after it. | Merged by a duplicate check where different passes reported the same defect. |
+| Severity | Set by the verifier; a separate rating ran only with a named `rater`. | Set by a rating that sees only each finding's text, on by default; `"rater": false` keeps the reviewers' levels. |
+| Modes | Different stages per mode. | The same stages in every mode; the modes differ only in their models. |
+| Settings | A `functional`, a `risk` and a `verifier` model per mode; one reviewer model for `/pr-quick`. | `models.<mode>.reviewers`, a list, and `rater`. `/pr-setup` shows the update of a 0.4.x file and writes it only when you confirm ([upgrading](#upgrading-from-04x)). |
+| Finding IDs | `F-`, `R-` and `V-` by role. | `F-1 … F-n` for the whole review. |
+
+Reviews that 0.4.x saved can still be shown, previewed and published. What
+the change does to findings, cost and time is measured
+[below](#what-was-measured-for-050), with ReviewBench's own judge.
+
 ## Choose a review
 
 Every mode runs the same review: reviewer passes, a duplicate check, a
@@ -221,40 +243,71 @@ price guarantee.
 
 ## Benchmark results
 
-**The public benchmark scores in this section were measured with releases 0.3.5
-to 0.4.6**, which reviewed with two reviewers and a verifier. 0.5.0 reviews
-with independent passes instead and has not been scored by either benchmark's
-own judge yet.
+**0.5.0 was scored on ReviewBench with the benchmark's own judge**, against
+0.4.6 with the same model (below). The other scores in this section were
+measured with releases 0.3.5 to 0.4.6, which reviewed with two reviewers and a
+verifier; 0.5.0 has not been run on Martian's Code Review Bench.
 
 ### What was measured for 0.5.0
 
-While the pipeline was rebuilt, both pipelines reviewed 24 pull requests of
-ReviewBench's test set with the same models, scored by our own judge (Claude
-Opus 5.5 applying ReviewBench's rubric). These are development measurements,
-one run each, not leaderboard results:
+0.4.6 and 0.5.0 reviewed the same 24 pull requests of
+[ReviewBench](https://github.com/review-bench/ReviewBench)'s test set with the
+same model, GPT-6.2 Sol at its default reasoning effort. ReviewBench's own
+judging pipeline scored every run with Claude Sonnet 5, the model that judges
+its leaderboard. We ran the pipeline ourselves, once per row, so these are not
+leaderboard results.
 
-| Per pull request | Findings | Judged valid | Reference issues found | Cost | Time |
-| :--- | ---: | ---: | ---: | ---: | ---: |
-| 0.4.6, GPT-6.1 Terra in all three roles | 7.3 | 90.2% | 29.5% | US$0.15 | 94 s |
-| **0.5.0, two passes of GPT-6.1 Terra** | **7.2** | **93.0%** | **29.8%** | **US$0.12** | **67 s** |
-| 0.4.6, GPT-6.2 Sol in all three roles | 34.1 | about 74% | 50.6% | US$1.30 | 369 s |
-| 0.5.0 development build, two passes of GPT-6.2 Sol | 27.7 | about 86% | 47.7% | US$0.72 | 257 s |
-| 0.5.0 development build, GPT-6.1 Terra and Claude Sonnet 5.5, one pass each | 7.3 | 93.7% | 35.0% | US$0.22 | 58 s |
+| Per pull request | Findings | Judged valid | Reference issues found | High and medium found | Cost | Time |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.4.6: two reviewers and a verifier, all GPT-6.2 Sol | 34.1 | 93.2% | 51.5% | 60.6% | US$1.30 | 367 s |
+| **0.5.0: two passes of GPT-6.2 Sol (the default)** | **27.8** | **89.7%** | **49.1%** | **61.9%** | **US$0.76** | **293 s** |
+| 0.5.0: three passes | 31.1 | 93.2% | 51.2% | 63.7% | US$1.01 | 290 s |
+| 0.5.0: four passes | 33.7 | 91.0% | 54.8% | 65.6% | US$1.36 | 338 s |
 
-- A verifier of the reviewers' own strength rejected 0 of 280 candidate
-  findings with Terra and 3 of 1,185 with Sol, for 30% and 54% of a review's
-  cost. Two passes of one reviewer prompt found about as much as the two
-  roles together, at a lower cost and in less time.
-- One pass each of two vendors' models found more than two, or four, passes
-  of one model, at the same share of valid findings.
-- What the verifier added is gone with it: findings of its own (worth 0.3 and
-  2.0 points of recall in these runs), a filter for reviewers whose own
-  findings often do not hold, and a rewrite that read better in about one
-  finding in eight for the stronger model.
+- **Two passes, the default, found about as much as 0.4.6 at 58% of its
+  cost**: 49.1% of the reference issues against 51.5%, and as many of the high
+  and medium ones. Fewer of their findings were judged valid, 89.7% against
+  93.2%. Every run reported the same defect in the same 12 files of one pull
+  request, and the judge accepted those 12 findings in every run but this one:
+  that alone is 1.8 of the 3.5 points.
+- **Three passes matched 0.4.6** at 78% of its cost and in less time: the same
+  share of reference issues found and of findings judged valid, and slightly
+  more of the high and medium issues. To review with three passes, write the
+  model as `MODEL*3` ([setup with options](#setup-with-options)).
+- **Four passes found more at about the same cost**: 54.8% of the reference
+  issues and 65.6% of the high and medium ones, with 91.0% of their findings
+  judged valid.
+- **The rating marks more findings high** than 0.4.6's verifier did: about
+  20% against 9%, and the judge rated 27% to 33% of those high, against 47%.
+  Its choice of which findings deserve an inline comment (medium or high)
+  agreed with the judge's as well as before.
 
-The runs, the judge, the reasoning-effort and rating measurements and the
-limits are in the
-[validation record](docs/VALIDATION.md#one-pipeline-passes-instead-of-roles-2026-11-22-and-23).
+*Findings judged valid* is the share the judge found correct (ReviewBench's
+augmented precision); *reference issues found* is the share of the
+benchmark's listed issues that a finding covered (its grounded recall); cost
+is the model's list price for each run's tokens; time is the median per
+review, with four reviews running at a time. The 25th pull request of the
+test set, simnaut/emdash#2, was left out of every row: its head merges about
+100 upstream commits, and 0.4.6 filed 449 findings there, more than the judge
+can score at a reasonable cost. One run per row: differences of about 3
+points of recall are within what two runs of one setup differed by before.
+The method, the noise, F1 and F2 and the limits are in the
+[validation record](docs/VALIDATION.md#050-against-046-on-reviewbench-with-its-own-judge-2026-11-24).
+
+Before that, while the pipeline was rebuilt, our own judge (Claude Opus 5.5
+applying ReviewBench's rubric) compared the two pipelines with other models.
+With GPT-6.1 Terra, two passes matched 0.4.6 (29.8% and 29.5% of the
+reference issues, 93.0% and 90.2% judged valid) at 80% of its cost. One pass
+each of Terra and Claude Sonnet 5.5 found 35.0% of the reference issues, more
+than two or four passes of Terra (29.2% and 30.6%), with 93.7% judged valid.
+A verifier of the reviewers' own strength rejected 0 of 280 candidate findings
+with Terra and 3 of 1,185 with Sol, for 30% and 54% of a review's cost. What
+the verifier added is gone with it: findings of its own, a filter for
+reviewers whose own findings often do not hold, and a rewrite that read
+better in about one finding in eight for the stronger model. These runs are
+in the
+[validation record](docs/VALIDATION.md#one-pipeline-passes-instead-of-roles-2026-11-22-and-23)
+too.
 
 ### Releases 0.3.5 to 0.4.6 on Martian's Code Review Bench
 
@@ -338,8 +391,9 @@ models and reasoning effort** on the same 50 PRs:
   and matched 65.2% (one run each, scored by our local judge). A smaller model
   in `models.review.reviewers` trades issues found for cost and time, so run
   `/pr-deep`, or set stronger review models, where a missed defect costs more.
-  The 0.5.0 development runs show the same: a pass of GPT-6 Luna at its
-  default effort found less than half of what a pass of GPT-6.1 Terra found.
+  Our own judge's runs while 0.5.0 was designed show the same: a pass of
+  GPT-6 Luna at its default effort found less than half of what a pass of
+  GPT-6.1 Terra found.
 
 The full method, the comparison of all 12 combinations and the limits are in
 the [validation record](docs/VALIDATION.md#martian-code-review-bench-2026-11-05-and-06).
