@@ -80,6 +80,44 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.5.0 after publication (2026-11-24)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.3.2 and tmux 3.2a, in isolated OpenCode profiles with the fake model and
+Azure DevOps services.
+
+- **The merged tree.** The pull request was merged with a merge commit whose
+  tree is that of the candidate's last commit. CI passed on that commit, on
+  `main` and on the tag. That commit changes only documentation against the
+  last commit of the review (`e560de3`): the code and tests are those the
+  thirteen host fixture runs passed on.
+- **Before the tag.** On the candidate's last commit: the source archive
+  passed the clean-directory installation check, the package built from a
+  clean export holds 35 files, all 350 local links and images of the 48
+  Markdown files resolve, and the public Git commit, installed by OpenCode's
+  plugin manager, passed the native smoke, terminal panel and setup fixtures
+  and the setup fixture's update of 0.4.x settings.
+- **Source archives.** The release's source archive, downloaded again, is
+  byte-identical to the one built from the tag, and so is GitHub's own archive
+  of the tag. They passed the clean-directory installation check: 23 runtime
+  modules, 6 prompts and the license as in the archive, the view's JSX source
+  not installed, and `--replace` keeping the settings file byte for byte.
+- **The Git package.** `github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.0`,
+  installed by OpenCode's plugin manager, passed the native smoke fixture
+  (124 model and 203 Azure DevOps requests), the terminal panel's fixture (47
+  and 73) and the setup fixture (no model request, 16 Azure DevOps requests).
+- **The npm package.** The registry's integrity and shasum for 0.5.0 equal
+  those of the package built from the tag, which holds the candidate's 35
+  files; the tarball downloaded from the registry is byte-identical to it, and
+  `latest` names 0.5.0. Installed from the registry, the package passed the
+  same three fixtures with the same request counts, and the update of 0.4.x
+  settings (no model request, 7 Azure DevOps requests).
+
+The runs with real models were made with the candidate; see
+[0.5.0 against 0.4.6 on ReviewBench](#050-against-046-on-reviewbench-with-its-own-judge-2026-11-24)
+and the [release candidate's acceptance](#050-release-candidate-acceptance-2026-11-23)
+for them and for what was not verified.
+
 ## 0.5.0 against 0.4.6 on ReviewBench with its own judge (2026-11-24)
 
 Before the release, 0.5.0 and 0.4.6 reviewed the same pull requests of
