@@ -796,7 +796,8 @@ try {
     await api(`/api/session/${origin}/command`, { name: 'pr-quick', text: `${prUrl} ${context}`, delivery: 'steer' });
     const receipt = await latest(origin);
     assert.match(receipt, new RegExp(`^\\[AZPR [a-f0-9]{8}\\] COMPLETE; coverage ${outcome === 'completed' ? 'complete' : 'incomplete'}; verification none\\n`), receipt);
-    assert.match(receipt, new RegExp(`^- azpr-quick-reviewer: ${outcome === 'completed' ? 'COMPLETE' : 'PARTIAL'};[^\\n]*follow-up=${outcome}$`, 'm'), receipt);
+    // A follow-up that answered prose gets its correction turn, which answers prose too: the receipt names both.
+    assert.match(receipt, new RegExp(`^- azpr-quick-reviewer: ${outcome === 'completed' ? 'COMPLETE' : 'PARTIAL'};[^\\n]*follow-up=${outcome}${outcome === 'unusable' ? '; repair=failed:unusable' : ''}$`, 'm'), receipt);
     assert.match(receipt, /\nFollow-up notice: a session answered PARTIAL and named unfinished work, so the same session was asked once to continue \(follow-up=completed, still-partial, unusable or failed\)\. A follow-up that failed or gave no usable answer kept the answer it followed\.\n/, receipt);
     const followRequests = requests.slice(before).filter(request => request.kind === 'review');
     assert.equal(new Set(followRequests.map(request => request.sessionID)).size, 1, 'The follow-up stays in the same session.');
@@ -807,7 +808,10 @@ try {
     const [stage] = stages;
     assert.equal(stage.followUp.outcome, outcome);
     assert.equal(stage.result.findings.length, 1, 'The finding survives the follow-up.');
-    if (outcome === 'unusable') assert.equal(stage.result.report, '提早停止。', 'The answer the follow-up followed stands.');
+    if (outcome === 'unusable') {
+      assert.equal(stage.result.report, '提早停止。', 'The answer the follow-up followed stands.');
+      assert.deepEqual([stage.repairFailure.turn, stage.repairFailure.failureClass], [2, 'unusable']);
+    }
   }
   results.quickFollowUp = 'PARTIAL, then one follow-up in the same session: COMPLETE, or the earlier answer kept when the follow-up is unusable';
 
