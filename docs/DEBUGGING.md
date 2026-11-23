@@ -173,7 +173,11 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    `followUp` records a reviewer's follow-up turn: the turn, the gaps the answer
    named, how many assigned files it did not list as reviewed and the outcome
    (`completed`, `still-partial`, `unusable`, or `failed` with its failure class
-   and error); the receipt shows `follow-up=<outcome>`.
+   and error); the receipt shows `follow-up=<outcome>`. `repairFailure`
+   records a correction turn that failed (its turn, failure class and error)
+   or whose answer was not usable (class `unusable`): the stage's latest
+   usable answer stands, with the items that turn would have repaired
+   degraded, and the receipt shows `repair=failed:<class>`.
 3. Cost and prompt cache: `tokens` in each stage record. `cachedInputShare` is
    `cacheRead / (input + cacheRead + cacheWrite)`. On a long session, a request
    whose `cacheRead` is close to the previous request's prompt reused it; a run
