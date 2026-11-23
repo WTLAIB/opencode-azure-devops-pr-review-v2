@@ -1176,7 +1176,8 @@ test('ownFile: the file a finding\'s location names, in every form a review of t
 eachKind('a structured location of 0.4.x names its file: a comment there stands, one in another file does not', (t, { make }) => {
   const both = [...observed, { input: { path: '/src/b.ts', version: head }, output: 'b one\nconst other = load();\n' }];
   const r = make([finding('F-1', 'high', { location: JSON.stringify({ side: 'head', path: '/src/a.ts', lineStart: 2, lineEnd: 2 }) })], both);
-  assert.deepEqual(evaluatePlanPage(answer([comment()]), { review: r, assigned: publishableFindings(r) }).issues, []);
+  const accepted = evaluatePlanPage(answer([comment()]), { review: r, assigned: publishableFindings(r) });
+  assert.deepEqual([accepted.issues, accepted.result.comments.map(c => [c.findingId, c.path, c.startLine])], [[], [['F-1', '/src/a.ts', 2]]]);
   const other = evaluatePlanPage(answer([comment({ path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'const other = load();' })]), { review: r, assigned: publishableFindings(r) });
   assert.ok(other.issues.some(issue => /path \/src\/b\.ts is not F-1's own file \/src\/a\.ts/.test(issue)), JSON.stringify(other.issues));
 }, ['verified']);

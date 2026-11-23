@@ -840,6 +840,16 @@ test('locations and source windows', () => {
   // A BASE location keeps its side, so HEAD source is never shown for BASE line numbers.
   assert.deepEqual(parseLocation('base:/src/old.ts:3'), { side: 'base', path: '/src/old.ts', start: 3, end: 3 });
   assert.equal(parseLocation('somewhere'), null);
+  // The forms a review of 0.4.x saved are read the same way everywhere: a structured location, a path without its
+  // leading slash or with "./", a file at the root with its line; a side counts only with its colon.
+  for (const [location, at] of [
+    [JSON.stringify({ side: 'head', path: '/src/a.ts', lineStart: 2, lineEnd: 4 }), { side: 'head', path: '/src/a.ts', start: 2, end: 4 }],
+    [{ side: 'base', path: '/src/a.ts', lineStart: 3 }, { side: 'base', path: '/src/a.ts', start: 3, end: 3 }],
+    ['src/a.ts:2', { side: 'head', path: '/src/a.ts', start: 2, end: 2 }], ['./src/a.ts:2', { side: 'head', path: '/src/a.ts', start: 2, end: 2 }],
+    ['Makefile:3', { side: 'head', path: '/Makefile', start: 3, end: 3 }], ['head/a.ts:2', { side: 'head', path: '/head/a.ts', start: 2, end: 2 }],
+    ['base/a.ts:2', { side: 'head', path: '/base/a.ts', start: 2, end: 2 }],
+  ]) assert.deepEqual(parseLocation(location), at, JSON.stringify(location));
+  for (const nothing of ['', 'head:', JSON.stringify({ side: 'head', path: 'src/a.ts' }), JSON.stringify({ side: 'left', path: '/src/a.ts' })]) assert.equal(parseLocation(nothing), null, nothing);
   const small = sourceWindow('a\nb\nc\n', { start: 2 });
   assert.deepEqual({ ...small, text: small.text.split('\n') }, { firstLine: 1, lastLine: 3, totalLines: 3, text: ['1 | a', '2 | b', '3 | c'] });
   const big = sourceWindow(Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join('\n'), { start: 500, end: 502, context: 5 });
@@ -867,6 +877,12 @@ eachKind('planning payloads inline source excerpts and the discussion digest; to
   assert.equal(payload.reportReference, undefined, 'A one-segment report needs no file reference.');
   assert.equal(typeof payload.findings[0].evidence, 'string', 'Findings are inline.');
   assert.equal(plan.comments.length, 2);
+  // A structured location that 0.4.6 saved gets its excerpt, and its comment stands in its file, like any other.
+  const structured = await setup(t, [{ ...finding('F-1'), location: JSON.stringify({ side: 'head', path: '/src/Main.java', lineStart: 1, lineEnd: 1 }) }], undefined, { kind });
+  const legacy = stages(async payload => JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }));
+  const legacyPlan = await prepareComments(structured.review, structured.store, legacy.invoke, { discussions: [], fetchSource: async () => `${codeFor('F-1')}\n` });
+  assert.deepEqual(legacy.payloads[0].sourceExcerpts.map(e => [e.path, e.findingIds]), [['/src/Main.java', ['F-1']]]);
+  assert.deepEqual(legacyPlan.comments.map(c => [c.findingId, c.path, c.startLine]), [['F-1', '/src/Main.java', 1]]);
   // Without discussions or source the planner is told to read them itself.
   const other = await setup(t, [finding('F-1')], undefined, { kind });
   const second = stages(async payload => JSON.stringify({ status: 'READY', comments: [comment(payload.findings[0].id)], skipped: [] }));

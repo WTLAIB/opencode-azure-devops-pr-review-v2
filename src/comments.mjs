@@ -75,26 +75,34 @@ export function publishableFindings(review) {
     .map(({ id, finding, inline, shard }) => ({ ...finding, id, ...(inline === false ? { inline: false } : {}), ...(shard ? { shard } : {}) }));
 }
 
-/** "head:/src/a.ts:12-14" -> { side, path, start, end }; null when no path. A location without a side is HEAD. */
-export function parseLocation(location) {
-  const match = /^(?:(head|base):?)?:?(\/[^:]+?)(?::(\d+)(?:-(\d+))?)?\s*$/.exec(String(location ?? '').trim());
-  if (!match) return null;
-  const start = match[3] ? Number(match[3]) : null;
-  return { side: match[1] ?? 'head', path: match[2], start, end: match[4] ? Number(match[4]) : start };
-}
-
 /**
- * The file a finding's location names, also as 0.4.x saved it: a structured location (JSON with side, path and
- * lines), or a path without its leading slash or with "./". A side is a side only with its colon, so that
- * "base/a.ts" is a path. null where it names no file.
+ * Where a finding's location points, in every form a review of this version or of 0.4.x saved it:
+ * "head:/src/a.ts:12-14" -> { side, path, start, end }, also a structured location (JSON, or an object, with
+ * side, path, lineStart and lineEnd) and a path without its leading slash or with "./". A location without a side
+ * is HEAD, and a side is one only with its colon, so that "base/a.ts" is a path. null where it names no file.
+ * Every reading of a location goes through here: excerpts, skips, placement and the other places alike.
  */
-export function ownFile(location) {
+export function parseLocation(location) {
   let value = location;
   if (typeof value === 'string' && value.trim().startsWith('{')) { try { value = JSON.parse(value); } catch { /* A string location. */ } }
-  if (value && typeof value === 'object') return typeof value.path === 'string' && value.path.startsWith('/') && !/[\0\r\n]/.test(value.path) ? value.path : null;
-  const path = String(value ?? '').trim().replace(/^(?:head|base):/, '').replace(/^(?:\.\/)+/, '').replace(/^\/+/, '');
-  return parseLocation(`/${path}`)?.path ?? null;
+  if (value && typeof value === 'object') {
+    const side = value.side ?? 'head';
+    if (!['head', 'base'].includes(side) || typeof value.path !== 'string' || !value.path.startsWith('/') || /[\0\r\n:]/.test(value.path)) return null;
+    const start = Number.isSafeInteger(value.lineStart) && value.lineStart > 0 ? value.lineStart : null;
+    return { side, path: value.path, start, end: start && Number.isSafeInteger(value.lineEnd) && value.lineEnd >= start ? value.lineEnd : start };
+  }
+  const text = String(value ?? '').trim();
+  const side = /^(head|base):/.exec(text)?.[1], rest = side ? text.slice(side.length + 1) : text;
+  const match = /^([^:]+?)(?::(\d+)(?:-(\d+))?)?\s*$/.exec(rest.replace(/^(?:\.\/)+/, '').replace(/^\/+/, ''));
+  if (!match || /[\0\r\n]/.test(match[1])) return null;
+  // A bare word with neither a side, a leading slash or "./", a slash inside nor a line is no location.
+  if (!side && !/^(?:\.\/|\/)/.test(rest) && !match[2] && !match[1].includes('/')) return null;
+  const start = match[2] ? Number(match[2]) : null;
+  return { side: side ?? 'head', path: `/${match[1]}`, start, end: match[3] ? Number(match[3]) : start };
 }
+
+/** The file a finding's location names (`parseLocation`); null where it names none. */
+export const ownFile = location => parseLocation(location)?.path ?? null;
 
 /** A finding's place as a comment lists it: "/src/a.ts:12-14". */
 export function placeOf(finding) {
