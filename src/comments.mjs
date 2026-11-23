@@ -83,6 +83,19 @@ export function parseLocation(location) {
   return { side: match[1] ?? 'head', path: match[2], start, end: match[4] ? Number(match[4]) : start };
 }
 
+/**
+ * The file a finding's location names, also as 0.4.x saved it: a structured location (JSON with side, path and
+ * lines), or a path without its leading slash or with "./". A side is a side only with its colon, so that
+ * "base/a.ts" is a path. null where it names no file.
+ */
+export function ownFile(location) {
+  let value = location;
+  if (typeof value === 'string' && value.trim().startsWith('{')) { try { value = JSON.parse(value); } catch { /* A string location. */ } }
+  if (value && typeof value === 'object') return typeof value.path === 'string' && value.path.startsWith('/') && !/[\0\r\n]/.test(value.path) ? value.path : null;
+  const path = String(value ?? '').trim().replace(/^(?:head|base):/, '').replace(/^(?:\.\/)+/, '').replace(/^\/+/, '');
+  return parseLocation(`/${path}`)?.path ?? null;
+}
+
 /** A finding's place as a comment lists it: "/src/a.ts:12-14". */
 export function placeOf(finding) {
   const at = parseLocation(finding.location);
@@ -761,9 +774,10 @@ export function restoreAnchor(comment, review) {
   });
   const declared = new Map();
   for (const observation of observations) {
-    // The empty element after a final newline is no line of the file, as in the search below.
-    const lines = observation.output.split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
+    // Split only as far as the range needs; the empty element after a final line break is no line of the file,
+    // as in the search below.
+    const lines = observation.output.split(/\r?\n/, comment.endLine + 1);
+    if (lines.at(-1) === '' && lines.length <= comment.endLine) lines.pop();
     const selected = lines.slice(comment.startLine - 1, comment.endLine), anchor = selected.join('\n');
     if (selected.length === count && forms.has(trim(anchor))) declared.set(JSON.stringify([anchor]), { anchor, startLine: comment.startLine, endLine: comment.endLine });
   }
@@ -1046,7 +1060,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       problems.push(...drafted.problems);
       // Where the comment stands follows from the lines it quotes, so they must be lines the file has:
       // the quote is found in the HEAD text, also for a review whose single comments need not be, and
-      // ends within the file (a quote that adds an empty line after the last one is found, but is no line).
+      // ends within the file (where the file's line count is known, it is checked below as well).
       if (!problems.length && repeated && !drafted.found) problems.push('the anchor text was not found in the HEAD source; quote the exact lines from sourceExcerpts');
       // (An anchor in a file that holds none of the findings is refused below, where the place is looked for.)
       // The list follows the body: a block the body leaves open would take it in.
@@ -1114,12 +1128,11 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
       continue;
     }
     const { problems, comment } = draft(c, finding.id, finding.severity);
-    // A comment for one finding stands in that finding's own file: an excerpt of another file is another place. A
-    // location 0.4.x saved without its side or leading slash names its file as well; one that names none keeps the
-    // finding in the summary index.
-    const own = parseLocation(finding.location) ?? parseLocation(`/${String(finding.location ?? '').trim().replace(/^(?:head|base):/, '').replace(/^\/+/, '')}`);
+    // A comment for one finding stands in that finding's own file (`ownFile`): an excerpt of another file is
+    // another place. A location that names no file keeps the finding in the summary index.
+    const own = ownFile(finding.location);
     if (!own) problems.push(`${finding.id}'s location names no file of its own to comment on`);
-    else if (comment?.path && comment.path !== own.path) problems.push(`path ${comment.path} is not ${finding.id}'s own file ${own.path}; quote lines of that file`);
+    else if (comment?.path && comment.path !== own) problems.push(`path ${comment.path} is not ${finding.id}'s own file ${own}; quote lines of that file`);
     // A comment for one place is not put on quoted lines that carry a comment for several places.
     const taken = !problems.length && posted ? occupiedLines(review.target, comment, posted) : '';
     if (taken) problems.push(`${taken}. Skip ${finding.id} with cause existing-thread when that thread covers it, or quote other lines`);

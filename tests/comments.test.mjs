@@ -4,7 +4,7 @@ import {
   evaluatePlanPage, assemblePlan, inlineMarker, summaryMarker, normalizeTitle, restoreAnchor, confirmedFindings, publicationItems,
   publishableFindings, reviewMethod, reviewVerification, combinationProblems, repeatProblems, placeOf, evaluateGrouping, groupingRepairPrompt,
   automaticPublicationProblems, automaticPublicationRepeats,
-  INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments,
+  INLINE_SOFT_LIMIT, INLINE_HARD_LIMIT, commentFindings, adjustmentInput, describeAdjustments, hasAdjustments, resolveAdjustments, ownFile,
   everyFindingExcluded, publicationStarted, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken, sharedMarker, linesMarker,
 } from '../src/comments.mjs';
 import { commentAttribution } from '../src/attribution.mjs';
@@ -1164,6 +1164,22 @@ test('a text that names a finding merged into an excluded one is held as one tha
     assert.deepEqual(excludedReferences({ ...chained, plan: { ...adjusted.plan, comments: [naming] } }), ['the comment of F-2 at /src/a.ts:2 names F-4'], rows.map(row => row.id).join());
   }
 });
+
+test('ownFile: the file a finding\'s location names, in every form a review of this version or of 0.4.x saved it', () => {
+  for (const [location, file] of [['head:/src/a.ts:2', '/src/a.ts'], ['/src/a.ts:2-4', '/src/a.ts'], ['base:/src/a.ts:3', '/src/a.ts'], ['src/a.ts:2', '/src/a.ts'], ['./src/a.ts:2', '/src/a.ts'],
+    ['base/a.ts:2', '/base/a.ts'], [JSON.stringify({ side: 'head', path: '/src/a.ts', lineStart: 2, lineEnd: 2 }), '/src/a.ts'], [{ side: 'head', path: '/src/a.ts', lineStart: 2, lineEnd: 2 }, '/src/a.ts'],
+    ['', null], ['  ', null], [undefined, null], [JSON.stringify({ side: 'head', path: 'src/a.ts' }), null]]) {
+    assert.equal(ownFile(location), file, JSON.stringify(location));
+  }
+});
+
+eachKind('a structured location of 0.4.x names its file: a comment there stands, one in another file does not', (t, { make }) => {
+  const both = [...observed, { input: { path: '/src/b.ts', version: head }, output: 'b one\nconst other = load();\n' }];
+  const r = make([finding('F-1', 'high', { location: JSON.stringify({ side: 'head', path: '/src/a.ts', lineStart: 2, lineEnd: 2 }) })], both);
+  assert.deepEqual(evaluatePlanPage(answer([comment()]), { review: r, assigned: publishableFindings(r) }).issues, []);
+  const other = evaluatePlanPage(answer([comment({ path: '/src/b.ts', startLine: 2, endLine: 2, anchor: 'const other = load();' })]), { review: r, assigned: publishableFindings(r) });
+  assert.ok(other.issues.some(issue => /path \/src\/b\.ts is not F-1's own file \/src\/a\.ts/.test(issue)), JSON.stringify(other.issues));
+}, ['verified']);
 
 eachKind('a location saved without its side or leading slash names its file; one that names none keeps the finding in the summary', (t, { make }) => {
   const both = [...observed, { input: { path: '/src/b.ts', version: head }, output: 'b one\nconst other = load();\n' }];
