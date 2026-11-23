@@ -1083,6 +1083,9 @@ test('one setting is saved at a time from the list; settings in use wait for a r
   await writeFile(f.path, JSON.stringify({ ...saved, afterReview: { quick: 'none', review: 'preview', deep: 'publish' }, models: { ...saved.models, review: { reviewers: ['fixture/model', 'fixture/model#high', 'fixture/model#high', 'fixture/model'] } } }));
   assert.deepEqual([await value('afterReview'), await value('reviewModel')], ['differs by mode', 'model + model#high ×2 + model'], 'The list has room for a few words; the file has each value.');
   assert.deepEqual([rowsOf(await status({})).afterReview.current, rowsOf(await status({})).reviewModel.current], ['', 'fixture/model*1,fixture/model#high*2,fixture/model*1'], 'A dialog starts from no choice, or from the list as it is.');
+  // Passes are counted by the whole reference: two providers' models of one name are two models, shown with their providers.
+  await writeFile(f.path, JSON.stringify({ ...saved, models: { ...saved.models, review: { reviewers: ['first/opus', 'second/opus', 'second/opus', 'fixture/model'] } } }));
+  assert.equal(await value('reviewModel'), 'first/opus + second/opus ×2 + model');
   const refused = await save({ changes: { language: 'no such language' } });
   assert.deepEqual([refused.ok, refused.problem], [false, 'outputLanguage must be a language tag such as en, zh-TW, zh-CN, or ja (not a language name or instruction).']);
 });
@@ -1954,7 +1957,7 @@ function updatedSettings(f) {
 const updatedText = legacy => settingsText(withMissingSettings(migrateSettings(legacy).settings).settings);
 // What /pr-setup and the dialogs say that update changes: one line per point.
 const UPDATE_FIRST = 'This version reviews with a list of reviewer models per mode: each entry reviews the changed files on its own, one pass each. There is no verifier any more: the first entry also merges repeated findings and plans the comments, and a rating sets the severities.';
-const UPDATE_LAST = 'Every other setting stays as it is.';
+const UPDATE_LAST = 'Every other setting stays as it is, also one that is not a setting of this version: the settings check then names it.';
 const UPDATE_REVIEW = '/pr-review: functional fixture/model, risk fixture/model#high, verifier fixture/verifier -> 2 passes: fixture/model, fixture/model#high. The verifier model is no longer used.';
 const UPDATE_LINES = [UPDATE_FIRST, UPDATE_REVIEW, '/pr-deep: off, stays off.', '/pr-quick: reviewer fixture/model#high -> 1 pass: fixture/model#high.',
   'Severity rating of /pr-review, /pr-quick: none ran before (no rater was set). From now on the first reviewer model rates the findings from their text alone; "rater": false in the settings file switches that off.',
@@ -2290,7 +2293,8 @@ test('what the update of 0.4.x settings changes is said line by line, with model
   const offered = async settings => { await writeFile(f.path, settingsText(settings), { mode: 0o600 }); return status({}); };
   const RATED_BY_FIRST = modes => `Severity rating of ${modes}: none ran before (no rater was set). From now on the first reviewer model rates the findings from their text alone; "rater": false in the settings file switches that off.`;
   const POSTS = (modes, several) => `afterReview is "publish" for ${modes}: after the update ${several ? 'these commands post' : 'this command posts'} the comments of the new reviews automatically, as the PAT owner. ` +
-    'Reports and comments then say that findings were checked by their reviewer and that no separate verification ran.';
+    'Reports and comments then say that findings were checked by their reviewer and that no separate verification ran. ' +
+    `To read the comments before they are posted, set afterReview to preview for ${several ? 'these modes' : 'this mode'}.`;
   // /pr-deep with all three models and every rating at its default: each verified mode becomes two passes, and a
   // rating runs where none ran. One mode posts by itself; the verifier's batch size has nothing left to size.
   const deep = { ...legacy, models: { ...legacy.models, deep: { functional: 'fixture/model#high', risk: 'fixture/model', verifier: 'fixture/verifier', rater: '' } }, afterReview: { quick: 'publish', review: 'none', deep: 'preview' } };
@@ -2367,8 +2371,8 @@ test('a token pasted where a model goes is named, never returned: also not in a 
   t.after(await old.f.setup({ environment: old.environment }));
   const offered = await old.f.rpc.handlers.status({});
   // What a person is shown names it without showing it, and so does every notice.
-  assert.deepEqual(offered.migration.lines.slice(1, 4), ['/pr-review: functional (not a model ID), risk fixture/model#high, verifier fixture/verifier -> 2 passes: (not a model ID), fixture/model#high. The verifier model is no longer used.',
-    '/pr-deep: off, stays off.', '/pr-quick: no model was chosen yet. Choose its models with /pr-setup after the update.']);
+  assert.deepEqual(offered.migration.lines.slice(1, 4), ['/pr-review: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.',
+    '/pr-deep: off, stays off.', '/pr-quick: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.']);
   for (const notice of [await old.f.invoke('pr-setup', ''), await old.f.invoke('pr-review', old.f.azure.prUrl())]) assert.ok(!notice.includes(FAKE_PAT));
   // Settings of this version: the token as an entry of the review models.
   const now = await fixture(t);
@@ -2538,8 +2542,8 @@ test('settings of 0.4.x that were never set up take their update like any others
     models: { review: { reviewers: [model, model], rater: '' }, deep: { reviewers: [], rater: '' }, quick: { reviewers: [model], rater: '' } } });
   const NO_MODEL = 'models.review.reviewers[0]: select an actual provider/model ID from opencode models, optionally with a variant as provider/model#variant; do not use a display name or placeholder.';
   // No model is named as if it were one, and what the file still lacks after the update is said before it is confirmed.
+  // A mode whose models were never chosen ran no review, so there is nothing to say about who rated before.
   const EXAMPLE_LINES = [UPDATE_FIRST, '/pr-review: no model was chosen yet. Choose its models with /pr-setup after the update.', '/pr-deep: off, stays off.', '/pr-quick: off, stays off.',
-    'Severity rating of /pr-review: none ran before (no rater was set). From now on the first reviewer model rates the findings from their text alone; "rater": false in the settings file switches that off.',
     'workflow.shardFindings is dropped: it sized the verifier\'s batches.', UPDATE_LAST, STILL(NO_MODEL)];
 
   // In the terminal UI.
@@ -2624,7 +2628,7 @@ test('settings of 0.4.x with a fault take their update before the fault is repai
   // The update as it is shown: the two passes of each mode that was on, who rates, that these commands post by
   // themselves afterwards, and last what will still be wrong with the file.
   const FAULTY_LINES = [...UPDATE_LINES.slice(0, -1),
-    'afterReview is "publish" for /pr-review, /pr-deep, /pr-quick: after the update these commands post the comments of the new reviews automatically, as the PAT owner. Reports and comments then say that findings were checked by their reviewer and that no separate verification ran.',
+    'afterReview is "publish" for /pr-review, /pr-deep, /pr-quick: after the update these commands post the comments of the new reviews automatically, as the PAT owner. Reports and comments then say that findings were checked by their reviewer and that no separate verification ran. To read the comments before they are posted, set afterReview to preview for these modes.',
     UPDATE_LAST, STILL(NO_LANGUAGE)];
   for (const way of ['option', 'rpc']) {
     const { f, environment, legacy, text } = await outdated(t, faulty);
@@ -2690,12 +2694,12 @@ test('every settings file of 0.4.x, whatever else is wrong with it, is offered i
     [{ ...complete, mcp: { concurrency: 2 } }, 'settings.mcp is no longer used: AZPR calls the Azure DevOps REST API itself. Move concurrency and callTimeoutSeconds to azure, set azure.organization and azure.patFile (or azure.pat), and remove mcp.'],
     [{ ...complete, azure: { ...complete.azure, concurrency: 99 } }, 'azure.concurrency must be an integer from 1 to 8.'],
     [{ ...complete, azure: 'fixture' }, 'azure must be a JSON object.'],
-    [{ ...complete, models: [] }, 'models.review.reviewers needs at least one model: /pr-review runs one pass per entry.', '/pr-review: off, stays off.'],
+    [{ ...complete, models: [] }, 'models must be a JSON object.', '/pr-review: its settings are not a group of models, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.'],
     // A value in a model's place that is none: named, not shown, also where it stays in the file.
-    [{ ...complete, models: { ...complete.models, review: { ...complete.models.review, rater: 'Fixture Rater' } } }, NO_MODEL('models.review.rater'), 'Severity rating of /pr-review: (not a model ID), as before.'],
+    [{ ...complete, models: { ...complete.models, review: { ...complete.models.review, rater: 'Fixture Rater' } } }, NO_MODEL('models.review.rater'), 'Severity rating of /pr-review: the rater the file names is no model ID; it is kept as it is, and the settings check names it after the update.'],
     [{ ...complete, models: { ...complete.models, review: { ...complete.models.review, functional: 'PRIVATE_VALUE_0123456789' } } }, NO_MODEL('models.review.reviewers[0]'),
-      '/pr-review: functional (not a model ID), risk fixture/model#high, verifier fixture/verifier -> 2 passes: (not a model ID), fixture/model#high. The verifier model is no longer used.'],
-    [{ ...complete, models: { ...complete.models, quick: { reviewer: 'Quick Model' } } }, NO_MODEL('models.quick.reviewers[0]'), '/pr-quick: no model was chosen yet. Choose its models with /pr-setup after the update.'],
+      '/pr-review: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.'],
+    [{ ...complete, models: { ...complete.models, quick: { reviewer: 'Quick Model' } } }, NO_MODEL('models.quick.reviewers[0]'), '/pr-quick: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.'],
     // A mode whose three models are all placeholders was never chosen: the update says so instead of naming models.
     [{ ...complete, models: { ...complete.models, deep: { functional: 'REPLACE_PROVIDER/REPLACE_FUNCTIONAL', risk: 'REPLACE_PROVIDER/REPLACE_RISK', verifier: 'REPLACE_PROVIDER/REPLACE_VERIFIER', rater: '' } } },
       NO_MODEL('models.deep.reviewers[0]'), '/pr-deep: no model was chosen yet. Choose its models with /pr-setup after the update.'],

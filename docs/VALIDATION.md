@@ -100,7 +100,7 @@ host moves to OpenCode 2.3.2.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 764 tests (686 for 0.4.6), all
+`npm run check` passes, and `npm test` runs 769 tests (686 for 0.4.6), all
 passing. Among them, for what is new: the order of finding IDs whichever
 session answers first (`tests/review-work.test.mjs`, `tests/runtime.test.mjs`);
 the duplicate check's refusal of a merge within one session, directly and

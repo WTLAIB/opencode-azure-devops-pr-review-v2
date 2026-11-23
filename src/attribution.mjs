@@ -438,6 +438,8 @@ function renderStageReceipt(stage) {
   ];
   for (const [label, count] of counters) if (count) fields.push(`${label}=${count}`);
   if (stage.followUp) fields.push(`follow-up=${stage.followUp.outcome}${stage.followUp.failureClass ? `:${stage.followUp.failureClass}` : ''}`);
+  // A correction turn that failed: the answer before it stands, with the items it would have repaired degraded.
+  if (stage.repairFailure) fields.push(`repair=failed:${stage.repairFailure.failureClass}`);
   if (stage.failureClass) fields.push(`failure=${stage.failureClass}`);
   if (stage.error) fields.push(`error=${stage.error}`);
   return '- ' + fields.join('; ');
@@ -448,8 +450,11 @@ export function renderReceipt(run, report, status, error, settings) {
   // A review states coverage and verification next to its status: whether every changed file was reviewed,
   // with several passes how many files every pass reviewed, and that nothing verified the findings separately.
   const reviewing = ['review', 'deep', 'quick'].includes(run.mode), summary = run.reviewSummary?.coverage;
-  const every = summary?.passes > 1 && Number.isInteger(summary.files) ? `, ${summary.reviewedByAll}/${summary.files} file(s) in every pass` : '';
-  const method = reviewing ? `${summary ? `; coverage ${summary.complete ? 'complete' : 'incomplete'}${every}` : ''}; verification none` : '';
+  // Of the changed files: how many were reviewed at all, where that is not every one, and with several passes how many every pass reviewed.
+  const counted = Number.isInteger(summary?.files);
+  const once = counted && summary.reviewedOnce < summary.files ? `, ${summary.reviewedOnce}/${summary.files} file(s) reviewed` : '';
+  const every = counted && summary.passes > 1 ? `, ${summary.reviewedByAll}/${summary.files}${once ? '' : ' file(s)'} in every pass` : '';
+  const method = reviewing ? `${summary ? `; coverage ${summary.complete ? 'complete' : 'incomplete'}${once}${every}` : ''}; verification none` : '';
   let body = `[AZPR ${run.id}] ${status}${method}\n${error ? `Reason (${run.phase ?? 'workflow'}): ${error}\n` : ''}${rows}${rows ? '\n' : ''}`;
   if (run.stages.some(s => s.repairs?.length)) body += '\nRepair notice: some answers did not meet the output contract and the same session was asked to correct them. Remaining problems were downgraded per item (NEEDS_INFO, a merge or rating left out, or skipped comments) instead of discarding the review.\n';
   if (run.stages.some(s => s.attempt > 1)) body += '\nRetry notice: a stage failed for a transient reason and ran again in a new session.\n';

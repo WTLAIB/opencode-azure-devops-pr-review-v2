@@ -40,9 +40,13 @@
               "description": "The review passes of /pr-review, in order: one exact provider/model ID (optionally provider/model#variant) per pass, 1 to 4. Each pass reviews every changed file on its own; an entry may repeat, and passes of different models find more than repeats of one. The first entry also merges repeated findings and plans the comments, and rates the severities unless rater names a model. Every reviewer needs tool support."
             },
             "rater": {
-              "type": [
-                "string",
-                "boolean"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "const": false
+                }
               ],
               "default": "",
               "description": "Which model rates the severities: after the duplicate check, sessions without tools rate the reported findings from their text alone, without the level their reviewer gave them, so that the findings of different reviewers are levelled on one scale. \"\" (the default): the first model of reviewers. A provider/model ID: that model (it needs no tool support). false: no rating; the reviewers' own levels stay."
@@ -65,9 +69,13 @@
               "description": "The review passes of /pr-deep, as models.review.reviewers: stronger models, the same model with a higher variant (provider/model#high), or more passes, for the PRs that need them. An empty list (the default) leaves /pr-deep off; it never falls back to the review models."
             },
             "rater": {
-              "type": [
-                "string",
-                "boolean"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "const": false
+                }
               ],
               "default": "",
               "description": "Which model rates the severities: after the duplicate check, sessions without tools rate the reported findings from their text alone, without the level their reviewer gave them, so that the findings of different reviewers are levelled on one scale. \"\" (the default): the first model of reviewers. A provider/model ID: that model (it needs no tool support). false: no rating; the reviewers' own levels stay."
@@ -90,9 +98,13 @@
               "description": "The review passes of /pr-quick, as models.review.reviewers: usually one pass of a fast model. An empty list (the default) leaves /pr-quick off; it never falls back to other models."
             },
             "rater": {
-              "type": [
-                "string",
-                "boolean"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "const": false
+                }
               ],
               "default": "",
               "description": "Which model rates the severities: after the duplicate check, sessions without tools rate the reported findings from their text alone, without the level their reviewer gave them, so that the findings of different reviewers are levelled on one scale. \"\" (the default): the first model of reviewers. A provider/model ID: that model (it needs no tool support). false: no rating; the reviewers' own levels stay."

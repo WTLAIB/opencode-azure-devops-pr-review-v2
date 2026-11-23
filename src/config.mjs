@@ -305,26 +305,57 @@ export function validateSettings(raw) {
  * - rater: a named model stays, and so does false. An empty one used to mean no rating; it now lets the first
  *   reviewer model rate (rater: false keeps it off), which the summary says.
  * - workflow.shardFindings (the verifier's batch size) and the documentation-only models._help are dropped.
- * Every other value stays as it is, in its place.
+ * Every other value stays as it is, in its place. The update repairs nothing: a value 0.4.x refused in a slot
+ * that still exists (a reviewer, a rater) is kept where it goes now, and so is a key it does not know, so that
+ * a file 0.4.x could not use is not usable after the update either, and the settings check names what is
+ * wrong. Only what no longer exists goes whatever it held: the verifier, the help texts, shardFindings.
  */
 export function migrateSettings(raw) {
   if (!isObject(raw) || raw.version !== 2) throw new Error('Only settings of version 2 are migrated.');
-  const old = isObject(raw.models) ? raw.models : {};
-  const named = value => typeof value === 'string' ? value : '';
-  const group = mode => isObject(old[mode]) ? old[mode] : {};
+  // What 0.4.x accepted in a model slot: a model reference, or nothing where the slot could stay empty.
+  const accepted = (value, optional) => isModelReference(value) || (optional && (value === undefined || value === ''));
+  // The keys of a group that the update does not map, with their values.
+  const unknown = (group, known) => Object.fromEntries(Object.entries(group).filter(([key]) => !known.includes(key)));
+  const empty = { reviewers: [], rater: '' };
   const models = {}, modes = {};
-  for (const mode of ['review', 'deep']) {
-    // A rater that says false keeps saying it: no version of 0.4.x took that value, and it can only mean no rating.
-    const before = Object.fromEntries(['functional', 'risk', 'verifier', 'rater'].map(role => [role, role === 'rater' && group(mode)[role] === false ? false : named(group(mode)[role])]));
-    const complete = Boolean(before.functional && before.risk && before.verifier);
-    models[mode] = { reviewers: complete ? [before.functional, before.risk] : [], rater: before.rater };
-    modes[mode] = { before, after: models[mode], state: complete ? 'on' : before.functional || before.risk || before.verifier ? 'partial' : 'off' };
+  const old = raw.models;
+  if (old !== undefined && !isObject(old)) {
+    // Not a group of models at all: kept as it is, for the settings check to name.
+    for (const mode of MODES) modes[mode] = { before: {}, after: empty, state: 'kept', value: true };
+  } else {
+    const groups = isObject(old) ? old : {};
+    for (const mode of ['review', 'deep']) {
+      const value = groups[mode];
+      if (value !== undefined && !isObject(value)) { models[mode] = value; modes[mode] = { before: {}, after: empty, state: 'kept', value: true }; continue; }
+      const group = isObject(value) ? value : {}, optional = mode === 'deep';
+      const before = Object.fromEntries(['functional', 'risk', 'verifier', 'rater'].map(role => [role, group[role] === undefined ? '' : group[role]]));
+      // A reviewer model 0.4.x refused stays in the list, where the settings check names its entry. A missing one
+      // is no value to keep: the list stays empty, and the check says that /pr-review needs a model.
+      const faulty = [group.functional, group.risk].some(item => ![undefined, ''].includes(item) && !accepted(item, optional));
+      // The verifier no longer exists: that it was set is what counts, not whether 0.4.x could use its value.
+      const complete = !faulty && Boolean(before.functional && before.risk) && ![undefined, ''].includes(group.verifier);
+      const rater = group.rater === undefined ? '' : group.rater;
+      models[mode] = { reviewers: faulty ? [before.functional, before.risk].map(item => item === '' ? null : item) : complete ? [before.functional, before.risk] : [], rater,
+        ...unknown(group, ['functional', 'risk', 'verifier', 'rater']) };
+      modes[mode] = { before, after: models[mode], state: faulty ? 'kept' : complete ? 'on' : before.functional || before.risk || before.verifier ? 'partial' : 'off' };
+    }
+    const value = groups.quick;
+    if (value !== undefined && !isObject(value)) { models.quick = value; modes.quick = { before: {}, after: empty, state: 'kept', value: true }; }
+    else {
+      const group = isObject(value) ? value : {}, reviewer = group.reviewer === undefined ? '' : group.reviewer;
+      const faulty = !accepted(group.reviewer, true);
+      // 0.4.x had no rater for /pr-quick; one the file names anyway is kept, and the summary says so.
+      models.quick = { reviewers: reviewer === '' ? [] : [reviewer], rater: group.rater === undefined ? '' : group.rater, ...unknown(group, ['reviewer', 'rater']) };
+      modes.quick = { before: { reviewer }, after: models.quick, state: faulty ? 'kept' : reviewer ? 'on' : 'off' };
+    }
+    // Groups the update does not know stay, and so does documentation that 0.4.x could not read either.
+    const help = groups._help;
+    const readableHelp = help === undefined || (isObject(help) && Object.entries(help).every(([key, text]) => ['functional', 'risk', 'verifier'].includes(key) && typeof text === 'string'));
+    Object.assign(models, unknown(groups, ['_help', ...MODES]), readableHelp ? {} : { _help: help });
   }
-  const reviewer = named(group('quick').reviewer);
-  models.quick = { reviewers: reviewer ? [reviewer] : [], rater: '' };
-  modes.quick = { before: { reviewer }, after: models.quick, state: reviewer ? 'on' : 'off' };
-  const settings = Object.fromEntries(Object.entries(raw).map(([key, value]) => key === 'version' ? [key, 3] : key === 'models' ? [key, models]
-    : key === 'workflow' && isObject(value) ? [key, Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'shardFindings'))] : [key, value]));
+  const settings = Object.fromEntries(Object.entries(raw).map(([key, value]) => key === 'version' ? [key, 3]
+    : key === 'models' ? [key, isObject(value) ? models : value]
+      : key === 'workflow' && isObject(value) ? [key, Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'shardFindings'))] : [key, value]));
   if (!Object.hasOwn(settings, 'models')) settings.models = models;
   const after = isObject(raw.afterReview) ? raw.afterReview : {};
   return { settings, summary: { modes,

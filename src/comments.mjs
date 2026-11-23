@@ -952,7 +952,7 @@ export function evaluatePlanPage(answerText, { review, assigned, final = false, 
   // Body, path and anchor of one inline comment; `lines` bounds the anchor of a combined comment.
   function draft(c, label, severity, lines) {
     const problems = [];
-    if (String(c.severity ?? '').toLowerCase() !== severity) corrections.push({ action: 'use-verified-severity', findingId: label });
+    if (String(c.severity ?? '').toLowerCase() !== severity) corrections.push({ action: 'use-review-severity', findingId: label });
     const body = nonempty(c.body) ? escapeComments(normalizeTitle(c.body, severity)) : '';
     if (!body) problems.push('body is empty');
     else if (body.length > INLINE_SOFT_LIMIT && !final) problems.push(`body is ${body.length} characters; keep it within ${INLINE_SOFT_LIMIT}`);

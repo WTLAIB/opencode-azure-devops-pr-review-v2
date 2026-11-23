@@ -293,12 +293,36 @@ test('migrateSettings: what a settings file of 0.4.x becomes, with no value lost
   assert.deepEqual([full.summary.modes.deep.state, full.summary.modes.quick.state, full.summary.shardFindings, full.summary.publish], ['on', 'off', undefined, []]);
   assert.deepEqual(Object.keys(full.settings), ['version', 'models', 'azure'], 'Nothing is added: the completion of a settings file does that.');
   validateSettings(full.settings);
-  // A value that was never a model reference is not carried into a list, and a file without models gets the empty layout.
-  const odd = migrateSettings({ version: 2, models: { review: { functional: 7, risk: ['p/r'], verifier: { id: 'p/v' }, rater: null }, quick: 'p/q' } });
-  assert.deepEqual(odd.settings.models, { review: { reviewers: [], rater: '' }, deep: { reviewers: [], rater: '' }, quick: { reviewers: [], rater: '' } });
-  assert.equal(odd.summary.modes.review.state, 'off');
-  assert.deepEqual(migrateSettings({ version: 2, enabled: false }).settings, { version: 3, enabled: false, models: odd.settings.models });
-  assert.throws(() => validateSettings(odd.settings), /models\.review\.reviewers needs at least one model/);
+  // The update repairs nothing. A value 0.4.x refused in a slot that still exists stays where it goes now, and so
+  // does a key the update does not know: the file is no more usable than before, and the settings check names
+  // the fault. Only what no longer exists goes, whatever it held (a verifier, help texts 0.4.x could not read).
+  const odd = migrateSettings({ version: 2, models: { review: { functional: 7, risk: ['p/r'], verifier: { id: 'p/v' }, rater: null, ratr: 'p/x' }, quick: 'p/q', extra: 1, _help: 'Notes' } });
+  assert.deepEqual(odd.settings.models, { review: { reviewers: [7, ['p/r']], rater: null, ratr: 'p/x' }, deep: { reviewers: [], rater: '' }, quick: 'p/q', extra: 1, _help: 'Notes' });
+  assert.deepEqual(['review', 'deep', 'quick'].map(mode => odd.summary.modes[mode].state), ['kept', 'off', 'kept']);
+  assert.throws(() => validateSettings(odd.settings), /^Error: Unknown setting models\.extra; check for a typo\.$/);
+  const refused = changes => { try { validateSettings(withMissingSettings(migrateSettings({ version: 2, ...changes }).settings).settings); return ''; } catch (error) { return error.message; } };
+  const usable = { review: { functional: 'p/f', risk: 'p/r', verifier: 'p/v' } }, azure = { organization: 'org', pat: PAT };
+  assert.equal(refused({ models: usable, azure }), '', 'A file 0.4.x could use gives one this version can use.');
+  for (const [models, problem] of [
+    [{ review: { ...usable.review, rater: 12 } }, /^models\.review\.rater must be ""/],
+    [{ review: { ...usable.review, ratr: 'p/x' } }, /^Unknown setting models\.review\.ratr; check for a typo\.$/],
+    [{ review: { ...usable.review, rater: 'Some Model' } }, /^models\.review\.rater: select an actual provider\/model ID/],
+    [{ review: { ...usable.review, risk: 'REPLACE_PROVIDER/REPLACE_MODEL' } }, /^models\.review\.reviewers\[1\]: select an actual provider\/model ID/],
+    [{ review: { functional: 'p/f', risk: 'p/r' } }, /^models\.review\.reviewers needs at least one model/],
+    [{ ...usable, deep: { functional: 7 } }, /^models\.deep\.reviewers\[0\]: select an actual provider\/model ID/],
+    [{ ...usable, deep: 'p/d' }, /^models\.deep must be a JSON object\.$/],
+    [{ ...usable, quick: { reviewer: 'Fast Model' } }, /^models\.quick\.reviewers\[0\]: select an actual provider\/model ID/],
+    [{ ...usable, other: {} }, /^Unknown setting models\.other; check for a typo\.$/],
+    [{ ...usable, _help: { reviewer: 'notes' } }, /^Unknown setting models\._help; check for a typo\.$/],
+  ]) assert.match(refused({ models, azure }), problem, JSON.stringify(models));
+  assert.match(refused({ models: 'p/m', azure }), /^models must be a JSON object\.$/);
+  // What no longer exists goes, whatever it held: a verifier, readable help texts, shardFindings.
+  for (const models of [{ review: { ...usable.review, verifier: 7 } }, { ...usable, _help: { functional: 'notes' } }]) assert.equal(refused({ models, azure }), '', JSON.stringify(models));
+  assert.equal(refused({ models: usable, azure, workflow: { shardFindings: 'many' } }), '');
+  // 0.4.x had no rater for /pr-quick; one the file names anyway is kept.
+  assert.deepEqual(migrateSettings({ version: 2, models: { ...usable, quick: { reviewer: 'p/q', rater: 'p/r' } } }).settings.models.quick, { reviewers: ['p/q'], rater: 'p/r' });
+  // A file without models gets the empty layout.
+  assert.deepEqual(migrateSettings({ version: 2, enabled: false }).settings, { version: 3, enabled: false, models: { review: { reviewers: [], rater: '' }, deep: { reviewers: [], rater: '' }, quick: { reviewers: [], rater: '' } } });
   for (const raw of [null, [], 'text', {}, { version: 1 }, { version: 3 }, { version: '2' }]) assert.throws(() => migrateSettings(raw), /Only settings of version 2 are migrated/, JSON.stringify(raw));
 });
 
@@ -488,7 +512,8 @@ test('models.<mode>.rater: "" lets the first reviewer model rate, a model names 
     assert.throws(() => validateSettings(withRater(rater)), /^Error: models\.review\.rater must be "" \(the first reviewer model rates\), a provider\/model ID, or false \(no severity rating\)\.$/, JSON.stringify(rater));
   }
   for (const mode of MODES) {
-    assert.deepEqual(schema.properties.models.properties[mode].properties.rater.type, ['string', 'boolean'], mode);
+    // A string or false, as validation takes it: true is no rater.
+    assert.deepEqual(schema.properties.models.properties[mode].properties.rater.anyOf, [{ type: 'string' }, { const: false }], mode);
     assert.equal(schema.properties.models.properties[mode].properties.rater.default, '', mode);
     assert.equal(example.models[mode].rater, '', `${mode}: the example leaves the rating to the first reviewer model`);
     assert.equal((schema.properties.models.properties[mode].required ?? []).includes('rater'), false, mode);

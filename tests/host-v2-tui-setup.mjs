@@ -160,8 +160,8 @@ const CHANGES = [
   'Severity rating of /pr-review: fixture/chat, as before.',
   'Severity rating of /pr-quick: none ran before (no rater was set). From now on the first reviewer model rates the findings from their text alone; "rater": false in the settings file switches that off.',
   'workflow.shardFindings is dropped: it sized the verifier\'s batches.',
-  'afterReview is "publish" for /pr-quick: after the update this command posts the comments of the new reviews automatically, as the PAT owner. Reports and comments then say that findings were checked by their reviewer and that no separate verification ran.',
-  'Every other setting stays as it is.',
+  'afterReview is "publish" for /pr-quick: after the update this command posts the comments of the new reviews automatically, as the PAT owner. Reports and comments then say that findings were checked by their reviewer and that no separate verification ran. To read the comments before they are posted, set afterReview to preview for this mode.',
+  'Every other setting stays as it is, also one that is not a setting of this version: the settings check then names it.',
 ];
 
 if (migrate) {

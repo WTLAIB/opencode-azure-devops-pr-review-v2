@@ -10,7 +10,7 @@ const MODELS = [
 // What the server part says of settings of an earlier version: what their update changes, line by line, and the word that names it.
 const UPDATE = Object.freeze({ word: '0123456789ab', lines: Object.freeze(['This version reviews with a list of reviewer models per mode.',
   '/pr-review: functional fixture/fast, risk fixture/strong, verifier fixture/strong -> 2 passes: fixture/fast, fixture/strong. The verifier model is no longer used.',
-  'Every other setting stays as it is.']) });
+  'Every other setting stays as it is, also one that is not a setting of this version: the settings check then names it.']) });
 const OUTDATED = 'settings.json is from AZPR 0.4.x (settings version 2): run /pr-setup to see what changes and to update the file.';
 
 // A mode's models as the server part keeps, takes and shows them: a list with one entry per pass; as text MODEL*N

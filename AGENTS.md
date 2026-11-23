@@ -46,10 +46,13 @@ settings, backups and failure records. Never upload `.local/`.
   or what another one found. Every pass of every shard shares one session pool
   (`workflow.parallelSessions`).
 - The review's finding IDs are the runtime's: every answer numbers its own
-  findings, and once all passes have answered the runtime numbers them by
-  place and source (`byPlaceAndSource` in `review-work.mjs`). Nothing a
-  later stage or a person sees may depend on which session finished first or
-  on an ID a model wrote.
+  findings in its shard's range (the same for every pass, so no pass's input
+  differs), and once all passes have answered the runtime numbers them by
+  place and source (`byPlaceAndSource` in `review-work.mjs`) and renames what
+  an answer's text says of its own findings by those IDs. Nothing a later
+  stage or a person sees may depend on which session finished first or on an
+  ID a model wrote: also not the tool observations the planner is given,
+  which are saved in the order of their content.
 - Add mode-specific or pass-specific instructions only with a measured
   benefit: deep-only prompt text and the split into a functional and a risk
   reviewer were both removed after runs showed no gain over repeating one
@@ -129,6 +132,11 @@ settings, backups and failure records. Never upload `.local/`.
   degrade the affected item (NEEDS_INFO, a merge left out, a level kept, a
   skipped comment) and keep the rest. Never discard a whole review for one bad
   item or one failed pass, and never invent a decision, evidence or a location.
+- A turn after the first that fails, a correction turn or a follow-up,
+  leaves the answer before it standing where that answer was usable; the
+  items it would have repaired stay degraded. Only a stopped run, and a
+  context that overflowed where the shard can still be split, keep their
+  rules (a shard of one file cannot be split).
 - A reviewer whose usable answer is PARTIAL with named unfinished work
   gets one follow-up turn in the same session, within the same budget; a
   follow-up that fails or gives no usable answer never replaces the answer it
@@ -253,11 +261,18 @@ settings, backups and failure records. Never upload `.local/`.
   missing settings, not the options of a first setup, not the installer,
   which carries such a file over byte for byte. What the update writes is
   `migrateSettings` in `config.mjs`, a pure function that loses and invents no
-  value. What it shows names every change in behaviour, also those nobody
+  value and repairs nothing: a value 0.4.x refused in a slot that still
+  exists stays where it goes now, and so does a key it does not know, for the
+  settings check to name. What it shows names every change in behaviour, also those nobody
   asked for (a rating that now runs, automatic publication that now posts
   findings no verifier confirmed). A version-2 file with a fault is no
   exception: the update comes first and the repair after it, since a repair
   that rewrote the file in this version's layout would convert it unseen.
+- The admission hooks treat as private every session that one of AZPR's
+  roles runs, also a role of 0.4.x that no longer exists, and every session
+  this process created or that a saved review or a session record names
+  (`privateSession` in `runtime.mjs`): such a session runs nothing without
+  the grant of a command that is under way.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,
@@ -282,7 +297,8 @@ settings, backups and failure records. Never upload `.local/`.
 
 **Publication is idempotent.**
 - Recheck the PR's head before writing; skip existing markers; save each
-  result immediately; read markers back. Re-running is always safe. The PR's
+  result immediately; read markers back. Posting a saved preview runs no
+  model: it reads neither the model catalog nor the private agents. Re-running is always safe. The PR's
   status stops nothing: a completed or abandoned PR (merged before its review
   was commented on, say) is checked, reviewed and commented on like an active
   one, and the check and the publication receipt name that status.

@@ -36,7 +36,9 @@ Reviews:
 - **Finding IDs are `F-1`, `F-2`, … for the whole review**, numbered by place
   (HEAD before BASE, then path and lines) and then by pass. The IDs no longer
   say which reviewer found something, and they do not depend on which session
-  finished first.
+  finished first. A reviewer numbers its findings in a range of its shard
+  (`F-1001`, …), and what its text says of them is renamed to the review's
+  IDs.
 - **A duplicate check across sessions.** Where different reviewer sessions
   reported findings on one side of one file, a session of the first reviewer
   model compares them and merges repeated reports of one defect (the same root
@@ -69,7 +71,9 @@ Reports, receipts and comments:
   first lines that findings were checked by their reviewer and that no
   separate verification ran. A receipt's first line reads
   `COMPLETE; coverage complete; verification none` (with several passes:
-  `coverage complete, 12/12 file(s) in every pass`).
+  `coverage complete, 12/12 file(s) in every pass`; where not every changed
+  file was reviewed, also how many were: `coverage incomplete, 11/12 file(s)
+  reviewed, 10/12 in every pass`).
 - Comments carry a new disclosure line: "Review method: findings checked by
   their reviewer against the source, no separate verification", followed by
   the models. Comments already on a pull request keep the line they were
@@ -79,7 +83,11 @@ Reports, receipts and comments:
   0.4.6 and its comments keep the old line.
 - Comment planning, previews, adjustments, automatic comments and publication
   work as before, with the first reviewer model as the planner. A
-  `/pr-comment --publish` that only posts a saved preview needs no model.
+  `/pr-comment --publish` that only posts a saved preview needs no model and
+  does not read the model catalog.
+- A correction turn that fails no longer costs a usable answer: the answer
+  before it stands, and the items it would have repaired stay degraded. So
+  does a follow-up whose context overflows on a shard of one file.
 
 Settings (`version: 3`):
 
@@ -105,7 +113,9 @@ Upgrading from 0.4.x:
   passes, in that order, and drops the verifier model. A quick reviewer
   becomes a list of one. A named rater stays. `/pr-deep` stays off when it
   was off, also when only some of its three models were set. Every other
-  setting keeps its value. A first setup's update is loaded at once; settings
+  setting keeps its value. The update repairs nothing: a value 0.4.x could
+  not use stays where it goes now, and so does a setting this version does
+  not know, so that `/pr-setup` names it afterwards. A first setup's update is loaded at once; settings
   that are in use wait for a restart, as always.
 - What changes without being asked for, and is named before you confirm: a
   mode without a rater now gets its findings rated by its first reviewer
@@ -124,7 +134,8 @@ Setup:
   off.
 - In the terminal UI a model row asks for one model and then for the passes:
   take what is shown, add a pass of the same or another model, or take the
-  last one away.
+  last one away. Picking the saved first model again starts from the saved
+  passes.
 
 Compatibility:
 

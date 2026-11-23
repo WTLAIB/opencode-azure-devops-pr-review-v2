@@ -31,7 +31,6 @@ import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTranspo
 import { reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions, renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview, conversationTitle, enclose } from './attribution.mjs';
 
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
-const ownRole = name => typeof name === 'string' && Object.hasOwn(ROLES, name);
 const text = v => typeof v === 'string' && v.trim().length > 0;
 const clone = v => JSON.parse(JSON.stringify(v));
 const errorText = e => e instanceof Error ? e.message : typeof e?.message === 'string' ? e.message : 'OpenCode SDK operation failed.';
@@ -325,6 +324,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
 
   /** Grant-only authorization; no file or catalog reads on the hot path. */
+  /**
+   * Whether a hook's event is about one of AZPR's private sessions: one of its roles, also one of 0.4.x that no
+   * longer exists, a session this process created, or one an earlier process created that a saved review or a
+   * session record names. Such a session runs nothing without a grant of a command that is under way.
+   */
+  const privateSession = event => privateAgent(event.agent) || seenSessions.has(event.sessionID) || createdEarlier.has(event.sessionID);
   function authorize(sessionID, agent, actualModel) {
     const g = grants.get(sessionID);
     if (!g || !g.run.active || g.role !== agent) throw new Error('[AZPR] No active command-scoped reviewer authorization.');
@@ -365,18 +370,22 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * comment command that only posts a saved preview uses no model at all.
    */
   async function readiness(run) {
+    const azureReadiness = { organization: settings.azure.organization, apiVersion: API_VERSION, ...network };
+    // Posting a saved preview runs no model: the catalog is not even read, so that an outage of it never stops it.
+    if (run.mode === 'comment' && run.planning === false) {
+      run.readiness = { profile: run.profile, checkedModelSlots: [], modelProblems: [], azure: azureReadiness };
+      return;
+    }
     requireMethods(context, ['model.list'], 'readiness checks');
     const modelRows = listOf(await bounded(() => context.model.list(), run.controller.signal));
     if (!modelRows) throw new Error('[AZPR] Invalid model catalog.');
     const checked = (mode, list = modelChecks(mode)) => ({ checkedModelSlots: list.map(item => item.label), modelProblems: modelProblems(modelRows, mode, list) });
     // Comment planning runs with the first reviewer model of the review's mode.
-    const own = run.mode !== 'comment' ? checked(run.profile)
-      : run.planning === false ? { checkedModelSlots: [], modelProblems: [] } : checked(run.profile, modelChecks(run.profile).slice(0, 1));
+    const own = run.mode !== 'comment' ? checked(run.profile) : checked(run.profile, modelChecks(run.profile).slice(0, 1));
     const problems = own.modelProblems;
     const optional = mode => run.mode === 'check' && modeReady(settings, mode) ? checked(mode) : undefined;
     const deep = optional('deep'), quick = optional('quick');
-    run.readiness = { profile: run.profile, ...own, ...(deep ? { deep } : {}), ...(quick ? { quick } : {}),
-      azure: { organization: settings.azure.organization, apiVersion: API_VERSION, ...network } };
+    run.readiness = { profile: run.profile, ...own, ...(deep ? { deep } : {}), ...(quick ? { quick } : {}), azure: azureReadiness };
     if (problems.length && run.mode !== 'check') throw new Error(`[AZPR] ${problems.join(' ')} No fallback was selected.`);
   }
 
@@ -407,7 +416,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     if (drift === 'settings') throw new Error('[AZPR] settings.json changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new settings; running reviews are unaffected.');
     if (drift === 'pat') throw new Error('[AZPR] azure.patFile changed since OpenCode loaded it. Restart the OpenCode service (opencode service restart) to use the new PAT; running reviews are unaffected.');
     await checkCommands(signal);
-    await pinAgents(run.profile, signal);
+    // Posting a saved preview starts no private session, so it needs no private agent either.
+    if (!(run.mode === 'comment' && run.planning === false)) await pinAgents(run.profile, signal);
     await readiness(run);
     await run.debug.write('readiness.json', { ...run.readiness, ...(baseUrl === 'https://dev.azure.com' ? {} : { azureBaseUrl: baseUrl }), host: capabilities,
       stateDirectory: store.root, ...(storeFallback ? { stateDirectoryFallback: storeFallback } : {}) });
@@ -863,14 +873,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         let answer;
         try { answer = await ask(g, made.id, prompt, signal); }
         catch (error) {
-          // A follow-up is optional: when it or a later turn fails, the answer it
-          // followed stands. Cancellation and context overflow keep their rules.
+          // A turn after the first that fails leaves the answer before it standing where that answer was usable: a
+          // follow-up is optional, and a correction turn only repairs items, which stay degraded instead. A stopped
+          // run, and a context that overflowed where the shard can still be split, keep their rules.
           const failureClass = runSignal.aborted ? 'cancelled' : watch.error ? 'idle' : classifyFailure(error);
-          if (!followUp || ['cancelled', 'overflow'].includes(failureClass)) throw error;
-          Object.assign(followUp, { outcome: 'failed', failureClass, error: errorText(watch.error ?? error).slice(0, 300) });
-          if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response-${followUp.turn === turn ? 'follow-up' : 'repair'}${turn}.json`, diagnosticResponse(error.response));
+          const kept = turn > 0 && failureClass !== 'cancelled' && !(failureClass === 'overflow' && handler.splittable !== false);
+          if (!kept || (!followUp && evaluation?.usable !== true)) throw error;
+          const failure = { failureClass, error: errorText(watch.error ?? error).slice(0, 300) };
+          if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response-${followUp?.turn === turn ? 'follow-up' : 'repair'}${turn}.json`, diagnosticResponse(error.response));
           await abortSession(run, made.id);
-          ({ evaluation, answerText } = followUp.before);
+          if (followUp) { Object.assign(followUp, { outcome: 'failed', ...failure }); ({ evaluation, answerText } = followUp.before); }
+          else record.repairFailure = { turn, ...failure };
           break;
         }
         answerText = visibleText(answer);
@@ -908,7 +921,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       g.timing?.promptSettled('returned');
       // A watchdog stop of a failed follow-up is already settled: the earlier answer stands.
-      if (!run.active || runSignal.aborted || (signal.aborted && followUp?.outcome !== 'failed')) throw abortError(signal);
+      if (!run.active || runSignal.aborted || (signal.aborted && followUp?.outcome !== 'failed' && !record.repairFailure)) throw abortError(signal);
       const result = evaluation.issues?.length && handler.finalize ? await handler.finalize(answerText, evaluation.result, session) : evaluation.result;
       if (!result) throw new Error('The stage produced no usable result.');
       if (repairs.length) record.repairs = repairs;
@@ -1377,7 +1390,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         verification: final.verification, method: clone(final.method),
         request: input.arguments, prUrl: request.prUrl, target: request.target, snapshot: final.snapshot,
         outputLanguage: settings.outputLanguage, provenance, final: clone({ ...final, initialReports: undefined }),
-        toolText: [...run.toolText.values()], dataDirectory: undefined, plan: null, publication: new Map(), commentEvidence: [],
+        // In the order of their content, not of the moment each read finished: what the planner is given of
+        // them must not depend on which session was faster.
+        toolText: [...run.toolText.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)), dataDirectory: undefined, plan: null, publication: new Map(), commentEvidence: [],
       };
       if (completedReview) {
         const data = await dataFor(run);
@@ -1459,7 +1474,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   function renderSavedPreview(review) {
     if (!review.plan) return `[AZPR] Review ${review.id} has no saved preview. /pr-comment ${review.id} plans one (a model runs; nothing is posted).`;
     const hold = holdNote(review);
-    const state = publicationStarted(review) ? `Publication of this preview has started; /pr-comment ${review.id} --publish retries what is not posted yet.`
+    // A review whose method this version does not know is shown and never offered for posting: commentRun refuses it.
+    const state = !reviewMethod(review) ? `This review does not say how its findings were produced in a way this version knows, so it cannot be posted; run a new review.`
+      : publicationStarted(review) ? `Publication of this preview has started; /pr-comment ${review.id} --publish retries what is not posted yet.`
       : everyFindingExcluded(review) ? 'A person excluded every finding, so nothing will be posted.'
       : `Nothing was posted. ${hold || `To post this exact preview: /pr-comment ${review.id} --publish`}`;
     const safe = enclose('comment', renderPlan(review));
@@ -1544,7 +1561,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // The preview shown again offers what its own receipt offered, as the review is now: both are read here,
       // before anything is awaited, so that what is offered is what the text shows.
       const saved = renderSavedPreview(review);
-      const next = review.plan && previewActions(review, { held: Boolean(holdNote(review)) });
+      const next = review.plan && reviewMethod(review) && previewActions(review, { held: Boolean(holdNote(review)) });
       output.text = `${saved}${await kept ? '' : UNSAVED_CHOICE}`;
       if (next) output.extra = { next };
       return;
@@ -1597,7 +1614,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // Planning needs the first reviewer model of the review's mode; posting a saved preview needs no model.
     const planning = !publish || !review.plan || Boolean(adjust);
     if (planning && !modeReady(settings, review.profile)) throw new Error(`[AZPR] Review ${review.id} is a /pr-${review.profile} review, and models.${review.profile}.reviewers names no model to plan its comments with. Name one there (its first entry plans the comments) and restart the OpenCode service${review.plan ? `, or post the saved preview with /pr-comment ${review.id} --publish` : ''}.`);
-    let planningNow = false, held = [], nothingNew = '', discussions = null, changed = [], earlier = '', hold = '', shown;
+    let held = [], nothingNew = '', discussions = null, changed = [], earlier = '', hold = '', shown;
     const step = auto && `(automatic ${auto.mode === 'publish' ? 'publication' : 'preview'} after review ${review.id} completed; ${auto.source})`;
     const { run, status, report, failure } = await workflow({ origin: review.origin, notifySession, mode: 'comment', planning,
       profile: review.profile, review, lockKey: targetKey(review.target), startNote: ` It acts on ${describeReview(review)}.`,
@@ -1625,7 +1642,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         review.planCreatedAt = new Date().toISOString();
         await savePreview(review);
       } else if (!publish || !review.plan) {
-        planningNow = true;
         run.phase = 'comment planning';
         review.plan = null; // Never leave an obsolete preview after a failed refresh.
         review.commentEvidence = []; // Evidence belongs to the plan being made.
@@ -1658,7 +1674,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
           { progress: message => progress(run, message), discussions, posted, parallel: parallelPages, active: () => run.active,
             fetchSource: path => azure.fileContent(run, review.snapshot, path, review.snapshot.head) });
         review.planCreatedAt = new Date().toISOString();
-        planningNow = false;
         if (everAdjusted(review)) await savePreview(review);
         else await persistReview(review);
         await run.debug.write('comment-plan.json', { sourceReview: review.id, snapshot: review.snapshot, parallelPages, ...review.plan });
@@ -1697,10 +1712,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (everAdjusted(review)) earlier = describeEarlierText(review, result.otherComments);
       return { status: result.status, report: `${preview}\n\n${renderPublication(review, result)}`, failure: result.reason ?? '' };
     }, dispatch);
-    // What this run decides about the review's preview and its own sessions is settled here, before anything is
-    // awaited: the command locks are released already, so a later command may be planning or saving while this
-    // run's sessions are deleted.
-    if (planningNow) review.plan = null;
+    // What this run decides about its own sessions is settled here, before anything is awaited: the command locks
+    // are released already, so a later command may be planning or saving while this run's sessions are deleted.
+    // The preview is not touched here: a planning that failed left none (the run cleared it before planning, under
+    // the lock), and one that a later command saved since is that command's.
     // A comment run keeps none of its sessions; the record names them before they are deleted.
     const obsolete = scheduleCleanup(run, review);
     await persistReview(review);
@@ -1916,7 +1931,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (event.prompt?.agents?.some(a => privateAgent(a.id) || privateAgent(a.name) || privateAgent(a.agent))) {
         throw new Error('[AZPR] Private reviewers cannot be mentioned or delegated.');
       }
-      if (!seenSessions.has(event.sessionID)) return;
+      if (!seenSessions.has(event.sessionID) && !createdEarlier.has(event.sessionID)) return;
       const g = grants.get(event.sessionID);
       const pending = g?.pending;
       if (!g?.run.active || !pending || event.prompt.text !== pending.text || event.metadata?.azprGrant !== pending.nonce ||
@@ -1931,7 +1946,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }));
     registrations.push(await context.session.hook('context', async event => {
       const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
-      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) {
+      if (!privateSession(event)) {
         // AZPR's PAT-backed tools exist only for its private reviewers.
         if (tools) for (const name of REVIEW_TOOL_NAMES) delete tools[name];
         return;
@@ -1950,7 +1965,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.primaryPrepared = true;
     }));
     registrations.push(await context.session.hook('model.request', async event => {
-      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
+      if (!privateSession(event)) return;
       const observed = grants.get(event.sessionID);
       const kind = Object.hasOwn(observed?.requestKinds ?? {}, event.kind) ? event.kind : 'unknown';
       if (observed) observed.requestKinds[kind]++;
@@ -1974,7 +1989,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
     }));
     registrations.push(await context.session.hook('retry', async event => {
-      if (!ownRole(event.agent) && !seenSessions.has(event.sessionID)) return;
+      if (!privateSession(event)) return;
       const g = grants.get(event.sessionID);
       const proposed = event.decision?.retry === true;
       // A used-up usage or spend limit fails every attempt the same way; the failed turn names it.

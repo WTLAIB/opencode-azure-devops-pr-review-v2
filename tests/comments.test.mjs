@@ -79,7 +79,7 @@ eachKind('a clean page is accepted; formatting slips are corrected instead of fa
   assert.equal(result.comments[0].body, '🔴 high: lost value &lt;!-- hidden --&gt;');
   assert.equal(result.comments[1].severity, 'medium', 'The severity of the review\'s finding wins.');
   assert.equal(result.comments[1].endLine, 6, 'The end line follows the quoted anchor.');
-  assert.ok(corrections.some(c => c.action === 'use-verified-severity'));
+  assert.ok(corrections.some(c => c.action === 'use-review-severity'));
   assert.ok(corrections.some(c => c.action === 'derive-end-line-from-anchor'));
 });
 

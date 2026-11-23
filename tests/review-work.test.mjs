@@ -81,8 +81,8 @@ test('one pass: one reviewer session per shard, findings reported as their revie
     behave: reviewer(payload => [finding('F-1', `head:${payload.assignment.files[0]}:1`)]) });
   const final = await runReview(f.ctx, f.run, f.request);
   assert.deepEqual(f.calls.map(call => [call.role, call.label]), [['azpr-quick-reviewer', 'shard 1/2'], ['azpr-quick-reviewer', 'shard 2/2'], ['azpr-quick-rating', '']]);
-  // Every session numbers its own findings from F-1; the review's IDs are the runtime's.
-  assert.deepEqual(f.of('review').map(call => [call.payload.assignment.shard, call.payload.assignment.firstFindingId]), [['1/2', 'F-1'], ['2/2', 'F-1']]);
+  // Every session numbers its own findings in its shard's range; the review's IDs are the runtime's.
+  assert.deepEqual(f.of('review').map(call => [call.payload.assignment.shard, call.payload.assignment.firstFindingId]), [['1/2', 'F-1001'], ['2/2', 'F-2001']]);
   assert.equal(final.status, 'COMPLETE');
   assert.equal(final.verification, 'none');
   assert.deepEqual(final.dispositions.map(d => `${d.id}:${d.status}:${d.inline}:${d.shard}:${d.pass}:${d.localId}`), ['F-1:REPORTED:true:1/2:1:F-1', 'F-2:REPORTED:true:2/2:1:F-1']);
@@ -350,6 +350,15 @@ test('a failed duplicate check keeps every finding; findings of one session alon
   const unmerged = await runReview(prose.ctx, prose.run, prose.request);
   assert.deepEqual(rows(unmerged), ['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED']);
   assert.deepEqual(unmerged.reviewWarnings, ['Duplicate check of /src/a.ts: The duplicate check gave no usable answer; no finding was merged.']);
+  assert.deepEqual(unmerged.method.duplicateCheck, { groups: 1, failed: 1, merged: 0, refused: 0 }, 'An answer without usable JSON compared nothing: the check failed.');
+  // A check whose input cannot be prepared (its private data write fails) fails alone: every finding stays and the rating runs.
+  const unwritable = await context(t, twice({ dedupe: async () => { throw new Error('must not run'); } }));
+  const store = await unwritable.ctx.dataFor();
+  unwritable.ctx.dataFor = async () => ({ ...store, pack: async (value, size) => { if (size === 40000) throw new Error('disk full'); return store.pack(value, size); } });
+  const prepared = await runReview(unwritable.ctx, unwritable.run, unwritable.request);
+  assert.deepEqual([rows(prepared), prepared.method.duplicateCheck, unwritable.of('dedupe').length, unwritable.of('rating').length],
+    [['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED'], { groups: 1, failed: 1, merged: 0, refused: 0 }, 0, 1]);
+  assert.deepEqual(prepared.reviewWarnings, ['The duplicate check of /src/a.ts failed (disk full); its 3 findings stay reported and may include duplicates.']);
   // One session's two findings in a file are that reviewer's two findings: no check, whatever the number of passes.
   const alone = await context(t, { files: ['/src/a.ts', '/src/b.ts'], models: { reviewers: ['p/a', 'p/b'] }, dedupe: async () => { throw new Error('must not run'); },
     behave: reviewer((payload, pass) => pass === 0 ? [finding('F-1', 'head:/src/a.ts:1'), finding('F-2', 'head:/src/a.ts:1', 'Another defect on that line')] : [finding('F-1', 'head:/src/b.ts:1')]) });
@@ -357,6 +366,21 @@ test('a failed duplicate check keeps every finding; findings of one session alon
   assert.equal(alone.of('dedupe').length, 0);
   assert.deepEqual([same.shards.duplicateChecks, same.method.duplicateCheck, rows(same)], [0, { groups: 0, failed: 0, merged: 0, refused: 0 }, ['F-1:REPORTED', 'F-2:REPORTED', 'F-3:REPORTED']]);
   assert.equal(alone.notices.some(message => /Duplicate check/.test(message)), false);
+});
+
+test('a record merged as an exact duplicate into a finding the duplicate check merged in turn names the finding that stays', async t => {
+  // Passes 1 and 2 file the very same record; pass 3 files the defect in other words. The runtime keeps one of the
+  // identical records, and the duplicate check merges it into pass 3's.
+  const f = await context(t, { files: ['/src/a.ts'], models: { reviewers: ['p/a', 'p/a', 'p/b'] },
+    behave: reviewer((payload, pass) => [finding('F-1', 'head:/src/a.ts:1', pass < 2 ? 'The guard is dropped' : 'Missing guard before the call')]),
+    dedupe: async ({ payload }) => {
+      assert.deepEqual(payload.assignment.findings.map(x => [x.id, x.session]), [['F-1', '1/1 pass 1 + 1/1 pass 2'], ['F-3', '1/1 pass 3']]);
+      return JSON.stringify({ status: 'COMPLETE', merged: [{ id: 'F-1', mergedInto: 'F-3', reason: 'Same guard.' }], report: '' });
+    } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  assert.deepEqual(rows(final), ['F-1:MERGED>F-3', 'F-2:MERGED>F-3', 'F-3:REPORTED']);
+  assert.equal(final.dispositions[1].reason, 'Identical in every field to F-1. [Runtime: exact duplicate.]', 'The reason still says what the record was identical to.');
+  assert.deepEqual(final.dispositions[2].sessions, ['1/1 pass 3', '1/1 pass 1', '1/1 pass 2']);
 });
 
 test('duplicateGroups: reported findings on one side of one file, where two could be merged at all', () => {
@@ -380,6 +404,25 @@ test('duplicateGroups: reported findings on one side of one file, where two coul
   assert.deepEqual(duplicateGroups([row('F-1', 'no place', ['1/1 pass 1']), row('F-2', 'no place', ['1/1 pass 2'])]), []);
 });
 
+test('what an answer says of its own findings, by the IDs of its range, names them by the review\'s IDs', async t => {
+  // Two passes over one file; each pass's first finding refers to its second by the ID the answer gave it.
+  const f = await context(t, { files: ['/src/a.ts'], sources: { '/src/a.ts': lines(20) }, models: { reviewers: ['p/a', 'p/b'] }, behave: async ({ payload, pass, read }) => {
+    read('/src/a.ts');
+    const [first, second] = [payload.assignment.firstFindingId, `F-${Number(payload.assignment.firstFindingId.slice(2)) + 1}`];
+    assert.equal(first, 'F-1001', 'Every pass of the shard gets its range.');
+    return answer(payload, [finding(first, `head:/src/a.ts:${pass ? 9 : 3}`, `Pass ${pass + 1}: the cause of ${second}`, { evidence: `See ${second}; \`F-1\` in the source is a constant.` }),
+      finding(second, `head:/src/a.ts:${pass ? 12 : 6}`, `Pass ${pass + 1}: the effect`)], { report: `${first} and ${second} are one chain.` });
+  } });
+  const final = await runReview(f.ctx, f.run, f.request);
+  // By place: pass 1's findings on lines 3 and 6 are F-1 and F-2, pass 2's on lines 9 and 12 are F-3 and F-4.
+  assert.deepEqual(final.dispositions.map(d => [d.id, d.localId, d.finding.summary, d.finding.evidence]), [
+    ['F-1', 'F-1001', 'Pass 1: the cause of F-2', 'See F-2; `F-1` in the source is a constant.'],
+    ['F-2', 'F-1002', 'Pass 1: the effect', 'HEAD `x` drops the guard; BASE kept it.'],
+    ['F-3', 'F-1001', 'Pass 2: the cause of F-4', 'See F-4; `F-1` in the source is a constant.'],
+    ['F-4', 'F-1002', 'Pass 2: the effect', 'HEAD `x` drops the guard; BASE kept it.']]);
+  assert.match(final.report, /### pass 1\/2\n\nF-1 and F-2 are one chain\.\n\n### pass 2\/2\n\nF-3 and F-4 are one chain\./);
+});
+
 test('findings on the same line stay separate; only records identical in every field are removed, also across passes', async t => {
   const f = await context(t, { files: ['/src/pay.ts'], behave: reviewer(() => {
     const authz = finding('F-1', 'head:/src/pay.ts:1', 'The permission check runs after the charge');
@@ -400,6 +443,11 @@ test('findings on the same line stay separate; only records identical in every f
   assert.deepEqual(merged.dispositions[0].sessions, ['1/1 pass 1', '1/1 pass 2']);
   assert.equal(merged.dispositions[0].alsoReported, undefined);
   assert.deepEqual(two.of('rating')[0].payload.assignment.findingIds, ['F-1']);
+  // A location is compared as it is: two files whose names differ only in their spaces are two places.
+  const spaced = await context(t, { files: ['/src/a b.ts', '/src/a  b.ts'], models: { reviewers: ['p/a', 'p/a'] },
+    behave: reviewer((payload, pass) => [finding('F-1', `head:${pass ? '/src/a  b.ts' : '/src/a b.ts'}:1`, 'The same text in both files')]) });
+  const apart = await runReview(spaced.ctx, spaced.run, spaced.request);
+  assert.deepEqual(apart.dispositions.map(d => `${d.id}:${d.status}:${d.finding?.location}`), ['F-1:REPORTED:head:/src/a  b.ts:1', 'F-2:REPORTED:head:/src/a b.ts:1']);
   // A difference in any field keeps both, and they go to the duplicate check.
   const near = await context(t, { files: ['/src/pay.ts'], models: { reviewers: ['p/a', 'p/a'] },
     behave: reviewer((payload, pass) => [finding('F-1', 'head:/src/pay.ts:1', 'The permission check runs after the charge', { severity: pass ? 'high' : 'medium' })]) });

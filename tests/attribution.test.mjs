@@ -545,19 +545,21 @@ test('a review\'s receipt carries coverage and verification on its first line, i
   for (const mode of ['review', 'deep', 'quick']) {
     // One pass: whether every changed file was reviewed.
     assert.equal(first(mode, coverage({ files: 3, reviewedOnce: 3, reviewedByAll: 3 })), '[AZPR 12345678] COMPLETE; coverage complete; verification none', mode);
-    assert.equal(first(mode, missed), '[AZPR 12345678] COMPLETE; coverage incomplete; verification none', mode);
+    // Where not every changed file was reviewed, how many were.
+    assert.equal(first(mode, missed), '[AZPR 12345678] COMPLETE; coverage incomplete, 2/3 file(s) reviewed; verification none', mode);
+    assert.equal(first(mode, { ...missed, reasons: ['reviewer-gaps'], unreviewedFiles: 0, reviewedOnce: 3 }), '[AZPR 12345678] COMPLETE; coverage incomplete; verification none', mode);
     // Several passes: also how many files every pass reviewed. A file that one pass missed is still reviewed.
     assert.equal(first(mode, coverage({ files: 3, passes: 3, reviewedOnce: 3, reviewedByAll: 3 })), '[AZPR 12345678] COMPLETE; coverage complete, 3/3 file(s) in every pass; verification none', mode);
     assert.equal(first(mode, coverage({ files: 3, passes: 2, reviewedOnce: 3, reviewedByAll: 2, failedSessions: 1 })), '[AZPR 12345678] COMPLETE; coverage complete, 2/3 file(s) in every pass; verification none', mode);
-    assert.equal(first(mode, { ...missed, passes: 2, reviewedByAll: 1 }), '[AZPR 12345678] COMPLETE; coverage incomplete, 1/3 file(s) in every pass; verification none', mode);
-    assert.equal(first(mode, { ...missed, passes: 2, reviewedByAll: 1 }, 'STALE'), '[AZPR 12345678] STALE; coverage incomplete, 1/3 file(s) in every pass; verification none', mode);
+    assert.equal(first(mode, { ...missed, passes: 2, reviewedByAll: 1 }), '[AZPR 12345678] COMPLETE; coverage incomplete, 2/3 file(s) reviewed, 1/3 in every pass; verification none', mode);
+    assert.equal(first(mode, { ...missed, passes: 2, reviewedByAll: 1 }, 'STALE'), '[AZPR 12345678] STALE; coverage incomplete, 2/3 file(s) reviewed, 1/3 in every pass; verification none', mode);
     // A review that ended without a result has no coverage to state; that nothing was verified holds all the same.
     assert.equal(first(mode, undefined, 'INCOMPLETE'), '[AZPR 12345678] INCOMPLETE; verification none', mode);
     // The same receipt whatever the mode: its text never names one.
     assert.equal(receipt(mode, missed), receipt('review', missed), mode);
   }
   const text = receipt('quick', missed);
-  assert.match(text, /^\[AZPR 12345678\] COMPLETE; coverage incomplete; verification none\n/);
+  assert.match(text, /^\[AZPR 12345678\] COMPLETE; coverage incomplete, 2\/3 file\(s\) reviewed; verification none\n/);
   assert.match(text, /\nStatus: COMPLETE means at least one review session produced a usable result and no source-commit change was detected\. Each finding was checked by its reviewer against the source and by the runtime for form and source only; nothing verified it separately, and findings that failed the runtime's checks are NEEDS_INFO\. Coverage says whether every changed file was reviewed, and with several passes how many files every pass reviewed\. STALE means the PR source commit changed during the review\. PARTIAL means no session produced a usable result\. None of these approves the PR\.\n/);
   assert.match(text, /\/pr-comment 12345678 --publish/);
   // Nothing recommends another mode for verification any more, whatever the findings and the comment step.

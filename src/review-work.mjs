@@ -77,7 +77,7 @@ function reviewRunner(ctx, run, request, { snapshot, modelSnapshot, handlerFor }
     const payload = {
       prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
       assignment: { shard: `${task.index + 1}/${task.count}${task.part ?? ''}`, files: task.files, changes: task.files.map(path => changes.get(path)).filter(Boolean),
-        firstFindingId: `${LOCAL_PREFIX}-1`, discoverFiles: !snapshot.filesComplete },
+        firstFindingId: `${LOCAL_PREFIX}-${task.base ?? 1}`, discoverFiles: !snapshot.filesComplete },
     };
     try {
       const result = await runStage(run, task.role, payload, handlerFor(task), { label: sessionLabel(task) });
@@ -203,7 +203,9 @@ export async function evaluateReview(answer, { task, snapshot, azure, run, reads
     ...(usable && !all.length && unfinished ? { followUp: { prompt: reviewFollowUpPrompt({ gaps: result.coverage.gaps, uncovered }), gaps: result.coverage.gaps, uncovered } } : {}) };
 }
 
-const findingKey = finding => JSON.stringify(FINDING_FIELDS.filter(key => key !== 'id').map(key => String(finding?.[key] ?? '').replace(/\s+/g, ' ').trim()));
+// Records identical in every field: prose may differ in its whitespace, a location (a path and its lines) may not.
+const findingKey = finding => JSON.stringify(FINDING_FIELDS.filter(key => key !== 'id').map(key => key === 'location'
+  ? String(finding?.[key] ?? '').trim() : String(finding?.[key] ?? '').replace(/\s+/g, ' ').trim()));
 const findingOnly = finding => Object.fromEntries(FINDING_FIELDS.filter(key => key !== 'id' && Object.hasOwn(finding, key)).map(key => [key, finding[key]]));
 
 /**
@@ -340,20 +342,29 @@ export async function runReview(ctx, run, request) {
   const shards = shardFiles(snapshot.files, settings.workflow.shardFiles);
   const roles = reviewerRoles(settings, run.profile), passes = roles.length;
   // One pool for every pass of every shard: the session limit holds for the review, not per pass.
-  const tasks = roles.flatMap((role, pass) => shards.map((files, index) => ({ role, pass, passes, files, index, count: shards.length })));
+  // A shard's sessions number their findings in a range of the shard's own (F-1001, F-2001, …), apart from the
+  // review's IDs, which the runtime gives once every pass has answered: a reference in an answer's text to one of its
+  // own findings is then renamed to that finding's review ID, and nothing in it can be taken for another finding's
+  // ID. Every pass of a shard gets the same range, so that no pass's input differs from another's.
+  const tasks = roles.flatMap((role, pass) => shards.map((files, index) => ({ role, pass, passes, files, index, count: shards.length, base: (index + 1) * 1000 + 1 })));
   progress(run, `Review: ${tasks.length} session(s) for ${shards.length} shard(s)${passes > 1 ? ` in ${passes} independent passes` : ''}; no separate verification follows.`);
   const reviewTask = reviewRunner(ctx, run, request, { snapshot, modelSnapshot, handlerFor: task => ({
     evaluate: (answer, _previous, session) => evaluateReview(answer, { task, snapshot, azure, run, reads: session?.reads }),
+    // A shard of one file cannot be split: an answer it gave before its context overflowed stands.
+    splittable: task.files.length > 1,
   }) });
   const outcomes = (await runPool(tasks, settings.workflow.parallelSessions, reviewTask)).flat();
   if (!run.active) throw new Error(run.reason || 'Review stopped.');
   if (!outcomes.some(outcome => outcome.result)) throw new Error(`Every review session failed: ${[...new Set(outcomes.map(outcome => outcome.error?.message).filter(Boolean))].slice(0, 3).join(' | ')}`);
 
-  const collected = [], reports = [], initialReports = [], unusableTexts = [], discovered = new Set();
+  const collected = [], reports = [], answerReports = [], initialReports = [], unusableTexts = [], discovered = new Set();
   // Per pass: the assigned paths a usable answer reported as reviewed. Retries, follow-ups and the parts of a
   // split shard belong to their pass; a path counts once per pass however often it is named.
   const reviewedBy = roles.map(() => new Set());
   const coverage = Object.fromEntries(roles.map(role => [role, { assigned: 0, covered: 0, failedFiles: [], gaps: [] }]));
+  // Per pass, the shard sessions whose outcome its coverage rests on: a split shard counts its two halves, not the
+  // session that overflowed, and a session retried after a transient failure counts once. The stage records and the
+  // receipt list every session that ran.
   const passRecords = roles.map((role, pass) => ({ pass: pass + 1, model: stageModel(settings, role), sessions: 0, failed: 0 }));
   let usable = 0, failedSessions = 0, reviewerGaps = false;
   for (const { task, result, error } of outcomes) {
@@ -372,7 +383,7 @@ export async function runReview(ctx, run, request) {
       failedSessions++; record.failed++;
       entry.failedFiles.push(...task.files);
       warnings.push(`${named} returned no usable review (${result.structured ? 'no reviewed file or usable finding' : 'no structured answer'}); its ${task.files.length} file(s) count as not reviewed${passes > 1 ? ' in this pass' : ''}.`);
-      if (text(result.report)) unusableTexts.push(label ? `### ${label}\n\n${result.report}` : result.report);
+      if (text(result.report)) unusableTexts.push({ session: sessionOf(task), label, text: result.report });
     } else {
       usable++;
       for (const path of reviewed) reviewedBy[task.pass].add(path);
@@ -380,7 +391,7 @@ export async function runReview(ctx, run, request) {
       entry.gaps.push(...result.coverage.gaps);
       if (result.coverage.gaps.length) reviewerGaps = true;
       for (const path of result.additionalFiles) discovered.add(path);
-      if (text(result.report)) reports.push(label ? `### ${label}\n\n${result.report}` : result.report);
+      if (text(result.report)) answerReports.push({ session: sessionOf(task), label, text: result.report });
     }
     // The session that reported a finding is recorded by the runtime, never derived from IDs. The checks are
     // keyed by the answer's own IDs, which stay with the finding (`localId`).
@@ -401,6 +412,19 @@ export async function runReview(ctx, run, request) {
   // The review's IDs, in a fixed order, before anything is merged.
   collected.sort(byPlaceAndSource);
   const findings = [], dispositions = [];
+  // An answer's references to its own findings, by the IDs of its range, become the review's IDs of those findings.
+  const renamed = new Map();
+  collected.forEach((entry, index) => {
+    if (!renamed.has(entry.session)) renamed.set(entry.session, new Map());
+    if (Number(String(entry.localId).slice(LOCAL_PREFIX.length + 1)) >= entry.task.base) renamed.get(entry.session).set(entry.localId, `${LOCAL_PREFIX}-${index + 1}`);
+  });
+  const rename = (session, value) => typeof value !== 'string' || !renamed.get(session)?.size ? value
+    : value.replace(new RegExp(`\\b${LOCAL_PREFIX}-[1-9]\\d*\\b`, 'g'), id => renamed.get(session).get(id) ?? id);
+  for (const entry of collected) {
+    entry.finding = Object.fromEntries(Object.entries(entry.finding).map(([key, value]) => [key, ['summary', 'evidence', 'counterevidence', 'suggestion'].includes(key) ? rename(entry.session, value) : value]));
+  }
+  const reportOf = ({ session, label, text: body }) => label ? `### ${label}\n\n${rename(session, body)}` : rename(session, body);
+  reports.push(...answerReports.map(reportOf));
   collected.forEach((entry, index) => {
     const id = `${LOCAL_PREFIX}-${index + 1}`;
     findings.push({ ...entry.finding, id, origin: entry.task.role });
@@ -434,11 +458,12 @@ export async function runReview(ctx, run, request) {
       const ids = task.group.items.map(item => item.id);
       const sessions = Object.fromEntries(task.group.items.map(item => [item.id, item.sessions]));
       const candidates = task.group.items.map(({ id, sessions: reportedBy, finding }) => ({ ...finding, id, session: reportedBy.join(' + ') }));
-      const payload = {
-        prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
-        assignment: { kind: 'duplicates', file: task.group.path, side: task.group.side, findingIds: ids, findings: await store.pack(candidates, 40000) },
-      };
       try {
+        // Preparing the input is part of the check: a write that fails costs this file's check, not the review.
+        const payload = {
+          prUrl: request.prUrl, userContext: request.userContext, outputLanguage: settings.outputLanguage, snapshot: modelSnapshot,
+          assignment: { kind: 'duplicates', file: task.group.path, side: task.group.side, findingIds: ids, findings: await store.pack(candidates, 40000) },
+        };
         const result = await runStage(run, checker, payload, {
           evaluate(answer) {
             const { result, issues } = evaluateDuplicates(answer, { ids, sessions });
@@ -459,6 +484,8 @@ export async function runReview(ctx, run, request) {
         warnings.push(`The duplicate check of ${group.path} failed (${error?.message ?? 'unknown error'}); its ${group.items.length} findings stay reported and may include duplicates.`);
         continue;
       }
+      // An answer without usable JSON, also after the correction turns, compared nothing: a failed check.
+      if (result.structured === false) duplicateCheck.failed++;
       duplicateCheck.refused += result.refused ?? 0;
       for (const merge of result.merges) {
         const entry = byId.get(merge.id), target = byId.get(merge.mergedInto);
@@ -474,6 +501,16 @@ export async function runReview(ctx, run, request) {
       warnings.push(...result.warnings.map(message => `Duplicate check of ${group.path}: ${message}`));
     }
     progress(run, `Duplicate check finished: ${duplicateCheck.merged} finding(s) merged into another session's finding.`);
+  }
+  // A record merged as an exact duplicate into a finding the duplicate check merged in turn names the finding that
+  // stays, so that every merged ID leads to one that a person can see, adjust and comment on.
+  const byIdAll = new Map(dispositions.map(row => [row.id, row]));
+  for (const row of dispositions) {
+    if (row.status !== 'MERGED') continue;
+    const seen = new Set([row.id]);
+    let target = byIdAll.get(row.mergedInto);
+    while (target?.status === 'MERGED' && !seen.has(target.id)) { seen.add(target.id); target = byIdAll.get(target.mergedInto); }
+    if (target && target.id !== row.mergedInto) row.mergedInto = target.id;
   }
 
   const rating = await rateSeverities(ctx, run, { snapshot, dispositions, warnings });
@@ -502,7 +539,7 @@ export async function runReview(ctx, run, request) {
     // pass did, and whether the duplicate check and the rating ran.
     method: { kind: 'reviewers', version: 1, requested: [...settings.models[run.profile].reviewers], passes: passRecords, duplicateCheck, rating },
     initialObservations: status === 'COMPLETE' ? [] : findings,
-    unstructuredInitials: unusableTexts,
+    unstructuredInitials: unusableTexts.map(reportOf),
     shards: { initial: shards.length, passes, duplicateChecks: groups.length, ratings: rating.sessions },
   };
 }

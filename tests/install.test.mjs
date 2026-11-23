@@ -295,6 +295,15 @@ test('settings of AZPR 0.4.x (version 2) are installed byte for byte, for /pr-se
   assert.match(later.stdout, /^Settings defaults added: enabled, returnReport, /m);
   assert.doesNotMatch(later.stdout, /version 2/);
   assert.deepEqual(JSON.parse(readFileSync(installed(s, 'settings.json'), 'utf8')).models, settings.models);
+  // Line endings are bytes like any others: a file written with CRLF stays CRLF, by both ways in.
+  const crlf = JSON.stringify(earlierSettings(), null, 2).replace(/\n/g, '\r\n') + '\r\n';
+  writeFileSync(file, crlf);
+  for (const replacing of [false, true]) {
+    if (replacing) writeFileSync(installed(s, 'settings.json'), crlf);
+    else rmSync(installed(s, ''), { recursive: true, force: true });
+    ok(install(s, replacing ? ['--replace'] : ['--settings', file]));
+    assert.equal(readFileSync(installed(s, 'settings.json'), 'utf8'), crlf, replacing ? '--replace' : '--settings');
+  }
   // Whatever else a version-2 file holds is the person's and stays: retired sections, unknown names, odd values.
   for (const extra of [{ mcp: { server: 'ado', concurrency: 5 } }, { models: { freeB: 'private/old' } }, { models: 'private/old' }, { steps: { initial: 60 } }, { custom: { array: [1, 2], value: null } }]) {
     const odd = JSON.stringify({ version: 2, ...extra });

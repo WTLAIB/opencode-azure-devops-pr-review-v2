@@ -389,7 +389,7 @@ test('coverage is stated as two numbers: the changed files that were reviewed, a
 
   // Both passes left it out: the file was not reviewed, whatever was found in the other one.
   const none = await review(['azpr-review-reviewer', 'azpr-review-reviewerb']);
-  assert.match(none.receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage incomplete, 1\/2 file\(s\) in every pass; verification none\n/);
+  assert.match(none.receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage incomplete, 1\/2 file\(s\) reviewed, 1\/2 in every pass; verification none\n/);
   assert.match(none.report, /\*\*Coverage:\*\* incomplete \(1 changed file\(s\) not reviewed\) — 1\/2 changed file\(s\) reviewed, 1\/2 in all 2 passes\n/);
   assert.deepEqual(none.saved.final.coverageSummary, { complete: false, unreviewedFiles: 1, filesComplete: true, reasons: [], files: 2, passes: 2, reviewedOnce: 1, reviewedByAll: 1, failedSessions: 0 });
   // The review is COMPLETE and can be commented on; its summary says what was not reviewed.
@@ -2004,7 +2004,7 @@ test('an incomplete review keeps an unconfirmed draft and leaves no completed re
   const f = await fixture(t, { answer: garbled });
   const receipt = await f.command();
   // No pass gave a usable answer, also not in its correction turns: nothing follows the reviewers.
-  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] PARTIAL; coverage incomplete, 0\/1 file\(s\) in every pass; verification none\n/);
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] PARTIAL; coverage incomplete, 0\/1 file\(s\) reviewed, 0\/1 in every pass; verification none\n/);
   assert.deepEqual([...f.sessions.values()].map(session => [session.agent, session.turns]), [['azpr-review-reviewer', 3], ['azpr-review-reviewerb', 3]]);
   assert.match(receipt, /\*\*PARTIAL: No review session produced a usable result\. These claims are provisional and cannot be used for PR comments\.\*\*/);
   for (const pass of ['1/2', '2/2']) assert.ok(receipt.includes(`\n- The review pass ${pass} returned no usable review (no structured answer); its 1 file(s) count as not reviewed in this pass.\n- Review pass ${pass}: The reviewer answer was not structured; its text is kept as it is.\n`), pass);
@@ -3306,7 +3306,7 @@ test('a reviewer that answers PARTIAL with unfinished work continues once in the
   assert.match(prompts[1].text, /^AZPR runtime: your answer is PARTIAL and names work that is not finished\.\n- Callers of the changed method were not read\./);
   assert.ok(f.notices.some(n => /PROGRESS — Review reported unfinished work; asking the same session once to continue\./.test(n.text)));
   const [saved] = await savedReviews(f);
-  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}:${d.localId}`), ['F-1:REPORTED:F-1', 'F-2:REPORTED:F-2']);
+  assert.deepEqual(saved.final.dispositions.map(d => `${d.id}:${d.status}:${d.localId}`), ['F-1:REPORTED:F-1001', 'F-2:REPORTED:F-2'], 'The answer numbered its first finding in its range.');
   assert.equal(saved.final.coverageSummary.complete, true);
   const [stage] = await stageRecords(receipt);
   assert.deepEqual(stage.followUp, { turn: 1, gaps: ['Callers of the changed method were not read.'], uncoveredFiles: 0, outcome: 'completed' });
@@ -3450,6 +3450,82 @@ test('reviews of the same head: a comment whose marker is on the PR is not poste
  * - 'quick': a /pr-quick. Its rows are REPORTED with their shard, the IDs are Q- and counted per shard (Q-1,
  *   Q-1001), and the record says `verification: 'none'` and has no `method`.
  */
+test('a correction turn that fails leaves the answer before it standing where it was usable; so does a follow-up that overflows on a one-file shard', async t => {
+  // One pass over one file: its answer has one finding that passes and one without a location. The correction turn fails.
+  const f = await fixture(t, { settings: quickSettings, answer(input) {
+    if (input.role !== 'azpr-quick-reviewer') return undefined;
+    if (input.turn) return { $provider: 401 };
+    const path = input.packet.assignment.files[0], { location: _missing, ...unplaced } = ownFinding(input, path, 'medium', 2);
+    return { ...defaultAnswer(input), findings: [ownFinding(input, path), { ...unplaced, summary: 'A defect without a place' }] };
+  } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  assert.match(receipt, /\n- azpr-quick-reviewer: COMPLETE; session=[^;\n]+; model=fixture\/quick-reviewer; repair-turns=1;[^\n]*repair=failed:permanent\n/);
+  assert.equal(f.sessionsFor('azpr-quick-reviewer').length, 1, 'No new session: the answer before the failed turn is the review.');
+  const saved = await savedReview(f, reviewId(receipt));
+  assert.deepEqual(saved.final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED'], ['F-2', 'NEEDS_INFO']]);
+  assert.match(saved.final.dispositions[1].reason, /^The finding is missing location after the correction turns\./);
+  const [stage] = await stageRecords(receipt);
+  assert.deepEqual([stage.repairFailure.turn, stage.repairFailure.failureClass], [1, 'permanent']);
+  // An answer that was not usable is not kept: the review has no result, as before.
+  const g = await fixture(t, { settings: quickSettings, answer: input => input.role !== 'azpr-quick-reviewer' ? undefined : input.turn ? { $provider: 401 } : 'Prose only.' });
+  assert.match(await g.command('pr-quick'), /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none\n/);
+  // A follow-up whose context overflows on a shard of one file: the shard cannot be split, so the answer it followed stands.
+  const h = await fixture(t, { settings: quickSettings,
+    async during({ role, turn, compact }) { if (role === 'azpr-quick-reviewer' && turn === 1) await compact(); },
+    answer: input => input.role === 'azpr-quick-reviewer' ? partialAnswer(input.packet, [ownFinding(input, input.packet.assignment.files[0])]) : undefined });
+  const partial = await h.command('pr-quick');
+  assert.match(partial, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage incomplete; verification none\n/);
+  assert.match(partial, /\n- azpr-quick-reviewer: PARTIAL; [^\n]*follow-up=failed:overflow\n/);
+  assert.equal(h.sessionsFor('azpr-quick-reviewer').length, 1, 'No split and no new session.');
+  assert.deepEqual((await savedReview(h, reviewId(partial))).final.dispositions.map(row => [row.id, row.status]), [['F-1', 'REPORTED']]);
+});
+
+test('sessions an earlier process created, and sessions of the roles of 0.4.x, run nothing without a grant', async t => {
+  const f = await fixture(t);
+  const id = reviewId(await f.command());
+  await f.cleanup();
+  const store = await createReviewStore({ root: join(f.directory, 'state') });
+  const saved = (await store.load()).find(review => review.id === id);
+  const [kept] = [...saved.reportSessions];
+  await store.save(savedBy04(saved, 'aaaa0011', 'verified'));
+  const g = await fixture(t, { directory: f.directory, azure: f.azure });
+  const model = { providerID: 'fixture', id: 'review-a' };
+  // The session a saved review keeps, whatever role it ran, and any session of a retired role.
+  for (const [sessionID, agent] of [[kept, 'azpr-review-rating'], [kept, 'azpr-review-verifier'], ['ses_elsewhere', 'azpr-review-verifier'], ['ses_elsewhere', 'azpr-deep-functional']]) {
+    await assert.rejects(g.emit('session', 'context', { sessionID, agent, model, tools: { azpr_read_file: {} }, system: [] }), /No active command-scoped reviewer authorization/, `${sessionID} ${agent}`);
+    for (const kind of ['primary', 'title', 'compaction']) {
+      await assert.rejects(g.emit('session', 'model.request', { sessionID, agent, model, kind }), /No active command-scoped reviewer authorization/, `${sessionID} ${agent} ${kind}`);
+    }
+  }
+  await assert.rejects(g.emit('session', 'prompt', { sessionID: kept, prompt: { text: 'Explain this finding.' } }), /Only the exact plugin-started reviewer input is authorized/);
+  // An ordinary session runs as it always did; AZPR only takes its own tools out of it.
+  const ordinary = await g.emit('session', 'context', { sessionID: 'ordinary', agent: 'build', model, tools: { azpr_read_file: {}, read: {} }, system: [] });
+  assert.deepEqual(Object.keys(ordinary.tools), ['read']);
+  await g.emit('session', 'model.request', { sessionID: 'ordinary', agent: 'build', model, kind: 'title' });
+  await g.emit('session', 'prompt', { sessionID: 'ordinary', prompt: { text: 'Hello.' } });
+});
+
+test('a saved preview of a review whose method this version does not know is shown, never offered for posting', async t => {
+  const f = await fixture(t, { files: ['/src/B.java', '/src/A.java', '/src/C.java'] });
+  const id = reviewId(await f.command());
+  assert.match(await f.command('pr-comment', id), /\] PREVIEW; source review=/);
+  await f.cleanup();
+  const store = await createReviewStore({ root: join(f.directory, 'state') });
+  const saved = (await store.load()).find(review => review.id === id);
+  assert.ok(saved.plan, 'The review has a saved preview.');
+  // Its tool observations were saved in the order of their content, not of the moment each read finished.
+  const keys = saved.toolText.map(observation => observation.key);
+  assert.ok(keys.length > 1 && keys.every((key, index) => index === 0 || keys[index - 1] < key), 'Observations are in content order.');
+  await store.save({ ...saved, id: 'aaaa0012', completedAt: new Date().toISOString(), method: { ...saved.method, kind: 'voting' } });
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, files: ['/src/B.java', '/src/A.java', '/src/C.java'] });
+  const shown = await g.command('pr-comment', 'aaaa0012 --show');
+  assert.match(shown, /^\[AZPR\] Saved preview of review aaaa0012[^\n]*\nThis review does not say how its findings were produced in a way this version knows, so it cannot be posted; run a new review\.\n/);
+  assert.doesNotMatch(shown, /--publish/);
+  assert.equal(g.notices.findLast(notice => notice.text === shown).metadata?.azpr?.next, undefined, 'No step is offered.');
+  await assert.rejects(g.commands.get('pr-comment').execute({ sessionID: 'ordinary', prompt: { text: 'aaaa0012 --publish' } }), /does not say how its findings were produced in a way this version knows/);
+});
+
 function savedBy04(review, id, kind) {
   const { method: _method, adjustments: _adjusted, usedAt: _used, final: { method: _own, verification: _stated, coverageSummary, ...final }, ...rest } = review;
   const reported = final.dispositions.filter(row => row.status === 'REPORTED');
@@ -3586,6 +3662,19 @@ test('a comment run that only posts a saved preview checks no model; one that pl
   const refused = await f.command('pr-comment', review);
   assert.match(refused, /\] INCOMPLETE; source review=[^\n]*\n[\s\S]*Reason: \[AZPR\] The selected review\.reviewers\[0\] model \(fixture\/review-a\) is unavailable in the host catalog\. No fallback was selected\./);
   assert.match(await f.command('pr-comment', `${review} --show`), /^\[AZPR\] Saved preview of review /);
+  // After a restart, with a catalog that cannot be read at all: posting the saved preview again looks up neither the
+  // catalog nor the private agents, since it starts no private session, and finds every comment on the PR.
+  await f.cleanup();
+  const g = await fixture(t, { directory: f.directory, azure: f.azure, files: ['/src/Main.java'] });
+  let catalog = 0, agentLookups = 0;
+  g.context.model.list = async () => { catalog++; throw new Error('catalog unavailable'); };
+  const get = g.context.agent.get;
+  g.context.agent.get = async input => { agentLookups++; return get(input); };
+  const again = await g.command('pr-comment', `${review} --publish`);
+  assert.match(again, new RegExp(`\\] POSTED; source review=${review}\\n`));
+  assert.match(again, /\nPublication \(ALREADY_PRESENT=3\):\n/);
+  assert.deepEqual([catalog, agentLookups, g.prompts().length], [0, 0, 0]);
+  assert.deepEqual([(await readiness(again)).checkedModelSlots, (await readiness(again)).modelProblems], [[], []]);
 });
 
 // Two shards of one pass report one defect in A.java; the B session read A.java too. `dedupe` answers the duplicate

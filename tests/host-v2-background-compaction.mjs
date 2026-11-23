@@ -174,7 +174,7 @@ try {
     // The same PR again, with a second pass that reviews nothing: no session gives a usable answer, so the review
     // is PARTIAL and none is saved. Its run keeps the session holding its report and deletes the other.
     const unusable = await review(`${prUrl} nothing-reviewed`);
-    assert.match(unusable, /^\[AZPR [a-f0-9]{8}\] PARTIAL; coverage incomplete, 0\/4 file\(s\) in every pass; verification none\n/, unusable);
+    assert.match(unusable, /^\[AZPR [a-f0-9]{8}\] PARTIAL; coverage incomplete, 0\/4 file\(s\) reviewed, 0\/4 in every pass; verification none\n/, unusable);
     assert.match(unusable, FAILED_PASS, unusable);
     assert.match(unusable, /^- azpr-review-reviewerb \[pass 2\/2\]: PARTIAL; session=ses_[A-Za-z0-9]+; model=fixture\/second$/m, unusable);
     assert.ok(!/context limit/.test(unusable) && (await notices()).every(text => !/context limit|splitting/.test(text)), 'No split in the second review either.');

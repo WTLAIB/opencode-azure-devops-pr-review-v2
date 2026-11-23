@@ -664,7 +664,9 @@ have confirmed its update:
    - a mode that was off stays off, also `/pr-deep` with only some of its
      three models set;
    - `workflow.shardFindings` and `models._help` are dropped, and every other
-     setting keeps its value;
+     setting keeps its value. The update repairs nothing: a value 0.4.x could
+     not use, or a setting this version does not know, stays as it is, and
+     `/pr-setup` names it afterwards;
    - where `afterReview` is `publish`, the comments of new reviews are posted
      automatically as before, although no verifier confirmed their findings.
      Set that mode to `preview` to read the comments first.

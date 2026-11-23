@@ -26,7 +26,8 @@ def finite_float(value):
 
 
 def load(path):
-    with open(path, encoding="utf-8") as stream:
+    # newline="" keeps line endings as they are: a file that is carried over unchanged is carried over byte for byte.
+    with open(path, encoding="utf-8", newline="") as stream:
         raw = stream.read()
     value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant, parse_float=finite_float)
     if not isinstance(value, dict):
@@ -106,7 +107,7 @@ def main():
             current_settings(existing)
             added = merge(existing, defaults)
             content = json.dumps(existing, ensure_ascii=False, indent=2, allow_nan=False) + "\n" if added else raw
-        with open(destination, "x", encoding="utf-8") as stream:
+        with open(destination, "x", encoding="utf-8", newline="") as stream:
             stream.write(content)
     except (ValueError, OSError, UnicodeError, RecursionError):
         # Parser exceptions can contain secrets from the profile. Never print them.

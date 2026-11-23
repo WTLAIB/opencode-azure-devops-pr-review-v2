@@ -197,7 +197,10 @@ never whether a defect is real.
    `review.md`). A pass receives what any other pass receives: nothing says
    which pass it is or what another one found. Every pass of every shard shares one pool of up to
    `workflow.parallelSessions` sessions. Each answer numbers its own findings
-   from `F-1`; the review's IDs are given later (step 5). A reviewer has two
+   in its shard's range (`F-1001` for the first shard, `F-2001` for the
+   second, the same for every pass); the review's IDs are given later (step
+   5), and what an answer's text says of its own findings by those IDs is
+   renamed to the review's IDs. A reviewer has two
    focuses, functional correctness and failure behaviour, which order its
    attention and are not a filter: it files every concrete defect it finds as
    a finding, and `report` carries exclusions, advice, open questions and
@@ -346,7 +349,11 @@ A review states its status, its coverage and its method separately:
 - **Method.** Every review records `verification: "none"` and `method`
   (`kind: "reviewers"`, `version: 1`): the models asked for (`requested`),
   for each pass its model, its sessions and how many of them failed
-  (`passes`), how many duplicate checks ran, failed, merged and were refused
+  (`passes`: the shard sessions whose answers the pass's coverage rests on,
+  so a shard split in two counts its two halves and not the session that
+  overflowed, and a session retried after a transient failure counts once),
+  how many duplicate checks ran, failed (also by giving no usable answer),
+  merged and were refused
   (`duplicateCheck`), and of the rating its state (`first`, `named` or
   `off`), its model, its sessions and how many findings it rated or left
   (`rating`). A result that does not state both is not saved as a review.

@@ -145,8 +145,15 @@ const runs = list => list.reduce((all, model) => { if (all.at(-1)?.[0] === model
  */
 const reviewersText = list => runs(list).map(([model, count]) => `${model}*${count}`).join(',');
 /** A list as a row of the settings list shows it, in a few words: each model without its provider, with its count. */
-const reviewersShown = (list, empty) => list.length ? runs(list.map(model => isModelReference(model) ? model.slice(model.indexOf('/') + 1) : NOT_A_MODEL))
-  .map(([model, count]) => `${model}${count > 1 ? ` ×${count}` : ''}`).join(' + ') : empty;
+function reviewersShown(list, empty) {
+  if (!list.length) return empty;
+  const shown = list.map(model => isModelReference(model) ? model : NOT_A_MODEL);
+  const short = model => model === NOT_A_MODEL ? model : model.slice(model.indexOf('/') + 1);
+  // Passes are counted by the whole reference; a model keeps its provider where another provider has one of that name.
+  const providers = new Map();
+  for (const model of new Set(shown)) providers.set(short(model), (providers.get(short(model)) ?? 0) + 1);
+  return runs(shown).map(([model, count]) => `${providers.get(short(model)) > 1 ? model : short(model)}${count > 1 ? ` ×${count}` : ''}`).join(' + ');
+}
 /**
  * The entries of a list that are model IDs. What a settings file holds in a model's place may be anything, a
  * pasted token included: a row names such an entry (`NOT_A_MODEL`) and never returns it.
@@ -368,24 +375,35 @@ function migrationOf(previous) {
 /** What an update of settings of 0.4.x changes, one line per point: values that are no model IDs are named, never shown. */
 function migrationLines({ modes, shardFindings, publish }, problem = '') {
   const lines = ['This version reviews with a list of reviewer models per mode: each entry reviews the changed files on its own, one pass each. There is no verifier any more: the first entry also merges repeated findings and plans the comments, and a rating sets the severities.'];
+  // Models that are no model IDs: none chosen yet (placeholders), or values that 0.4.x could not use either,
+  // which the update keeps where they go now for the settings check to name.
+  const unchosen = list => Array.isArray(list) && list.length > 0 && list.every(item => typeof item === 'string' && /REPLACE_|YOUR_PROVIDER|YOUR_MODEL/.test(item));
+  const kept = mode => modes[mode].value ? `/pr-${mode}: its settings are not a group of models, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`
+    : unchosen(modes[mode].after.reviewers) ? `/pr-${mode}: no model was chosen yet. Choose its models with /pr-setup after the update.`
+      : `/pr-${mode}: its models are not all model IDs, so the file could not be used before either; they are kept as they are, and the settings check names them after the update.`;
   for (const mode of ['review', 'deep']) {
     const { before, after, state } = modes[mode];
-    if (state === 'on' && !after.reviewers.some(isModelReference)) lines.push(`/pr-${mode}: no model was chosen yet. Choose its models with /pr-setup after the update.`);
+    if (state === 'kept') lines.push(kept(mode));
     else if (state === 'on') lines.push(`/pr-${mode}: functional ${shownModel(before.functional)}, risk ${shownModel(before.risk)}, verifier ${shownModel(before.verifier)} -> ${after.reviewers.length} passes: ${after.reviewers.map(shownModel).join(', ')}. The verifier model is no longer used.`);
     else if (state === 'partial') lines.push(`/pr-${mode}: only some of its three models were set, so it was off and stays off (models.${mode}.reviewers is empty). Set it afterwards with /pr-setup.`);
     else lines.push(`/pr-${mode}: off, stays off.`);
   }
-  lines.push(modes.quick.state !== 'on' ? '/pr-quick: off, stays off.'
-    : !isModelReference(modes.quick.after.reviewers[0]) ? '/pr-quick: no model was chosen yet. Choose its models with /pr-setup after the update.'
-      : `/pr-quick: reviewer ${shownModel(modes.quick.before.reviewer)} -> 1 pass: ${shownModel(modes.quick.after.reviewers[0])}.`);
-  const on = MODES.filter(mode => modes[mode].state === 'on');
-  const named = on.filter(mode => modes[mode].after.rater), inherited = on.filter(mode => modes[mode].after.rater === ''), off = on.filter(mode => modes[mode].after.rater === false);
+  lines.push(modes.quick.state === 'kept' ? kept('quick') : modes.quick.state !== 'on' ? '/pr-quick: off, stays off.'
+    : `/pr-quick: reviewer ${shownModel(modes.quick.before.reviewer)} -> 1 pass: ${shownModel(modes.quick.after.reviewers[0])}.`);
+  // The rating of every mode that runs, and a rater the file names wherever it is no model ID or false.
+  const rated = MODES.filter(mode => modes[mode].state === 'on'), raterOf = mode => modes[mode].after.rater;
+  const off = rated.filter(mode => raterOf(mode) === false), inherited = rated.filter(mode => raterOf(mode) === '');
   if (off.length) lines.push(`Severity rating of ${off.map(mode => `/pr-${mode}`).join(', ')}: off ("rater": false), as the file says.`);
-  for (const mode of named) lines.push(`Severity rating of /pr-${mode}: ${shownModel(modes[mode].after.rater)}, as before.`);
+  for (const mode of rated.filter(mode => isModelReference(raterOf(mode)))) {
+    lines.push(`Severity rating of /pr-${mode}: ${raterOf(mode)}, ${mode === 'quick' ? 'as the file names it (0.4.x had no rating for /pr-quick)' : 'as before'}.`);
+  }
+  for (const mode of MODES.filter(mode => modes[mode].state !== 'kept' && ![undefined, '', false].includes(raterOf(mode)) && !isModelReference(raterOf(mode)))) {
+    lines.push(`Severity rating of /pr-${mode}: the rater the file names is no model ID; it is kept as it is, and the settings check names it after the update.`);
+  }
   if (inherited.length) lines.push(`Severity rating of ${inherited.map(mode => `/pr-${mode}`).join(', ')}: none ran before (no rater was set). From now on the first reviewer model rates the findings from their text alone; "rater": false in the settings file switches that off.`);
   if (shardFindings !== undefined) lines.push('workflow.shardFindings is dropped: it sized the verifier\'s batches.');
-  if (publish.length) lines.push(`afterReview is "publish" for ${publish.map(mode => `/pr-${mode}`).join(', ')}: after the update ${publish.length > 1 ? 'these commands post' : 'this command posts'} the comments of the new reviews automatically, as the PAT owner. Reports and comments then say that findings were checked by their reviewer and that no separate verification ran.`);
-  lines.push('Every other setting stays as it is.');
+  if (publish.length) lines.push(`afterReview is "publish" for ${publish.map(mode => `/pr-${mode}`).join(', ')}: after the update ${publish.length > 1 ? 'these commands post' : 'this command posts'} the comments of the new reviews automatically, as the PAT owner. Reports and comments then say that findings were checked by their reviewer and that no separate verification ran. To read the comments before they are posted, set afterReview to preview for ${publish.length > 1 ? 'these modes' : 'this mode'}.`);
+  lines.push('Every other setting stays as it is, also one that is not a setting of this version: the settings check then names it.');
   // A file that had a fault keeps it: the update changes the layout, and the repair follows it.
   if (problem) lines.push(`After the update the settings still cannot be used: ${problem} Nothing runs until that is set right, with /pr-setup or in the settings file.`);
   return lines;
