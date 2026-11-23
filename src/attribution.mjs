@@ -217,8 +217,8 @@ function displayLocation(value) {
   let p = value;
   if (typeof p === 'string' && p.trim().startsWith('{')) { try { p = JSON.parse(p); } catch { return value; } }
   if (!p || typeof p !== 'object') return value;
-  const side = p.side ?? 'head', end = Number.isSafeInteger(p.lineEnd) ? p.lineEnd : p.lineStart;
-  if (['head', 'base'].includes(side) && typeof p.path === 'string' && p.path.startsWith('/') && Number.isSafeInteger(p.lineStart) && p.lineStart > 0 && end >= p.lineStart) {
+  const side = p.side ?? 'head', end = p.lineEnd === undefined || p.lineEnd === null ? p.lineStart : p.lineEnd;
+  if (['head', 'base'].includes(side) && typeof p.path === 'string' && p.path.startsWith('/') && Number.isSafeInteger(p.lineStart) && p.lineStart > 0 && Number.isSafeInteger(end) && end >= p.lineStart) {
     return `${side}:${p.path}:${p.lineStart}${end === p.lineStart ? '' : '-' + end}`;
   }
   return typeof value === 'string' ? value : JSON.stringify(value);
@@ -254,9 +254,12 @@ function placeRow(place, findingId, [open, close]) {
 /**
  * Whether a place can be written into that list and read back as it is: its
  * text holds no control character, no line separator and neither end of an
- * HTML comment, which the posted text would have to change.
+ * HTML comment, which the posted text would have to change, and its path no
+ * colon (a structured location of 0.4.x may name one), since the reader takes
+ * the first colon for the start of the lines.
  */
-export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]|<!--|-->/.test(place);
+export const listablePlace = place => typeof place === 'string' && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]|<!--|-->/.test(place) &&
+  (place.match(/:/g) ?? []).length <= 1;
 
 /**
  * The places a posted comment of AZPR's lists, read back from its text for a

@@ -563,6 +563,9 @@ test('disclosure lines name the method of their review and, for the summary, inc
     { ...finding('F-2'), location: JSON.stringify({ side: 'head', path: '/b.ts', lineStart: 4 }) }, { ...finding('F-3'), location: JSON.stringify({ side: 'head', path: '/c.ts', lineStart: 5, lineEnd: 7 }) }];
   const rows = renderReviewSummary(located.map(f => ({ ...f, ids: [f.id] })), 'en', '', { verification: 'none' });
   for (const place of ['head:/a.ts:2', 'head:/b.ts:4', 'head:/c.ts:5-7']) assert.ok(rows.includes(`| ${place} |`), `${place}: ${rows}`);
+  // An end that is no line number is not made into one: the location is shown as it was saved.
+  const mistyped = renderReviewSummary([{ ...finding('F-4'), ids: ['F-4'], location: JSON.stringify({ side: 'head', path: '/d.ts', lineStart: 3, lineEnd: '2' }) }], 'en', '', { verification: 'none' });
+  assert.doesNotMatch(mistyped, /head:\/d\.ts:3/);
   assert.doesNotMatch(rows, /\[object Object\]/);
   assert.match(renderReviewSummary([], 'zh-TW'), /未發現可確認缺陷/);
 });

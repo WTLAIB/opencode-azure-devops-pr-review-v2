@@ -831,6 +831,9 @@ test('the list of other places is read back only in the form the runtime writes 
   }
   // One that cannot (a control character, an end of an HTML comment, which the posted text would change) is never offered for a list.
   for (const place of ['/src/x-->y.ts:2', '/src/x<!--y.ts:2', '/src/a\tb.ts:2', '/src/a\nb.ts:2', '/src/a\u007fb.ts:2', '/src/a\u0085b.ts:2', '/src/a\u2028b.ts:2', 7, null, undefined]) assert.equal(listablePlace(place), false, String(place));
+  // Nor is a path with a colon (a structured location of 0.4.x may name one): the reader takes the first colon for
+  // the start of the lines, so the place would not read back.
+  assert.equal(listablePlace('/a:b.ts:2'), false);
 });
 
 test('locations and source windows', () => {
@@ -855,6 +858,9 @@ test('locations and source windows', () => {
   assert.deepEqual(parseLocation(JSON.stringify({ side: 'head', path: '/a:b.ts', lineStart: 2, lineEnd: 2 })), { side: 'head', path: '/a:b.ts', start: 2, end: 2 });
   assert.deepEqual([parseLocation(JSON.stringify({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd: 2 })), parseLocation('head:/a.ts:3-2')],
     [{ side: 'head', path: '/a.ts', start: 3, end: 2 }, { side: 'head', path: '/a.ts', start: 3, end: 2 }]);
+  // An end that is given but is no line number leaves the range unknown (the file stays); one left out is the start.
+  assert.deepEqual([parseLocation({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd: '2' }), parseLocation({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd: null })],
+    [{ side: 'head', path: '/a.ts', start: null, end: null }, { side: 'head', path: '/a.ts', start: 3, end: 3 }]);
   const small = sourceWindow('a\nb\nc\n', { start: 2 });
   assert.deepEqual({ ...small, text: small.text.split('\n') }, { firstLine: 1, lastLine: 3, totalLines: 3, text: ['1 | a', '2 | b', '3 | c'] });
   const big = sourceWindow(Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join('\n'), { start: 500, end: 502, context: 5 });

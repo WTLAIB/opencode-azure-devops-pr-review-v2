@@ -90,8 +90,11 @@ export function parseLocation(location) {
     // reversed one as the text form "3-2" is), and an end it leaves out is its start.
     const side = value.side ?? 'head';
     if (!['head', 'base'].includes(side) || typeof value.path !== 'string' || !value.path.startsWith('/') || /[\0\r\n]/.test(value.path)) return null;
+    // An end it leaves out is its start; an end it gives that is no line number leaves the range unknown, as a
+    // start that is none does: the file still takes a comment for one finding, and the place no other.
     const start = Number.isSafeInteger(value.lineStart) && value.lineStart > 0 ? value.lineStart : null;
-    return { side, path: value.path, start, end: start && Number.isSafeInteger(value.lineEnd) ? value.lineEnd : start };
+    const end = value.lineEnd === undefined || value.lineEnd === null ? start : Number.isSafeInteger(value.lineEnd) ? value.lineEnd : null;
+    return { side, path: value.path, start: start && end ? start : null, end: start && end ? end : null };
   }
   const text = String(value ?? '').trim();
   const side = /^(head|base):/.exec(text)?.[1], rest = side ? text.slice(side.length + 1) : text;
