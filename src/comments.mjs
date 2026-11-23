@@ -93,7 +93,7 @@ export function parseLocation(location) {
     // An end it leaves out is its start; an end it gives that is no line number leaves the range unknown, as a
     // start that is none does: the file still takes a comment for one finding, and the place no other.
     const start = Number.isSafeInteger(value.lineStart) && value.lineStart > 0 ? value.lineStart : null;
-    const end = value.lineEnd === undefined || value.lineEnd === null ? start : Number.isSafeInteger(value.lineEnd) ? value.lineEnd : null;
+    const end = value.lineEnd === undefined || value.lineEnd === null ? start : Number.isSafeInteger(value.lineEnd) && value.lineEnd > 0 ? value.lineEnd : null;
     return { side, path: value.path, start: start && end ? start : null, end: start && end ? end : null };
   }
   const text = String(value ?? '').trim();

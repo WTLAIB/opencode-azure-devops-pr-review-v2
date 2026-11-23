@@ -861,6 +861,7 @@ test('locations and source windows', () => {
   // An end that is given but is no line number leaves the range unknown (the file stays); one left out is the start.
   assert.deepEqual([parseLocation({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd: '2' }), parseLocation({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd: null })],
     [{ side: 'head', path: '/a.ts', start: null, end: null }, { side: 'head', path: '/a.ts', start: 3, end: 3 }]);
+  for (const lineEnd of [-1, 0]) assert.deepEqual(parseLocation({ side: 'head', path: '/a.ts', lineStart: 3, lineEnd }), { side: 'head', path: '/a.ts', start: null, end: null }, String(lineEnd));
   const small = sourceWindow('a\nb\nc\n', { start: 2 });
   assert.deepEqual({ ...small, text: small.text.split('\n') }, { firstLine: 1, lastLine: 3, totalLines: 3, text: ['1 | a', '2 | b', '3 | c'] });
   const big = sourceWindow(Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`).join('\n'), { start: 500, end: 502, context: 5 });
