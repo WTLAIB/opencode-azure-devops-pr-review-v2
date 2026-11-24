@@ -11,18 +11,16 @@ Use your own OpenCode models to review code, inspect the proposed comments,
 and choose what gets published. No MCP server or CI pipeline setup is required.
 
 0.5.0 makes a review with independent passes in place of two reviewers and a
-verifier ([what changed](#what-changed-in-050)). On Martian's open
-[Code Review Bench](#martians-code-review-bench), its `/pr-deep` with three
-passes of Claude Opus 5.5 found more of the listed issues in 50 real pull
-requests than any of the 21 tools on the benchmark's dashboard, as 0.3.5 did
-before it, and more of the High and Critical ones. Scored by ReviewBench's own
-judge against 0.4.6 with the same model, its default two passes found about
-as many of the listed issues at 58% of the cost, with somewhat fewer findings
-judged valid; three passes matched 0.4.6 at about three quarters of its cost,
-and four found more at about the same cost
-([the measurement](#what-was-measured-for-050)). On ReviewBench's test set,
-which scores each finding on its own merits, 97.4% of 0.3.7's findings were
-judged valid.
+verifier ([what changed](#what-changed-in-050)). It aims at the same findings
+for less: against 0.4.6 with the same model, its default two passes found
+about as many of the listed issues on two public benchmarks, at 58% of
+0.4.6's cost with GPT-6.2 Sol and 83% with Claude Opus 5.5. How much it saves
+depends on the model: the saving is the verifier 0.5.0 drops, which cost most
+where a model reports many findings. On Martian's open
+[Code Review Bench](#martians-code-review-bench), the two passes of Claude
+Opus 5.5 found more of the listed issues in 50 real pull requests than any of
+the 21 tools on the benchmark's dashboard, as 0.3.5 did before it
+([the measurements](#benchmark-results)).
 
 AZPR is an independent community project. It is not built by or affiliated with
 the OpenCode team.
@@ -283,9 +281,10 @@ leaderboard results.
   share of reference issues found and of findings judged valid, and slightly
   more of the high and medium issues. To review with three passes, write the
   model as `MODEL*3` ([setup with options](#setup-with-options)).
-- **Four passes found more at about the same cost**: 54.8% of the reference
-  issues and 65.6% of the high and medium ones, with 91.0% of their findings
-  judged valid.
+- **Four passes cost about as much as 0.4.6** (US$1.36 against US$1.30) and
+  found 54.8% of the reference issues and 65.6% of the high and medium ones,
+  with 91.0% of their findings judged valid. The gain in reference issues is
+  about one run's variation.
 - **The rating marks more findings high** than 0.4.6's verifier did: about
   20% against 9%, and the judge rated 27% to 33% of those high, against 47%.
   Its choice of which findings deserve an inline comment (medium or high)
@@ -323,30 +322,36 @@ too.
 On Martian's open [Code Review Bench](https://codereview.withmartian.com),
 which evaluates AI code reviewers on 50 real-world pull requests from
 **cal.com, Discourse, Grafana, Keycloak and Sentry**, **AZPR 0.5.0
-(`/pr-deep` with three passes of Claude Opus 5.5) found more of the
+(`/pr-deep` with the default two passes of Claude Opus 5.5) found more of the
 benchmark's expected issues than any of the 21 tools on its public
 dashboard.**
 
-- **Highest recall on the dashboard (69.6%):** AZPR caught more of the
-  expected issues than every tool listed there, and more than 0.3.5 (67.7%).
-- **Highest High and Critical recall (78.8%):** the best of the listed tools
+- **Highest recall on the dashboard (73.4%):** AZPR caught more of the
+  expected issues than every tool listed there.
+- **Highest High and Critical recall (80.3%):** the best of the listed tools
   found 74.2% of the most severe issues.
-- **Built for interactive triage (F2 53.1, would rank 6th, as 0.3.5 did):**
-  `/pr-deep` puts every finding in the preview instead of holding findings
-  back, and you choose which ones to publish.
-- **Precision counts only the benchmark's list (27.2%):** the benchmark lists
+- **Built for interactive triage (F2 56.9, would rank 6th):** `/pr-deep` puts
+  every finding in the preview instead of holding findings back, and you
+  choose which ones to publish.
+- **Precision counts only the benchmark's list (29.9%):** the benchmark lists
   about three issues per PR and counts an accurate comment outside that list
   as wrong; see [why `/pr-deep` favors recall](#why-pr-deep-favors-recall).
-- **Three passes, not four:** before the official judging, our own judge (the
-  benchmark's prompts, applied by Claude Opus 5.5) scored three and four
-  passes on the same 50 pull requests. Four passes matched one expected issue
-  fewer (111 against 112) with 51 more comments off the list (F2 50.9
-  against 53.8), so the official judge scored three.
+- **About the same as before, for less:** the earlier pipeline with the same
+  model found 67.1% (0.4.6, F2 51.9) and 67.7% (0.3.5, F2 54.1). The two
+  passes used 83% of the model cost of 0.4.6's review.
+- **One run per setup, and runs vary:** one run's recall varies by about 4
+  points either way. A second official run, with three passes, found 69.6%
+  (precision 27.2%, F2 53.1) at 121% of 0.4.6's cost. Counted from the judge's
+  verdicts, its first two passes alone found about 66%: its third pass did add
+  expected issues, as more passes did on
+  [ReviewBench](#what-was-measured-for-050), and the two-pass run above simply
+  did better than that run's first two passes. No difference from 0.4.6 or
+  0.3.5 is larger than runs of one setup differ: 0.5.0 is about as good as
+  before, not better.
 
 | Tool | Issues found (recall) | High and Critical found | Comments on the benchmark's list (precision) | F2 |
 | :--- | ---: | ---: | ---: | ---: |
-| **AZPR 0.5.0 (`/pr-deep`, three passes of Claude Opus 5.5)** | **69.6%** 🏆 | **78.8%** 🏆 | **27.2%** | **53.1** |
-| AZPR 0.3.5 (`/pr-deep`, two reviewers and a verifier, Claude Opus 5.5) | 67.7% | 74.2% | 30.0% | 54.1 |
+| **AZPR 0.5.0 (`/pr-deep`, two passes of Claude Opus 5.5)** | **73.4%** 🏆 | **80.3%** 🏆 | **29.9%** | **56.9** |
 | copilot-v2 | 66.5% | 71.2% | 38.5% | 58.0 |
 | cubic-v2 | 65.8% | 72.7% | 61.5% | 64.9 |
 | augment | 65.2% | 74.2% | 59.5% | 64.0 |
@@ -355,19 +360,18 @@ dashboard.**
 | coderabbit | 59.5% | 63.6% | 32.6% | 51.1 |
 
 *Data as of 2026-11-25. AZPR 0.5.0, as published on npm, reviewed the PRs on
-2026-11-24 and 25 (on OpenCode 2.4.0) and was scored on 2026-11-25; 0.3.5
-reviewed them on 2026-11-05 and was scored on 2026-11-06. Both rows were
-scored with the benchmark's own pipeline and judge and the way its published
-results count a match; under the corrected counting Martian adopted on
-2026-11-20, 0.5.0's precision is 28.2% and its F2 53.8. One run each: one
-run's recall varies by about 4 points and its precision by about 2, so 0.5.0
-and 0.3.5 score about the same. Other tools: the six with the highest recall
-in the default view of Martian's dashboard (core issues, judged by Claude
-Opus 4.5; published results of 2026-08-30, the latest in the benchmark's
-repository on 2026-11-25), sorted by recall. The dashboard includes tools
-based on their public GitHub review activity, and AZPR reviews **Azure
-DevOps** pull requests, so we ran the official benchmark pipeline and judge
-ourselves, as Martian invites. The method and both runs are in the
+2026-11-25 (on OpenCode 2.4.0) and was scored the same day with the
+benchmark's own pipeline and judge and the way its published results count a
+match; under the corrected counting Martian adopted on 2026-11-20, its
+precision is 31.3% and its F2 57.8. Model cost compares the runs' tokens,
+weighted by the provider's prices for cache reads, cache writes and output.
+Other tools: the six with the highest recall in the default view of Martian's
+dashboard (core issues, judged by Claude Opus 4.5; published results of
+2026-08-30, the latest in the benchmark's repository on 2026-11-25), sorted
+by recall. The dashboard includes tools based on their public GitHub review
+activity, and AZPR reviews **Azure DevOps** pull requests, so we ran the
+official benchmark pipeline and judge ourselves, as Martian invites. The
+method and every run are in the
 [validation record](docs/VALIDATION.md#050-on-martians-code-review-bench-with-claude-opus-55-2026-11-25).*
 
 ### Why `/pr-deep` favors recall
@@ -380,7 +384,7 @@ The benchmark's precision also counts accurate comments it does not list:
 
 1. **Unlisted issues count as false positives.** Code Review Bench lists about
    three issues per PR and counts every comment that matches none of them as a
-   false positive. 0.5.0's `/pr-deep` with three passes reported 7.4 findings
+   false positive. 0.5.0's `/pr-deep` with two passes reported 7.0 findings
    per PR in its run; 0.3.5's commented on the 6.5 per PR its verifier
    confirmed.
 2. **Most unmatched findings were accurate.** We checked a random sample of 40
@@ -394,33 +398,38 @@ The benchmark's precision also counts accurate comments it does not list:
    ([the runs](#earlier-releases-on-reviewbench)). We ran its scoring pipeline
    ourselves, so this is not a leaderboard result.
 
-### Model and effort recommendations
+### Models and passes
 
-To find the best setup for 0.3.5's `/pr-deep`, we compared **12 combinations of
-models and reasoning effort** on the same 50 PRs:
+- **Two passes, the default, are the measured setup.** On both benchmarks
+  they found about as many issues as 0.4.6 with the same model, for less: 58%
+  of its cost with GPT-6.2 Sol, 83% with Claude Opus 5.5
+  (`claude-agent/opus#medium`, about an hour for Martian's 50 PRs, two at a
+  time, with a median of two minutes per review).
+- **More passes cost more and trade precision for recall.** On ReviewBench
+  with GPT-6.2 Sol, three and four passes found 51.2% and 54.8% of the
+  reference issues against 49.1% for two, at 133% and 179% of their cost. On
+  Martian's benchmark our own judge (its prompts, applied by Claude Opus 5.5)
+  scored the passes of the three-pass run cumulatively: the first pass found
+  63.3% of the expected issues with 33.2% precision, the first two 67.7% and
+  30.1%, all three 70.9% and 27.4%; a separate four-pass run found 70.3%
+  with 24.2%, no more than three.
+- **The model matters more than the number of passes.** While 0.5.0 was
+  designed, our own judge found that a pass of GPT-6 Luna at its default
+  effort found less than half of what a pass of GPT-6.1 Terra found, and that
+  one pass each of Terra and Claude Sonnet 5.5 found more than four passes of
+  Terra at about the same cost. A smaller model in `models.review.reviewers`
+  trades issues found for cost and time, so run `/pr-deep`, or set stronger
+  review models, where a missed defect costs more.
+- **Reasoning effort.** For 0.3.5, twelve combinations of models and effort
+  were compared on Martian's benchmark: Claude Opus 5.5 at `medium` scored
+  best, `high` about the same at a higher cost, `xhigh` added more marginal
+  findings, and `low` missed more issues, including High-severity ones. 0.5.0
+  was measured at `medium`.
 
-- **Best there: `claude-agent/opus#medium`.** Claude Opus 5.5 at medium effort
-  in all three review roles scored best. Its full 50-PR run took about 35
-  minutes, four PRs at a time. In 0.5.0, three passes of it in
-  `models.deep.reviewers` are the setup measured
-  [above](#martians-code-review-bench): about an hour for the 50 PRs, mostly
-  two at a time, with a median of two minutes per review. A fourth pass added
-  no expected issue there.
-- **Why not higher or lower?** `high` scored about the same at a higher cost,
-  `xhigh` added more marginal findings, and `low` missed more issues, including
-  High-severity ones.
-- **`/pr-review` depends on its models in the same way.** In that comparison
-  `/pr-review` with GPT-6 Luna at its default effort posted 91 comments and
-  matched 27.8% of the expected issues; the recommended deep setup posted 323
-  and matched 65.2% (one run each, scored by our local judge). A smaller model
-  in `models.review.reviewers` trades issues found for cost and time, so run
-  `/pr-deep`, or set stronger review models, where a missed defect costs more.
-  Our own judge's runs while 0.5.0 was designed show the same: a pass of
-  GPT-6 Luna at its default effort found less than half of what a pass of
-  GPT-6.1 Terra found.
-
-The full method, the comparison of all 12 combinations and the limits are in
-the [validation record](docs/VALIDATION.md#martian-code-review-bench-2026-11-05-and-06).
+The runs, the method and the limits are in the
+[validation record](docs/VALIDATION.md#050-on-martians-code-review-bench-with-claude-opus-55-2026-11-25),
+and the twelve combinations under
+[0.3.5's comparison](docs/VALIDATION.md#martian-code-review-bench-2026-11-05-and-06).
 
 ### Earlier releases on ReviewBench
 
