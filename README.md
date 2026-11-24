@@ -10,18 +10,19 @@
 Use your own OpenCode models to review code, inspect the proposed comments,
 and choose what gets published. No MCP server or CI pipeline setup is required.
 
-Earlier releases were measured on two public benchmarks: on Martian's open
-[Code Review Bench](#benchmark-results), 0.3.5's `/pr-deep` found more of the
-listed issues in 50 real pull requests than any of the 21 tools on the
-benchmark's dashboard, and on ReviewBench's test set, which scores each finding
-on its own merits, 97.4% of 0.3.7's findings were judged valid. 0.5.0 makes a
-review differently, with independent passes in place of two reviewers and a
-verifier ([what changed](#what-changed-in-050)). Scored by ReviewBench's own
+0.5.0 makes a review with independent passes in place of two reviewers and a
+verifier ([what changed](#what-changed-in-050)). On Martian's open
+[Code Review Bench](#martians-code-review-bench), its `/pr-deep` with three
+passes of Claude Opus 5.5 found more of the listed issues in 50 real pull
+requests than any of the 21 tools on the benchmark's dashboard, as 0.3.5 did
+before it, and more of the High and Critical ones. Scored by ReviewBench's own
 judge against 0.4.6 with the same model, its default two passes found about
 as many of the listed issues at 58% of the cost, with somewhat fewer findings
 judged valid; three passes matched 0.4.6 at about three quarters of its cost,
 and four found more at about the same cost
-([the measurement](#what-was-measured-for-050)).
+([the measurement](#what-was-measured-for-050)). On ReviewBench's test set,
+which scores each finding on its own merits, 97.4% of 0.3.7's findings were
+judged valid.
 
 AZPR is an independent community project. It is not built by or affiliated with
 the OpenCode team.
@@ -244,9 +245,10 @@ price guarantee.
 ## Benchmark results
 
 **0.5.0 was scored on ReviewBench with the benchmark's own judge**, against
-0.4.6 with the same model (below). The other scores in this section were
+0.4.6 with the same model, and **on Martian's Code Review Bench with Martian's
+own pipeline and judge** (below). The other scores in this section were
 measured with releases 0.3.5 to 0.4.6, which reviewed with two reviewers and a
-verifier; 0.5.0 has not been run on Martian's Code Review Bench.
+verifier.
 
 ### What was measured for 0.5.0
 
@@ -309,45 +311,57 @@ in the
 [validation record](docs/VALIDATION.md#one-pipeline-passes-instead-of-roles-2026-11-22-and-23)
 too.
 
-### Releases 0.3.5 to 0.4.6 on Martian's Code Review Bench
+### Martian's Code Review Bench
 
 On Martian's open [Code Review Bench](https://codereview.withmartian.com),
 which evaluates AI code reviewers on 50 real-world pull requests from
-**cal.com, Discourse, Grafana, Keycloak and Sentry**, **AZPR (`v0.3.5`,
-`/pr-deep`) found more of the benchmark's expected issues than any of the 21
-tools on its public dashboard.**
+**cal.com, Discourse, Grafana, Keycloak and Sentry**, **AZPR 0.5.0
+(`/pr-deep` with three passes of Claude Opus 5.5) found more of the
+benchmark's expected issues than any of the 21 tools on its public
+dashboard.**
 
-- **Highest recall on the dashboard (67.7%):** AZPR caught more of the
-  expected issues than every tool listed there.
-- **Highest High and Critical recall, tied (74.2%):** level with
-  qodo-extended-v2 and augment on the most severe issues.
-- **Built for interactive triage (F2 54.1, would rank 6th):** `/pr-deep`
-  reported every defect its verifier confirmed instead of holding findings
+- **Highest recall on the dashboard (69.6%):** AZPR caught more of the
+  expected issues than every tool listed there, and more than 0.3.5 (67.7%).
+- **Highest High and Critical recall (78.8%):** the best of the listed tools
+  found 74.2% of the most severe issues.
+- **Built for interactive triage (F2 53.1, would rank 6th, as 0.3.5 did):**
+  `/pr-deep` puts every finding in the preview instead of holding findings
   back, and you choose which ones to publish.
-- **Findings that hold up when checked (95.6% judged valid):** this
-  benchmark's precision is the share of comments that are on its list of about
-  three issues per PR, so it counts an accurate comment outside that list as
-  wrong. [ReviewBench](#checked-on-a-second-benchmark) scores each finding on
-  its own merits instead: it judged 95.6% of this release's findings valid, and
-  97.4% of 0.3.7's.
+- **Precision counts only the benchmark's list (27.2%):** the benchmark lists
+  about three issues per PR and counts an accurate comment outside that list
+  as wrong; see [why `/pr-deep` favors recall](#why-pr-deep-favors-recall).
+- **Three passes, not four:** before the official judging, our own judge (the
+  benchmark's prompts, applied by Claude Opus 5.5) scored three and four
+  passes on the same 50 pull requests. Four passes matched one expected issue
+  fewer (111 against 112) with 51 more comments off the list (F2 50.9
+  against 53.8), so the official judge scored three.
 
 | Tool | Issues found (recall) | High and Critical found | Comments on the benchmark's list (precision) | F2 |
 | :--- | ---: | ---: | ---: | ---: |
-| **AZPR 0.3.5 (`/pr-deep`, Claude Opus 5.5)** | **67.7%** 🏆 | **74.2%** 🏆 | **30.0%** | **54.1** |
+| **AZPR 0.5.0 (`/pr-deep`, three passes of Claude Opus 5.5)** | **69.6%** 🏆 | **78.8%** 🏆 | **27.2%** | **53.1** |
+| AZPR 0.3.5 (`/pr-deep`, two reviewers and a verifier, Claude Opus 5.5) | 67.7% | 74.2% | 30.0% | 54.1 |
 | copilot-v2 | 66.5% | 71.2% | 38.5% | 58.0 |
 | cubic-v2 | 65.8% | 72.7% | 61.5% | 64.9 |
-| augment | 65.2% | 74.2% 🏆 | 59.5% | 64.0 |
-| qodo-extended-v2 | 64.6% | 74.2% 🏆 | 67.1% | 65.1 |
+| augment | 65.2% | 74.2% | 59.5% | 64.0 |
+| qodo-extended-v2 | 64.6% | 74.2% | 67.1% | 65.1 |
 | qodo-v2 | 62.0% | 71.2% | 55.4% | 60.6 |
 | coderabbit | 59.5% | 63.6% | 32.6% | 51.1 |
 
-*Data as of 2026-11-06: AZPR 0.3.5 reviewed the PRs on 2026-11-05 and was
-scored on 2026-11-06. Other tools: the six with the highest recall in the
-default view of Martian's dashboard (core issues, judged by Claude Opus 4.5;
-published results of 2026-08-30, still the latest on 2026-11-06), sorted by
-recall. The dashboard includes tools based on their public GitHub review
-activity, and AZPR reviews **Azure DevOps** pull requests, so we ran the
-official benchmark pipeline and judge ourselves, as Martian invites.*
+*Data as of 2026-11-25. AZPR 0.5.0, as published on npm, reviewed the PRs on
+2026-11-24 and 25 (on OpenCode 2.4.0) and was scored on 2026-11-25; 0.3.5
+reviewed them on 2026-11-05 and was scored on 2026-11-06. Both rows were
+scored with the benchmark's own pipeline and judge and the way its published
+results count a match; under the corrected counting Martian adopted on
+2026-11-20, 0.5.0's precision is 28.2% and its F2 53.8. One run each: one
+run's recall varies by about 4 points and its precision by about 2, so 0.5.0
+and 0.3.5 score about the same. Other tools: the six with the highest recall
+in the default view of Martian's dashboard (core issues, judged by Claude
+Opus 4.5; published results of 2026-08-30, the latest in the benchmark's
+repository on 2026-11-25), sorted by recall. The dashboard includes tools
+based on their public GitHub review activity, and AZPR reviews **Azure
+DevOps** pull requests, so we ran the official benchmark pipeline and judge
+ourselves, as Martian invites. The method and both runs are in the
+[validation record](docs/VALIDATION.md#050-on-martians-code-review-bench-with-claude-opus-55-2026-11-25).*
 
 ### Why `/pr-deep` favors recall
 
@@ -359,16 +373,17 @@ The benchmark's precision also counts accurate comments it does not list:
 
 1. **Unlisted issues count as false positives.** Code Review Bench lists about
    three issues per PR and counts every comment that matches none of them as a
-   false positive. 0.3.5's `/pr-deep` commented on every defect its verifier
-   confirmed (6.5 per PR in this run).
+   false positive. 0.5.0's `/pr-deep` with three passes reported 7.4 findings
+   per PR in its run; 0.3.5's commented on the 6.5 per PR its verifier
+   confirmed.
 2. **Most unmatched findings were accurate.** We checked a random sample of 40
-   AZPR findings that matched no expected issue against the source code:
+   of 0.3.5's findings that matched no expected issue against the source code:
    **36 were accurate**, and **18 were genuine defects** introduced or exposed
    by the PR that the benchmark's list does not include.
 3. **A judge that checks each finding found them valid.** ReviewBench does not
    compare findings with a list alone: its judge checks every finding that
    matches no listed issue against the code. On its 25-PR test set it judged
-   **95.6%** of this release's findings valid, and **97.4%** of 0.3.7's
+   **95.6%** of 0.3.5's findings valid, and **97.4%** of 0.3.7's
    ([the runs](#checked-on-a-second-benchmark)). We ran its scoring pipeline
    ourselves, so this is not a leaderboard result.
 
@@ -379,9 +394,11 @@ models and reasoning effort** on the same 50 PRs:
 
 - **Best there: `claude-agent/opus#medium`.** Claude Opus 5.5 at medium effort
   in all three review roles scored best. Its full 50-PR run took about 35
-  minutes, four PRs at a time. In 0.5.0 that model is a natural first entry of
-  `models.deep.reviewers`, but how it does in passes, without a verifier, was
-  not measured.
+  minutes, four PRs at a time. In 0.5.0, three passes of it in
+  `models.deep.reviewers` are the setup measured
+  [above](#martians-code-review-bench): about an hour for the 50 PRs, mostly
+  two at a time, with a median of two minutes per review. A fourth pass added
+  no expected issue there.
 - **Why not higher or lower?** `high` scored about the same at a higher cost,
   `xhigh` added more marginal findings, and `low` missed more issues, including
   High-severity ones.
@@ -408,7 +425,8 @@ agreement with the judge on which findings deserve an inline comment rose from
 <details>
 <summary>The ReviewBench runs of 0.3.5, 0.3.6 and 0.3.7</summary>
 
-0.3.6 changed two reviewer instructions because of issues this run missed:
+0.3.6 changed two reviewer instructions because of issues 0.3.5's run on
+Martian's benchmark missed:
 defects in code a pull request moves unchanged, and findings dropped because
 the behavior might be intended. They were written after reading three of the
 benchmark's expected issues, and in a local scoring run they raised its recall
