@@ -262,8 +262,10 @@ read from its cache.
   run was made two days before the 0.5.0 runs, with the same OpenCode,
   profile and stand-in.
 - Times depend on four reviews running at once and on the provider's load.
-- We ran the judging pipeline ourselves; this is not a leaderboard entry, and
-  the leaderboard averages per pull request over all 25.
+- We ran the judging pipeline ourselves; this is not a leaderboard entry. The
+  leaderboard runs on ReviewBench's full set of 219 pull requests, of which
+  the test set is a sample of 25, so these numbers do not compare with its
+  rows.
 
 ## 0.5.0 release candidate acceptance (2026-11-23)
 
