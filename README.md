@@ -39,10 +39,13 @@ summary.
 
 [![Actual Azure DevOps inline comment on fulfillment.py: the changed line replaces a deep copy with a shallow copy; the review explains the shared-state defect, cites evidence and suggests a fix.](docs/assets/azure-inline-review.png)](docs/assets/azure-inline-review.png)
 
-*Actual output on a dedicated test PR with seeded defects, from a different run
-than the recording below. The image joins cropped excerpts of the diff and the
-comment, with identifying UI removed; code and review text are unchanged. It
-shows the output format, not review accuracy. Click the image to enlarge, or
+*Actual output on a dedicated test PR with seeded defects, published by AZPR
+0.3.1 in a different run than the recording below. 0.5.0 posts the same
+layout; its disclosure line also names the review method
+([the differences](docs/DEMO.md)). The image joins cropped excerpts of the
+diff and the comment, with identifying UI removed; code and review text are
+unchanged. It shows the output format, not review accuracy. Click the image to
+enlarge, or
 [read the pictured comments and capture details](docs/DEMO.md#actual-azure-devops-comments).*
 
 <details>
@@ -59,8 +62,11 @@ is an actual capture excerpt with identifying UI removed and its text unchanged.
 
 [![Real OpenCode run: a review starts and a panel beside the conversation lists its sessions, with a step at its foot that stops the run; the panel then shows the report and the comment preview rendered, with the next step at its foot, and the findings as a list.](docs/assets/terminal-panel-teaser.gif)](docs/DEMO.md#the-terminal-panel)
 
-*A 15-second edit of a real OpenCode 2.3.0 session with AZPR 0.4.x on a dedicated test PR.
-Waiting time is shortened, so the length is not the review duration.
+*A 15-second edit of a real OpenCode 2.3.0 session with the AZPR 0.4.5 release
+candidate on a dedicated test PR. 0.5.0's panel works the same; the sessions it
+lists are review passes, duplicate checks and the severity rating instead of
+two reviewers and a verifier. Waiting time is shortened, so the length is not
+the review duration.
 [Recording details and other walkthroughs](docs/DEMO.md), among them
 [adjusting findings before publishing](docs/DEMO.md#adjust-findings-before-publishing).*
 
@@ -188,7 +194,8 @@ to your selected model providers, and review records are saved locally. See
 
 Reviews that 0.4.x saved can still be shown, previewed and published. What
 the change does to findings, cost and time is measured
-[below](#what-was-measured-for-050), with ReviewBench's own judge.
+[below](#benchmark-results): on ReviewBench with its own judge, and on
+Martian's Code Review Bench with Martian's.
 
 ## Choose a review
 
@@ -384,7 +391,7 @@ The benchmark's precision also counts accurate comments it does not list:
    compare findings with a list alone: its judge checks every finding that
    matches no listed issue against the code. On its 25-PR test set it judged
    **95.6%** of 0.3.5's findings valid, and **97.4%** of 0.3.7's
-   ([the runs](#checked-on-a-second-benchmark)). We ran its scoring pipeline
+   ([the runs](#earlier-releases-on-reviewbench)). We ran its scoring pipeline
    ourselves, so this is not a leaderboard result.
 
 ### Model and effort recommendations
@@ -415,15 +422,16 @@ models and reasoning effort** on the same 50 PRs:
 The full method, the comparison of all 12 combinations and the limits are in
 the [validation record](docs/VALIDATION.md#martian-code-review-bench-2026-11-05-and-06).
 
-### Checked on a second benchmark
-
-Two releases of the earlier pipeline were checked on ReviewBench's test set, which was not used
-to write their changes: recall stayed within the run-to-run variation, and
-agreement with the judge on which findings deserve an inline comment rose from
-70.0 (0.3.5) to 83.0 (0.3.7).
+### Earlier releases on ReviewBench
 
 <details>
-<summary>The ReviewBench runs of 0.3.5, 0.3.6 and 0.3.7</summary>
+<summary>0.3.5, 0.3.6 and 0.3.7 on ReviewBench's test set</summary>
+
+Two releases of the earlier pipeline, with two reviewers and a verifier, were
+checked on ReviewBench's test set, which was not used to write their changes:
+recall stayed within the run-to-run variation, and agreement with the judge on
+which findings deserve an inline comment rose from 70.0 (0.3.5) to 83.0
+(0.3.7).
 
 0.3.6 changed two reviewer instructions because of issues 0.3.5's run on
 Martian's benchmark missed:
@@ -631,8 +639,8 @@ npm registry:
 opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.0'
 ```
 
-Add only one of them. OpenCode 2.3.0 loads the plugin into a running OpenCode
-service within a few seconds; if `/pr-setup` does not appear in a new
+Add only one of them. OpenCode (2.3.0 and later) loads the plugin into a
+running OpenCode service within a few seconds; if `/pr-setup` does not appear in a new
 conversation, run `opencode service restart`. Then run `/pr-setup`: in the
 terminal UI it asks for what it needs, elsewhere it prints the instructions.
 Native packages
@@ -662,7 +670,8 @@ with a new version adds a second entry**: OpenCode keeps running the version
 listed first and reports the new one as `Duplicate plugin ID: azpr` (from
 0.3.1, `/pr-check` also warns about it). Upgrade when no AZPR command is
 running, since
-OpenCode 2.3.0 replaces the running plugin as soon as its entry changes.
+OpenCode (2.3.0 and later) replaces the running plugin as soon as its entry
+changes.
 
 For an entry that `opencode plugin add` created, add the new version and,
 only when that succeeds, remove the previous one:
@@ -1615,6 +1624,8 @@ node tests/host-v2-tui-panel.mjs /absolute/path/to/opencode
 node tests/host-v2-tui-panel.mjs /absolute/path/to/opencode --native
 node tests/host-v2-tui-setup.mjs /absolute/path/to/opencode
 node tests/host-v2-tui-setup.mjs /absolute/path/to/opencode --native
+node tests/host-v2-tui-setup.mjs /absolute/path/to/opencode --migrate
+node tests/host-v2-tui-setup.mjs /absolute/path/to/opencode --migrate --native
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config
 sh uninstall.sh --config-dir /absolute/path/to/v2-opencode-config --apply
 ```
@@ -1626,7 +1637,8 @@ private session; the two `--cleanup` runs turn it off, so that each run deletes
 its sessions as an installation with default settings does. The
 `host-v2-tui-panel` and `host-v2-tui-setup` runs drive the real terminal UI in
 `tmux`, which they need, each once installed from source and once as
-OpenCode's plugin manager installs the package. `npm ci` installs the compiler of the terminal panel's JSX, which only
+OpenCode's plugin manager installs the package; with `--migrate` the setup
+runs start from settings of AZPR 0.4.x and confirm their update. `npm ci` installs the compiler of the terminal panel's JSX, which only
 `npm run check` and `npm run build:tui` use; the installed plugin has no
 dependency and is not built on your machine.
 Uninstall without `--apply` previews; `--apply` archives only this package under
@@ -1648,6 +1660,5 @@ or personal model selections.
 [MIT](LICENSE), copyright 2026 WTLAIB. See the [changelog](CHANGELOG.md) for the
 release scope, [v0.5.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.5.0)
 for downloads, the [npm package](https://www.npmjs.com/package/opencode-azure-devops-pr-review),
-[v0.2.0](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/releases/tag/v0.2.0)
-for the recorded demonstration, and [releasing](docs/RELEASING.md) for the
-release process.
+the [demo page](docs/DEMO.md) for the recordings and the version each was made
+with, and [releasing](docs/RELEASING.md) for the release process.
