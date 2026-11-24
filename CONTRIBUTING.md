@@ -80,6 +80,8 @@ node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-tui-panel.mjs "$AZPR_TEST_HOST" --native
 node tests/host-v2-tui-setup.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-tui-setup.mjs "$AZPR_TEST_HOST" --native
+node tests/host-v2-tui-setup.mjs "$AZPR_TEST_HOST" --migrate
+node tests/host-v2-tui-setup.mjs "$AZPR_TEST_HOST" --migrate --native
 ```
 
 The two `--cleanup` runs have debug off. Debug keeps every private session, so
@@ -88,7 +90,8 @@ only these runs exercise the deletion of a run's sessions on the host. The
 in a detached `tmux` session, read its screen and drive its keyboard and
 mouse; they need `tmux` (3.2 or later), each once installed from source and
 once as OpenCode's plugin manager installs the package. The setup runs start
-without usable settings and set AZPR up through its dialogs.
+without usable settings and set AZPR up through its dialogs; with `--migrate`
+they start from settings of AZPR 0.4.x and confirm their update instead.
 
 The fixtures need `openssl` and use isolated configuration, a fake model
 provider and fake Azure services. They do not need your PAT or provider account,

@@ -2,12 +2,12 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.5.0, the moves to OpenCode 2.3.0 and 2.3.2, a run of Martian's public code
+0.5.0, the moves to OpenCode 2.3.0 and 2.3.2, runs of Martian's public code
 review benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, the severity changes
 of 0.3.7 run on ReviewBench's test set, the runs behind the single
-pipeline of 0.5.0, and 0.5.0 against 0.4.6 scored by ReviewBench's own
-judge. Host
+pipeline of 0.5.0, 0.5.0 against 0.4.6 scored by ReviewBench's own
+judge, and 0.5.0 on Martian's benchmark. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -67,18 +67,137 @@ acceptance runs, including the MCP-based runs, are preserved in
   The 0.4.6 candidate, [measured the same way](#martians-code-review-bench-measured-again)
   on 2026-11-21, found 67.1% and 75.8%, again the highest recall, with an F2
   that would place eighth: one run each, and within one run's sampling error
-  of 0.3.5. Both reviewed with two reviewers and a verifier; 0.5.0 has not
-  been run on that benchmark. On 24 pull requests of ReviewBench's test set,
+  of 0.3.5. Both reviewed with two reviewers and a verifier. 0.5.0, with
+  [its default two passes of the same model](#050-on-martians-code-review-bench-with-claude-opus-55-2026-11-25),
+  found 73.4% and 80.3%, again the highest recall and High and Critical
+  recall, with an F2 that would place sixth, at 83% of 0.4.6's model cost; a
+  second run, with three passes, found 69.6% and 78.8% at 121%. One run each:
+  no difference from 0.4.6 or 0.3.5 is larger than runs of one setup differ.
+  On 24 pull requests of ReviewBench's test set,
   [scored by ReviewBench's own judge](#050-against-046-on-reviewbench-with-its-own-judge-2026-11-24)
   against 0.4.6 with GPT-6.2 Sol, 0.5.0's two passes found about as many
   reference issues (49.1% against 51.5%) at 58% of the cost, with 89.7% of
   their findings judged valid against 93.2%; three passes matched 0.4.6, and
-  four found more (54.8%) at about the same cost.
+  four, at about its cost, found 54.8%, a gain of about one run's variation.
 
 The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## 0.5.0 on Martian's Code Review Bench with Claude Opus 5.5 (2026-11-25)
+
+The [public benchmark](#martian-code-review-bench-2026-11-05-and-06) had been
+run with 0.3.5 and with the
+[0.4.6 candidate](#martians-code-review-bench-measured-again), both reviewing
+with two reviewers and a verifier. 0.5.0 reviews with passes instead, so it
+was run again, with the model of those runs: with two passes (the default),
+three and four, one run each.
+
+- **Review.** AZPR 0.5.0 as published on npm, `/pr-deep` with
+  `claude-agent/opus#medium` (Claude Opus 5.5 at medium effort, Claude Code
+  CLI 2.1.314) for every pass, the first reviewer model rating the severities
+  (the default), English output, the same 50 pull requests at the same
+  commits and the same local implementation of the Azure DevOps calls as
+  before. The host was OpenCode 2.4.0, not the tested 2.3.2: on 2.3.2 every
+  claude-agent session keeps a local process of about 200 MB until the host
+  exits, and the three runs started about 1,200 model sessions; 2.4.0 stops
+  the process when its session is deleted, which the runs showed between two
+  reviews. The five pull requests with 30 or more changed files were reviewed
+  one at a time and the others two at a time; at most 31 such processes ran at
+  once, and at least 1.6 GB of memory stayed free.
+- **All runs complete.** All 150 reviews were COMPLETE without a retry.
+
+  | Passes | Findings (high, medium, low) | Median review | Longest | Model cost against 0.4.6 |
+  | --- | --- | ---: | ---: | ---: |
+  | Two | 348 (48, 151, 149) | 112 s | 282 s | 83% |
+  | Three | 371 (56, 167, 148) | 119 s | 285 s | 121% |
+  | Four | 406 (69, 167, 170) | 138 s | 338 s | 157% |
+
+  Model cost weighs each run's tokens by the provider's prices relative to
+  uncached input: cache reads 0.1, cache writes 1.25, output and reasoning 5;
+  0.4.6's run is counted without its comment previews. The runs took 57, 63
+  and 70 minutes. In 49 reviews of each of the two- and three-pass runs and in 46 of the
+  four-pass run every pass finished its files. In the others a pass still
+  named unfinished work after its follow-up: in every run the same
+  sentry-greptile pull request, where the passes covered 7 of its 8 files
+  (with two passes, no pass reviewed the eighth), and with four passes three
+  cal.com pull requests, where every pass still covered every file. As in the
+  0.4.6 run, five cal.com pull requests had no content search, since that
+  repository's archive is larger than `azure.archiveMegabytes` allows by
+  default.
+- **Choosing a run to score.** Our own judge (the benchmark's three prompts
+  applied by Claude Opus 5.5 subagents, as in the
+  [model comparison](#martian-code-review-bench-2026-11-05-and-06)) scored
+  the three- and four-pass runs under a rule written before any score was
+  seen: the higher core F2 goes to the official judge. Three passes: precision
+  27.4, recall 70.9, F2 53.8, with 112 core golden comments matched and 297
+  unmatched issues; four passes: 24.2, 70.3 and 50.9, with 111 and 348. The
+  two-pass run, the default, was added afterwards and scored officially as
+  well; four passes were scored by our judge only.
+- **Scoring.** By the benchmark's pipeline (upstream `e616e84` with the
+  scoring step of `23a35d0`, which changes only how a repeated match is
+  counted) and the dashboard's judge, Claude Opus 4.5
+  (`claude-opus-4-5-20251101`, temperature 0), through Anthropic's
+  OpenAI-compatible endpoint: 413 extracted issues and 1,745 judged pairs for
+  two passes, 434 and 1,844 for three. Eight extractions failed once (three
+  refused for too many concurrent requests) and passed when retried, and no
+  verdict is missing. Every verdict was recorded, so both ways of counting
+  come from the same judging.
+
+| Core golden comments, one run each | Comments | Issues per PR | Precision | Recall | F2 | High and Critical recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| AZPR 0.3.5 (2026-11-06) | 323 | 7.6 | 30.0 | 67.7 | 54.1 | 74.2 |
+| 0.4.6 candidate (2026-11-21) | 341 | 8.1 | 27.2 | 67.1 | 51.9 | 75.8 |
+| 0.5.0, two passes (2026-11-25) | 348 | 8.3 | 29.9 | 73.4 | 56.9 | 80.3 |
+| 0.5.0, three passes (2026-11-25) | 371 | 8.7 | 27.2 | 69.6 | 53.1 | 78.8 |
+
+Counted as the dashboard's published results count. Under the corrected
+counting the 0.4.6 candidate scores 28.5, 67.1 and 52.8, 0.5.0's two passes
+31.3, 73.4 and 57.8, and its three passes 28.2, 69.6 and 53.8; 0.3.5's
+verdicts were not recorded. The two passes matched 116 of the 158 core golden
+comments (0.3.5: 107) and 53 of the 66 High and Critical ones (49); 272
+extracted issues matched none (250). On the dashboard's default view that is
+the highest recall of its 21 tools (copilot-v2 66.5) and the highest High and
+Critical recall (qodo-extended-v2 and augment 74.2), with the sixth F2: after
+copilot-v2 (58.0), ahead of gemini-v2 (52.8).
+
+What this shows and what it does not:
+
+- **About the same as before, not better.** One run's recall has a sampling
+  error of about 3.7 points and its precision of about 2.3, so a difference
+  between two runs has one of about 5 and 3. No difference between these
+  four runs is twice that: 0.5.0 finds about as much of the benchmark's list
+  as 0.3.5's and 0.4.6's two reviewers and verifier did.
+- **Runs vary more than a pass adds.** Counted from the recorded official
+  verdicts of the three-pass run, with each extracted issue attributed to the
+  finding it most resembles and kept when that finding came from the first
+  passes, its first pass alone found about 60.1% (precision 30.4), its first
+  two 65.8% (28.7) and all three 69.6% (27.2). Our own judge, scoring the same
+  subsets rebuilt from the run's records (the rebuild with all three passes
+  reproduces the run's 371 findings), gave 63.3% (33.2), 67.7% (30.1) and
+  70.9% (27.4). Within a run each pass found more and lowered precision; the
+  separate two-pass run found about 8 points more than the first two passes
+  of the three-pass run. By our judge a fourth pass, in its own run, found no
+  more than three. On ReviewBench, with GPT-6.2 Sol, three and four passes
+  found more than two
+  ([0.5.0 against 0.4.6](#050-against-046-on-reviewbench-with-its-own-judge-2026-11-24)).
+- **What it saves depends on the model.** With Claude Opus 5.5 here, two
+  passes cost 83% of 0.4.6's run, three 121% and four 157%. With GPT-6.2 Sol
+  on ReviewBench the same setups cost 58%, 78% and 105%: there 0.4.6 had
+  filed about five times as many findings per pull request, and the verifier
+  that checked them, which 0.5.0 drops, was a larger part of its cost.
+- **Our judge and the official one agreed this time.** For the three passes
+  our judge gave F2 53.8 and the official one 53.1 under the dashboard's
+  counting (53.8 under the corrected one); for 0.3.5 ours was 2.5 points
+  lower.
+- **Not on the tested host.** The reviews ran on OpenCode 2.4.0 with AZPR's
+  code unchanged; AZPR is tested with 2.3.2. This run is evidence for 0.5.0 on
+  2.4.0, and the 2.3.2 process limit above applies to real use with
+  claude-agent models there.
+- **Not a leaderboard result.** We ran the benchmark's pipeline and judge
+  ourselves; the dashboard includes tools by their public GitHub activity, and
+  AZPR reviews Azure DevOps pull requests.
 
 ## 0.5.0 after publication (2026-11-24)
 
