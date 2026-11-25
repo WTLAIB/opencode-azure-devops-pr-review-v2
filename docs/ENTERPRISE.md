@@ -137,9 +137,14 @@ model the instruction files OpenCode loads when a reviewer's native `read`
 reads a file beside one. A reviewer can still read such a file on purpose,
 like any other file of the active project. This relies on a field of
 OpenCode's plugin interface that OpenCode marks as experimental: where AZPR
-cannot tell the parts of a request apart, it sends the request as OpenCode
-built it, and the stage's [debug record](DEBUGGING.md) says so
-(`placeInstructionsNotToldApart`).
+cannot tell the parts of a request apart (another plugin rewrote them, or a
+later OpenCode builds them another way), it sends those parts as OpenCode
+built them, with what OpenCode collected for the directory, and the stage's
+[debug record](DEBUGGING.md) says so (`placeInstructionsNotToldApart`). The
+instruction files loaded beside a file are taken out of the request either
+way; where another plugin rewrote the messages so that such a file can no
+longer be told, the pass that read beside it fails instead of going on with
+it.
 
 **Experiments of OpenCode that reach these sessions.** Three opt-in
 experiments of OpenCode 2.4 concern AZPR's private sessions; all are off

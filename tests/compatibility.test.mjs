@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isInstructionLoad, isInstructionUpdate, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isInstructionLoad, isRequestedLoad, isInstructionUpdate, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -233,14 +233,17 @@ test('the host\'s own load of instruction files is told by its form: the paths i
   // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one.
   const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED', description: 'Loaded sub/AGENTS.md', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
   const request = { id: 'msg_load', role: 'user', content: load.text, metadata: load.metadata };
-  assert.equal(isInstructionLoad(load), true);
-  assert.equal(isInstructionLoad(request), true, 'The message a request is built with has the same ID and metadata, as a user message.');
+  // Each place has its own form: a session's messages hold the synthetic message, a request the user message made
+  // of it, with the same ID and metadata. Neither is taken for the other.
+  assert.deepEqual([isInstructionLoad(load), isRequestedLoad(load)], [true, false]);
+  assert.deepEqual([isInstructionLoad(request), isRequestedLoad(request)], [false, true]);
   for (const other of [undefined, {}, { type: 'synthetic', text: load.text }, { ...load, metadata: {} }, { ...load, metadata: { instruction: {} } }, { ...load, metadata: { instruction: { paths: [] } } },
     { ...load, metadata: { instruction: { paths: [''] } } }, { ...load, metadata: { instruction: { paths: [1] } } }, { ...load, metadata: { instruction: { paths: '/work/sub/AGENTS.md' } } }, { ...load, metadata: { azpr: {} } },
     // Not the host's load, whatever metadata it carries: no ID to know it by, a person's message, another role of a request.
-    { ...load, id: undefined }, { ...load, id: '' }, { ...load, id: 7 }, { ...load, type: 'user' }, { ...load, type: 'assistant' }, { ...request, id: undefined },
+    { ...load, id: undefined }, { ...load, id: '' }, { ...load, id: 7 }, { ...load, type: 'user' }, { ...load, type: 'assistant' }, { ...request, id: undefined }, { ...request, id: '' },
+    { ...request, metadata: {} }, { ...request, metadata: { instruction: { paths: [] } } },
     { ...request, role: 'tool' }, { ...request, role: 'assistant' }, { ...request, role: 'system' }, { ...request, type: 'user' }]) {
-    assert.equal(isInstructionLoad(other), false, JSON.stringify(other));
+    assert.deepEqual([isInstructionLoad(other), isRequestedLoad(other)], [false, false], JSON.stringify(other));
   }
 });
 
@@ -248,8 +251,9 @@ test('an update of the instructions is a system message of one text and nothing 
   // OpenCode 2.3.0 through 2.4.1 write it from `session.instructions.updated`, without an ID or metadata.
   const update = { role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }] };
   assert.equal(isInstructionUpdate(update), true);
-  assert.equal(isInstructionUpdate({ role: 'system', content: 'Instructions from: /work/AGENTS.md\nCHANGED' }), true, 'Also where the text is not in parts.');
   for (const other of [undefined, {}, { role: 'user', content: [{ type: 'text', text: 'x' }] }, { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] },
+    // The host makes the content one text part; a system message whose content is a plain string is another hook's.
+    { role: 'system', content: 'Instructions from: /work/AGENTS.md\nCHANGED' },
     { role: 'system', content: [], tools: { add: [], remove: ['read'] } }, { ...update, tools: { add: [], remove: [] } },
     { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'effort', effort: 'low' }] }, { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'text', text: 'y' }] },
     { role: 'system', content: [] }, { role: 'system', content: '' }, { role: 'system' }, { role: 'system', content: [{ type: 'text' }] }, { role: 'system', content: [{ type: 'text', text: '' }] },

@@ -245,30 +245,36 @@ export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
 export const claudeInstructions = sources => sources.map(source => source.text).join('\n\n');
 
 /**
- * Whether a message is one OpenCode leaves in a session by itself after the session's native read tool read a file
- * of the project: the instruction files between that file and the conversation's directory (AGENTS.md; from
- * OpenCode 2.3.1 also CLAUDE.md), as a synthetic message whose `metadata.instruction.paths` names the files it
- * holds. The message a request is built with has the same ID and metadata, as a user message (OpenCode 2.3.0
- * through 2.4.1). Both forms are told here, and nothing else: a message without an ID, a tool result or an
- * assistant message that carries such metadata is not the host's load.
+ * The instruction files OpenCode leaves in a session by itself after the session's native read tool read a file of
+ * the project: the files between that file and the conversation's directory (AGENTS.md; from OpenCode 2.3.1 also
+ * CLAUDE.md), as a synthetic message whose `metadata.instruction.paths` names the files it holds (OpenCode 2.3.0
+ * through 2.4.1). Nothing else is one: not a message without an ID, and not a tool result, a person's message or
+ * an assistant message that carries such metadata.
  */
-export function isInstructionLoad(message) {
+const loadedPaths = message => {
   const paths = message?.metadata?.instruction?.paths;
-  return (message?.type === 'synthetic' || (message?.type === undefined && message?.role === 'user')) && typeof message.id === 'string' && message.id.length > 0 &&
-    Array.isArray(paths) && paths.length > 0 && paths.every(path => typeof path === 'string' && path.length > 0);
-}
+  return typeof message?.id === 'string' && message.id.length > 0 && Array.isArray(paths) && paths.length > 0 &&
+    paths.every(path => typeof path === 'string' && path.length > 0);
+};
+/** Such a load as a session's own messages hold it. */
+export const isInstructionLoad = message => message?.type === 'synthetic' && loadedPaths(message);
+/**
+ * Such a load as a request holds it: the user message OpenCode makes of the stored one, with the same ID and
+ * metadata (every user message of a request carries the ID of the message it was made of).
+ */
+export const isRequestedLoad = message => message?.type === undefined && message?.role === 'user' && loadedPaths(message);
 
 /**
  * Whether a message of a request is an update of the instructions that OpenCode wrote into the session because a
  * source changed while the session ran (an instruction file that was edited, an MCP server that says something
  * else). OpenCode 2.3.0 through 2.4.1 build it from nothing but `session.instructions.updated`: a system message
- * of one text part, without an ID, metadata or tools. The other system messages they know change a model's
- * effort or its tools and hold no text, and a system message that carries an ID or metadata is another hook's.
+ * whose content is one text part, without an ID, metadata or tools. The other system messages they know change a
+ * model's effort or its tools and hold no text, and a system message of any other form (an ID, metadata, a plain
+ * string) is another hook's.
  */
 export function isInstructionUpdate(message) {
   if (message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined) return false;
   const content = message.content;
-  if (typeof content === 'string') return content.length > 0;
   return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' && content[0].text.length > 0;
 }
 

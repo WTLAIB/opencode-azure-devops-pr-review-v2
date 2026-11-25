@@ -513,10 +513,23 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   step.props.onMouseUp(onStep);
   await settle();
   assert.deepEqual([lost.log.sent, lost.log.shown.length], [[], 0], 'A release long after the pointer last moved on the step picks nothing.');
-  // What was pressed then is over: a release that follows picks nothing either.
+  // What was pressed then is over. The pointer moves on the step again, with nothing pressed anew, and a release
+  // follows at once: were the press still held, this would be a click.
+  step.props.onMouseDrag(onStep);
+  now += 150;
   step.props.onMouseUp(onStep);
   await settle();
   assert.deepEqual([lost.log.sent, lost.log.shown.length], [[], 0], 'The made-up release ended the gesture.');
+  // A movement with another button is no movement of the gesture: the host sends it to whatever is under the
+  // pointer, also to the step that a lost gesture still holds, and the release it makes up later is no click.
+  step.props.onMouseDown(event());
+  step.props.onMouseDrag(onStep);
+  now += 60_000;
+  step.props.onMouseDrag({ ...onStep, button: 2 });
+  now += 150;
+  step.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual([lost.log.sent, lost.log.shown.length], [[], 0], 'A drag with the right button over the step does not make the made-up release a click.');
   // A hand that moves a little while it clicks: the release follows the movement at once, and it is a click.
   step.props.onMouseDown(event());
   step.props.onMouseDrag(onStep);
@@ -562,6 +575,14 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
     element.props.onMouseDown({ ...event(), button: 2 });
     element.props.onMouseUp(event());
     assert.deepEqual(done(), before, `A press of another button on ${name} does not make the made-up release a click.`);
+    // Nor does a movement with another button over it.
+    element.props.onMouseDown(event());
+    element.props.onMouseDrag(event());
+    now += 60_000;
+    element.props.onMouseDrag({ ...event(), button: 2 });
+    now += 150;
+    element.props.onMouseUp(event());
+    assert.deepEqual(done(), before, `A drag with another button over ${name} does not make the made-up release a click.`);
     element.props.onMouseDown(event());
     element.props.onMouseDrag(event());
     now += 150;

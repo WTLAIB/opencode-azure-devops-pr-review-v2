@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCe
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, isInstructionLoad, isInstructionUpdate, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, isRequestedLoad, isInstructionUpdate, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
 import { reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions, renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview, conversationTitle, enclose, stagesInOrder } from './attribution.mjs';
 
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -430,8 +430,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const directory = owner.dataDirectory;
     const pending = directory && openStores.has(directory) ? openStores.get(directory)
       : createCommentData(directory ? { directory } : { root: store.dirs.data }).catch(error => {
-        // Rows of an earlier version that could not be written again are their own reason, and the next command
-        // tries again: a store that failed to open is not kept.
+        // A store whose values cannot be made ready (rows of an earlier version that cannot be written again) says
+        // why itself, and the next command tries again: a store that failed to open is not kept.
         if (!directory || error?.unfitPages) throw error;
         throw new Error('[AZPR] This review\'s private data is no longer available (it may have been evicted). Run a new review.');
       });
@@ -790,9 +790,29 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     return () => { clearTimeout(timer); unfollowEvents(); };
   }
 
+  /** The end of a turn, for the hooks: nothing is asked of a model or run for the session until a prompt is admitted. */
+  const close = g => { g.open = false; g.resting = false; g.primaryPrepared = false; };
+
+  /**
+   * Whether the execution that took a session's prompt is still the one that runs: no idle marker follows the
+   * prompt in the session's messages. A prompt becomes a message in the execution that takes it, and an
+   * execution writes its marker before the host starts another one (OpenCode 2.3.0 through 2.4.1), so this is the
+   * same line that `requestReview` draws for the turn afterwards. Anything that cannot be read is no proof.
+   */
+  async function promptStillRuns(g, sessionID) {
+    g.turnChecks++;
+    try {
+      const messages = await bounded(() => context.session.context({ sessionID }), g.run.controller.signal);
+      const at = Array.isArray(messages) && g.promptID ? messages.findIndex(message => message?.id === g.promptID) : -1;
+      return at >= 0 && !messages.slice(at + 1).some(message => message?.type === 'idle');
+    } catch { return false; }
+  }
+
   async function ask(g, sessionID, text, signal) {
     const nonce = randomUUID();
-    g.pending = { text, nonce };
+    // The prompt this call sends is admitted, and opens the grant, only while this very call still waits for its
+    // turn: a prompt the host admits late (the call was stopped while the host still worked on it) opens nothing.
+    g.pending = g.turn = { text, nonce };
     g.primaryPrepared = false;
     const before = { admitted: g.admitted, calls: g.calls };
     touch(g, 'the prompt was sent');
@@ -801,9 +821,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try {
       answer = await bounded(() => requestReview(context, {
         sessionID, role: g.role, model: modelRef(g.model), text, metadata: { azprGrant: nonce },
-        signal, allowHostContinuations: true, hiddenMessages: g.hiddenMessages, settled: () => { g.open = false; },
+        signal, allowHostContinuations: true, settled: () => close(g),
+        // A load of instruction files is no one else's input only on proof that no request of this session
+        // showed it: it was taken out of a request, no request showed a message of its ID, and every user
+        // message that a request did show had an ID to know it by.
+        unseen: id => g.unidentified === 0 && g.hiddenMessages.has(id) && !g.shownMessages.has(id),
       }), signal);
-    } finally { g.watch.waiting = false; g.open = false; }
+    } finally { g.watch.waiting = false; close(g); g.pending = g.turn = null; }
     if (g.admitted <= before.admitted || g.calls <= before.calls) throw new Error('Required V2 prompt/context hooks were not observed; the answer cannot be accepted.');
     return answer;
   }
@@ -841,17 +865,26 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const input = JSON.stringify(payload);
     const g = {
       run, role, model: idModel, watch, pending: null, admitted: 0, calls: 0, primaryPrepared: false,
-      // A turn is open from the admission of AZPR's prompt until the host reports the session idle again. Only then
-      // does the session get a model request or a tool: what the host starts in it by itself afterwards (a
-      // background command that ended wakes it) gets neither, so nothing is added to an answer that was taken.
-      open: false,
+      // A turn is open from the admission of AZPR's prompt until the session's work on it is done. Only then does
+      // the session get a model request, a retry or a tool: what the host starts in it by itself afterwards (a
+      // background command that ended wakes it) gets none, so nothing is added to an answer that was taken.
+      // `turn` is the prompt of the call that waits for a turn, from before it is sent until that call ends, and
+      // `promptID` the message the host made of the prompt it admitted. `resting` says that the host reported the
+      // session about to go idle (its idle hook), which closes the grant at once: should the host ask again, the
+      // session's own messages tell whether the turn goes on or has ended (see the `context` hook). The end of
+      // the wait for the session closes it in any case.
+      open: false, turn: null, promptID: undefined, resting: false, idleReports: 0, turnChecks: 0, refusedAfterTurn: 0,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
       // (and in how many requests the host's parts could not be told apart, so that they went out as they were),
       // the messages with which the host loaded instruction files near a file the session read, by ID (never one
       // that a request has shown, whose IDs are kept too), and how many instruction updates one request held.
+      // `prompts` are the messages of AZPR's own admitted prompts, which are never taken for a load, and
+      // `unidentified` counts user messages that a request showed without an ID: nothing can then be said of what
+      // the model did not see.
       place: { sources: new Set(), unknown: 0 }, hiddenMessages: new Set(), shownMessages: new Set(), hiddenUpdates: 0,
+      prompts: new Set(), unidentified: 0,
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(), blockedNativeCalls: new Map(),
       toolArgumentCharacters: new Map(), toolTimeouts: 0,
@@ -986,7 +1019,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (commentRole(role)) record.visibleToolCharacters = g.visibleCharacters - input.length;
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls, rejected: g.rejectedRequests, retries: g.retryEvents,
         ...(g.place.sources.size ? { placeInstructions: [...g.place.sources] } : {}), ...(g.place.unknown ? { placeInstructionsNotToldApart: g.place.unknown } : {}),
-        ...(g.hiddenMessages.size ? { instructionLoads: g.hiddenMessages.size } : {}), ...(g.hiddenUpdates ? { instructionUpdates: g.hiddenUpdates } : {}) };
+        ...(g.hiddenMessages.size ? { instructionLoads: g.hiddenMessages.size } : {}), ...(g.hiddenUpdates ? { instructionUpdates: g.hiddenUpdates } : {}),
+        ...(g.unidentified ? { unidentifiedMessages: g.unidentified } : {}),
+        // How often the host said the session would go idle, how often it then asked again and the session's
+        // messages were read to see whether the turn went on, and how many requests were refused outside a turn.
+        ...(g.idleReports ? { idleReports: g.idleReports } : {}), ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}),
+        ...(g.refusedAfterTurn ? { refusedAfterTurn: g.refusedAfterTurn } : {}) };
       record.endedAt = new Date().toISOString();
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
@@ -1970,7 +2008,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // text is submitted before it has loaded the commands (`opencode --prompt "/pr-review …"`; with 2.4.0 and
         // 2.4.1 nearly always, and then often to the built-in free model). No command ran, and a model would
         // receive the PR URL and the context as text: stop it here and say so in the conversation.
-        const stray = typeof event.prompt?.text === 'string' ? /^\s*\/(pr-[a-z]+)(?=\s|$)/.exec(event.prompt.text)?.[1] : undefined;
+        // A command begins the text, as OpenCode's own prompt box requires of one: an indented example, or a
+        // command after a blank line, is what a person wrote about a command.
+        const stray = typeof event.prompt?.text === 'string' ? /^\/(pr-[a-z]+)(?=\s|$)/.exec(event.prompt.text)?.[1] : undefined;
         if (stray && COMMAND_NAMES.includes(stray)) {
           await deliver(event.sessionID, `[AZPR] /${stray} reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it. That happens when it is sent before OpenCode has loaded its commands (opencode --prompt at startup, for example). Type /${stray} again once it shows in the slash-command list.`);
           throw new Error(`[AZPR] /${stray} was sent as an ordinary prompt, not as a command; it was not passed to a model.`);
@@ -1986,7 +2026,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.pending = null;
       const session = recordOf(await bounded(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal));
       authorize(event.sessionID, session?.agent, session?.model);
+      // The call that sent this prompt can have ended while the session was read (a stage the inactivity watchdog
+      // stopped): nothing waits for this turn any more, so the prompt is not admitted and opens nothing.
+      if (g.turn !== pending) throw new Error('[AZPR] The reviewer turn this prompt was sent for has ended; the prompt is not admitted.');
       g.admitted++;
+      g.promptID = typeof event.messageID === 'string' && event.messageID ? event.messageID : undefined;
+      if (g.promptID) g.prompts.add(g.promptID);
+      g.resting = false;
       g.open = true;
       touch(g, 'the prompt was admitted');
     }));
@@ -1999,7 +2045,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       const g = authorize(event.sessionID, event.agent, event.model);
       if (!g.admitted) throw new Error('[AZPR] Missing authorized reviewer input.');
-      if (!g.open) throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
+      if (!g.open) {
+        // The host said that this session would go idle, and asks again. Either the same execution goes on,
+        // because input reached the session while it was going idle (the notice of a background command, which
+        // the model is handed like a late tool result), or the turn has ended and the host began another
+        // execution by itself, which a wait for the session covers as well. Only the first is part of the turn.
+        const turn = g.turn;
+        const goesOn = g.resting && turn !== null && await promptStillRuns(g, event.sessionID);
+        // Looked at again with nothing awaited before the grant opens: the call that waits for the turn can have
+        // ended meanwhile.
+        if (!goesOn || grants.get(event.sessionID) !== g || !g.resting || g.turn !== turn) {
+          if (g.turn === turn) g.resting = false;
+          g.refusedAfterTurn++;
+          throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
+        }
+        g.resting = false;
+        g.open = true;
+      }
       // Show only the tools this role may run, so the model does not waste turns on others.
       const allowed = new Set(allowedTools(g.role, settings.shell));
       if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
@@ -2025,12 +2087,19 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (Array.isArray(event.messages)) {
         let updates = 0;
         const shown = event.messages.filter(message => {
-          const id = typeof message?.id === 'string' ? message.id : undefined;
-          // A load is kept from the model, and remembered by ID, only while no request has shown a message of
-          // that ID: the turn's check accepts it on the ground that the model never saw it.
-          if (isInstructionLoad(message) && !g.shownMessages.has(id)) { g.hiddenMessages.add(id); return false; }
+          const id = typeof message?.id === 'string' && message.id ? message.id : undefined;
+          // A load is kept from the model in every request; AZPR's own prompt is never taken for one, whatever
+          // another hook wrote on it. Whether the load counts as never shown is another matter: only while no
+          // request has shown a message of its ID, which the turn's check asks (`unseen`).
+          if (isRequestedLoad(message) && !g.prompts.has(id)) {
+            if (!g.shownMessages.has(id)) g.hiddenMessages.add(id);
+            return false;
+          }
           if (isInstructionUpdate(message)) { updates++; return false; }
           if (id !== undefined) { g.shownMessages.add(id); g.hiddenMessages.delete(id); }
+          // OpenCode gives every user message of a request the ID of the message it was made of. One without an
+          // ID was rewritten by another hook: it may be a load that nothing can name any more.
+          else if (message?.role === 'user') g.unidentified++;
           return true;
         });
         if (shown.length !== event.messages.length) event.messages = shown;
@@ -2047,15 +2116,28 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // OpenCode builds two kinds of requests outside a turn's `context` hook, each with the session's whole tool
     // list: a summary (`compaction`, also the one it writes in the background) and a generation such as a side
     // question (`generate`). An ordinary session's must not carry AZPR's tools either; a private session's are
-    // refused before anything is sent (`model.request` below). A host without these hooks keeps what it had.
+    // refused before anything is sent (`model.request` below). OpenCode registers a hook under any name and
+    // never runs one it does not know, so a host without these keeps what it had, and a registration that fails
+    // is a failure like any other hook's.
     for (const name of ['compaction', 'generate']) {
-      try {
-        registrations.push(await context.session.hook(name, async event => {
-          const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
-          if (tools) for (const tool of REVIEW_TOOL_NAMES) delete tools[tool];
-        }));
-      } catch { /* The host has no such hook. */ }
+      registrations.push(await context.session.hook(name, async event => {
+        const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
+        if (tools) for (const tool of REVIEW_TOOL_NAMES) delete tools[tool];
+      }));
     }
+    // OpenCode runs this hook when a session's model work is done and nothing waits for the session, right before
+    // it goes idle, and not after a failure or an interruption (`experimental.idle`, OpenCode 2.3.0 through
+    // 2.4.1). For a private session that is the end of the turn's work, so its grant closes here, before the host
+    // can start anything else in it; the wait for the session, which `ask` closes it on in any case, also covers
+    // an execution the host starts right afterwards. A host that never runs the hook leaves the grant to that.
+    registrations.push(await context.session.hook('experimental.idle', event => {
+      const g = grants.get(event?.sessionID);
+      if (!g?.open) return;
+      g.open = false;
+      g.primaryPrepared = false;
+      g.resting = true;
+      g.idleReports++;
+    }));
     registrations.push(await context.session.hook('model.request', async event => {
       if (!privateSession(event)) return;
       const observed = grants.get(event.sessionID);
@@ -2070,7 +2152,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
             ? '[AZPR] Private review compaction is not authorized; a reviewer whose context fills is split into smaller sessions instead.'
             : '[AZPR] Auxiliary model requests are not authorized for private reviewers.');
         }
-        if (!g.admitted || !g.primaryPrepared) throw new Error('[AZPR] Model request has no authorized primary context.');
+        if (!g.admitted || !g.open || !g.primaryPrepared) throw new Error('[AZPR] Model request has no authorized primary context.');
         g.primaryPrepared = false;
         g.calls++;
         g.timing?.modelRequest();
@@ -2087,7 +2169,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // A used-up usage or spend limit fails every attempt the same way; the failed turn names it.
       const usedUp = Object.hasOwn(USED_UP_LIMITS, event.error?.type) ? event.error.type : null;
       let authorized = false;
-      try { if (g?.run.active && !usedUp) { authorize(event.sessionID, event.agent, event.model); authorized = true; } } catch { /* Revoked. */ }
+      // A retry is a request: outside a turn there is none.
+      try { if (g?.run.active && g.open && !usedUp) { authorize(event.sessionID, event.agent, event.model); authorized = true; } } catch { /* Revoked. */ }
       if (!authorized) event.decision = { retry: false };
       const attempt = Number.isInteger(event.attempt) ? event.attempt : null;
       const delayMs = Number.isFinite(event.decision?.delay) && event.decision.delay > 0 ? event.decision.delay : 0;

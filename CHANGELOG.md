@@ -62,7 +62,10 @@ Private sessions:
   OpenCode's date and environment, also with `claude-agent` models, to which
   OpenCode hands instructions another way. Your own conversations are not
   touched. A reviewer can still read local files on purpose, and the
-  environment names the directory as before.
+  environment names the directory as before. Where AZPR cannot tell these
+  parts of a request apart (another plugin rewrote them, or a later OpenCode
+  builds them another way), it sends them as OpenCode built them, as 0.5.0
+  did, and the stage's debug record counts the request.
 - **Reading a file beside a nested instruction file no longer fails the
   pass.** When a reviewer's native `read` reads a file of the local project
   in a directory that has an `AGENTS.md` of its own (from OpenCode 2.3.1 also
@@ -75,9 +78,10 @@ Private sessions:
   background, and OpenCode tells the session when it has ended. 0.5.0 took
   that notice for someone else's message: the pass failed, and its retry ran
   the command again. The notice of a command the session itself started is
-  now part of the turn, once for each such command. A turn ends when its
-  answer is given: a command that ends later wakes the session, which then
-  gets no model request and no tool, and the answer stands.
+  now part of the turn, once for each such command. A turn ends where the
+  session's work on its prompt ends: a command that ends later wakes the
+  session, which then gets no model request and no tool, and the answer
+  stands.
 - AZPR's tool definitions are no longer in the requests OpenCode builds for
   an ordinary conversation outside a turn (a summary, also the one it writes
   in the background, and a generation such as a side question): six
@@ -99,9 +103,9 @@ Receipts:
 
 - A review's receipt lists the stages by their place in the pipeline (the
   passes in their order, the duplicate checks, the rating), also in its
-  inactivity notice, and the report is in the last of them. Until now these
-  followed the order in which OpenCode had created the sessions, which
-  differed between runs of one review.
+  inactivity notice, and the report is in the session of the last of them
+  that did not fail. Until now these followed the order in which OpenCode had
+  created the sessions, which differed between runs of one review.
 
 Documentation:
 
@@ -128,6 +132,10 @@ Known and not changed by this release (see the
   the dialog that opens before choosing.
 - Page Up and Page Down close the token dialog of `/pr-setup`, as they close
   OpenCode's own dialogs; nothing is saved then.
+- After a release was lost, a second press within a second of the pointer's
+  last movement can still pick the step that was pressed. The second is
+  measured where the terminal UI handles the two events: where its input
+  waited meanwhile, a press made later counts the same.
 
 ## 0.5.0 — 2026-11-24
 

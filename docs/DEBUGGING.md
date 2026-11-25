@@ -194,8 +194,17 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    file the session read and the updates it wrote, and
    `placeInstructionsNotToldApart` counts the requests that went out as
    OpenCode built them because their parts did not have the form AZPR knows
-   (a newer OpenCode, or another plugin that edited them). `shellNotices`
-   on the stage counts background commands that reported back.
+   (a newer OpenCode, or another plugin that edited them).
+   `unidentifiedMessages` counts user messages that a request showed without
+   an ID, which another plugin rewrote: a session with one cannot prove that
+   its model never saw a loaded instruction file, so such a load fails its
+   turn. `shellNotices` on the stage counts background commands that reported
+   back. `idleReports` counts how often OpenCode said that the session would
+   go idle, which ends a turn's work; `turnChecks` how often OpenCode asked
+   again after that and the session's messages were read to see whether the
+   turn went on; and `refusedAfterTurn` the requests that were refused
+   because no turn was open (the notice of a background command woke the
+   session after its answer).
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a

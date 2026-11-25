@@ -107,7 +107,9 @@ const inside = (event) => {
  * release that comes more than a moment after the pointer last moved, with the button that was pressed on this
  * element still down, is no click. Without a movement the host makes none up, so a button held still for any
  * time is a click as before, and a press of the element begins anew. Only a press of the left button does: the
- * host ends the lost gesture at the next left press, so another button must not forget the movement.
+ * host ends the lost gesture at the next left press, so another button must not forget the movement. And only a
+ * movement with the left button counts: the host sends a drag with another button to whatever is under the
+ * pointer, which can be the element a lost gesture still holds, and that is no movement of the gesture.
  *
  * Two clocks say how long that was, and a release is a click only where both call it a moment: the time of day
  * can be set back, and the steady clock may stand still while the machine sleeps. A click that is refused can be
@@ -122,8 +124,8 @@ const hold = () => {
     down: () => {
       moved = undefined
     },
-    drag: () => {
-      moved = { day: Date.now(), steady: performance.now() }
+    drag: (event) => {
+      if (event?.button === MouseButton.LEFT) moved = { day: Date.now(), steady: performance.now() }
     },
     madeUp: () => {
       if (!moved) return false

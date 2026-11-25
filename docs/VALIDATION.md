@@ -96,33 +96,41 @@ Azure DevOps services. No review with a real model ran on this candidate.
 found. `host.mjs` has the tested version, the workspace limit among the
 used-up limits, the length of a line the host's read returns, and what tells
 the host's parts and messages apart (`withoutPlaceInstructions`,
-`claudeInstructions`, `isInstructionLoad`, `isInstructionUpdate`).
-`runtime.mjs` keeps the place's instructions and the host's own messages out
-of private requests in its `context` hook, opens a grant only for a turn,
-takes AZPR's tools out of the requests built outside a turn, refuses one of
-AZPR's commands that arrives as a prompt, and puts the report into the last
-stage of the pipeline. `session.mjs` ends a turn at its own idle marker and
-lets its check pass a load that was hidden and the notice of the session's
-own background command. `comment-data.mjs` writes rows that fit (`pageRows`)
-and writes pages that do not fit again when a store is opened (`fitPages`),
-`attribution.mjs` orders the stages (`stagesInOrder`), and `tui-view.jsx`
-tells a made-up release from a click (`hold`). No prompt changed (the hash
-test holds them), no setting is new, and the package has the files of 0.5.0.
+`claudeInstructions`, `isInstructionLoad`, `isRequestedLoad`,
+`isInstructionUpdate`). `runtime.mjs` keeps the place's instructions and the
+host's own messages out of private requests in its `context` hook, opens a
+grant for a turn and closes it with the host's idle hook, takes AZPR's tools
+out of the requests built outside a turn, refuses one of AZPR's commands that
+arrives as a prompt, and puts the report into the last stage of the pipeline
+that did not fail. `session.mjs` ends a turn at the first idle marker after
+its prompt and lets its check pass a load that no request showed, an update
+of the instructions, and the notice of the session's own background command.
+`comment-data.mjs` writes rows that fit (`pageRows`) and hands out a stored
+value only when its pages give it whole through the host's read
+(`wholePages`), `attribution.mjs` orders the stages (`stagesInOrder`), and
+`tui-view.jsx` tells a made-up release from a click (`hold`). No prompt
+changed (the hash test holds them), no setting is new, and the package has
+the files of 0.5.0.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 804 tests (783 for 0.5.0), all
+`npm run check` passes, and `npm test` runs 808 tests (783 for 0.5.0), all
 passing. The new ones:
 
 | Tests | What they establish |
 | ---: | --- |
-| 4 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. What the Claude Code provider keeps for a request is its sources but those two, joined. A load of instruction files is told by the paths it names, an ID and the kind of message the host makes of it; a message without an ID, a person's message, a tool result or an assistant message that carries such paths is none. An update is a system message of one text without an ID or metadata; a change of effort or of tools, two texts, or a system message that another hook marked is none. |
-| 5 | The `context` hook (`tests/runtime.test.mjs`): a private request keeps only the date and the environment, loses the loaded instruction file and the update and keeps a change of effort; an option of the Claude provider's name on another provider's request changes nothing of that; an ordinary session's request is untouched. For the Claude Code provider the sources are left out, and its option emptied, only where the option holds exactly what they give: written another way, with a source more or less, missing, not a text, or holding something where nothing is to leave out, the parts and the option stay and the stage record counts the request. A load that no request offered to the hook, a message that only looks like one, and a message of an ID that one request showed and another did not (in either order) still fail the turn. A private session gets a request and a tool only while a turn is open: between two turns the hook refuses a request, the tool hook a call and AZPR's own tool its execution, and nothing is read. One of AZPR's commands sent as a prompt is refused with a notice, for each of its eight commands; a question about a command, a longer name and an unknown name are not. |
-| 6 | The turn (`tests/session.test.mjs`): a hidden load ends no turn, and a load whose ID is not among the hidden ones, a message of another form, a user message and a second, foreign message do. A turn ends at the first idle marker after an answer: a marker before any answer is skipped, what the session writes after the turn's marker is no part of the answer, and the session's outcome is consulted only where the turn has no marker. The caller is told that the session is idle before its context is read. The notice of the session's own background command is no foreign input, whether the command completed, was cancelled or ended in error, also between a step that broke and its retry; a notice after the turn's marker leaves the answer before it, whatever the woken turn's outcome and whatever else of the host's lies between. A notice for a shell the session did not start, one before its call, one of another tool's or of a call that ended in the foreground, one without the host's marks, one that does not say the command ended, and a second one for a shell (in the turn, in a later turn, after the turn) are foreign; the notice of a command that an earlier turn started is the session's own. And the workspace limit is named and not retried. |
-| 3 | Rows (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. A store that is opened again has every pages file with a row that does not fit written again, each time it is opened, and leaves a file that fits as it is; it holds no mark. Pages are not derived from an object whose digest is not the one in its name; a store whose pages cannot be made to fit is not opened, leaves no working file, and is opened once the obstacle is gone. |
-| 3 | The order of stages (`tests/attribution.test.mjs`, `tests/runtime.test.mjs`): three orders of creation give one list, for a review and for a comment run; the sessions of one label, among them a page's continuation after a retry, keep the order they ran in; the receipt's inactivity notice follows the same order; with the second pass's session created first and no later stage, the receipt lists the first pass first and the report is in the second pass's session. |
-| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture; one right after a movement, and one after any time without a movement, is a click; a movement before the press does not count; a session's row and `close` follow the same rule, also after another button was pressed on them; and each of the two clocks alone, or one that runs backwards, is enough to refuse. The clocks are the test's. |
+| 4 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. What the Claude Code provider keeps for a request is its sources but those two, joined. A load of instruction files is told by the paths it names and an ID, in the form of the place it is in: the synthetic message of a session, the user message of a request, and neither for the other; a message without an ID, a person's message, a tool result or an assistant message that carries such paths is none. An update is a system message whose content is one text part, without an ID or metadata; a change of effort or of tools, two texts, a plain string, or a system message that another hook marked is none. |
+| 9 | The hooks (`tests/runtime.test.mjs`). A private request keeps only the date and the environment, loses the loaded instruction file and the update and keeps a change of effort; an option of the Claude provider's name on another provider's request changes nothing of that; an ordinary session's request is untouched. For the Claude Code provider the sources are left out, and its option emptied, only where the option holds exactly what they give: written another way, with a source more or less, missing, not a text, or holding something where nothing is to leave out, the parts and the option stay and the stage record counts the request. A load ends no turn only on proof that no request showed it: one that no request offered to the hook, one whose ID a request showed (before or after a request that knew it, which takes it out all the same), one that was hidden in the first turn and shown in the correction turn, and one in a session where a request showed a user message without an ID all fail the turn; a message that only looks like a load is someone else's; AZPR's own prompt is never taken for a load. A private session gets a request and a tool only while a turn is open: between two turns the hook refuses a request, the tool hook a call and AZPR's own tool its execution, and nothing is read. At the end of a turn (the fixture's host runs the idle hook and leaves its marker as OpenCode does): a session that rests gets no prepared request and no tool; asked again before the marker, the turn goes on and what it reads counts; asked again after the marker, with the wait for the session still pending, it gets no request, no retry and no tool, and nothing is read. A prompt that the host admits after the call that sent it has ended (the inactivity watchdog stopped the stage while the host was slow, before the prompt hook or inside it) is refused and no model is asked. One of AZPR's commands sent as a prompt is refused with a notice, for each of its eight commands; a question about a command, a longer name, an unknown name, an indented example and a command after a blank line or a tab are not. A hook that cannot be registered fails the load, also one for the requests built outside a turn. The receipt lists the passes in their order and the report goes to the last of them. |
+| 7 | The turn (`tests/session.test.mjs`): a turn ends at the first idle marker after its prompt, whatever came before it: a marker right after the prompt is the end of the prompt's own execution (interrupted, failed, or with nothing answered), what another execution wrote afterwards is not the answer, and the turn keeps the outcome its own marker says. A load of instruction files ends no turn where the caller says that no request showed it, and fails it otherwise, also a load of an earlier turn and one after the turn's marker; a message of another form and a second, foreign message end the turn. An update of the instructions is no step of the turn between two steps, between a step that broke and its retry, and after the answer, and excuses nothing else. The caller is told that the session is idle before its context is read. The notice of the session's own background command is no foreign input, whether the command completed, was cancelled or ended in error, also between a step that broke and its retry; a notice after the turn's marker leaves the answer before it, whatever the woken turn's outcome and whatever else of the host's lies between. A notice for a shell the session did not start, one before its call, one of another tool's or of a call that ended in the foreground, one without the host's marks, one that does not say the command ended, and a second one for a shell (in the turn, in a later turn, after the turn) are foreign; the notice of a command that an earlier turn started is the session's own. And the workspace limit is named and not retried. |
+| 3 | Rows and stored values (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. What tells that a pages file gives its value whole says so of every file this version writes and of none that lacks a row or its line end, repeats or reorders rows, holds another text or a row longer than the host returns (2,000 characters pass, 2,001 do not). A store that is opened again writes the pages of a sound object again where they are rows of 0.5.0, a row of 2,001 characters, missing, empty, cut in a row, cut after a row, another text, or something else, each time it is opened, and leaves a row of exactly 2,000 characters as it is; it holds no mark. A value that another writer has written since the store was opened (an earlier version with its rows, a writer cut off in the object or in the pages, an object that is something else) is made right when it is put. An object that is not what its name says gives no pages and is not handed out; putting its value writes it again; with pages that the host's read would cut, and where the pages of a sound object cannot be written, the store is not opened, leaves no working file, and is opened once the obstacle is gone. |
+| 2 | The order of stages (`tests/attribution.test.mjs`): three orders of creation give one list, for a review and for a comment run; the sessions of one label, among them a page's continuation after a retry, keep the order they ran in; the receipt's inactivity notice follows the same order. |
+| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture, which a later movement and release without a new press show; one right after a movement, and one after any time without a movement, is a click; a movement before the press does not count, and neither does one with another button; a session's row and `close` follow the same rule, also after another button was pressed or moved on them; and each of the two clocks alone, or one that runs backwards, is enough to refuse. The clocks are the test's. |
 | in an existing test | The requests built outside a turn lose AZPR's tools (`tests/runtime.test.mjs`). |
+
+Twenty-two changes that each take one of these rules out of the code (the
+marker rule, the proof for a load, the idle hook, the look at the session's
+messages, the checks of a stored value, and so on) were tried against the
+tests, and each made one fail.
 
 The other changed expectations are the tested version (`2.4.1`) and what
 `/pr-check` says of it.
@@ -139,6 +147,11 @@ them:
   (reviewers, duplicate checks, ratings, comment planning), and every stage's
   record names the source that was left out and counts no request that could
   not be told apart.
+- **The end of a turn.** Every stage's record of that review counts the
+  host's idle reports, at least one: OpenCode ran the hook that closes a
+  private session's grant when its work is done. None counts a look at the
+  session's messages, a request refused outside a turn, or a user message
+  that a request showed without an ID.
 - **A local read beside an instruction file.** A quick review whose reviewer
   reads a file of the project with the native read, in a folder that has an
   `AGENTS.md`. The host leaves that file in the reviewer's session, which the
@@ -162,7 +175,11 @@ them:
   and `--native`). In the real terminal UI, **Reset adjustments** is pressed,
   moved on by a cell and not released, and 2.5 seconds later something else
   is clicked: the conversation gets no notice and the preview stays. The same
-  for `close` at the end of the run.
+  for `close` at the end of the run. The panel measures the moment where it
+  handles the events, so the fixture counts the 2.5 seconds from when the
+  terminal UI is seen to have handled the movement (a word typed into the
+  prompt after it appears there), and reads the result once it has handled
+  the click in the same way.
 - **A token that is typed** (`tests/host-v2-tui-setup.mjs`): the second token
   is typed key by key, with a Backspace and `ctrl+u` on the way, where the
   fixture only pasted before.
@@ -177,7 +194,10 @@ recognised, the step for the configured file; without hiding the load, the
 nested file (both sessions `failure=transient`, and the file's text in their
 requests); without the refusal, the prompt (HTTP 200 and a user message);
 without the limit's type, the usage limit (a second request); with rows of
-2,900 characters, the read (a row cut at 2,000).
+2,900 characters, the read (a row cut at 2,000); with an idle hook that
+closes nothing, the end of a turn (no idle report in the record); and with a
+made-up release taken for a click again, the panel's step (the step that was
+pressed long before was picked).
 
 Model and Azure DevOps requests of the runs: smoke fresh 123 and 212,
 replacement 102 and 182, native 129 and 228; comment scale 36 and 125, with
@@ -217,10 +237,34 @@ under `shell: ask` that was approved through the API. And a review saved by
 store's pages, 14 rows of up to 3,243 characters as 0.5.0 wrote them, were
 written again as 24 rows of at most 1,879, and the preview was planned.
 
+A fifth probe looked at the end of a turn, on 2.3.0, 2.3.1, 2.4.0 and 2.4.1,
+with shell allowed and a reviewer that starts a background command. A second
+plugin, loaded before AZPR, admitted the notice for that command itself at
+chosen moments. Inside the host's idle hook, or a microtask after it returned
+(thirteen runs on 2.4.1, three on each other version): the same execution
+went on, AZPR's hook read the session's messages once, found no marker after
+the prompt and let the request through, the model was asked once more, and
+the review was COMPLETE with the notice counted on its stage. A turn of the
+event loop later, or one to two milliseconds (ten runs on 2.4.1, two on each
+other version): the execution had ended, the session held its marker before
+the notice, and the execution the host started then got no request (the
+provider was asked nothing more); the review was COMPLETE with the answer
+before the marker. With the command's own notice, timed from 40 ms before to
+40 ms after the model's last answer (ten runs on 2.4.1, three on each other
+version), every review was COMPLETE in one session with the command run once:
+the notice was handed to the model as input that waited (three of the ten),
+or came after the marker. The moment between the two, where OpenCode starts
+another execution while AZPR's wait still covers it, is a few awaits wide and
+was not produced on a real host; what AZPR does in it (the look at the
+session's messages finds the marker, and the request is refused) is shown by
+the unit test with the fixture's host.
+
 ### Not verified
 
 - A review with a real model on this candidate, and what a real model does
   after the notice of a background command.
+- The moment in which OpenCode starts another execution in a private session
+  while the wait for its turn still covers it (the fifth probe above).
 - The Claude Code provider with a real Claude Code: a stand-in recorded what
   it would be given, for the reviewer role only; nested instruction files and
   updates with that provider were not run.
@@ -290,11 +334,15 @@ of ReviewBench's pull requests, reviewer sessions called the native `read` in
 GPT-6 Luna and 4% of GPT-6.1 Terra; in the other sets none did. The failure
 that a nested instruction file causes appears once in those records.
 
-Not covered: real providers on 2.3.1 to 2.4.1 apart from the benchmark runs
-of 0.5.0 on 2.4.0; the answer a real ChatGPT workspace gives at its limit; an
-automatic plugin update itself; real terminal emulators and their mouse and
-keyboard reporting; the desktop app, macOS and Windows; and the native
-terminal UI in OpenCode's source, which has not shipped.
+Not covered: reviews with real providers on 2.3.1 to 2.4.1. The benchmark
+runs of 0.5.0 ran on 2.4.0 before this comparison, and the one measurement
+with a real model in the table (`claude-agent/haiku` on 2.3.2 and 2.4.1)
+looked at how long a local process lives, with 0.5.0: it says nothing of what
+a review finds, and nothing of this candidate. Also not covered: the answer a
+real ChatGPT workspace gives at its limit; an automatic plugin update itself;
+real terminal emulators and their mouse and keyboard reporting; the desktop
+app, macOS and Windows; and the native terminal UI in OpenCode's source,
+which has not shipped.
 
 ## 0.5.0 on Martian's Code Review Bench with Claude Opus 5.5 (2026-11-25)
 

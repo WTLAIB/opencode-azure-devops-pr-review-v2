@@ -59,31 +59,54 @@ settings, backups and failure records. Never upload `.local/`.
   request decides nothing. The messages below are taken out either way.
 - What the host writes into a running private session by itself is kept from
   the model in every request: the instruction files it loads beside a file
-  the native read tool read (`isInstructionLoad`), and its updates of the
-  sources (`isInstructionUpdate`). Take out only what has the host's form: a
-  message another hook could have marked, or one without an ID, stays.
+  the native read tool read (in a request `isRequestedLoad`, in the session
+  `isInstructionLoad`), and its updates of the sources
+  (`isInstructionUpdate`). Take out only what has the host's very form: a
+  load without an ID stays, and so does a system message that carries an ID
+  or metadata or whose content is a plain string, which another hook wrote.
+  AZPR's own admitted prompt is never taken for a load, whatever another
+  hook wrote on it. A load that is known is taken out of every request, also
+  after a request showed it.
 - `requestReview` fails a turn that received anyone else's message, and lets
-  a message of the host pass only on one of two grounds. The model never saw
-  it: a load whose ID the `context` hook recorded when it took it out
-  (`hiddenMessages`), and never an ID that any request has shown. Or it is
-  the late result of the session's own tool call: the host's notice that a
-  background command ended, which names a shell that a shell call of this
-  same session reported as running, once for each such shell
-  (`ownShellNotices`); that can only be with shell allowed, and it rests on
-  the host's metadata, since nothing proves who wrote a message. Never
-  accept a message that the model saw by its text or its form alone.
-- A turn is the admitted prompt up to the first idle marker after an answer,
-  and its answer is the last assistant message before that marker. How the
-  turn ended is what that marker says: the session's own outcome is its
-  latest execution's, which can be a later one. What follows the marker is no
-  part of the turn; someone else's message there still fails it.
-- A private session gets a model request and a tool only while a turn of it
-  is open: from the admission of AZPR's prompt until the host reports the
-  session idle (`open` on the grant). What the host starts in it by itself
-  afterwards, as when a background command that ended wakes it, gets
-  neither, so nothing is added to an answer that was taken: not a file the
-  session reads later, which would count as read for a finding it had
-  already filed.
+  a message of the host pass only on one of three grounds. The model never
+  saw it: a load, anywhere in the session since every request is sent the
+  whole session, that the `context` hook took out of a request, whose ID no
+  request has shown, in a session where every user message that a request
+  showed had an ID to know it by (`unseen`); where that proof is missing,
+  the turn fails. Or it is the late result of the session's own tool call:
+  the host's notice that a background command ended, which names a shell
+  that a shell call of this same session reported as running, once for each
+  such shell (`ownShellNotices`); that can only be with shell allowed, and
+  it rests on the host's metadata, since nothing proves who wrote a message.
+  Or it is an update of the instructions, a `system` message, which only the
+  host writes and which is no step of a turn. Never accept a message that
+  the model saw by its text or its form alone.
+- A turn is the admitted prompt up to the first idle marker after it, and
+  its answer is the last assistant message before that marker. A prompt
+  becomes a message of the session only in the execution that takes it, and
+  an execution leaves one marker however it ends, so that marker is the end
+  of the execution that had the prompt and says how the turn ended; the
+  session's own outcome is its latest execution's, which can be a later one.
+  Never skip a marker: one before any answer is the turn's own end, not an
+  earlier execution's. What follows the marker is no part of the turn;
+  someone else's message there still fails it.
+- A private session gets a model request, a retry and a tool only while a
+  turn of it is open (`open` on the grant). A prompt opens it, and only
+  while the call that sent it still waits for that turn (`turn`): one the
+  host admits after that call ended, as when the inactivity watchdog stopped
+  the stage meanwhile, is refused. It closes when the host says that the
+  session's work is done and it will go idle (its idle hook), and in any
+  case when the wait for the session ends. That wait also covers what the
+  host starts in the session right afterwards, as when a background command
+  that ended wakes it, so the wait alone would leave the grant open for it.
+  When the host asks again after it said the session would go idle, read
+  the session's messages: with no idle marker after the turn's prompt the
+  same execution goes on (input reached the session while it was going
+  idle), and the turn with it; with one, the turn has ended, and what the
+  host does now gets nothing (`promptStillRuns`). So nothing is added to an
+  answer that was taken: not a file the session reads later, which would
+  count as read for a finding it had already filed. A host that never runs
+  the idle hook leaves the grant to the wait; the smoke fixture notices.
 
 **Every mode runs one pipeline and differs only in its models.**
 - `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
@@ -282,8 +305,10 @@ settings, backups and failure records. Never upload `.local/`.
   be sent the PR URL and the person's context. The `prompt` hook refuses such
   a prompt and leaves a notice in the conversation that says what happened.
   Refuse only a prompt that begins with one of AZPR's own command names
-  followed by a blank or the end: one that mentions a command, or begins with
-  another name, is the person's own. The names are every slash command AZPR
+  followed by a blank or the end, at its very first character as OpenCode's
+  prompt box requires of a command: one that mentions a command, begins with
+  another name, or has the command after indentation or a blank line (an
+  example, say) is the person's own. The names are every slash command AZPR
   has, whichever part registers it (`COMMAND_NAMES` in `config.mjs`). The
   refusal has a cost that the documentation states (the terminal UI tries
   again in new conversations, which stay empty); never widen it to anything
@@ -487,13 +512,22 @@ settings, backups and failure records. Never upload `.local/`.
   longer line and says so only inside the line (`HOST_READ_LINE_CHARACTERS` in
   `host.mjs`). Measure a row as it is written, after escaping (`pageRows` in
   `comment-data.mjs`), and never rely on the prompt to work around a cut row.
-  Saved references name the pages files, so a pages file with a row that does
-  not fit is written again from its object whenever its store is opened
-  (`fitPages`). Each file answers for itself: keep no mark that says a whole
-  store fits, since an earlier version that still runs can add to it. Derive
-  pages only from an object that has the digest its name says, replace a
-  pages file in one step, and fail the opening where a sound object's pages
-  cannot be written: its rows would reach a model cut.
+  Saved references name the pages files, and a model reads them by itself,
+  so a value is ready only when its object is what its name says and its
+  pages give it whole through the host's read: rows the read returns uncut,
+  one after another, that together are the value (`wholePages`). That is
+  asked of every value when its store is opened and when a value is put
+  whose files another writer made, and pages that do not pass (rows of an
+  earlier version, a file that is missing or was not finished) are written
+  again from the value. Judge pages that are there by what the host's read
+  returns, not by the length this version writes. Each value answers for
+  itself: keep no mark that says a whole store is ready, since an earlier
+  version that still runs can add to it. Derive pages only from an object
+  that has the digest its name says, replace a file in one step, hand out
+  no value that is not ready, and fail the opening where pages with a row
+  the host's read cuts cannot be written again (a sound object's that
+  cannot be written, a damaged object's): their rows would reach a model
+  cut.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -638,7 +672,10 @@ settings, backups and failure records. Never upload `.local/`.
   without a movement the host makes none up, so a button held still is a
   click for any time. Only a press of the left button begins a gesture: the
   host ends a lost one at the next left press, so another button must not
-  forget the movement. That moment is measured on two clocks, and a release
+  forget the movement. And only a movement with the left button is one of
+  the gesture: the host sends a drag with another button to whatever is
+  under the pointer, also to an element that a lost gesture still holds.
+  That moment is measured on two clocks, and a release
   is a click only where both call it a moment: the time of day can be set
   back, and the steady clock may stand still while the machine sleeps. A
   click that is refused can be made again; one that is made up cannot be
@@ -872,8 +909,10 @@ The smoke and the scale fixture also hold the forms of the host that the
 runtime tells things apart by: the sources of a request's instructions (a
 configured instruction file reaches an ordinary conversation and no private
 session), the message OpenCode leaves after a native read beside an
-instruction file, the error type of a used-up limit, a prompt that is one of
-AZPR's commands, and the line length the native read returns. When one of
+instruction file, the idle hook at the end of a private session's turn, the
+ID on every user message of a request, the error type of a used-up limit, a
+prompt that is one of AZPR's commands, and the line length the native read
+returns. When one of
 these steps fails on another OpenCode, read that version's source before
 changing the step: the runtime's fallback is to leave things as the host
 made them, which such a step is there to notice.

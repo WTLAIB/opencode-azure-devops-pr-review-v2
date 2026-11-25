@@ -929,14 +929,25 @@ conversation's directory there, as a message of its own; and when a source
 changes while a session runs, it leaves an update. Neither is shown to a
 private session's model: the `context` hook takes them out of every request,
 whether or not the parts could be told apart, and only where they have the
-host's form (`isInstructionLoad`: the paths it names, an ID, a user message;
-`isInstructionUpdate`: a system message of one text without an ID or
-metadata). It remembers the loads by ID, and never an ID that a request has
-shown. `requestReview`, which fails a turn that received anyone else's
-message, lets a load pass only when its ID is among those: the model never
-saw it, so the answer is still the answer to the admitted prompt, and a
-message that merely has the same form reaches no model either. A load that no
-request offered to the hook fails the turn as before.
+host's very form (`isRequestedLoad`: the paths it names, an ID, a user
+message; `isInstructionUpdate`: a system message whose content is one text
+part, without an ID or metadata). AZPR's own prompt is never taken for a
+load, whatever another hook wrote on it.
+
+`requestReview`, which fails a turn that received anyone else's message, lets
+a load pass only on proof that no request of the session showed it. Every
+request is sent the whole session, so that is asked of every load the session
+holds, not only of those after the turn's prompt: the hook took it out of a
+request, no request has shown a message of its ID, and every user message
+that a request did show had an ID to know it by (OpenCode gives each the ID
+of the message it was made of; one without was rewritten by another hook, and
+may be a load that nothing can name any more). Then the model never saw it,
+the answer is still the answer to the admitted prompt, and a message that
+merely has the same form reaches no model either. A load without that proof
+fails the turn, also in a later turn of the session than the one it was
+loaded in. An update of the instructions is a `system` message in the
+session, which only the host writes; it is no step of a turn, wherever it
+stands between the steps.
 
 With shell allowed, a command can go on in the background: the model asked
 for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's
@@ -952,18 +963,42 @@ message, so this rests on the host's metadata; with `shell: "deny"`, the
 default, a private role has no shell call and no such notice is accepted.
 
 **A turn, and what is open during it.** A turn is the admitted prompt and
-what follows it up to the first idle marker after an answer; its answer is
-the last assistant message before that marker, and that marker says how the
-turn ended. The session's own outcome is its latest execution's, which is
-only consulted where the turn has no marker. An idle marker before any answer
-is what an execution the host had begun before the prompt left behind. What
-follows the turn's marker is no part of it: a command that ended later woke
-the session, and neither what the host wrote then nor how that ended changes
-the answer. A grant is open only during a turn, from the admission of AZPR's
-prompt until the host reports the session idle: outside it the `context` hook
-refuses a request and the tool hooks refuse a call, so a session that the
-host wakes by itself asks no model and reads nothing. A file read later can
-therefore not count as read for a finding the session had already filed.
+what follows it up to the first idle marker; its answer is the last assistant
+message before that marker, and that marker says how the turn ended. This
+follows how OpenCode 2.3.0 through 2.4.1 run a session. A prompt that is
+admitted waits in the session's inbox and becomes a message only in the
+execution that takes it. An execution is one busy period: it goes on while
+input reaches the session, and leaves one marker when it ends, however it
+ends. So the first marker after the prompt is the end of the execution that
+had the prompt, also where the model never answered (the turn was interrupted
+or failed), and what another execution wrote after it is not the turn's: a
+command that ended later woke the session, and neither what the host wrote
+then nor how that ended changes the answer. The session's own outcome is its
+latest execution's, which can be that later one.
+
+A grant is open only during a turn: outside it the `context` hook refuses a
+request, the `model.request` hook a request that was prepared earlier, the
+`retry` hook a retry, and the tool hooks a call. A prompt opens it, and only
+while the call that sent it still waits for the turn: one that the host
+admits after that call has ended (the inactivity watchdog stopped the stage
+while the host still worked on the prompt) is refused. Waiting for the
+session does not tell where the turn ends, since OpenCode's wait also covers
+an execution that it starts right after the turn's, as when the notice of a
+background command arrives in that moment. The grant therefore closes in the
+host's idle hook (`experimental.idle`), which runs when a session's model
+work is done and nothing waits for it, right before the session goes idle.
+If the host asks again after that, input reached the session in that moment,
+and one of two things happened: the same execution goes on with it, and the
+model's next message is the turn's answer; or the execution had ended, and
+the host began another one. The session's own messages tell which: the hook
+reads them, and lets the request through only where no idle marker follows
+the turn's prompt (`promptStillRuns` in `runtime.mjs`), which is the line
+`requestReview` draws afterwards. So a session that the host wakes by itself
+asks no model and reads nothing, and a file read later cannot count as read
+for a finding the session had already filed. A stage's record counts the
+host's idle reports, those readings and the requests refused outside a turn
+(`idleReports`, `turnChecks`, `refusedAfterTurn`). A host that never runs the
+idle hook leaves the grant to close when the wait ends.
 
 **A command that arrives as text.** OpenCode's terminal UI can submit a
 startup prompt before it has loaded the commands (`opencode --prompt`; with
@@ -971,10 +1006,12 @@ startup prompt before it has loaded the commands (`opencode --prompt`; with
 [debugging](DEBUGGING.md#a-startup-slash-command-becomes-an-ordinary-prompt)).
 `/pr-review <URL> …` is then an ordinary prompt: no command runs, and a model
 would receive the URL and the context. The `prompt` hook refuses a prompt of
-an ordinary conversation that begins with one of AZPR's commands and leaves a
-notice there that says what happened. It is the one prompt of a person that
-AZPR refuses; a prompt that only mentions a command, or begins with another
-name, is the person's own. The hook comes with the runtime, so a process
+an ordinary conversation that begins with one of AZPR's commands, at its very
+first character as OpenCode's prompt box takes a command, and leaves a notice
+there that says what happened. It is the one prompt of a person that AZPR
+refuses; a prompt that only mentions a command, begins with another name, or
+shows a command after indentation or a blank line (an example) is the
+person's own. The hook comes with the runtime, so a process
 without usable settings refuses nothing, and the terminal UI answers a
 refusal by trying again in new conversations, which stay empty.
 

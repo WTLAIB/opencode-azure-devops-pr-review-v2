@@ -249,6 +249,19 @@ async function pressAndHold(text) {
   tmux('send-keys', '-t', 'azpr', '-l', `\x1b[<32;${column + 1};${row + 1}M`);
 }
 /**
+ * Wait until the terminal UI has handled everything that was sent to it so far. It handles its input in the order
+ * it arrives, so a word that is typed after it and seen in the prompt came after all of it: what tmux was told to
+ * send is not yet what the terminal UI did, least of all on a busy machine. The prompt is given the keyboard
+ * first, whichever pane had it, and is left empty.
+ */
+async function handled(word) {
+  key('C-x'); key('Left');
+  type(word);
+  await see(new RegExp(`┃\\s+${word}`), `The prompt did not show "${word}": the terminal UI has not handled what was sent before it.`);
+  key('C-u');
+  await see(shown => !shown.includes(word), `The prompt kept "${word}".`);
+}
+/**
  * Type a slash command the way a person does: wait for its suggestion, then send it. AZPR's server commands take
  * arguments, so Enter right after the name only completes it: they are typed with the space that follows the name.
  * The panel's own commands take none and run at once.
@@ -675,9 +688,13 @@ try {
   // button, wherever that is, with a release it makes up for the step that was pressed, at the place of the
   // last movement. It comes more than a moment after that movement, so it picks nothing. (An earlier OpenTUI
   // sends the step the next press and its release, which is not on the step.)
+  // The panel measures the moment where it handles the two events, so the wait is counted from when the terminal
+  // UI is seen to have handled the movement, and the result is looked at once it has handled the press.
   await pressAndHold('Reset adjustments');
+  await handled('held-on-the-step');
   await sleep(2500);
   await click('Sessions (click one to open it)');
+  await handled('pressed-somewhere-else');
   await sleep(2000);
   assert.equal((await own()).length, toldBefore, 'A release the host made up for a step that was pressed long before picked that step.');
   assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'A release the host made up changed what the panel shows.');
@@ -723,8 +740,10 @@ try {
   // panel's own status), and it is the last thing done in this terminal: an OpenTUI before 0.9 keeps such a
   // gesture for the next press on what cannot be selected.
   await pressAndHold('close');
+  await handled('held-on-close');
   await sleep(2500);
   await click(`AZPR ${postedRun[1]} · POSTED`);
+  await handled('pressed-on-the-status');
   await sleep(2000);
   assert.ok(panelOpen(screen()), 'A release the host made up for "close" closed the panel.');
   result.rows = `${result.rows}; after a preview its next steps are one row at the panel's foot: findings left out from their list (applied with a click and with the key at its foot) and the comments posted without typing; a click leaves the keyboard with the prompt`;

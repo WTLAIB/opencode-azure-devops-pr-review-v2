@@ -264,18 +264,23 @@ export function classifyFailure(error) {
  * Works for the first prompt and for follow-up repair prompts in the same
  * session: only the turn after this admitted prompt is examined.
  *
- * A turn is the admitted prompt and what follows it up to the first idle marker after an answer. Its answer is
- * the last assistant message before that marker. Two kinds of messages the host writes by itself are no one
- * else's input and no step of the turn: its load of instruction files (`isInstructionLoad`), where the caller
- * kept it out of every model request of this session and says so by its ID (`hiddenMessages`), since the model
- * never saw it; and the notice that a background command of this session ended (`ownShellNotices`). Anyone
- * else's message after the prompt fails the request, as before.
+ * A turn is the admitted prompt and what follows it up to the first idle marker. A prompt becomes a message of
+ * the session only in the execution that takes it, and an execution leaves one marker when it ends, however it
+ * ends (OpenCode 2.3.0 through 2.4.1), so that marker is the end of the execution that had the prompt, and says
+ * how the turn ended. The turn's answer is the last assistant message before it.
+ *
+ * Three kinds of messages the host writes by itself are no one else's input and no step of the turn. Its load
+ * of instruction files (`isInstructionLoad`), anywhere in the session, since every request is sent the whole
+ * session: the caller says of each by its ID that no request of this session showed it (`unseen`), and a load
+ * it does not say that of fails the request. The notice that a background command of this session ended
+ * (`ownShellNotices`). And an update of the instructions (a `system` message, which only the host writes).
+ * Anyone else's message after the prompt fails the request, as before.
  *
  * What follows the turn's idle marker is no part of it: a command that ended later woke the session, and what
  * the host did then neither changes the answer nor how the turn ended. `settled` is called once the host reports
  * the session idle, before anything else is awaited, so that the caller can close what it opened for the turn.
  */
-export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, hiddenMessages, settled }) {
+export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, unseen, settled }) {
   const api = sessionApi(context, ['prompt', 'wait', 'context', 'get']);
   if (!textValue(sessionID) || !textValue(text) || !textValue(role)) throw new Error('[AZPR] A session, role and literal prompt are required.');
   const selectedModel = modelRef(model);
@@ -300,17 +305,17 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {
     throw new Error('[AZPR] The projected prompt differs from the admitted literal input.');
   }
+  // A load that a request showed, in this turn or in an earlier one of the session, is instructions nobody
+  // authorized for this answer: the model is sent the whole session with every request.
+  if (messages.some(message => isInstructionLoad(message) && unseen?.(message.id) !== true)) {
+    const error = new Error('[AZPR] Instruction files that OpenCode loaded into this session were not kept from its model; the output cannot be assigned to the authorized request.');
+    error.contextChanged = true;
+    throw error;
+  }
   const after = messages.slice(indexes[0] + 1);
   const notices = ownShellNotices(messages);
-  const loads = new Set(after.filter(message => isInstructionLoad(message) && message.type === 'synthetic' && hiddenMessages?.has(message.id) === true));
-  const steps = after.filter(message => !loads.has(message) && !notices.has(message));
-  // The turn's own idle marker is the first one after an answer. A marker before any answer is what an execution
-  // the host had begun before this prompt left behind.
-  let answered = false, end = -1;
-  for (let index = 0; index < steps.length && end < 0; index++) {
-    if (steps[index]?.type === 'assistant') answered = true;
-    else if (answered && steps[index]?.type === 'idle') end = index;
-  }
+  const steps = after.filter(message => !isInstructionLoad(message) && !notices.has(message) && message?.type !== 'system');
+  const end = steps.findIndex(message => message?.type === 'idle');
   const turn = end < 0 ? steps : steps.slice(0, end + 1);
   // Either way the host recovers an interrupted stream; both need the caller's consent.
   const retried = retriedSteps(turn, allowHostContinuations);
@@ -325,10 +330,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
-  // The turn's own marker says how it ended. The session's outcome is that of its latest execution, which is this
-  // turn only while the turn has no marker of its own.
+  // The turn's own marker says how it ended. The session's outcome is that of its latest execution, which can be a
+  // later one: it only describes a turn that has no marker.
   const marked = end >= 0;
-  if ((!marked && session.outcome !== 'succeeded') || terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
+  if (terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
     const outcome = value => ['succeeded', 'failed', 'interrupted'].includes(value) ? value : 'unknown';
     const finish = ['stop', 'tool-calls', 'length', 'content-filter', 'error', 'cancelled'].includes(final?.finish) ? final.finish : 'unknown';
     const execution = { sessionOutcome: outcome(session.outcome),
@@ -374,7 +379,8 @@ export async function requestReview(context, { sessionID, text, role, model, met
     answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
   if (retried.size) answer.retriedSteps = retried.size;
-  if (loads.size) answer.instructionLoads = loads.size;
+  const loads = after.filter(isInstructionLoad).length;
+  if (loads) answer.instructionLoads = loads;
   const noticed = after.filter(message => notices.has(message)).length;
   if (noticed) answer.shellNotices = noticed;
   aborted(signal);
