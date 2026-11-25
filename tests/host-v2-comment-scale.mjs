@@ -35,6 +35,7 @@ import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2], cleanup = process.argv[3] === '--cleanup';
 assert.ok(binary?.startsWith('/'));
@@ -57,6 +58,9 @@ let grouped = [];
 const duplicateChecks = [], ratings = [];
 // What the first planning page read of the changed-file list: the reference its input named and the read's result.
 let rowsRead = null;
+// A file of the project with a line of exactly the length the host's read returns whole, and one a character longer.
+const limitFile = join(dirs.work, 'read-limit.txt');
+await writeFile(limitFile, `${'a'.repeat(HOST_READ_LINE_CHARACTERS)}\n${'b'.repeat(HOST_READ_LINE_CHARACTERS + 1)}\n`);
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
 const provider = createServer(async (request, response) => {
   try {
@@ -104,9 +108,13 @@ const provider = createServer(async (request, response) => {
     } else if (payload?.commentWork?.kind === 'plan' && payload.commentWork.page === 1 && !results && payload.snapshot?.allFiles?.azprData && offered('read')) {
       // The first page looks at the start of the changed-file list before it plans: rows 1 and 2 of the pages of
       // that private value, as the planner's instructions say (one or two rows at a time, with offset and limit).
-      calls = [{ name: 'read', arguments: { path: payload.snapshot.allFiles.azprData.pages, offset: 1, limit: 2 } }];
+      // And the two lines of a file of the project that stand on either side of what the host's read returns whole.
+      calls = [{ name: 'read', arguments: { path: payload.snapshot.allFiles.azprData.pages, offset: 1, limit: 2 } }, { name: 'read', arguments: { path: limitFile, offset: 1, limit: 2 } }];
     } else if (payload?.commentWork?.kind === 'plan') {
-      if (payload.commentWork.page === 1 && results) rowsRead = { reference: payload.snapshot.allFiles.azprData, result: textOf(input.messages.findLast(m => m.role === 'tool').content) };
+      if (payload.commentWork.page === 1 && results) {
+        const [rows, limit] = input.messages.filter(m => m.role === 'tool').slice(-2).map(m => textOf(m.content));
+        rowsRead = { reference: payload.snapshot.allFiles.azprData, result: rows, limit };
+      }
       planningMost = Math.max(planningMost, ++planning);
       if (!planningGate) {
         let open, limit; planningGate = { promise: new Promise(resolve => { open = resolve; }), open };
@@ -186,7 +194,13 @@ try {
     assert.deepEqual(JSON.parse(value), files, 'The private value is the list of the PR\'s changed files.');
     assert.deepEqual([rows[0].start, rows[1].start, rows[1].end < value.length], [0, rows[0].end, true], 'The two rows follow each other from the start of the value, which goes on after them.');
     assert.equal(rows[0].text + rows[1].text, value.slice(0, rows[1].end), 'The rows hold the value\'s own text, nothing lost.');
-    return `${numbered.length} rows of ${Math.max(...numbered.map(line => line.length))} characters at most, whole`;
+    // The length that decides whether a row an earlier version wrote can stay (`wholePages`): the host returns a
+    // line of exactly that many characters whole, and cuts one that is a character longer, saying so in the line.
+    const [whole, cut] = rowsRead.limit.split('\n').filter(line => /^\d+: /.test(line)).map(line => line.replace(/^\d+: /, ''));
+    assert.equal(whole, 'a'.repeat(HOST_READ_LINE_CHARACTERS), `The host's read no longer returns a line of ${HOST_READ_LINE_CHARACTERS} characters whole (it returned ${whole?.length}): ${rowsRead.limit.slice(0, 200)}`);
+    assert.ok(cut?.startsWith('b'.repeat(HOST_READ_LINE_CHARACTERS)) && !cut.startsWith('b'.repeat(HOST_READ_LINE_CHARACTERS + 1)) && /truncated/.test(cut),
+      `The host's read no longer cuts a line of ${HOST_READ_LINE_CHARACTERS + 1} characters after ${HOST_READ_LINE_CHARACTERS}: ${String(cut).slice(-120)}`);
+    return `${numbered.length} rows of ${Math.max(...numbered.map(line => line.length))} characters at most, whole; a line of ${HOST_READ_LINE_CHARACTERS} characters is returned whole and one of ${HOST_READ_LINE_CHARACTERS + 1} is cut`;
   };
   await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
   const receipt = await latest(), reviewId = /^\[AZPR ([a-f0-9]{8})\]/.exec(receipt)[1];

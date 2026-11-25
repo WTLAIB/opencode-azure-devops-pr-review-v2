@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isInstructionLoad, isRequestedLoad, isInstructionUpdate, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isInstructionLoad, isInstructionUpdate, turnState, withoutHostMessages, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -229,39 +229,80 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
   }
 });
 
-test('the host\'s own load of instruction files is told by its form: the paths it names, an ID, and the kind of message the host makes of it', () => {
-  // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one.
+test('what the host wrote of instructions into a session is told by the session\'s own messages: a load by the paths it names, an update by its type', () => {
+  // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one, and
+  // after a source changed while the session ran.
   const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED', description: 'Loaded sub/AGENTS.md', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
-  const request = { id: 'msg_load', role: 'user', content: load.text, metadata: load.metadata };
-  // Each place has its own form: a session's messages hold the synthetic message, a request the user message made
-  // of it, with the same ID and metadata. Neither is taken for the other.
-  assert.deepEqual([isInstructionLoad(load), isRequestedLoad(load)], [true, false]);
-  assert.deepEqual([isInstructionLoad(request), isRequestedLoad(request)], [false, true]);
+  const update = { id: 'msg_update', type: 'system', text: 'Instructions from: /work/AGENTS.md\nCHANGED' };
+  assert.deepEqual([isInstructionLoad(load), isInstructionUpdate(load), isInstructionLoad(update), isInstructionUpdate(update)], [true, false, false, true]);
   for (const other of [undefined, {}, { type: 'synthetic', text: load.text }, { ...load, metadata: {} }, { ...load, metadata: { instruction: {} } }, { ...load, metadata: { instruction: { paths: [] } } },
     { ...load, metadata: { instruction: { paths: [''] } } }, { ...load, metadata: { instruction: { paths: [1] } } }, { ...load, metadata: { instruction: { paths: '/work/sub/AGENTS.md' } } }, { ...load, metadata: { azpr: {} } },
-    // Not the host's load, whatever metadata it carries: no ID to know it by, a person's message, another role of a request.
-    { ...load, id: undefined }, { ...load, id: '' }, { ...load, id: 7 }, { ...load, type: 'user' }, { ...load, type: 'assistant' }, { ...request, id: undefined }, { ...request, id: '' },
-    { ...request, metadata: {} }, { ...request, metadata: { instruction: { paths: [] } } },
-    { ...request, role: 'tool' }, { ...request, role: 'assistant' }, { ...request, role: 'system' }, { ...request, type: 'user' }]) {
-    assert.deepEqual([isInstructionLoad(other), isRequestedLoad(other)], [false, false], JSON.stringify(other));
+    // Not the host's, whatever it carries: no ID to know it by, a person's message, an assistant's, or what a request holds of it.
+    { ...load, id: undefined }, { ...load, id: '' }, { ...load, id: 7 }, { ...load, type: 'user' }, { ...load, type: 'assistant' },
+    { id: 'msg_load', role: 'user', content: load.text, metadata: load.metadata }, { ...update, id: undefined }, { ...update, id: '' }, { ...update, text: undefined },
+    { role: 'system', content: [{ type: 'text', text: update.text }] }]) {
+    assert.deepEqual([isInstructionLoad(other), isInstructionUpdate(other)], [false, false], JSON.stringify(other));
   }
 });
 
-test('an update of the instructions is a system message of one text and nothing else; one that changes the effort or the tools, or that another hook marked, is none', () => {
-  // OpenCode 2.3.0 through 2.4.1 write it from `session.instructions.updated`, without an ID or metadata.
-  const update = { role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }] };
-  assert.equal(isInstructionUpdate(update), true);
-  for (const other of [undefined, {}, { role: 'user', content: [{ type: 'text', text: 'x' }] }, { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] },
-    // The host makes the content one text part; a system message whose content is a plain string is another hook's.
-    { role: 'system', content: 'Instructions from: /work/AGENTS.md\nCHANGED' },
-    { role: 'system', content: [], tools: { add: [], remove: ['read'] } }, { ...update, tools: { add: [], remove: [] } },
-    { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'effort', effort: 'low' }] }, { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'text', text: 'y' }] },
-    { role: 'system', content: [] }, { role: 'system', content: '' }, { role: 'system' }, { role: 'system', content: [{ type: 'text' }] }, { role: 'system', content: [{ type: 'text', text: '' }] },
-    { type: 'system', text: 'x' },
-    // A system message that can be told from the host's: it has an ID or metadata of its own.
-    { ...update, id: 'msg_directive' }, { ...update, metadata: { plugin: 'other' } }]) {
-    assert.equal(isInstructionUpdate(other), false, JSON.stringify(other));
+test('a request loses what the host wrote of instructions by the session\'s own record, and proves that its model saw none of it only where it is the session\'s messages one for one', () => {
+  // What a session holds, and what OpenCode makes of it in a request: every user message has the ID of the
+  // message it was made of, and an update is a system message of its text as one part, without an ID.
+  const stored = [{ id: 'msg_prompt', type: 'user', text: 'PROMPT' }, { id: 'msg_step', type: 'assistant', content: [] },
+    { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/CLAUDE.md\nNESTED', metadata: { instruction: { paths: ['/work/sub/CLAUDE.md'] } } },
+    { id: 'msg_update', type: 'system', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }, { id: 'msg_notice', type: 'synthetic', text: 'a notice', metadata: { source: 'shell', shellID: 'sh_1', state: 'completed' } }];
+  const prompt = { id: 'msg_prompt', role: 'user', content: [{ type: 'text', text: 'PROMPT' }] }, step = { id: 'msg_step', role: 'assistant', content: [] };
+  const load = { id: 'msg_load', role: 'user', content: stored[2].text, metadata: stored[2].metadata }, update = { role: 'system', content: [{ type: 'text', text: stored[3].text }] };
+  const notice = { id: 'msg_notice', role: 'user', content: 'a notice', metadata: stored[4].metadata }, effort = { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] };
+  const requested = [prompt, step, load, update, notice, effort];
+  const frozen = JSON.stringify(requested);
+  assert.deepEqual(withoutHostMessages(requested, stored), { messages: [prompt, step, notice, effort], hidden: ['msg_load', 'msg_update'], trusted: true });
+  assert.equal(JSON.stringify(requested), frozen, 'The request that was handed over is not changed.');
+  // A session without such messages: nothing is taken out, and the request is the session's own.
+  assert.deepEqual(withoutHostMessages([prompt, step], stored.slice(0, 2)), { messages: [prompt, step], hidden: [], trusted: true });
+  // A load is known by the session's record, whatever a hook before this one made of it in the request: without
+  // its metadata, or as another role, it is taken out all the same.
+  for (const [name, rewritten] of [['its metadata taken away', { id: 'msg_load', role: 'user', content: load.content }], ['another role', { ...load, role: 'assistant' }]]) {
+    const result = withoutHostMessages([prompt, step, rewritten, update, notice], stored);
+    assert.deepEqual([result.messages, result.hidden, result.trusted], [[prompt, step, notice], ['msg_load', 'msg_update'], true], name);
   }
+  // No proof where the request is not the session's messages one for one: a user message without an ID, with an
+  // ID the session does not have, or twice; a load that is not among the request's messages (it may have been
+  // joined to another message, under that message's ID); an update that is not there in the host's form.
+  const joined = { ...prompt, content: [{ type: 'text', text: `PROMPT\n\n${load.content}` }] };
+  for (const [name, messages, shown, hidden] of [
+    ['a user message without an ID', [prompt, step, { role: 'user', content: 'who knows' }, load, update, notice], 4, ['msg_load', 'msg_update']],
+    ['a user message of another ID', [prompt, step, { ...notice, id: 'msg_invented' }, load, update], 3, ['msg_load', 'msg_update']],
+    ['a user message twice', [prompt, step, load, update, notice, notice], 4, ['msg_load', 'msg_update']],
+    ['a load joined to the message before it', [joined, step, update, notice], 3, ['msg_update']],
+    ['a load that is not there', [prompt, step, update, notice], 3, ['msg_update']],
+    ['an update written as a plain string', [prompt, step, load, { role: 'system', content: stored[3].text }, notice], 4, ['msg_load']],
+    ['an update with another text', [prompt, step, load, { role: 'system', content: [{ type: 'text', text: 'something else' }] }, notice], 4, ['msg_load']],
+    ['an update that is not there', [prompt, step, load, notice], 3, ['msg_load']],
+  ]) {
+    const result = withoutHostMessages(messages, stored);
+    assert.deepEqual([result.trusted, result.messages.length, result.hidden], [false, shown, hidden], name);
+  }
+  // Another hook's own system message stays, also in the host's form, where the session holds no update of that
+  // text; and of two updates with one text, each stored one answers for one message.
+  const directive = { role: 'system', content: [{ type: 'text', text: 'Answer briefly.' }] };
+  assert.deepEqual(withoutHostMessages([prompt, step, load, update, directive, notice], stored).messages, [prompt, step, directive, notice]);
+  const twice = [...stored, { id: 'msg_update_2', type: 'system', text: stored[3].text }];
+  assert.deepEqual([withoutHostMessages([prompt, step, load, update, update, update, notice], twice).messages.length, withoutHostMessages([prompt, step, load, update, update, notice], twice).hidden,
+    withoutHostMessages([prompt, step, load, update, notice], twice).trusted], [4, ['msg_load', 'msg_update', 'msg_update_2'], false]);
+});
+
+test('where a turn stands is told by the session\'s messages: before its prompt is one of them, running, or ended at the first idle marker after it', () => {
+  const prompt = { id: 'msg_prompt', type: 'user', text: 'PROMPT' }, answer = { id: 'msg_answer', type: 'assistant' }, idle = id => ({ id, type: 'idle', outcome: 'succeeded' });
+  const earlier = [{ id: 'msg_first', type: 'user', text: 'FIRST' }, { id: 'msg_first_answer', type: 'assistant' }, idle('msg_idle_1')];
+  for (const [messages, state] of [
+    [[], 'before'], [earlier, 'before'], [[...earlier, { id: 'msg_notice', type: 'synthetic', text: 'woke the session' }, { id: 'msg_idle_w', type: 'idle', outcome: 'failed' }], 'before'],
+    [[...earlier, prompt], 'running'], [[...earlier, prompt, answer], 'running'], [[...earlier, prompt, answer, { id: 'msg_notice', type: 'synthetic', text: 'reached it while it went idle' }, answer], 'running'],
+    [[...earlier, prompt, answer, idle('msg_idle_2')], 'ended'], [[...earlier, prompt, { id: 'msg_idle_2', type: 'idle', outcome: 'interrupted' }], 'ended'],
+    [[...earlier, prompt, answer, idle('msg_idle_2'), { id: 'msg_notice', type: 'synthetic', text: 'woke it' }], 'ended'],
+  ]) assert.equal(turnState(messages, 'msg_prompt'), state, JSON.stringify(messages.map(message => message.id)));
+  // A host that does not say which message the prompt became: the turn is never known to have begun.
+  for (const id of [undefined, '', 7]) assert.equal(turnState([...earlier, prompt, answer], id), 'before');
 });
 
 test('what the Claude Code provider keeps for a request is its instruction sources but the date and the environment, joined', () => {

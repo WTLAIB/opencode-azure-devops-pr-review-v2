@@ -248,34 +248,78 @@ export const claudeInstructions = sources => sources.map(source => source.text).
  * The instruction files OpenCode leaves in a session by itself after the session's native read tool read a file of
  * the project: the files between that file and the conversation's directory (AGENTS.md; from OpenCode 2.3.1 also
  * CLAUDE.md), as a synthetic message whose `metadata.instruction.paths` names the files it holds (OpenCode 2.3.0
- * through 2.4.1). Nothing else is one: not a message without an ID, and not a tool result, a person's message or
- * an assistant message that carries such metadata.
+ * through 2.4.1). Nothing else is one: not a message without an ID, and not a person's message or an assistant
+ * message that carries such metadata. This is the form a session's own messages hold it in.
  */
-const loadedPaths = message => {
+export function isInstructionLoad(message) {
   const paths = message?.metadata?.instruction?.paths;
-  return typeof message?.id === 'string' && message.id.length > 0 && Array.isArray(paths) && paths.length > 0 &&
+  return message?.type === 'synthetic' && typeof message.id === 'string' && message.id.length > 0 && Array.isArray(paths) && paths.length > 0 &&
     paths.every(path => typeof path === 'string' && path.length > 0);
-};
-/** Such a load as a session's own messages hold it. */
-export const isInstructionLoad = message => message?.type === 'synthetic' && loadedPaths(message);
-/**
- * Such a load as a request holds it: the user message OpenCode makes of the stored one, with the same ID and
- * metadata (every user message of a request carries the ID of the message it was made of).
- */
-export const isRequestedLoad = message => message?.type === undefined && message?.role === 'user' && loadedPaths(message);
+}
 
 /**
- * Whether a message of a request is an update of the instructions that OpenCode wrote into the session because a
+ * An update of the instructions as a session's own messages hold it: OpenCode writes a `system` message when a
  * source changed while the session ran (an instruction file that was edited, an MCP server that says something
- * else). OpenCode 2.3.0 through 2.4.1 build it from nothing but `session.instructions.updated`: a system message
- * whose content is one text part, without an ID, metadata or tools. The other system messages they know change a
- * model's effort or its tools and hold no text, and a system message of any other form (an ID, metadata, a plain
- * string) is another hook's.
+ * else), and nothing else writes one (OpenCode 2.3.0 through 2.4.1, from `session.instructions.updated`).
  */
-export function isInstructionUpdate(message) {
-  if (message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined) return false;
+export const isInstructionUpdate = message => message?.type === 'system' && typeof message.id === 'string' && message.id.length > 0 && typeof message.text === 'string';
+
+// What OpenCode makes of such an update in a request: a system message whose content is its text as one text
+// part, without an ID, metadata or tools. The other system messages it knows change a model's effort or its
+// tools and hold no text.
+const updateText = message => {
+  if (message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined) return undefined;
   const content = message.content;
-  return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' && content[0].text.length > 0;
+  return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
+};
+
+/**
+ * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
+ * and its updates of the instructions. Which messages those are is the session's own word (`stored`, its
+ * messages as the host holds them), not the request's: a hook that ran before this one may have changed what a
+ * request message looks like. A load is taken out by its ID, whatever the request made of it; an update, which
+ * has no ID in a request, where a system message of the host's form holds exactly its text.
+ *
+ * `hidden` are the IDs of the stored messages that were taken out. `trusted` says whether this request can count
+ * as proof that its model saw none of the others: every user message of the request is one message of the
+ * session under its ID, each once (OpenCode makes every user message of a request from one stored message and
+ * gives it that message's ID, 2.3.0 through 2.4.1), and every load and every update the session holds was
+ * among the request's messages and was taken out. Where a hook before this one joined messages, gave them
+ * other IDs, dropped a load or rewrote an update, that is not so, and nothing is proved: what such a hook did
+ * with their text cannot be told from here.
+ */
+export function withoutHostMessages(requested, stored) {
+  const loads = new Set(stored.filter(isInstructionLoad).map(message => message.id));
+  const updates = stored.filter(isInstructionUpdate);
+  const known = new Set(stored.map(message => message?.id).filter(id => typeof id === 'string' && id.length > 0));
+  const users = new Set(), hidden = new Set();
+  let trusted = true;
+  const messages = requested.filter(message => {
+    const id = typeof message?.id === 'string' && message.id.length > 0 ? message.id : undefined;
+    if (message?.role === 'user') {
+      if (id === undefined || !known.has(id) || users.has(id)) trusted = false;
+      else users.add(id);
+    }
+    if (id !== undefined && loads.has(id)) { hidden.add(id); return false; }
+    const text = updateText(message);
+    const update = text === undefined ? undefined : updates.find(candidate => candidate.text === text && !hidden.has(candidate.id));
+    if (update) { hidden.add(update.id); return false; }
+    return true;
+  });
+  if ([...loads].some(id => !hidden.has(id)) || updates.some(update => !hidden.has(update.id))) trusted = false;
+  return { messages, hidden: [...hidden], trusted };
+}
+
+/**
+ * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them (a
+ * prompt that is admitted waits in the session's inbox, and becomes a message only in the execution that takes
+ * it), `running` while no idle marker follows it, and `ended` once one does (an execution leaves one marker
+ * when it ends, however it ends, before the host starts another one; OpenCode 2.3.0 through 2.4.1).
+ */
+export function turnState(messages, promptID) {
+  const at = typeof promptID === 'string' && promptID.length > 0 ? messages.findIndex(message => message?.id === promptID) : -1;
+  if (at < 0) return 'before';
+  return messages.slice(at + 1).some(message => message?.type === 'idle') ? 'ended' : 'running';
 }
 
 /** Throw one readable error naming every missing host method. */

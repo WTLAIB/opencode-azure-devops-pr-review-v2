@@ -1047,9 +1047,11 @@ How to choose the lists:
 - **`claude-agent` models need memory.** Each session of OpenCode's
   `claude-agent` provider has a local `claude` process of about 200 MB, which
   ends five minutes after the session's last turn. OpenCode 2.4.0 and later
-  also end it when the session is deleted, so after a run only the session
-  that holds the report still has one (every session while `debug.enabled`
-  keeps them all). A review starts one session per pass and shard, plus its
+  also end it when the session is deleted, so after a run whose sessions AZPR
+  deleted only the session that holds the report still has one. Where the
+  sessions stay (`debug.enabled`, `deletePrivateSessions: false`, or a run
+  whose stop OpenCode did not confirm), each keeps its process for those
+  five minutes. A review starts one session per pass and shard, plus its
   duplicate checks, its rating and its comment planning, and they run side
   by side: leave memory for them.
 

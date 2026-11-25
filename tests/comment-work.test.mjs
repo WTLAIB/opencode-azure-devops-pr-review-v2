@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readdir, rm, readFile, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, observationIndex, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
 import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -1670,48 +1670,91 @@ test('pages are derived only from an object that is what its name says; a store 
   const first = await createCommentData({ root: directory });
   const sound = await first.put('x'.repeat(5000)), damaged = await first.put('z'.repeat(9000));
   const fresh = await readFile(damaged.pages, 'utf8');
+  const whole = async (store, reference, value) => {
+    assert.deepEqual([await store.read(reference), await readFile(reference.file, 'utf8'), store.holds(reference)], [value, value, true]);
+    assert.ok((await rowsOf(reference)).every(row => row.length <= ROW_CHARACTERS));
+    assert.equal((await rowsOf(reference)).map(row => JSON.parse(row).text).join(''), value);
+  };
   // An object that lost its end and has no pages: a write that was cut off, or another process that still writes.
-  // It is not ready, nothing is derived from it, and putting its value writes it again.
+  // It is not ready, nothing is derived from it, the store does not hold its reference, and putting its value
+  // writes it again.
   await writeFile(damaged.file, 'z'.repeat(4000));
   await rm(damaged.pages);
   const unfinished = await createCommentData({ directory: first.directory });
   await assert.rejects(readFile(damaged.pages), { code: 'ENOENT' });
   await assert.rejects(unfinished.read(damaged), /Unknown private comment data reference/, 'A value that is not ready is not the store\'s to hand out.');
-  assert.equal(await unfinished.read(sound), 'x'.repeat(5000));
+  assert.deepEqual([unfinished.holds(damaged), unfinished.holds(sound), await unfinished.read(sound)], [false, true, 'x'.repeat(5000)]);
   assert.deepEqual(await unfinished.put('z'.repeat(9000)), damaged);
-  assert.deepEqual([await unfinished.read(damaged), await readFile(damaged.pages, 'utf8')], ['z'.repeat(9000), fresh]);
-  // The same object with pages that the host's read returns whole: they were right when the value was, and stay.
+  await whole(unfinished, damaged, 'z'.repeat(9000));
+  assert.equal(await readFile(damaged.pages, 'utf8'), fresh);
+  // The same object with its pages complete: they hold the value, of whatever length their rows are, and the
+  // object is written again from them. Rows of an earlier version are then written again as well.
+  for (const pages of [fresh, earlierRows('z'.repeat(9000))]) {
+    await writeFile(damaged.file, 'z'.repeat(4000));
+    await writeFile(damaged.pages, pages);
+    await whole(await createCommentData({ directory: first.directory }), damaged, 'z'.repeat(9000));
+  }
+  // An object is what its name says by its bytes: a write that was cut off inside its last character decodes to
+  // the same text, and is not the object.
+  const ending = await first.put(`${'e'.repeat(3000)}�`);
+  const bytes = await readFile(ending.file);
+  await writeFile(ending.file, bytes.subarray(0, bytes.length - 1));
+  assert.equal(await readFile(ending.file, 'utf8'), `${'e'.repeat(3000)}�`, 'Decoded, the cut object reads like the whole one.');
+  await createCommentData({ directory: first.directory });
+  assert.deepEqual(await readFile(ending.file), bytes, 'It was told apart by its bytes, and written again from its pages.');
+  // With pages of an earlier version that are not complete either, the value cannot be restored, and those rows
+  // would reach a model cut: a reference that a review saved may name them, so the store is not opened.
   await writeFile(damaged.file, 'z'.repeat(4000));
-  const kept = await createCommentData({ directory: first.directory });
-  assert.equal(await readFile(damaged.pages, 'utf8'), fresh, 'No pages are derived from an object that is not what its name says.');
-  await assert.rejects(kept.read(damaged), /Unknown private comment data reference/);
-  // With pages of an earlier version, whose rows the host's read cuts: they cannot be written again from a damaged
-  // object, and a reference that a review saved may name them, so the store is not opened.
-  await writeFile(damaged.pages, earlierRows('z'.repeat(9000)));
+  await writeFile(damaged.pages, earlierRows('z'.repeat(9000)).slice(0, 7000));
   await writeFile(sound.pages, earlierRows('x'.repeat(5000)));
   await assert.rejects(createCommentData({ directory: first.directory }), error => {
     assert.equal(error.unfitPages, true);
-    assert.equal(error.message, '[AZPR] This review\'s private data was written by an earlier version in rows that OpenCode\'s read tool cuts, and the value they belong to is damaged, so they cannot be written again. Nothing was planned; review the pull request again.');
+    assert.equal(error.message, '[AZPR] This review\'s private data holds pages that OpenCode\'s read tool does not return whole (an earlier version wrote longer rows, or a write was cut off), and the value they belong to is damaged, so they cannot be written again. Nothing was planned; review the pull request again.');
     return true;
   });
-  assert.equal(await readFile(damaged.pages, 'utf8'), earlierRows('z'.repeat(9000)), 'What is there is left.');
+  assert.equal(await readFile(damaged.pages, 'utf8'), earlierRows('z'.repeat(9000)).slice(0, 7000), 'What is there is left.');
   // The pages of a sound object cannot be read or replaced (a directory stands where they belong): the store is
-  // not opened either, since its rows would reach a model cut. The next opening, with the obstacle gone, writes them.
+  // not opened either. The next opening, with the obstacle gone, writes them.
   await writeFile(damaged.file, 'z'.repeat(9000));
   await rm(damaged.pages);
   await mkdir(damaged.pages);
   await writeFile(join(damaged.pages, 'in the way'), '');
   await assert.rejects(createCommentData({ directory: first.directory }), error => {
     assert.equal(error.unfitPages, true);
-    assert.match(error.message, /^\[AZPR\] This review's private data was written by an earlier version in rows that OpenCode's read tool cuts, and they could not be written again \(EISDIR\)\. Nothing was planned; run the command again once the cause is gone\.$/);
+    assert.match(error.message, /^\[AZPR\] This review's private data holds pages that OpenCode's read tool does not return whole \(an earlier version wrote longer rows, or a write was cut off\), and they could not be written again \(EISDIR\)\. Nothing was planned; run the command again once the cause is gone\.$/);
     return true;
   });
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
   await rm(damaged.pages, { recursive: true });
   const opened = await createCommentData({ directory: first.directory });
-  for (const [reference, value] of [[sound, 'x'.repeat(5000)], [damaged, 'z'.repeat(9000)]]) {
-    assert.equal((await rowsOf(reference)).map(row => JSON.parse(row).text).join(''), value);
-    assert.ok((await rowsOf(reference)).every(row => row.length <= ROW_CHARACTERS));
-    assert.equal(await opened.read(reference), value);
-  }
+  for (const [reference, value] of [[sound, 'x'.repeat(5000)], [damaged, 'z'.repeat(9000)]]) await whole(opened, reference, value);
+});
+
+test('a value is stored as the text a file can hold, and only a reference the store holds ready is listed for a model', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await createCommentData({ root: directory });
+  // A lone surrogate cannot be written as UTF-8: the object would hold U+FFFD in its place and the pages the
+  // surrogate itself. The value is the text the object holds, in both.
+  const given = `tool output with half a pair \uD83D and more ${'m'.repeat(2500)}`, kept = given.replace('\uD83D', '�');
+  const reference = await store.put(given);
+  assert.deepEqual([await store.read(reference), await readFile(reference.file, 'utf8'), (await rowsOf(reference)).map(row => JSON.parse(row).text).join(''), reference.characters],
+    [kept, kept, kept, kept.length]);
+  assert.deepEqual(await store.put(kept), reference, 'Both texts are one value.');
+  const pages = await readFile(reference.pages, 'utf8');
+  const reopened = await createCommentData({ directory: store.directory });
+  assert.equal(await readFile(reference.pages, 'utf8'), pages, 'Opened again, the value is ready as it is.');
+  // What the planner is listed as evidence it may read: observations whose saved references the store holds
+  // ready. One whose object was damaged since, one whose files are gone, and one of another store are left out.
+  const output = index => `observed text ${index} ${'o'.repeat(3000)}`;
+  const observations = await Promise.all([0, 1, 2].map(index => captureObservation(reopened, 'azpr_read_file', { path: `/src/file-${index}.ts`, version: 'head' }, output(index))));
+  const elsewhere = await captureObservation(await createCommentData({ root: directory }), 'azpr_read_file', { path: '/src/elsewhere.ts', version: 'head' }, output(9));
+  await writeFile(observations[1].outputRef.file, 'cut');
+  await writeFile(observations[1].outputRef.pages, (await readFile(observations[1].outputRef.pages, 'utf8')).slice(0, 900));
+  await rm(observations[2].outputRef.file);
+  await rm(observations[2].outputRef.pages);
+  const later = await createCommentData({ directory: store.directory });
+  assert.deepEqual([...observations, elsewhere].map(observation => later.holds(observation.outputRef)), [true, false, false, false]);
+  const listed = (await later.read(await observationIndex(later, [...observations, elsewhere]))).trim().split('\n').map(row => JSON.parse(row));
+  assert.deepEqual(listed.map(row => [row.arguments.path, row.output.sha256]), [['/src/file-0.ts', observations[0].outputRef.sha256]]);
 });

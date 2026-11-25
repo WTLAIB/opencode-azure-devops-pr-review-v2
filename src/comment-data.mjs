@@ -9,8 +9,12 @@ export const PAGE_CHARACTERS = 12000;
 export const COMMENT_TURN_CHARACTERS = 48000;
 // A row of a pages file, as it is written: within what the host's read returns of one line, with room to spare.
 export const ROW_CHARACTERS = HOST_READ_LINE_CHARACTERS - 100;
+// Of a text, the digest of its UTF-8 bytes; of bytes, their own.
 const hash = value => createHash('sha256').update(value).digest('hex');
 const json = value => JSON.stringify(value);
+// A text as a file holds it: UTF-8 has no lone surrogate, so one becomes U+FFFD when it is written. Pages are
+// derived from this text, so that they and the object are one value.
+const wellFormed = text => typeof text.isWellFormed === 'function' ? (text.isWellFormed() ? text : text.toWellFormed()) : Buffer.from(text, 'utf8').toString('utf8');
 
 /** UTF-16 offsets match JS/Azure positions; never split a surrogate pair. */
 export function textPages(text, size = PAGE_CHARACTERS) {
@@ -85,7 +89,16 @@ export function wholePages(content, text) {
   return at === text.length;
 }
 
-const present = path => readFile(path, 'utf8').catch(error => { if (error?.code === 'ENOENT') return undefined; throw error; });
+const absent = error => { if (error?.code === 'ENOENT') return undefined; throw error; };
+const present = path => readFile(path, 'utf8').catch(absent);
+/**
+ * The text of an object that is what its name says, and nothing where it is not or cannot be read. Its bytes are
+ * what the name is the digest of: a write that was cut off inside a character decodes like the whole character.
+ */
+const sound = async (file, id) => {
+  const bytes = await readFile(file).catch(() => undefined);
+  return bytes !== undefined && hash(bytes) === id ? bytes.toString('utf8') : undefined;
+};
 
 /** Replaces a file in one step, under a working name of this call's own: a reader finds what was there or what is written. */
 async function replace(path, content) {
@@ -106,6 +119,23 @@ async function settlePages(file, text) {
 }
 
 /**
+ * The value a pages file holds, where its rows are complete and give a text of the digest: rows of any length,
+ * since this reads them itself. An object that was damaged after its pages were written is restored from them.
+ */
+function valueOfPages(content, id) {
+  if (!content.endsWith('\n')) return undefined;
+  let text = '';
+  for (const row of content.length > 1 ? content.slice(0, -1).split('\n') : []) {
+    let page;
+    try { page = JSON.parse(row); } catch { return undefined; }
+    if (page === null || typeof page !== 'object' || page.start !== text.length || typeof page.text !== 'string' || page.end !== text.length + page.text.length) return undefined;
+    text += page.text;
+  }
+  text = wellFormed(text);
+  return hash(text) === id ? text : undefined;
+}
+
+/**
  * Whether a value that a store holds when it is opened again is ready to be handed out: its object is what its
  * name says, and its pages give it whole through the host's read. A saved review's references name these files,
  * and a model reads the pages by itself, so every value is looked at for itself, each time the store is opened:
@@ -113,26 +143,32 @@ async function settlePages(file, text) {
  * process, may have written into it meanwhile. Pages of a sound object that are not whole (rows of 3,000
  * characters as 0.5.0 wrote them, a file that is missing or was not finished) are written again from the object.
  *
- * An object that is not what its name says gives no pages. Where it has none, it is another writer's work in
- * progress or a write that was cut off: it is not ready, and putting its value writes it again. Where it has
- * pages with a row the host's read cuts, opening the store fails, as it does where the pages of a sound object
- * cannot be written: a reference a review saved may name them, and their rows would reach a model cut.
+ * An object that is not what its name says gives no pages. Complete pages hold the value all the same, and
+ * the object is written again from them. Otherwise the value is not ready: it is another writer's work in
+ * progress or a write that was cut off, and putting it writes it again. Only where such a value has pages with
+ * a row the host's read cuts does opening the store fail, as it does where pages cannot be written: a reference
+ * a review saved may name them, and their rows would reach a model cut. The object is read once more before
+ * that, since a writer may have finished it between the two reads.
  */
 async function ready(file, id) {
-  let text;
-  try {
-    text = await present(file);
-    if (text !== undefined && hash(text) === id) { await settlePages(file, text); return true; }
-  } catch (error) {
-    throw unfit(`they could not be written again (${error?.code ?? 'error'}). Nothing was planned; run the command again once the cause is gone.`);
+  const unwritten = error => unfit(`they could not be written again (${error?.code ?? 'error'}). Nothing was planned; run the command again once the cause is gone.`);
+  for (let again = false; ; again = true) {
+    const text = await sound(file, id);
+    if (text !== undefined) {
+      try { await settlePages(file, text); } catch (error) { throw unwritten(error); }
+      return true;
+    }
+    const pages = await present(file + '.pages.jsonl').catch(() => undefined);
+    const value = pages === undefined ? undefined : valueOfPages(pages, id);
+    if (value !== undefined) {
+      try { await replace(file, value); await settlePages(file, value); } catch (error) { throw unwritten(error); }
+      return true;
+    }
+    if (!pages?.split('\n').some(row => row.length > HOST_READ_LINE_CHARACTERS)) return false;
+    if (again) throw unfit('the value they belong to is damaged, so they cannot be written again. Nothing was planned; review the pull request again.');
   }
-  const rows = await present(file + '.pages.jsonl').catch(() => undefined);
-  if (rows?.split('\n').some(row => row.length > HOST_READ_LINE_CHARACTERS)) {
-    throw unfit('the value they belong to is damaged, so they cannot be written again. Nothing was planned; review the pull request again.');
-  }
-  return false;
 }
-const unfit = rest => Object.assign(new Error(`[AZPR] This review's private data was written by an earlier version in rows that OpenCode's read tool cuts, and ${rest}`), { unfitPages: true });
+const unfit = rest => Object.assign(new Error(`[AZPR] This review's private data holds pages that OpenCode's read tool does not return whole (an earlier version wrote longer rows, or a write was cut off), and ${rest}`), { unfitPages: true });
 
 /**
  * Private content-addressed store. A new store gets a fresh directory under
@@ -153,14 +189,14 @@ export async function createCommentData({ root, directory: existing } = {}) {
     await mkdir(join(directory, 'objects'), { mode: 0o700 });
     await writeFile(join(directory, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
   }
-  const put = async (text, format = 'text') => {
-    const id = hash(text), file = join(directory, 'objects', id + '.txt');
+  const put = async (given, format = 'text') => {
+    const text = wellFormed(given), id = hash(text), file = join(directory, 'objects', id + '.txt');
     if (!written.has(id)) {
       const operation = (async () => {
         const made = await writeFile(file, text, { flag: 'wx', mode: 0o600 }).then(() => true, error => { if (error.code !== 'EEXIST') throw error; return false; });
         // An object that was there is another writer's: an earlier version that still runs, another process,
         // or a write that was cut off. Whatever it holds, the text in hand is the value.
-        if (!made && await present(file) !== text) await replace(file, text);
+        if (!made && await sound(file, id) === undefined) await replace(file, text);
         // A line-addressable representation also works for huge single-line
         // responses. It is lossless JSON text, NOT original source line numbers. Each row is short enough for
         // the host's read to return it whole (`pageRows`); pages that were there are kept only where they are.
@@ -172,14 +208,18 @@ export async function createCommentData({ root, directory: existing } = {}) {
     await written.get(id);
     return { file, pages: file + '.pages.jsonl', format, characters: text.length, sha256: id };
   };
+  // A reference is the store's own where it names a value that is ready here: one a review saved earlier may
+  // name files that are no longer what they were, and a model reads the pages by itself.
+  const holds = reference => Boolean(reference) && typeof reference.sha256 === 'string' && reference.file === join(directory, 'objects', reference.sha256 + '.txt') &&
+    reference.pages === reference.file + '.pages.jsonl' && written.has(reference.sha256);
   return {
-    directory, put,
+    directory, put, holds,
     async object(value) { return put(JSON.stringify(value, null, 2), 'json'); },
     async read(reference) {
       // Only references created by this store are accepted, never model paths.
       if (!reference || reference.file !== join(directory, 'objects', reference.sha256 + '.txt') || !written.has(reference.sha256)) throw new Error('Unknown private comment data reference.');
-      const value = await readFile(reference.file, 'utf8');
-      if (hash(value) !== reference.sha256) throw new Error('Private comment data changed; no plan was accepted.');
+      const value = await sound(reference.file, reference.sha256);
+      if (value === undefined) throw new Error('Private comment data changed; no plan was accepted.');
       return value;
     },
     async pack(value, size = PAGE_CHARACTERS) {
@@ -196,7 +236,9 @@ export async function captureObservation(store, tool, input, output) {
 }
 
 export async function observationIndex(store, observations) {
-  return store.put((await Promise.all(observations.map(async ({ tool, input, outputRef }) =>
+  // Only what the store holds ready is listed: a reference that a review saved is handed to a model, which reads
+  // its pages by itself, and the files it names may be damaged or gone since (`holds`).
+  return store.put((await Promise.all(observations.filter(({ outputRef }) => store.holds(outputRef)).map(async ({ tool, input, outputRef }) =>
     json({ tool, arguments: await store.pack(input, 2000), output: outputRef })))).join('\n') + '\n', 'jsonl');
 }
 

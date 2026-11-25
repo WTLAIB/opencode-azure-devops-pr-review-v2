@@ -928,26 +928,35 @@ of the project it leaves the instruction files between that file and the
 conversation's directory there, as a message of its own; and when a source
 changes while a session runs, it leaves an update. Neither is shown to a
 private session's model: the `context` hook takes them out of every request,
-whether or not the parts could be told apart, and only where they have the
-host's very form (`isRequestedLoad`: the paths it names, an ID, a user
-message; `isInstructionUpdate`: a system message whose content is one text
-part, without an ID or metadata). AZPR's own prompt is never taken for a
-load, whatever another hook wrote on it.
+whether or not the parts could be told apart. Which messages they are is the
+session's own word. The hook reads the session's messages, where a load is a
+synthetic message that names the files it holds and an update is a `system`
+message, which only the host writes (`isInstructionLoad`,
+`isInstructionUpdate`), and takes them out of the request by that record
+(`withoutHostMessages` in `host.mjs`): a load by its ID, whatever a hook
+before AZPR's made of it in the request, and an update where a system message
+of the host's form holds exactly its text. A system message of another
+plugin's stays, also one that looks like the host's.
 
 `requestReview`, which fails a turn that received anyone else's message, lets
-a load pass only on proof that no request of the session showed it. Every
-request is sent the whole session, so that is asked of every load the session
-holds, not only of those after the turn's prompt: the hook took it out of a
-request, no request has shown a message of its ID, and every user message
-that a request did show had an ID to know it by (OpenCode gives each the ID
-of the message it was made of; one without was rewritten by another hook, and
-may be a load that nothing can name any more). Then the model never saw it,
-the answer is still the answer to the admitted prompt, and a message that
-merely has the same form reaches no model either. A load without that proof
-fails the turn, also in a later turn of the session than the one it was
-loaded in. An update of the instructions is a `system` message in the
-session, which only the host writes; it is no step of a turn, wherever it
-stands between the steps.
+what the host wrote of instructions pass only on proof that no request of the
+session showed it. Every request is sent the whole session, so that is asked
+of every such message the session holds, not only of those after the turn's
+prompt: the hook took it out of a request, and every request of the session
+was the session's own messages one for one. OpenCode makes each user message
+of a request from one message of the session and gives it that message's ID;
+a request in which a user message has no ID, an ID the session does not have,
+or the same ID twice, or which lacks a load or an update that the session
+holds, was rewritten by a hook that ran before AZPR's, and what that hook did
+with the text cannot be told from here. After such a request nothing is
+proved, and an answer of a session that holds a load or an update is not
+accepted. With the proof, the model never saw it, the answer is still the
+answer to the admitted prompt, and a message that merely has the same form
+reaches no model either. A turn that did not succeed keeps its own failure,
+which decides whether it is tried again. An update is no step of a turn,
+wherever it stands between the steps. Anyone else's message fails the turn
+where the turn's model was sent it: after the prompt, and between the turn
+before and the prompt.
 
 With shell allowed, a command can go on in the background: the model asked
 for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's
@@ -981,24 +990,31 @@ request, the `model.request` hook a request that was prepared earlier, the
 `retry` hook a retry, and the tool hooks a call. A prompt opens it, and only
 while the call that sent it still waits for the turn: one that the host
 admits after that call has ended (the inactivity watchdog stopped the stage
-while the host still worked on the prompt) is refused. Waiting for the
-session does not tell where the turn ends, since OpenCode's wait also covers
-an execution that it starts right after the turn's, as when the notice of a
-background command arrives in that moment. The grant therefore closes in the
-host's idle hook (`experimental.idle`), which runs when a session's model
-work is done and nothing waits for it, right before the session goes idle.
-If the host asks again after that, input reached the session in that moment,
-and one of two things happened: the same execution goes on with it, and the
-model's next message is the turn's answer; or the execution had ended, and
-the host began another one. The session's own messages tell which: the hook
-reads them, and lets the request through only where no idle marker follows
-the turn's prompt (`promptStillRuns` in `runtime.mjs`), which is the line
-`requestReview` draws afterwards. So a session that the host wakes by itself
-asks no model and reads nothing, and a file read later cannot count as read
-for a finding the session had already filed. A stage's record counts the
-host's idle reports, those readings and the requests refused outside a turn
-(`idleReports`, `turnChecks`, `refusedAfterTurn`). A host that never runs the
-idle hook leaves the grant to close when the wait ends.
+while the host still worked on the prompt) is refused. The end of the wait
+for the session closes it. Neither end is the turn's own. The host may have
+begun an execution by itself before the prompt was admitted (the notice of a
+background command woke the session), whose request does not hold the prompt;
+and OpenCode's wait also covers an execution that it starts right after the
+turn's, as when such a notice arrives in that moment, whether the turn
+succeeded or failed. So before every request of a private session the
+`context` hook reads the session's own messages and lets the request through
+only where the turn's prompt is among them and no idle marker follows it
+(`turnState` in `host.mjs`), which is the line `requestReview` draws
+afterwards. Before the prompt is a message, the request is refused and the
+turn is still to come. Where input reached the session while it was going
+idle, the same execution goes on with it, no marker stands there yet, and the
+model's next message is the turn's answer. Where the execution had ended, its
+marker is there before the host starts another one, the request is refused
+and the grant closes. So a session that the host wakes by itself asks no
+model and reads nothing, and a file read later cannot count as read for a
+finding the session had already filed. Where the messages cannot be read, the
+request is refused. What a hook reads of the host it reads until its stage
+ends, so a stage that was stopped does not wait for a host that stalls. A
+stage's record counts those readings and the requests refused outside a turn
+(`turnChecks`, `refusedOutsideTurn`). The reading costs what the
+session's size costs: about 3 ms for each megabyte of its messages, measured
+on OpenCode 2.4.1 (see the
+[validation record](VALIDATION.md#051-release-candidate-acceptance-2026-11-26)).
 
 **A command that arrives as text.** OpenCode's terminal UI can submit a
 startup prompt before it has loaded the commands (`opencode --prompt`; with

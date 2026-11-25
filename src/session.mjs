@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, isInstructionLoad, recordOf, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, isInstructionLoad, isInstructionUpdate, recordOf, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -269,18 +269,19 @@ export function classifyFailure(error) {
  * ends (OpenCode 2.3.0 through 2.4.1), so that marker is the end of the execution that had the prompt, and says
  * how the turn ended. The turn's answer is the last assistant message before it.
  *
- * Three kinds of messages the host writes by itself are no one else's input and no step of the turn. Its load
- * of instruction files (`isInstructionLoad`), anywhere in the session, since every request is sent the whole
- * session: the caller says of each by its ID that no request of this session showed it (`unseen`), and a load
- * it does not say that of fails the request. The notice that a background command of this session ended
- * (`ownShellNotices`). And an update of the instructions (a `system` message, which only the host writes).
- * Anyone else's message after the prompt fails the request, as before.
+ * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
+ * wrote of instructions (`isInstructionLoad`, `isInstructionUpdate`), anywhere in the session, since every
+ * request is sent the whole session: the caller says of each by its ID that no request of this session showed
+ * it (`unseen`), and where it does not say so of one, an answer is not accepted. And the notice that a
+ * background command of this session ended (`ownShellNotices`). Anyone else's message fails the request, as
+ * before, wherever the model of this turn was sent it: after the prompt, and between the turn before and the
+ * prompt (`since` is that turn's prompt, and what stands before a session's first prompt counts too).
  *
  * What follows the turn's idle marker is no part of it: a command that ended later woke the session, and what
  * the host did then neither changes the answer nor how the turn ended. `settled` is called once the host reports
  * the session idle, before anything else is awaited, so that the caller can close what it opened for the turn.
  */
-export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, unseen, settled }) {
+export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, unseen, since, settled }) {
   const api = sessionApi(context, ['prompt', 'wait', 'context', 'get']);
   if (!textValue(sessionID) || !textValue(text) || !textValue(role)) throw new Error('[AZPR] A session, role and literal prompt are required.');
   const selectedModel = modelRef(model);
@@ -305,26 +306,32 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {
     throw new Error('[AZPR] The projected prompt differs from the admitted literal input.');
   }
-  // A load that a request showed, in this turn or in an earlier one of the session, is instructions nobody
-  // authorized for this answer: the model is sent the whole session with every request.
-  if (messages.some(message => isInstructionLoad(message) && unseen?.(message.id) !== true)) {
-    const error = new Error('[AZPR] Instruction files that OpenCode loaded into this session were not kept from its model; the output cannot be assigned to the authorized request.');
-    error.contextChanged = true;
-    throw error;
-  }
+  const changed = message => Object.assign(new Error(message), { contextChanged: true });
   const after = messages.slice(indexes[0] + 1);
   const notices = ownShellNotices(messages);
-  const steps = after.filter(message => !isInstructionLoad(message) && !notices.has(message) && message?.type !== 'system');
+  // What the host wrote of instructions is answered for by the caller (below), and its notices of this
+  // session's own commands are no input of anyone else's: neither is a step.
+  const instructions = message => isInstructionLoad(message) || isInstructionUpdate(message);
+  const own = message => instructions(message) || notices.has(message);
+  const steps = after.filter(message => !own(message));
   const end = steps.findIndex(message => message?.type === 'idle');
   const turn = end < 0 ? steps : steps.slice(0, end + 1);
+  // What reached the session since the turn before was sent to this turn's model with the rest: from that turn's
+  // idle marker on, or from the session's beginning.
+  let from = 0;
+  if (since !== undefined) {
+    const before = messages.findIndex(message => message?.id === since);
+    const ended = before < 0 ? -1 : messages.findIndex((message, index) => index > before && message?.type === 'idle');
+    if (ended < 0 || ended > indexes[0]) throw changed('[AZPR] The turn before this one is no longer where the session\'s messages had it; no output was accepted.');
+    from = ended + 1;
+  }
+  const between = messages.slice(from, indexes[0]).filter(message => !own(message));
   // Either way the host recovers an interrupted stream; both need the caller's consent.
   const retried = retriedSteps(turn, allowHostContinuations);
   const continuation = continuedText(turn.filter(message => !retried.has(message)), allowHostContinuations);
-  // Someone else's message ends it, in the turn or after it.
-  if (steps.some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
-    const error = new Error('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
-    error.contextChanged = true;
-    throw error;
+  // Someone else's message ends it: before the prompt, in the turn or after it.
+  if ([...between, ...steps].some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
+    throw changed('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
   }
   const terminal = turn.at(-1);
   const assistants = turn.filter(message => message?.type === 'assistant');
@@ -354,6 +361,12 @@ export async function requestReview(context, { sessionID, text, role, model, met
       : '';
     throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }
+  // Instructions that a request showed, in this turn or in an earlier one of the session, are instructions nobody
+  // authorized for this answer. A turn that did not succeed has failed by its own outcome above, which decides
+  // whether it is tried again.
+  if (messages.some(message => instructions(message) && unseen?.(message.id) !== true)) {
+    throw changed('[AZPR] Instructions that OpenCode wrote into this session by itself were not kept from its model; the output cannot be assigned to the authorized request.');
+  }
   if (session.agent !== role || !sameModel(session.model, selectedModel) ||
       assistants.some(message => message.agent !== role || !sameModel(message.model, selectedModel))) {
     throw responseError('[AZPR] Reviewer agent or model binding changed; no output was accepted.', answer);
@@ -381,6 +394,8 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (retried.size) answer.retriedSteps = retried.size;
   const loads = after.filter(isInstructionLoad).length;
   if (loads) answer.instructionLoads = loads;
+  // The prompt of this turn, for the caller's next one in this session (`since`).
+  answer.prompt = admitted.id;
   const noticed = after.filter(message => notices.has(message)).length;
   if (noticed) answer.shellNotices = noticed;
   aborted(signal);

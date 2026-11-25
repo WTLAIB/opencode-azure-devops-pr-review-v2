@@ -88,6 +88,12 @@ async function fixture(t, opts = {}) {
     return { dispose() { hooks.set(key, (hooks.get(key) ?? []).filter(item => item !== fn)); } };
   };
   const nativeTools = { shell: async () => ({ output: 'shell ran' }), read: async () => ({ output: 'read ran' }) };
+  // What OpenCode 2.3.0 through 2.4.1 make of a session's messages in a request: every user message has the ID of
+  // the message it was made of, an update of the instructions is a system message of its text as one part, without
+  // an ID, and a marker is no message of a request.
+  const project = history => history.flatMap(message => ['user', 'synthetic'].includes(message.type) ? [{ id: message.id, role: 'user', content: message.text, ...(message.metadata ? { metadata: clone(message.metadata) } : {}) }]
+    : message.type === 'system' ? [{ role: 'system', content: [{ type: 'text', text: message.text }] }]
+    : message.type === 'assistant' ? [{ id: message.id, role: 'assistant', content: clone(message.content ?? []) }] : []);
   // `execution` adds to the context the tool receives (OpenCode's ToolContext), such as `signal`; getters stay getters.
   const invoke = async (session, tool, input = {}, execution = {}) => {
     const event = { sessionID: session.id, agent: session.agent, messageID: 'msg_tool', id: `call_${++seq}`, tool, input };
@@ -171,15 +177,21 @@ async function fixture(t, opts = {}) {
         const messageID = `msg_${++seq}`;
         // What the host does in the session by itself before this prompt reaches it, as when a command that ended woke it.
         await opts.admitting?.({ session, role, turn, emit, invoke });
-        try { await emit('session', 'prompt', { sessionID: session.id, messageID, prompt: { text: input.text }, metadata: input.metadata, delivery: input.delivery }); }
+        // `promptID: false`: a host whose prompt hook does not say which message the prompt becomes.
+        try { await emit('session', 'prompt', { sessionID: session.id, ...(opts.promptID === false ? {} : { messageID }), prompt: { text: input.text }, metadata: input.metadata, delivery: input.delivery }); }
         catch (error) { opts.refused?.({ session, role, turn, error }); throw error; }
+        // The prompt is admitted and waits in the session's inbox: like OpenCode, it becomes a message only when an
+        // execution takes it. `admitted` is what the host does in the session meanwhile.
+        await opts.admitted?.({ session, role, turn, emit, invoke });
         session.history.push({ id: messageID, type: 'user', text: input.text, metadata: input.metadata });
         session.running = (async () => {
           try {
-            const frame = { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: [],
+            const frame = { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: project(session.history),
               tools: Object.fromEntries(['shell', 'read', 'glob', 'grep', 'edit', 'execute', 'webfetch', ...registry.names()].map(name => [name, {}])) };
             await emit('session', 'context', frame);
             session.visibleTools = Object.keys(frame.tools);
+            // What happens between a request's preparation and its dispatch, as when a later hook of the host is slow.
+            await opts.prepared?.({ session, role, turn });
             await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
             // Like OpenCode 2.1.4 through 2.3.0: a compaction it attempts in the turn opens its message first, and AZPR's refusal
             // ends the turn; a background summary publishes nothing, and its refusal stays in the background.
@@ -212,12 +224,11 @@ async function fixture(t, opts = {}) {
             session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'stop', time: { created: 1, completed: 2 },
               ...(opts.tokens ? { tokens: opts.tokens({ role, turn }) } : {}),
               content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] });
-            // Like OpenCode 2.3.0 through 2.4.1: when the model's work is done and nothing waits for the session, the
-            // idle hook runs; the execution then ends and leaves its marker; and what the host starts in the session
-            // right afterwards (a late notice of a background command) is still covered by a wait for the session.
-            // `resting` is what reaches the session while it goes idle, in the same execution; `woken` what the host
-            // does in it after the marker, before the wait resolves.
-            await emit('session', 'experimental.idle', { sessionID: session.id, background: [] });
+            // Like OpenCode 2.3.0 through 2.4.1: an execution goes on while input reaches the session, leaves its
+            // marker when it ends, and what the host starts in the session right afterwards (a late notice of a
+            // background command) is still covered by a wait for the session. `resting` is what reaches the session
+            // while it goes idle, in the same execution; `woken` what the host does in it after the marker, before
+            // the wait resolves.
             await opts.resting?.({ session, role, turn, emit, invoke, model, next: () => `late_${++seq}` });
             session.history.push({ id: `idle_${++seq}`, type: 'idle', outcome: 'succeeded' });
             session.outcome = 'succeeded';
@@ -242,7 +253,8 @@ async function fixture(t, opts = {}) {
         opts.updated?.(input);
       } } : {}),
       async wait({ sessionID }) { await sessions.get(sessionID).running; },
-      async context({ sessionID }) { return clone(sessions.get(sessionID).history); },
+      // `reading` runs before the session's messages are handed out, and may fail the read.
+      async context({ sessionID }) { await opts.reading?.(sessions.get(sessionID)); return clone(sessions.get(sessionID).history); },
       async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); await opts.remove?.(sessionID); sessions.delete(sessionID); },
       async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) { s.outcome = 'interrupted'; s.onInterrupt?.(); } return { interrupted: true }; },
       async synthetic(input) {
@@ -257,7 +269,7 @@ async function fixture(t, opts = {}) {
   const stateDirectory = join(directory, 'state');
   const cleanup = await setupAzurePrReview(context, directory, { stateDirectory, azureTimeoutMs: opts.azureTimeoutMs, removeTimeoutMs: opts.removeTimeoutMs, stageIdleMs: opts.stageIdleMs, namingMs: opts.namingMs, namingUnloadMs: opts.namingUnloadMs, retryDelayMs: 5, fetch: azure.fetch });
   t.after(cleanup);
-  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, subscriptions, publish,
+  return { directory, stateDirectory, settings, agents, commands, sessions, hooks, calls, notices, context, emit, invoke, cleanup, azure, registry, feeds, subscriptions, publish, project,
     prompts: () => calls.filter(call => call.kind === 'prompt'),
     // Resolves with the first truthy result of `find(notices)`, checked on every new notice.
     waitFor: find => new Promise(resolve => {
@@ -5237,19 +5249,21 @@ const instructionLoad = (id = 'msg_load') => ({ id, type: 'synthetic', text: 'In
 
 test('a private role gets AZPR\'s instructions and the host\'s date and environment; what the host collects for the conversation\'s place stays out, and its own load of instruction files ends no turn', async t => {
   const load = instructionLoad();
-  // The update of a source that changed is a system message of text, without an ID; a system message that
-  // changes the model's effort holds no text and is none.
+  // The update of a source that changed is a `system` message of the session, and in a request a system message
+  // of its text, without an ID; a system message that changes the model's effort holds no text and is none.
+  const update = { id: 'msg_update', type: 'system', text: 'Instructions from: /work/AGENTS.md\nCHANGED RULES' }, effort = { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] };
   const messages = () => [{ id: 'msg_prompt', role: 'user', content: 'PROMPT', metadata: { azprGrant: 'nonce' } }, { id: 'msg_step', role: 'assistant', content: [] },
-    { id: load.id, role: 'user', content: load.text, metadata: clone(load.metadata) }, { role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED RULES' }] },
-    { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] }];
+    { id: load.id, role: 'user', content: load.text, metadata: clone(load.metadata) }, { role: 'system', content: [{ type: 'text', text: update.text }] }, effort];
   const frames = [];
+  let own;
   const f = await fixture(t, { files: ['/src/Main.java'],
     async during({ session, role, turn, emit }) {
       if (role !== 'azpr-review-reviewer' || turn) return;
       // The reviewer read a file of the local project with the native read tool: the host leaves the instruction
       // file near it in the session, and the turn's next request holds it, with an update of a file that changed.
-      session.history.push(clone(load));
-      const frame = options => ({ sessionID: session.id, agent: role, model: clone(session.model), system: placeSystem(), messages: messages(), tools: { read: {}, azpr_read_file: {}, shell: {} }, ...(options ? { options } : {}) });
+      session.history.push(clone(load), clone(update));
+      own = session.history[0].id;
+      const frame = options => ({ sessionID: session.id, agent: role, model: clone(session.model), system: placeSystem(), messages: [...f.project(session.history), effort], tools: { read: {}, azpr_read_file: {}, shell: {} }, ...(options ? { options } : {}) });
       frames.push(await emit('session', 'context', frame()));
       await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
       // An option of that name means nothing to another provider: the parts are what such a request sends.
@@ -5261,7 +5275,7 @@ test('a private role gets AZPR\'s instructions and the host\'s date and environm
   assert.equal(f.sessionsFor('azpr-review-reviewer').length, 1);
   const [frame, copied] = frames;
   assert.deepEqual(frame.system.map(part => part.text), LEAN_SYSTEM, 'Only the date and the environment are left of the instructions part.');
-  assert.deepEqual(frame.messages.map(message => message.id ?? message.content[0].type), ['msg_prompt', 'msg_step', 'effort'], 'Neither the loaded instruction file nor the update reaches the model; the change of effort does.');
+  assert.deepEqual(frame.messages.map(message => message.id ?? message.content[0].type), [own, 'effort'], 'Neither the loaded instruction file nor the update reaches the model; the prompt and the change of effort do.');
   assert.deepEqual([copied.system.map(part => part.text), copied.options], [LEAN_SYSTEM, { maxTokens: 1, claudeCodeInstructions: 'COPIED FROM SOMEWHERE' }]);
   const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
   assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart, stage.requestObservations.instructionLoads, stage.requestObservations.instructionUpdates],
@@ -5309,62 +5323,72 @@ test('for the Claude Code provider the sources are left out only where its optio
   assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 8]);
 });
 
-test('a load of instruction files ends no turn only on proof that no request showed it; a message that only looks like one is someone else\'s', async t => {
-  const load = instructionLoad();
-  const SHOWN = /azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=transient; error=\[AZPR\] Instruction files that OpenCode loaded into this session were not kept from its model/;
+test('what the host wrote of instructions ends no turn only on proof that no request showed it; a message that only looks like a load is someone else\'s', async t => {
+  const load = instructionLoad(), update = { id: 'msg_update', type: 'system', text: 'Instructions from: /work/AGENTS.md\nCHANGED RULES' };
+  const SHOWN = /azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=transient; error=\[AZPR\] Instructions that OpenCode wrote into this session by itself were not kept from its model/;
   const FOREIGN = /azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=transient; error=\[AZPR\] The session received another message during this turn/;
-  // The host left the message, but no request of the turn offered it to the context hook: nothing says that the
-  // model did not see it. And a message without the host's list of paths is someone else's.
-  for (const [message, failure] of [[load, SHOWN], [{ id: 'msg_notice', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED RULES' }, FOREIGN]]) {
-    const f = await fixture(t, { files: ['/src/Main.java'], async during({ session, role, turn }) { if (role === 'azpr-review-reviewer' && !turn) session.history.push(clone(message)); } });
-    assert.match(await f.command(), failure);
-  }
-  // What a request holds of the load: the user message OpenCode makes of it, which another hook can have changed
-  // on its way (its metadata taken away, or its ID).
-  const request = (marked, id = load.id) => ({ ...(id ? { id } : {}), role: 'user', content: load.text, ...(marked ? { metadata: clone(load.metadata) } : {}) });
-  const frame = (session, role, ...messages) => ({ sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: [{ id: 'msg_other', role: 'assistant', content: [] }, ...messages], tools: {} });
-  const shown = result => result.messages.some(message => message.content === load.text);
   // In the first session only: the stage runs again in a new one, which gets no such message.
   const once = run => { let first; return input => { if (input.role !== 'azpr-review-reviewer') return; first ??= input.session.id; if (input.session.id === first) return run(input); }; };
-  // A message of that ID that one request showed is not kept from the model by another request's form, in either
-  // order. A request that knows the load takes it out all the same: once shown is no reason to show it again.
-  for (const order of [[false, true], [true, false]]) {
+  // The host left the message, but no request of the turn offered it to the context hook: nothing says that the
+  // model did not see it. And a message without the host's list of paths is someone else's.
+  for (const [message, failure] of [[load, SHOWN], [update, SHOWN], [{ id: 'msg_notice', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED RULES' }, FOREIGN]]) {
+    const f = await fixture(t, { files: ['/src/Main.java'], during: once(({ session, turn }) => { if (!turn) session.history.push(clone(message)); }) });
+    assert.match(await f.command(), failure, message.id);
+  }
+  // A request as OpenCode builds it from the session, and what a hook that ran before AZPR's may have made of it.
+  let f;
+  const request = (session, role, change = messages => messages) => ({ sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: change(f.project(session.history)), tools: {} });
+  const texts = result => result.messages.map(message => typeof message.content === 'string' ? message.content : message.content[0]?.text).filter(text => typeof text === 'string' && (text.includes(load.text) || text.includes(update.text)));
+  const run = async (name, { changes, turns = [0], answer }) => {
     const seen = [];
-    const f = await fixture(t, { files: ['/src/Main.java'], during: once(async ({ session, role, turn, emit }) => {
-      if (turn) return;
-      session.history.push(clone(load));
-      for (const marked of order) seen.push(shown(await emit('session', 'context', frame(session, role, request(marked)))));
+    f = await fixture(t, { files: ['/src/Main.java'], ...(answer ? { answer } : {}), during: once(async ({ session, role, turn, emit }) => {
+      if (!turn) session.history.push(clone(load), clone(update));
+      if (turns.includes(turn)) for (const change of changes[turns.indexOf(turn)]) seen.push(texts(await emit('session', 'context', request(session, role, change))).length);
     }) });
-    assert.match(await f.command(), SHOWN, String(order));
-    assert.deepEqual(seen, order.map(marked => !marked), String(order));
+    return { receipt: await f.command(), seen };
+  };
+  // As the host built it: both are taken out, every time, and the turn's answer is accepted.
+  const plain = await run('as the host built it', { changes: [[undefined, undefined]] });
+  assert.match(plain.receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; /);
+  assert.deepEqual(plain.seen, [0, 0]);
+  // A load is known by the session's own record: with its metadata taken away in a request it is taken out all
+  // the same, and nothing was shown.
+  const stripped = await run('metadata taken away', { changes: [[messages => messages.map(({ metadata: _gone, ...message }) => message)]] });
+  assert.match(stripped.receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; /);
+  assert.deepEqual(stripped.seen, [0]);
+  // No proof once a request was not the session's messages one for one, whatever the requests before and after it
+  // were: its text may have gone anywhere. What can still be told is taken out.
+  const joined = messages => messages.filter(message => message.id !== load.id).map((message, index) => index ? message : { ...message, content: `${message.content}\n\n${load.text}` });
+  for (const [name, change, shown] of [
+    ['the load joined to the message before it, under that message\'s ID', joined, 1],
+    ['the load not among the request\'s messages', messages => messages.filter(message => message.id !== load.id), 0],
+    ['the load under another ID', messages => messages.map(message => message.id === load.id ? { ...message, id: 'msg_renamed' } : message), 1],
+    ['the load without an ID', messages => messages.map(message => message.id === load.id ? { role: 'user', content: message.content, metadata: message.metadata } : message), 1],
+    ['a user message that is not the session\'s', messages => [...messages, { id: 'msg_added', role: 'user', content: 'added by a hook' }], 0],
+    ['the update written as a plain string', messages => messages.map(message => message.role === 'system' ? { role: 'system', content: update.text } : message), 1],
+    ['the update with a mark of another hook', messages => messages.map(message => message.role === 'system' ? { ...message, metadata: { plugin: 'other' } } : message), 1],
+  ]) {
+    for (const order of [[change, undefined], [undefined, change]]) {
+      const result = await run(name, { changes: [order] });
+      assert.match(result.receipt, SHOWN, name);
+      assert.deepEqual(result.seen, order.map(each => each ? shown : 0), name);
+    }
   }
   // Hidden in the first turn and shown in the correction turn: the load stands before the correction's prompt, and
   // its model saw it, so that turn's answer is not accepted either.
-  const later = [];
-  const g = await fixture(t, { files: ['/src/Main.java'], answer: input => input.role === 'azpr-review-reviewer' && !input.turn ? 'Not the JSON that was asked for.' : undefined,
-    during: once(async ({ session, role, turn, emit }) => {
-      if (!turn) session.history.push(clone(load));
-      later.push([turn, shown(await emit('session', 'context', frame(session, role, request(!turn))))]);
-    }) });
-  assert.match(await g.command(), SHOWN);
-  assert.deepEqual(later, [[0, false], [1, true]]);
-  // A request shows a user message that nothing identifies, and the next one holds the load with its ID: the first
-  // may have been that load, so nothing proves that the model did not see it.
-  const h = await fixture(t, { files: ['/src/Main.java'], during: once(async ({ session, role, turn, emit }) => {
-    if (turn) return;
-    session.history.push(clone(load));
-    assert.equal(shown(await emit('session', 'context', frame(session, role, request(true, null)))), true, 'A message without an ID is not taken out.');
-    assert.equal(shown(await emit('session', 'context', frame(session, role, request(true)))), false);
-  }) });
-  const unidentified = await h.command();
-  assert.match(unidentified, SHOWN);
-  assert.equal((await stageRecords(unidentified)).find(record => record.role === 'azpr-review-reviewer' && record.status === 'FAILED').requestObservations.unidentifiedMessages, 1);
-  // AZPR's own prompt is never taken for a load, whatever another hook wrote on it: the model must get it.
+  const later = await run('shown in the correction turn', { turns: [0, 1], changes: [[undefined], [joined]], answer: input => input.role === 'azpr-review-reviewer' && !input.turn ? 'Not the JSON that was asked for.' : undefined });
+  assert.match(later.receipt, SHOWN);
+  assert.deepEqual(later.seen, [0, 1]);
+  const failed = (await stageRecords(later.receipt)).find(record => record.role === 'azpr-review-reviewer' && record.status === 'FAILED');
+  assert.deepEqual([failed.requestObservations.untrustedRequests, failed.requestObservations.instructionLoads, failed.requestObservations.instructionUpdates], [1, 1, 1]);
+  // AZPR's own prompt is the session's message of a person's type: whatever another hook wrote on it in a request,
+  // it is no load, and the model gets it.
   let prompt;
   const k = await fixture(t, { files: ['/src/Main.java'], during: once(async ({ session, role, turn, emit }) => {
     if (turn) return;
     const own = session.history.findLast(message => message.type === 'user');
-    const result = await emit('session', 'context', frame(session, role, { id: own.id, role: 'user', content: own.text, metadata: { ...own.metadata, instruction: { paths: ['/work/AGENTS.md'] } } }));
+    const result = await emit('session', 'context', { sessionID: session.id, agent: role, model: clone(session.model), system: [], tools: {},
+      messages: k.project(session.history).map(message => message.id === own.id ? { ...message, metadata: { ...message.metadata, instruction: { paths: ['/work/AGENTS.md'] } } } : message) });
     prompt = result.messages.some(message => message.id === own.id);
   }) });
   assert.match(await k.command(), /^\[AZPR [a-f0-9]{8}\] COMPLETE; /);
@@ -5408,25 +5432,14 @@ test('input that reaches a session while it goes idle is part of its turn; what 
   f = await fixture(t, { azure, settings: quickSettings,
     answer(input) { if (input.role === 'azpr-quick-reviewer') answer = JSON.stringify(defaultAnswer(input)); return undefined; },
     // The notice of a background command reaches the session in the moment it goes idle: OpenCode goes on in the
-    // same execution, so the model is asked again, may read a file, and answers once more before the marker.
+    // same execution, so the model is asked again, may read a file, and answers once more before the marker. The
+    // session's messages hold no marker after the prompt yet, so all of it is the turn's.
     async resting({ session, role, emit, invoke, model, next }) {
       if (role !== 'azpr-quick-reviewer') return;
-      // Nothing runs for a session that rests until it is asked again: a model request that was prepared earlier
-      // is no longer sent, and no tool runs.
-      seen.resting.push(await outcome(() => emit('session', 'model.request', request(session, role))));
-      seen.resting.push(await outcome(() => invoke(session, 'azpr_read_file', { path: '/src/Extra.java', version: 'head' })));
       seen.resting.push(await outcome(() => emit('session', 'context', frame(session, role))));
       seen.resting.push(await outcome(() => emit('session', 'model.request', request(session, role))));
       seen.resting.push(await outcome(() => invoke(session, 'azpr_read_file', { path: '/src/Extra.java', version: 'head' })));
-      // A request that was prepared and not yet sent when the session's work ended is not sent afterwards.
-      seen.resting.push(await outcome(() => emit('session', 'context', frame(session, role))));
-      await emit('session', 'experimental.idle', { sessionID: session.id, background: [] });
-      seen.resting.push(await outcome(() => emit('session', 'model.request', request(session, role))));
-      // Asked once more, the turn goes on as before.
-      seen.resting.push(await outcome(() => emit('session', 'context', frame(session, role))));
-      seen.resting.push(await outcome(() => emit('session', 'model.request', request(session, role))));
       session.history.push({ id: next(), type: 'assistant', agent: role, model, finish: 'stop', time: { created: 3, completed: 4 }, content: [{ type: 'text', text: answer }] });
-      await emit('session', 'experimental.idle', { sessionID: session.id, background: [] });
     },
     // The same notice a moment later: the execution has ended and left its marker, and OpenCode starts another one
     // by itself, which the wait for the session covers too.
@@ -5445,27 +5458,62 @@ test('input that reaches a session while it goes idle is part of its turn; what 
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
   const closed = '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.';
-  assert.deepEqual(seen.resting, ['[AZPR] Model request has no authorized primary context.', '[AZPR] Review tool authorization expired.', 'ran', 'ran', 'ran',
-    'ran', '[AZPR] Model request has no authorized primary context.', 'ran', 'ran']);
+  assert.deepEqual(seen.resting, ['ran', 'ran', 'ran']);
   assert.deepEqual(seen.woken, [closed, '[AZPR] Model request has no authorized primary context.', '[AZPR] Review tool authorization expired.',
     '[AZPR] AZPR tools are available only to an active AZPR reviewer session.', closed, { retry: false }]);
   const read = path => azure.callsTo('items').filter(call => JSON.stringify(call.query).includes(path)).length;
   assert.deepEqual([read('Extra.java') > 0, read('Late.java')], [true, 0], 'What the turn read was read; nothing was read after it.');
   const [stage] = await stageRecords(receipt);
-  // Two reads count for the session, the assigned file and the one read while the turn went on. The host said three
-  // times that the session would go idle, and the session's messages were looked at for the request that followed
-  // each: twice while the turn went on, once after it. The second request after the turn needed no look.
-  assert.deepEqual([stage.status, stage.sessionReads, stage.modelRequests], ['COMPLETE', 2, 3]);
-  assert.deepEqual([stage.requestObservations.idleReports, stage.requestObservations.turnChecks, stage.requestObservations.refusedAfterTurn], [3, 3, 2]);
+  // Two reads count for the session, the assigned file and the one read while the turn went on. The session's
+  // messages were looked at before each request of the open turn: its own two, and the first one after the marker,
+  // which closed the grant, so that the second needed no look.
+  assert.deepEqual([stage.status, stage.sessionReads, stage.modelRequests], ['COMPLETE', 2, 2]);
+  assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn], [3, 2]);
   assert.deepEqual(stage.requestObservations.retries.at(-1), { attempt: 2, proposed: true, allowed: false });
 });
 
 test('a hook that cannot be registered fails the load like any other, also one for the requests built outside a turn', async t => {
   // OpenCode registers a hook under any name and never runs one it does not know: a registration that fails is no
   // sign of a host without that hook, and requests built outside a turn would keep AZPR's tools unnoticed.
-  for (const name of ['session:compaction', 'session:generate', 'session:experimental.idle', 'session:context']) {
+  for (const name of ['session:compaction', 'session:generate', 'session:context']) {
     await assert.rejects(fixture(t, { hookFailure: name }), new RegExp(`Fixture cannot register ${name.replace('.', '\\.')}`), name);
   }
+});
+
+test('a request is the turn\'s only on the word of the session\'s own messages: where they cannot be read, or do not hold the turn\'s prompt, it is refused', async t => {
+  const refused = stage => [stage.status, stage.modelRequests, stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn];
+  // The first look at a session's messages fails, in the first session of the pass only: its request is refused,
+  // the turn fails, and the pass runs again in a new session, where the messages can be read.
+  let failed;
+  const f = await fixture(t, { settings: quickSettings, reading(session) { if (session.agent === 'azpr-quick-reviewer' && !failed) { failed = session.id; throw new Error('Fixture cannot read the session'); } } });
+  const receipt = await f.command('pr-quick');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  const [first, second] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-quick-reviewer');
+  assert.deepEqual([first.sessionID, ...refused(first), first.attempt], [failed, 'FAILED', 0, 1, 1, 1]);
+  assert.deepEqual([...refused(second), second.attempt], ['COMPLETE', 1, 1, undefined, 2]);
+  assert.equal(f.sessions.get(failed).failure, '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
+  // The host had begun an execution by itself when the correction's prompt was admitted (the notice of a background
+  // command woke the session): its request was built before the prompt became a message, and is not the turn's. It
+  // is refused, and the turn's own request, which holds the prompt, goes through.
+  let early;
+  const e = await fixture(t, { settings: quickSettings, answer: input => input.role === 'azpr-quick-reviewer' && !input.turn ? 'Not the JSON that was asked for.' : undefined,
+    async admitted({ session, role, turn, emit }) {
+      if (role !== 'azpr-quick-reviewer' || turn !== 1) return;
+      try { await emit('session', 'context', { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: e.project(session.history), tools: {} }); early = 'ran'; }
+      catch (error) { early = error.message; }
+    } });
+  const corrected = await e.command('pr-quick');
+  assert.match(corrected, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  assert.equal(early, '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
+  const [stage] = (await stageRecords(corrected)).filter(record => record.role === 'azpr-quick-reviewer');
+  assert.deepEqual([...refused(stage), stage.repairs.length], ['COMPLETE', 2, 3, 1, 1]);
+  // A host that does not say which message a prompt becomes: nothing tells where the turn's prompt stands among
+  // the session's messages, so no request is the turn's. No model is asked, and the review has no result.
+  const g = await fixture(t, { settings: quickSettings, promptID: false });
+  const unknown = await g.command('pr-quick');
+  assert.match(unknown, /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none\n/);
+  const stages = (await stageRecords(unknown)).filter(record => record.role === 'azpr-quick-reviewer');
+  assert.deepEqual(stages.map(refused), [['FAILED', 0, 1, 1], ['FAILED', 0, 1, 1]]);
 });
 
 test('a prompt the host admits after the call that sent it has ended opens no turn', async t => {
@@ -5473,8 +5521,8 @@ test('a prompt the host admits after the call that sent it has ended opens no tu
   // host is slow with that prompt, and the inactivity watchdog stops the stage meanwhile; the answer before stands.
   // Nothing the host could observe says that the call has ended, so the host answers by a timer that is due after
   // the watchdog's: timers run in the order they are due, each with everything it started before the next.
-  for (const slow of ['before the prompt hook', 'while the prompt hook reads the session']) {
-    let held, requests = 0;
+  for (const slow of ['before the prompt hook', 'while the prompt hook reads the session', 'between a request\'s preparation and its dispatch']) {
+    let held, requests = 0, late;
     const refused = [];
     const hold = () => new Promise(resolve => setTimeout(resolve, 700));
     const f = await fixture(t, { settings: quickSettings, stageIdleMs: 400,
@@ -5485,18 +5533,24 @@ test('a prompt the host admits after the call that sent it has ended opens no tu
       },
       async admitting({ session, role, turn }) {
         if (role !== 'azpr-quick-reviewer' || turn !== 1) return;
-        if (slow === 'before the prompt hook') await hold(); else held = session.id;
+        if (slow === 'before the prompt hook') await hold(); else if (slow.startsWith('while')) held = session.id;
       },
       async getting(sessionID) { if (held === sessionID) { held = undefined; await hold(); } },
+      // The prompt was admitted in time and its first request prepared; the host is slow before it sends it.
+      async prepared({ session, role, turn }) { if (slow.startsWith('between') && role === 'azpr-quick-reviewer' && turn === 1) { late = session; await hold(); } },
       refused({ role, turn, error }) { refused.push([role, turn, error.message]); },
       during({ role, turn }) { if (role === 'azpr-quick-reviewer' && turn === 1) requests++; } });
     const receipt = await f.command('pr-quick');
     assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/, slow);
     assert.match(receipt, /\n- azpr-quick-reviewer: COMPLETE; [^\n]*repair=failed:idle\n/, slow);
     assert.doesNotMatch(receipt, /Cancellation warning/, slow);
-    assert.deepEqual(refused, [['azpr-quick-reviewer', 1, slow === 'before the prompt hook'
+    // Before the hook ran, the prompt is no longer the one that is waited for. Inside the hook, the read of the
+    // session ends with the stage, so that the stage's interruption does not wait for a host that stalls.
+    assert.deepEqual(refused, slow.startsWith('between') ? [] : [['azpr-quick-reviewer', 1, slow === 'before the prompt hook'
       ? '[AZPR] Only the exact plugin-started reviewer input is authorized.'
-      : '[AZPR] The reviewer turn this prompt was sent for has ended; the prompt is not admitted.']], slow);
+      : '[AZPR] Stage inactivity watchdog stopped this stage: no activity for 0.4 s after the prompt was sent (workflow.stageIdleSeconds).']], slow);
+    // A request that was prepared while the turn was open is not sent once the turn has closed.
+    if (slow.startsWith('between')) assert.equal(late.failure, '[AZPR] Model request has no authorized primary context.');
     const [stage] = await stageRecords(receipt);
     assert.deepEqual([stage.modelRequests, requests, stage.repairFailure.turn, stage.repairFailure.failureClass], [1, 0, 1, 'idle'], slow);
   }

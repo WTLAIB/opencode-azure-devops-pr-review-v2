@@ -745,13 +745,12 @@ try {
   for (const stage of reviewStages) {
     assert.ok(stage.requestObservations.placeInstructions?.includes('core/instructions'), `The record of ${stage.role} names the instruction files among what its requests were sent without: ${JSON.stringify(stage.requestObservations)}`);
     assert.equal(stage.requestObservations.placeInstructionsNotToldApart, undefined, `Every request of ${stage.role} could be told apart: ${JSON.stringify(stage.requestObservations)}`);
-    // The end of a turn's work is what the host's idle hook says (`experimental.idle`): the grant of a private
-    // session closes there, before the host can start anything else in the session. A host that no longer runs
-    // the hook leaves that to the wait for the session, which also covers what the host starts right afterwards.
-    assert.ok(stage.requestObservations.idleReports >= 1, `OpenCode did not say that the session of ${stage.role} would go idle: ${JSON.stringify(stage.requestObservations)}`);
-    // Nothing reached a session while it went idle, nothing was asked outside a turn, and every user message of
-    // a request had the ID of the message it was made of.
-    assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedAfterTurn, stage.requestObservations.unidentifiedMessages], [undefined, undefined, undefined], JSON.stringify(stage.requestObservations));
+    // Before every request of a private session its messages are read, and the request is the turn's only while
+    // no idle marker follows the turn's prompt: every request here was looked at so and found to be its turn's
+    // (the prompt is among the session's messages by then, and the marker comes when the execution has ended).
+    // And every request was the session's own messages, one for one: each user message under the ID of the message
+    // it was made of.
+    assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn, stage.requestObservations.untrustedRequests], [stage.requestObservations.authorizedPrimary, undefined, undefined], JSON.stringify(stage.requestObservations));
   }
   assert.ok(during.every(request => !request.marks.length), 'No request of the review carried the configured instruction file.');
   results.placeInstructions = `left out of every private request (${[...new Set(reviewStages.flatMap(stage => stage.requestObservations.placeInstructions))].sort().join(', ')}); an ordinary conversation keeps them`;

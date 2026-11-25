@@ -57,30 +57,37 @@ settings, backups and failure records. Never upload `.local/`.
   it with them; where it holds anything else, or is missing, the parts and
   the option stay as they are. An option of that name on another provider's
   request decides nothing. The messages below are taken out either way.
-- What the host writes into a running private session by itself is kept from
-  the model in every request: the instruction files it loads beside a file
-  the native read tool read (in a request `isRequestedLoad`, in the session
-  `isInstructionLoad`), and its updates of the sources
-  (`isInstructionUpdate`). Take out only what has the host's very form: a
-  load without an ID stays, and so does a system message that carries an ID
-  or metadata or whose content is a plain string, which another hook wrote.
-  AZPR's own admitted prompt is never taken for a load, whatever another
-  hook wrote on it. A load that is known is taken out of every request, also
-  after a request showed it.
-- `requestReview` fails a turn that received anyone else's message, and lets
-  a message of the host pass only on one of three grounds. The model never
-  saw it: a load, anywhere in the session since every request is sent the
-  whole session, that the `context` hook took out of a request, whose ID no
-  request has shown, in a session where every user message that a request
-  showed had an ID to know it by (`unseen`); where that proof is missing,
-  the turn fails. Or it is the late result of the session's own tool call:
-  the host's notice that a background command ended, which names a shell
-  that a shell call of this same session reported as running, once for each
-  such shell (`ownShellNotices`); that can only be with shell allowed, and
-  it rests on the host's metadata, since nothing proves who wrote a message.
-  Or it is an update of the instructions, a `system` message, which only the
-  host writes and which is no step of a turn. Never accept a message that
-  the model saw by its text or its form alone.
+- What the host writes of instructions into a running private session by
+  itself is kept from the model in every request: the instruction files it
+  loads beside a file the native read tool read (`isInstructionLoad`), and
+  its updates of the sources (`isInstructionUpdate`). Which messages those
+  are is the session's own word, not a request's: the `context` hook reads
+  the session's messages and takes them out by that record
+  (`withoutHostMessages`), a load by its ID whatever the request made of it,
+  an update where a system message of the host's form holds exactly its
+  text. Never tell them by what a request message looks like: a hook that
+  ran before AZPR's may have changed it, and another plugin's system message
+  can have the host's form.
+- `requestReview` fails a turn that received anyone else's message, wherever
+  the turn's model was sent it: after the prompt, and between the turn
+  before and the prompt (`since`; before a session's first prompt too). It
+  lets a message of the host pass only on one of two grounds. The model
+  never saw it: what the host wrote of instructions, anywhere in the session
+  since every request is sent the whole session, which the `context` hook
+  took out of a request, in a session of which every request was the
+  session's own messages one for one (`unseen`): each user message of the
+  request one message of the session under its ID, once, and every load and
+  update the session holds among the request's messages. Where that proof is
+  missing, an answer is not accepted; a turn that did not succeed keeps its
+  own failure, which decides whether it is tried again. Or it is the late
+  result of the session's own tool call: the host's notice that a background
+  command ended, which names a shell that a shell call of this same session
+  reported as running, once for each such shell (`ownShellNotices`); that
+  can only be with shell allowed, and it rests on the host's metadata, since
+  nothing proves who wrote a message. Never accept a message that the model
+  saw by its text or its form alone. What a hook before AZPR's did with the
+  text of a request's messages cannot be told from here: claim the
+  one-for-one check, and no more.
 - A turn is the admitted prompt up to the first idle marker after it, and
   its answer is the last assistant message before that marker. A prompt
   becomes a message of the session only in the execution that takes it, and
@@ -94,19 +101,25 @@ settings, backups and failure records. Never upload `.local/`.
   turn of it is open (`open` on the grant). A prompt opens it, and only
   while the call that sent it still waits for that turn (`turn`): one the
   host admits after that call ended, as when the inactivity watchdog stopped
-  the stage meanwhile, is refused. It closes when the host says that the
-  session's work is done and it will go idle (its idle hook), and in any
-  case when the wait for the session ends. That wait also covers what the
-  host starts in the session right afterwards, as when a background command
-  that ended wakes it, so the wait alone would leave the grant open for it.
-  When the host asks again after it said the session would go idle, read
-  the session's messages: with no idle marker after the turn's prompt the
-  same execution goes on (input reached the session while it was going
-  idle), and the turn with it; with one, the turn has ended, and what the
-  host does now gets nothing (`promptStillRuns`). So nothing is added to an
-  answer that was taken: not a file the session reads later, which would
-  count as read for a finding it had already filed. A host that never runs
-  the idle hook leaves the grant to the wait; the smoke fixture notices.
+  the stage meanwhile, is refused. The end of the wait for the session
+  closes it. Neither end is the turn's own: the host may have begun an
+  execution by itself before the prompt was admitted, whose request does not
+  hold the prompt, and the wait also covers what the host starts in the
+  session right after the turn, as when a background command that ended
+  wakes it, whether the turn succeeded or failed. So before every request of
+  a private session, read the session's messages (`turnState`): the request
+  is the turn's only while the turn's prompt is among them and no idle
+  marker follows it, which is the line `requestReview` draws afterwards.
+  Before the prompt is a message, the request is refused and the turn is
+  still to come; after the marker the turn has ended, the grant closes, and
+  what the host does now gets nothing. So nothing is added to an answer that
+  was taken: not a file the session reads later, which would count as read
+  for a finding it had already filed. Where the messages cannot be read,
+  refuse: there is no weaker rule to fall back on. Never tell the end of a
+  turn by time, by a hook the host may not run (its idle hook runs only when
+  a turn succeeds), or by the wait alone. What a hook reads of the host, it
+  reads until the stage ends (`signal` on the grant), not the run: a stage
+  that was stopped waits for its session to settle.
 
 **Every mode runs one pipeline and differs only in its models.**
 - `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
@@ -522,12 +535,17 @@ settings, backups and failure records. Never upload `.local/`.
   again from the value. Judge pages that are there by what the host's read
   returns, not by the length this version writes. Each value answers for
   itself: keep no mark that says a whole store is ready, since an earlier
-  version that still runs can add to it. Derive pages only from an object
-  that has the digest its name says, replace a file in one step, hand out
-  no value that is not ready, and fail the opening where pages with a row
-  the host's read cuts cannot be written again (a sound object's that
-  cannot be written, a damaged object's): their rows would reach a model
-  cut.
+  version that still runs can add to it. An object is what its name says by
+  its bytes, not by the text they decode to, and a value is the text a file
+  can hold (no lone surrogate), so that object and pages are one value.
+  Derive pages only from such an object; where the object is damaged and
+  its pages are complete, write the object again from them. Replace a file
+  in one step, hand out no value that is not ready, also not through a
+  reference a review saved (`holds`: the evidence index lists only what the
+  store holds), and fail the opening only where pages with a row the host's
+  read cuts cannot be written again (a sound object's that cannot be
+  written; a damaged object's whose pages are not complete, looked at
+  twice): their rows would reach a model cut.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -909,10 +927,11 @@ The smoke and the scale fixture also hold the forms of the host that the
 runtime tells things apart by: the sources of a request's instructions (a
 configured instruction file reaches an ordinary conversation and no private
 session), the message OpenCode leaves after a native read beside an
-instruction file, the idle hook at the end of a private session's turn, the
-ID on every user message of a request, the error type of a used-up limit, a
-prompt that is one of AZPR's commands, and the line length the native read
-returns. When one of
+instruction file, the session's messages read from inside a hook (the prompt
+is among them by the turn's first request, and no idle marker follows it
+while the turn runs), the ID on every user message of a request, the error
+type of a used-up limit, a prompt that is one of AZPR's commands, and the
+line length the native read returns. When one of
 these steps fails on another OpenCode, read that version's source before
 changing the step: the runtime's fallback is to leave things as the host
 made them, which such a step is there to notice.

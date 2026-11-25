@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCe
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, isRequestedLoad, isInstructionUpdate, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, turnState, withoutHostMessages, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
 import { reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions, renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview, conversationTitle, enclose, stagesInOrder } from './attribution.mjs';
 
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -791,21 +791,20 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   }
 
   /** The end of a turn, for the hooks: nothing is asked of a model or run for the session until a prompt is admitted. */
-  const close = g => { g.open = false; g.resting = false; g.primaryPrepared = false; };
+  const close = g => { g.open = false; g.primaryPrepared = false; };
 
   /**
-   * Whether the execution that took a session's prompt is still the one that runs: no idle marker follows the
-   * prompt in the session's messages. A prompt becomes a message in the execution that takes it, and an
-   * execution writes its marker before the host starts another one (OpenCode 2.3.0 through 2.4.1), so this is the
-   * same line that `requestReview` draws for the turn afterwards. Anything that cannot be read is no proof.
+   * A private session's messages as the host holds them, read from inside a hook: where the turn stands and what
+   * the host wrote into the session by itself are the session's own word, not a request's. The read ends with
+   * the stage (`g.signal`), so a host that stalls does not hold a stage that was stopped. Null where they cannot
+   * be read, which proves nothing.
    */
-  async function promptStillRuns(g, sessionID) {
+  async function sessionMessages(g, sessionID) {
     g.turnChecks++;
     try {
-      const messages = await bounded(() => context.session.context({ sessionID }), g.run.controller.signal);
-      const at = Array.isArray(messages) && g.promptID ? messages.findIndex(message => message?.id === g.promptID) : -1;
-      return at >= 0 && !messages.slice(at + 1).some(message => message?.type === 'idle');
-    } catch { return false; }
+      const messages = await bounded(() => context.session.context({ sessionID }), g.signal);
+      return Array.isArray(messages) ? messages : null;
+    } catch { return null; }
   }
 
   async function ask(g, sessionID, text, signal) {
@@ -821,12 +820,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try {
       answer = await bounded(() => requestReview(context, {
         sessionID, role: g.role, model: modelRef(g.model), text, metadata: { azprGrant: nonce },
-        signal, allowHostContinuations: true, settled: () => close(g),
-        // A load of instruction files is no one else's input only on proof that no request of this session
-        // showed it: it was taken out of a request, no request showed a message of its ID, and every user
-        // message that a request did show had an ID to know it by.
-        unseen: id => g.unidentified === 0 && g.hiddenMessages.has(id) && !g.shownMessages.has(id),
+        signal, allowHostContinuations: true, settled: () => close(g), since: g.validated,
+        // What the host wrote of instructions into the session is no one else's input only on proof that no
+        // request of this session showed it: it was taken out of a request, and every request of the session
+        // was the session's own messages, one for one (`withoutHostMessages`).
+        unseen: id => g.untrusted === 0 && g.hiddenMessages.has(id),
       }), signal);
+      // The turn that was looked at: the next one in this session is looked at from its end on.
+      g.validated = answer.prompt;
     } finally { g.watch.waiting = false; close(g); g.pending = g.turn = null; }
     if (g.admitted <= before.admitted || g.calls <= before.calls) throw new Error('Required V2 prompt/context hooks were not observed; the answer cannot be accepted.');
     return answer;
@@ -864,27 +865,26 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     watch.waiting = false;
     const input = JSON.stringify(payload);
     const g = {
-      run, role, model: idModel, watch, pending: null, admitted: 0, calls: 0, primaryPrepared: false,
+      run, role, model: idModel, watch, signal, pending: null, admitted: 0, calls: 0, primaryPrepared: false,
       // A turn is open from the admission of AZPR's prompt until the session's work on it is done. Only then does
       // the session get a model request, a retry or a tool: what the host starts in it by itself afterwards (a
       // background command that ended wakes it) gets none, so nothing is added to an answer that was taken.
       // `turn` is the prompt of the call that waits for a turn, from before it is sent until that call ends, and
-      // `promptID` the message the host made of the prompt it admitted. `resting` says that the host reported the
-      // session about to go idle (its idle hook), which closes the grant at once: should the host ask again, the
-      // session's own messages tell whether the turn goes on or has ended (see the `context` hook). The end of
-      // the wait for the session closes it in any case.
-      open: false, turn: null, promptID: undefined, resting: false, idleReports: 0, turnChecks: 0, refusedAfterTurn: 0,
+      // `promptID` the message the host made of the prompt it admitted. The wait for the session does not tell
+      // where the turn ends, since it also covers what the host starts right after it: before every request the
+      // session's own messages are read, and a request is the turn's only while the turn's prompt is among them
+      // and no idle marker follows it (see the `context` hook). The end of the wait closes the grant in any
+      // case. `validated` is the prompt of the last turn whose answer was taken.
+      open: false, turn: null, promptID: undefined, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
       // (and in how many requests the host's parts could not be told apart, so that they went out as they were),
-      // the messages with which the host loaded instruction files near a file the session read, by ID (never one
-      // that a request has shown, whose IDs are kept too), and how many instruction updates one request held.
-      // `prompts` are the messages of AZPR's own admitted prompts, which are never taken for a load, and
-      // `unidentified` counts user messages that a request showed without an ID: nothing can then be said of what
-      // the model did not see.
-      place: { sources: new Set(), unknown: 0 }, hiddenMessages: new Set(), shownMessages: new Set(), hiddenUpdates: 0,
-      prompts: new Set(), unidentified: 0,
+      // and what the host wrote of instructions into the session by itself, by the IDs of its messages (the
+      // instruction files it loaded near a file the session read, and its updates). `untrusted` counts requests
+      // whose user messages were not the session's own, one for one, or that lacked one of those messages: after
+      // one, nothing can be said of what the model did not see.
+      place: { sources: new Set(), unknown: 0 }, hiddenMessages: new Set(), hiddenLoads: new Set(), hiddenUpdates: new Set(), untrusted: 0,
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(), blockedNativeCalls: new Map(),
       toolArgumentCharacters: new Map(), toolTimeouts: 0,
@@ -1019,12 +1019,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (commentRole(role)) record.visibleToolCharacters = g.visibleCharacters - input.length;
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls, rejected: g.rejectedRequests, retries: g.retryEvents,
         ...(g.place.sources.size ? { placeInstructions: [...g.place.sources] } : {}), ...(g.place.unknown ? { placeInstructionsNotToldApart: g.place.unknown } : {}),
-        ...(g.hiddenMessages.size ? { instructionLoads: g.hiddenMessages.size } : {}), ...(g.hiddenUpdates ? { instructionUpdates: g.hiddenUpdates } : {}),
-        ...(g.unidentified ? { unidentifiedMessages: g.unidentified } : {}),
-        // How often the host said the session would go idle, how often it then asked again and the session's
-        // messages were read to see whether the turn went on, and how many requests were refused outside a turn.
-        ...(g.idleReports ? { idleReports: g.idleReports } : {}), ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}),
-        ...(g.refusedAfterTurn ? { refusedAfterTurn: g.refusedAfterTurn } : {}) };
+        ...(g.hiddenLoads.size ? { instructionLoads: g.hiddenLoads.size } : {}), ...(g.hiddenUpdates.size ? { instructionUpdates: g.hiddenUpdates.size } : {}),
+        ...(g.untrusted ? { untrustedRequests: g.untrusted } : {}),
+        // How often the session's messages were read before a request (once for every request of an open
+        // turn), and how many requests were refused because they were not a turn's.
+        ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}), ...(g.refusedOutsideTurn ? { refusedOutsideTurn: g.refusedOutsideTurn } : {}) };
       record.endedAt = new Date().toISOString();
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
@@ -2024,15 +2023,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         throw new Error('[AZPR] Only the exact plugin-started reviewer input is authorized.');
       }
       g.pending = null;
-      const session = recordOf(await bounded(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal));
+      // The read ends with the stage, not with the run: a stage that the inactivity watchdog stopped waits for this
+      // admission to settle, and a host that stalls here must not hold it.
+      const session = recordOf(await bounded(() => context.session.get({ sessionID: event.sessionID }), g.signal));
       authorize(event.sessionID, session?.agent, session?.model);
-      // The call that sent this prompt can have ended while the session was read (a stage the inactivity watchdog
-      // stopped): nothing waits for this turn any more, so the prompt is not admitted and opens nothing.
+      // A prompt opens a turn only for the call that still waits for it: where that call has ended all the same,
+      // nothing waits for this turn, and the prompt is not admitted.
       if (g.turn !== pending) throw new Error('[AZPR] The reviewer turn this prompt was sent for has ended; the prompt is not admitted.');
       g.admitted++;
       g.promptID = typeof event.messageID === 'string' && event.messageID ? event.messageID : undefined;
-      if (g.promptID) g.prompts.add(g.promptID);
-      g.resting = false;
       g.open = true;
       touch(g, 'the prompt was admitted');
     }));
@@ -2045,22 +2044,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       const g = authorize(event.sessionID, event.agent, event.model);
       if (!g.admitted) throw new Error('[AZPR] Missing authorized reviewer input.');
-      if (!g.open) {
-        // The host said that this session would go idle, and asks again. Either the same execution goes on,
-        // because input reached the session while it was going idle (the notice of a background command, which
-        // the model is handed like a late tool result), or the turn has ended and the host began another
-        // execution by itself, which a wait for the session covers as well. Only the first is part of the turn.
-        const turn = g.turn;
-        const goesOn = g.resting && turn !== null && await promptStillRuns(g, event.sessionID);
-        // Looked at again with nothing awaited before the grant opens: the call that waits for the turn can have
-        // ended meanwhile.
-        if (!goesOn || grants.get(event.sessionID) !== g || !g.resting || g.turn !== turn) {
-          if (g.turn === turn) g.resting = false;
-          g.refusedAfterTurn++;
-          throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
-        }
-        g.resting = false;
-        g.open = true;
+      // A request is the turn's only while the execution that took the turn's prompt runs. The grant is open
+      // from the prompt's admission until the wait for the session ends, but neither end is the turn's own. The
+      // host may have begun an execution by itself before the prompt was admitted (the notice of a background
+      // command woke the session), whose request does not hold the prompt; and the wait also covers an execution
+      // the host starts by itself right after the turn's, whether the turn succeeded or failed. Neither gets
+      // anything. The session's own messages tell: a prompt becomes a message in the execution that takes it,
+      // and an execution leaves its idle marker before the host starts another one.
+      const turn = g.turn;
+      const stored = g.open && turn !== null ? await sessionMessages(g, event.sessionID) : null;
+      const state = stored ? turnState(stored, g.promptID) : 'unknown';
+      // Looked at again, with nothing awaited between this and what follows: the call that waits for the turn
+      // can have ended while the messages were read.
+      if (state !== 'running' || grants.get(event.sessionID) !== g || !g.open || g.turn !== turn) {
+        // Past its marker the turn is over; before its prompt is a message, the turn's own request is still to come.
+        if (state === 'ended' && grants.get(event.sessionID) === g && g.turn === turn) close(g);
+        g.refusedOutsideTurn++;
+        throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
       }
       // Show only the tools this role may run, so the model does not waste turns on others.
       const allowed = new Set(allowedTools(g.role, settings.shell));
@@ -2085,25 +2085,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         for (const source of lean.removed) g.place.sources.add(source.key);
       }
       if (Array.isArray(event.messages)) {
-        let updates = 0;
-        const shown = event.messages.filter(message => {
-          const id = typeof message?.id === 'string' && message.id ? message.id : undefined;
-          // A load is kept from the model in every request; AZPR's own prompt is never taken for one, whatever
-          // another hook wrote on it. Whether the load counts as never shown is another matter: only while no
-          // request has shown a message of its ID, which the turn's check asks (`unseen`).
-          if (isRequestedLoad(message) && !g.prompts.has(id)) {
-            if (!g.shownMessages.has(id)) g.hiddenMessages.add(id);
-            return false;
-          }
-          if (isInstructionUpdate(message)) { updates++; return false; }
-          if (id !== undefined) { g.shownMessages.add(id); g.hiddenMessages.delete(id); }
-          // OpenCode gives every user message of a request the ID of the message it was made of. One without an
-          // ID was rewritten by another hook: it may be a load that nothing can name any more.
-          else if (message?.role === 'user') g.unidentified++;
-          return true;
-        });
-        if (shown.length !== event.messages.length) event.messages = shown;
-        g.hiddenUpdates = Math.max(g.hiddenUpdates, updates);
+        // What the host wrote of instructions into the session by itself is taken out of every request, by the
+        // session's own record. The request counts as proof that the model saw none of it only where its user
+        // messages are the session's own, one for one, and hold every such message.
+        const own = withoutHostMessages(event.messages, stored);
+        if (own.messages.length !== event.messages.length) event.messages = own.messages;
+        for (const id of own.hidden) g.hiddenMessages.add(id);
+        for (const message of stored) if (own.hidden.includes(message?.id)) (message.type === 'system' ? g.hiddenUpdates : g.hiddenLoads).add(message.id);
+        if (!own.trusted) g.untrusted++;
       }
       if (commentRole(g.role) && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
@@ -2125,19 +2114,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         if (tools) for (const tool of REVIEW_TOOL_NAMES) delete tools[tool];
       }));
     }
-    // OpenCode runs this hook when a session's model work is done and nothing waits for the session, right before
-    // it goes idle, and not after a failure or an interruption (`experimental.idle`, OpenCode 2.3.0 through
-    // 2.4.1). For a private session that is the end of the turn's work, so its grant closes here, before the host
-    // can start anything else in it; the wait for the session, which `ask` closes it on in any case, also covers
-    // an execution the host starts right afterwards. A host that never runs the hook leaves the grant to that.
-    registrations.push(await context.session.hook('experimental.idle', event => {
-      const g = grants.get(event?.sessionID);
-      if (!g?.open) return;
-      g.open = false;
-      g.primaryPrepared = false;
-      g.resting = true;
-      g.idleReports++;
-    }));
     registrations.push(await context.session.hook('model.request', async event => {
       if (!privateSession(event)) return;
       const observed = grants.get(event.sessionID);

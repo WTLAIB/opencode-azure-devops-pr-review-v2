@@ -541,9 +541,27 @@ test('a follow-up prompt in the same session only examines its own turn', async 
   const repair = 'AZPR runtime: correct your answer';
   const history = [{ id: 'msg_input', type: 'user', text: input }, assistant({ id: 'msg_first' }), idle(),
     { id: 'msg_repair', type: 'user', text: repair }, assistant({ id: 'msg_second', content: [{ type: 'text', text: '{"fixed":true}' }] }), { ...idle(), id: 'msg_idle2' }];
-  const { context } = host({ prompt: async () => ({ id: 'msg_repair', sessionID, type: 'user', payload: { text: repair }, delivery: 'steer' }), context: async () => history });
-  const answer = await requestReview(context, { sessionID, text: repair });
-  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"fixed":true}' }]);
+  const second = messages => host({ prompt: async () => ({ id: 'msg_repair', sessionID, type: 'user', payload: { text: repair }, delivery: 'steer' }), context: async () => messages }).context;
+  // The caller names the prompt of the turn before, whose answer it took: this turn is looked at from that turn's
+  // idle marker on, and says which prompt was its own for the next one.
+  const answer = await requestReview(second(history), { sessionID, text: repair, since: 'msg_input' });
+  assert.deepEqual([answer.parts, answer.prompt], [[{ type: 'text', text: '{"fixed":true}' }], 'msg_repair']);
+  // What reached the session between the two turns was sent to this turn's model with the rest: someone else's
+  // message there fails the turn like one after the prompt, whatever it is. What the host left there by itself does
+  // not: the end of an execution it had begun, and the notice of a command this session started.
+  const between = (...messages) => [...history.slice(0, 3), ...messages, ...history.slice(3)];
+  for (const foreign of [{ id: 'msg_other', type: 'synthetic', text: 'someone else wrote this' }, { id: 'msg_person', type: 'user', text: 'a person typed here' },
+    { id: 'msg_notice_sh_1', type: 'synthetic', text: 'a notice for a shell that this session never started', metadata: { source: 'shell', shellID: 'sh_1', state: 'completed' } }]) {
+    await assert.rejects(requestReview(second(between(foreign)), { sessionID, text: repair, since: 'msg_input' }), error => error.contextChanged === true && /another message during this turn/.test(error.message), foreign.id);
+  }
+  const woken = between({ id: 'msg_woken', type: 'assistant', agent: 'azpr-review-functional', model, finish: 'error', error: { type: 'unknown' }, time: { created: 5, completed: 6 }, content: [] }, { id: 'msg_idle_w', type: 'idle', outcome: 'failed' });
+  assert.deepEqual((await requestReview(second(woken), { sessionID, text: repair, since: 'msg_input' })).parts, [{ type: 'text', text: '{"fixed":true}' }]);
+  // A session's first turn is looked at from the session's beginning: a prompt before it is not this caller's.
+  await assert.rejects(requestReview(second(history), { sessionID, text: repair }), /another message during this turn/);
+  // And the turn before must still be where it was: its prompt among the messages, and its marker before this prompt.
+  for (const since of ['msg_gone', 'msg_repair']) {
+    await assert.rejects(requestReview(second(history), { sessionID, text: repair, since }), error => error.contextChanged === true && /The turn before this one is no longer where the session's messages had it/.test(error.message), since);
+  }
 });
 
 test('only a compaction the host attempted in the failed turn marks it; a refused background summary leaves no trace', async () => {
@@ -620,7 +638,7 @@ test('the host\'s own load of instruction files does not end a turn when the cal
   // plainly yes, has not said it.
   for (const unseen of [undefined, () => false, only('msg_other'), () => 'yes', () => undefined]) {
     const shown = host({ context: turn(load()) });
-    await assert.rejects(requestReview(shown.context, { sessionID, text: input, unseen }), error => error.contextChanged === true && /Instruction files that OpenCode loaded into this session were not kept from its model/.test(error.message));
+    await assert.rejects(requestReview(shown.context, { sessionID, text: input, unseen }), error => error.contextChanged === true && /Instructions that OpenCode wrote into this session by itself were not kept from its model/.test(error.message));
   }
   // Someone else's messages still end the turn, whatever the caller kept back: a synthetic message without the
   // host's list of paths, a user message that only looks like a load.
@@ -639,11 +657,26 @@ test('the host\'s own load of instruction files does not end a turn when the cal
   // since, it ends nothing; shown in a request of this turn, it fails this turn too.
   const earlier = () => host({ context: async () => [{ id: 'msg_first', type: 'user', text: 'first prompt' }, reading(), load(), assistant({ id: 'msg_first_answer' }), { id: 'msg_idle_1', type: 'idle', outcome: 'succeeded' },
     { id: 'msg_input', type: 'user', text: input }, assistant(), idle()] });
-  assert.equal((await requestReview(earlier().context, { sessionID, text: input, unseen: only('msg_load') })).instructionLoads, undefined, 'Counted for the turn it was loaded in.');
-  await assert.rejects(requestReview(earlier().context, { sessionID, text: input, unseen: () => false }), /were not kept from its model/);
+  assert.equal((await requestReview(earlier().context, { sessionID, text: input, since: 'msg_first', unseen: only('msg_load') })).instructionLoads, undefined, 'Counted for the turn it was loaded in.');
+  await assert.rejects(requestReview(earlier().context, { sessionID, text: input, since: 'msg_first', unseen: () => false }), /were not kept from its model/);
   // And one after the turn's marker, which a later execution of the session left.
   const later = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, assistant(), idle(), load(), { ...idle(), id: 'msg_idle2' }] });
   await assert.rejects(requestReview(later.context, { sessionID, text: input, unseen: () => false }), /were not kept from its model/);
+  // A turn that did not succeed fails by its own outcome, which decides whether it is tried again: a load that
+  // the native read left right before the execution was interrupted, or before a used-up limit ended it, was
+  // offered to no request, and that is not what failed the turn.
+  const interrupted = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, reading(), load(), { ...idle(), outcome: 'interrupted' }], get: async () => ({ id: sessionID, outcome: 'interrupted', agent: 'azpr-review-functional', model }) });
+  await assert.rejects(requestReview(interrupted.context, { sessionID, text: input, unseen: () => false }), error => {
+    assert.deepEqual([error.contextChanged, error.execution.terminalOutcome, error.execution.interrupted, classifyFailure(error)], [undefined, 'interrupted', true, 'permanent']);
+    return true;
+  });
+  const limited = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, reading(), load(),
+    assistant({ id: 'msg_limit', finish: 'error', error: { type: 'provider.quota', status: 429, message: 'used up' }, content: [] }), { ...idle(), outcome: 'failed' }],
+    get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
+  await assert.rejects(requestReview(limited.context, { sessionID, text: input, unseen: () => false }), error => {
+    assert.deepEqual([error.contextChanged, error.execution.provider.exhausted, classifyFailure(error)], [undefined, 'provider.quota', 'permanent']);
+    return true;
+  });
 });
 
 test('an update of the instructions that the host wrote into the session is no step of the turn, wherever it stands', async () => {
@@ -653,6 +686,7 @@ test('an update of the instructions that the host wrote into the session is no s
   const prompt = { id: 'msg_input', type: 'user', text: input };
   const reading = assistant({ id: 'msg_read', finish: 'tool-calls', content: [{ type: 'tool', id: 'call_read', name: 'azpr_read_file', state: { status: 'completed' } }] });
   const cut = assistant({ id: 'msg_cut', finish: 'error', error: { type: 'provider.transport', message: 'connection lost' }, retry: { attempt: 2, at: 5 }, content: [{ type: 'text', text: '{"status":"COM' }] });
+  const kept = () => true;
   for (const [name, messages, fields] of [
     ['between two steps', [prompt, reading, update(), assistant(), idle()], {}],
     ['between a step that broke and its retry', [prompt, cut, update(), assistant(), idle()], { retriedSteps: 1 }],
@@ -660,14 +694,25 @@ test('an update of the instructions that the host wrote into the session is no s
     ['several', [prompt, update('msg_u1'), reading, update('msg_u2'), assistant(), update('msg_u3'), idle()], {}],
   ]) {
     const { context } = host({ context: async () => messages });
-    const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
+    const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true, unseen: kept });
     assert.deepEqual([answer.parts, answer.retriedSteps], [[{ type: 'text', text: '{"status":"COMPLETE"}' }], fields.retriedSteps], name);
+  }
+  // Like a load, it is the caller that says that no request showed it: one of several that it does not say so of,
+  // also one of an earlier turn or after the turn's marker, and the answer is not accepted.
+  for (const [name, messages, options] of [
+    ['one of three', [prompt, update('msg_u1'), reading, update('msg_u2'), assistant(), update('msg_u3'), idle()], { unseen: id => id !== 'msg_u2' }],
+    ['nothing said', [prompt, reading, update(), assistant(), idle()], {}],
+    ['of an earlier turn', [{ id: 'msg_first', type: 'user', text: 'first prompt' }, update(), assistant({ id: 'msg_first_answer' }), { ...idle(), id: 'msg_idle_1' }, prompt, assistant(), idle()], { since: 'msg_first', unseen: () => false }],
+    ['after the marker', [prompt, assistant(), idle(), update()], { unseen: () => false }],
+  ]) {
+    const { context } = host({ context: async () => messages });
+    await assert.rejects(requestReview(context, { sessionID, text: input, ...options }), error => error.contextChanged === true && /Instructions that OpenCode wrote into this session by itself were not kept from its model/.test(error.message), name);
   }
   // It excuses nothing else: the step that broke still needs its retry, and a turn without a marker is unfinished.
   const { context: unretried } = host({ context: async () => [prompt, cut, update(), idle()] });
-  await assert.rejects(requestReview(unretried, { sessionID, text: input, allowHostContinuations: true }), /no complete, successful final assistant response/);
+  await assert.rejects(requestReview(unretried, { sessionID, text: input, allowHostContinuations: true, unseen: kept }), /no complete, successful final assistant response/);
   const { context: unfinished } = host({ context: async () => [prompt, assistant(), update()] });
-  await assert.rejects(requestReview(unfinished, { sessionID, text: input }), /did not finish successfully/);
+  await assert.rejects(requestReview(unfinished, { sessionID, text: input, unseen: kept }), /did not finish successfully/);
 });
 
 // OpenCode 2.3.0 through 2.4.1, shell allowed: a command the session started goes on in the background (the model
@@ -717,7 +762,7 @@ test('a command that ends after the answer wakes the session by itself; the answ
   assert.deepEqual((await requestReview(later, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
   // Something else of the host's between the marker and the notice changes nothing: an update of the instructions.
   const { context: updated } = host({ context: async () => [...history.slice(0, 4), { id: 'msg_update', type: 'system', text: 'The instructions changed.' }, ...history.slice(4)] });
-  assert.deepEqual((await requestReview(updated, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
+  assert.deepEqual((await requestReview(updated, { sessionID, text: input, unseen: id => id === 'msg_update' })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
   // The turn itself must still have ended well.
   const { context: failed } = host({ context: async () => [history[0], shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"given"}') }), { ...idle(), outcome: 'failed' }, shellNotice()],
     get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
@@ -737,16 +782,23 @@ test('a shell notice the session did not start, a second one for a shell, and an
     'a second notice for the shell, in the same turn': [prompt, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), { ...shellNotice('sh_1'), id: 'msg_again' }, assistant({ id: 'msg_second' }), idle()],
     'a second notice for the shell, in a later turn': [{ id: 'msg_earlier', type: 'user', text: 'the first prompt' }, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), { ...idle(), id: 'msg_idle1' },
       prompt, { ...shellNotice('sh_1'), id: 'msg_again' }, assistant({ id: 'msg_second' }), idle()],
+    // Delivered right before the next prompt, it stands before that prompt, and that turn's model was sent it too.
+    'a second notice for the shell, between two turns': [{ id: 'msg_earlier', type: 'user', text: 'the first prompt' }, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), { ...idle(), id: 'msg_idle1' },
+      { ...shellNotice('sh_1'), id: 'msg_again' }, prompt, assistant({ id: 'msg_second' }), idle()],
     'a second notice for the shell, after the turn': [prompt, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), idle(), { ...shellNotice('sh_1'), id: 'msg_again' }],
     'other input in the turn next to a real notice': [prompt, shellCall('sh_1'), shellNotice('sh_1'), { type: 'synthetic', text: 'foreign input' }, assistant({ id: 'msg_second' }), idle()],
     'other input after a late notice': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), idle(), shellNotice('sh_1'), { type: 'user', text: 'foreign input' }, assistant({ id: 'msg_woken' }), { ...idle(), id: 'msg_idle2' }],
     'other input after the turn without a notice': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), idle(), { type: 'synthetic', text: 'foreign input' }, assistant({ id: 'msg_woken' }), { ...idle(), id: 'msg_idle2' }],
   })) {
     const { context } = host({ context: async () => history });
-    await assert.rejects(requestReview(context, { sessionID, text: input }), /another message during this turn/, name);
+    await assert.rejects(requestReview(context, { sessionID, text: input, ...(history[0].id === 'msg_earlier' ? { since: 'msg_earlier' } : {}) }), /another message during this turn/, name);
   }
-  // The notice of a command that an earlier turn of the session started is this session's own in a later turn.
-  const { context: carried } = host({ context: async () => [{ id: 'msg_earlier', type: 'user', text: 'the first prompt' }, shellCall('sh_1'), assistant({ id: 'msg_first' }), { ...idle(), id: 'msg_idle1' },
-    prompt, shellNotice('sh_1'), assistant({ id: 'msg_second', ...said('{"answer":"second turn"}') }), idle()] });
-  assert.deepEqual((await requestReview(carried, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"second turn"}' }]);
+  // The notice of a command that an earlier turn of the session started is this session's own in a later turn,
+  // and between the two turns, where it woke the session and the host could run nothing for it.
+  const earlier = [{ id: 'msg_earlier', type: 'user', text: 'the first prompt' }, shellCall('sh_1'), assistant({ id: 'msg_first' }), { ...idle(), id: 'msg_idle1' }];
+  const answered = [assistant({ id: 'msg_second', ...said('{"answer":"second turn"}') }), idle()];
+  for (const history of [[...earlier, prompt, shellNotice('sh_1'), ...answered], [...earlier, shellNotice('sh_1'), { id: 'msg_idle_w', type: 'idle', outcome: 'failed' }, prompt, ...answered]]) {
+    const { context } = host({ context: async () => history });
+    assert.deepEqual((await requestReview(context, { sessionID, text: input, since: 'msg_earlier' })).parts, [{ type: 'text', text: '{"answer":"second turn"}' }]);
+  }
 });

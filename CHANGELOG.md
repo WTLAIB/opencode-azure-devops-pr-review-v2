@@ -136,6 +136,9 @@ Known and not changed by this release (see the
   last movement can still pick the step that was pressed. The second is
   measured where the terminal UI handles the two events: where its input
   waited meanwhile, a press made later counts the same.
+- A step, a session's row or `close` that is pressed, moved on a little and
+  released more than a second after the last movement is not taken (click
+  again), also on OpenCode 2.3.x, which makes no release up.
 
 ## 0.5.0 — 2026-11-24
 
