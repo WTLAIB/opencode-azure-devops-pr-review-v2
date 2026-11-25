@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Compile the terminal panel's JSX (src/tui-view.jsx) to the JavaScript OpenCode loads (src/tui.js).
 //
-// OpenCode compiles a plugin's JSX when it loads it, but OpenCode 2.3.0 (OpenTUI 0.8.4) skips every
-// file under node_modules, which is where it installs npm and Git packages; anomalyco/opentui#2051
-// compiles them again from OpenTUI 0.9.0 on. So the compiled file is part of the repository and of
+// OpenCode compiles a plugin's JSX when it loads it, but OpenCode 2.3.0 through 2.3.2 (OpenTUI 0.8.4) skip
+// every file under node_modules, which is where they install npm and Git packages; anomalyco/opentui#2051
+// compiles them again from OpenTUI 0.9.0 on, which OpenCode 2.4.0 brought. A compiled file loads on all of
+// them, so it is part of the repository and of
 // the package, made with the settings OpenTUI itself uses for plugin JSX: Solid's universal renderer,
 // imported from @opentui/solid. Nothing is built when the plugin is installed.
 //

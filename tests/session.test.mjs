@@ -266,6 +266,7 @@ test('provider failures expose status and observed tool turns while retaining pr
 test('a used-up usage or spend limit is named and not retried, with or without an HTTP status', async () => {
   for (const [type, status, named] of [['provider.quota', 429, /usage quota as used up \(provider\.quota\)/], ['provider.free-limit', 429, /free model's usage limit as reached \(provider\.free-limit\)/],
     ['provider.chatgpt-limit', 429, /ChatGPT reports the subscription usage limit as reached \(provider\.chatgpt-limit\)/],
+    ['provider.chatgpt-workspace-limit', 429, /ChatGPT reports the usage limit set by the workspace's admin as reached \(provider\.chatgpt-workspace-limit\)/],
     ['provider.go-limit', 429, /OpenCode Go reports its usage limit as reached \(provider\.go-limit\)/],
     ['provider.budget-limit', 429, /workspace usage limit as reached \(provider\.budget-limit\)/],
     ['provider.model-budget-limit', 429, /this model's spend limit as reached \(provider\.model-budget-limit\)/],
@@ -554,4 +555,90 @@ test('a model that restarts its answer after a stream interruption keeps only th
   assert.equal(answer.continuation.restartedAt, 1);
   assert.equal(restartIndex(['{"status":"COM', 'PLETE"}']), 0, 'A real continuation is joined.');
   assert.equal(restartIndex(['{"a"', '{"a" again']), 0, 'Very short openings are not compared.');
+});
+
+// OpenCode 2.3.0 and later: after the native read tool read a file of the project, the host leaves the instruction
+// files near it in the session as a synthetic message of its own (AGENTS.md; from 2.3.1 also CLAUDE.md).
+test('the host\'s own load of instruction files does not end a turn when the caller kept it from the model, and only then', async () => {
+  const load = (fields = {}) => ({ id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED RULES', description: 'Loaded sub/AGENTS.md',
+    metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } }, ...fields });
+  const reading = () => assistant({ id: 'msg_read', finish: 'tool-calls', content: [{ type: 'tool', id: 'call_read', name: 'read', state: { status: 'completed' } }] });
+  const turn = message => async () => [{ id: 'msg_input', type: 'user', text: input }, reading(), message, assistant(), idle()];
+  // Kept from every model request of the session: the answer is the answer to the admitted prompt.
+  const kept = host({ context: turn(load()) });
+  const answer = await requestReview(kept.context, { sessionID, text: input, hiddenMessages: new Set(['msg_load']) });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
+  assert.equal(answer.instructionLoads, 1);
+  // Not known to be kept from the model: the turn ends as with any other message.
+  for (const hiddenMessages of [undefined, new Set(), new Set(['msg_other'])]) {
+    const shown = host({ context: turn(load()) });
+    await assert.rejects(requestReview(shown.context, { sessionID, text: input, hiddenMessages }), /another message during this turn/);
+  }
+  // Someone else's messages still end the turn, whatever the caller hid: a synthetic message without the host's
+  // list of paths, one with another ID than the hidden one, a user message that only looks like a load.
+  for (const foreign of [load({ metadata: undefined }), load({ metadata: { instruction: { paths: [] } } }), load({ metadata: { azpr: { notice: true } } }), load({ id: 'msg_forged' }),
+    load({ type: 'user' }), { id: 'msg_load', type: 'synthetic', text: 'A notice of another plugin.' }]) {
+    const { context } = host({ context: turn(foreign) });
+    await assert.rejects(requestReview(context, { sessionID, text: input, hiddenMessages: new Set(['msg_load']) }), /another message during this turn/, JSON.stringify(foreign).slice(0, 120));
+  }
+  // One of each in a turn: the foreign one decides.
+  const both = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, reading(), load(), { id: 'msg_foreign', type: 'synthetic', text: 'foreign input' }, assistant(), idle()] });
+  await assert.rejects(requestReview(both.context, { sessionID, text: input, hiddenMessages: new Set(['msg_load']) }), /another message during this turn/);
+  // A load of an earlier turn lies before the admitted prompt and is not looked at.
+  const earlier = host({ context: async () => [{ id: 'msg_first', type: 'user', text: 'first prompt' }, reading(), load(), assistant({ id: 'msg_first_answer' }), { id: 'msg_idle_1', type: 'idle', outcome: 'succeeded' },
+    { id: 'msg_input', type: 'user', text: input }, assistant(), idle()] });
+  assert.equal((await requestReview(earlier.context, { sessionID, text: input })).instructionLoads, undefined);
+});
+
+// OpenCode 2.3.0 through 2.4.1, shell allowed: a command the session started goes on in the background (the model
+// asked for it, or from 2.3.1 its timeout ran out) and the host tells the session when it has ended.
+const shellCall = (shellID = 'sh_1', name = 'shell') => assistant({ id: `msg_call_${shellID}`, finish: 'tool-calls', content: [{ type: 'tool', id: `tool_${shellID}`, name,
+  state: { status: 'completed', input: { command: 'sleep 2', background: true }, metadata: { status: 'running', truncated: false, shellID, pid: 1 }, content: [{ type: 'text', text: `Command moved to the background (shell ID: ${shellID}).` }] } }] });
+const shellNotice = (shellID = 'sh_1') => ({ id: `msg_notice_${shellID}`, type: 'synthetic', text: `<background-result kind="shell" id="${shellID}" state="completed" command="sleep 2">\n(no output)\n</background-result>`,
+  description: 'sleep 2', metadata: { source: 'shell', shellID, jobID: shellID, state: 'completed', truncated: false, exit: 0 } });
+const said = text => ({ content: [{ type: 'text', text }] });
+
+test('the host\'s notice that a background command of this session ended is no foreign input; the answer after it counts', async () => {
+  const { context } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(),
+    assistant({ id: 'msg_first', ...said('{"answer":"before the notice"}') }), shellNotice(), assistant({ id: 'msg_second', ...said('{"answer":"after the notice"}') }), idle()] });
+  const answer = await requestReview(context, { sessionID, text: input });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"answer":"after the notice"}' }]);
+  assert.equal(answer.shellNotices, 1);
+  // The notice may be the last thing before the turn ends: the answer before it stands.
+  const { context: last } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"only"}') }), shellNotice(), idle()] });
+  assert.deepEqual((await requestReview(last, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"only"}' }]);
+});
+
+test('a command that ends after the answer wakes the session by itself; the answer before the idle marker stands', async () => {
+  const history = [{ id: 'msg_input', type: 'user', text: input }, shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"given"}') }), idle(),
+    shellNotice(), assistant({ id: 'msg_woken', ...said('The command has finished.') }), { ...idle(), id: 'msg_idle2' }];
+  const { context } = host({ context: async () => history });
+  const answer = await requestReview(context, { sessionID, text: input });
+  assert.deepEqual(answer.parts, [{ type: 'text', text: '{"answer":"given"}' }]);
+  assert.equal(answer.shellNotices, 1);
+  // The host could not run the woken turn (no grant any more): the session's outcome is that turn's, not this one's.
+  const { context: refused } = host({ context: async () => [...history.slice(0, 5), { ...idle(), id: 'msg_idle2', outcome: 'failed' }],
+    get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
+  assert.deepEqual((await requestReview(refused, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
+  // The turn itself must still have ended well.
+  const { context: failed } = host({ context: async () => [history[0], shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"given"}') }), { ...idle(), outcome: 'failed' }, shellNotice()],
+    get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
+  await assert.rejects(requestReview(failed, { sessionID, text: input }), /did not finish successfully/);
+});
+
+test('a shell notice the session did not start, and anything else that arrives, stays foreign input', async () => {
+  const prompt = { id: 'msg_input', type: 'user', text: input };
+  for (const [name, history] of Object.entries({
+    'a shell this session never started': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), shellNotice('sh_other'), assistant({ id: 'msg_second' }), idle()],
+    'no shell call at all (a command a person ran)': [prompt, assistant({ id: 'msg_first' }), shellNotice('sh_1'), assistant({ id: 'msg_second' }), idle()],
+    'the notice before the call that names its shell': [prompt, shellNotice('sh_1'), shellCall('sh_1'), assistant({ id: 'msg_second' }), idle()],
+    'another tool whose result names a shell': [prompt, shellCall('sh_1', 'foreign_tool'), assistant({ id: 'msg_first' }), shellNotice('sh_1'), assistant({ id: 'msg_second' }), idle()],
+    'a notice without the host\'s source mark': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), { ...shellNotice('sh_1'), metadata: { shellID: 'sh_1' } }, assistant({ id: 'msg_second' }), idle()],
+    'other input in the turn next to a real notice': [prompt, shellCall('sh_1'), shellNotice('sh_1'), { type: 'synthetic', text: 'foreign input' }, assistant({ id: 'msg_second' }), idle()],
+    'other input after a late notice': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), idle(), shellNotice('sh_1'), { type: 'user', text: 'foreign input' }, assistant({ id: 'msg_woken' }), { ...idle(), id: 'msg_idle2' }],
+    'other input after the turn without a notice': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), idle(), { type: 'synthetic', text: 'foreign input' }, assistant({ id: 'msg_woken' }), { ...idle(), id: 'msg_idle2' }],
+  })) {
+    const { context } = host({ context: async () => history });
+    await assert.rejects(requestReview(context, { sessionID, text: input }), /another message during this turn/, name);
+  }
 });

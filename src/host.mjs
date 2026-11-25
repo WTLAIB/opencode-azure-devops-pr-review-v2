@@ -6,7 +6,7 @@
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
  */
-export const TESTED_HOST_VERSION = '2.3.2';
+export const TESTED_HOST_VERSION = '2.4.1';
 
 // Text OpenCode 2.0.32 through 2.2.7 queue after resuming an interrupted text stream. OpenCode 2.3.0 retries the
 // interrupted step instead and queues nothing (see `retriedSteps` in session.mjs).
@@ -59,7 +59,7 @@ export function packageNamed(target, name, repository) {
 }
 
 /**
- * This plugin's entries in the host's plugin list. OpenCode 2.1.4 through 2.3.0 list
+ * This plugin's entries in the host's plugin list. OpenCode 2.1.4 through 2.4.1 list
  * { id?, source: { type: package|local|builtin|sdk, target?, version? },
  * state: { status: active|failed, error? } } and keeps only the first entry
  * of a plugin ID: a second one is listed as failed with "Duplicate plugin ID".
@@ -95,7 +95,7 @@ export function pluginSourceLabel(source) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.1.2 through 2.3.0 emit one delta event per streamed chunk of answer text,
+ * 2.1.2 through 2.4.1 emit one delta event per streamed chunk of answer text,
  * reasoning or tool-call input; the projected session context shows the text
  * only once the step ends.
  */
@@ -124,7 +124,7 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4 through 2.3.0),
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4 through 2.4.1),
  * whose fetch accepts per-request `proxy` and `tls` options. Node's fetch
  * silently ignores both, so a configured proxy would be bypassed; callers
  * refuse instead.
@@ -156,35 +156,131 @@ export function usageTotals(requests) {
 /**
  * Provider error types that mean a usage or spend limit is used up. Another
  * attempt fails the same way, so AZPR refuses OpenCode's retries of them and
- * starts no new session. OpenCode 2.2.0 added the spend limits and 2.2.3 the
- * ChatGPT and OpenCode Go usage limits; before, a ChatGPT limit arrived as a
- * rate limit.
+ * starts no new session. OpenCode 2.2.0 added the spend limits, 2.2.3 the
+ * ChatGPT and OpenCode Go usage limits and 2.4.0 the limit a ChatGPT
+ * workspace's admin sets for a member; before, a ChatGPT limit arrived as a
+ * rate limit (the workspace limit as a rate limit or, where its text speaks
+ * of a usage limit, as a used-up quota).
  */
 export const USED_UP_LIMITS = Object.freeze({
   'provider.quota': 'The provider reports the usage quota as used up',
   'provider.free-limit': "OpenCode reports the free model's usage limit as reached",
   'provider.chatgpt-limit': 'ChatGPT reports the subscription usage limit as reached',
+  'provider.chatgpt-workspace-limit': "ChatGPT reports the usage limit set by the workspace's admin as reached",
   'provider.go-limit': 'OpenCode Go reports its usage limit as reached',
   'provider.budget-limit': 'OpenCode reports the workspace usage limit as reached',
   'provider.model-budget-limit': "OpenCode reports this model's spend limit as reached",
 });
 
 /**
+ * The longest line OpenCode's native `read` returns whole: it cuts a longer one there and appends
+ * "... (line truncated to 2000 chars)" (OpenCode 2.3.0 through 2.4.1). A model reads AZPR's private data pages
+ * with that tool, one row per line, so a row must not be longer.
+ */
+export const HOST_READ_LINE_CHARACTERS = 2000;
+
+/**
  * Whether a rejected session call says the session does not exist. OpenCode
- * 2.2.4 and 2.3.0 reject `session.get` and `session.remove` of such a session
+ * 2.2.4 through 2.4.1 reject `session.get` and `session.remove` of such a session
  * with an error whose `_tag` and `name` are `Session.NotFoundError`.
  */
 export const isSessionNotFound = error => (error?._tag ?? error?.name) === 'Session.NotFoundError';
 
 /**
- * Whether a session still has the name OpenCode shows for one that nobody named. OpenCode 2.3.0 creates a
- * conversation without a title and lists it as "New session"; earlier releases stored the same words with the
+ * Whether a session still has the name OpenCode shows for one that nobody named. OpenCode 2.3.0 through 2.4.1
+ * create a conversation without a title and list it as "New session"; earlier releases stored the same words with the
  * time it was created. OpenCode's own model names such a conversation when it first runs there.
  */
 export function isUntitledSession(session) {
   const title = session?.title;
   return title === undefined || title === null || title === '' ||
     (typeof title === 'string' && /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title));
+}
+
+/**
+ * The sources of a request's instructions that are facts of the host itself: the date and the environment (the
+ * working directory and the platform). Every other source tells of the place a conversation is in or of what is
+ * configured there: instruction files (AGENTS.md, CLAUDE.md, the instructions a configuration lists), what MCP
+ * servers, references and skills say of themselves, CodeMode guidance, instructions another plugin added.
+ */
+export const HOST_FACT_SOURCES = Object.freeze(['core/date', 'core/environment']);
+
+/**
+ * A request's system parts with the instructions part rebuilt from the sources named in `keep`. OpenCode 2.3.0
+ * through 2.4.1 build that part from sources, join their texts with a blank line and keep each source as
+ * `{ key, text }` in the part's `metadata.experimental.instructions`, a field the host marks as experimental.
+ * Returns `{ system, removed }` (the sources that were left out, in their order), or null where no part has that
+ * shape, more than one has it, or its text is not what its sources give: nothing can be told apart then, and
+ * the caller leaves the request as it is.
+ */
+export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
+  if (!Array.isArray(system)) return null;
+  const found = system.flatMap((part, index) => Array.isArray(part?.metadata?.experimental?.instructions) ? [index] : []);
+  if (found.length !== 1) return null;
+  const [at] = found, part = system[at], sources = part.metadata.experimental.instructions;
+  if (typeof part.text !== 'string' || !sources.every(source => isRecord(source) && typeof source.key === 'string' && typeof source.text === 'string') ||
+      part.text !== sources.map(source => source.text).join('\n\n')) return null;
+  const kept = sources.filter(source => keep.includes(source.key)), removed = sources.filter(source => !keep.includes(source.key));
+  if (!removed.length) return { system, removed };
+  const rebuilt = kept.length ? [{ ...part, text: kept.map(source => source.text).join('\n\n'),
+    metadata: { ...part.metadata, experimental: { ...part.metadata.experimental, instructions: kept } } }] : [];
+  return { system: [...system.slice(0, at), ...rebuilt, ...system.slice(at + 1)], removed };
+}
+
+/**
+ * The request option in which OpenCode's Claude Code provider (`claude-agent`) keeps the instructions it hands
+ * the model. That provider ignores a request's system parts: its own `context` hook works the instructions out of
+ * them and leaves the text here (OpenCode 2.3.0 through 2.4.1).
+ */
+export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
+
+/**
+ * That text without the sources that were left out of the system parts. The provider joins with a blank line the
+ * texts of the parts after the first, and of the instructions part every source but the date and the
+ * environment (Claude Code writes those itself), as the parts are when its hook runs: before any plugin's, and
+ * before the hooks that add parts of their own, so the text cannot be worked out again from the parts a plugin
+ * sees. The sources that were left out are one run of it instead: their texts in their order, joined the same
+ * way, standing alone or between blank lines. Returns the text without that run, or null where the run is not
+ * there exactly once: the provider then works differently from what is written here, and nothing can be told
+ * apart.
+ */
+export function withoutClaudeSources(option, texts) {
+  if (typeof option !== 'string' || !Array.isArray(texts) || !texts.length || !texts.every(text => typeof text === 'string')) return null;
+  const run = texts.join('\n\n');
+  if (!run) return null;
+  const places = [];
+  for (let at = option.indexOf(run); at >= 0; at = option.indexOf(run, at + 1)) {
+    const end = at + run.length;
+    if ((at === 0 || (at >= 2 && option.startsWith('\n\n', at - 2))) && (end === option.length || option.startsWith('\n\n', end))) places.push(at);
+  }
+  if (places.length !== 1) return null;
+  const before = option.slice(0, places[0]), after = option.slice(places[0] + run.length);
+  return before && after ? before + after.slice(2) : before ? before.slice(0, -2) : after.slice(2);
+}
+
+/**
+ * Whether a message is one OpenCode leaves in a session by itself after the session's native read tool read a file
+ * of the project: the instruction files between that file and the conversation's directory (AGENTS.md; from
+ * OpenCode 2.3.1 also CLAUDE.md), as a synthetic message whose `metadata.instruction.paths` names the files it
+ * holds. The message a request is built with carries the same metadata (OpenCode 2.3.0 through 2.4.1).
+ */
+export function isInstructionLoad(message) {
+  const paths = message?.metadata?.instruction?.paths;
+  return Array.isArray(paths) && paths.length > 0 && paths.every(path => typeof path === 'string' && path.length > 0);
+}
+
+/**
+ * Whether a message of a request is an update of the instructions that OpenCode wrote into the session because a
+ * source changed while the session ran (an instruction file that was edited, an MCP server that says something
+ * else): a system message of text and nothing else. OpenCode 2.3.0 through 2.4.1 build such a message from
+ * nothing but `session.instructions.updated`, without an ID or metadata; the other system messages they know
+ * change a model's effort or its tools and hold no text.
+ */
+export function isInstructionUpdate(message) {
+  if (message?.role !== 'system' || message.tools !== undefined) return false;
+  const content = message.content;
+  if (typeof content === 'string') return content.length > 0;
+  return Array.isArray(content) && content.length > 0 && content.every(part => part?.type === 'text' && typeof part.text === 'string');
 }
 
 /** Throw one readable error naming every missing host method. */

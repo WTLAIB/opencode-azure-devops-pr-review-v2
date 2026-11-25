@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, pageRows, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
 import { publicationItems, inlineMarker, sharedMarker, reviewMethod, publishableFindings } from '../src/comments.mjs';
@@ -1542,4 +1543,86 @@ test('without a local record, a refused write whose marker the read-back finds i
   const entries = [...changed.publication.values()];
   assert.ok(entries.every(entry => entry.state === 'VERIFIED'), 'The read-back finds every marker, as before.');
   assert.deepEqual(entries.filter(entry => entry.earlierText).map(entry => entry.kind === 'summary' ? 'summary' : entry.findingId), ['summary', 'F-1']);
+});
+
+// OpenCode's native read cuts a line at HOST_READ_LINE_CHARACTERS and says so at its end; a model reads the
+// pages of a private value with that tool, one row per line.
+test('the rows of a private value\'s pages come back whole through the host\'s read, and together they are the value', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await createCommentData({ root: directory });
+  const hostRead = line => line.length <= HOST_READ_LINE_CHARACTERS ? line : `${line.slice(0, HOST_READ_LINE_CHARACTERS)}... (line truncated to ${HOST_READ_LINE_CHARACTERS} chars)`;
+  const texts = {
+    prose: Array.from({ length: 60 }, (_, i) => `Paragraph ${i}: the "retry budget" check moves before the cache lookup; see /src/file-0.ts.`).join('\n'),
+    code: Array.from({ length: 400 }, (_, i) => `  const value${i} = compute(input${i}, options) // step ${i}`).join('\n'),
+    oneLine: 'x'.repeat(12000),
+    quotes: '"\\'.repeat(4000),
+    control: '\u0000\u0001\u001f'.repeat(1500),
+    pairs: '中文說明與🙂表情'.repeat(700),
+  };
+  for (const [name, text] of Object.entries(texts)) {
+    for (const reference of [await store.put(text), await store.object({ value: text, list: [text.slice(0, 5000)] })]) {
+      const whole = await store.read(reference);
+      const lines = (await readFile(reference.pages, 'utf8')).split('\n');
+      assert.equal(lines.pop(), '', name);
+      assert.ok(lines.length > 1, `${name}: more than one row`);
+      const rows = lines.map(line => { assert.ok(line.length <= ROW_CHARACTERS, `${name}: a row of ${line.length} characters`); return JSON.parse(hostRead(line)); });
+      assert.equal(rows.map(row => row.text).join(''), whole, `${name}: the rows are the value`);
+      rows.forEach((row, index) => {
+        assert.deepEqual([row.start, row.end - row.start], [index ? rows[index - 1].end : 0, row.text.length], `${name}: row ${index} continues the one before`);
+        assert.doesNotMatch(row.text, /[\uD800-\uDBFF]$/, `${name}: no surrogate pair is split`);
+      });
+    }
+  }
+  assert.deepEqual(pageRows(''), [], 'An empty value has no row.');
+  assert.deepEqual(pageRows('abc').map(row => JSON.parse(row)), [{ start: 0, end: 3, text: 'abc' }]);
+  // A row ends at a line break where one lies in its second half.
+  const broken = pageRows(`${'a'.repeat(1200)}\n${'b'.repeat(1200)}`).map(row => JSON.parse(row));
+  assert.deepEqual(broken.map(row => [row.start, row.end]), [[0, 1201], [1201, 2401]]);
+});
+
+test('a store that an earlier version wrote gets its pages written again when it is reopened, once', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const first = await createCommentData({ root: directory });
+  const text = Array.from({ length: 300 }, (_, i) => `line ${i} of a tool output that a review saved`).join('\n');
+  const reference = await first.put(text);
+  // As 0.5.0 wrote it: rows of 3,000 characters of text, and no mark.
+  const old = [];
+  for (let start = 0; start < text.length; start += 3000) old.push(JSON.stringify({ start, end: Math.min(text.length, start + 3000), text: text.slice(start, start + 3000) }));
+  await writeFile(reference.pages, old.join('\n') + '\n');
+  await rm(join(first.directory, 'rows-v2'));
+  assert.ok(old.some(row => row.length > HOST_READ_LINE_CHARACTERS), 'The earlier rows are longer than the host returns.');
+  const reopened = await createCommentData({ directory: first.directory });
+  const rows = (await readFile(reference.pages, 'utf8')).trimEnd().split('\n');
+  assert.ok(rows.every(row => row.length <= ROW_CHARACTERS), 'Every row fits the host\'s read.');
+  assert.equal(rows.map(row => JSON.parse(row).text).join(''), text);
+  assert.equal(await reopened.read(reference), text, 'The reference a saved review holds still names the object.');
+  // Once per store: a second reopening leaves the pages alone.
+  await writeFile(reference.pages, 'left alone\n');
+  await createCommentData({ directory: first.directory });
+  assert.equal(await readFile(reference.pages, 'utf8'), 'left alone\n');
+  assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
+});
+
+test('a store whose pages could not all be written again is not marked, and its next opening writes them', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const first = await createCommentData({ root: directory });
+  const one = await first.put('x'.repeat(5000)), other = await first.put('y'.repeat(5000));
+  await rm(join(first.directory, 'rows-v2'));
+  for (const reference of [one, other]) await writeFile(reference.pages, 'as an earlier version wrote it\n');
+  // One pages file cannot be replaced: a directory stands where it belongs.
+  await rm(other.pages);
+  await mkdir(other.pages);
+  await writeFile(join(other.pages, 'in the way'), '');
+  await createCommentData({ directory: first.directory });
+  assert.equal((await readFile(one.pages, 'utf8')).trimEnd().split('\n').map(row => JSON.parse(row).text).join(''), 'x'.repeat(5000), 'The file that could be written is.');
+  await assert.rejects(readFile(join(first.directory, 'rows-v2')), { code: 'ENOENT' }, 'The store is not marked while a file is as it was.');
+  assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
+  // The obstacle goes, and the next opening finishes the work.
+  await rm(other.pages, { recursive: true });
+  await createCommentData({ directory: first.directory });
+  assert.equal((await readFile(other.pages, 'utf8')).trimEnd().split('\n').map(row => JSON.parse(row).text).join(''), 'y'.repeat(5000));
+  assert.equal(await readFile(join(first.directory, 'rows-v2'), 'utf8'), '');
 });

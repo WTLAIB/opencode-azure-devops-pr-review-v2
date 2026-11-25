@@ -113,6 +113,30 @@ export function conversationTitle(target) {
   return `AZPR: PR #${target.pullRequestId} (${String(target.repository).slice(0, 60)})`;
 }
 
+/**
+ * A run's stages in an order of their own, for everything a person sees: the run records a stage when OpenCode
+ * has created its session, and sessions that start side by side are created in whichever order the host answers.
+ * By the stage's place in the pipeline, the reviewer's pass, the label (shard, page; numbers by value) and the
+ * attempt. Stages alike in all of these (the continuation sessions of one planning page) keep the order they ran
+ * in, which is one after another.
+ */
+export function stagesInOrder(stages) {
+  const slot = role => (typeof ROLES[role]?.slot === 'number' ? ROLES[role].slot : 0);
+  const parts = label => String(label ?? '').match(/\d+|\D+/g) ?? [];
+  const byLabel = (x, y) => {
+    const a = parts(x), b = parts(y);
+    for (let index = 0; index < Math.min(a.length, b.length); index++) {
+      const numbers = /^\d/.test(a[index]) && /^\d/.test(b[index]);
+      const order = numbers ? Number(a[index]) - Number(b[index]) : a[index] < b[index] ? -1 : a[index] > b[index] ? 1 : 0;
+      if (order) return order;
+    }
+    return a.length - b.length;
+  };
+  return stages.map((stage, index) => ({ stage, index })).sort((x, y) =>
+    (ROLES[x.stage.role]?.order ?? 9) - (ROLES[y.stage.role]?.order ?? 9) || slot(x.stage.role) - slot(y.stage.role) ||
+    byLabel(x.stage.label, y.stage.label) || (x.stage.attempt ?? 1) - (y.stage.attempt ?? 1) || x.index - y.index).map(item => item.stage);
+}
+
 /** Models per role, aggregated over shards and retries: the passes in their order, then the duplicate check and the rating. */
 export function reviewProvenance(run) {
   const rows = new Map();
@@ -405,7 +429,8 @@ export function renderFinalReport(final, language) {
 }
 
 /** What the reviewers that answered wrote is kept when the review did not complete. */
-export function renderIncompleteDraft(stages, failure, language) {
+export function renderIncompleteDraft(unordered, failure, language) {
+  const stages = stagesInOrder(unordered);
   const initials = stages.filter(s => ROLES[s.role]?.format === 'initial' && s.result);
   if (!initials.length) return '';
   const w = reportWords(language);
@@ -467,7 +492,7 @@ function renderStageReceipt(stage) {
 }
 
 export function renderReceipt(run, report, status, error, settings) {
-  const rows = run.stages.map(renderStageReceipt).join('\n');
+  const rows = stagesInOrder(run.stages).map(renderStageReceipt).join('\n');
   // A review states coverage and verification next to its status: whether every changed file was reviewed,
   // with several passes how many files every pass reviewed, and that nothing verified the findings separately.
   const reviewing = ['review', 'deep', 'quick'].includes(run.mode), summary = run.reviewSummary?.coverage;

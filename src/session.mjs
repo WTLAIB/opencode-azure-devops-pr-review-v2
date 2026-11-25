@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, recordOf, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, isInstructionLoad, recordOf, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -208,10 +208,31 @@ export function restartIndex(texts) {
 }
 
 /**
+ * The host's notices that a command of this session went on in the background and has ended (shell under
+ * `shell: "ask"` or `"inherit"`): a synthetic message whose metadata names the shell that a shell tool call of this
+ * same session reported as still running (OpenCode 2.3.0 through 2.4.1: `metadata.source` "shell" and `shellID`
+ * on the notice, `state.metadata.shellID` on the tool call). The host writes it by itself and hands it to the
+ * model like a late tool result, so it is no other party's input. A notice of a shell this session did not start
+ * (a command a person ran with `!`, another session's) is not one.
+ */
+function ownShellNotices(messages) {
+  const running = new Set(), notices = new Set();
+  for (const message of messages) {
+    if (message?.type === 'assistant' && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        const id = part?.type === 'tool' && part.name === 'shell' ? part.state?.metadata?.shellID : undefined;
+        if (textValue(id)) running.add(id);
+      }
+    } else if (message?.type === 'synthetic' && message.metadata?.source === 'shell' && running.has(message.metadata.shellID)) notices.add(message);
+  }
+  return notices;
+}
+
+/**
  * Classify a failed stage for the runtime's retry policy.
  * - overflow: the host attempted compaction in the failed turn (context full) or
  *   the provider rejected size. A refused background summary (OpenCode's
- *   `compaction.background`, on by default in 2.3.2; before that
+ *   `compaction.background`, on by default from 2.3.1 on; before that
  *   `experimental.background_compaction`) is not evidence: the turn went on, so
  *   its own failure decides.
  * - transient: interrupted streams, provider 408/409/425/429/5xx, missing idle,
@@ -236,8 +257,12 @@ export function classifyFailure(error) {
  * Admit exactly one literal prompt, await idle, then read authoritative context.
  * Works for the first prompt and for follow-up repair prompts in the same
  * session: only the turn after this admitted prompt is examined.
+ * `hiddenMessages` holds the IDs of the messages the caller kept out of every model request of this session. A
+ * message of the turn is no one else's input only when it is the host's own load of instruction files
+ * (`isInstructionLoad`) and its ID is among them: the model never saw it, so the answer is still the answer to
+ * the admitted prompt. Such a message is left out of the turn; any other message ends it as before.
  */
-export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false }) {
+export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, hiddenMessages }) {
   const api = sessionApi(context, ['prompt', 'wait', 'context', 'get']);
   if (!textValue(sessionID) || !textValue(text) || !textValue(role)) throw new Error('[AZPR] A session, role and literal prompt are required.');
   const selectedModel = modelRef(model);
@@ -261,20 +286,33 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {
     throw new Error('[AZPR] The projected prompt differs from the admitted literal input.');
   }
-  const turn = messages.slice(indexes[0] + 1);
+  const hostLoads = messages.slice(indexes[0] + 1).filter(message => message?.type === 'synthetic' && isInstructionLoad(message) &&
+    typeof message.id === 'string' && hiddenMessages?.has(message.id) === true);
+  const after = messages.slice(indexes[0] + 1).filter(message => !hostLoads.includes(message));
+  // A background command of this session that ended: the host's own notice, in the turn or after it.
+  const shellNotices = ownShellNotices(messages);
+  // A command that ends after the answer wakes the session by itself. What the host does then follows the turn's
+  // idle marker and belongs to no turn: the answer is what came before it.
+  const ended = after.findIndex(message => message?.type === 'idle');
+  const late = ended >= 0 && shellNotices.has(after[ended + 1]);
+  const foreign = message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !shellNotices.has(message);
+  const whole = late ? after.slice(0, ended + 1) : after;
   // Either way the host recovers an interrupted stream; both need the caller's consent.
-  const retried = retriedSteps(turn, allowHostContinuations);
-  const continuation = continuedText(turn.filter(message => !retried.has(message)), allowHostContinuations);
-  if (turn.some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
+  const retried = retriedSteps(whole, allowHostContinuations);
+  const continuation = continuedText(whole.filter(message => !retried.has(message)), allowHostContinuations);
+  if (whole.some(message => foreign(message) && !continuation.synthetic.has(message)) || (late && after.slice(ended + 1).some(foreign))) {
     const error = new Error('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
     error.contextChanged = true;
     throw error;
   }
+  // The notices are late tool results: they are no step of the turn.
+  const turn = whole.filter(message => !shellNotices.has(message));
   const terminal = turn.at(-1);
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
   const answer = final && Array.isArray(final.content) ? normalizeAnswer(final, sessionID) : undefined;
-  if (session.outcome !== 'succeeded' || terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
+  // After a late notice the session's outcome is that of what the host did then, not of this turn.
+  if ((!late && session.outcome !== 'succeeded') || terminal?.type !== 'idle' || terminal.outcome !== 'succeeded') {
     const outcome = value => ['succeeded', 'failed', 'interrupted'].includes(value) ? value : 'unknown';
     const finish = ['stop', 'tool-calls', 'length', 'content-filter', 'error', 'cancelled'].includes(final?.finish) ? final.finish : 'unknown';
     const execution = { sessionOutcome: outcome(session.outcome),
@@ -320,6 +358,9 @@ export async function requestReview(context, { sessionID, text, role, model, met
     answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
   if (retried.size) answer.retriedSteps = retried.size;
+  if (hostLoads.length) answer.instructionLoads = hostLoads.length;
+  const noticed = after.filter(message => shellNotices.has(message)).length;
+  if (noticed) answer.shellNotices = noticed;
   aborted(signal);
   return answer;
 }

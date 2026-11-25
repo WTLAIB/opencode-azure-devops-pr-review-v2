@@ -2,8 +2,8 @@ import { privateSessions, withCommandCompletion } from './host-command.mjs';
 import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
 /** Opt-in exact-host fixture for the summary OpenCode writes in the background before a compaction.
  * node tests/host-v2-background-compaction.mjs /absolute/path/opencode
- * OpenCode 2.3.2 writes such a summary by default (compaction.background; the
- * experimental.background_compaction option of earlier releases is gone), so
+ * OpenCode 2.3.1 and later write such a summary by default (compaction.background;
+ * the experimental.background_compaction option of 2.3.0 and earlier is gone), so
  * the fixture leaves the host's compaction settings alone.
  * A review of two passes over one shard. Each pass's reviewer reports, with
  * its second response, a context past the host's background-summary threshold
@@ -15,7 +15,7 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * again once the turn has ended, which is refused as well). It reviewed every
  * file, so the review is COMPLETE and its coverage is complete, and the
  * receipt says that no file was reviewed in every pass.
- * The models' window is 100,000 tokens. OpenCode 2.3.2 compacts in the turn
+ * The models' window is 100,000 tokens. OpenCode (2.3.0 through 2.4.1) compacts in the turn
  * once the context reaches the window less 16,000 tokens (84,000) and starts a
  * summary earlier: within 60,000 tokens of that ceiling, at most half the room
  * the session began with (here from 42,000 tokens on). One response alone
@@ -65,7 +65,7 @@ const provider = createServer(async (request, response) => {
     if (payload?.assignment?.files) {
       const assigned = payload.assignment.files;
       // Each reviewer reads two files. After a small first response the second one reports 80% of the 100,000-token
-      // window: past the background-summary threshold of OpenCode 2.3.2 (42,000 here), below its compaction ceiling
+      // window: past the host's background-summary threshold (42,000 here), below its compaction ceiling
       // (84,000). The context stays that large for the rest of the turn.
       const reads = 2, large = { prompt_tokens: 80000, completion_tokens: 10, total_tokens: 80010 };
       if (input.model === 'first' && results >= reads) {
@@ -114,7 +114,7 @@ settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });
 assert.equal(install.status, 0, install.stderr);
-// No compaction setting: OpenCode 2.3.2 writes background summaries by default (compaction.background).
+// No compaction setting: OpenCode 2.3.1 and later write background summaries by default (compaction.background).
 await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/second',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
     models: Object.fromEntries(['first', 'second'].map(id => [id, { limit: { context: 100000, output: 4000 } }])) } } }));

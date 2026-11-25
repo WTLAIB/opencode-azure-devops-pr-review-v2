@@ -1,11 +1,14 @@
 // Lossless private data transport. Page sizes are working-set sizes, never
 // limits on PR size, retained evidence, findings, comments or model rounds.
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, mkdtemp, writeFile, readFile, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { HOST_READ_LINE_CHARACTERS } from './host.mjs';
 
 export const PAGE_CHARACTERS = 12000;
 export const COMMENT_TURN_CHARACTERS = 48000;
+// A row of a pages file, as it is written: within what the host's read returns of one line, with room to spare.
+export const ROW_CHARACTERS = HOST_READ_LINE_CHARACTERS - 100;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const json = value => JSON.stringify(value);
 
@@ -23,6 +26,33 @@ export function textPages(text, size = PAGE_CHARACTERS) {
   return pages;
 }
 
+/**
+ * The rows of a text's pages file: `{"start","end","text"}` in JSON, one per line, each at most `limit`
+ * characters as written. Escaping makes a row longer than its text by an amount that depends on the text, so a
+ * row takes as much text as fits. Offsets are UTF-16 positions in the text; a surrogate pair is never split,
+ * and a row ends at a line break where one lies in its second half.
+ */
+export function pageRows(text, limit = ROW_CHARACTERS) {
+  const rows = [];
+  for (let start = 0; start < text.length;) {
+    let size = Math.min(text.length - start, limit), end, row;
+    for (;;) {
+      end = start + size;
+      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+      if (end <= start) end = Math.min(text.length, start + 2);
+      // Only the second half of what the row could take is searched: a text of one long line has no line break
+      // to find, and looking through all of it for every row would cost its length times its rows.
+      if (end < text.length) for (let at = end - 1; at >= start + size / 2; at--) if (text.charCodeAt(at) === 10) { end = at + 1; break; }
+      row = json({ start, end, text: text.slice(start, end) });
+      if (row.length <= limit || size <= 1) break;
+      size = Math.max(1, Math.min(size - 1, Math.floor((end - start) * limit / row.length) - 8));
+    }
+    rows.push(row);
+    start = end;
+  }
+  return rows;
+}
+
 export function itemPages(items, size = PAGE_CHARACTERS, maxItems = Infinity) {
   const pages = [];
   let page = [], characters = 0;
@@ -33,6 +63,33 @@ export function itemPages(items, size = PAGE_CHARACTERS, maxItems = Infinity) {
   }
   if (page.length) pages.push(page);
   return pages;
+}
+
+// Marks a store whose pages files all hold rows the host's read returns whole.
+const ROWS_MARK = 'rows-v2';
+
+/**
+ * A store that 0.5.0 or an earlier version wrote holds pages of 3,000 characters a row, which the host's read
+ * cuts. Its pages are derived from the objects, so they are written again from them: a saved review's references
+ * name these files. Each file is replaced in one step, under a name of this call's own, so that a reader finds
+ * the earlier rows or the new ones and two stores opened together do not write into each other's file. The store
+ * is marked once every file was written; one that could not be stays as it is, and the next opening tries again.
+ */
+async function renewPages(directory, ids) {
+  const mark = join(directory, ROWS_MARK);
+  try { await readFile(mark); return; } catch { /* Not renewed yet. */ }
+  let renewed = true;
+  for (const id of ids) {
+    const file = join(directory, 'objects', id + '.txt'), temporary = `${file}.pages.jsonl.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await writeFile(temporary, pageRows(await readFile(file, 'utf8')).join('\n') + '\n', { flag: 'wx', mode: 0o600 });
+      await rename(temporary, file + '.pages.jsonl');
+    } catch {
+      renewed = false;
+      await rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+  if (renewed) await writeFile(mark, '', { mode: 0o600 }).catch(() => {});
 }
 
 /**
@@ -47,12 +104,14 @@ export async function createCommentData({ root, directory: existing } = {}) {
       const match = /^([a-f0-9]{64})\.txt$/.exec(name);
       if (match) written.set(match[1], Promise.resolve());
     }
+    await renewPages(existing, [...written.keys()]);
   } else {
     if (!root) throw new Error('A private data root is required.');
     await mkdir(root, { recursive: true, mode: 0o700 });
     directory = await mkdtemp(join(root, 'data-'));
     await mkdir(join(directory, 'objects'), { mode: 0o700 });
     await writeFile(join(directory, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
+    await writeFile(join(directory, ROWS_MARK), '', { flag: 'wx', mode: 0o600 });
   }
   const put = async (text, format = 'text') => {
     const id = hash(text), file = join(directory, 'objects', id + '.txt');
@@ -60,9 +119,9 @@ export async function createCommentData({ root, directory: existing } = {}) {
       const operation = (async () => {
         await writeFile(file, text, { flag: 'wx', mode: 0o600 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
         // A line-addressable representation also works for huge single-line
-        // responses. It is lossless JSON text, NOT original source line numbers.
-        const pages = textPages(text, 3000).map(({ start, end, text }) => json({ start, end, text }));
-        await writeFile(file + '.pages.jsonl', pages.join('\n') + '\n', { flag: 'wx', mode: 0o600 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+        // responses. It is lossless JSON text, NOT original source line numbers. Each row is short enough for
+        // the host's read to return it whole (`pageRows`).
+        await writeFile(file + '.pages.jsonl', pageRows(text).join('\n') + '\n', { flag: 'wx', mode: 0o600 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
       })();
       written.set(id, operation);
       operation.catch(() => written.delete(id));

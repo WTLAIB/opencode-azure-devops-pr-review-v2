@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   renderReceipt, renderDiagnosticNotices, searchLimitation, describeReview, conversationTitle, renderCommentActions, renderFinalReport, renderCheckReport, renderPublication,
-  reviewProvenance, provenanceReport, methodText, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote, enclose, renderOtherPlaces } from '../src/attribution.mjs';
+  reviewProvenance, provenanceReport, methodText, renderIncompleteDraft, renderReviewSummary, commentAttribution, coverageNote, enclose, renderOtherPlaces, stagesInOrder } from '../src/attribution.mjs';
 import { buildPanel, disclose } from '../src/tui-model.mjs';
 
 function freeze(value) {
@@ -651,4 +651,35 @@ test('the other places of one defect are a plain list of the findings\' own file
   const odd = renderOtherPlaces([{ findingId: 'F-1', place: '/src/a`b``c.ts:1' }, { findingId: 'F-2', place: '/src/x\n<!-- y -->.ts:2' }, { findingId: 'F-3</b>', place: '/src/[z](u).ts:3' }], 'en');
   assert.deepEqual(odd.split('\n').slice(1), ['- ``` /src/a`b``c.ts:1 ``` (F-1)', '- `/src/x <!-- y -->.ts:2` (F-2)', '- `/src/[z](u).ts:3` (F-3b)']);
   assert.doesNotMatch(odd, /<details|<summary|\]\(http/);
+});
+
+// A run records a stage when OpenCode has created its session, and sessions that start side by side are created
+// in whichever order the host answers. What a person reads must not follow that order.
+test('a receipt and an unfinished review\'s draft list the stages in the pipeline\'s order, however their sessions were created', () => {
+  const stage = (role, label, extra = {}) => ({ role, label, status: 'COMPLETE', sessionID: `ses_${role.slice(-9)}_${label.replace(/\W/g, '')}_${extra.attempt ?? 1}`, model: 'fixture/m', attempt: 1,
+    result: { report: `report of ${label}`, coverage: { gaps: [] }, findings: [] }, ...extra });
+  const inOrder = [
+    stage('azpr-review-reviewer', 'pass 1/2 shard 1/12'), stage('azpr-review-reviewer', 'pass 1/2 shard 2/12a', { status: 'FAILED' }),
+    stage('azpr-review-reviewer', 'pass 1/2 shard 2/12a', { attempt: 2 }), stage('azpr-review-reviewer', 'pass 1/2 shard 2/12b'),
+    stage('azpr-review-reviewer', 'pass 1/2 shard 10/12'),
+    stage('azpr-review-reviewerb', 'pass 2/2 shard 1/12'), stage('azpr-review-reviewerb', 'pass 2/2 shard 2/12'), stage('azpr-review-reviewerb', 'pass 2/2 shard 10/12'),
+    stage('azpr-review-dedupe', '1/2'), stage('azpr-review-dedupe', '2/2'), stage('azpr-review-rating', ''),
+  ];
+  const names = stages => stages.map(s => `${s.role} [${s.label}] ${s.attempt}`);
+  // Every order the host could create them in gives the same list: three shuffles that put later stages first.
+  const shuffles = [[...inOrder].reverse(), [...inOrder.slice(5), ...inOrder.slice(0, 5)], inOrder.filter((_, i) => i % 2).concat(inOrder.filter((_, i) => !(i % 2)))];
+  for (const created of shuffles) {
+    assert.deepEqual(names(stagesInOrder(created)), names(inOrder));
+    const receipt = renderReceipt({ ...run(), stages: created }, '', 'COMPLETE', '', { ...settings, outputLanguage: 'en' });
+    assert.deepEqual(receipt.split('\n').filter(line => line.startsWith('- azpr-')).map(line => /session=(\S+?);/.exec(line)[1]), inOrder.map(s => s.sessionID));
+    const draft = renderIncompleteDraft(created, 'A reviewer failed.', 'en');
+    assert.deepEqual([...draft.matchAll(/^- (\S+)(?: \(([^)]*)\))?: [A-Z]+; session=(\S+);/gm)].map(match => match[3]), inOrder.map(s => s.sessionID));
+    assert.deepEqual([...draft.matchAll(/^### (\S+) — (.+)$/gm)].map(match => match[2]), inOrder.filter(s => s.role.startsWith('azpr-review-reviewer')).map(s => s.label));
+  }
+  // The sessions of a comment run: the grouping pass, then the pages by number; the continuation sessions of one
+  // page, which run one after another, keep their order.
+  const page = (label, sessionID) => ({ role: 'azpr-review-comment-plan', label, status: 'COMPLETE', sessionID, model: 'fixture/m', attempt: 1 });
+  const planned = [page('page 2/11', 'p2-first'), page('page 10/11', 'p10'), page('grouping', 'g'), page('page 2/11', 'p2-second'), page('page 1/11', 'p1')];
+  assert.deepEqual(stagesInOrder(planned).map(s => s.sessionID), ['g', 'p1', 'p2-first', 'p2-second', 'p10']);
+  assert.deepEqual(stagesInOrder([]), []);
 });

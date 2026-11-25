@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isInstructionLoad, isInstructionUpdate, withoutPlaceInstructions, withoutClaudeSources, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -100,10 +100,10 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(listOf({}), null);
   assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
-  const capabilities = hostCapabilities({ app: { version: '2.3.2' }, permission: { hook() {} }, tool: { transform() {} } });
+  const capabilities = hostCapabilities({ app: { version: '2.4.1' }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
-  assert.equal(TESTED_HOST_VERSION, '2.3.2');
-  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.0', '2.3.1', '2.3.3']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
+  assert.equal(TESTED_HOST_VERSION, '2.4.1');
+  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.4.2']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);
@@ -198,4 +198,77 @@ test('session progress events: streamed text, reasoning and tool-call input, too
   assert.deepEqual(PROGRESS_EVENT_TYPES, ['text', 'reasoning', 'tool.input'].flatMap(kind => ['started', 'delta', 'ended'].map(phase => `session.${kind}.${phase}`))
     .concat(['session.tool.progress', 'session.step.started', 'session.step.streamed', 'session.step.ended']));
   for (const type of PROGRESS_EVENT_TYPES) assert.ok(sessionProgress({ type, data }), type);
+});
+
+test('a request\'s instructions part is rebuilt from the host\'s own facts, and left alone where it cannot be told apart', () => {
+  // The shape of OpenCode 2.3.0 through 2.4.1: the agent's system prompt, a part a host plugin adds, then the
+  // instructions part, whose text is its sources joined by a blank line.
+  const sources = [{ key: 'core/codemode', text: 'CODEMODE' }, { key: 'core/mcp-guidance', text: 'MCP SAYS' }, { key: 'core/instructions', text: 'Instructions from: /work/AGENTS.md\nLOCAL RULES' },
+    { key: 'core/date', text: "Today's date: Wed Nov 25 2026" }, { key: 'core/environment', text: 'Here is some useful information…\n<env>\n</env>' }, { key: 'other.plugin/notes', text: 'PLUGIN NOTES' }];
+  const part = { type: 'text', text: sources.map(source => source.text).join('\n\n'), metadata: { experimental: { instructions: sources } } };
+  const system = [{ type: 'text', text: 'AZPR ROLE' }, { type: 'text', text: '# Your Model' }, part, { type: 'text', text: 'TRAILER' }];
+  const before = JSON.stringify(system);
+  const lean = withoutPlaceInstructions(system);
+  assert.deepEqual(lean.removed.map(source => source.key), ['core/codemode', 'core/mcp-guidance', 'core/instructions', 'other.plugin/notes'], 'Everything but the date and the environment tells of the place or of what is configured there.');
+  assert.deepEqual(lean.removed.map(source => source.text), ['CODEMODE', 'MCP SAYS', 'Instructions from: /work/AGENTS.md\nLOCAL RULES', 'PLUGIN NOTES'], 'The sources that go are handed back whole, in their order.');
+  assert.deepEqual(lean.system.map(item => item.text), ['AZPR ROLE', '# Your Model', "Today's date: Wed Nov 25 2026\n\nHere is some useful information…\n<env>\n</env>", 'TRAILER']);
+  assert.deepEqual(lean.system[2].metadata.experimental.instructions.map(source => source.key), HOST_FACT_SOURCES, 'The part still says what it is made of.');
+  assert.equal(JSON.stringify(system), before, 'The parts the host handed over are not changed in place.');
+  // Nothing to leave out: the same list comes back.
+  const facts = sources.filter(source => HOST_FACT_SOURCES.includes(source.key));
+  const plain = [{ type: 'text', text: 'AZPR ROLE' }, { type: 'text', text: facts.map(source => source.text).join('\n\n'), metadata: { experimental: { instructions: facts } } }];
+  assert.deepEqual(withoutPlaceInstructions(plain), { system: plain, removed: [] });
+  // No source is a fact of the host: the part goes.
+  const placeOnly = [{ type: 'text', text: 'AZPR ROLE' }, { type: 'text', text: 'LOCAL', metadata: { experimental: { instructions: [{ key: 'core/instructions', text: 'LOCAL' }] } } }];
+  assert.deepEqual(withoutPlaceInstructions(placeOnly).system, [{ type: 'text', text: 'AZPR ROLE' }]);
+  // Anything else is not told apart: no such part, two of them, a text another hook edited, sources of another form.
+  for (const unknown of [undefined, 'text', [], [{ type: 'text', text: 'AZPR ROLE' }], [part, part],
+    [{ ...part, text: part.text + '\n\nEDITED' }], [{ ...part, metadata: { experimental: { instructions: [{ key: 'core/date' }] } } }],
+    [{ type: 'text', text: 'x', metadata: { experimental: { instructions: 'x' } } }]]) {
+    assert.equal(withoutPlaceInstructions(unknown), null, JSON.stringify(unknown)?.slice(0, 80));
+  }
+});
+
+test('the host\'s own load of instruction files is told by the paths it names', () => {
+  // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one.
+  const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED', description: 'Loaded sub/AGENTS.md', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
+  assert.equal(isInstructionLoad(load), true);
+  assert.equal(isInstructionLoad({ id: 'msg_load', role: 'user', content: load.text, metadata: load.metadata }), true, 'The message a request is built with carries the same metadata.');
+  for (const other of [undefined, {}, { type: 'synthetic', text: load.text }, { ...load, metadata: {} }, { ...load, metadata: { instruction: {} } }, { ...load, metadata: { instruction: { paths: [] } } },
+    { ...load, metadata: { instruction: { paths: [''] } } }, { ...load, metadata: { instruction: { paths: [1] } } }, { ...load, metadata: { instruction: { paths: '/work/sub/AGENTS.md' } } }, { ...load, metadata: { azpr: {} } }]) {
+    assert.equal(isInstructionLoad(other), false, JSON.stringify(other));
+  }
+});
+
+test('an update of the instructions is a system message of text; one that changes the effort or the tools is none', () => {
+  // OpenCode 2.3.0 through 2.4.1 write it from `session.instructions.updated`, without an ID or metadata.
+  assert.equal(isInstructionUpdate({ role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }] }), true);
+  assert.equal(isInstructionUpdate({ role: 'system', content: 'Instructions from: /work/AGENTS.md\nCHANGED' }), true, 'Also where the text is not in parts.');
+  for (const other of [undefined, {}, { role: 'user', content: [{ type: 'text', text: 'x' }] }, { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] },
+    { role: 'system', content: [], tools: { add: [], remove: ['read'] } }, { role: 'system', content: [{ type: 'text', text: 'x' }], tools: { add: [], remove: [] } },
+    { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'effort', effort: 'low' }] }, { role: 'system', content: [] }, { role: 'system', content: '' }, { role: 'system' },
+    { role: 'system', content: [{ type: 'text' }] }, { type: 'system', text: 'x' }]) {
+    assert.equal(isInstructionUpdate(other), false, JSON.stringify(other));
+  }
+});
+
+test('the text the Claude Code provider keeps loses the sources that were left out, where they stand as that provider writes them', () => {
+  // OpenCode 2.3.0 through 2.4.1: its hook has joined, with a blank line, the texts of the parts after the first and
+  // the instructions part's sources but the date and the environment, as the parts were when it ran.
+  assert.equal(CLAUDE_INSTRUCTIONS_OPTION, 'claudeCodeInstructions');
+  const left = ['MCP SAYS', 'Instructions from: /work/AGENTS.md\nLOCAL RULES\n\nA second paragraph.'], run = left.join('\n\n');
+  // As measured on a host: the instructions part is the only one after the agent's prompt then, so the text is the run.
+  assert.equal(withoutClaudeSources(run, left), '');
+  // With a text before it, after it, or both: the run goes with one of the blank lines around it.
+  assert.equal(withoutClaudeSources(`# A part before\n\n${run}`, left), '# A part before');
+  assert.equal(withoutClaudeSources(`${run}\n\nA part after`, left), 'A part after');
+  assert.equal(withoutClaudeSources(`# A part before\n\n${run}\n\nA part after`, left), '# A part before\n\nA part after');
+  assert.equal(withoutClaudeSources(`\n\n${run}`, left), '', 'An empty text before it is an item of the join like any other.');
+  // Not told apart: the run is not there, is there twice, or does not stand between blank lines; no text, no sources.
+  for (const [option, texts] of [['Something else', left], [`${run}\n\n${run}`, left], [`${run}\n\nA part\n\n${run}`, left], [`x${run}`, left], [`${run} and more`, left],
+    [`A line\n${run}`, left], [run.slice(0, -1), left], [undefined, left], [42, left], [run, []], [run, undefined], [run, ['MCP SAYS', 7]], ['', ['']]]) {
+    assert.equal(withoutClaudeSources(option, texts), null, JSON.stringify([option, texts]).slice(0, 90));
+  }
+  // The sources are taken as one run in their order: another order is not what the provider wrote.
+  assert.equal(withoutClaudeSources(run, [...left].reverse()), null);
 });

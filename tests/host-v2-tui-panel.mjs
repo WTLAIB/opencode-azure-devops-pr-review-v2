@@ -26,8 +26,8 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * them, and commands start all the same.
  * With --native the package is installed by OpenCode's plugin manager: the compiled view must load
  * from there, and the compiler must not be installed with it (the package ships the compiled view
- * because OpenCode 2.3.0 compiled no JSX of an installed package; this fixture does not try whether
- * 2.3.2 would).
+ * because OpenCode 2.3.x compiles no JSX of an installed package; 2.4.0 and later do, and load the
+ * compiled view all the same).
  * --package SPEC installs a published package (an npm version or a public Git commit) instead of
  * the one packed from this checkout.
  * Synthetic completions test the panel and the host, not model review quality.
@@ -233,6 +233,20 @@ async function dragInPanel(from, to) {
     await sleep(50);
   }
   send(0, toColumn, toRow, 'm');
+}
+/**
+ * The left button pressed in the middle of `text` inside the panel and moved one cell on it, with no release:
+ * what a terminal reports when the pointer then leaves it with the button down.
+ */
+async function pressAndHold(text) {
+  const lines = (await see(shown => panelOpen(shown) && shown, 'The panel is not open to press a step in.')).split('\n');
+  const edge = lines.find(line => panelOpen(line)).search(/AZPR [a-f0-9]{8} · /);
+  const row = lines.findIndex(line => line.indexOf(text, edge) >= 0);
+  assert.ok(row >= 0, `"${text}" is not in the panel.\n--- screen ---\n${lines.join('\n')}`);
+  const column = columns(lines[row].slice(0, lines[row].indexOf(text, edge))) + Math.max(1, Math.floor(columns(text) / 2));
+  tmux('send-keys', '-t', 'azpr', '-l', `\x1b[<0;${column};${row + 1}M`);
+  await sleep(50);
+  tmux('send-keys', '-t', 'azpr', '-l', `\x1b[<32;${column + 1};${row + 1}M`);
 }
 /**
  * Type a slash command the way a person does: wait for its suggestion, then send it. AZPR's server commands take
@@ -618,7 +632,7 @@ try {
   assert.doesNotMatch(screen(), /Apply, and plan the preview|apply ctrl\+s/, 'Something is to apply before anything was changed.');
   // Typing filters the list; the finding typed in full comes first.
   type('F-1');
-  await see(/Findings\s+F-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings.');
+  await see(/Findings[^\n]*\n[^\n]*F-1 — `invoice` drops the guard\b[^\n]* high\b/, 'Typing does not filter the findings.');
   key('Enter');
   await see(/F-1: how is it published\?/, 'Picking a finding did not ask what happens to it.');
   // The level the review gave it is the rating's: its reviewer filed it as medium.
@@ -656,6 +670,17 @@ try {
   await sleep(2000);
   assert.equal((await own()).length, toldBefore, 'A step that was pressed and then left was picked.');
   assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'A step that was pressed and then left changed what the panel shows.');
+  // The button is pressed on that step, moved on it and never let go: the pointer left the terminal there, and
+  // the release was lost. OpenTUI 0.9 (OpenCode 2.4.0 and later) ends such a gesture at the next press of the
+  // button, wherever that is, with a release it makes up for the step that was pressed, at the place of the
+  // last movement. It comes more than a moment after that movement, so it picks nothing. (An earlier OpenTUI
+  // sends the step the next press and its release, which is not on the step.)
+  await pressAndHold('Reset adjustments');
+  await sleep(2500);
+  await click('Sessions (click one to open it)');
+  await sleep(2000);
+  assert.equal((await own()).length, toldBefore, 'A release the host made up for a step that was pressed long before picked that step.');
+  assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'A release the host made up changed what the panel shows.');
   // With the keyboard, the panel's keys do the same: `a` opens the list, and the key at its foot applies.
   await click('Sessions (click one to open it)');
   key('a');
@@ -693,6 +718,15 @@ try {
   assert.equal(postedRun[2], 'POSTED', `The publication ended as ${postedRun[2]}.`);
   assert.equal(azure.state.threads.length, 3, 'The summary and the two comments that were not left out are on the PR.');
   await see(shown => !/\[p\] Post \d+ comments?…/.test(shown), 'After posting the panel still offers the preview\'s steps.');
+  // `close` acts on a release alone, like a session's row, so it keeps the same watch: pressed, moved on and never
+  // let go, it does not close the panel at a press somewhere else. That press is on text that can be selected (the
+  // panel's own status), and it is the last thing done in this terminal: an OpenTUI before 0.9 keeps such a
+  // gesture for the next press on what cannot be selected.
+  await pressAndHold('close');
+  await sleep(2500);
+  await click(`AZPR ${postedRun[1]} · POSTED`);
+  await sleep(2000);
+  assert.ok(panelOpen(screen()), 'A release the host made up for "close" closed the panel.');
   result.rows = `${result.rows}; after a preview its next steps are one row at the panel's foot: findings left out from their list (applied with a click and with the key at its foot) and the comments posted without typing; a click leaves the keyboard with the prompt`;
 
   // What the panel must never do: ask a model, or fail to load.

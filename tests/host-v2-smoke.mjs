@@ -27,9 +27,17 @@ import { TESTED_HOST_VERSION } from '../src/host.mjs';
  * across a host restart; a quick review (one reviewer session and its rating)
  * and the follow-up turn of a PARTIAL answer; cancellation; a provider 503
  * that OpenCode retries in the same session; a provider stream cut mid-answer
- * whose step OpenCode retries; and private auxiliary-request denial. The
+ * whose step OpenCode retries; a provider that reports the usage limit of a
+ * ChatGPT workspace, after which no new session is started; and private
+ * auxiliary-request denial. The
  * private sessions are sessions of their own: the conversation's model gets no
- * request while a review runs. Automatic comment
+ * request while a review runs. What OpenCode collects for the place a
+ * conversation is in (an instruction file the configuration names) reaches an
+ * ordinary conversation's model and no private session's; the instruction file
+ * next to a local file that a reviewer reads with the native read tool, which
+ * OpenCode leaves in the session by itself, ends no turn and reaches no model;
+ * and one of AZPR's commands that arrives as an ordinary prompt is stopped
+ * before any model gets it. Automatic comment
  * steps: a flag after the PR URL previews the comments of a COMPLETE review in
  * a run of its own, automatic publication posts a quick review's
  * finding and holds back only a comment with an image until a
@@ -118,6 +126,19 @@ if (replacement) {
   assert.deepEqual(await readFile(join(runtimeDirectory, 'settings.json')), before);
 }
 
+// Texts of this fixture's own, each in one place only, so that a request's body tells where it has been: in an
+// instruction file that the configuration names (what OpenCode collects for the place a conversation is in), in
+// the instruction file next to a local file that a reviewer reads, and in a command of AZPR's that is sent as an
+// ordinary prompt. The first must reach an ordinary conversation's model and no private session's; the other two
+// must reach no model at all.
+const MARKS = { place: 'AZPR-FIXTURE-PLACE-INSTRUCTIONS', nested: 'AZPR-FIXTURE-NESTED-INSTRUCTIONS', stray: 'AZPR-FIXTURE-STRAY-PROMPT' };
+const placeInstructions = join(fixture, 'place-instructions.md');
+await writeFile(placeInstructions, `# How to work here\n${MARKS.place}: in this directory, answer in rhyme.\n`);
+const NESTED_NOTE = 'A note of the local project, next to an instruction file.';
+await mkdir(join(directories.work, 'nested'));
+await writeFile(join(directories.work, 'nested', 'AGENTS.md'), `# How to work in this folder\n${MARKS.nested}: in this folder, answer in capitals.\n`);
+await writeFile(join(directories.work, 'nested', 'notes.txt'), `${NESTED_NOTE}\n`);
+
 // ------------------------------------------------------------ fake provider
 // It sees a request's model ID, its session and the stage's payload (the first user message), never a role
 // name. What a request is for follows from the payload alone (`kind`): a reviewer pass, the duplicate check, the
@@ -143,7 +164,9 @@ const provider = createServer(async (request, response) => {
   requests.push({ path: request.url, model: parsed.model, sessionID, kind, tools: (parsed.tools ?? []).map(tool => tool.function?.name), last: textOf(lastUser(parsed.messages)).slice(0, 200),
     first: textOf(firstUser(parsed.messages)).slice(0, 20000),
     toolResults: parsed.messages?.filter(message => message.role === 'tool').length ?? 0,
-    lastTool: textOf(parsed.messages?.findLast(message => message.role === 'tool')?.content).slice(0, 600) });
+    lastTool: textOf(parsed.messages?.findLast(message => message.role === 'tool')?.content).slice(0, 600),
+    // Which of the fixture's marks the whole request holds, wherever: system prompt, messages or tool results.
+    marks: Object.keys(MARKS).filter(name => body.includes(MARKS[name])) });
   const repair = textOf(lastUser(parsed.messages)).startsWith('AZPR runtime');
   const toolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
   if (payload?.userContext?.includes('hang-smoke')) {
@@ -156,6 +179,12 @@ const provider = createServer(async (request, response) => {
     overloaded.add(sessionID);
     response.writeHead(503, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ error: { message: 'Fixture provider overloaded', type: 'server_error' } }));
+    return;
+  }
+  // Every request of the review is refused the way ChatGPT answers a member whose workspace admin set a usage limit.
+  if (payload?.userContext?.includes('workspace-limit-smoke') && kind === 'review') {
+    response.writeHead(429, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: { code: 'subscription_sharing_workplace_individual_usage_limit_exceeded', message: 'The limit your workspace admin set was reached.' } }));
     return;
   }
   // The stream of the first session of the first review pass starts and then stops sending.
@@ -175,6 +204,8 @@ const provider = createServer(async (request, response) => {
     const files = payload.assignment.files;
     // Every reviewer reads the file first: the runtime accepts a finding only at a file its own session read.
     if (!toolResults && fileTool) call = { name: fileTool, arguments: { path: files[0], version: 'head' } };
+    // A reviewer that looks into the local project with the native read tool, at a file whose folder holds an instruction file.
+    else if (toolResults === 1 && payload.userContext?.includes('nested-smoke') && parsed.tools?.some(tool => tool.function?.name === 'read')) call = { name: 'read', arguments: { path: 'nested/notes.txt' } };
     // A reviewer mistaking a repository path for a local one must get an answer, not a pending approval.
     else if (toolResults === 1 && parsed.model === 'first' && parsed.tools?.some(tool => tool.function?.name === 'grep')) call = { name: 'grep', arguments: { pattern: 'guard', path: '/scale_lab' } };
     // An existing directory outside the project reaches the permission hook, whatever the host's default.
@@ -271,10 +302,15 @@ await writeFile(join(directories.config, 'plugins', 'network-guard.js'), `export
 } };`);
 await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   update: 'disable', snapshots: false, warming: false, model: 'fixture/fixture',
+  // An instruction file of the configuration: OpenCode adds its text to every request, whatever the agent. (The
+  // fixture's environment turns off the instruction files of the project directory, not this one.)
+  instructions: [placeInstructions],
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
-    // An image model makes OpenCode 2.2.2 and later offer experimental_image_generate to every agent.
+    // An image model makes OpenCode 2.2.2 and later offer generate_image to every agent, and a video model makes
+    // OpenCode 2.4.0 and later offer generate_video: the fixture names both, so that neither depends on what the
+    // host's built-in catalog happens to enable.
     models: { ...Object.fromEntries(['fixture', 'first', 'second', 'rater', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])),
-      image: { type: 'image', limit: { context: 100000, output: 4000 } } } } },
+      image: { type: 'image', limit: { context: 100000, output: 4000 } }, video: { type: 'video', limit: { context: 100000, output: 4000 } } } } },
   // With CodeMode execute denied, OpenCode 2.2.0 and later list a CodeMode MCP server's tools directly.
   mcp: { servers: { foreign: { type: 'local', command: [process.execPath, foreignPath], codemode: false },
     'foreign-codemode': { type: 'local', command: [process.execPath, foreignPath], codemode: true } } },
@@ -533,7 +569,7 @@ try {
   const refusal = await fetch(`${url}/api/session/${offOrigin}/command`, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work },
     body: JSON.stringify({ name: 'pr-deep', text: prUrl, delivery: 'steer' }), signal: AbortSignal.timeout(60000) });
   const refusalText = await refusal.text();
-  // OpenCode answers a command that throws with its error (2.3.2: HTTP 500, CommandExecutionError).
+  // OpenCode answers a command that throws with its error (2.3.0 through 2.4.1: HTTP 500, CommandExecutionError).
   assert.equal(refusal.ok, false, refusalText);
   assert.deepEqual(JSON.parse(refusalText), { _tag: 'CommandExecutionError', command: 'pr-deep',
     message: '[AZPR] /pr-deep is off: models.deep.reviewers names no model. Name at least one with /pr-setup or in the settings file (stronger than those of models.review, or more passes), then restart the OpenCode service (opencode service restart). No fallback to the models of another mode.' }, `${refusal.status} ${refusalText}`);
@@ -588,7 +624,8 @@ try {
     await api(`/api/session/${duplicateOrigin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
     const warned = await latest(duplicateOrigin);
     assert.match(warned, /\] READY/, warned);
-    assert.ok(warned.includes(`| AZPR | WARNING | Another AZPR entry is configured but not running; keep one (see Upgrading in the README). Running ${nativePackage}; not running: git+file://`), warned);
+    // /pr-check cuts a row's text at 300 characters, and the package's path is as long as this checkout's: compare what the row can hold.
+    assert.ok(warned.includes(`| AZPR | WARNING | ${`Another AZPR entry is configured but not running; keep one (see Upgrading in the README). Running ${nativePackage}; not running: git+file://`.slice(0, 300)}`), warned);
     await writeFile(configPath, original);
     await stopHost();
     url = await startHost();
@@ -635,7 +672,11 @@ try {
   }
   assert.ok(toolRequests.every(request => ['azpr_read_diff', 'azpr_read_file', 'azpr_search_code', 'azpr_find_files', 'azpr_list_files', 'azpr_pr_threads'].every(name => request.tools.includes(name))), 'Reviewers see the AZPR tools.');
   assert.ok(toolRequests.every(request => !request.tools.some(name => /foreign|lookup/.test(name))), 'Foreign MCP tools, direct or CodeMode, are hidden from private reviewers.');
-  assert.ok(toolRequests.every(request => !request.tools.includes('experimental_image_generate')), 'Image generation is hidden from private reviewers.');
+  assert.ok(toolRequests.every(request => !request.tools.includes('generate_image')), 'Image generation is hidden from private reviewers.');
+  // Exactly the allowlist: whatever tool a host adds (generate_video in OpenCode 2.4.0, the next one later) stays out
+  // without being named here.
+  const PRIVATE_TOOLS = ['azpr_find_files', 'azpr_list_files', 'azpr_pr_threads', 'azpr_read_diff', 'azpr_read_file', 'azpr_search_code', 'glob', 'grep', 'read'];
+  for (const request of toolRequests) assert.deepEqual([...request.tools].sort(), PRIVATE_TOOLS, 'A private reviewer is offered exactly its allowlist.');
   assert.ok(azure.callsTo('items').some(call => call.query['versionDescriptor.version'] === 'b'.repeat(40)), 'A reviewer read HEAD through azpr_read_file.');
   assert.ok(reviewRequests.some(request => request.model === 'second' && /^2 match\(es\) for "second line of" in 2 file\(s\)[\s\S]*\/src\/fixture\.js:2: second line of \/src\/fixture\.js/.test(request.lastTool)),
     'A reviewer searched file contents at HEAD through azpr_search_code.');
@@ -697,6 +738,16 @@ try {
   assert.deepEqual(reviewStages.map(stage => [stage.role, stage.modelRequests]).sort(), [['azpr-review-dedupe', 2], ['azpr-review-rating', 1], ['azpr-review-reviewer', 4], ['azpr-review-reviewerb', 3]]);
   assert.ok(reviewStages.filter(stage => stage.stage.startsWith('reviewer')).every(stage => stage.sessionReads >= 1), 'The runtime recorded what each reviewer session read: a finding counts only at a file its own session read.');
   assert.deepEqual(reviewStages.find(stage => stage.role === 'azpr-review-dedupe').repairs.map(repair => repair.issues.length), [2], 'One correction turn, for the two merges that named no finding that stays.');
+  // What OpenCode collects for the place a conversation is in was left out of every stage's requests, the rating's
+  // too, which has no tool at all. This rests on a field the host marks as experimental (the sources of a
+  // request's instructions part): a host that changes it leaves the requests as they were, and each stage's record
+  // then counts the requests that could not be told apart.
+  for (const stage of reviewStages) {
+    assert.ok(stage.requestObservations.placeInstructions?.includes('core/instructions'), `The record of ${stage.role} names the instruction files among what its requests were sent without: ${JSON.stringify(stage.requestObservations)}`);
+    assert.equal(stage.requestObservations.placeInstructionsNotToldApart, undefined, `Every request of ${stage.role} could be told apart: ${JSON.stringify(stage.requestObservations)}`);
+  }
+  assert.ok(during.every(request => !request.marks.length), 'No request of the review carried the configured instruction file.');
+  results.placeInstructions = `left out of every private request (${[...new Set(reviewStages.flatMap(stage => stage.requestObservations.placeInstructions))].sort().join(', ')}); an ordinary conversation keeps them`;
   // The private sessions are sessions of their own: OpenCode 2.3.0 and later hand every answer of a child session to
   // its parent and wake the parent's own model with it. The conversation's model was asked nothing while the review
   // ran, and each session is placed where the conversation is and names its run, role and conversation.
@@ -768,7 +819,7 @@ try {
   assert.deepEqual(quickRequests.map(request => request.kind), ['review', 'review', 'rating'], 'The reviewer\'s file read and answer, then one rating request.');
   assert.equal(new Set(quickRequests.filter(request => request.kind === 'review').map(request => request.sessionID)).size, 1, 'One reviewer session for the one shard.');
   assert.ok(quickRequests.every(request => !request.tools.includes('shell') && !request.tools.some(name => /foreign|lookup/.test(name)) &&
-    !request.tools.includes('experimental_image_generate')), 'The quick sessions see only their tools.');
+    !request.tools.includes('generate_image')), 'The quick sessions see only their tools.');
   const [quickRating] = quickRequests.filter(request => request.kind === 'rating');
   assert.deepEqual(quickRating.tools, [], 'The rating session is offered no tool.');
   assert.ok(!quickRequests.slice(0, 2).some(request => request.sessionID === quickRating.sessionID) && !/"severity"/.test(quickRating.first), 'The rating is a session of its own, and its input carries no level.');
@@ -814,6 +865,30 @@ try {
     }
   }
   results.quickFollowUp = 'PARTIAL, then one follow-up in the same session: COMPLETE, or the earlier answer kept when the follow-up is unusable';
+
+  // 3c2. A reviewer looks into the local project with the native read tool, and the file's folder holds an
+  //      instruction file: OpenCode (2.3.0 and later; from 2.3.1 also for CLAUDE.md) then leaves that file's text in
+  //      the session, as a message of its own in the middle of the turn. AZPR keeps it from the model, so the
+  //      message is no one's input: the turn goes on, and no new session is needed.
+  const nestedOrigin = await newOrigin('Quick with a local read');
+  const beforeNested = requests.length;
+  await api(`/api/session/${nestedOrigin}/command`, { name: 'pr-quick', text: `${prUrl} nested-smoke`, delivery: 'steer' });
+  const nestedReceipt = await latest(nestedOrigin);
+  assert.match(nestedReceipt, COMPLETE_ONE_PASS, nestedReceipt);
+  assert.match(nestedReceipt, /\n- azpr-quick-reviewer: COMPLETE; session=ses_\w+; model=fixture\/quick\n- azpr-quick-rating: COMPLETE; session=ses_\w+; model=fixture\/quick\n\n/, nestedReceipt);
+  assert.doesNotMatch(nestedReceipt, /another message during this turn|attempt=2|Retry notice/, 'The instruction file OpenCode loaded ended no turn and cost no new session.');
+  const nestedRequests = requests.slice(beforeNested).filter(request => request.kind === 'review');
+  assert.deepEqual([nestedRequests.length, new Set(nestedRequests.map(request => request.sessionID)).size], [3, 1], 'One reviewer session: the PR\'s file, the local file, then the answer.');
+  assert.ok(nestedRequests[2].lastTool.includes(NESTED_NOTE), `The native read returned the local file: ${nestedRequests[2].lastTool}`);
+  // Positive control: the host did leave the instruction file in that session, with its text.
+  const nestedContext = await rawApi(`/api/session/${nestedRequests[0].sessionID}/context`);
+  const loaded = (Array.isArray(nestedContext) ? nestedContext : nestedContext?.data ?? []).filter(message => message.type === 'synthetic' && Array.isArray(message.metadata?.instruction?.paths));
+  assert.equal(loaded.length, 1, 'OpenCode left one message with the instruction file in the reviewer\'s session.');
+  assert.ok(loaded[0].text.includes(MARKS.nested) && loaded[0].metadata.instruction.paths.length === 1 && loaded[0].metadata.instruction.paths[0].endsWith(join('work', 'nested', 'AGENTS.md')), JSON.stringify(loaded[0]).slice(0, 400));
+  assert.ok(requests.slice(beforeNested).every(request => !request.marks.length), 'Neither that file nor the configured one reached a model.');
+  const [nestedStage] = await stageRecords(nestedReceipt);
+  assert.equal(nestedStage.requestObservations.instructionLoads, 1, `The stage's record counts the message that was kept from the model: ${JSON.stringify(nestedStage.requestObservations)}`);
+  results.nestedInstructions = 'a native read next to an instruction file: OpenCode left that file in the session, AZPR kept it from the model; COMPLETE in one session';
 
   // 3d. Automatic comment steps from a flag right after the PR URL: a preview in a run of its own;
   //     automatic publication posts a quick review's finding and holds back only a comment with
@@ -927,6 +1002,35 @@ try {
   assert.equal(cutStage.result.findings.length, 1, 'The answer is the retried one, whole.');
   results.streamCut = `a quick answer cut mid-stream was retried by OpenCode in the same session (${cutRequests.length} requests, step-retries=1); COMPLETE without a new session`;
 
+  // 4b3. The usage limit a ChatGPT workspace's admin set for a member is used up (OpenCode 2.4.0 and later report it
+  // as a provider error type of its own): another attempt fails the same way, so AZPR refuses OpenCode's retry,
+  // starts no new session and names the limit.
+  const limitOrigin = await newOrigin('Workspace usage limit');
+  const beforeLimit = requests.length;
+  // Where the limit is not recognized, OpenCode goes on retrying the refused request for minutes: a second request
+  // ends this step at once, with the reason.
+  let limitSettled = false;
+  const askedAgain = async () => {
+    while (!limitSettled) {
+      if (requests.length > beforeLimit + 1) throw new Error('The provider was asked again after it reported the used-up workspace limit: the retry was not refused (is provider.chatgpt-workspace-limit still the error type this OpenCode reports?).');
+      await new Promise(resolveLater => setTimeout(resolveLater, 50));
+    }
+  };
+  const limitRun = api(`/api/session/${limitOrigin}/command`, { name: 'pr-quick', text: `${prUrl} workspace-limit-smoke`, delivery: 'steer' });
+  limitRun.catch(() => {});
+  try { await Promise.race([limitRun, askedAgain()]); } finally { limitSettled = true; }
+  const limited = await latest(limitOrigin);
+  assert.match(limited, /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none\n/, limited);
+  assert.match(limited, /\n- azpr-quick-reviewer: FAILED; session=ses_\w+; model=fixture\/quick; failure=permanent; error=\[AZPR\] Model provider request failed \(HTTP 429; 0 tool calls observed\)\. ChatGPT reports the usage limit set by the workspace's admin as reached \(provider\.chatgpt-workspace-limit\), so a new session would fail the same way and is not started\. Choose another model in the settings or wait until the limit resets\. /, limited);
+  assert.equal(limited.match(/^- azpr-/gm).length, 1, 'One session, and nothing after it.');
+  assert.doesNotMatch(limited, /attempt=2|Retry notice/, 'No new session was started.');
+  const limitRequests = requests.slice(beforeLimit);
+  assert.deepEqual([limitRequests.length, new Set(limitRequests.map(request => request.sessionID)).size], [1, 1], 'The provider was asked once: OpenCode\'s retry of the request was refused.');
+  const [limitStage] = await stageRecords(limited);
+  assert.deepEqual([limitStage.failureClass, limitStage.execution?.provider?.exhausted, limitStage.requestObservations.retries.map(retry => [retry.proposed, retry.allowed, retry.usedUp])],
+    ['permanent', 'provider.chatgpt-workspace-limit', [[true, false, 'provider.chatgpt-workspace-limit']]], JSON.stringify([limitStage.execution, limitStage.requestObservations]));
+  results.usageLimit = 'a used-up ChatGPT workspace limit (HTTP 429): one request, OpenCode\'s retry refused, no new session, the receipt names the limit';
+
   // 4c. The stage inactivity watchdog (workflow.stageIdleSeconds: 60), two reviews
   // at once: a model stream that stops sending is stopped, interrupted on the
   // host and retried; an answer that keeps streaming longer than the window runs on.
@@ -972,6 +1076,10 @@ try {
   const ordinary = await newOrigin('Ordinary');
   const generated = await api(`/api/session/${ordinary}/generate`, { prompt: 'Ordinary generation positive control' });
   assert.equal(typeof generated.data.text, 'string');
+  // A generation is built outside a turn, with the session's whole tool list: AZPR's tools are not in it either.
+  const generation = requests.findLast(request => request.sessionID === ordinary && request.last.includes('Ordinary generation positive control'));
+  assert.ok(generation, 'The ordinary generation reached the provider.');
+  assert.ok(generation.tools.length > 0 && !generation.tools.some(name => name.startsWith('azpr_')), `An ordinary generation carries no AZPR tool: ${generation.tools.join(', ')}`);
   results.auxiliary = 'private denied, ordinary allowed';
 
   // Ordinary conversations keep foreign tools and never see AZPR's PAT-backed tools.
@@ -982,9 +1090,35 @@ try {
   const chatRequest = requests.slice(beforeChat).find(request => request.sessionID === chat);
   assert.ok(chatRequest, 'The ordinary chat reached the provider.');
   assert.ok(chatRequest.tools.some(name => /lookup/.test(name)), 'Ordinary sessions keep foreign MCP tools.');
-  assert.ok(chatRequest.tools.includes('experimental_image_generate'), 'Positive control: OpenCode offers image generation to ordinary sessions.');
+  assert.ok(chatRequest.tools.includes('generate_image'), 'Positive control: OpenCode offers image generation to ordinary sessions.');
+  assert.ok(chatRequest.tools.includes('generate_video'), 'Positive control: OpenCode offers video generation to ordinary sessions.');
   assert.ok(!chatRequest.tools.some(name => name.startsWith('azpr_')), 'Ordinary sessions never see AZPR tools.');
+  // Positive control for what the private sessions are spared: OpenCode does add the configured instruction file.
+  assert.deepEqual(chatRequest.marks, ['place'], 'An ordinary conversation\'s model gets the instruction file the configuration names.');
   results.toolScopes = 'AZPR tools only in private sessions; foreign MCP tools (direct and CodeMode) and image generation only in ordinary sessions';
+
+  // 5b. One of AZPR's commands that reaches OpenCode as an ordinary prompt, as the terminal UI sends it when it is
+  //     submitted before the commands are loaded (opencode --prompt "/pr-check …"). No command ran, and a model
+  //     would get the PR URL and the context as text: AZPR stops the prompt, says so in the conversation, and the
+  //     command itself works there afterwards.
+  const strayOrigin = await newOrigin('Command sent as a prompt');
+  const beforeStray = requests.length;
+  const stray = await fetch(`${url}/api/session/${strayOrigin}/prompt`, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work },
+    body: JSON.stringify({ text: `/pr-check ${prUrl} ${MARKS.stray}` }), signal: AbortSignal.timeout(60000) });
+  // OpenCode answers a prompt that a plugin's hook refused with a general error (2.4.1: HTTP 500, UnknownError,
+  // "Check server logs"): the reason is in the notice AZPR leaves in the conversation.
+  const strayText = await stray.text();
+  assert.equal(stray.ok, false, `OpenCode did not refuse the prompt: ${stray.status} ${strayText}`);
+  await api(`/api/experimental/session/${strayOrigin}/wait`, {});
+  const strayNotices = await inbox(strayOrigin);
+  assert.ok(strayNotices.length === 1 && strayNotices[0].startsWith('[AZPR] /pr-check reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it.'), JSON.stringify(strayNotices));
+  const strayContext = await rawApi(`/api/session/${strayOrigin}/context`);
+  assert.deepEqual((Array.isArray(strayContext) ? strayContext : strayContext?.data ?? []).filter(message => message.type === 'user').map(message => message.text), [], 'The refused prompt is no message of the conversation, so no later request holds it either.');
+  assert.equal(requests.length, beforeStray, 'No model was asked, not even for a title.');
+  await api(`/api/session/${strayOrigin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
+  assert.match(await latest(strayOrigin), /\] READY/, 'The command itself still runs in that conversation.');
+  assert.equal(requests.length, beforeStray, '/pr-check asks no model.');
+  results.strayCommand = 'an AZPR command sent as an ordinary prompt is refused with a notice in the conversation; no message, no model request; the command then runs there';
 
   // 6. Actual TUI: the invoking conversation stays the origin and can cancel.
   const tui = spawn('python3', [join(sourceRoot, 'tests', 'tui-background.py'), binary, url, directories.work, fixture],
@@ -1099,6 +1233,15 @@ try {
       await new Promise(resolveClosed => tlsServer.close(resolveClosed));
     }
   }
+
+  // Over the whole run: what OpenCode collects for a conversation's place reached no private session (every request
+  // that carries a stage's payload), and the two texts that must reach no model reached none.
+  const privateRequests = requests.filter(request => request.kind !== 'chat');
+  assert.ok(privateRequests.length > 0 && privateRequests.every(request => !request.marks.length),
+    `A private session's request carried a text it must not: ${JSON.stringify(privateRequests.filter(request => request.marks.length).map(request => [request.kind, request.model, request.marks]))}`);
+  assert.ok(requests.every(request => !request.marks.includes('nested') && !request.marks.includes('stray')),
+    `A request carried the nested instruction file or the stray command: ${JSON.stringify(requests.filter(request => request.marks.some(mark => mark !== 'place')).map(request => [request.kind, request.model, request.marks]))}`);
+  assert.ok(requests.some(request => request.kind === 'chat' && request.marks.includes('place')), 'Positive control: an ordinary conversation did carry the configured instruction file.');
 
   console.log(JSON.stringify({ status: 'PASS', installation: native ? 'native' : replacement ? 'replace' : 'fresh', host: hostVersion, providerRequests: requests.length, azureCalls: azure.state.calls.length, results, fixture }, null, 2));
 } finally {
