@@ -528,14 +528,14 @@ at least one pass, and those reviewed in every pass. A pass that fails costs
 depth, which the second number and a warning show; a file is unreviewed only
 when no pass reviewed it.
 
-**A review does not depend on where its conversation is open.** OpenCode adds
-to every request what it collects for a conversation's directory: instruction
+**Your local project's instructions are not a review's.** OpenCode adds to
+every request what it collects for a conversation's directory: instruction
 files (`AGENTS.md`, `CLAUDE.md`, configured ones) and what MCP servers,
 references and skills say of themselves. AZPR keeps all of that out of its
 private sessions, which get AZPR's own instructions and OpenCode's date and
 environment; your own conversations are not touched. A reviewer can still read
 the instruction files of the PR's repository with AZPR's tools, at the
-reviewed commit.
+reviewed commit, and local files on purpose.
 
 `/pr-quick` and `/pr-deep` run this same review with the models listed for
 them (`models.quick.reviewers`, `models.deep.reviewers`). An empty list leaves
@@ -1118,7 +1118,7 @@ restart the OpenCode service.
 | `returnReport` | `receipt`; `full` also encloses the rendered report in the receipt. |
 | `outputLanguage` | `en`; used by reviews, the report and comments. `zh-TW` for Traditional Chinese. |
 | `runTimeoutSeconds` | `null` (no whole-command timer); an integer 10–7200 enables one. |
-| `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode; the request is the reviewer session's, and one that nobody answers stops the stage after `workflow.stageIdleSeconds`. `inherit`: host permissions decide. A command that goes on in the background (OpenCode 2.3.1 and later move one there when its timeout runs out, after 120 seconds by default) tells its reviewer when it has ended, and the pass goes on. |
+| `shell` | `deny`: private reviewers cannot run shell commands (the tool is hidden). `ask`: each command needs your approval in OpenCode; the request is the reviewer session's, and one that nobody answers stops the stage after `workflow.stageIdleSeconds`. `inherit`: host permissions decide. A command that goes on in the background (OpenCode 2.3.1 and later move one there when its timeout runs out, after 120 seconds by default) tells its reviewer when it has ended, and the pass goes on; one that ends only after the reviewer has answered is not waited for. |
 | `progressNotices` | `true`: short PROGRESS notices in the invoking conversation. |
 | `deletePrivateSessions` | `true`: when a command ends, AZPR deletes its private reviewer sessions except the one that holds the review's report (see [retention](#retention-and-privacy)); `false` keeps every session. |
 | `terminalPanel` | `auto`: the [terminal panel](#terminal-panel) opens by itself when a review or comment run starts and when a report or preview arrives.<br>`manual`: it opens only with `/pr-panel`. |

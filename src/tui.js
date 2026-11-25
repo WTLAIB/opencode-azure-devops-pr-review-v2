@@ -157,11 +157,15 @@ const inside = event => {
  * that release tells it from a real one. Time does: a real release follows the last movement at once. So a
  * release that comes more than a moment after the pointer last moved, with the button that was pressed on this
  * element still down, is no click. Without a movement the host makes none up, so a button held still for any
- * time is a click as before, and a press of the element begins anew.
+ * time is a click as before, and a press of the element begins anew. Only a press of the left button does: the
+ * host ends the lost gesture at the next left press, so another button must not forget the movement.
  *
  * Two clocks say how long that was, and a release is a click only where both call it a moment: the time of day
  * can be set back, and the steady clock may stand still while the machine sleeps. A click that is refused can be
- * made again; one that is made up cannot be taken back.
+ * made again; one that is made up cannot be taken back. The moment is measured where this process handles the
+ * two events, which is all it knows of them: an event carries no time of its own. Where the terminal's input
+ * waited meanwhile (the process was stopped, or busy for that long), a made-up release that is handled right
+ * after its movement is still taken for a click.
  */
 const hold = () => {
   let moved;
@@ -199,6 +203,7 @@ function Row(props) {
     _$setProp(_el$, "gap", 1);
     _$setProp(_el$, "onMouseOver", () => setHover(true));
     _$setProp(_el$, "onMouseOut", () => setHover(false));
+    _$setProp(_el$, "onMouseDown", event => event.button === MouseButton.LEFT && held.down());
     _$setProp(_el$, "onMouseUp", event => {
       if (!clicked(event) || held.madeUp()) return;
       event.stopPropagation();
@@ -238,25 +243,22 @@ function Row(props) {
     }), null);
     _$effect(_p$ => {
       var _v$3 = hover() ? props.colors.hover : undefined,
-        _v$4 = held.down,
-        _v$5 = held.drag,
-        _v$6 = mark(),
-        _v$7 = props.colors.base,
-        _v$8 = props.colors.muted;
+        _v$4 = held.drag,
+        _v$5 = mark(),
+        _v$6 = props.colors.base,
+        _v$7 = props.colors.muted;
       _v$3 !== _p$.e && (_p$.e = _$setProp(_el$, "backgroundColor", _v$3, _p$.e));
-      _v$4 !== _p$.t && (_p$.t = _$setProp(_el$, "onMouseDown", _v$4, _p$.t));
-      _v$5 !== _p$.a && (_p$.a = _$setProp(_el$, "onMouseDrag", _v$5, _p$.a));
-      _v$6 !== _p$.o && (_p$.o = _$setProp(_el$2, "fg", _v$6, _p$.o));
-      _v$7 !== _p$.i && (_p$.i = _$setProp(_el$3, "fg", _v$7, _p$.i));
-      _v$8 !== _p$.n && (_p$.n = _$setProp(_el$4, "fg", _v$8, _p$.n));
+      _v$4 !== _p$.t && (_p$.t = _$setProp(_el$, "onMouseDrag", _v$4, _p$.t));
+      _v$5 !== _p$.a && (_p$.a = _$setProp(_el$2, "fg", _v$5, _p$.a));
+      _v$6 !== _p$.o && (_p$.o = _$setProp(_el$3, "fg", _v$6, _p$.o));
+      _v$7 !== _p$.i && (_p$.i = _$setProp(_el$4, "fg", _v$7, _p$.i));
       return _p$;
     }, {
       e: undefined,
       t: undefined,
       a: undefined,
       o: undefined,
-      i: undefined,
-      n: undefined
+      i: undefined
     });
     return _el$;
   })();
@@ -304,16 +306,16 @@ function Button(props) {
     _$setProp(_el$8, "selectable", false);
     _$insert(_el$8, () => props.item.label);
     _$effect(_p$ => {
-      var _v$9 = hover() ? props.colors.hover : undefined,
-        _v$0 = held.drag,
-        _v$1 = props.live ? props.colors.link : props.colors.muted,
-        _v$10 = props.item.primary ? props.colors.base : props.colors.text,
-        _v$11 = props.item.primary ? TextAttributes.BOLD : 0;
-      _v$9 !== _p$.e && (_p$.e = _$setProp(_el$6, "backgroundColor", _v$9, _p$.e));
-      _v$0 !== _p$.t && (_p$.t = _$setProp(_el$6, "onMouseDrag", _v$0, _p$.t));
-      _v$1 !== _p$.a && (_p$.a = _$setProp(_el$7, "fg", _v$1, _p$.a));
-      _v$10 !== _p$.o && (_p$.o = _$setProp(_el$8, "fg", _v$10, _p$.o));
-      _v$11 !== _p$.i && (_p$.i = _$setProp(_el$8, "attributes", _v$11, _p$.i));
+      var _v$8 = hover() ? props.colors.hover : undefined,
+        _v$9 = held.drag,
+        _v$0 = props.live ? props.colors.link : props.colors.muted,
+        _v$1 = props.item.primary ? props.colors.base : props.colors.text,
+        _v$10 = props.item.primary ? TextAttributes.BOLD : 0;
+      _v$8 !== _p$.e && (_p$.e = _$setProp(_el$6, "backgroundColor", _v$8, _p$.e));
+      _v$9 !== _p$.t && (_p$.t = _$setProp(_el$6, "onMouseDrag", _v$9, _p$.t));
+      _v$0 !== _p$.a && (_p$.a = _$setProp(_el$7, "fg", _v$0, _p$.a));
+      _v$1 !== _p$.o && (_p$.o = _$setProp(_el$8, "fg", _v$1, _p$.o));
+      _v$10 !== _p$.i && (_p$.i = _$setProp(_el$8, "attributes", _v$10, _p$.i));
       return _p$;
     }, {
       e: undefined,
@@ -635,6 +637,7 @@ function Panel(props) {
     _$insertNode(_el$18, _$createTextNode(`close`));
     _$setProp(_el$18, "flexShrink", 0);
     _$setProp(_el$18, "selectable", false);
+    _$setProp(_el$18, "onMouseDown", event => event.button === MouseButton.LEFT && closing.down());
     _$setProp(_el$18, "onMouseUp", event => {
       if (!clicked(event) || closing.madeUp()) return;
       event.stopPropagation();
@@ -753,14 +756,14 @@ function Panel(props) {
             cellPaddingX: 1
           });
           _$effect(_p$ => {
-            var _v$12 = syntax(),
-              _v$13 = model().markdown,
-              _v$14 = palette().text,
-              _v$15 = palette().surface;
-            _v$12 !== _p$.e && (_p$.e = _$setProp(_el$29, "syntaxStyle", _v$12, _p$.e));
-            _v$13 !== _p$.t && (_p$.t = _$setProp(_el$29, "content", _v$13, _p$.t));
-            _v$14 !== _p$.a && (_p$.a = _$setProp(_el$29, "fg", _v$14, _p$.a));
-            _v$15 !== _p$.o && (_p$.o = _$setProp(_el$29, "bg", _v$15, _p$.o));
+            var _v$11 = syntax(),
+              _v$12 = model().markdown,
+              _v$13 = palette().text,
+              _v$14 = palette().surface;
+            _v$11 !== _p$.e && (_p$.e = _$setProp(_el$29, "syntaxStyle", _v$11, _p$.e));
+            _v$12 !== _p$.t && (_p$.t = _$setProp(_el$29, "content", _v$12, _p$.t));
+            _v$13 !== _p$.a && (_p$.a = _$setProp(_el$29, "fg", _v$13, _p$.a));
+            _v$14 !== _p$.o && (_p$.o = _$setProp(_el$29, "bg", _v$14, _p$.o));
             return _p$;
           }, {
             e: undefined,
@@ -828,20 +831,17 @@ function Panel(props) {
       }
     }), null);
     _$effect(_p$ => {
-      var _v$16 = palette().base,
-        _v$17 = palette().muted,
-        _v$18 = closing.down,
-        _v$19 = closing.drag;
-      _v$16 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$16, _p$.e));
-      _v$17 !== _p$.t && (_p$.t = _$setProp(_el$18, "fg", _v$17, _p$.t));
-      _v$18 !== _p$.a && (_p$.a = _$setProp(_el$18, "onMouseDown", _v$18, _p$.a));
-      _v$19 !== _p$.o && (_p$.o = _$setProp(_el$18, "onMouseDrag", _v$19, _p$.o));
+      var _v$15 = palette().base,
+        _v$16 = palette().muted,
+        _v$17 = closing.drag;
+      _v$15 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$15, _p$.e));
+      _v$16 !== _p$.t && (_p$.t = _$setProp(_el$18, "fg", _v$16, _p$.t));
+      _v$17 !== _p$.a && (_p$.a = _$setProp(_el$18, "onMouseDrag", _v$17, _p$.a));
       return _p$;
     }, {
       e: undefined,
       t: undefined,
-      a: undefined,
-      o: undefined
+      a: undefined
     });
     return _el$9;
   })();
@@ -1171,16 +1171,16 @@ function Secret(props) {
     })());
     _$insertNode(_el$42, _$createTextNode(`enter save · ctrl+u clear · esc leave`));
     _$effect(_p$ => {
-      var _v$20 = palette().base,
-        _v$21 = palette().muted,
-        _v$22 = palette().hover ?? palette().surface,
-        _v$23 = length() ? palette().base : palette().muted,
-        _v$24 = palette().muted;
-      _v$20 !== _p$.e && (_p$.e = _$setProp(_el$36, "fg", _v$20, _p$.e));
-      _v$21 !== _p$.t && (_p$.t = _$setProp(_el$39, "fg", _v$21, _p$.t));
-      _v$22 !== _p$.a && (_p$.a = _$setProp(_el$40, "backgroundColor", _v$22, _p$.a));
-      _v$23 !== _p$.o && (_p$.o = _$setProp(_el$41, "fg", _v$23, _p$.o));
-      _v$24 !== _p$.i && (_p$.i = _$setProp(_el$42, "fg", _v$24, _p$.i));
+      var _v$18 = palette().base,
+        _v$19 = palette().muted,
+        _v$20 = palette().hover ?? palette().surface,
+        _v$21 = length() ? palette().base : palette().muted,
+        _v$22 = palette().muted;
+      _v$18 !== _p$.e && (_p$.e = _$setProp(_el$36, "fg", _v$18, _p$.e));
+      _v$19 !== _p$.t && (_p$.t = _$setProp(_el$39, "fg", _v$19, _p$.t));
+      _v$20 !== _p$.a && (_p$.a = _$setProp(_el$40, "backgroundColor", _v$20, _p$.a));
+      _v$21 !== _p$.o && (_p$.o = _$setProp(_el$41, "fg", _v$21, _p$.o));
+      _v$22 !== _p$.i && (_p$.i = _$setProp(_el$42, "fg", _v$22, _p$.i));
       return _p$;
     }, {
       e: undefined,

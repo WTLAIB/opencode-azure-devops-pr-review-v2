@@ -65,32 +65,38 @@ export function itemPages(items, size = PAGE_CHARACTERS, maxItems = Infinity) {
   return pages;
 }
 
-// Marks a store whose pages files all hold rows the host's read returns whole.
-const ROWS_MARK = 'rows-v2';
-
 /**
- * A store that 0.5.0 or an earlier version wrote holds pages of 3,000 characters a row, which the host's read
- * cuts. Its pages are derived from the objects, so they are written again from them: a saved review's references
- * name these files. Each file is replaced in one step, under a name of this call's own, so that a reader finds
- * the earlier rows or the new ones and two stores opened together do not write into each other's file. The store
- * is marked once every file was written; one that could not be stays as it is, and the next opening tries again.
+ * The pages of a store that is opened again, made to fit. A store that 0.5.0 or an earlier version wrote, or
+ * still writes into, has pages of 3,000 characters a row, which the host's read cuts; a saved review's
+ * references name these files, so a pages file with a row that does not fit is written again from its object.
+ * Every file is looked at for itself, each time the store is opened: nothing says of a store as a whole that its
+ * pages fit, since another version may have added to it meanwhile.
+ *
+ * The object is checked against the digest that names it before its pages are replaced. One that is damaged, or
+ * that another process is still writing, gives no pages, and what is there is left: AZPR's own reads of such an
+ * object fail on that digest anyway. A pages file is replaced in one step, under a working name of this call's
+ * own, so that a reader finds the earlier rows or the new ones. Where the pages of a sound object cannot be
+ * written, opening the store fails: its rows would reach a model cut, which is what this is here to prevent.
  */
-async function renewPages(directory, ids) {
-  const mark = join(directory, ROWS_MARK);
-  try { await readFile(mark); return; } catch { /* Not renewed yet. */ }
-  let renewed = true;
+async function fitPages(directory, ids) {
   for (const id of ids) {
-    const file = join(directory, 'objects', id + '.txt'), temporary = `${file}.pages.jsonl.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    const file = join(directory, 'objects', id + '.txt'), pages = file + '.pages.jsonl';
+    let rows;
+    try { rows = await readFile(pages, 'utf8'); } catch (error) { if (error?.code === 'ENOENT') continue; throw unfit(error); }
+    if (rows.split('\n').every(row => row.length <= ROW_CHARACTERS)) continue;
+    const temporary = `${pages}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
     try {
-      await writeFile(temporary, pageRows(await readFile(file, 'utf8')).join('\n') + '\n', { flag: 'wx', mode: 0o600 });
-      await rename(temporary, file + '.pages.jsonl');
-    } catch {
-      renewed = false;
+      const text = await readFile(file, 'utf8');
+      if (hash(text) !== id) continue;
+      await writeFile(temporary, pageRows(text).join('\n') + '\n', { flag: 'wx', mode: 0o600 });
+      await rename(temporary, pages);
+    } catch (error) {
       await rm(temporary, { force: true }).catch(() => {});
+      throw unfit(error);
     }
   }
-  if (renewed) await writeFile(mark, '', { mode: 0o600 }).catch(() => {});
 }
+const unfit = error => Object.assign(new Error(`[AZPR] This review's private data was written by an earlier version in rows that OpenCode's read tool cuts, and they could not be written again (${error?.code ?? 'error'}). Nothing was planned; run the command again once the cause is gone.`), { unfitPages: true });
 
 /**
  * Private content-addressed store. A new store gets a fresh directory under
@@ -104,14 +110,13 @@ export async function createCommentData({ root, directory: existing } = {}) {
       const match = /^([a-f0-9]{64})\.txt$/.exec(name);
       if (match) written.set(match[1], Promise.resolve());
     }
-    await renewPages(existing, [...written.keys()]);
+    await fitPages(existing, [...written.keys()]);
   } else {
     if (!root) throw new Error('A private data root is required.');
     await mkdir(root, { recursive: true, mode: 0o700 });
     directory = await mkdtemp(join(root, 'data-'));
     await mkdir(join(directory, 'objects'), { mode: 0o700 });
     await writeFile(join(directory, '.gitignore'), '*\n', { flag: 'wx', mode: 0o600 });
-    await writeFile(join(directory, ROWS_MARK), '', { flag: 'wx', mode: 0o600 });
   }
   const put = async (text, format = 'text') => {
     const id = hash(text), file = join(directory, 'objects', id + '.txt');

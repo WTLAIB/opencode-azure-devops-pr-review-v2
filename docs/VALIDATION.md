@@ -96,31 +96,32 @@ Azure DevOps services. No review with a real model ran on this candidate.
 found. `host.mjs` has the tested version, the workspace limit among the
 used-up limits, the length of a line the host's read returns, and what tells
 the host's parts and messages apart (`withoutPlaceInstructions`,
-`withoutClaudeSources`, `isInstructionLoad`, `isInstructionUpdate`).
+`claudeInstructions`, `isInstructionLoad`, `isInstructionUpdate`).
 `runtime.mjs` keeps the place's instructions and the host's own messages out
-of private requests in its `context` hook, takes AZPR's tools out of the
-requests built outside a turn, refuses one of AZPR's commands that arrives as
-a prompt, and puts the report into the last stage of the pipeline.
-`session.mjs` lets a turn's check pass a load that was hidden and the notice
-of the session's own background command. `comment-data.mjs` writes rows that
-fit (`pageRows`) and writes an earlier store's pages again (`renewPages`),
+of private requests in its `context` hook, opens a grant only for a turn,
+takes AZPR's tools out of the requests built outside a turn, refuses one of
+AZPR's commands that arrives as a prompt, and puts the report into the last
+stage of the pipeline. `session.mjs` ends a turn at its own idle marker and
+lets its check pass a load that was hidden and the notice of the session's
+own background command. `comment-data.mjs` writes rows that fit (`pageRows`)
+and writes pages that do not fit again when a store is opened (`fitPages`),
 `attribution.mjs` orders the stages (`stagesInOrder`), and `tui-view.jsx`
 tells a made-up release from a click (`hold`). No prompt changed (the hash
 test holds them), no setting is new, and the package has the files of 0.5.0.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 799 tests (783 for 0.5.0), all
+`npm run check` passes, and `npm test` runs 804 tests (783 for 0.5.0), all
 passing. The new ones:
 
 | Tests | What they establish |
 | ---: | --- |
-| 4 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. The text the Claude Code provider keeps loses the sources that were left out where they stand alone, first, last or between other texts, and is not told apart where they are missing, twice there, not between blank lines or in another order. A load of instruction files is told by the paths it names, an update by being a system message of text; a change of effort or of tools is none. |
-| 3 | The `context` hook and the turn (`tests/runtime.test.mjs`): a private request keeps only the date and the environment, with and without the Claude Code provider's option, loses the loaded instruction file and the update and keeps a change of effort; a request whose option was written another way stays as it is, and the stage record counts it; an ordinary session's request is untouched; a load that no request offered to the hook, or a message that only looks like one, still ends the turn. One of AZPR's commands sent as a prompt is refused with a notice, for each command and with leading blanks; a question about a command, a longer name and an unknown name are not. |
-| 4 | The turn's check (`tests/session.test.mjs`): a hidden load ends no turn, and a load whose ID is not among the hidden ones, a message of another form, a user message and a second, foreign message do; the notice of the session's own background command is part of the turn, the answer after it counts, and a notice after the idle marker leaves the answer before it, whatever outcome the woken turn has; a notice for a shell the session did not start, one before its call, one of another tool's shell, one without the host's mark and other input next to a real notice end the turn. And the workspace limit is named and not retried. |
-| 3 | Rows (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. A store of an earlier version gets its pages written again once, without a working file left; one whose pages could not all be written is not marked, and its next opening writes them. |
-| 2 | The order of stages (`tests/attribution.test.mjs`, `tests/runtime.test.mjs`): three shuffled orders of creation give one list, for a review and for a comment run; with the second pass's session created first, the receipt lists the first pass first and the report is in the last stage. |
-| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture; one right after a movement, and one after any time without a movement, is a click; a movement before the press does not count; a session's row and `close` follow the same rule; and each of the two clocks alone, or one that runs backwards, is enough to refuse. The clocks are the test's. |
+| 4 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. What the Claude Code provider keeps for a request is its sources but those two, joined. A load of instruction files is told by the paths it names, an ID and the kind of message the host makes of it; a message without an ID, a person's message, a tool result or an assistant message that carries such paths is none. An update is a system message of one text without an ID or metadata; a change of effort or of tools, two texts, or a system message that another hook marked is none. |
+| 5 | The `context` hook (`tests/runtime.test.mjs`): a private request keeps only the date and the environment, loses the loaded instruction file and the update and keeps a change of effort; an option of the Claude provider's name on another provider's request changes nothing of that; an ordinary session's request is untouched. For the Claude Code provider the sources are left out, and its option emptied, only where the option holds exactly what they give: written another way, with a source more or less, missing, not a text, or holding something where nothing is to leave out, the parts and the option stay and the stage record counts the request. A load that no request offered to the hook, a message that only looks like one, and a message of an ID that one request showed and another did not (in either order) still fail the turn. A private session gets a request and a tool only while a turn is open: between two turns the hook refuses a request, the tool hook a call and AZPR's own tool its execution, and nothing is read. One of AZPR's commands sent as a prompt is refused with a notice, for each of its eight commands; a question about a command, a longer name and an unknown name are not. |
+| 6 | The turn (`tests/session.test.mjs`): a hidden load ends no turn, and a load whose ID is not among the hidden ones, a message of another form, a user message and a second, foreign message do. A turn ends at the first idle marker after an answer: a marker before any answer is skipped, what the session writes after the turn's marker is no part of the answer, and the session's outcome is consulted only where the turn has no marker. The caller is told that the session is idle before its context is read. The notice of the session's own background command is no foreign input, whether the command completed, was cancelled or ended in error, also between a step that broke and its retry; a notice after the turn's marker leaves the answer before it, whatever the woken turn's outcome and whatever else of the host's lies between. A notice for a shell the session did not start, one before its call, one of another tool's or of a call that ended in the foreground, one without the host's marks, one that does not say the command ended, and a second one for a shell (in the turn, in a later turn, after the turn) are foreign; the notice of a command that an earlier turn started is the session's own. And the workspace limit is named and not retried. |
+| 3 | Rows (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. A store that is opened again has every pages file with a row that does not fit written again, each time it is opened, and leaves a file that fits as it is; it holds no mark. Pages are not derived from an object whose digest is not the one in its name; a store whose pages cannot be made to fit is not opened, leaves no working file, and is opened once the obstacle is gone. |
+| 3 | The order of stages (`tests/attribution.test.mjs`, `tests/runtime.test.mjs`): three orders of creation give one list, for a review and for a comment run; the sessions of one label, among them a page's continuation after a retry, keep the order they ran in; the receipt's inactivity notice follows the same order; with the second pass's session created first and no later stage, the receipt lists the first pass first and the report is in the second pass's session. |
+| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture; one right after a movement, and one after any time without a movement, is a click; a movement before the press does not count; a session's row and `close` follow the same rule, also after another button was pressed on them; and each of the two clocks alone, or one that runs backwards, is enough to refuse. The clocks are the test's. |
 | in an existing test | The requests built outside a turn lose AZPR's tools (`tests/runtime.test.mjs`). |
 
 The other changed expectations are the tested version (`2.4.1`) and what
@@ -184,16 +185,37 @@ debug off 36 and 121; background compaction 6 model requests, with debug off
 12; the terminal panel 47 and 73 in both runs; setup none and 16, the update
 of 0.4.x settings none and 7.
 
-Three probes outside the repository's tests ran on the candidate with a real
+The same tree ran on three other versions, with only its tested version set
+to the host's: people upgrade AZPR before OpenCode. On 2.4.0 all thirteen
+runs passed. On 2.3.2 and 2.3.0 the comment scale runs, the six runs in the
+terminal UI and the background compaction runs passed, except, on 2.3.0, the
+background compaction run with debug on, which waits for a background summary
+that 2.3.0 does not write by default. The smoke fixture checks the tested
+host's own error types and tool names, so on 2.3.2 and 2.3.0 its three runs
+stop at the step for a workspace's usage limit, a type those versions do not
+have; what comes before that step passed there, among it the review of two
+passes, the configured instruction file and the instruction file beside a
+local read.
+
+Four probes outside the repository's tests ran on the candidate with a real
 host and the fake services. The Claude Code provider, with a stand-in for the
-`claude` program, on 2.3.0 and 2.4.1 (see the comparison of the hosts). An
-instruction file edited while a review ran, with the file watcher on, on
-2.3.0 and 2.4.1: the host wrote its update into the session, the stage record
-counts it, and no request held the update or the file. And a review saved by
+`claude` program, on 2.3.0 and 2.4.1 (see the comparison of the hosts).
+Messages in a reviewer's turn, on 2.3.0 and 2.4.1: a native read beside an
+`AGENTS.md`, beside a `CLAUDE.md`, in two such folders, and in a correction
+turn, each COMPLETE in one session with the file kept from the model; an
+instruction file edited while the review ran, with the file watcher on, whose
+update the host wrote into the session and no request held; a message of the
+load's form that someone else posted, kept from the model as well; and
+someone else's ordinary message, which fails the pass as it should. Shell
+allowed, on 2.3.0, 2.3.1 and 2.4.1: a command that ends at once, one in the
+background that ends during the turn, one that outlasts its timeout, one that
+ends six seconds after the answer and one that ends between a first answer
+and its correction turn (three runs) each gave a COMPLETE review in one
+session with the command run once; so did, on 2.4.1, a background command
+under `shell: ask` that was approved through the API. And a review saved by
 0.5.0 on 2.4.1, then the candidate installed over it and `/pr-comment`: the
 store's pages, 14 rows of up to 3,243 characters as 0.5.0 wrote them, were
-written again as 24 rows of at most 1,879, the store was marked, and the
-preview was planned.
+written again as 24 rows of at most 1,879, and the preview was planned.
 
 ### Not verified
 
@@ -5828,13 +5850,24 @@ transient failure, and its error names the last activity.
   which is the state every review is in now.
 - **What a private session is told rests on OpenCode's interface.** Keeping
   local instructions out of private requests uses a field OpenCode marks as
-  experimental, and recognising a background command's notice uses the
-  metadata OpenCode writes on it. Where a later OpenCode changes either, AZPR
-  falls back: requests go out as OpenCode builds them (the stage record
-  counts them), and such a notice ends the turn again, as before 0.5.1. With
-  shell allowed, a notice is taken for the host's own by that metadata alone,
-  which anyone who can write to the session could imitate; the default,
-  `shell: "deny"`, accepts none.
+  experimental (for `claude-agent` models, also the text that provider keeps
+  in a request's options), and recognising a background command's notice uses
+  the metadata OpenCode writes on it. Where a later OpenCode changes either,
+  AZPR falls back: the system parts go out as OpenCode builds them (the stage
+  record counts those requests), and such a notice fails the turn again, as
+  before 0.5.1. With shell allowed, a notice is taken for the host's own by
+  that metadata alone, once for each command the session started in the
+  background; whoever can write to the session and sends such a notice before
+  the host does is believed. The default, `shell: "deny"`, accepts none. This
+  keeps OpenCode's collected instructions out of a review; it does not make a
+  review the same in every directory: the environment names the directory,
+  and a reviewer can read local files on purpose.
+- **With shell allowed, a command that ends after the answer.** The session
+  it wakes gets no model request and no tool, so the command's result is not
+  looked at, and OpenCode leaves that session in a failed state, which is the
+  state of the session that keeps the report when it was the last one. A
+  request that nobody approves (`shell: "ask"`) stops the stage after
+  `workflow.stageIdleSeconds`, in its retry too.
 - **An answer that reaches the model's output limit fails its pass.** OpenCode
   then asks the model to go on, with a message of its own that AZPR takes for
   someone else's: both sessions of the pass fail, and the receipt speaks of
@@ -5880,10 +5913,13 @@ transient failure, and its error names the last activity.
   release as a click only within a second of the pointer's last movement, so
   a second press within that second can still pick what was pressed, and a
   click whose release comes more than a second after a movement does nothing
-  and must be made again. The questions that a step opens, and the foot of
-  the list of adjustments, are the host's own lists, which act on a release
-  alone. Whether and how often real terminals lose a release was not
-  measured: every gesture here was injected in tmux.
+  and must be made again. The second is measured between handling the two
+  events, since an event carries no time of its own: where the terminal's
+  input waited (the process was stopped or busy), a made-up release that is
+  handled right after its movement is taken for a click. The questions that a
+  step opens, and the foot of the list of adjustments, are the host's own
+  lists, which act on a release alone. Whether and how often real terminals
+  lose a release was not measured: every gesture here was injected in tmux.
 - **Setup in the terminal UI.** The dialogs of `/pr-setup` exist in
   OpenCode's terminal UI only; the desktop app and other clients get the
   instructions and the options. They were exercised on OpenCode 2.3.0, 2.3.2

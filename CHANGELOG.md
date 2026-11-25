@@ -5,8 +5,10 @@
 AZPR is tested with OpenCode 2.4.1 instead of 2.3.2. OpenCode 2.3.1 to 2.4.1
 were compared with 2.3.0, the last version whose interfaces had been studied
 one by one, and what they change for AZPR is fixed here, together with
-defects that were there on 2.3.0 too. The review prompts are those of 0.5.0,
-no setting is new, and settings and saved reviews are used as they are.
+defects that were there on 2.3.0 too. The prompt files are those of 0.5.0,
+no setting is new, and settings and saved reviews are used as they are. What
+a private session is sent besides its prompt changed (see below), and no
+review with a real model was run on this version.
 
 **With OpenCode 2.4.0 or 2.4.1 and the terminal panel, upgrade**: the first
 item below could post comments that nobody asked for.
@@ -59,8 +61,8 @@ Private sessions:
   625,000 characters. Private sessions now get AZPR's own instructions and
   OpenCode's date and environment, also with `claude-agent` models, to which
   OpenCode hands instructions another way. Your own conversations are not
-  touched. A review no longer depends on the directory its conversation is
-  open in.
+  touched. A reviewer can still read local files on purpose, and the
+  environment names the directory as before.
 - **Reading a file beside a nested instruction file no longer fails the
   pass.** When a reviewer's native `read` reads a file of the local project
   in a directory that has an `AGENTS.md` of its own (from OpenCode 2.3.1 also
@@ -73,7 +75,9 @@ Private sessions:
   background, and OpenCode tells the session when it has ended. 0.5.0 took
   that notice for someone else's message: the pass failed, and its retry ran
   the command again. The notice of a command the session itself started is
-  now part of the turn.
+  now part of the turn, once for each such command. A turn ends when its
+  answer is given: a command that ends later wakes the session, which then
+  gets no model request and no tool, and the answer stands.
 - AZPR's tool definitions are no longer in the requests OpenCode builds for
   an ordinary conversation outside a turn (a summary, also the one it writes
   in the background, and a generation such as a side question): six
@@ -86,16 +90,18 @@ Large inputs:
   is handed to a model as a reference to pages, which it reads with OpenCode's
   native read. That tool cuts every line after 2,000 characters, and a row
   held up to 3,000 characters of text, so a model got about two thirds of
-  what it read. Rows now fit, and the pages of a saved review are written
-  again when it is next used. The instructions to the models did not change.
+  what it read. Rows now fit, and pages of a saved review that do not are
+  written again whenever it is used. Where that cannot be done (a full disk,
+  for instance) the command says so instead of planning from cut rows. The
+  instructions to the models did not change.
 
 Receipts:
 
-- A receipt lists the stages by their place in the pipeline (the passes in
-  their order, the duplicate checks, the rating; a comment run's grouping and
-  pages), and the report is in the last of them. Until now both followed the
-  order in which OpenCode had created the sessions, which differed between
-  runs of one review.
+- A review's receipt lists the stages by their place in the pipeline (the
+  passes in their order, the duplicate checks, the rating), also in its
+  inactivity notice, and the report is in the last of them. Until now these
+  followed the order in which OpenCode had created the sessions, which
+  differed between runs of one review.
 
 Documentation:
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isInstructionLoad, isInstructionUpdate, withoutPlaceInstructions, withoutClaudeSources, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, isInstructionLoad, isInstructionUpdate, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -229,46 +229,44 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
   }
 });
 
-test('the host\'s own load of instruction files is told by the paths it names', () => {
+test('the host\'s own load of instruction files is told by its form: the paths it names, an ID, and the kind of message the host makes of it', () => {
   // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one.
   const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED', description: 'Loaded sub/AGENTS.md', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
+  const request = { id: 'msg_load', role: 'user', content: load.text, metadata: load.metadata };
   assert.equal(isInstructionLoad(load), true);
-  assert.equal(isInstructionLoad({ id: 'msg_load', role: 'user', content: load.text, metadata: load.metadata }), true, 'The message a request is built with carries the same metadata.');
+  assert.equal(isInstructionLoad(request), true, 'The message a request is built with has the same ID and metadata, as a user message.');
   for (const other of [undefined, {}, { type: 'synthetic', text: load.text }, { ...load, metadata: {} }, { ...load, metadata: { instruction: {} } }, { ...load, metadata: { instruction: { paths: [] } } },
-    { ...load, metadata: { instruction: { paths: [''] } } }, { ...load, metadata: { instruction: { paths: [1] } } }, { ...load, metadata: { instruction: { paths: '/work/sub/AGENTS.md' } } }, { ...load, metadata: { azpr: {} } }]) {
+    { ...load, metadata: { instruction: { paths: [''] } } }, { ...load, metadata: { instruction: { paths: [1] } } }, { ...load, metadata: { instruction: { paths: '/work/sub/AGENTS.md' } } }, { ...load, metadata: { azpr: {} } },
+    // Not the host's load, whatever metadata it carries: no ID to know it by, a person's message, another role of a request.
+    { ...load, id: undefined }, { ...load, id: '' }, { ...load, id: 7 }, { ...load, type: 'user' }, { ...load, type: 'assistant' }, { ...request, id: undefined },
+    { ...request, role: 'tool' }, { ...request, role: 'assistant' }, { ...request, role: 'system' }, { ...request, type: 'user' }]) {
     assert.equal(isInstructionLoad(other), false, JSON.stringify(other));
   }
 });
 
-test('an update of the instructions is a system message of text; one that changes the effort or the tools is none', () => {
+test('an update of the instructions is a system message of one text and nothing else; one that changes the effort or the tools, or that another hook marked, is none', () => {
   // OpenCode 2.3.0 through 2.4.1 write it from `session.instructions.updated`, without an ID or metadata.
-  assert.equal(isInstructionUpdate({ role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }] }), true);
+  const update = { role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }] };
+  assert.equal(isInstructionUpdate(update), true);
   assert.equal(isInstructionUpdate({ role: 'system', content: 'Instructions from: /work/AGENTS.md\nCHANGED' }), true, 'Also where the text is not in parts.');
   for (const other of [undefined, {}, { role: 'user', content: [{ type: 'text', text: 'x' }] }, { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] },
-    { role: 'system', content: [], tools: { add: [], remove: ['read'] } }, { role: 'system', content: [{ type: 'text', text: 'x' }], tools: { add: [], remove: [] } },
-    { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'effort', effort: 'low' }] }, { role: 'system', content: [] }, { role: 'system', content: '' }, { role: 'system' },
-    { role: 'system', content: [{ type: 'text' }] }, { type: 'system', text: 'x' }]) {
+    { role: 'system', content: [], tools: { add: [], remove: ['read'] } }, { ...update, tools: { add: [], remove: [] } },
+    { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'effort', effort: 'low' }] }, { role: 'system', content: [{ type: 'text', text: 'x' }, { type: 'text', text: 'y' }] },
+    { role: 'system', content: [] }, { role: 'system', content: '' }, { role: 'system' }, { role: 'system', content: [{ type: 'text' }] }, { role: 'system', content: [{ type: 'text', text: '' }] },
+    { type: 'system', text: 'x' },
+    // A system message that can be told from the host's: it has an ID or metadata of its own.
+    { ...update, id: 'msg_directive' }, { ...update, metadata: { plugin: 'other' } }]) {
     assert.equal(isInstructionUpdate(other), false, JSON.stringify(other));
   }
 });
 
-test('the text the Claude Code provider keeps loses the sources that were left out, where they stand as that provider writes them', () => {
-  // OpenCode 2.3.0 through 2.4.1: its hook has joined, with a blank line, the texts of the parts after the first and
-  // the instructions part's sources but the date and the environment, as the parts were when it ran.
-  assert.equal(CLAUDE_INSTRUCTIONS_OPTION, 'claudeCodeInstructions');
-  const left = ['MCP SAYS', 'Instructions from: /work/AGENTS.md\nLOCAL RULES\n\nA second paragraph.'], run = left.join('\n\n');
-  // As measured on a host: the instructions part is the only one after the agent's prompt then, so the text is the run.
-  assert.equal(withoutClaudeSources(run, left), '');
-  // With a text before it, after it, or both: the run goes with one of the blank lines around it.
-  assert.equal(withoutClaudeSources(`# A part before\n\n${run}`, left), '# A part before');
-  assert.equal(withoutClaudeSources(`${run}\n\nA part after`, left), 'A part after');
-  assert.equal(withoutClaudeSources(`# A part before\n\n${run}\n\nA part after`, left), '# A part before\n\nA part after');
-  assert.equal(withoutClaudeSources(`\n\n${run}`, left), '', 'An empty text before it is an item of the join like any other.');
-  // Not told apart: the run is not there, is there twice, or does not stand between blank lines; no text, no sources.
-  for (const [option, texts] of [['Something else', left], [`${run}\n\n${run}`, left], [`${run}\n\nA part\n\n${run}`, left], [`x${run}`, left], [`${run} and more`, left],
-    [`A line\n${run}`, left], [run.slice(0, -1), left], [undefined, left], [42, left], [run, []], [run, undefined], [run, ['MCP SAYS', 7]], ['', ['']]]) {
-    assert.equal(withoutClaudeSources(option, texts), null, JSON.stringify([option, texts]).slice(0, 90));
-  }
-  // The sources are taken as one run in their order: another order is not what the provider wrote.
-  assert.equal(withoutClaudeSources(run, [...left].reverse()), null);
+test('what the Claude Code provider keeps for a request is its instruction sources but the date and the environment, joined', () => {
+  // Measured on OpenCode 2.3.0 and 2.4.1: that provider's hook runs when the instructions part is the only one
+  // after the agent's prompt, so the option holds these texts and nothing else.
+  assert.deepEqual([CLAUDE_PROVIDER, CLAUDE_INSTRUCTIONS_OPTION], ['claude-agent', 'claudeCodeInstructions']);
+  const sources = [{ key: 'core/mcp-guidance', text: 'MCP SAYS' }, { key: 'core/date', text: 'DATE' }, { key: 'core/instructions', text: 'LOCAL RULES\n\nA second paragraph.' }, { key: 'core/environment', text: 'ENVIRONMENT' }];
+  const system = [{ type: 'text', text: 'AGENT PROMPT' }, { type: 'text', text: sources.map(source => source.text).join('\n\n'), metadata: { experimental: { instructions: sources } } }];
+  const lean = withoutPlaceInstructions(system);
+  assert.equal(claudeInstructions(lean.removed), 'MCP SAYS\n\nLOCAL RULES\n\nA second paragraph.');
+  assert.equal(claudeInstructions([]), '', 'Nothing to leave out: the option of such a request is empty.');
 });

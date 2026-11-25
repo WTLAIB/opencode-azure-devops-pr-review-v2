@@ -228,59 +228,48 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
 }
 
 /**
- * The request option in which OpenCode's Claude Code provider (`claude-agent`) keeps the instructions it hands
- * the model. That provider ignores a request's system parts: its own `context` hook works the instructions out of
- * them and leaves the text here (OpenCode 2.3.0 through 2.4.1).
+ * OpenCode's own provider for Claude Code, and the request option in which it keeps the instructions it hands the
+ * model. That provider does not send a request's system parts. Its own `context` hook, which runs before any
+ * plugin's and before the built-in hooks that add parts of their own, leaves there what it made of the
+ * instructions part: the texts of its sources but the date and the environment, which Claude Code writes itself,
+ * joined with a blank line (OpenCode 2.3.0 through 2.4.1, measured on 2.3.0 and 2.4.1).
  */
+export const CLAUDE_PROVIDER = 'claude-agent';
 export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
 
 /**
- * That text without the sources that were left out of the system parts. The provider joins with a blank line the
- * texts of the parts after the first, and of the instructions part every source but the date and the
- * environment (Claude Code writes those itself), as the parts are when its hook runs: before any plugin's, and
- * before the hooks that add parts of their own, so the text cannot be worked out again from the parts a plugin
- * sees. The sources that were left out are one run of it instead: their texts in their order, joined the same
- * way, standing alone or between blank lines. Returns the text without that run, or null where the run is not
- * there exactly once: the provider then works differently from what is written here, and nothing can be told
- * apart.
+ * What that option holds for a request whose instructions part has these sources besides the host's facts. A
+ * caller that leaves those sources out of the system parts empties the option too, and only where the option
+ * holds exactly this: anything else was made another way, and nothing can be told apart.
  */
-export function withoutClaudeSources(option, texts) {
-  if (typeof option !== 'string' || !Array.isArray(texts) || !texts.length || !texts.every(text => typeof text === 'string')) return null;
-  const run = texts.join('\n\n');
-  if (!run) return null;
-  const places = [];
-  for (let at = option.indexOf(run); at >= 0; at = option.indexOf(run, at + 1)) {
-    const end = at + run.length;
-    if ((at === 0 || (at >= 2 && option.startsWith('\n\n', at - 2))) && (end === option.length || option.startsWith('\n\n', end))) places.push(at);
-  }
-  if (places.length !== 1) return null;
-  const before = option.slice(0, places[0]), after = option.slice(places[0] + run.length);
-  return before && after ? before + after.slice(2) : before ? before.slice(0, -2) : after.slice(2);
-}
+export const claudeInstructions = sources => sources.map(source => source.text).join('\n\n');
 
 /**
  * Whether a message is one OpenCode leaves in a session by itself after the session's native read tool read a file
  * of the project: the instruction files between that file and the conversation's directory (AGENTS.md; from
  * OpenCode 2.3.1 also CLAUDE.md), as a synthetic message whose `metadata.instruction.paths` names the files it
- * holds. The message a request is built with carries the same metadata (OpenCode 2.3.0 through 2.4.1).
+ * holds. The message a request is built with has the same ID and metadata, as a user message (OpenCode 2.3.0
+ * through 2.4.1). Both forms are told here, and nothing else: a message without an ID, a tool result or an
+ * assistant message that carries such metadata is not the host's load.
  */
 export function isInstructionLoad(message) {
   const paths = message?.metadata?.instruction?.paths;
-  return Array.isArray(paths) && paths.length > 0 && paths.every(path => typeof path === 'string' && path.length > 0);
+  return (message?.type === 'synthetic' || (message?.type === undefined && message?.role === 'user')) && typeof message.id === 'string' && message.id.length > 0 &&
+    Array.isArray(paths) && paths.length > 0 && paths.every(path => typeof path === 'string' && path.length > 0);
 }
 
 /**
  * Whether a message of a request is an update of the instructions that OpenCode wrote into the session because a
  * source changed while the session ran (an instruction file that was edited, an MCP server that says something
- * else): a system message of text and nothing else. OpenCode 2.3.0 through 2.4.1 build such a message from
- * nothing but `session.instructions.updated`, without an ID or metadata; the other system messages they know
- * change a model's effort or its tools and hold no text.
+ * else). OpenCode 2.3.0 through 2.4.1 build it from nothing but `session.instructions.updated`: a system message
+ * of one text part, without an ID, metadata or tools. The other system messages they know change a model's
+ * effort or its tools and hold no text, and a system message that carries an ID or metadata is another hook's.
  */
 export function isInstructionUpdate(message) {
-  if (message?.role !== 'system' || message.tools !== undefined) return false;
+  if (message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined) return false;
   const content = message.content;
   if (typeof content === 'string') return content.length > 0;
-  return Array.isArray(content) && content.length > 0 && content.every(part => part?.type === 'text' && typeof part.text === 'string');
+  return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' && content[0].text.length > 0;
 }
 
 /** Throw one readable error naming every missing host method. */

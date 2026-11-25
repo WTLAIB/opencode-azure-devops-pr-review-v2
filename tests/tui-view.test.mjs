@@ -554,6 +554,14 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
     now += 60_000;
     element.props.onMouseUp(event());
     assert.deepEqual(done(), before, `A release the host made up for ${name} does nothing.`);
+    // Another button pressed on it meanwhile forgets nothing: the host ends the lost gesture at the next press of
+    // the left button, and only that button begins a new one here.
+    element.props.onMouseDown(event());
+    element.props.onMouseDrag(event());
+    now += 60_000;
+    element.props.onMouseDown({ ...event(), button: 2 });
+    element.props.onMouseUp(event());
+    assert.deepEqual(done(), before, `A press of another button on ${name} does not make the made-up release a click.`);
     element.props.onMouseDown(event());
     element.props.onMouseDrag(event());
     now += 150;

@@ -4,6 +4,9 @@ import { REVIEW_TOOL_NAMES } from './review-tools.mjs';
 // One catalog owns mode, role, model slot, prompt, output kind and stage order.
 export const MODES = Object.freeze(['review', 'deep', 'quick']);
 export const COMMANDS = Object.freeze({ 'pr-check': 'check', 'pr-review': 'review', 'pr-deep': 'deep', 'pr-quick': 'quick', 'pr-stop': 'stop', 'pr-comment': 'comment' });
+// Every slash command AZPR has, whichever part registers it: the runtime's, `/pr-setup` (`setup.mjs`) and the
+// terminal part's `/pr-panel` (`tui-view.jsx`). A prompt that begins with one of them was meant as that command.
+export const COMMAND_NAMES = Object.freeze([...Object.keys(COMMANDS), 'pr-setup', 'pr-panel']);
 
 // How the host identifies this plugin and its published packages in its plugin list.
 export const PLUGIN_ID = 'azpr';

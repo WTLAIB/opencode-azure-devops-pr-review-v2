@@ -106,11 +106,15 @@ const inside = (event) => {
  * that release tells it from a real one. Time does: a real release follows the last movement at once. So a
  * release that comes more than a moment after the pointer last moved, with the button that was pressed on this
  * element still down, is no click. Without a movement the host makes none up, so a button held still for any
- * time is a click as before, and a press of the element begins anew.
+ * time is a click as before, and a press of the element begins anew. Only a press of the left button does: the
+ * host ends the lost gesture at the next left press, so another button must not forget the movement.
  *
  * Two clocks say how long that was, and a release is a click only where both call it a moment: the time of day
  * can be set back, and the steady clock may stand still while the machine sleeps. A click that is refused can be
- * made again; one that is made up cannot be taken back.
+ * made again; one that is made up cannot be taken back. The moment is measured where this process handles the
+ * two events, which is all it knows of them: an event carries no time of its own. Where the terminal's input
+ * waited meanwhile (the process was stopped, or busy for that long), a made-up release that is handled right
+ * after its movement is still taken for a click.
  */
 const hold = () => {
   let moved
@@ -141,7 +145,7 @@ function Row(props) {
       backgroundColor={hover() ? props.colors.hover : undefined}
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
-      onMouseDown={held.down}
+      onMouseDown={(event) => event.button === MouseButton.LEFT && held.down()}
       onMouseDrag={held.drag}
       onMouseUp={(event) => {
         if (!clicked(event) || held.madeUp()) return
@@ -390,7 +394,7 @@ function Panel(props) {
             fg={palette().muted}
             flexShrink={0}
             selectable={false}
-            onMouseDown={closing.down}
+            onMouseDown={(event) => event.button === MouseButton.LEFT && closing.down()}
             onMouseDrag={closing.drag}
             onMouseUp={(event) => {
               if (!clicked(event) || closing.madeUp()) return

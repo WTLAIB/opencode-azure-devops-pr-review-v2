@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import { createReviewSession, requestReview, interruptSession, appendReport, classifyFailure } from './session.mjs';
-import { COMMANDS, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
+import { COMMANDS, COMMAND_NAMES, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
 import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCe
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, isInstructionLoad, isInstructionUpdate, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, withoutClaudeSources, CLAUDE_INSTRUCTIONS_OPTION } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, isInstructionLoad, isInstructionUpdate, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
 import { reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions, renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview, conversationTitle, enclose, stagesInOrder } from './attribution.mjs';
 
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -430,7 +430,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const directory = owner.dataDirectory;
     const pending = directory && openStores.has(directory) ? openStores.get(directory)
       : createCommentData(directory ? { directory } : { root: store.dirs.data }).catch(error => {
-        if (!directory) throw error;
+        // Rows of an earlier version that could not be written again are their own reason, and the next command
+        // tries again: a store that failed to open is not kept.
+        if (!directory || error?.unfitPages) throw error;
         throw new Error('[AZPR] This review\'s private data is no longer available (it may have been evicted). Run a new review.');
       });
     owner.data = pending.then(data => { owner.dataDirectory = data.directory; openStores.set(data.directory, owner.data); return data; });
@@ -799,9 +801,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try {
       answer = await bounded(() => requestReview(context, {
         sessionID, role: g.role, model: modelRef(g.model), text, metadata: { azprGrant: nonce },
-        signal, allowHostContinuations: true, hiddenMessages: g.hiddenMessages,
+        signal, allowHostContinuations: true, hiddenMessages: g.hiddenMessages, settled: () => { g.open = false; },
       }), signal);
-    } finally { g.watch.waiting = false; }
+    } finally { g.watch.waiting = false; g.open = false; }
     if (g.admitted <= before.admitted || g.calls <= before.calls) throw new Error('Required V2 prompt/context hooks were not observed; the answer cannot be accepted.');
     return answer;
   }
@@ -839,13 +841,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     const input = JSON.stringify(payload);
     const g = {
       run, role, model: idModel, watch, pending: null, admitted: 0, calls: 0, primaryPrepared: false,
+      // A turn is open from the admission of AZPR's prompt until the host reports the session idle again. Only then
+      // does the session get a model request or a tool: what the host starts in it by itself afterwards (a
+      // background command that ended wakes it) gets neither, so nothing is added to an answer that was taken.
+      open: false,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
       // (and in how many requests the host's parts could not be told apart, so that they went out as they were),
-      // the messages with which the host loaded instruction files near a file the session read, by ID, and how
-      // many instruction updates one request held.
-      place: { sources: new Set(), unknown: 0 }, hiddenMessages: new Set(), hiddenUpdates: 0,
+      // the messages with which the host loaded instruction files near a file the session read, by ID (never one
+      // that a request has shown, whose IDs are kept too), and how many instruction updates one request held.
+      place: { sources: new Set(), unknown: 0 }, hiddenMessages: new Set(), shownMessages: new Set(), hiddenUpdates: 0,
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
       returnedTools: new Set(), reportedToolErrors: new Set(), truncatedTools: new Set(), blockedNativeCalls: new Map(),
       toolArgumentCharacters: new Map(), toolTimeouts: 0,
@@ -1896,7 +1902,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    */
   async function executeReviewTool(name, input, execution) {
     const g = grants.get(execution?.sessionID);
-    if (!g?.run.active || g.role !== execution?.agent) throw new Error('[AZPR] AZPR tools are available only to an active AZPR reviewer session.');
+    if (!g?.run.active || g.role !== execution?.agent || !g.open) throw new Error('[AZPR] AZPR tools are available only to an active AZPR reviewer session.');
     const snapshot = g.referenceSnapshot;
     if (!snapshot) throw new Error('[AZPR] No PR snapshot is available for this reviewer.');
     // OpenCode aborts this signal when it interrupts the call; from 2.3.0 on, reading it (once) also tells the host
@@ -1965,7 +1971,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // 2.4.1 nearly always, and then often to the built-in free model). No command ran, and a model would
         // receive the PR URL and the context as text: stop it here and say so in the conversation.
         const stray = typeof event.prompt?.text === 'string' ? /^\s*\/(pr-[a-z]+)(?=\s|$)/.exec(event.prompt.text)?.[1] : undefined;
-        if (stray && (Object.hasOwn(COMMANDS, stray) || stray === 'pr-setup')) {
+        if (stray && COMMAND_NAMES.includes(stray)) {
           await deliver(event.sessionID, `[AZPR] /${stray} reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it. That happens when it is sent before OpenCode has loaded its commands (opencode --prompt at startup, for example). Type /${stray} again once it shows in the slash-command list.`);
           throw new Error(`[AZPR] /${stray} was sent as an ordinary prompt, not as a command; it was not passed to a model.`);
         }
@@ -1981,6 +1987,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const session = recordOf(await bounded(() => context.session.get({ sessionID: event.sessionID }), g.run.controller.signal));
       authorize(event.sessionID, session?.agent, session?.model);
       g.admitted++;
+      g.open = true;
       touch(g, 'the prompt was admitted');
     }));
     registrations.push(await context.session.hook('context', async event => {
@@ -1992,6 +1999,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       const g = authorize(event.sessionID, event.agent, event.model);
       if (!g.admitted) throw new Error('[AZPR] Missing authorized reviewer input.');
+      if (!g.open) throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
       // Show only the tools this role may run, so the model does not waste turns on others.
       const allowed = new Set(allowedTools(g.role, settings.shell));
       if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
@@ -1999,27 +2007,30 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // collects for the place a conversation is in stays out: instruction files (AGENTS.md, CLAUDE.md, configured
       // ones), what MCP servers, references and skills say of themselves, and what the host adds while the session
       // runs (the instruction files near a file the native read tool read, and updates of the sources). Those
-      // tell an agent how to work in the local directory, which is not the PR's repository, and would make a
-      // review depend on where its conversation is open.
+      // tell an agent how to work in the local directory, which is not the PR's repository, and are no
+      // instructions for a review.
       const lean = withoutPlaceInstructions(event.system);
-      // OpenCode's Claude Code provider does not use the system parts: before this hook runs it has made one text
-      // of them, which it keeps in the request's options and hands the model. What was left out of the parts is
-      // taken out of that text too, where it is there as the provider writes it. Where the parts or that text
-      // cannot be told apart, the request stays as it is.
-      const claude = event.options?.[CLAUDE_INSTRUCTIONS_OPTION];
-      const forClaude = lean?.removed.length && typeof claude === 'string' ? withoutClaudeSources(claude, lean.removed.map(source => source.text)) : undefined;
-      if (!lean || forClaude === null) g.place.unknown++;
+      // OpenCode's Claude Code provider does not send the system parts: before this hook runs it has made one text
+      // of the instructions part, which it keeps in the request's options and hands the model. For a request to
+      // that provider, the sources can be left out only where the option holds exactly what those sources give;
+      // it is emptied then. Where the parts or that text cannot be told apart, both stay as they are.
+      const forClaude = event.model?.providerID === CLAUDE_PROVIDER;
+      const told = lean && (!forClaude || event.options?.[CLAUDE_INSTRUCTIONS_OPTION] === claudeInstructions(lean.removed));
+      if (!told) g.place.unknown++;
       else if (lean.removed.length) {
-        if (forClaude !== undefined) event.options[CLAUDE_INSTRUCTIONS_OPTION] = forClaude;
+        if (forClaude) event.options[CLAUDE_INSTRUCTIONS_OPTION] = '';
         event.system = lean.system;
         for (const source of lean.removed) g.place.sources.add(source.key);
       }
       if (Array.isArray(event.messages)) {
         let updates = 0;
         const shown = event.messages.filter(message => {
-          // Remembered by ID: the turn's check accepts such a message only when no request showed it.
-          if (isInstructionLoad(message)) { if (typeof message.id === 'string') g.hiddenMessages.add(message.id); return false; }
+          const id = typeof message?.id === 'string' ? message.id : undefined;
+          // A load is kept from the model, and remembered by ID, only while no request has shown a message of
+          // that ID: the turn's check accepts it on the ground that the model never saw it.
+          if (isInstructionLoad(message) && !g.shownMessages.has(id)) { g.hiddenMessages.add(id); return false; }
           if (isInstructionUpdate(message)) { updates++; return false; }
+          if (id !== undefined) { g.shownMessages.add(id); g.hiddenMessages.delete(id); }
           return true;
         });
         if (shown.length !== event.messages.length) event.messages = shown;
@@ -2122,7 +2133,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // A tool call in a private session, also one an earlier process created, needs the grant of a command under way.
       if (!privateSession(event)) return;
       const g = grants.get(event.sessionID);
-      if (!g?.run.active || g.role !== event.agent) throw new Error('[AZPR] Review tool authorization expired.');
+      if (!g?.run.active || g.role !== event.agent || !g.open) throw new Error('[AZPR] Review tool authorization expired.');
       touch(g, `tool ${event.tool} started`);
       const call = `${event.id}:${event.tool}`;
       g.toolCalls.set(call, event.tool);

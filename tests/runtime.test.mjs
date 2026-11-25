@@ -9,7 +9,7 @@ import { rootCertificates } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupAzurePrReview } from '../src/runtime.mjs';
-import { ROLES } from '../src/config.mjs';
+import { COMMAND_NAMES, ROLES } from '../src/config.mjs';
 import { inlineMarker } from '../src/comments.mjs';
 import { PROGRESS_EVENT_TYPES } from '../src/host.mjs';
 import { createReviewStore } from '../src/store.mjs';
@@ -103,7 +103,7 @@ async function fixture(t, opts = {}) {
     // Like a host catalog, each configured model once, however many passes or modes name it: every reviewer, and
     // a rater that is named.
     model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => [...(group.reviewers ?? []), group.rater]).filter(value => typeof value === 'string' && value)
-      .map(value => value.slice(8).split('#')[0]))].map(id => ({ providerID: 'fixture', id, enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
+      .map(value => value.split('#')[0]))].map(reference => ({ providerID: reference.slice(0, reference.indexOf('/')), id: reference.slice(reference.indexOf('/') + 1), enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
     ...(opts.plugins ? { plugin: { async list() { return typeof opts.plugins === 'function' ? opts.plugins() : { data: clone(opts.plugins) }; } } } : {}),
     ...(opts.events === false ? {} : { event: { subscribe(options) {
@@ -145,6 +145,7 @@ async function fixture(t, opts = {}) {
         const session = { ...placed, id, history: [], turns: 0, outcome: 'succeeded' };
         if (session.model) session.model.variant ??= 'default';
         sessions.set(id, session);
+        opts.created?.(session);
         return { ...clone(placed), id, ...(session.model ? { model: clone(session.model) } : {}) };
       },
       // A conversation is not one of the fixture's sessions; like every session it has a location. Like OpenCode
@@ -164,6 +165,8 @@ async function fixture(t, opts = {}) {
         try { packet = JSON.parse(input.text); session.packet = packet; } catch { packet = session.packet; }
         const turn = session.turns++;
         const messageID = `msg_${++seq}`;
+        // What the host does in the session by itself before this prompt reaches it, as when a command that ended woke it.
+        await opts.admitting?.({ session, role, turn, emit, invoke });
         await emit('session', 'prompt', { sessionID: session.id, messageID, prompt: { text: input.text }, metadata: input.metadata, delivery: input.delivery });
         session.history.push({ id: messageID, type: 'user', text: input.text, metadata: input.metadata });
         session.running = (async () => {
@@ -2566,19 +2569,19 @@ test('a tool call the host stops ends at once: the request only it waits for is 
 test('the receipt lists the passes in their order and the report goes to the last of them, whichever session OpenCode creates first', async t => {
   // The host answers the second pass's session first: the first pass's is created only once that one exists.
   const second = deferred();
-  const f = await fixture(t, { files: ['/src/Main.java'], async creating(input) {
-    if (input.agent === 'azpr-review-reviewerb') second.resolve(); else if (input.agent === 'azpr-review-reviewer') { await second.promise; await sleep(5); } } });
+  const f = await fixture(t, { files: ['/src/Main.java'],
+    async creating(input) { if (input.agent === 'azpr-review-reviewer') await second.promise; },
+    created(session) { if (session.agent === 'azpr-review-reviewerb') second.resolve(); },
+    // Neither pass files a finding, so no duplicate check and no rating follow: the last stage is the second pass.
+    answer(input) { return ROLES[input.role].format === 'initial' ? { ...defaultAnswer(input), findings: [] } : undefined; } });
   const receipt = await f.command();
   assert.match(receipt, /\] COMPLETE/);
-  const created = f.calls.filter(call => call.kind === 'create').map(call => call.agent);
-  assert.deepEqual(created.slice(0, 2).sort(), ['azpr-review-reviewer', 'azpr-review-reviewerb']);
   const sessions = [...f.sessions.values()];
-  assert.equal(sessions[0].agent, 'azpr-review-reviewerb', 'The second pass\'s session exists first.');
-  const rows = receipt.split('\n').filter(line => line.startsWith('- azpr-review-reviewer'));
+  assert.deepEqual(sessions.map(session => session.agent), ['azpr-review-reviewerb', 'azpr-review-reviewer'], 'The second pass\'s session exists first, and nothing follows the passes.');
+  const rows = receipt.split('\n').filter(line => line.startsWith('- azpr-review-'));
   assert.deepEqual(rows.map(line => /^- (\S+) \[([^\]]+)\]/.exec(line).slice(1)), [['azpr-review-reviewer', 'pass 1/2'], ['azpr-review-reviewerb', 'pass 2/2']]);
-  if (!/azpr-review-(?:dedupe|rating)/.test(receipt)) {
-    assert.equal(reportSession(receipt), sessions.find(session => session.agent === 'azpr-review-reviewerb').id, 'Without a later stage the report is in the last pass\'s session.');
-  }
+  assert.equal(reportSession(receipt), sessions[0].id, 'The report is in the last pass\'s session, not in the one that was created last.');
+  assert.ok(f.notices.some(n => n.sessionID === sessions[0].id && /^# AZPR [a-f0-9]{8} — COMPLETE\n/.test(n.text)));
 });
 
 test('a session OpenCode creates after its stage was stopped is deleted, since no stage knows it', async t => {
@@ -5212,19 +5215,19 @@ test('the terminal panel reads what a review, its report and its preview tell th
 
 // OpenCode 2.3.0 through 2.4.1 add to every request what they collect for the place a conversation is in, and
 // leave the instruction files near a file the native read tool read in the session as a message of their own.
+const PLACE_SOURCES = [{ key: 'core/mcp-guidance', text: 'MCP SERVER SAYS' }, { key: 'core/instructions', text: 'Instructions from: /work/AGENTS.md\nLOCAL RULES' },
+  { key: 'core/date', text: "Today's date: Wed Nov 25 2026" }, { key: 'core/environment', text: 'Here is some useful information about the environment you are running in:\n<env>\n</env>' }];
+const placeSystem = (sources = PLACE_SOURCES) => [{ type: 'text', text: 'ROLE' }, { type: 'text', text: '# Your Model' }, { type: 'text', text: sources.map(source => source.text).join('\n\n'), metadata: { experimental: { instructions: clone(sources) } } }];
+const LEAN_SYSTEM = ['ROLE', '# Your Model', `${PLACE_SOURCES[2].text}\n\n${PLACE_SOURCES[3].text}`];
+const instructionLoad = (id = 'msg_load') => ({ id, type: 'synthetic', text: 'Instructions from: /work/sub/CLAUDE.md\nNESTED RULES', description: 'Loaded sub/CLAUDE.md', metadata: { instruction: { paths: ['/work/sub/CLAUDE.md'] } } });
+
 test('a private role gets AZPR\'s instructions and the host\'s date and environment; what the host collects for the conversation\'s place stays out, and its own load of instruction files ends no turn', async t => {
-  const sources = [{ key: 'core/mcp-guidance', text: 'MCP SERVER SAYS' }, { key: 'core/instructions', text: 'Instructions from: /work/AGENTS.md\nLOCAL RULES' },
-    { key: 'core/date', text: "Today's date: Wed Nov 25 2026" }, { key: 'core/environment', text: 'Here is some useful information about the environment you are running in:\n<env>\n</env>' }];
-  const system = () => [{ type: 'text', text: 'ROLE' }, { type: 'text', text: '# Your Model' }, { type: 'text', text: sources.map(source => source.text).join('\n\n'), metadata: { experimental: { instructions: clone(sources) } } }];
-  const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/CLAUDE.md\nNESTED RULES', description: 'Loaded sub/CLAUDE.md', metadata: { instruction: { paths: ['/work/sub/CLAUDE.md'] } } };
+  const load = instructionLoad();
   // The update of a source that changed is a system message of text, without an ID; a system message that
   // changes the model's effort holds no text and is none.
   const messages = () => [{ id: 'msg_prompt', role: 'user', content: 'PROMPT', metadata: { azprGrant: 'nonce' } }, { id: 'msg_step', role: 'assistant', content: [] },
     { id: load.id, role: 'user', content: load.text, metadata: clone(load.metadata) }, { role: 'system', content: [{ type: 'text', text: 'Instructions from: /work/AGENTS.md\nCHANGED RULES' }] },
     { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] }];
-  // OpenCode's Claude Code provider ignores the system parts: before a plugin's hook runs, and before the part that
-  // names the model was added, its own hook has left what it made of the instructions part in the request's options.
-  const claude = `${sources[0].text}\n\n${sources[1].text}`;
   const frames = [];
   const f = await fixture(t, { files: ['/src/Main.java'],
     async during({ session, role, turn, emit }) {
@@ -5232,38 +5235,68 @@ test('a private role gets AZPR\'s instructions and the host\'s date and environm
       // The reviewer read a file of the local project with the native read tool: the host leaves the instruction
       // file near it in the session, and the turn's next request holds it, with an update of a file that changed.
       session.history.push(clone(load));
-      const frame = options => ({ sessionID: session.id, agent: role, model: clone(session.model), system: system(), messages: messages(), tools: { read: {}, azpr_read_file: {}, shell: {} }, ...(options ? { options } : {}) });
+      const frame = options => ({ sessionID: session.id, agent: role, model: clone(session.model), system: placeSystem(), messages: messages(), tools: { read: {}, azpr_read_file: {}, shell: {} }, ...(options ? { options } : {}) });
       frames.push(await emit('session', 'context', frame()));
       await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
-      // The same request as that provider prepares it, and one whose text is not what the parts give.
-      frames.push(await emit('session', 'context', frame({ maxTokens: 1, claudeCodeAgent: 'ROLE', claudeCodeInstructions: claude })));
-      frames.push(await emit('session', 'context', frame({ claudeCodeAgent: 'ROLE', claudeCodeInstructions: `${sources[1].text}\n\nWRITTEN ANOTHER WAY` })));
+      // An option of that name means nothing to another provider: the parts are what such a request sends.
+      frames.push(await emit('session', 'context', frame({ maxTokens: 1, claudeCodeInstructions: 'COPIED FROM SOMEWHERE' })));
     } });
   const receipt = await f.command();
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete, 1\/1 file\(s\) in every pass; verification none\n/, receipt);
   assert.doesNotMatch(receipt, /another message during this turn|Retry notice/, 'The host\'s own message ended no turn and cost no new session.');
   assert.equal(f.sessionsFor('azpr-review-reviewer').length, 1);
-  const [frame, forClaude, edited] = frames;
-  const lean = ['ROLE', '# Your Model', `${sources[2].text}\n\n${sources[3].text}`];
-  assert.deepEqual(frame.system.map(part => part.text), lean, 'Only the date and the environment are left of the instructions part.');
+  const [frame, copied] = frames;
+  assert.deepEqual(frame.system.map(part => part.text), LEAN_SYSTEM, 'Only the date and the environment are left of the instructions part.');
   assert.deepEqual(frame.messages.map(message => message.id ?? message.content[0].type), ['msg_prompt', 'msg_step', 'effort'], 'Neither the loaded instruction file nor the update reaches the model; the change of effort does.');
-  assert.deepEqual([forClaude.system.map(part => part.text), forClaude.options], [lean, { maxTokens: 1, claudeCodeAgent: 'ROLE', claudeCodeInstructions: '' }],
-    'What the Claude Code provider hands the model loses the same sources.');
-  assert.deepEqual([edited.system, edited.options.claudeCodeInstructions], [system(), `${sources[1].text}\n\nWRITTEN ANOTHER WAY`], 'A text in which those sources do not stand as the provider writes them is not told apart: the request stays as it is.');
-  assert.deepEqual(edited.messages.map(message => message.id ?? message.content[0].type), ['msg_prompt', 'msg_step', 'effort'], 'The messages are kept from the model all the same.');
+  assert.deepEqual([copied.system.map(part => part.text), copied.options], [LEAN_SYSTEM, { maxTokens: 1, claudeCodeInstructions: 'COPIED FROM SOMEWHERE' }]);
   const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
   assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart, stage.requestObservations.instructionLoads, stage.requestObservations.instructionUpdates],
-    [['core/mcp-guidance', 'core/instructions'], 2, 1, 1], 'The record names what was left out, and counts the requests that went out as they were (the fixture\'s own, which has no such parts, and the edited one).');
+    [['core/mcp-guidance', 'core/instructions'], 1, 1, 1], 'The record names what was left out, and counts the one request that went out as it was: the fixture\'s own, which has no such parts.');
   // A session without such parts says so in its record, and nothing of it is changed.
   const [other] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewerb');
   assert.deepEqual([other.requestObservations.placeInstructions, other.requestObservations.placeInstructionsNotToldApart, other.requestObservations.instructionLoads], [undefined, 1, undefined]);
   // An ordinary session keeps all of it.
-  const ordinary = await f.emit('session', 'context', { sessionID: 'ordinary', agent: 'build', model: { providerID: 'fixture', id: 'x' }, system: system(), messages: messages(), tools: { read: {}, azpr_read_file: {} } });
-  assert.deepEqual([ordinary.system, ordinary.messages, Object.keys(ordinary.tools)], [system(), messages(), ['read']]);
+  const ordinary = await f.emit('session', 'context', { sessionID: 'ordinary', agent: 'build', model: { providerID: 'fixture', id: 'x' }, system: placeSystem(), messages: messages(), tools: { read: {}, azpr_read_file: {} } });
+  assert.deepEqual([ordinary.system, ordinary.messages, Object.keys(ordinary.tools)], [placeSystem(), messages(), ['read']]);
+});
+
+// OpenCode's Claude Code provider does not send the system parts: before a plugin's hook runs, and before the
+// part that names the model is added, its own hook has left what it made of the instructions part in the
+// request's options, and hands the model that.
+test('for the Claude Code provider the sources are left out only where its option holds what they give, and the option is emptied with them', async t => {
+  const given = `${PLACE_SOURCES[0].text}\n\n${PLACE_SOURCES[1].text}`, facts = PLACE_SOURCES.slice(2);
+  const frames = {};
+  const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.models.review.reviewers = ['claude-agent/haiku', 'fixture/review-b']; },
+    async during({ session, role, turn, emit }) {
+      if (role !== 'azpr-review-reviewer' || turn) return;
+      assert.equal(session.model.providerID, 'claude-agent');
+      const frame = (options, sources) => ({ sessionID: session.id, agent: role, model: clone(session.model), system: placeSystem(sources), messages: [], tools: { read: {} }, ...(options ? { options } : {}) });
+      for (const [name, options, sources] of [
+        ['as the provider writes it', { maxTokens: 1, claudeCodeAgent: 'ROLE', claudeCodeInstructions: given }],
+        ['written another way', { claudeCodeAgent: 'ROLE', claudeCodeInstructions: `# Your Model\n\n${given}` }],
+        ['with one source more than the parts have now', { claudeCodeInstructions: `EARLIER SOURCE\n\n${given}` }],
+        ['with a part of what the parts give', { claudeCodeInstructions: PLACE_SOURCES[1].text }],
+        ['missing', { claudeCodeAgent: 'ROLE' }], ['no options at all', undefined], ['not a text', { claudeCodeInstructions: ['x'] }],
+        ['nothing to leave out, and an empty option', { claudeCodeInstructions: '' }, facts],
+        ['nothing to leave out, but an option that holds something', { claudeCodeInstructions: 'LOCAL RULES OF AN EARLIER HOOK' }, facts],
+      ]) frames[name] = { before: clone(frame(options, sources)), after: await emit('session', 'context', frame(options, sources)) };
+    } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/, receipt);
+  const told = frames['as the provider writes it'].after;
+  assert.deepEqual([told.system.map(part => part.text), told.options], [LEAN_SYSTEM, { maxTokens: 1, claudeCodeAgent: 'ROLE', claudeCodeInstructions: '' }], 'The parts lose the sources, and so does what the provider hands the model.');
+  for (const name of ['written another way', 'with one source more than the parts have now', 'with a part of what the parts give', 'missing', 'no options at all', 'not a text', 'nothing to leave out, but an option that holds something']) {
+    assert.deepEqual([frames[name].after.system, frames[name].after.options], [frames[name].before.system, frames[name].before.options], `${name}: the parts and the option stay as they are`);
+  }
+  const plain = frames['nothing to leave out, and an empty option'];
+  assert.deepEqual([plain.after.system, plain.after.options], [plain.before.system, plain.before.options], 'Nothing to change.');
+  const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
+  // Seven of the nine requests above, and the fixture's own, which has neither parts nor the option.
+  assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 8]);
 });
 
 test('a load of instruction files that reached the model, or a message that only looks like one, still ends the turn', async t => {
-  const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED RULES', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
+  const load = instructionLoad();
   // The host left the message, but no request of the turn offered it to the context hook: nothing says that the
   // model did not see it. And a message without the host's list of paths is someone else's.
   for (const message of [load, { id: 'msg_notice', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED RULES' }]) {
@@ -5271,19 +5304,66 @@ test('a load of instruction files that reached the model, or a message that only
     const receipt = await f.command();
     assert.match(receipt, /azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=transient; error=\[AZPR\] The session received another message during this turn/, receipt);
   }
+  // A message of that ID that one request showed is not kept from the model by another request's form: another
+  // hook can have taken its metadata away in one request and not in the next, in either order.
+  const request = marked => ({ id: load.id, role: 'user', content: load.text, ...(marked ? { metadata: clone(load.metadata) } : {}) });
+  for (const order of [[false, true], [true, false]]) {
+    const seen = [];
+    const f = await fixture(t, { files: ['/src/Main.java'], async during({ session, role, turn, emit }) {
+      if (role !== 'azpr-review-reviewer' || turn) return;
+      session.history.push(clone(load));
+      for (const marked of order) {
+        const frame = await emit('session', 'context', { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: [{ id: 'msg_prompt', role: 'user', content: 'PROMPT' }, request(marked)], tools: {} });
+        seen.push(frame.messages.some(message => message.id === load.id));
+      }
+    } });
+    const receipt = await f.command();
+    assert.match(receipt, /azpr-review-reviewer \[pass 1\/2\]: FAILED; [^\n]*failure=transient; error=\[AZPR\] The session received another message during this turn/, `${order}: ${receipt}`);
+    // Shown first, it stays shown; hidden first and shown afterwards, it counts as shown.
+    assert.deepEqual(seen.slice(0, 2), order[0] ? [false, true] : [true, true], String(order));
+  }
+});
+
+test('a private session gets a model request and a tool only while a turn of it is open', async t => {
+  const refused = [];
+  let reads;
+  const f = await fixture(t, { files: ['/src/Main.java'],
+    // The first reviewer's first answer needs a correction, so its session has a second turn.
+    answer(input) { return input.role === 'azpr-review-reviewer' && input.turn === 0 ? 'Not the JSON that was asked for.' : undefined; },
+    // Between the two turns the host does something in the session by itself, as when a background command that
+    // ended wakes it: a request, a tool call through the host, and a call of AZPR's tool itself.
+    async admitting({ session, role, turn, emit, invoke }) {
+      if (role !== 'azpr-review-reviewer' || turn !== 1) return;
+      const outcome = async run => { try { await run(); return 'ran'; } catch (error) { return error.message; } };
+      refused.push(await outcome(() => emit('session', 'context', { sessionID: session.id, agent: role, model: clone(session.model), system: [], messages: [], tools: {} })));
+      refused.push(await outcome(() => invoke(session, 'azpr_read_file', { path: '/src/Other.java', version: 'head' })));
+      refused.push(await outcome(() => f.registry.tool('azpr_read_file').execute({ path: '/src/Other.java', version: 'head' }, { sessionID: session.id, agent: role })));
+      reads = f.azure.callsTo('items').length;
+    } });
+  const receipt = await f.command();
+  assert.match(receipt, /\] COMPLETE/, receipt);
+  assert.deepEqual(refused, ['[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.', '[AZPR] Review tool authorization expired.',
+    '[AZPR] AZPR tools are available only to an active AZPR reviewer session.']);
+  assert.equal(f.azure.callsTo('items').filter(call => /Other\.java/.test(JSON.stringify(call.query))).length, 0, 'Nothing was read for the session between its turns.');
+  assert.ok(reads >= 1);
+  // The second turn runs as always: the prompt that is admitted opens it.
+  const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
+  assert.deepEqual([stage.status, stage.repairs?.length, stage.sessionReads], ['COMPLETE', 1, 1]);
 });
 
 test('a command of AZPR\'s that arrives as an ordinary prompt is stopped before a model gets it, and the conversation is told', async t => {
   const f = await fixture(t);
-  for (const text of ['/pr-review https://dev.azure.com/o/p/_git/r/pullrequest/1 focus on auth', '/pr-check', '  /pr-comment --publish', '/pr-setup']) {
+  // Every slash command AZPR has: the runtime's, /pr-setup and the terminal part's /pr-panel.
+  assert.deepEqual(COMMAND_NAMES, ['pr-check', 'pr-review', 'pr-deep', 'pr-quick', 'pr-stop', 'pr-comment', 'pr-setup', 'pr-panel']);
+  for (const text of ['/pr-review https://dev.azure.com/o/p/_git/r/pullrequest/1 focus on auth', '/pr-check', '  /pr-comment --publish', '/pr-setup', '/pr-panel', '/pr-deep x', '/pr-quick\nx', '/pr-stop 1a2b3c4d']) {
     await assert.rejects(f.emit('session', 'prompt', { sessionID: 'ordinary', prompt: { text } }), /was sent as an ordinary prompt, not as a command; it was not passed to a model/, text);
   }
   const told = f.notices.filter(n => n.sessionID === 'ordinary').map(n => n.text);
   assert.deepEqual(told.map(text => /^\[AZPR\] \/(pr-[a-z]+) reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it\./.exec(text)?.[1]),
-    ['pr-review', 'pr-check', 'pr-comment', 'pr-setup']);
+    ['pr-review', 'pr-check', 'pr-comment', 'pr-setup', 'pr-panel', 'pr-deep', 'pr-quick', 'pr-stop']);
   // Anything else stays the person's own prompt: a question about a command, a longer name, a name AZPR does not have.
   for (const text of ['Hello.', 'What does /pr-review do?', '/pr-reviewer please', '/pr-unknown x', 'see /pr-review', '/pr-review-notes']) {
     await f.emit('session', 'prompt', { sessionID: 'ordinary', prompt: { text } });
   }
-  assert.equal(f.notices.filter(n => n.sessionID === 'ordinary').length, 4);
+  assert.equal(f.notices.filter(n => n.sessionID === 'ordinary').length, 8);
 });

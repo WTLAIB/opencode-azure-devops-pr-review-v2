@@ -35,39 +35,55 @@ settings, backups and failure records. Never upload `.local/`.
 - Models review, compare, rate and plan comment text. They never echo identity
   or SHAs and never write to Azure DevOps.
 
-**A private session is told what AZPR tells it.**
+**A private session is told what AZPR tells it, and runs only for AZPR's prompt.**
 - A private role works from AZPR's own instructions and the host's date and
   environment. What the host collects for the place a conversation is in stays
   out of its requests: instruction files (AGENTS.md, CLAUDE.md, configured
   ones), and what MCP servers, references, skills and CodeMode say of
   themselves (`withoutPlaceInstructions` and `HOST_FACT_SOURCES` in
   `host.mjs`). Those speak of the local directory, which is not the PR's
-  repository: a review must not depend on where its conversation is open.
-  Ordinary sessions are never touched.
+  repository, and are no instructions for a review. Claim no more than that:
+  the environment still names the directory, and a reviewer can read local
+  files on purpose. Ordinary sessions are never touched.
 - The host's parts are told apart by a field it marks as experimental. Where
   they cannot be (no such part, several, a text that is not its sources
-  joined), change nothing and count the request in the stage record
-  (`placeInstructionsNotToldApart`); never tell them apart by their text.
-  OpenCode's Claude Code provider hands the model a text it made of the parts
-  before any plugin's hook ran, in the request's options, when the parts were
-  not yet what a plugin sees: never work that text out again from the parts.
-  Take out of it the sources that were left out, where they stand in it as
-  that provider writes them (`withoutClaudeSources`); otherwise the whole
-  request stays as it is.
+  joined), the system parts stay as they are and the stage record counts the
+  request (`placeInstructionsNotToldApart`); never tell them apart by their
+  text. OpenCode's Claude Code provider (`claude-agent`) does not send the
+  parts: it hands the model a text it made of them before any plugin's hook
+  ran, in the request's options, when the parts were not yet what a plugin
+  sees. For a request to that provider, leave the sources out only where
+  that option holds exactly what they give (`claudeInstructions`), and empty
+  it with them; where it holds anything else, or is missing, the parts and
+  the option stay as they are. An option of that name on another provider's
+  request decides nothing. The messages below are taken out either way.
 - What the host writes into a running private session by itself is kept from
   the model in every request: the instruction files it loads beside a file
   the native read tool read (`isInstructionLoad`), and its updates of the
-  sources (`isInstructionUpdate`). `requestReview` ends a turn that received
-  anyone else's message, and lets a message pass only on one of two grounds.
-  The model never saw it: a load whose ID the `context` hook recorded when it
-  took it out (`hiddenMessages`), so that a message of the same form that was
-  shown, or that no request offered to the hook, still ends the turn. Or it is
+  sources (`isInstructionUpdate`). Take out only what has the host's form: a
+  message another hook could have marked, or one without an ID, stays.
+- `requestReview` fails a turn that received anyone else's message, and lets
+  a message of the host pass only on one of two grounds. The model never saw
+  it: a load whose ID the `context` hook recorded when it took it out
+  (`hiddenMessages`), and never an ID that any request has shown. Or it is
   the late result of the session's own tool call: the host's notice that a
-  background command ended, whose metadata names the shell a shell call of
-  this same session reported (`ownShellNotices`), which can only be with
-  shell allowed. Never accept a message that the model saw by its text or its
-  form alone. An answer is what came before the turn's idle marker, also when
-  a late notice woke the session afterwards.
+  background command ended, which names a shell that a shell call of this
+  same session reported as running, once for each such shell
+  (`ownShellNotices`); that can only be with shell allowed, and it rests on
+  the host's metadata, since nothing proves who wrote a message. Never
+  accept a message that the model saw by its text or its form alone.
+- A turn is the admitted prompt up to the first idle marker after an answer,
+  and its answer is the last assistant message before that marker. How the
+  turn ended is what that marker says: the session's own outcome is its
+  latest execution's, which can be a later one. What follows the marker is no
+  part of the turn; someone else's message there still fails it.
+- A private session gets a model request and a tool only while a turn of it
+  is open: from the admission of AZPR's prompt until the host reports the
+  session idle (`open` on the grant). What the host starts in it by itself
+  afterwards, as when a background command that ended wakes it, gets
+  neither, so nothing is added to an answer that was taken: not a file the
+  session reads later, which would count as read for a finding it had
+  already filed.
 
 **Every mode runs one pipeline and differs only in its models.**
 - `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
@@ -100,9 +116,11 @@ settings, backups and failure records. Never upload `.local/`.
   which session finished first or on an ID a model wrote: also not the tool
   observations and limitations the planner is given, which follow the order
   of their content. Nor on which session the host created first: a run
-  records its stages in that order, so a receipt, a draft and the choice of
-  the session that holds the report take them by their place in the pipeline
-  (`stagesInOrder` in `attribution.mjs`).
+  records its stages in that order, so a receipt, its notices, a draft and
+  the choice of the session that holds the report take them by their place in
+  the pipeline (`stagesInOrder` in `attribution.mjs`). Only the sessions of
+  one label keep the order they were recorded in: they ran one after another,
+  and each continuation of a planning page counts its attempts anew.
 - Add mode-specific or pass-specific instructions only with a measured
   benefit: deep-only prompt text and the split into a functional and a risk
   reviewer were both removed after runs showed no gain over repeating one
@@ -265,9 +283,11 @@ settings, backups and failure records. Never upload `.local/`.
   a prompt and leaves a notice in the conversation that says what happened.
   Refuse only a prompt that begins with one of AZPR's own command names
   followed by a blank or the end: one that mentions a command, or begins with
-  another name, is the person's own. The refusal has a cost that the
-  documentation states (the terminal UI tries again in new conversations,
-  which stay empty); never widen it to anything else a person types.
+  another name, is the person's own. The names are every slash command AZPR
+  has, whichever part registers it (`COMMAND_NAMES` in `config.mjs`). The
+  refusal has a cost that the documentation states (the terminal UI tries
+  again in new conversations, which stay empty); never widen it to anything
+  else a person types.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -467,9 +487,13 @@ settings, backups and failure records. Never upload `.local/`.
   longer line and says so only inside the line (`HOST_READ_LINE_CHARACTERS` in
   `host.mjs`). Measure a row as it is written, after escaping (`pageRows` in
   `comment-data.mjs`), and never rely on the prompt to work around a cut row.
-  Saved references name the pages files, so a store written with other rows
-  has them written again from its objects when it is reopened
-  (`renewPages`); give the store's mark a new name when the limit changes.
+  Saved references name the pages files, so a pages file with a row that does
+  not fit is written again from its object whenever its store is opened
+  (`fitPages`). Each file answers for itself: keep no mark that says a whole
+  store fits, since an earlier version that still runs can add to it. Derive
+  pages only from an object that has the digest its name says, replace a
+  pages file in one step, and fail the opening where a sound object's pages
+  cannot be written: its rows would reach a model cut.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -612,10 +636,16 @@ settings, backups and failure records. Never upload `.local/`.
   session's row or `close`, only within a moment of the pointer's last
   movement with the button down (`hold` and `MOVED_MS` in `tui-view.jsx`);
   without a movement the host makes none up, so a button held still is a
-  click for any time. That moment is measured on two clocks, and a release is
-  a click only where both call it a moment: the time of day can be set back,
-  and the steady clock may stand still while the machine sleeps. A click that
-  is refused can be made again; one that is made up cannot be taken back.
+  click for any time. Only a press of the left button begins a gesture: the
+  host ends a lost one at the next left press, so another button must not
+  forget the movement. That moment is measured on two clocks, and a release
+  is a click only where both call it a moment: the time of day can be set
+  back, and the steady clock may stand still while the machine sleeps. A
+  click that is refused can be made again; one that is made up cannot be
+  taken back. An event carries no time of its own, so the moment is that
+  between handling the two events: where the terminal's input waited, a
+  made-up release can follow its movement at once. Say that limit where the
+  rule is described.
   Draw the steps from their names, as the session
   rows are drawn from their IDs, so that each keeps its element while the
   panel's content is worked out again (with every notice and every answer

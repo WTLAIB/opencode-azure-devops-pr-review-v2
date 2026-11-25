@@ -203,10 +203,49 @@ test('V2 output rejects incomplete, truncated, filtered, failed and interrupted 
       return true;
     });
   }
+  // The turn's own idle marker says how it ended. The session's outcome is that of its latest execution: by the
+  // time it is read, a command that ended later can have woken the session, and that execution is not this turn.
   for (const outcome of ['failed', 'interrupted']) {
-    const { context } = host({ get: async () => ({ id: sessionID, outcome }) });
-    await assert.rejects(requestReview(context, { sessionID, text: input }), /did not finish successfully/);
+    const { context } = host({ get: async () => ({ id: sessionID, outcome, agent: 'azpr-review-functional', model }) });
+    assert.deepEqual((await requestReview(context, { sessionID, text: input })).parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }], outcome);
+    // A turn without a marker of its own has only the session's outcome to go by.
+    const { context: unmarked } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, assistant()],
+      get: async () => ({ id: sessionID, outcome, agent: 'azpr-review-functional', model }) });
+    await assert.rejects(requestReview(unmarked, { sessionID, text: input }), error => {
+      assert.match(error.message, /did not finish successfully/);
+      assert.deepEqual([error.execution.sessionOutcome, error.execution.terminalOutcome, error.execution.interrupted], [outcome, 'missing-idle', outcome === 'interrupted']);
+      return true;
+    });
   }
+});
+
+test('a turn ends at the first idle marker after an answer; a marker before any answer is an earlier execution\'s', async () => {
+  const prompt = { id: 'msg_input', type: 'user', text: input };
+  const answer = (id, text) => assistant({ id, content: [{ type: 'text', text }] });
+  // The host had begun something in the session before the prompt arrived (a command that ended had woken it),
+  // and that execution ended, without an answer, after the prompt was admitted.
+  for (const outcome of ['failed', 'succeeded']) {
+    const { context } = host({ context: async () => [prompt, { id: 'msg_stale', type: 'idle', outcome }, answer('msg_answer', '{"answer":"to the prompt"}'), idle()] });
+    assert.deepEqual((await requestReview(context, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"to the prompt"}' }], outcome);
+  }
+  // Nothing but that marker: the prompt was never answered.
+  const { context: unanswered } = host({ context: async () => [prompt, { id: 'msg_stale', type: 'idle', outcome: 'failed' }], get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
+  await assert.rejects(requestReview(unanswered, { sessionID, text: input }), error => error.execution.terminalOutcome === 'failed' && error.execution.assistantResponses === 0);
+  // What the session's own model wrote after the turn's marker (the host woke it) is no part of the answer.
+  const { context: woken } = host({ context: async () => [prompt, answer('msg_first', '{"answer":"given"}'), idle(), answer('msg_later', 'Something the session said afterwards.'), { ...idle(), id: 'msg_idle2', outcome: 'failed' }] });
+  assert.deepEqual((await requestReview(woken, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
+});
+
+test('the caller is told that the session is idle before its context is read', async () => {
+  const order = [];
+  const { context } = host({ wait: async () => { order.push('wait'); }, context: async () => { order.push('context'); return [{ id: 'msg_input', type: 'user', text: input }, assistant(), idle()]; } });
+  await requestReview(context, { sessionID, text: input, settled: () => order.push('settled') });
+  assert.deepEqual(order, ['wait', 'settled', 'context']);
+  // Not when the wait itself fails: the caller closes what it opened either way.
+  const { context: failing } = host({ wait: async () => { throw new Error('wait failed'); } });
+  let told = 0;
+  await assert.rejects(requestReview(failing, { sessionID, text: input, settled: () => told++ }), /wait failed/);
+  assert.equal(told, 0);
 });
 
 test('V2 output rejects stale idle markers or missing terminal settlement', async () => {
@@ -592,10 +631,10 @@ test('the host\'s own load of instruction files does not end a turn when the cal
 
 // OpenCode 2.3.0 through 2.4.1, shell allowed: a command the session started goes on in the background (the model
 // asked for it, or from 2.3.1 its timeout ran out) and the host tells the session when it has ended.
-const shellCall = (shellID = 'sh_1', name = 'shell') => assistant({ id: `msg_call_${shellID}`, finish: 'tool-calls', content: [{ type: 'tool', id: `tool_${shellID}`, name,
-  state: { status: 'completed', input: { command: 'sleep 2', background: true }, metadata: { status: 'running', truncated: false, shellID, pid: 1 }, content: [{ type: 'text', text: `Command moved to the background (shell ID: ${shellID}).` }] } }] });
-const shellNotice = (shellID = 'sh_1') => ({ id: `msg_notice_${shellID}`, type: 'synthetic', text: `<background-result kind="shell" id="${shellID}" state="completed" command="sleep 2">\n(no output)\n</background-result>`,
-  description: 'sleep 2', metadata: { source: 'shell', shellID, jobID: shellID, state: 'completed', truncated: false, exit: 0 } });
+const shellCall = (shellID = 'sh_1', name = 'shell', reported = { status: 'running', truncated: false, shellID, pid: 1 }) => assistant({ id: `msg_call_${shellID}`, finish: 'tool-calls',
+  content: [{ type: 'tool', id: `tool_${shellID}`, name, state: { status: 'completed', input: { command: 'sleep 2', background: true }, metadata: reported, content: [{ type: 'text', text: `Command moved to the background (shell ID: ${shellID}).` }] } }] });
+const shellNotice = (shellID = 'sh_1', fields = {}) => ({ id: `msg_notice_${shellID}`, type: 'synthetic', text: `<background-result kind="shell" id="${shellID}" state="completed" command="sleep 2">\n(no output)\n</background-result>`,
+  description: 'sleep 2', metadata: { source: 'shell', shellID, jobID: shellID, state: 'completed', truncated: false, exit: 0 }, ...fields });
 const said = text => ({ content: [{ type: 'text', text }] });
 
 test('the host\'s notice that a background command of this session ended is no foreign input; the answer after it counts', async () => {
@@ -607,33 +646,57 @@ test('the host\'s notice that a background command of this session ended is no f
   // The notice may be the last thing before the turn ends: the answer before it stands.
   const { context: last } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"only"}') }), shellNotice(), idle()] });
   assert.deepEqual((await requestReview(last, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"only"}' }]);
+  // However the command ended, the host says so once: cancelled and in error are endings too.
+  for (const state of ['cancelled', 'error']) {
+    const notice = shellNotice('sh_1', { metadata: { source: 'shell', shellID: 'sh_1', jobID: 'sh_1', state } });
+    const { context: ended } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(), notice, assistant(), idle()] });
+    assert.equal((await requestReview(ended, { sessionID, text: input })).shellNotices, 1, state);
+  }
+  // A step whose stream broke is retried by the host, and the notice can lie between the two: it is no step, so the
+  // retried answer is still the one that directly follows.
+  const cut = assistant({ id: 'msg_cut', finish: 'error', error: { type: 'provider.transport', message: 'lost' }, retry: { attempt: 1, at: 3 }, ...said('{"ans') });
+  const { context: recovered } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(), cut, shellNotice(), assistant({ id: 'msg_retried', ...said('{"answer":"retried"}') }), idle()] });
+  const retried = await requestReview(recovered, { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual([retried.parts, retried.retriedSteps, retried.shellNotices], [[{ type: 'text', text: '{"answer":"retried"}' }], 1, 1]);
 });
 
-test('a command that ends after the answer wakes the session by itself; the answer before the idle marker stands', async () => {
+test('a command that ends after the answer wakes the session by itself; the answer before the turn\'s idle marker stands', async () => {
   const history = [{ id: 'msg_input', type: 'user', text: input }, shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"given"}') }), idle(),
     shellNotice(), assistant({ id: 'msg_woken', ...said('The command has finished.') }), { ...idle(), id: 'msg_idle2' }];
   const { context } = host({ context: async () => history });
   const answer = await requestReview(context, { sessionID, text: input });
   assert.deepEqual(answer.parts, [{ type: 'text', text: '{"answer":"given"}' }]);
   assert.equal(answer.shellNotices, 1);
-  // The host could not run the woken turn (no grant any more): the session's outcome is that turn's, not this one's.
+  // The host could not run the woken turn (no turn is open any more): the session's outcome is that turn's, not this one's.
   const { context: refused } = host({ context: async () => [...history.slice(0, 5), { ...idle(), id: 'msg_idle2', outcome: 'failed' }],
     get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
   assert.deepEqual((await requestReview(refused, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
+  // Also where the session was woken only after its context was read: the marker that was read decides.
+  const { context: later } = host({ context: async () => history.slice(0, 4), get: async () => ({ id: sessionID, outcome: 'interrupted', agent: 'azpr-review-functional', model }) });
+  assert.deepEqual((await requestReview(later, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
+  // Something else of the host's between the marker and the notice changes nothing: an update of the instructions.
+  const { context: updated } = host({ context: async () => [...history.slice(0, 4), { id: 'msg_update', type: 'system', text: 'The instructions changed.' }, ...history.slice(4)] });
+  assert.deepEqual((await requestReview(updated, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"given"}' }]);
   // The turn itself must still have ended well.
   const { context: failed } = host({ context: async () => [history[0], shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"given"}') }), { ...idle(), outcome: 'failed' }, shellNotice()],
     get: async () => ({ id: sessionID, outcome: 'failed', agent: 'azpr-review-functional', model }) });
   await assert.rejects(requestReview(failed, { sessionID, text: input }), /did not finish successfully/);
 });
 
-test('a shell notice the session did not start, and anything else that arrives, stays foreign input', async () => {
+test('a shell notice the session did not start, a second one for a shell, and anything else that arrives, stays foreign input', async () => {
   const prompt = { id: 'msg_input', type: 'user', text: input };
   for (const [name, history] of Object.entries({
     'a shell this session never started': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), shellNotice('sh_other'), assistant({ id: 'msg_second' }), idle()],
     'no shell call at all (a command a person ran)': [prompt, assistant({ id: 'msg_first' }), shellNotice('sh_1'), assistant({ id: 'msg_second' }), idle()],
     'the notice before the call that names its shell': [prompt, shellNotice('sh_1'), shellCall('sh_1'), assistant({ id: 'msg_second' }), idle()],
     'another tool whose result names a shell': [prompt, shellCall('sh_1', 'foreign_tool'), assistant({ id: 'msg_first' }), shellNotice('sh_1'), assistant({ id: 'msg_second' }), idle()],
-    'a notice without the host\'s source mark': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), { ...shellNotice('sh_1'), metadata: { shellID: 'sh_1' } }, assistant({ id: 'msg_second' }), idle()],
+    'a shell call that ended in the foreground': [prompt, shellCall('sh_1', 'shell', { status: 'completed', truncated: false, exit: 0, shellID: 'sh_1' }), shellNotice('sh_1'), assistant({ id: 'msg_second' }), idle()],
+    'a notice without the host\'s source mark': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), { ...shellNotice('sh_1'), metadata: { shellID: 'sh_1', state: 'completed' } }, assistant({ id: 'msg_second' }), idle()],
+    'a notice that does not say the command ended': [prompt, shellCall('sh_1'), shellNotice('sh_1', { metadata: { source: 'shell', shellID: 'sh_1', state: 'running' } }), assistant({ id: 'msg_second' }), idle()],
+    'a second notice for the shell, in the same turn': [prompt, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), { ...shellNotice('sh_1'), id: 'msg_again' }, assistant({ id: 'msg_second' }), idle()],
+    'a second notice for the shell, in a later turn': [{ id: 'msg_earlier', type: 'user', text: 'the first prompt' }, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), { ...idle(), id: 'msg_idle1' },
+      prompt, { ...shellNotice('sh_1'), id: 'msg_again' }, assistant({ id: 'msg_second' }), idle()],
+    'a second notice for the shell, after the turn': [prompt, shellCall('sh_1'), shellNotice('sh_1'), assistant({ id: 'msg_first' }), idle(), { ...shellNotice('sh_1'), id: 'msg_again' }],
     'other input in the turn next to a real notice': [prompt, shellCall('sh_1'), shellNotice('sh_1'), { type: 'synthetic', text: 'foreign input' }, assistant({ id: 'msg_second' }), idle()],
     'other input after a late notice': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), idle(), shellNotice('sh_1'), { type: 'user', text: 'foreign input' }, assistant({ id: 'msg_woken' }), { ...idle(), id: 'msg_idle2' }],
     'other input after the turn without a notice': [prompt, shellCall('sh_1'), assistant({ id: 'msg_first' }), idle(), { type: 'synthetic', text: 'foreign input' }, assistant({ id: 'msg_woken' }), { ...idle(), id: 'msg_idle2' }],
@@ -641,4 +704,8 @@ test('a shell notice the session did not start, and anything else that arrives, 
     const { context } = host({ context: async () => history });
     await assert.rejects(requestReview(context, { sessionID, text: input }), /another message during this turn/, name);
   }
+  // The notice of a command that an earlier turn of the session started is this session's own in a later turn.
+  const { context: carried } = host({ context: async () => [{ id: 'msg_earlier', type: 'user', text: 'the first prompt' }, shellCall('sh_1'), assistant({ id: 'msg_first' }), { ...idle(), id: 'msg_idle1' },
+    prompt, shellNotice('sh_1'), assistant({ id: 'msg_second', ...said('{"answer":"second turn"}') }), idle()] });
+  assert.deepEqual((await requestReview(carried, { sessionID, text: input })).parts, [{ type: 'text', text: '{"answer":"second turn"}' }]);
 });

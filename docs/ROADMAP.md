@@ -44,26 +44,27 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Coverage in two numbers (0.5.0).** With several passes a review states
   the changed files reviewed in at least one pass and those reviewed in
   every pass. A pass that fails costs depth and leaves the others' work.
-- **A review that does not depend on where its conversation is open
-  (0.5.1).** A private session gets AZPR's own instructions and OpenCode's
-  date and environment. What OpenCode collects for the conversation's
-  directory (instruction files, what MCP servers, references and skills say
-  of themselves) stays out of it, and so do the instruction files OpenCode
-  loads when a reviewer's native read reads a file beside one, which used to
-  fail the pass.
+- **Local instructions stay out of a review (0.5.1).** A private session
+  gets AZPR's own instructions and OpenCode's date and environment. What
+  OpenCode collects for the conversation's directory (instruction files, what
+  MCP servers, references and skills say of themselves) stays out of it, and
+  so do the instruction files OpenCode loads when a reviewer's native read
+  reads a file beside one, which used to fail the pass.
 - **OpenCode 2.4.1 as the tested host (0.5.1).** With what 2.3.1 to 2.4.1
   changed for AZPR: a click the terminal UI makes up after a lost release no
   longer picks a step, a usage limit set by a ChatGPT workspace's admin is
   named and not retried, a command that goes on in the background no longer
-  fails its pass where shell is allowed, and one of AZPR's commands that
-  reaches OpenCode as an ordinary prompt is stopped before a model gets it.
+  fails its pass where shell is allowed, a private session runs only while a
+  turn of it is open, and one of AZPR's commands that reaches OpenCode as an
+  ordinary prompt is stopped before a model gets it.
 - **Rows the host's read returns whole (0.5.1).** The pages of AZPR's
   private data hold rows short enough for OpenCode's native read, which cut
   every row after 2,000 characters, so a model that read a large value in
-  pages got about two thirds of it.
-- **Stages in one order (0.5.1).** A receipt lists the stages by their place
-  in the pipeline, and the report is in the last one, whichever session
-  OpenCode created first.
+  pages got about two thirds of it. Pages of a saved review that do not fit
+  are written again whenever it is used.
+- **Stages in one order (0.5.1).** A review's receipt lists the stages by
+  their place in the pipeline, and the report is in the last one, whichever
+  session OpenCode created first.
 - **Settings of 0.4.x are updated on a confirmation (0.5.0).** A version-2
   settings file is left as it is and not used. `/pr-setup` shows what its
   update changes and writes the new file only for a confirmation of that

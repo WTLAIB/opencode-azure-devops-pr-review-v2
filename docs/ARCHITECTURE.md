@@ -898,49 +898,72 @@ instruction files of the conversation's directory and above (`AGENTS.md`; from
 OpenCode 2.3.1 also `CLAUDE.md`, the user's own included; the files a
 configuration lists), and what MCP servers, references, skills and CodeMode
 say of themselves. All but the first two tell an agent how to work in the
-local directory, which is not the PR's repository, and would make a review
-depend on where its conversation is open; with a large instruction file they
-also multiply the size of every private request. The `context` hook therefore
-rebuilds that part from the date and the environment alone
+local directory, which is not the PR's repository; with a large instruction
+file they also multiply the size of every private request. The `context` hook
+therefore rebuilds that part from the date and the environment alone
 (`withoutPlaceInstructions` in `host.mjs`). It can do so because OpenCode
 2.3.0 through 2.4.1 keep each source as `{ key, text }` in the part's
 `metadata.experimental.instructions`, a field the host marks as experimental:
 where no part has that form, more than one has it, or a part's text is not its
-sources joined, nothing is changed and the stage's debug record counts the
-request (`placeInstructionsNotToldApart`); what was left out is named there
-too (`placeInstructions`). OpenCode's own Claude Code provider (`claude-agent`)
-does not use the system parts: its hook, which runs before any plugin's and
-before the hooks that add parts of their own, has already made one text of
-them and kept it in the request's options. That text cannot be worked out
-again from the parts a plugin sees, so AZPR takes out of it the sources it
-left out of the parts, where they stand in it as that provider writes them
-(`withoutClaudeSources`); where they do not, the whole request stays as it
-is and is counted. Ordinary sessions are not touched.
+sources joined, the parts stay as they are and the stage's debug record counts
+the request (`placeInstructionsNotToldApart`); what was left out is named
+there too (`placeInstructions`). Ordinary sessions are not touched. This
+keeps the host's collected instructions out; it does not make a review the
+same in every directory, since the environment names the directory and a
+reviewer can read local files.
+
+OpenCode's own Claude Code provider (`claude-agent`) does not send the system
+parts. Its hook, which runs before any plugin's and before the built-in hooks
+that add parts of their own, has already made one text of the instructions
+part and kept it in the request's options, and the model is handed that. On
+OpenCode 2.3.0 and 2.4.1 that text is the sources but the date and the
+environment, joined by a blank line (`claudeInstructions`). For a request to
+that provider the sources are left out only where the option holds exactly
+that, and the option is emptied with them; where it holds anything else, or
+is missing, the parts and the option both stay and the request is counted.
+An option of that name on another provider's request decides nothing.
 
 The host also writes into a running session. After a native `read` of a file
 of the project it leaves the instruction files between that file and the
 conversation's directory there, as a message of its own; and when a source
 changes while a session runs, it leaves an update. Neither is shown to a
-private session's model: the `context` hook takes them out of every request
-(`isInstructionLoad`, `isInstructionUpdate`) and remembers the loads by ID.
-`requestReview`, which ends a turn that received anyone else's message, lets
-a load pass only when its ID is among those: the model never saw it, so the
-answer is still the answer to the admitted prompt, and a message that merely
-has the same form reaches no model either. A load that no request offered to
-the hook ends the turn as before.
+private session's model: the `context` hook takes them out of every request,
+whether or not the parts could be told apart, and only where they have the
+host's form (`isInstructionLoad`: the paths it names, an ID, a user message;
+`isInstructionUpdate`: a system message of one text without an ID or
+metadata). It remembers the loads by ID, and never an ID that a request has
+shown. `requestReview`, which fails a turn that received anyone else's
+message, lets a load pass only when its ID is among those: the model never
+saw it, so the answer is still the answer to the admitted prompt, and a
+message that merely has the same form reaches no model either. A load that no
+request offered to the hook fails the turn as before.
 
 With shell allowed, a command can go on in the background: the model asked
-for that, or (OpenCode 2.3.1 and later) its timeout ran out. When it ends,
-the host tells the session with a message of its own, which is that tool
-call's late result. `requestReview` takes it as part of the turn when its
-metadata says `source: "shell"` and names the shell that a shell call of this
-same session reported (`ownShellNotices` in `session.mjs`); a notice for a
-shell the session did not start, or without that mark, ends the turn like any
-other message. A notice that arrives after the answer wakes the session by
-itself: the answer is what came before the turn's idle marker, whatever the
-woken turn does. Nothing proves who wrote a message, so this rests on the
-host's metadata; with `shell: "deny"`, the default, a private role has no
-shell call and no such notice is accepted.
+for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's
+tool part then says that the command is still running and names its shell,
+and when the command ends the host tells the session with a message of its
+own, which is that call's late result. `requestReview` takes it as no one
+else's input when its metadata says `source: "shell"`, says that the command
+ended, and names a shell that a shell call of this same session reported as
+running; each such shell reports once (`ownShellNotices` in `session.mjs`).
+A notice for a shell the session did not start, a second one, or one without
+those marks fails the turn like any other message. Nothing proves who wrote a
+message, so this rests on the host's metadata; with `shell: "deny"`, the
+default, a private role has no shell call and no such notice is accepted.
+
+**A turn, and what is open during it.** A turn is the admitted prompt and
+what follows it up to the first idle marker after an answer; its answer is
+the last assistant message before that marker, and that marker says how the
+turn ended. The session's own outcome is its latest execution's, which is
+only consulted where the turn has no marker. An idle marker before any answer
+is what an execution the host had begun before the prompt left behind. What
+follows the turn's marker is no part of it: a command that ended later woke
+the session, and neither what the host wrote then nor how that ended changes
+the answer. A grant is open only during a turn, from the admission of AZPR's
+prompt until the host reports the session idle: outside it the `context` hook
+refuses a request and the tool hooks refuse a call, so a session that the
+host wakes by itself asks no model and reads nothing. A file read later can
+therefore not count as read for a finding the session had already filed.
 
 **A command that arrives as text.** OpenCode's terminal UI can submit a
 startup prompt before it has loaded the commands (`opencode --prompt`; with

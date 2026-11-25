@@ -116,9 +116,9 @@ export function conversationTitle(target) {
 /**
  * A run's stages in an order of their own, for everything a person sees: the run records a stage when OpenCode
  * has created its session, and sessions that start side by side are created in whichever order the host answers.
- * By the stage's place in the pipeline, the reviewer's pass, the label (shard, page; numbers by value) and the
- * attempt. Stages alike in all of these (the continuation sessions of one planning page) keep the order they ran
- * in, which is one after another.
+ * By the stage's place in the pipeline, the reviewer's pass and the label (shard, page; numbers by value). The
+ * sessions of one label (a stage's attempts, and for a planning page each continuation with its own attempts)
+ * ran one after another, so they keep the order in which they were recorded.
  */
 export function stagesInOrder(stages) {
   const slot = role => (typeof ROLES[role]?.slot === 'number' ? ROLES[role].slot : 0);
@@ -134,7 +134,7 @@ export function stagesInOrder(stages) {
   };
   return stages.map((stage, index) => ({ stage, index })).sort((x, y) =>
     (ROLES[x.stage.role]?.order ?? 9) - (ROLES[y.stage.role]?.order ?? 9) || slot(x.stage.role) - slot(y.stage.role) ||
-    byLabel(x.stage.label, y.stage.label) || (x.stage.attempt ?? 1) - (y.stage.attempt ?? 1) || x.index - y.index).map(item => item.stage);
+    byLabel(x.stage.label, y.stage.label) || x.index - y.index).map(item => item.stage);
 }
 
 /** Models per role, aggregated over shards and retries: the passes in their order, then the duplicate check and the rating. */
@@ -551,7 +551,7 @@ export function renderDiagnosticNotices(run, settings) {
   if (blocked) notices.push(`\nTool notice: ${blocked} attempt(s) to use a tool this role may not use were blocked before execution.\n`);
   if (failures) notices.push(`\nTool error notice: ${failures} tool call(s) failed. A completed review does not erase these; inspect the original tool results.\n`);
   if (timeouts) notices.push(`\nTool timeout notice: ${timeouts} Azure DevOps read(s) exceeded the per-call timeout after retries and were abandoned.\n`);
-  const idle = run.stages.filter(stage => stage.failureClass === 'idle');
+  const idle = stagesInOrder(run.stages).filter(stage => stage.failureClass === 'idle');
   if (idle.length) notices.push(`\nInactivity notice: the stage inactivity watchdog stopped ${idle.length} stage(s) (failure=idle) after ${idle[0].idleStop?.idleSeconds ?? 'workflow.stageIdleSeconds'} s without activity: ${idle.map(stage => `${stage.role}${stage.label ? ` [${stage.label}]` : ''} after ${stage.idleStop?.lastActivity ?? 'an unknown activity'}`).join('; ')}. The model stream, a tool or OpenCode stopped responding; a stopped stage runs again in a new session while workflow.stageRetries allows.\n`);
   const search = searchLimitation(run, settings);
   if (search) notices.push(`\nContent search notice: ${search}\n`);

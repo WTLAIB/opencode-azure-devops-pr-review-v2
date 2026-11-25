@@ -1581,48 +1581,68 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
   assert.deepEqual(broken.map(row => [row.start, row.end]), [[0, 1201], [1201, 2401]]);
 });
 
-test('a store that an earlier version wrote gets its pages written again when it is reopened, once', async t => {
+// As 0.5.0 wrote a pages file: rows of 3,000 characters of text.
+const earlierRows = text => { const rows = []; for (let start = 0; start < text.length; start += 3000) rows.push(JSON.stringify({ start, end: Math.min(text.length, start + 3000), text: text.slice(start, start + 3000) })); return rows.join('\n') + '\n'; };
+const rowsOf = async reference => (await readFile(reference.pages, 'utf8')).trimEnd().split('\n');
+
+test('a store that is opened again has every pages file with rows that do not fit written again from its object, each time', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const first = await createCommentData({ root: directory });
   const text = Array.from({ length: 300 }, (_, i) => `line ${i} of a tool output that a review saved`).join('\n');
-  const reference = await first.put(text);
-  // As 0.5.0 wrote it: rows of 3,000 characters of text, and no mark.
-  const old = [];
-  for (let start = 0; start < text.length; start += 3000) old.push(JSON.stringify({ start, end: Math.min(text.length, start + 3000), text: text.slice(start, start + 3000) }));
-  await writeFile(reference.pages, old.join('\n') + '\n');
-  await rm(join(first.directory, 'rows-v2'));
-  assert.ok(old.some(row => row.length > HOST_READ_LINE_CHARACTERS), 'The earlier rows are longer than the host returns.');
+  const reference = await first.put(text), other = await first.put('y'.repeat(5000));
+  await writeFile(reference.pages, earlierRows(text));
+  assert.ok((await rowsOf(reference)).some(row => row.length > HOST_READ_LINE_CHARACTERS), 'The earlier rows are longer than the host returns.');
+  // A pages file whose rows fit is left as it is, whatever it holds.
+  await writeFile(other.pages, 'left alone\n');
   const reopened = await createCommentData({ directory: first.directory });
-  const rows = (await readFile(reference.pages, 'utf8')).trimEnd().split('\n');
+  const rows = await rowsOf(reference);
   assert.ok(rows.every(row => row.length <= ROW_CHARACTERS), 'Every row fits the host\'s read.');
   assert.equal(rows.map(row => JSON.parse(row).text).join(''), text);
   assert.equal(await reopened.read(reference), text, 'The reference a saved review holds still names the object.');
-  // Once per store: a second reopening leaves the pages alone.
-  await writeFile(reference.pages, 'left alone\n');
+  assert.equal(await readFile(other.pages, 'utf8'), 'left alone\n');
+  // Nothing says of the store as a whole that its pages fit: an earlier version that still runs, or that is
+  // installed again for a while, adds pages of its own, and the next opening sees them.
+  await writeFile(other.pages, earlierRows('y'.repeat(5000)));
   await createCommentData({ directory: first.directory });
-  assert.equal(await readFile(reference.pages, 'utf8'), 'left alone\n');
+  assert.ok((await rowsOf(other)).every(row => row.length <= ROW_CHARACTERS));
+  assert.equal((await rowsOf(other)).map(row => JSON.parse(row).text).join(''), 'y'.repeat(5000));
+  assert.deepEqual((await readdir(first.directory)).sort(), ['.gitignore', 'objects'], 'The store holds no mark of its own.');
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
 });
 
-test('a store whose pages could not all be written again is not marked, and its next opening writes them', async t => {
+test('pages are written again only from an object that is what its name says, and a store whose pages cannot be made to fit is not opened', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const first = await createCommentData({ root: directory });
-  const one = await first.put('x'.repeat(5000)), other = await first.put('y'.repeat(5000));
-  await rm(join(first.directory, 'rows-v2'));
-  for (const reference of [one, other]) await writeFile(reference.pages, 'as an earlier version wrote it\n');
-  // One pages file cannot be replaced: a directory stands where it belongs.
-  await rm(other.pages);
-  await mkdir(other.pages);
-  await writeFile(join(other.pages, 'in the way'), '');
-  await createCommentData({ directory: first.directory });
-  assert.equal((await readFile(one.pages, 'utf8')).trimEnd().split('\n').map(row => JSON.parse(row).text).join(''), 'x'.repeat(5000), 'The file that could be written is.');
-  await assert.rejects(readFile(join(first.directory, 'rows-v2')), { code: 'ENOENT' }, 'The store is not marked while a file is as it was.');
+  const sound = await first.put('x'.repeat(5000)), damaged = await first.put('z'.repeat(9000));
+  for (const [reference, text] of [[sound, 'x'.repeat(5000)], [damaged, 'z'.repeat(9000)]]) await writeFile(reference.pages, earlierRows(text));
+  // An object that lost its end, as a write that was cut off leaves it (or as another process has it while it
+  // still writes): its digest is not the one in its name, so no pages are derived from it. What is there stays.
+  await writeFile(damaged.file, 'z'.repeat(4000));
+  const before = await readFile(damaged.pages, 'utf8');
+  const reopened = await createCommentData({ directory: first.directory });
+  assert.equal(await readFile(damaged.pages, 'utf8'), before, 'The pages of an object that is not what its name says are left.');
+  assert.ok((await rowsOf(sound)).every(row => row.length <= ROW_CHARACTERS), 'The sound object\'s pages are written again all the same.');
+  await assert.rejects(reopened.read(damaged), /Private comment data changed/, 'AZPR\'s own read of that object fails on its digest, as before.');
+  // The pages of a sound object cannot be read or replaced (a directory stands where they belong): the store is
+  // not opened, since its rows would reach a model cut. The next opening, with the obstacle gone, writes them.
+  await writeFile(damaged.file, 'z'.repeat(9000));
+  await rm(damaged.pages);
+  await mkdir(damaged.pages);
+  await writeFile(join(damaged.pages, 'in the way'), '');
+  await assert.rejects(createCommentData({ directory: first.directory }), error => {
+    assert.equal(error.unfitPages, true);
+    assert.match(error.message, /^\[AZPR\] This review's private data was written by an earlier version in rows that OpenCode's read tool cuts, and they could not be written again \(EISDIR\)\. Nothing was planned; run the command again once the cause is gone\.$/);
+    return true;
+  });
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
-  // The obstacle goes, and the next opening finishes the work.
-  await rm(other.pages, { recursive: true });
+  await rm(damaged.pages, { recursive: true });
+  await writeFile(damaged.pages, earlierRows('z'.repeat(9000)));
   await createCommentData({ directory: first.directory });
-  assert.equal((await readFile(other.pages, 'utf8')).trimEnd().split('\n').map(row => JSON.parse(row).text).join(''), 'y'.repeat(5000));
-  assert.equal(await readFile(join(first.directory, 'rows-v2'), 'utf8'), '');
+  assert.equal((await rowsOf(damaged)).map(row => JSON.parse(row).text).join(''), 'z'.repeat(9000));
+  // An object without a pages file is another writer's work in progress, and is left to it.
+  await rm(sound.pages);
+  await createCommentData({ directory: first.directory });
+  await assert.rejects(readFile(sound.pages), { code: 'ENOENT' });
 });

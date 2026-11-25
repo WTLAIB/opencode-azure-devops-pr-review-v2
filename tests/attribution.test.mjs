@@ -666,8 +666,13 @@ test('a receipt and an unfinished review\'s draft list the stages in the pipelin
     stage('azpr-review-dedupe', '1/2'), stage('azpr-review-dedupe', '2/2'), stage('azpr-review-rating', ''),
   ];
   const names = stages => stages.map(s => `${s.role} [${s.label}] ${s.attempt}`);
-  // Every order the host could create them in gives the same list: three shuffles that put later stages first.
-  const shuffles = [[...inOrder].reverse(), [...inOrder.slice(5), ...inOrder.slice(0, 5)], inOrder.filter((_, i) => i % 2).concat(inOrder.filter((_, i) => !(i % 2)))];
+  // Every order the host could create them in gives the same list. Sessions that start side by side can be
+  // created in any order; the sessions of one label run one after another (a stage and its retry), so those keep
+  // theirs. Three orders that put later stages first.
+  const groups = [];
+  for (const item of inOrder) { const last = groups.at(-1); if (last && last[0].role === item.role && last[0].label === item.label) last.push(item); else groups.push([item]); }
+  const shuffles = [[...groups].reverse(), [...groups.slice(5), ...groups.slice(0, 5)], groups.filter((_, i) => i % 2).concat(groups.filter((_, i) => !(i % 2)))].map(order => order.flat());
+  assert.ok(shuffles.every(created => names(created).join() !== names(inOrder).join()));
   for (const created of shuffles) {
     assert.deepEqual(names(stagesInOrder(created)), names(inOrder));
     const receipt = renderReceipt({ ...run(), stages: created }, '', 'COMPLETE', '', { ...settings, outputLanguage: 'en' });
@@ -681,5 +686,20 @@ test('a receipt and an unfinished review\'s draft list the stages in the pipelin
   const page = (label, sessionID) => ({ role: 'azpr-review-comment-plan', label, status: 'COMPLETE', sessionID, model: 'fixture/m', attempt: 1 });
   const planned = [page('page 2/11', 'p2-first'), page('page 10/11', 'p10'), page('grouping', 'g'), page('page 2/11', 'p2-second'), page('page 1/11', 'p1')];
   assert.deepEqual(stagesInOrder(planned).map(s => s.sessionID), ['g', 'p1', 'p2-first', 'p2-second', 'p10']);
+  // Each continuation of a page counts its attempts anew: a first session that failed, its retry that asked to
+  // continue and the continuation that finished are attempts 1, 2 and 1, and stay in the order they ran in.
+  const continued = [{ ...page('page 3/3', 'failed'), status: 'FAILED' }, { ...page('page 3/3', 'retry'), status: 'CONTINUE', attempt: 2 }, { ...page('page 3/3', 'finished'), status: 'READY' },
+    page('page 1/3', 'p1'), page('grouping', 'g')];
+  assert.deepEqual(stagesInOrder(continued).map(s => s.sessionID), ['g', 'p1', 'failed', 'retry', 'finished']);
+  assert.equal(stagesInOrder(continued).filter(s => s.status !== 'FAILED').at(-1).sessionID, 'finished', 'The last stage that did not fail is the session that finished the page.');
   assert.deepEqual(stagesInOrder([]), []);
+});
+
+test('the receipt names the stages the inactivity watchdog stopped in the pipeline\'s order too', () => {
+  const stopped = (role, label, sessionID) => ({ role, label, status: 'FAILED', failureClass: 'idle', sessionID, model: 'fixture/m', attempt: 1, error: 'stopped',
+    idleStop: { idleSeconds: 600, lastActivity: 'model request 1 was sent' } });
+  const first = stopped('azpr-review-reviewer', 'pass 1/2', 'ses_first'), second = stopped('azpr-review-reviewerb', 'pass 2/2', 'ses_second');
+  const notice = stages => /\nInactivity notice: [^\n]*\n/.exec(renderReceipt({ ...run(), stages }, '', 'INCOMPLETE', 'Every review session failed.', { ...settings, outputLanguage: 'en' }))?.[0];
+  assert.match(notice([first, second]), /ses_first[^\n]*ses_second|pass 1\/2[^\n]*pass 2\/2/);
+  assert.equal(notice([second, first]), notice([first, second]), 'Whichever session the host created first.');
 });
