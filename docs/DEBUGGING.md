@@ -6,16 +6,40 @@ acceptance, Azure source validity or report quality.
 
 ## A startup slash command becomes an ordinary prompt
 
-On OpenCode 2.1.2 through 2.3.0, `opencode --prompt "/pr-review ..."` can
-submit before a native Git package's command catalog has loaded. The host then
+On OpenCode 2.1.2 through 2.4.1, `opencode --prompt "/pr-review ..."` can
+submit before the terminal UI has loaded the commands. The host then
 treats the text as an ordinary model prompt; AZPR has not received the command.
 This was observed in local native-package TUI acceptance failures on 2.1.2 and
 matches the host's
 [startup submission](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/tui/src/routes/home.tsx#L68)
 and [command classification](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/tui/src/component/prompt/index.tsx#L1150).
 
-Start the TUI normally and wait for `/pr-review` to appear in slash-command
-completion before submitting it. A command admitted by AZPR emits its own
+OpenCode 2.4.0 and 2.4.1 do this far more often. With a project directory the
+service had not loaded yet, the text went out as an ordinary prompt in 14 of
+16 terminal UI starts in a fixture (1 of 12 on 2.3.0 and 2.3.2), and in 10 of
+those 14 the conversation's model was OpenCode's built-in free model instead
+of the configured one, so the PR URL and the context you wrote would be sent
+there.
+
+From 0.5.1 AZPR stops such a prompt: a prompt of an ordinary conversation
+that begins with one of AZPR's commands is refused before any model gets it,
+and the conversation is told:
+
+```text
+[AZPR] /pr-review reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it. …
+```
+
+The terminal UI then shows `Failed to set up session` and may try again in a
+new conversation, which leaves a few empty conversations behind; a retry that
+finds the commands loaded runs the command. AZPR can only stop a prompt where
+its runtime is loaded: not before OpenCode has loaded the plugin, and not in
+a process whose settings cannot be used yet, which has AZPR's placeholder
+commands and no hook.
+
+Do not start AZPR's commands with `--prompt`. Start the TUI and wait for
+`/pr-review` to appear in slash-command completion before submitting it; a
+script uses the command endpoint (`POST /api/session/<id>/command`), which
+waits for the plugins. A command admitted by AZPR emits its own
 `[AZPR ...] STARTED` receipt. Do not treat an ordinary assistant response as that
 receipt or repeat a command without checking the original conversation. The
 host fixture exercises interactive submission in both new and existing
@@ -128,7 +152,9 @@ session holding the report or draft stays.
 | `delivery.json` | Whether the final receipt was queued (and how many attempts). |
 | `conversation-name.json` | For a check or a review, written a few seconds after the command: how naming the conversation ended. `named` (with AZPR's own name for it), `kept` (it had a name, or got one meanwhile), `restored` (a name given in that moment was written back), `unconfirmed` (a name was written, but OpenCode did not report the rename in time) or `failed` (OpenCode refused the write and reported no rename). A name that is not AZPR's own is never recorded. |
 
-The numeric prefix is stage creation order; the reviewer sessions of all
+The numeric prefix is stage creation order, which differs from run to run
+(a receipt lists the stages by their place in the pipeline instead); the
+reviewer sessions of all
 passes and shards run in parallel, and so do the duplicate checks and the
 rating sessions. `ROLE` is the private agent: `azpr-<mode>-reviewer` for the
 first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
@@ -153,12 +179,23 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    `requestObservations.retries` lists OpenCode's own retries of a provider
    request (attempt, whether AZPR allowed it, the announced delay).
    Receipt counters show interrupted provider streams that OpenCode recovered
-   in the same session: `step-retries` (OpenCode 2.3.0 retried the step),
+   in the same session: `step-retries` (OpenCode 2.3.0 and later retried the step),
    `stream-continuations` and `continuation-restarts` (earlier hosts asked the
    model to continue, and the model started its answer over). A request to a
-   provider host that cannot be reached is retried by OpenCode 2.3.0 for up to
+   provider host that cannot be reached is retried by OpenCode (2.3.0 and
+   later) for up to
    an hour, each retry listed under `requestObservations.retries`; the stage
    waits meanwhile, and `/pr-stop` ends it.
+   `requestObservations` also says what AZPR kept from the session's model:
+   `placeInstructions` lists the instruction sources of the conversation's
+   place that were left out of its requests (`core/instructions` for
+   instruction files, `core/mcp-guidance` and so on), `instructionLoads` and
+   `instructionUpdates` count the instruction files OpenCode loaded beside a
+   file the session read and the updates it wrote, and
+   `placeInstructionsNotToldApart` counts the requests that went out as
+   OpenCode built them because their parts did not have the form AZPR knows
+   (a newer OpenCode, or another plugin that edited them). `shellNotices`
+   on the stage counts background commands that reported back.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a
@@ -196,7 +233,7 @@ Common receipts:
 | Message | Next step |
 | --- | --- |
 | `Azure DevOps rejected the PAT for organization …` | Renew or correct the PAT in `azure.pat` or the file named by `azure.patFile` (organization-scoped, Code Read, Pull Request Threads Read & write) and restart the OpenCode service. |
-| `The provider reports the usage quota as used up (provider.quota)` / `ChatGPT reports the subscription usage limit as reached (provider.chatgpt-limit)` and the other used-up usage or spend limits (`provider.free-limit`, `provider.go-limit`, `provider.budget-limit`, `provider.model-budget-limit`) | The stage failed without a retry, which would fail the same way; AZPR also refused OpenCode's own retries. Choose another model in the settings, or wait until the limit resets. |
+| `The provider reports the usage quota as used up (provider.quota)` / `ChatGPT reports the subscription usage limit as reached (provider.chatgpt-limit)` / `ChatGPT reports the usage limit set by the workspace's admin as reached (provider.chatgpt-workspace-limit)` and the other used-up usage or spend limits (`provider.free-limit`, `provider.go-limit`, `provider.budget-limit`, `provider.model-budget-limit`) | The stage failed without a retry, which would fail the same way; AZPR also refused OpenCode's own retries. Choose another model in the settings, or wait until the limit resets. |
 | `azure.patFile could not be used …` / `azure.patFile changed since OpenCode loaded it` | Make it a regular file you own with only the PAT (`chmod 600`), or restart the OpenCode service after replacing it. |
 | `Azure DevOps refused … (HTTP 403 …)` | Add the missing PAT scope or project/repository access. |
 | `network error (ConnectionRefused)` with a hint to set `azure.proxy` | dev.azure.com is reachable only through a proxy; set `azure.proxy` (see [proxies](AZURE_DEVOPS.md#proxies-and-tls-inspection)). |
@@ -204,6 +241,9 @@ Common receipts:
 | `A proxy refused … (HTTP 407)` / `A proxy or gateway answered …` | The proxy wants credentials in `azure.proxy`, or it blocks dev.azure.com. |
 | `Content search notice: Content search (azpr_search_code) was unavailable: …` (also among the report's limitations) | The repository archive is over `azure.archiveMegabytes`, or is one AZPR cannot read (ZIP64, encrypted, damaged). The review ran, but sessions could not search file contents, so callers and other uses of changed code may be unchecked. Raise `azure.archiveMegabytes` (at most 1024) where the notice names it and restart the OpenCode service; the archive is held in memory during a review. |
 | `azpr_read_file failed: …` in a stage's tool errors | The model asked for a missing path or invalid range; the review continues and reports the gap. |
+| `The session received another message during this turn; its output cannot be assigned to the authorized request` (`failure=transient`) | Something other than the reviewer's own prompt arrived in its session while it answered, so the answer is not taken; the stage ran once more in a new session. Known causes: a message someone sent to that session; and an answer that reached the model's output limit, after which OpenCode asks the model to go on (a second failure for that reason means the shard's answer is too long for the model: lower `workflow.shardFiles` or use a model with a larger output limit). The instruction files OpenCode loads beside a file a reviewer read, and its notice that a background command ended, no longer count (0.5.1). |
+| `[AZPR] /pr-review reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it` (any AZPR command) | The text was sent before OpenCode had loaded its commands, typically with `opencode --prompt` at startup; see [above](#a-startup-slash-command-becomes-an-ordinary-prompt). Nothing ran. Type the command once it shows in the slash-command list. |
+| `permission.rejected` … `cannot run a shell command that OpenCode cannot analyze` | With shell allowed, a reviewer's command used something OpenCode's scanner cannot follow (an alias, for instance), for which OpenCode 2.4.0 and later ask for every directory; AZPR refuses that, and the model is told to rewrite the command. |
 | `permission.rejected` … `cannot use paths outside the local OpenCode project` | A reviewer used a native tool on a repository path; it was refused instead of waiting for an approval and the model was pointed to the azpr tools. |
 | `settings.json changed since OpenCode loaded it` | Restart the OpenCode service. Running commands were unaffected. |
 | `/pr-deep is off: models.deep.reviewers names no model` (or `/pr-quick`) | That mode's list of reviewer models is empty, and no mode falls back to another mode's models. List at least one with `/pr-setup` (`--deep-model`, `--quick-model`) or in the settings file, then restart the OpenCode service. |

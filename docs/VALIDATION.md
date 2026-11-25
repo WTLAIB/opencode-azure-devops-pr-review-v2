@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.5.0, the moves to OpenCode 2.3.0 and 2.3.2, runs of Martian's public code
+0.5.1, the moves to OpenCode 2.3.0, 2.3.2 and 2.4.1, runs of Martian's public code
 review benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, the severity changes
 of 0.3.7 run on ReviewBench's test set, the runs behind the single
@@ -17,7 +17,7 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  thirteen runs on the real OpenCode 2.3.2 host with isolated profiles and
+  thirteen runs on the real OpenCode 2.4.1 host with isolated profiles and
   fake model and Azure DevOps services: fresh, replacement and native
   installation (including an authenticating proxy, a custom CA certificate, a
   foreign MCP server behind CodeMode and an image model), a 120-file review
@@ -85,6 +85,195 @@ the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
 
+## 0.5.1 release candidate acceptance (2026-11-26)
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9, OpenCode
+2.4.1 and tmux 3.2a, with isolated OpenCode profiles and the fake model and
+Azure DevOps services. No review with a real model ran on this candidate.
+
+0.5.1 moves the tested host to OpenCode 2.4.1 and changes what the
+[comparison of the hosts](#opencode-231-to-241-compared-with-230-2026-11-24-to-26)
+found. `host.mjs` has the tested version, the workspace limit among the
+used-up limits, the length of a line the host's read returns, and what tells
+the host's parts and messages apart (`withoutPlaceInstructions`,
+`withoutClaudeSources`, `isInstructionLoad`, `isInstructionUpdate`).
+`runtime.mjs` keeps the place's instructions and the host's own messages out
+of private requests in its `context` hook, takes AZPR's tools out of the
+requests built outside a turn, refuses one of AZPR's commands that arrives as
+a prompt, and puts the report into the last stage of the pipeline.
+`session.mjs` lets a turn's check pass a load that was hidden and the notice
+of the session's own background command. `comment-data.mjs` writes rows that
+fit (`pageRows`) and writes an earlier store's pages again (`renewPages`),
+`attribution.mjs` orders the stages (`stagesInOrder`), and `tui-view.jsx`
+tells a made-up release from a click (`hold`). No prompt changed (the hash
+test holds them), no setting is new, and the package has the files of 0.5.0.
+
+### Offline
+
+`npm run check` passes, and `npm test` runs 799 tests (783 for 0.5.0), all
+passing. The new ones:
+
+| Tests | What they establish |
+| ---: | --- |
+| 4 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. The text the Claude Code provider keeps loses the sources that were left out where they stand alone, first, last or between other texts, and is not told apart where they are missing, twice there, not between blank lines or in another order. A load of instruction files is told by the paths it names, an update by being a system message of text; a change of effort or of tools is none. |
+| 3 | The `context` hook and the turn (`tests/runtime.test.mjs`): a private request keeps only the date and the environment, with and without the Claude Code provider's option, loses the loaded instruction file and the update and keeps a change of effort; a request whose option was written another way stays as it is, and the stage record counts it; an ordinary session's request is untouched; a load that no request offered to the hook, or a message that only looks like one, still ends the turn. One of AZPR's commands sent as a prompt is refused with a notice, for each command and with leading blanks; a question about a command, a longer name and an unknown name are not. |
+| 4 | The turn's check (`tests/session.test.mjs`): a hidden load ends no turn, and a load whose ID is not among the hidden ones, a message of another form, a user message and a second, foreign message do; the notice of the session's own background command is part of the turn, the answer after it counts, and a notice after the idle marker leaves the answer before it, whatever outcome the woken turn has; a notice for a shell the session did not start, one before its call, one of another tool's shell, one without the host's mark and other input next to a real notice end the turn. And the workspace limit is named and not retried. |
+| 3 | Rows (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. A store of an earlier version gets its pages written again once, without a working file left; one whose pages could not all be written is not marked, and its next opening writes them. |
+| 2 | The order of stages (`tests/attribution.test.mjs`, `tests/runtime.test.mjs`): three shuffled orders of creation give one list, for a review and for a comment run; with the second pass's session created first, the receipt lists the first pass first and the report is in the last stage. |
+| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture; one right after a movement, and one after any time without a movement, is a click; a movement before the press does not count; a session's row and `close` follow the same rule; and each of the two clocks alone, or one that runs backwards, is enough to refuse. The clocks are the test's. |
+| in an existing test | The requests built outside a turn lose AZPR's tools (`tests/runtime.test.mjs`). |
+
+The other changed expectations are the tested version (`2.4.1`) and what
+`/pr-check` says of it.
+
+### On the real host
+
+The thirteen host fixture runs passed on OpenCode 2.4.1. What is new in
+them:
+
+- **What a private request carries** (`tests/host-v2-smoke.mjs`, fresh,
+  `--replace` and `--native`). The fixture's configuration names an
+  instruction file. Its text is in the request of an ordinary conversation
+  and in none of the 121 requests of private sessions in the fresh run
+  (reviewers, duplicate checks, ratings, comment planning), and every stage's
+  record names the source that was left out and counts no request that could
+  not be told apart.
+- **A local read beside an instruction file.** A quick review whose reviewer
+  reads a file of the project with the native read, in a folder that has an
+  `AGENTS.md`. The host leaves that file in the reviewer's session, which the
+  fixture reads back to see; no request carries its text, the review is
+  COMPLETE with one reviewer session, and the stage's record counts the load.
+- **A command sent as a prompt.** `/pr-check <URL>` posted to the prompt
+  endpoint of a new conversation is refused (the host answers HTTP 500
+  without the reason), the conversation holds AZPR's notice and no user
+  message, no model is asked, also not for a title, and the command then
+  runs there.
+- **A workspace's usage limit.** Every request of a quick review is answered
+  with HTTP 429 and the code of that limit: one request, one session,
+  `failure=permanent`, OpenCode's retry refused, and the receipt names the
+  limit.
+- **Rows read with the host's read** (`tests/host-v2-comment-scale.mjs`, with
+  debug on and off). The first planning page reads two rows of the list of
+  120 changed files, which its input names as private data, with the native
+  read: the host returns both whole (1,893 characters at most), and their
+  texts are the value's beginning.
+- **A release the host makes up** (`tests/host-v2-tui-panel.mjs`, from source
+  and `--native`). In the real terminal UI, **Reset adjustments** is pressed,
+  moved on by a cell and not released, and 2.5 seconds later something else
+  is clicked: the conversation gets no notice and the preview stays. The same
+  for `close` at the end of the run.
+- **A token that is typed** (`tests/host-v2-tui-setup.mjs`): the second token
+  is typed key by key, with a Backspace and `ctrl+u` on the way, where the
+  fixture only pasted before.
+- **The host's tools** (smoke): the image tool under its new name, and a
+  video model in the fixture's catalog, so that the check that private roles
+  see their allowlist and nothing else runs against tools OpenCode 2.4.1
+  really offers to ordinary sessions.
+
+Each new step failed when the change it is for was taken out of a copy of the
+tree: with the system parts left as they were, or the host's form no longer
+recognised, the step for the configured file; without hiding the load, the
+nested file (both sessions `failure=transient`, and the file's text in their
+requests); without the refusal, the prompt (HTTP 200 and a user message);
+without the limit's type, the usage limit (a second request); with rows of
+2,900 characters, the read (a row cut at 2,000).
+
+Model and Azure DevOps requests of the runs: smoke fresh 123 and 212,
+replacement 102 and 182, native 129 and 228; comment scale 36 and 125, with
+debug off 36 and 121; background compaction 6 model requests, with debug off
+12; the terminal panel 47 and 73 in both runs; setup none and 16, the update
+of 0.4.x settings none and 7.
+
+Three probes outside the repository's tests ran on the candidate with a real
+host and the fake services. The Claude Code provider, with a stand-in for the
+`claude` program, on 2.3.0 and 2.4.1 (see the comparison of the hosts). An
+instruction file edited while a review ran, with the file watcher on, on
+2.3.0 and 2.4.1: the host wrote its update into the session, the stage record
+counts it, and no request held the update or the file. And a review saved by
+0.5.0 on 2.4.1, then the candidate installed over it and `/pr-comment`: the
+store's pages, 14 rows of up to 3,243 characters as 0.5.0 wrote them, were
+written again as 24 rows of at most 1,879, the store was marked, and the
+preview was planned.
+
+### Not verified
+
+- A review with a real model on this candidate, and what a real model does
+  after the notice of a background command.
+- The Claude Code provider with a real Claude Code: a stand-in recorded what
+  it would be given, for the reviewer role only; nested instruction files and
+  updates with that provider were not run.
+- What a real ChatGPT workspace answers at its limit, and an automatic plugin
+  update against a registry.
+- Real terminal emulators: every mouse gesture and key was injected in tmux.
+- The refused prompt in the desktop app and other clients.
+- A store that 0.5.0 saved, reopened by this version on a host, beyond the
+  run named above.
+- macOS, Windows and the desktop app.
+
+## OpenCode 2.3.1 to 2.4.1 compared with 2.3.0 (2026-11-24 to 26)
+
+The baseline is OpenCode 2.3.0, the last version whose interfaces were
+[studied one by one](#opencode-230-compared-with-224-2026-11-15-and-16).
+0.5.0 named 2.3.2 as the tested host after its fixtures passed there; what
+2.3.1 and 2.3.2 change had not been studied. This section covers 2.3.1,
+2.3.2, 2.4.0 and 2.4.1 against 2.3.0.
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and tmux 3.2a. OpenCode
+CLI 2.3.0, 2.3.1, 2.3.2, 2.4.0 and 2.4.1 were installed into disposable
+prefixes; all embed Bun 1.4.4, and 2.4.0 moves from OpenTUI 0.8.4 to 0.9.4.
+Every run used isolated profiles and the fake model and Azure DevOps services.
+No real model or Azure request was made, with one exception that the table
+names (the processes of the `claude-agent` provider). The upstream source of
+the five tags was read for each host interface AZPR uses, and the 236 entries
+of the four releases' notes were read against it. "0.5.0" below is the
+released tree; "the candidate" is 0.5.1. Each row says on which versions it
+was measured; "source" means read in OpenCode's code and not run.
+
+| Check | Observed |
+| --- | --- |
+| The fixtures of 0.5.0 | The thirteen host fixture runs of 0.5.0, unchanged: 12 of 13 on 2.3.0 (the background-summary run fails there, since 2.3.0 writes no such summary by default), 13 of 13 on 2.3.1 and on 2.3.2. On 2.4.0 and 2.4.1 they pass once the tests follow two changes of the host: the image tool is `generate_image` (was `experimental_image_generate`), and lists mark the current choice differently in the terminal UI's new design. |
+| Model requests | Every request a 0.5.0 fixture review sends to the fake model was recorded and compared part by part between versions. 2.3.1: the host's own `read` tool description is one sentence shorter. 2.3.2: identical to 2.3.1. 2.4.0: the environment block no longer has a sentence about worktrees. 2.4.1: identical to 2.4.0. AZPR's system prompts and tool definitions are the same on all five. |
+| What the host adds for a conversation's place | Measured on 2.3.0, 2.3.1 and 2.4.1 with 0.5.0, a review of 6 files with two passes and its preview (9 private requests in 7 sessions). Characters added to every private request, against a directory with no instruction source: an `AGENTS.md` in the conversation's directory (AZPR's own, 53,853 bytes) 54,085 on all three; the same text as `CLAUDE.md` there, or as `~/.claude/CLAUDE.md`, nothing on 2.3.0 and 54,085 and 54,120 from 2.3.1; an MCP server that says 2,100 characters about itself 2,144; a file the configuration lists under `instructions` 1,988; a reference 476; the last three on 2.3.0 too. With the `AGENTS.md`, the system messages of the nine requests came to about 625,000 characters instead of 138,000; the rating, which has no tools and a prompt of 5,226 characters, received the whole file. |
+| The candidate and those sources | Same runs, 2.3.0, 2.3.1 and 2.4.1: in all eight arrangements the private requests carry the date and the environment only, their system messages are back at the size of a directory without sources, an ordinary conversation's request still has every source, and the review, the preview and the number of requests are as before. |
+| Instruction files beside a file that was read | Measured on 2.3.0, 2.3.1 and 2.4.1: a reviewer's native `read` of a file in a directory with its own `AGENTS.md` makes the host leave that file in the session as a message, which reaches the model. 0.5.0 then fails both of the pass's sessions (`The session received another message during this turn`) and the review is INCOMPLETE; with a `CLAUDE.md` instead, only from 2.3.1. The candidate on the three versions: COMPLETE with one session, also after two such directories and when the load falls into a correction turn, and the file's text is in no request. A message of the same form that someone else sends is kept from the model as well; any other message still ends the turn. |
+| An instruction file that changes during a review | Measured on 2.3.0 and 2.4.1: the host writes an update into the session, which 0.5.0 passes to the model (`<system-update>The instructions changed: …`). The candidate keeps it out of private requests. |
+| The Claude Code provider | OpenCode's `claude-agent` provider does not send the system parts. Its own hook, which runs before any plugin's and before the built-in hooks that add the model's identity and a hint about worktrees, joins the instruction sources but the date and the environment into one text, and Claude Code is handed that text after the agent's prompt (source, all five tags). Measured on 2.3.0 and 2.4.1 with a stand-in for the `claude` program that records what it is given, so that no model ran, and with an `AGENTS.md`, a configured instruction file and an MCP server's text in place: 0.5.0's private reviewer session was handed all three, in a system prompt of 18,856 characters. So was a first form of the candidate, which worked that text out again from the parts as a plugin sees them, matched nothing, left the request as it was and counted it. The candidate takes the sources it leaves out of the parts out of that text as well: the reviewer's system prompt has 18,117 characters, none of the three and AZPR's role prompt as before, the stage record names the two sources, and an ordinary conversation on the same model keeps all three. Only the reviewer role ran, and no real Claude Code. For the same reason, what AZPR itself adds to the system parts (the note that ends a comment page's reading) does not reach a `claude-agent` model, as before this release (source). |
+| A usage limit of a ChatGPT workspace | The provider's answer carries the code `subscription_sharing_workplace_individual_usage_limit_exceeded`. OpenCode's own ChatGPT plugin refuses to retry it on all five versions (source, and upstream's test). Measured with HTTP 429 from the fake provider and a stand-in for that plugin's decision: 2.3.0 to 2.3.2 report `provider.rate-limit`, or `provider.quota` where the answer's text also speaks of a usage limit; 2.4.0 and 2.4.1 report `provider.chatgpt-workspace-limit` either way. 0.5.0 on 2.4.x: two sessions, both `failure=transient`, a receipt that names only HTTP 429. The candidate on 2.4.0 and 2.4.1: one session, `failure=permanent`, the limit named. What a real workspace answers was not seen. |
+| AZPR's tools outside a turn | Measured on 2.3.0, 2.3.1 and 2.4.1: in an ordinary conversation, a generation, a manual summary, a background summary and a compaction in the turn each carried 18 to 20 tool definitions, 6 of them AZPR's (4,990 of 22,780 characters on 2.4.1); a turn's own requests carried none. The candidate: none in any of them. |
+| The read tool's line limit | The native `read` returns at most 2,000 characters of a line and appends `... (line truncated to 2000 chars)` (source, 2.3.0 and 2.4.1). Measured on both with a PR description of 9,000 characters, which a reviewer and a comment planner each got as a reference: of every row of 3,000 characters, 1,910 could be read. The candidate's rows are at most 1,900 characters as written; the same reads return them whole. A value of 12,000 characters has 7 rows instead of 4. |
+| The order of stages | A run records a stage when the host has created its session. Six reviews of one PR, two passes over three shards: 0.5.0 listed the stages in 4 different orders on 2.3.0 and in 6 on 2.4.1, and the report was in one of two sessions. The candidate: one order and one session on both. |
+| A command in the background | Shell allowed (`inherit`, and `ask` with an approval through the API), measured on 2.3.0, 2.3.1 and 2.4.1. A command the model starts with `background: true` and that ends while the turn runs: 0.5.0 fails both sessions of the pass on all three, and the command runs twice. A command that outlasts its `timeout`: stopped on 2.3.0, so the review completes; moved to the background from 2.3.1 on, with the same failure. The candidate: COMPLETE, the command once, on all three; also where the notice arrives between a first answer and its correction turn (three runs each). A notice after the last answer wakes the session that keeps the report; AZPR refuses that request, and the session is left in a failed state. |
+| A shell command the host cannot analyze | `alias p=true; …`: a tool error of the host's scanner on 2.3.0 and 2.3.2; on 2.4.0 and 2.4.1 the host asks for every directory instead, which AZPR's project boundary refuses, so the command does not run on any of them. The candidate says why in that case. |
+| A shell request nobody approves | `shell: ask`, measured on 2.3.0 and 2.4.1 with `workflow.stageIdleSeconds` at 60: both sessions of the pass wait their window and fail as idle, 120 s in all. The request belongs to the reviewer's session. |
+| Reloading plugins | Measured on 2.3.0 and 2.4.1 with the file watcher on and a review under way: a plugin that is loaded before AZPR changes, and AZPR is unloaded and loaded again; the review ends `CANCELLED` within 0.25 s (`OpenCode V2 plugin unloaded`). A plugin loaded after AZPR, or an unrelated key of the configuration, leaves it running. Local plugins of the configuration directory are loaded before the entries of `plugins`. |
+| Automatic plugin updates | Source only: 2.3.x check every 24 hours and mark a plugin as updatable; 2.4.0 and later install the newer version of an entry that follows one (`@latest`, a range, a Git branch, a `#semver:` range) when the service starts and every 24 hours, and reload. An exact version is not even checked, and a Git tag or commit is not changed. Not run against a registry. |
+| Commands at startup, over HTTP | `/pr-check` sent to the command endpoint as soon as the server listened: READY in 10 of 10 starts on each of 2.3.0, 2.3.2, 2.4.0 and 2.4.1. On 2.4.x the model list answers before plugins are loaded (empty in those 10 starts), which a command does not depend on: it waits for the plugins. |
+| Commands at startup, in the terminal UI | `opencode --prompt "/pr-check <URL>"` with a project directory the server had not loaded: sent as an ordinary prompt in 1 of 6 starts on 2.3.0, 0 of 6 on 2.3.2, 5 of 6 on 2.4.0 and 9 of 10 on 2.4.1; in 5 and 5 of those on 2.4.x the conversation's model was the built-in `opencode/big-pickle`, not the configured one (requests to it were blocked in the fixture). With the directory already loaded: 0 of 4 on 2.3.x, 1 of 4 on each of 2.4.0 and 2.4.1. |
+| The candidate and such a prompt | 2.4.0 and 2.4.1, 22 starts: 5 ran as a command and 17 were refused; a refused prompt left no user message and no model request, also no title request. The terminal UI then showed `Failed to set up session` and tried again in a new conversation, two to four in all; where a retry found the commands loaded, the command ran. 2.3.0, 6 starts: all ran as a command. |
+| A release that was lost | OpenTUI 0.9.4 ends a drag whose release never arrived at the next press of the left button, with a release for the element that was pressed, at the place of the last movement (source). Measured with injected mouse sequences in tmux on all five versions, and on 2.4.1 in both designs: a step that is pressed, moved on by one cell and not released is picked by a later click elsewhere on 2.4.0 and 2.4.1 with 0.5.0, never on 2.3.x. With **Post 3 comments…** and that click where the question's second row appears, the three comments were posted to the fake service. A session's row and `close` were triggered the same way. The candidate, on 2.3.0, 2.4.0 and 2.4.1: none of it; an ordinary click, and one with a movement of a cell, pick as before. How often a real terminal loses a release is not known. |
+| Typing a token | The setup fixture only pasted. Thirty steps of typing, keys of the Kitty and xterm protocols, pasting and keys that must change nothing passed on all five versions and in both designs, with no change to the code. Page Up and Page Down close the dialog on all of them (the host's handler for scrolling the transcript clears dialogs). |
+| Screens | The panel and the setup dialogs were walked through on 2.4.1 (new design, classic design, light theme) and on 2.3.0, and 228 screens were rendered as pictures from tmux captures; about 55 were looked at, the rest compared as text. Nothing is wrong on 2.4.1 that is right on 2.3.0. The same on both: typing `F-1` into the list of adjustments selects `F-11` when there are twelve findings; a panel that fills a narrow terminal shows the Markdown's background as bands; a question's second line is cut at the dialog's width. |
+| Markdown | 2.4.0 renders Markdown with a native engine (source): character references in running text are decoded, and struck-through text is drawn so. The summary table, whose cells AZPR decodes itself, reads the same on 2.3.0 and 2.4.1 (screens). |
+| Compiled view | A package whose terminal part is the JSX source does not load on 2.3.0 (measured) and loads and passes the panel and setup fixtures on 2.4.1 (measured). 2.3.1 and 2.3.2 have 2.3.0's OpenTUI (source). The compiled file loads on all five. |
+| Processes of the `claude-agent` provider | The one measurement with a real model: `claude-agent/haiku` on 2.3.2 and 2.4.1, ten one-word prompts and two reviews of a two-file fixture PR. Each session has a local `claude` process of 200 to 230 MB. It ends about five minutes after the session's last turn on both (the provider's idle timer, in all five tags). Deleting the session ends it within 2 s on 2.4.1 and not at all on 2.3.2: after a review with debug off, five processes were left on 2.3.2 and one on 2.4.1. When OpenCode stops, the processes end with it. Claude Code's transcript of each session stays under its configuration directory on both. |
+| Background summary | On by default from 2.3.1 (`compaction.background`; 2.3.0 has `experimental.background_compaction`, off). The thresholds are those of 2.3.0 on all five (source). |
+| Plugin interface | The session methods, message types, hooks, events, the error of a missing session, the plugin list and the registration of commands and agents that AZPR uses are unchanged from 2.3.0 to 2.4.1 (source). A change of commands a plugin makes after it was loaded is still announced without its location. |
+| Database | 2.3.1 adds three migrations and 2.4.0 two, and 2.4.0 stores an answer's parts in rows of their own (source): going back to an earlier version needs a backup. |
+| Requests to OpenAI-style providers | From 2.3.2, models reached through the Responses interface get the system prompt as a developer message (source). The fake provider speaks another interface, so no fixture shows it, and its effect on reviews is not measured. |
+
+How often real models read local files was counted in the debug records of
+about 4,900 earlier runs, nearly all of them benchmark reviews. In the runs
+of ReviewBench's pull requests, reviewer sessions called the native `read` in
+9% of the sessions of GPT-6.1 Sol (158 of 1,729), 15% of GPT-6.2 Sol, 3% of
+GPT-6 Luna and 4% of GPT-6.1 Terra; in the other sets none did. The failure
+that a nested instruction file causes appears once in those records.
+
+Not covered: real providers on 2.3.1 to 2.4.1 apart from the benchmark runs
+of 0.5.0 on 2.4.0; the answer a real ChatGPT workspace gives at its limit; an
+automatic plugin update itself; real terminal emulators and their mouse and
+keyboard reporting; the desktop app, macOS and Windows; and the native
+terminal UI in OpenCode's source, which has not shipped.
+
 ## 0.5.0 on Martian's Code Review Bench with Claude Opus 5.5 (2026-11-25)
 
 The [public benchmark](#martian-code-review-bench-2026-11-05-and-06) had been
@@ -103,7 +292,7 @@ three and four, one run each.
   claude-agent session keeps a local process of about 200 MB until the host
   exits, and the three runs started about 1,200 model sessions; 2.4.0 stops
   the process when its session is deleted, which the runs showed between two
-  reviews. The five pull requests with 30 or more changed files were reviewed
+  reviews. (Correction of 2026-11-26: the process ends five minutes after the session's last turn, not when the host exits; on 2.3.2 deleting the session does not end it earlier. See [the comparison of the hosts](#opencode-231-to-241-compared-with-230-2026-11-24-to-26).) The five pull requests with 30 or more changed files were reviewed
   one at a time and the others two at a time; at most 31 such processes ran at
   once, and at least 1.6 GB of memory stayed free.
 - **All runs complete.** All 150 reviews were COMPLETE without a retry.
@@ -194,7 +383,8 @@ What this shows and what it does not:
 - **Not on the tested host.** The reviews ran on OpenCode 2.4.0 with AZPR's
   code unchanged; AZPR is tested with 2.3.2. This run is evidence for 0.5.0 on
   2.4.0, and the 2.3.2 process limit above applies to real use with
-  claude-agent models there.
+  claude-agent models there (as corrected above: five minutes after a
+  session's last turn).
 - **Not a leaderboard result.** We ran the benchmark's pipeline and judge
   ourselves; the dashboard includes tools by their public GitHub activity, and
   AZPR reviews Azure DevOps pull requests.
@@ -737,7 +927,7 @@ which is why the first entry of a list, or the named rater, matters.
 - A session of a `claude-agent` model keeps a local process of about 215 MB
   until the OpenCode process ends (OpenCode 2.3.2). A Sonnet run with four
   PRs at a time exhausted the 8 GB of the test machine; the rest of the
-  Sonnet runs used a new host process for every one to six PRs.
+  Sonnet runs used a new host process for every one to six PRs. (Correction of 2026-11-26: the process ends five minutes after the session's last turn, not when the host exits; on 2.3.2 deleting the session does not end it earlier. See [the comparison of the hosts](#opencode-231-to-241-compared-with-230-2026-11-24-to-26).)
 
 ## 0.4.6 after publication (2026-11-21)
 
@@ -5624,11 +5814,38 @@ transient failure, and its error names the last activity.
 
 ## Known limitations
 
-- **Tested environment.** OpenCode CLI 2.3.2 (V2 plugin API) on Ubuntu 22.04
-  under WSL2 since 0.5.0 (2.3.0 for 0.4.1 to 0.4.6). Other OpenCode 2.x
-  versions get an OpenCode WARNING row in `/pr-check` and are not validated,
-  apart from the host fixtures of 0.4.1, which also passed on 2.2.4; OpenCode
-  1.x is not supported. Other operating systems are not validated yet.
+- **Tested environment.** OpenCode CLI 2.4.1 (V2 plugin API) on Ubuntu 22.04
+  under WSL2 since 0.5.1 (2.3.2 for 0.5.0, 2.3.0 for 0.4.1 to 0.4.6). Other
+  OpenCode 2.x versions get an OpenCode WARNING row in `/pr-check` and are not
+  validated, apart from what the records of 0.4.1 (2.2.4) and of 0.5.1 (2.3.0
+  to 2.4.0) say was run there; OpenCode 1.x is not supported. Other operating
+  systems are not validated yet.
+- **0.5.1 with real models.** No review with a real model ran on the 0.5.1
+  candidate. Its review prompts are those of 0.5.0, but its private sessions
+  no longer get the local instructions OpenCode collects, and what a real
+  model does after the notice of a background command was not seen. The
+  benchmark runs of 0.5.0 were made in directories without such instructions,
+  which is the state every review is in now.
+- **What a private session is told rests on OpenCode's interface.** Keeping
+  local instructions out of private requests uses a field OpenCode marks as
+  experimental, and recognising a background command's notice uses the
+  metadata OpenCode writes on it. Where a later OpenCode changes either, AZPR
+  falls back: requests go out as OpenCode builds them (the stage record
+  counts them), and such a notice ends the turn again, as before 0.5.1. With
+  shell allowed, a notice is taken for the host's own by that metadata alone,
+  which anyone who can write to the session could imitate; the default,
+  `shell: "deny"`, accepts none.
+- **An answer that reaches the model's output limit fails its pass.** OpenCode
+  then asks the model to go on, with a message of its own that AZPR takes for
+  someone else's: both sessions of the pass fail, and the receipt speaks of
+  another message in the turn, not of the limit (OpenCode 2.3.0 to 2.4.1,
+  measured with the fake model). Smaller shards (`workflow.shardFiles`) or a
+  model with a larger output limit avoid it.
+- **A command sent as a prompt at startup.** AZPR stops one of its commands
+  that reaches OpenCode as an ordinary prompt only once AZPR itself is
+  loaded, and the terminal UI answers the refusal by trying again in new
+  conversations, which stay empty (two to four in the fixture runs). How the
+  desktop app and other clients show the refusal was not tried.
 - **0.5.0 with real models.** The candidate's real-model runs reviewed public
   pull requests against a local stand-in for Azure DevOps (see
   [the record](#050-release-candidate-acceptance-2026-11-23)); no 0.5.0 review
@@ -5643,20 +5860,39 @@ transient failure, and its error names the last activity.
   prompt cache is not measured: one run per case cannot separate it from the
   variation between runs.
 - **The terminal panel.** It is part of OpenCode's terminal UI and was
-  exercised on OpenCode 2.3.0 and, since 0.5.0, 2.3.2 inside tmux with fake services (see
-  [the record](#042-release-candidate-acceptance-2026-11-17)). No review with
-  a real model has run with it, other terminal emulators and their mouse
-  reporting are untested, and the desktop app does not load it. The package
-  carries its view compiled, because OpenCode 2.3.0 compiles no JSX of a
-  package it installed; an OpenCode with OpenTUI 0.9 changes that and also
-  the Markdown element the panel uses, so the panel must be checked again
-  before that OpenCode becomes the tested one.
+  exercised on OpenCode 2.3.0, 2.3.2 and, since 0.5.1, 2.4.1 in its new and
+  its classic design, inside tmux with fake services (see
+  [the record](#042-release-candidate-acceptance-2026-11-17) and
+  [the comparison of the hosts](#opencode-231-to-241-compared-with-230-2026-11-24-to-26)).
+  On 2.4.1 no review with a real model has run with it; other terminal
+  emulators and their mouse reporting are untested, and the desktop app does
+  not load it. The package carries its view compiled, which loads on OpenCode
+  2.3.0 to 2.4.1.
+  Three things are as they were on 2.3.0: in the list that adjusts findings,
+  what is typed selects by the host's fuzzy search, so with ten or more
+  findings `F-1` selects `F-11` (the dialog that opens names the finding); a
+  panel that fills a narrow terminal shows bands of the Markdown's
+  background; and the second line of a question's row is cut at the dialog's
+  width.
+- **A release the terminal UI makes up.** On OpenCode 2.4.0 and later a step,
+  a session's row or `close` that was pressed and moved on, and whose release
+  never arrived, gets a release at the next press anywhere. AZPR takes a
+  release as a click only within a second of the pointer's last movement, so
+  a second press within that second can still pick what was pressed, and a
+  click whose release comes more than a second after a movement does nothing
+  and must be made again. The questions that a step opens, and the foot of
+  the list of adjustments, are the host's own lists, which act on a release
+  alone. Whether and how often real terminals lose a release was not
+  measured: every gesture here was injected in tmux.
 - **Setup in the terminal UI.** The dialogs of `/pr-setup` exist in
   OpenCode's terminal UI only; the desktop app and other clients get the
-  instructions and the options. They were exercised on OpenCode 2.3.0 and 2.3.2 inside
+  instructions and the options. They were exercised on OpenCode 2.3.0, 2.3.2
+  and 2.4.1 inside
   tmux with fake services (see
   [the record](#043-release-candidate-acceptance-2026-11-18)): pasting and
-  typing in other terminal emulators are untested, and the dialogs have not
+  typing in other terminal emulators are untested, Page Up and Page Down
+  close the token dialog as they close OpenCode's own dialogs (nothing is
+  saved then), and the dialogs have not
   been used against a live Azure DevOps organization, only the one request
   they make was. The check tells that Azure DevOps accepts the token for the
   organization and lets it read code; it cannot tell whether the token may
@@ -5666,8 +5902,8 @@ transient failure, and its error names the last activity.
   use, and another project directory that the OpenCode service had already
   opened without settings, still need a restart of the OpenCode service. After a first setup, a client other than the terminal UI
   with AZPR's part may go on suggesting the review commands as "setup
-  required" until it reconnects, because OpenCode 2.3.0 announces that change
-  of commands without a location; the commands themselves work. The token
+  required" until it reconnects, because OpenCode 2.3.0 through 2.4.1 announce
+  that change of commands without a location; the commands themselves work. The token
   passes through the terminal UI's memory and its connection to the OpenCode
   server on its way to the token file.
 - **Notices and the conversation's own model.** AZPR leaves its notices in
@@ -5711,8 +5947,11 @@ transient failure, and its error names the last activity.
   gpt-6-luna missed; `/pr-deep` runs the same review with stronger models. On
   the 50 PRs of Martian's benchmark, recall ranged from 27.8% to 73.4% across
   the [model combinations we compared](#choosing-models-for-pr-deep).
-- **Claude through the claude-agent provider.** With OpenCode 2.2.4, the
-  Claude CLI process behind each finished private session (about 200 MB)
-  stayed alive for minutes after the session ended, so many reviews in quick
-  succession can hold several gigabytes; restarting the OpenCode service
-  releases them.
+- **Claude through the claude-agent provider.** The Claude CLI process behind
+  each private session (about 200 MB) stays for five minutes after the
+  session's last turn; OpenCode 2.4.0 and later end it when AZPR deletes the
+  session, earlier versions do not. Many reviews in quick succession can
+  therefore hold several gigabytes, on 2.4.x with `debug.enabled` too, which
+  keeps every session; restarting the OpenCode service releases them. Claude
+  Code also keeps a transcript of each session under its own configuration
+  directory, which AZPR does not remove.

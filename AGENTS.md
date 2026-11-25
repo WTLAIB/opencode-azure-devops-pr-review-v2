@@ -1,7 +1,7 @@
 # AI development guide
 
 This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.3.2`), the Azure DevOps Services REST API (api-version 7.1)
+`@opencode/cli@2.4.1`), the Azure DevOps Services REST API (api-version 7.1)
 and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
@@ -29,9 +29,45 @@ settings, backups and failure records. Never upload `.local/`.
 - Models read the repository only through the read-only tools in
   `review-tools.mjs`, registered with `codemode: false`; private roles see an
   explicit tool allowlist (empty for the `rating` role) and ordinary sessions
-  never see AZPR's tools.
+  never see AZPR's tools: also not in the requests the host builds outside a
+  turn, a summary or a generation, which pass the `compaction` and `generate`
+  hooks instead of `context`.
 - Models review, compare, rate and plan comment text. They never echo identity
   or SHAs and never write to Azure DevOps.
+
+**A private session is told what AZPR tells it.**
+- A private role works from AZPR's own instructions and the host's date and
+  environment. What the host collects for the place a conversation is in stays
+  out of its requests: instruction files (AGENTS.md, CLAUDE.md, configured
+  ones), and what MCP servers, references, skills and CodeMode say of
+  themselves (`withoutPlaceInstructions` and `HOST_FACT_SOURCES` in
+  `host.mjs`). Those speak of the local directory, which is not the PR's
+  repository: a review must not depend on where its conversation is open.
+  Ordinary sessions are never touched.
+- The host's parts are told apart by a field it marks as experimental. Where
+  they cannot be (no such part, several, a text that is not its sources
+  joined), change nothing and count the request in the stage record
+  (`placeInstructionsNotToldApart`); never tell them apart by their text.
+  OpenCode's Claude Code provider hands the model a text it made of the parts
+  before any plugin's hook ran, in the request's options, when the parts were
+  not yet what a plugin sees: never work that text out again from the parts.
+  Take out of it the sources that were left out, where they stand in it as
+  that provider writes them (`withoutClaudeSources`); otherwise the whole
+  request stays as it is.
+- What the host writes into a running private session by itself is kept from
+  the model in every request: the instruction files it loads beside a file
+  the native read tool read (`isInstructionLoad`), and its updates of the
+  sources (`isInstructionUpdate`). `requestReview` ends a turn that received
+  anyone else's message, and lets a message pass only on one of two grounds.
+  The model never saw it: a load whose ID the `context` hook recorded when it
+  took it out (`hiddenMessages`), so that a message of the same form that was
+  shown, or that no request offered to the hook, still ends the turn. Or it is
+  the late result of the session's own tool call: the host's notice that a
+  background command ended, whose metadata names the shell a shell call of
+  this same session reported (`ownShellNotices`), which can only be with
+  shell allowed. Never accept a message that the model saw by its text or its
+  form alone. An answer is what came before the turn's idle marker, also when
+  a late notice woke the session afterwards.
 
 **Every mode runs one pipeline and differs only in its models.**
 - `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
@@ -63,7 +99,10 @@ settings, backups and failure records. Never upload `.local/`.
   stage or a person sees may depend on
   which session finished first or on an ID a model wrote: also not the tool
   observations and limitations the planner is given, which follow the order
-  of their content.
+  of their content. Nor on which session the host created first: a run
+  records its stages in that order, so a receipt, a draft and the choice of
+  the session that holds the report take them by their place in the pipeline
+  (`stagesInOrder` in `attribution.mjs`).
 - Add mode-specific or pass-specific instructions only with a measured
   benefit: deep-only prompt text and the split into a functional and a risk
   reviewer were both removed after runs showed no gain over repeating one
@@ -175,7 +214,7 @@ settings, backups and failure records. Never upload `.local/`.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
   compact, and a compaction the host attempts in a reviewer's turn means "split
   this shard". A refused background summary (OpenCode's `compaction.background`, on
-  by default in 2.3.2; `experimental.background_compaction` in earlier releases)
+  by default from 2.3.1 on; `experimental.background_compaction` in earlier releases)
   ends nothing, so the turn's own failure decides its class.
 - There is deliberately no default whole-run timeout and no per-stage step cap;
   see the roadmap's Deferred section before adding either.
@@ -187,8 +226,10 @@ settings, backups and failure records. Never upload `.local/`.
   with `metadata.azpr`, and tie them to the conversation through AZPR's own
   records (run stages, a saved review's sessions), never the host's session
   tree.
-- The conversation is the person's: AZPR leaves its notices there and changes
-  nothing else, with one exception. A conversation nobody named yet
+- The conversation is the person's: AZPR leaves its notices there, changes
+  nothing else and refuses nothing a person sends, with two exceptions: the
+  name of a conversation nobody named, and one of AZPR's own commands that
+  arrives as a prompt (below). A conversation nobody named yet
   (`isUntitledSession` in `host.mjs`) gets a name when a check or a review
   starts in it, made of the PR's number and repository from the URL the
   person typed (`conversationTitle`): no model runs there to name it, and the
@@ -216,6 +257,17 @@ settings, backups and failure records. Never upload `.local/`.
   handler: a feed that fails has ended. A host without that feed names
   nothing, and a name that is not AZPR's own is never recorded. Say this
   limit where the naming is described; never write "never replaced".
+- One of AZPR's commands can reach an ordinary conversation as text: the
+  terminal UI submits a startup prompt (`opencode --prompt`) before it has
+  loaded the commands, with OpenCode 2.4.0 and 2.4.1 nearly always, and then
+  often to the host's built-in free model. No command ran, and a model would
+  be sent the PR URL and the person's context. The `prompt` hook refuses such
+  a prompt and leaves a notice in the conversation that says what happened.
+  Refuse only a prompt that begins with one of AZPR's own command names
+  followed by a blank or the end: one that mentions a command, or begins with
+  another name, is the person's own. The refusal has a cost that the
+  documentation states (the terminal UI tries again in new conversations,
+  which stay empty); never widen it to anything else a person types.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -410,6 +462,14 @@ settings, backups and failure records. Never upload `.local/`.
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory
   (owner-only permissions, newest 20). Clean only stale, unreferenced data.
+- A model reads a large private value in pages, with the host's native read,
+  one row per line. A row must be one that read returns whole: OpenCode cuts a
+  longer line and says so only inside the line (`HOST_READ_LINE_CHARACTERS` in
+  `host.mjs`). Measure a row as it is written, after escaping (`pageRows` in
+  `comment-data.mjs`), and never rely on the prompt to work around a cut row.
+  Saved references name the pages files, so a store written with other rows
+  has them written again from its objects when it is reopened
+  (`renewPages`); give the store's mark a new name when the limit changes.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -543,7 +603,20 @@ settings, backups and failure records. Never upload `.local/`.
   release of a button that was dragged away to the element it was pressed
   on. A press is one gesture's: end it with every other press or release
   the panel sees (`forget`), so that a gesture that was given up never makes
-  a later release a click. Draw the steps from their names, as the session
+  a later release a click. The host can also make a release up: OpenTUI 0.9
+  (OpenCode 2.4.0 and later) ends a drag whose release it never saw at the
+  next press of the button, anywhere and any time later, with a release at
+  the place of the pointer's last movement, which the element that was
+  pressed receives before anything sees that press, and nothing in that
+  event tells it from a real one. So a release is a click, on a step, a
+  session's row or `close`, only within a moment of the pointer's last
+  movement with the button down (`hold` and `MOVED_MS` in `tui-view.jsx`);
+  without a movement the host makes none up, so a button held still is a
+  click for any time. That moment is measured on two clocks, and a release is
+  a click only where both call it a moment: the time of day can be set back,
+  and the steady clock may stand still while the machine sleeps. A click that
+  is refused can be made again; one that is made up cannot be taken back.
+  Draw the steps from their names, as the session
   rows are drawn from their IDs, so that each keeps its element while the
   panel's content is worked out again (with every notice and every answer
   of the server; often while a run is under way): an element made anew is
@@ -621,8 +694,10 @@ settings, backups and failure records. Never upload `.local/`.
   together with `tui-model.mjs`, whose tests run against `renderReceipt` and
   against the notices of a whole run.
 - `src/tui.js` is generated: edit `tui-view.jsx`, run `npm run build:tui` and
-  commit both. OpenCode 2.3.0 compiles no JSX of an installed package, so the
-  package ships the compiled file; keep it free of JSX and importing only what
+  commit both. OpenCode 2.3.x compiles no JSX of an installed package (2.4.0
+  and later do), so the package ships the compiled file, which loads on all of
+  them (see the roadmap's Deferred section before shipping the source
+  instead); keep it free of JSX and importing only what
   the host provides (`@opentui/solid`, `@opentui/core`, `solid-js`). The
   compiler stays a development dependency at an exact version: the package
   has no dependency, no lifecycle script and no build at installation.
@@ -763,6 +838,15 @@ publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh an
 also with `--cleanup`. The fixtures keep debug on to read its records, and
 debug keeps every private session: only the `--cleanup` runs, with debug off,
 exercise the deletion of a run's sessions on a real host.
+The smoke and the scale fixture also hold the forms of the host that the
+runtime tells things apart by: the sources of a request's instructions (a
+configured instruction file reaches an ordinary conversation and no private
+session), the message OpenCode leaves after a native read beside an
+instruction file, the error type of a used-up limit, a prompt that is one of
+AZPR's commands, and the line length the native read returns. When one of
+these steps fails on another OpenCode, read that version's source before
+changing the step: the runtime's fallback is to leave things as the host
+made them, which such a step is there to notice.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.

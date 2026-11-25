@@ -6,7 +6,7 @@ MCP dependency. Start with the [quickstart](QUICKSTART.md), then use
 this page to understand access, data flow and local retention before reviewing
 your team's repositories.
 
-The tested environment is **OpenCode V2 `@opencode/cli` 2.3.2 on Ubuntu
+The tested environment is **OpenCode V2 `@opencode/cli` 2.4.1 on Ubuntu
 22.04**. Azure DevOps Server URLs are not supported. See
 [current validation](VALIDATION.md) for the distinction between isolated tests
 with fake services and runs against real Azure DevOps and model providers.
@@ -127,6 +127,31 @@ shell has real host authority and is not a sandbox. Native edit/write tools,
 web access, delegation and other MCP tools are excluded from private sessions.
 See [authorization and isolation](ARCHITECTURE.md#authorization-and-isolation).
 
+**Your local project's instructions are not sent along.** OpenCode adds to
+every request of an ordinary session what it collects for the conversation's
+directory: instruction files (`AGENTS.md`, `CLAUDE.md`, the ones a
+configuration lists) and what MCP servers, references and skills say of
+themselves. AZPR keeps these out of its private sessions, which get AZPR's own
+instructions and OpenCode's date and environment, and it also keeps from the
+model the instruction files OpenCode loads when a reviewer's native `read`
+reads a file beside one. A reviewer can still read such a file on purpose,
+like any other file of the active project. This relies on a field of
+OpenCode's plugin interface that OpenCode marks as experimental: where AZPR
+cannot tell the parts of a request apart, it sends the request as OpenCode
+built it, and the stage's [debug record](DEBUGGING.md) says so
+(`placeInstructionsNotToldApart`).
+
+**Experiments of OpenCode that reach these sessions.** Three opt-in
+experiments of OpenCode 2.4 concern AZPR's private sessions; all are off
+unless you turn them on. With `full_codemode`, the model of any ordinary
+conversation can interrupt another session, a running review's included (its
+stage ends as interrupted and is not retried). With `sqlite_fts`, sessions
+are indexed for search and ordinary conversations get tools that search and
+read them, among them the session that keeps a review's report (every session
+of a run while `debug.enabled` is on). With `home_memory`, a daily
+maintenance session reads the conversations under your home directory. This
+is read from OpenCode's source, not exercised.
+
 ## Preview, cost and publication
 
 Start in one OpenCode conversation with a small PR:
@@ -155,9 +180,11 @@ publication (`publish`, `--publish`); see
 session per shard, and the duplicate checks, the rating and comment planning
 run with the first entry (the rating with `rater`, where one is named).
 Passes run side by side, so more passes mainly cost more. With OpenCode's
-`claude-agent` provider, each session keeps a local process until OpenCode
-exits (observed on OpenCode 2.3.2), so a service that runs many passes over
-many shards with such models needs memory for them until it is restarted.
+`claude-agent` provider, each session has a local `claude` process of about
+200 MB that ends five minutes after the session's last turn; OpenCode 2.4.0
+and later also end it when AZPR deletes the session. A service that runs many
+passes over many shards with such models needs memory for the sessions that
+run at once and for those of the last five minutes.
 
 **Preview uses a model.** `/pr-comment` reads live discussions and plans the
 comments; each new preview replans and can incur provider charges. One session
@@ -232,6 +259,16 @@ effort: a session whose deletion failed stays on record and is requested
 again with the review. Setting this option to `false` keeps the sessions. Your own conversations are never
 deleted by AZPR, and deleting local records does not delete provider records
 or published Azure comments.
+
+With a `claude-agent` model there is one more local record, which AZPR does
+not manage: Claude Code keeps a transcript of every session under its own
+configuration directory (`~/.claude/projects/<working directory>/` by default;
+OpenCode 2.4.0 and later can name another directory for that provider). It
+holds what AZPR sent, source excerpts of the PR included, in files only the
+user can read. Deleting the OpenCode session does not delete the transcript.
+Claude Code's own cleanup removes it (after 30 days by default); for code that
+must not stay that long, delete the folders that belong to your OpenCode
+working directories, and nothing else under that directory.
 
 The [terminal panel](../README.md#terminal-panel) runs in OpenCode's terminal
 UI. It reads AZPR's notices and the report queued to a review session from the
