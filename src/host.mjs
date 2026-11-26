@@ -323,16 +323,19 @@ export function claudeOption(options) {
  * What a request's event holds in the places a `context` hook looks at and may replace (`system`, `messages`,
  * `options`, `tools`), each taken once from the event's own descriptor: its value, and whether the place can be
  * given another one. OpenCode hands a hook a plain object with these as listed data it can write (read from the
- * events of OpenCode 2.3.0 and 2.4.1). A place behind an accessor is not asked: it holds nothing here and cannot
- * be written, and neither can a place of an event that answers for another object. Whose request it is (its
+ * events of OpenCode 2.3.0 and 2.4.1). A place behind an accessor is not asked, and one that is not listed is
+ * not looked at: it holds nothing here and is not written, and neither is a place of an event that answers for
+ * another object. Whose request it is (its
  * session, agent and model) is not among them: that is read from the event as the host reads it, since a
  * request is authorized for what the host will send it as.
  */
 export function requestSlots(event) {
   const slot = name => {
     const property = ordinary(event) ? Reflect.getOwnPropertyDescriptor(event, name) : undefined;
-    const data = Boolean(property) && Object.hasOwn(property, 'value');
-    // `unread`: something is there that was not asked (an accessor), so nothing is known of what it holds.
+    // A place is listed data, like everything the host builds: one behind an accessor, or one that a hook made
+    // unlisted, is not the host's. `unread`: something is there that was not looked at, so nothing is known of
+    // what it holds, and it is not given another value.
+    const data = Boolean(property) && Object.hasOwn(property, 'value') && property.enumerable === true;
     return { value: data ? property.value : undefined, writable: data && property.writable === true, unread: Boolean(property) && !data };
   };
   return { system: slot('system'), messages: slot('messages'), options: slot('options'), tools: slot('tools') };

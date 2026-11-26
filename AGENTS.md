@@ -55,7 +55,9 @@ settings, backups and failure records. Never upload `.local/`.
   sees. For a request to that provider, leave the sources out only where
   that option holds exactly what they give (`claudeInstructions`), and empty
   it with them; where it holds anything else, or is missing, the parts and
-  the option stay as they are. An option of that name on another provider's
+  the option stay as they are. That is a rule for what OpenCode hands the
+  Claude Code program, and no more is claimed: what that program reads of
+  the working directory by itself was not tried with the real one. An option of that name on another provider's
   request decides nothing. The messages below are taken out either way.
 - What the host writes of instructions into a running private session by
   itself is kept from the model: the instruction files it loads beside a

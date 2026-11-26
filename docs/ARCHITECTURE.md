@@ -1110,10 +1110,11 @@ startup prompt before it has loaded the commands (`opencode --prompt`; with
 would receive the URL and the context. The `prompt` hook refuses a prompt of
 an ordinary conversation that begins with one of AZPR's commands, at its very
 first character as OpenCode's prompt box takes a command, and leaves a notice
-there that says what happened. It is the one prompt of a person that AZPR
-refuses; a prompt that only mentions a command, begins with another name, or
-shows a command after indentation or a blank line (an example) is the
-person's own. The hook comes with the runtime, so a process
+there that says what happened. It is the one prompt that AZPR refuses for
+its text (the other one it refuses names one of AZPR's private agents, which
+cannot be mentioned or delegated to); a prompt that only mentions a command,
+begins with another name, or shows a command after indentation or a blank
+line (an example) is the person's own. The hook comes with the runtime, so a process
 without usable settings refuses nothing, and the terminal UI answers a
 refusal by trying again in new conversations, which stay empty.
 

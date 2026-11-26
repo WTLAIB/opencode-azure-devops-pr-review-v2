@@ -63,10 +63,12 @@ Private sessions:
   directory and not the PR: with an instruction file of 54,000 characters,
   the system messages of a small review and its preview grew from 138,000 to
   625,000 characters. Private sessions now get AZPR's own instructions and
-  OpenCode's date and environment. The local instructions are kept from
-  `claude-agent` models too, to which OpenCode hands instructions another
-  way; the date and the environment those models are told are Claude Code's
-  own. Your own conversations are not
+  OpenCode's date and environment. For `claude-agent` models, to which
+  OpenCode hands its collected instructions another way, AZPR takes them out
+  of what OpenCode hands over; what the Claude Code program reads by itself
+  (the date and the environment, and possibly an instruction file of the
+  working directory) is its own, and was not tried with the real program.
+  Your own conversations are not
   touched. A reviewer can still read local files on purpose, and the
   environment names the directory as before. Where AZPR cannot tell these
   parts of a request apart (another plugin rewrote them, or a later OpenCode
@@ -146,6 +148,10 @@ Known and not changed by this release (see the
   the dialog that opens before choosing.
 - Page Up and Page Down close the token dialog of `/pr-setup`, as they close
   OpenCode's own dialogs; nothing is saved then.
+- With `claude-agent` models, AZPR keeps the instructions OpenCode collected
+  out of what OpenCode hands the Claude Code program; whether that program
+  reads an instruction file of the working directory by itself (`CLAUDE.md`)
+  was not tried with the real program.
 - With `claude-agent` models, the note that AZPR adds to a comment planning
   session that has read much does not reach the model: OpenCode's Claude
   Code provider does not send what a plugin adds to a request's system

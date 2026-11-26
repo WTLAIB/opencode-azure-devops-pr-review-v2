@@ -134,7 +134,10 @@ configuration lists) and what MCP servers, references and skills say of
 themselves. AZPR keeps these out of its private sessions, which get AZPR's own
 instructions and OpenCode's date and environment, and it also keeps from the
 model the instruction files OpenCode loads when a reviewer's native `read`
-reads a file beside one. A reviewer can still read such a file on purpose,
+reads a file beside one. With a `claude-agent` model this holds for what
+OpenCode hands the Claude Code program; what that program reads from the
+working directory by itself (it has instruction files of its own, such as
+`CLAUDE.md`) is outside AZPR, and was not tried with the real program. A reviewer can still read such a file on purpose,
 like any other file of the active project. This relies on a field of
 OpenCode's plugin interface that OpenCode marks as experimental: where AZPR
 cannot tell the parts of a request apart (another plugin rewrote them, or a

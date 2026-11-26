@@ -2183,9 +2183,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // (`execute.before`), since a list of tools that could not be emptied still offers them.
       g.toolless = commentRole(g.role) && (g.checkpointRequested || g.calls >= 12);
       if (g.toolless) {
-        // No tool for this response: an empty list in the place of the one that is there, or, where that place
-        // cannot be written, every tool taken out of the list that is.
-        listed = put('tools', {}) || (!slots.tools.unread && withoutTools(slots.tools.value, () => true));
+        // No tool for this response: every tool is taken out of the list that is there. The list itself stays,
+        // with whatever a hook keeps on it that is no tool; a tool that could not be taken out is not run either.
+        listed = !slots.tools.unread && withoutTools(slots.tools.value, () => true);
         // The note is one more part, where the parts are an ordinary list and their place can be written; where
         // not, the request goes without it.
         const noted = withPart(system, { type: 'text', text: g.grouping

@@ -338,6 +338,9 @@ test('the places of a request are taken once from the event\'s own descriptors: 
   assert.deepEqual(requestSlots({ system }), { system: place(system), messages: place(undefined, false), options: place(undefined, false), tools: place(undefined, false) });
   assert.deepEqual(requestSlots(Object.defineProperty({ messages }, 'system', { value: system, enumerable: true })).system, place(system, false));
   assert.deepEqual(Object.values(requestSlots(Object.freeze({ system, messages, options, tools }))).map(slot => [slot.value !== undefined, slot.writable]), Array(4).fill([true, false]));
+  // A place that a hook made unlisted is not the host's: it is not looked at, and not given another value,
+  // though it could be written.
+  assert.deepEqual(requestSlots(Object.defineProperty({ messages }, 'system', { value: system, writable: true, configurable: true })), { system: place(undefined, false, true), messages: place(messages), options: place(undefined, false), tools: place(undefined, false) });
   // A place behind an accessor is not asked: something is there, and nothing is known of it. An event that
   // answers for another object, or is none, has no places.
   let asked = 0;

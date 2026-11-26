@@ -22,6 +22,12 @@ const clone = value => structuredClone(value);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const within = (promise, ms = 5000) => Promise.race([promise, sleep(ms)]);
+// A wait that must end by what it waits for: it answers whether that happened in time, so that running out of
+// time fails an assertion instead of letting a test pass late.
+const inTime = (promise, ms = 4000) => {
+  let timer;
+  return Promise.race([promise.then(() => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), ms); })]).finally(() => clearTimeout(timer));
+};
 const RECEIPT = /^\[AZPR [a-f0-9]{8}\] [A-Z_]+(?:;|\n|$)/;
 // The first line of the receipt of a COMPLETE review whose two passes each reviewed every changed file.
 const COMPLETE = /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete, (\d+)\/\1 file\(s\) in every pass; verification none\n/;
@@ -2205,7 +2211,7 @@ test('when a planning page fails, the page already running finishes before the c
   // preview is planned.
   for (const fails of [true, false, 'once']) {
     const answered = deferred(), stopping = deferred(), release = deferred(), turns = [];
-    let failing, tried = 0;
+    let failing, tried = 0, pageOne, read = 0, held;
     const g = await fixture(t, { files,
       answer: input => {
         if (input.role !== 'azpr-review-comment-plan' || input.packet.commentWork.kind !== 'plan') return reviewers(input);
@@ -2214,9 +2220,18 @@ test('when a planning page fails, the page already running finishes before the c
           return fails === true ? { $provider: 401 } : fails === 'once' && !tried++ ? { $provider: 503 } : reviewers(input);
         }
         turns.push(input.turn);
+        pageOne = input.session.id;
         return input.turn ? reviewers(input) : 'This is no JSON.';
       },
-      async interrupting(sessionID) { if (fails && sessionID === failing) { stopping.resolve(); await within(release.promise); } },
+      // Page 1's session is read once for its answer and once more when its stage has ended: the stop of the
+      // failed session is held open until then, so that page 1 has made its decision while the stop was under
+      // way. `held` says that the stop was held and let go by that, not by running out of time.
+      reading(session) { if (fails === true && session.id === pageOne && ++read === 2) release.resolve(); },
+      async interrupting(sessionID) {
+        if (!fails || sessionID !== failing) return;
+        stopping.resolve();
+        held = await inTime(release.promise);
+      },
       async during({ role, packet, turn }) {
         if (role !== 'azpr-review-comment-plan' || packet.commentWork.kind !== 'plan' || packet.commentWork.page !== 1) return;
         // Page 1 answers once page 2 has answered and, where that failed, while its session is being stopped.
@@ -2226,8 +2241,8 @@ test('when a planning page fails, the page already running finishes before the c
     await g.command();
     const planned = await g.command('pr-comment', '');
     assert.match(planned, fails === true ? /\] INCOMPLETE/ : /\] PREVIEW/, String(fails));
-    const pageOne = (await stageRecords(planned)).find(stage => stage.stage === 'comment-plan' && stage.commentWork.kind === 'plan' && stage.commentWork.page === 1);
-    assert.deepEqual([turns, pageOne.repairs?.length], fails === true ? [[0], undefined] : [[0, 1], 1], String(fails));
+    const record = (await stageRecords(planned)).find(stage => stage.stage === 'comment-plan' && stage.commentWork.kind === 'plan' && stage.commentWork.page === 1);
+    assert.deepEqual([turns, record.repairs?.length, held], fails === true ? [[0], undefined, true] : [[0, 1], 1, fails ? true : undefined], String(fails));
     release.resolve();
   }
 });
@@ -2396,17 +2411,20 @@ test('a grouping pass that takes many steps is told to finish in its own words: 
     await emit('session', 'model.request', { sessionID: session.id, agent: role, model, kind: 'primary' });
     stuck.calls = [await invoke(session, 'read', { filePath: 'notes.md' }).then(() => 'ran', error => error.message), await invoke(session, 'azpr_read_file', { path: '/src/A.java' }).then(() => 'ran', error => error.message)];
     stuck.session = session.id;
-    // A list that cannot be changed, in a place that can be given another: an empty list takes its place, so no
-    // tool is left listed and none is counted.
-    stuck.replaced = { sessionID: session.id, agent: role, model, system: [], messages: f.project(session.history), tools: Object.freeze({ azpr_read_file: {}, read: {}, edit: {} }) };
-    await emit('session', 'context', stuck.replaced);
+    // The tools are taken out of the list that is there, and the list stays: what a hook keeps on it that is no
+    // tool (something unlisted, something under a symbol) is still there for the hooks after this one.
+    const mark = Symbol('mark');
+    stuck.list = Object.defineProperty({ azpr_read_file: {}, read: {}, edit: {}, [mark]: 'of a hook' }, 'revision', { value: 7 });
+    stuck.emptied = { sessionID: session.id, agent: role, model, system: [], messages: f.project(session.history), tools: stuck.list };
+    await emit('session', 'context', stuck.emptied);
+    stuck.kept = [stuck.emptied.tools === stuck.list, Object.keys(stuck.list), stuck.list.revision, stuck.list[mark]];
   } });
   await f.command();
   const planned = await f.command('pr-comment', '');
   assert.match(planned, /\] PREVIEW/);
   assert.deepEqual([Object.keys(stuck.frame.tools), stuck.frame.system, stuck.calls], [['azpr_read_file', 'read'], [], Array(2).fill('[AZPR] Tools are unavailable for this response.')]);
   const observed = (await stageRecords(planned)).find(stage => stage.sessionID === stuck.session).requestObservations;
-  assert.deepEqual([observed.toolsLeftListed, observed.notesNotAdded, stuck.replaced.tools, stuck.replaced.system.length], [1, 1, {}, 1], 'The stage\'s record says what could not be done, and only that.');
+  assert.deepEqual([observed.toolsLeftListed, observed.notesNotAdded, stuck.kept, stuck.emptied.system.length], [1, 1, [true, [], 7, 'of a hook'], 1], 'The stage\'s record says what could not be done, and only that.');
   assert.deepEqual([frames.group.tools, frames.plan.tools], [{}, {}], 'Neither may call a tool in that response.');
   assert.equal(frames.group.system.length, 1);
   assert.equal(frames.group.system[0].text, 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.');
@@ -5470,6 +5488,9 @@ test('a place of a request that cannot be written, or a list in it that cannot b
     seen.messages = await emit('session', 'context', fixed('messages'));
     seen.system = await emit('session', 'context', fixed('system'));
     seen.whole = await emit('session', 'context', Object.freeze(request()));
+    // Parts in a place that a hook made unlisted: it could be written, and is not the host's any more.
+    const hidden = request();
+    seen.hidden = await emit('session', 'context', Object.defineProperty(hidden, 'system', { value: hidden.system, writable: true, configurable: true, enumerable: false }));
     for (const name of ['messages', 'system', 'tools', 'options']) seen[`lazy ${name}`] = await emit('session', 'context', lazy(name));
     seen.watched = await emit('session', 'context', { ...request(), tools: watched() });
     seen.revoked = await emit('session', 'context', { ...request(), tools: revoked() });
@@ -5486,16 +5507,17 @@ test('a place of a request that cannot be written, or a list in it that cannot b
   assert.deepEqual([holding(seen.system.messages), texts(seen.system)], [0, FULL]);
   // Nothing of the event can be replaced: only the list of tools, which is changed where it stands, differs.
   assert.deepEqual([holding(seen.whole.messages), texts(seen.whole), Object.keys(seen.whole.tools)], [2, FULL, ['read']]);
+  assert.deepEqual([holding(seen.hidden.messages), texts(seen.hidden)], [0, FULL], 'Parts in a place that is not listed stay as they are.');
   // A place behind an accessor is not asked, and holds nothing for this hook: the request goes on as it is there.
   assert.equal(asked, 0, 'Nothing of a request\'s own was called.');
   // A list of tools that answers for another object, or cannot be changed, keeps its tools; the request goes on.
   assert.deepEqual([Object.keys(seen.frozenTools.tools), texts(seen.frozenTools)], [['read', 'edit'], LEAN_SYSTEM]);
   const record = (await stageRecords(receipt)).find(stage => stage.sessionID === first).requestObservations;
   // Counted once each: the fixture's own request, which has no parts to tell apart; the three whose messages
-  // could not be replaced or read (fixed, frozen as a whole, behind an accessor); the two more whose parts could
-  // not (fixed, behind an accessor). And for the tools: behind an accessor, answering for another object twice,
-  // and in a list that cannot be changed.
-  assert.deepEqual([record.placeInstructionsNotToldApart, record.toolsLeftListed, record.instructionLoads, record.instructionUpdates], [6, 4, 1, 1]);
+  // could not be replaced or read (fixed, frozen as a whole, behind an accessor); the three more whose parts
+  // could not (fixed, behind an accessor, in a place that is not listed). And for the tools: behind an accessor,
+  // answering for another object twice, and in a list that cannot be changed.
+  assert.deepEqual([record.placeInstructionsNotToldApart, record.toolsLeftListed, record.instructionLoads, record.instructionUpdates], [7, 4, 1, 1]);
   // Only what was written is recorded as left out: the session whose one such request could not take new parts
   // names no source, and counts that request beside its own.
   const other = (await stageRecords(receipt)).find(stage => stage.sessionID === second).requestObservations;
