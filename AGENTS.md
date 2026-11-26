@@ -58,28 +58,41 @@ settings, backups and failure records. Never upload `.local/`.
   the option stay as they are. An option of that name on another provider's
   request decides nothing. The messages below are taken out either way.
 - What the host writes of instructions into a running private session by
-  itself is kept from the model in every request: the instruction files it
-  loads beside a file the native read tool read (`isInstructionLoad`), and
-  its updates of the sources (`isInstructionUpdate`). Which messages those
-  are is the session's own word, not a request's: the `context` hook reads
-  the session's messages and takes them out by that record
-  (`withoutHostMessages`), a load by its ID whatever the request made of it,
-  an update wherever a system message of the host's form holds exactly its
-  text. Never tell them by what a request message looks like: a hook that
-  ran before AZPR's may have changed it, and another plugin's system message
-  can have the host's form.
-- A request that cannot be made right is not sent; an answer is never
-  refused afterwards for what its model was shown. Where a message that
-  stays still holds such a text whole, word for word in one of its strings
-  however deep (a hook before AZPR's joined it to another message, or gave
-  its message another ID or form), and where the request does not hold its
-  turn's prompt once, the `context` hook refuses the request. So `requestReview` needs no proof of what a model
-  saw: what the host wrote of instructions is no step of a turn and no one
-  else's input, wherever it stands. Say what this is and no more: AZPR
-  answers for a request as its own hook leaves it. Text that a hook before
-  it cut into pieces or rewrote in other words, and what a hook after it
-  does, cannot be seen from there, and a plugin in the same process can do
-  anything.
+  itself is kept from the model: the instruction files it loads beside a
+  file the native read tool read (`isInstructionLoad`), and its updates of
+  the sources (`isInstructionUpdate`), whatever source an update is of.
+  Which messages those are is the session's own word, not a request's
+  (`hostInstructions`): an update is a `system` message, which only the
+  host writes; a load is a synthetic message that names the files it holds,
+  which is what the host itself goes by, and like the notice of a
+  background command it is the late result of the session's own tool call:
+  it counts only after an assistant message of the session called the
+  native read tool. The `context` hook reads the session's messages and
+  takes out of the request what is such a message as the host builds it
+  (`withoutHostMessages`): the user message with a load's ID and the load's
+  text, and a system message of the host's form that holds exactly an
+  update's text. Never tell them by what a request message looks like
+  alone, never take a message out for the ID it has alone (one that a hook
+  before AZPR's changed may hold what is not the host's), and never take a
+  message of the load's form for the host's in a session that did not read.
+  Beyond that nothing proves who wrote a message, and the text of a load
+  proves nothing more than its metadata: one of that form that someone
+  posts after such a read is kept from the model like the host's, so its
+  text reaches no answer.
+- What AZPR cannot identify in a request stays as it is, and no request is
+  refused for what it holds: a message with a load's ID that is not the
+  load as the host builds it goes out as it is, and the stage record counts
+  the request with those whose parts could not be told apart. AZPR does not
+  police other plugins. A plugin's hook may add to a request, so no check
+  of what a request holds could be complete, and a request refused for its
+  form would fail every review on a host that builds requests another way.
+  Say that and no more: AZPR's rules hold for a request as OpenCode builds
+  it and for a tool's result as AZPR's tool returns it. What another
+  plugin's hook makes of either, before or after AZPR's own, AZPR neither
+  sees nor corrects, and a plugin in the same process can do anything. So
+  `requestReview` asks for no proof of what a model saw: what the host
+  wrote of instructions is no step of a turn and no one else's input,
+  wherever it stands.
 - `requestReview` fails a turn that received anyone else's message, wherever
   the turn's model was sent it: after the prompt, and between the turn
   before and the prompt (`since`; before a session's first prompt too). A
@@ -540,23 +553,30 @@ settings, backups and failure records. Never upload `.local/`.
   Saved references name the pages files, and a model reads them by itself,
   so a value is ready only when its object is what its name says and its
   pages give it whole through the host's read: rows the read returns uncut,
-  one after another, that together are the value (`wholePages`). A value is
-  made ready when it is handed out, each time, and not when its store is
-  opened: when it is put, from the text in hand, also where this process
-  put it before, and when a reference that a review saved is handed to a
-  model or read (`holds`, `read`), from its files. Pages that do not pass (rows of an earlier version, a file that is
-  missing or was not finished) are written again from the value. Judge
-  pages that are there by what the host's read returns, not by the length
-  this version writes. Keep no mark that says a store, or a value at an
-  earlier time, is ready: an earlier version that still runs, and another
-  process, write into the same directory. An object is what its name says
-  by its bytes, not by the text they decode to, and a value is the text a
-  file can hold (no lone surrogate), so that object and pages are one
-  value. Derive pages only from such an object; where the object is damaged
-  or gone and its pages are complete, write the object again from them.
-  Replace a file in one step. A value that cannot be made ready is not
-  handed out, and the others are not held back for it: opening a store
-  never fails for one value.
+  one after another, that together are the value, each row reading as it
+  parses (`wholePages`: a member that is there twice parses to the value
+  and reads otherwise). A value is made ready when it is handed out, each
+  time, and not when its store is opened: when it is put, from the text in
+  hand, also where this process put it before; and when a reference that
+  was saved earlier (by a review, or by an earlier session of the same run)
+  is handed to a model or read, from its files (`holds`, `read`; a list of
+  them through `heldItems`, a few values at a time and each value once).
+  Every place that hands such a reference to a model goes through that.
+  Pages that do not pass (rows of an earlier version, a file that is
+  missing, cannot be read or was not finished) are written again from the
+  value. Judge pages that are there by what the host's read returns, not by
+  the length this version writes. Keep no mark that says a store, or a
+  value at an earlier time, is ready: an earlier version that still runs,
+  and another process, write into the same directory. An object is what its
+  name says by its bytes, not by the text they decode to, and a value is
+  the text a file can hold (no lone surrogate), so that object and pages
+  are one value. Derive pages only from such an object; where the object is
+  damaged or gone and its pages are complete, write the object again from
+  them. Replace a file in one step. A value that cannot be made ready is
+  not handed out, and the others are not held back for it: opening a store
+  never fails for one value. What is only kept for later is not made ready
+  again and again: a file that a reviewer reads in several windows is one
+  observation, saved once (`observationKey`).
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -938,18 +958,19 @@ The smoke and the scale fixture also hold the forms of the host that the
 runtime tells things apart by: the sources of a request's instructions (a
 configured instruction file reaches an ordinary conversation and no private
 session), the message OpenCode leaves after a native read beside an
-instruction file, the session's messages read from inside a hook (the prompt
-is among them by the turn's first request, with the nonce it was sent with,
-and no idle marker follows it while the turn runs), the prompt's message in
-the request under the same ID, the assistant message that OpenCode names to
-a tool for a call, the error type of a used-up limit, a prompt that is one of
-AZPR's commands, and the line length the native read returns. When one of
-these steps fails on another OpenCode, read that version's source before
-changing the step. Two kinds of fallback are behind them. Where the parts of
-a request cannot be told apart, the runtime leaves them as the host made
-them, which such a step is there to notice. Where the session's messages
-cannot be read, or do not say that a request is its turn's, the runtime
-refuses the request, and a review fails instead of going on unchecked.
+instruction file and what a request holds of it, the session's messages read
+from inside a hook (the prompt is among them by the turn's first request,
+with the nonce it was sent with, and no idle marker follows it while the
+turn runs), the assistant message that OpenCode names to a tool for a call,
+the error type of a used-up limit, a prompt that is one of AZPR's commands,
+and the line length the native read returns. When one of these steps fails
+on another OpenCode, read that version's source before changing the step.
+Two kinds of fallback are behind them. Where the parts of a request cannot
+be told apart, or a message is not what the host builds of its own, the
+runtime leaves them as they are, which such a step is there to notice. Where
+the session's messages cannot be read, or do not say that a request is its
+turn's, the runtime refuses the request, and a review fails instead of going
+on unchecked.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.

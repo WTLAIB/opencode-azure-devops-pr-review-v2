@@ -1,6 +1,6 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewMethod, reviewVerification } from './comments.mjs';
-import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
+import { observationIndex, evidenceIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
@@ -237,8 +237,9 @@ async function planningInput(review, store, findings, report, work, continuation
     ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
     ...(extras.repeatCandidates?.length ? { repeatCandidates: extras.repeatCandidates } : {}),
-    // This page's own earlier reads; pages planned at the same time keep theirs.
-    ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(extras.evidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
+    // This page's own earlier reads; pages planned at the same time keep theirs. Their saved references are
+    // handed to another session here, so only those the store holds ready now are listed.
+    ...(continuation && extras.evidence?.length ? { workEvidence: await evidenceIndex(store, extras.evidence) } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
     commentWork: work,
   };

@@ -142,11 +142,13 @@ later OpenCode builds them another way), it sends those parts as OpenCode
 built them, with what OpenCode collected for the directory, and the stage's
 [debug record](DEBUGGING.md) says so (`placeInstructionsNotToldApart`). The
 instruction files loaded beside a file are taken out of the request either
-way; a request in which another plugin put such a file's text somewhere else
-is not sent, and the pass that read beside it fails instead of going on with
-it. AZPR answers for a request as its own hook leaves it: what a plugin that
-is loaded before it cut into pieces or rewrote in other words, and what a
-plugin loaded after it adds, it cannot see. List AZPR first among your plugins.
+way, where they are as OpenCode builds them; one that another plugin changed
+first goes out as that plugin left it, and the same record counts the
+request. AZPR does not police other plugins: what another plugin's hook adds
+to a request, takes from it or makes of a tool's result, before or after
+AZPR's own hook, AZPR neither sees nor corrects. List AZPR first among your
+plugins, so that its hook sees a request before theirs, and install only
+plugins you trust with what a review reads.
 
 **Experiments of OpenCode that reach these sessions.** Three opt-in
 experiments of OpenCode 2.4 concern AZPR's private sessions; all are off

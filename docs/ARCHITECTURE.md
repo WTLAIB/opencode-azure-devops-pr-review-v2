@@ -930,36 +930,44 @@ changes while a session runs, it leaves an update. Neither is shown to a
 private session's model: the `context` hook takes them out of every request,
 whether or not the parts could be told apart, and an update whatever source
 it is of, the date and the environment among them (a review that runs past
-midnight is not told the new date). Which messages they are is the
-session's own word. The hook reads the session's messages, where a load is a
-synthetic message that names the files it holds and an update is a `system`
-message, which only the host writes (`isInstructionLoad`,
-`isInstructionUpdate`), and takes them out of the request by that record
-(`withoutHostMessages` in `host.mjs`): a load by its ID, whatever a hook
-before AZPR's made of it in the request, and an update wherever a system
-message of the host's form holds exactly its text. A system message of
-another plugin's stays, also one that looks like the host's.
+midnight is not told the new date). Which messages they are is the session's
+own word (`hostInstructions` in `host.mjs`). An update is a `system` message,
+which only the host writes. A load is a synthetic message that names the
+files it holds; that metadata is what the host itself goes by, as its only
+record of which files a session was given. Like the notice of a background
+command, a load is the late result of the session's own tool call, so it
+counts only after an assistant message of the session called the native read
+tool: a message of that form in a session that did not read is someone
+else's. The hook takes out of the request what is such a message as the host
+builds it (`withoutHostMessages`): the user message that has a load's ID and
+the load's text, and a system message of the host's form that holds exactly
+an update's text. A system message of another plugin's stays, also one that
+looks like the host's. Beyond that, who wrote a message cannot be proved, and
+a load's text would prove nothing more than its metadata; a message of the
+load's form that someone posts after such a read is kept from the model in
+the same way, so its text reaches no answer.
 
-A request that cannot be made right is not sent. After the two kinds of
-messages are taken out, the hook looks through every string of what stays,
-however deep it lies, for their text, whole and word for word: a hook that
-ran before AZPR's may have joined such a text to another message, or given
-its message another ID or another form. A request that still holds it is
-refused, and so is one that does not hold its turn's
-prompt once, since its answer would be an answer to something else. So no
-answer is refused afterwards for what its model was shown, and
-`requestReview`, which fails a turn that received anyone else's message,
-takes what the host wrote of instructions for what it is: no step of a turn
-and no one else's input, wherever it stands. Anyone else's message fails the
-turn where the turn's model was sent it: after the prompt, and between the
-turn before and the prompt. A turn that did not succeed fails by its own
-outcome first, which decides whether it is tried again.
+What the hook cannot identify stays as it is, as with the system parts, and
+no request is refused for what it holds. A message that has a load's ID and
+is not the load as the host builds it (another plugin's hook joined
+something to it, or changed its form) goes out as it is, and the stage's
+record counts the request among those that could not be told apart
+(`placeInstructionsNotToldApart`). So `requestReview`, which fails a turn
+that received anyone else's message, asks for no proof of what a model was
+shown: what the host wrote of instructions is no step of a turn and no one
+else's input, wherever it stands. Anyone else's message fails the turn where
+the turn's model was sent it: after the prompt, and between the turn before
+and the prompt. A turn that did not succeed fails by its own outcome first,
+which decides whether it is tried again.
 
-This is what AZPR's hook can see, and no more. It answers for a request as it
-leaves that hook: text that a hook before it cut into pieces or rewrote in
-other words, and what a hook after it puts into a request, are out of its
-sight, and a plugin that runs in the same process can do anything. List AZPR first among the plugins,
-and it sees the request before every plugin that is listed after it.
+AZPR does not police other plugins. Its rules hold for a request as OpenCode
+builds it, and for a tool's result as AZPR's tool returns it. A plugin's hook
+may add to a request, so no check of what a request holds could be complete,
+and a request refused for its form would fail every review on a host that
+builds requests another way. What another plugin's hook makes of a request or
+of a tool's result, before or after AZPR's own, AZPR neither sees nor
+corrects, and a plugin that runs in the same process can do anything. List
+AZPR first among the plugins: its hook then sees the request before theirs.
 
 With shell allowed, a command can go on in the background: the model asked
 for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's
@@ -1014,10 +1022,10 @@ model and reads nothing. Where the messages cannot be read, the request is
 refused. What follows a request (the request itself, a retry of it, the tool
 calls of its answer) needs a request of this very turn that was looked at so.
 What a hook reads of the host it reads until its stage ends, so a stage that
-was stopped does not wait for a host that stalls. A stage's record counts
-those readings, the requests refused outside a turn, and the requests that
-were not sent because another plugin had changed them (`turnChecks`,
-`refusedOutsideTurn`, `unsendableRequests`).
+was stopped does not wait for a host that stalls. A request that is refused,
+or whose look at the session failed, also ends what an earlier request of the
+turn allowed. A stage's record counts those readings and the requests refused
+outside a turn (`turnChecks`, `refusedOutsideTurn`).
 
 What a session read, for the check that a finding names a file its own tools
 read, is settled the same way, by the host's record and not by the time of a

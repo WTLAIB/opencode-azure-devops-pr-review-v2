@@ -18,7 +18,7 @@ import { createReviewSession, requestReview, interruptSession, appendReport, cla
 import { COMMANDS, COMMAND_NAMES, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
-import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
+import { createCommentData, captureObservation, observationKey, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewMethod,
   everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
@@ -885,12 +885,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
-      // (and in how many requests the host's parts could not be told apart, so that they went out as they were),
-      // and what the host wrote of instructions into the session by itself, by the IDs of its messages (the
-      // instruction files it loaded near a file the session read, and its updates). `unsendable` counts requests
-      // that were not sent because they still held such a text outside its message, or did not hold the turn's
-      // prompt once: another plugin had changed them.
-      place: { sources: new Set(), unknown: 0 }, hiddenLoads: new Set(), hiddenUpdates: new Set(), unsendable: 0,
+      // (and in how many requests the host's parts could not be told apart, or a loaded instruction file was not
+      // as the host builds it, so that they went out as they were), and what the host wrote of instructions into
+      // the session by itself, by the IDs of its messages (the instruction files it loaded near a file the
+      // session read, and its updates).
+      place: { sources: new Set(), unknown: 0 }, hiddenLoads: new Set(), hiddenUpdates: new Set(),
       // The notices of this session's own background commands that its turns looked at, by ID.
       shellNotices: new Set(),
       toolCalls: new Map(), completedTools: new Set(), terminalTools: new Map(), failedTools: new Set(),
@@ -1029,7 +1028,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       record.requestObservations = { kinds: { ...g.requestKinds }, authorizedPrimary: g.calls, rejected: g.rejectedRequests, retries: g.retryEvents,
         ...(g.place.sources.size ? { placeInstructions: [...g.place.sources] } : {}), ...(g.place.unknown ? { placeInstructionsNotToldApart: g.place.unknown } : {}),
         ...(g.hiddenLoads.size ? { instructionLoads: g.hiddenLoads.size } : {}), ...(g.hiddenUpdates.size ? { instructionUpdates: g.hiddenUpdates.size } : {}),
-        ...(g.unsendable ? { unsendableRequests: g.unsendable } : {}),
         // How often the session's messages were read before a request (once for every request of an open
         // turn), and how many requests were refused because they were not a turn's.
         ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}), ...(g.refusedOutsideTurn ? { refusedOutsideTurn: g.refusedOutsideTurn } : {}) };
@@ -1970,11 +1968,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       touch(g, `tool ${name} ended`);
     }
     let observation;
-    if (outcome.observation && ROLES[g.role].format === 'initial') {
-      // Keep observed source text with its request for anchor checks in comment planning. A stopped call does not
-      // wait for that save, which finishes by itself.
+    // Keep observed source text with its request for anchor checks in comment planning, once: a file that is
+    // read in several windows is one observation, and is saved by the first of them. A stopped call does not
+    // wait for that save, which finishes by itself.
+    const observed = outcome.observation && ROLES[g.role].format === 'initial' ? { path: outcome.observation.path, version: outcome.observation.version } : null;
+    if (observed && !g.run.toolText.has(observationKey(name, observed, outcome.observation.text))) {
       try {
-        observation = await scoped(async () => captureObservation(await dataFor(g.run), name, { path: outcome.observation.path, version: outcome.observation.version }, outcome.observation.text), stop);
+        observation = await scoped(async () => captureObservation(await dataFor(g.run), name, observed, outcome.observation.text), stop);
       } catch {
         if (!stop?.aborted) g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.');
       }
@@ -2074,25 +2074,23 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Looked at again, with nothing awaited between this and what follows: the call that waits for the turn
       // can have ended while the messages were read.
       if (state !== 'running' || grants.get(event.sessionID) !== g || !g.open || g.turn !== turn) {
-        // Past its marker the turn is over; before its prompt is a message, the turn's own request is still to come.
-        if (state === 'ended' && grants.get(event.sessionID) === g && g.turn === turn) close(g);
+        if (grants.get(event.sessionID) === g && g.turn === turn) {
+          // Past its marker the turn is over. Before its prompt is a message, the turn's own request is still to
+          // come, and where the messages could not be read nothing is known: either way, a request of this turn
+          // that was looked at earlier says nothing for what follows this one.
+          if (state === 'ended') close(g);
+          else { g.checked = null; g.primaryPrepared = false; }
+        }
         g.refusedOutsideTurn++;
         throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
       }
       // What the host wrote of instructions into the session by itself (the instruction files near a file the
       // native read tool read, and updates of the sources) is taken out of every request, by the session's own
-      // record. The request is sent only as the turn's own and without that text: it holds the turn's prompt,
-      // once, and what stays of it holds none of those texts whole. A hook that ran before this one may have
-      // dropped the prompt or put such a text elsewhere; what such a hook cut into pieces or rewrote in other
-      // words, and what a hook after this one does, cannot be seen from here.
+      // record, where the request holds it as the host builds it. Nothing else is taken out and nothing is
+      // looked for: a request that another plugin's hook changed before this one goes out as that hook left it,
+      // and what a hook after this one does is not seen here either.
       const requested = Array.isArray(event.messages) ? event.messages : [];
       const own = withoutHostMessages(requested, stored);
-      if (own.left || own.messages.filter(message => message?.role === 'user' && message.id === prompt.id).length !== 1) {
-        g.unsendable++;
-        throw new Error(own.left
-          ? '[AZPR] This request holds instructions that OpenCode wrote into the session by itself, outside the messages they came in, so it is not sent: another plugin changed the request before AZPR saw it.'
-          : '[AZPR] This request does not hold the reviewer prompt of its turn once, so it is not sent: another plugin changed the request before AZPR saw it.');
-      }
       if (own.messages.length !== requested.length) event.messages = own.messages;
       for (const id of own.loads) g.hiddenLoads.add(id);
       for (const id of own.updates) g.hiddenUpdates.add(id);
@@ -2110,8 +2108,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // it is emptied then. Where the parts or that text cannot be told apart, both stay as they are.
       const forClaude = event.model?.providerID === CLAUDE_PROVIDER;
       const told = lean && (!forClaude || event.options?.[CLAUDE_INSTRUCTIONS_OPTION] === claudeInstructions(lean.removed));
-      if (!told) g.place.unknown++;
-      else if (lean.removed.length) {
+      // Counted once: the parts could not be told apart, or a loaded instruction file was not as the host builds it.
+      if (!told || own.changed) g.place.unknown++;
+      if (told && lean.removed.length) {
         if (forClaude) event.options[CLAUDE_INSTRUCTIONS_OPTION] = '';
         event.system = lean.system;
         for (const source of lean.removed) g.place.sources.add(source.key);

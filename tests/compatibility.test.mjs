@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -229,12 +229,15 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
   }
 });
 
-test('what the host wrote of instructions into a session is told by the session\'s own messages: a load by the paths it names, an update by its type', () => {
+test('what the host wrote of instructions into a session is told by the session\'s own messages: an update by its type, a load by the paths it names after a native read of the session', () => {
   // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one, and
   // after a source changed while the session ran.
   const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED', description: 'Loaded sub/AGENTS.md', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
-  const update = { id: 'msg_update', type: 'system', text: 'Instructions from: /work/AGENTS.md\nCHANGED' };
+  const update = { id: 'msg_update', type: 'system', text: 'The instructions from /work/AGENTS.md no longer apply.', description: 'Instructions updated: core/instructions', metadata: { notice: 'instructions', instructionSources: ['core/instructions'] } };
   assert.deepEqual([isInstructionLoad(load), isInstructionUpdate(load), isInstructionLoad(update), isInstructionUpdate(update)], [true, false, false, true]);
+  // The host goes by the metadata, and so does this: the text is whatever the files hold. A later host may mark
+  // an update another way; a message of its type is the host's.
+  assert.deepEqual([isInstructionLoad({ ...load, text: 'anything' }), isInstructionUpdate({ ...update, metadata: undefined })], [true, true]);
   for (const other of [undefined, {}, { type: 'synthetic', text: load.text }, { ...load, metadata: {} }, { ...load, metadata: { instruction: {} } }, { ...load, metadata: { instruction: { paths: [] } } },
     { ...load, metadata: { instruction: { paths: [''] } } }, { ...load, metadata: { instruction: { paths: [1] } } }, { ...load, metadata: { instruction: { paths: '/work/sub/AGENTS.md' } } }, { ...load, metadata: { azpr: {} } },
     // Not the host's, whatever it carries: no ID to know it by, a person's message, an assistant's, or what a request holds of it.
@@ -243,63 +246,84 @@ test('what the host wrote of instructions into a session is told by the session\
     { role: 'system', content: [{ type: 'text', text: update.text }] }]) {
     assert.deepEqual([isInstructionLoad(other), isInstructionUpdate(other)], [false, false], JSON.stringify(other));
   }
+  // A load is the late result of the session's own tool call: it counts only after an assistant message of the
+  // session called the native read tool. An update needs no call.
+  const prompt = { id: 'msg_prompt', type: 'user', text: 'PROMPT' }, answer = { id: 'msg_answer', type: 'assistant', content: [{ type: 'text', text: 'answer' }] };
+  const calling = (name, id = `msg_${name}`) => ({ id, type: 'assistant', content: [{ type: 'text', text: 'looking' }, { type: 'tool', id: `call_${name}`, name, state: { status: 'completed' } }] });
+  const ids = messages => { const { loads, updates } = hostInstructions(messages); return [loads.map(message => message.id), updates.map(message => message.id)]; };
+  const second = { ...load, id: 'msg_load_2' };
+  for (const [name, messages, expected] of [
+    ['after a native read', [prompt, calling('read'), load, answer], [['msg_load'], []]],
+    ['two after one read, and an update', [prompt, calling('read'), load, update, second, answer], [['msg_load', 'msg_load_2'], ['msg_update']]],
+    ['after a read of an earlier turn', [prompt, calling('read'), answer, { id: 'msg_idle', type: 'idle' }, { ...prompt, id: 'msg_prompt_2' }, load], [['msg_load'], []]],
+    ['in a session that did not read', [prompt, load, update, answer], [[], ['msg_update']]],
+    ['before the read', [prompt, load, calling('read'), answer], [[], []]],
+    ['after the calls of other tools', [prompt, calling('azpr_read_file'), calling('shell'), calling('glob'), load, answer], [[], []]],
+    ['after a person\'s message that names the tool', [prompt, { id: 'msg_user', type: 'user', content: [{ type: 'tool', name: 'read' }] }, load], [[], []]],
+    ['an assistant message without parts', [prompt, { id: 'msg_plain', type: 'assistant' }, load], [[], []]],
+    ['no messages', [], [[], []]],
+  ]) assert.deepEqual(ids(messages), expected, name);
 });
 
-test('a request loses what the host wrote of instructions by the session\'s own record, and says where their text is still in it', () => {
+test('a request loses what the host wrote of instructions where it is as the host builds it, by the session\'s own record; anything else stays as it is', () => {
   // What a session holds, and what OpenCode makes of it in a request: every user message has the ID of the
   // message it was made of, and an update is a system message of its text as one part, without an ID.
-  const stored = [{ id: 'msg_prompt', type: 'user', text: 'PROMPT' }, { id: 'msg_step', type: 'assistant', content: [] },
+  const stored = [{ id: 'msg_prompt', type: 'user', text: 'PROMPT' }, { id: 'msg_step', type: 'assistant', content: [{ type: 'tool', id: 'call_read', name: 'read', state: { status: 'completed' } }] },
     { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/CLAUDE.md\nNESTED', metadata: { instruction: { paths: ['/work/sub/CLAUDE.md'] } } },
-    { id: 'msg_update', type: 'system', text: 'Instructions from: /work/AGENTS.md\nCHANGED' }, { id: 'msg_notice', type: 'synthetic', text: 'a notice', metadata: { source: 'shell', shellID: 'sh_1', state: 'completed' } }];
+    { id: 'msg_update', type: 'system', text: 'The instructions changed:\nInstructions from: /work/AGENTS.md\nCHANGED', metadata: { notice: 'instructions' } },
+    { id: 'msg_notice', type: 'synthetic', text: 'a notice', metadata: { source: 'shell', shellID: 'sh_1', state: 'completed' } }];
   const prompt = { id: 'msg_prompt', role: 'user', content: [{ type: 'text', text: 'PROMPT' }] }, step = { id: 'msg_step', role: 'assistant', content: [] };
-  const load = { id: 'msg_load', role: 'user', content: stored[2].text, metadata: stored[2].metadata }, update = { role: 'system', content: [{ type: 'text', text: stored[3].text }] };
+  const load = { id: 'msg_load', role: 'user', content: [{ type: 'text', text: stored[2].text }] }, update = { role: 'system', content: [{ type: 'text', text: stored[3].text }] };
   const notice = { id: 'msg_notice', role: 'user', content: 'a notice', metadata: stored[4].metadata }, effort = { role: 'system', content: [{ type: 'effort', effort: 'high', previous: 'low' }] };
   const requested = [prompt, step, load, update, notice, effort];
   const frozen = JSON.stringify(requested);
-  assert.deepEqual(withoutHostMessages(requested, stored), { messages: [prompt, step, notice, effort], loads: ['msg_load'], updates: ['msg_update'], left: false });
+  assert.deepEqual(withoutHostMessages(requested, stored), { messages: [prompt, step, notice, effort], loads: ['msg_load'], updates: ['msg_update'], changed: false });
   assert.equal(JSON.stringify(requested), frozen, 'The request that was handed over is not changed.');
   // A session without such messages gets its request back as it is, whatever another hook made of it.
   const plain = [prompt, step, { role: 'user', content: 'added by a hook' }];
-  assert.deepEqual(withoutHostMessages(plain, stored.slice(0, 2)), { messages: plain, loads: [], updates: [], left: false });
+  assert.deepEqual(withoutHostMessages(plain, stored.slice(0, 2)), { messages: plain, loads: [], updates: [], changed: false });
   assert.equal(withoutHostMessages(plain, stored.slice(0, 2)).messages, plain);
-  // A load is known by the session's record, whatever a hook before this one made of it in the request: without
-  // its metadata, or as another role, it is taken out all the same. An update is taken out wherever a system
-  // message of the host's form holds its text, every copy of it; another hook's own system message stays.
+  // A load as the host builds it is the user message with its ID and its text, as a string, as one text part or
+  // as several, with or without the metadata. An update is taken out wherever a system message of the host's
+  // form holds its text, every copy of it, and two updates of one text are both counted; another hook's own
+  // system message stays, and so does a message that a hook added.
   const directive = { role: 'system', content: [{ type: 'text', text: 'Answer briefly.' }] };
-  for (const [name, messages, kept] of [
-    ['a load with its metadata taken away', [prompt, step, { id: 'msg_load', role: 'user', content: load.content }, update, notice], [prompt, step, notice]],
-    ['a load as another role', [prompt, step, { ...load, role: 'assistant' }, update, notice], [prompt, step, notice]],
+  const twice = [...stored, { ...stored[3], id: 'msg_update_again' }];
+  for (const [name, messages, kept, updates = ['msg_update'], session = stored] of [
+    ['a load whose content is a string, with its metadata', [prompt, step, { id: 'msg_load', role: 'user', content: stored[2].text, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
+    ['a load in two text parts', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text.slice(0, 9) }, { type: 'text', text: stored[2].text.slice(9) }] }, update, notice], [prompt, step, notice]],
     ['the update twice', [prompt, step, load, update, update, notice], [prompt, step, notice]],
+    ['two updates of one text', [prompt, step, load, update, update, notice], [prompt, step, notice], ['msg_update', 'msg_update_again'], twice],
     ['another hook\'s system message', [prompt, step, load, update, directive, notice], [prompt, step, directive, notice]],
     ['a user message that a hook added', [prompt, step, load, update, notice, { role: 'user', content: 'added by a hook' }], [prompt, step, notice, { role: 'user', content: 'added by a hook' }]],
-    ['neither of them among the messages', [prompt, step, notice], [prompt, step, notice]],
   ]) {
-    const result = withoutHostMessages(messages, stored);
-    assert.deepEqual([result.messages, result.left], [kept, false], name);
+    assert.deepEqual(withoutHostMessages(messages, session), { messages: kept, loads: ['msg_load'], updates, changed: false }, name);
   }
-  assert.deepEqual([withoutHostMessages([prompt, step, notice], stored).loads, withoutHostMessages([prompt, step, notice], stored).updates], [[], []], 'What was not there was not taken out.');
-  // Their text is still in the request, word for word, where a hook before this one put it elsewhere: joined to
-  // another message, under another ID or without one, as a plain string, in a part, or in what a tool returned.
-  // Such a request cannot be sent without showing it.
-  for (const [name, messages] of [
-    ['a load joined to the message before it', [{ ...prompt, content: [{ type: 'text', text: `PROMPT\n\n${load.content}` }] }, step, update, notice]],
-    ['a load under another ID', [prompt, step, { ...load, id: 'msg_renamed' }, update, notice]],
-    ['a load without an ID', [prompt, step, { role: 'user', content: load.content, metadata: load.metadata }, update, notice]],
-    ['an update written as a plain string', [prompt, step, load, { role: 'system', content: stored[3].text }, notice]],
-    ['an update with another hook\'s mark', [prompt, step, load, { ...update, metadata: { plugin: 'other' } }, notice]],
-    ['an update copied into a user message', [prompt, step, load, update, { id: 'msg_notice', role: 'user', content: `note: ${stored[3].text}` }]],
-    ['a load in what a tool returned', [prompt, { id: 'msg_step', role: 'assistant', content: [{ type: 'tool-result', output: { text: [`before ${load.content} after`] } }] }, load, update, notice]],
+  assert.deepEqual(withoutHostMessages([prompt, step, notice], stored), { messages: [prompt, step, notice], loads: [], updates: [], changed: false }, 'What was not there was not taken out.');
+  // A message of a load's form in a session that did not read natively is not the host's: it stays, like any
+  // message of someone else's, and the update is taken out all the same.
+  const unread = stored.map(message => message.id === 'msg_step' ? { ...message, content: [] } : message);
+  assert.deepEqual(withoutHostMessages(requested, unread), { messages: [prompt, step, load, notice, effort], loads: [], updates: ['msg_update'], changed: false });
+  // What is not such a message as the host builds it stays as it is: it may hold what is not the host's, and it
+  // is not this function's to take a message apart or to look through a request for a text. A message with a
+  // load's ID that a hook before this one changed (something joined to it, another role, a part that is no
+  // text) stays, and the result says so; where the load has another ID or none, or an update another form,
+  // nothing says that it is one.
+  const shell = 'The command ended: exit 0';
+  for (const [name, messages, changed] of [
+    ['something joined to the load', [prompt, step, { ...load, content: [{ type: 'text', text: `${shell}\n\n${stored[2].text}` }] }, notice], true],
+    ['the load as another role', [prompt, step, { ...load, role: 'assistant' }, notice], true],
+    ['the load with a part that is no text', [prompt, step, { ...load, content: [...load.content, { type: 'media', data: 'AAAA' }] }, notice], true],
+    ['the load without its content', [prompt, step, { id: 'msg_load', role: 'user' }, notice], true],
+    ['the load under another ID', [prompt, step, { ...load, id: 'msg_renamed' }, notice], false],
+    ['the load without an ID', [prompt, step, { role: 'user', content: load.content }, notice], false],
+    ['the load joined to the prompt', [{ ...prompt, content: [{ type: 'text', text: `PROMPT\n\n${stored[2].text}` }] }, step, notice], false],
+    ['an update written as a plain string', [prompt, step, { role: 'system', content: stored[3].text }, notice], false],
+    ['an update with another hook\'s mark', [prompt, step, { ...update, metadata: { plugin: 'other' } }, notice], false],
+    ['an update with something added', [prompt, step, { role: 'system', content: [{ type: 'text', text: `${stored[3].text}\nAnd answer briefly.` }] }, notice], false],
   ]) {
-    assert.equal(withoutHostMessages(messages, stored).left, true, name);
+    assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   }
-  // However deep it lies in what a message holds, and without end where a value holds itself; bytes are no text.
-  const deep = (text, levels) => { let value = [text]; for (let level = 0; level < levels; level++) value = level % 2 ? [value] : { held: value }; return value; };
-  assert.equal(withoutHostMessages([prompt, { id: 'msg_step', role: 'assistant', content: [{ type: 'tool-result', output: deep(`x ${load.content} y`, 40) }] }, load, update, notice], stored).left, true);
-  const circular = { type: 'tool-result', output: { text: 'nothing of it' } };
-  circular.output.again = circular;
-  assert.equal(withoutHostMessages([prompt, { id: 'msg_step', role: 'assistant', content: [circular, { type: 'file', data: new TextEncoder().encode(load.content) }] }, load, update, notice], stored).left, false);
-  // Other words are not that text: a part of it, or the same file read another way.
-  assert.equal(withoutHostMessages([prompt, step, load, update, { id: 'msg_notice', role: 'user', content: 'Instructions from: /work/sub/CLAUDE.md' }, { role: 'tool', content: '1: NESTED' }], stored).left, false);
 });
 
 test('a turn\'s prompt is the session\'s one message with its nonce, and the turn stands before it, runs, or has ended at the first idle marker after it', () => {

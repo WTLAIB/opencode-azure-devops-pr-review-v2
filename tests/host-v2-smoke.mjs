@@ -748,10 +748,10 @@ try {
     // Before every request of a private session its messages are read, and the request is the turn's only while
     // no idle marker follows the turn's prompt: every request here was looked at so and found to be its turn's
     // (the prompt is among the session's messages by then, known by the nonce it was sent with, and the marker
-    // comes when the execution has ended). Every request held that prompt once, under the ID of the session's
-    // message, and none was held back. What a reviewer's own tool calls read is credited by the assistant message
-    // that asked for each call, which OpenCode names to the tool: the check of `sessionReads` above holds that.
-    assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn, stage.requestObservations.unsendableRequests], [stage.requestObservations.authorizedPrimary, undefined, undefined], JSON.stringify(stage.requestObservations));
+    // comes when the execution has ended), and none was refused. What a reviewer's own tool calls read is
+    // credited by the assistant message that asked for each call, which OpenCode names to the tool: the check of
+    // `sessionReads` above holds that.
+    assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn], [stage.requestObservations.authorizedPrimary, undefined], JSON.stringify(stage.requestObservations));
   }
   assert.ok(during.every(request => !request.marks.length), 'No request of the review carried the configured instruction file.');
   results.placeInstructions = `left out of every private request (${[...new Set(reviewStages.flatMap(stage => stage.requestObservations.placeInstructions))].sort().join(', ')}); an ordinary conversation keeps them`;
@@ -889,12 +889,19 @@ try {
   assert.ok(nestedRequests[2].lastTool.includes(NESTED_NOTE), `The native read returned the local file: ${nestedRequests[2].lastTool}`);
   // Positive control: the host did leave the instruction file in that session, with its text.
   const nestedContext = await rawApi(`/api/session/${nestedRequests[0].sessionID}/context`);
-  const loaded = (Array.isArray(nestedContext) ? nestedContext : nestedContext?.data ?? []).filter(message => message.type === 'synthetic' && Array.isArray(message.metadata?.instruction?.paths));
+  const nestedMessages = Array.isArray(nestedContext) ? nestedContext : nestedContext?.data ?? [];
+  const loaded = nestedMessages.filter(message => message.type === 'synthetic' && Array.isArray(message.metadata?.instruction?.paths));
   assert.equal(loaded.length, 1, 'OpenCode left one message with the instruction file in the reviewer\'s session.');
   assert.ok(loaded[0].text.includes(MARKS.nested) && loaded[0].metadata.instruction.paths.length === 1 && loaded[0].metadata.instruction.paths[0].endsWith(join('work', 'nested', 'AGENTS.md')), JSON.stringify(loaded[0]).slice(0, 400));
+  // AZPR takes such a message for the host's only after the session's own assistant called the native read tool:
+  // that call is a part of an assistant message that stands before it.
+  assert.ok(nestedMessages.slice(0, nestedMessages.indexOf(loaded[0])).some(message => message.type === 'assistant' && Array.isArray(message.content) && message.content.some(part => part?.type === 'tool' && part.name === 'read')),
+    `No assistant message before the loaded file holds a call of the native read tool: ${JSON.stringify(nestedMessages.map(message => [message.type, (message.content ?? []).map?.(part => part?.name ?? part?.type)])).slice(0, 600)}`);
+  // It reached no model: the request held it as the user message of that ID and text, which AZPR took out.
   assert.ok(requests.slice(beforeNested).every(request => !request.marks.length), 'Neither that file nor the configured one reached a model.');
   const [nestedStage] = await stageRecords(nestedReceipt);
-  assert.equal(nestedStage.requestObservations.instructionLoads, 1, `The stage's record counts the message that was kept from the model: ${JSON.stringify(nestedStage.requestObservations)}`);
+  assert.deepEqual([nestedStage.requestObservations.instructionLoads, nestedStage.requestObservations.placeInstructionsNotToldApart], [1, undefined],
+    `The stage's record counts the message that was kept from the model, and no request that went out as it was: ${JSON.stringify(nestedStage.requestObservations)}`);
   results.nestedInstructions = 'a native read next to an instruction file: OpenCode left that file in the session, AZPR kept it from the model; COMPLETE in one session';
 
   // 3d. Automatic comment steps from a flag right after the PR URL: a preview in a run of its own;

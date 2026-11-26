@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation, observationIndex, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, observationIndex, observationKey, evidenceIndex, heldItems, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
 import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -201,13 +201,16 @@ eachKind('a page gets at most three continuation sessions even when each one rea
     if (payload.commentWork.page === 2) return JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] });
     // Page 1 never finishes, but every session reads new source, so its checkpoint always differs.
     if (++reads > 10) throw new Error('Page 1 kept continuing: the continuation cap is missing.');
-    review.commentEvidence = [...(review.commentEvidence ?? []), { page: 1, tool: 'azpr_read_file', input: { path: '/src/Main.java', offset: reads }, result: { sha256: String(reads) } }];
+    review.commentEvidence = [...(review.commentEvidence ?? []), { page: 1, tool: 'azpr_read_file', input: { path: '/src/Main.java', offset: reads }, result: await store.object({ output: `part ${reads}` }) }];
     return JSON.stringify({ status: 'CONTINUE', comments: payload.continuation ? [] : [comment('F-1')], skipped: [], continuation: `Read part ${reads}; more to read.` });
   });
   const notices = [];
   const plan = await prepareComments(review, store, invoke, { progress: message => notices.push(message) });
   assert.equal(PAGE_CONTINUATIONS, 3);
   assert.equal(payloads.filter(p => p.commentWork.page === 1).length, 1 + PAGE_CONTINUATIONS, 'Page 1 stops after its first session and three continuations.');
+  // Each continuation is handed what the page's sessions before it read.
+  const handed = await Promise.all(payloads.filter(p => p.commentWork.page === 1).slice(1).map(async p => (await store.read(p.workEvidence)).trim().split('\n').map(row => JSON.parse(row).input.offset)));
+  assert.deepEqual(handed, [[1], [1, 2], [1, 2, 3]]);
   assert.equal(payloads.filter(p => p.commentWork.page === 2).length, 1);
   assert.deepEqual(plan.comments.map(c => c.findingId), ['F-1', 'F-5']);
   assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-2', 'F-3', 'F-4']);
@@ -304,19 +307,21 @@ eachKind('only the first page writes the summary note; a note from another page 
 eachKind('a continuing page keeps its own checkpoint and evidence while another page runs', async (t, kind) => {
   const findings = Array.from({ length: PLANNING_FINDINGS_PER_PAGE + 1 }, (_, i) => finding(`F-${i + 1}`));
   const { review, store } = await setup(t, findings, undefined, { kind });
-  const read = (page, offset) => ({ sessionID: `ses_${page}`, page, tool: 'azpr_read_file', input: { path: '/src/Main.java', offset }, result: { sha256: `${page}:${offset}` } });
+  // What a planner session read, as the runtime keeps it: the result is a value the store holds.
+  const read = async (page, offset) => ({ sessionID: `ses_${page}`, page, tool: 'azpr_read_file', input: { path: '/src/Main.java', offset }, result: await store.object({ output: `page ${page}, offset ${offset}` }) });
   // Page 2 reads before page 1's first session ends and finishes, with details, before its second ends.
   const secondRead = deferred(), firstSession = deferred(), secondDone = deferred();
   const { invoke, payloads } = stages(async payload => {
     if (payload.commentWork.page === 2) {
-      review.commentEvidence = [...(review.commentEvidence ?? []), read(2, 99)];
+      review.commentEvidence = [...(review.commentEvidence ?? []), await read(2, 99)];
       secondRead.resolve();
       await within(firstSession.promise);
       return JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [], summaryDetails: 'Page 2 details.' });
     }
     if (!payload.continuation) {
       await within(secondRead.promise);
-      review.commentEvidence = [...(review.commentEvidence ?? []), read(1, 1)];
+      const own = await read(1, 1);
+      review.commentEvidence = [...(review.commentEvidence ?? []), own];
       return JSON.stringify({ status: 'CONTINUE', comments: [comment('F-1')], skipped: [], continuation: 'Check F-2 to F-4 next.' });
     }
     await within(secondDone.promise);
@@ -1592,6 +1597,14 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
   while (row(size).length - 1 < HOST_READ_LINE_CHARACTERS) size++;
   assert.deepEqual([row(size).length - 1, wholePages(row(size), 'y'.repeat(size)), wholePages(row(size + 1), 'y'.repeat(size + 1))], [HOST_READ_LINE_CHARACTERS, true, false]);
   assert.deepEqual(pageRows('abc').map(row => JSON.parse(row)), [{ start: 0, end: 3, text: 'abc' }]);
+  // A model reads a row as it stands, not as it parses: a member that is there twice, one more, another order
+  // or another spelling parses to the same page, or to more than the page, and is not what was written.
+  assert.equal(wholePages('{"start":0,"end":3,"text":"abc"}\n', 'abc'), true);
+  for (const [what, written] of [['a text twice', '{"start":0,"end":3,"text":"xyz","text":"abc"}'], ['a start twice', '{"start":7,"start":0,"end":3,"text":"abc"}'],
+    ['a member more', '{"start":0,"end":3,"text":"abc","note":"read this too"}'], ['another order', '{"text":"abc","start":0,"end":3}'],
+    ['blanks', '{"start": 0, "end": 3, "text": "abc"}'], ['another escape', '{"start":0,"end":3,"text":"\\u0061bc"}'], ['a list', '[{"start":0,"end":3,"text":"abc"}]']]) {
+    assert.equal(wholePages(`${written}\n`, 'abc'), false, what);
+  }
   // A row ends at a line break where one lies in its second half.
   const broken = pageRows(`${'a'.repeat(1200)}\n${'b'.repeat(1200)}`).map(row => JSON.parse(row));
   assert.deepEqual(broken.map(row => [row.start, row.end]), [[0, 1201], [1201, 2401]]);
@@ -1670,6 +1683,24 @@ test('a value is made ready when it is handed out: pages that do not give it who
     await whole(again, value);
     assert.equal(await reopened.read(again), value, name);
   }
+  // Pages that cannot be read are no pages: with a sound object they are replaced, when the value is handed out
+  // and when it is put. (An administrator reads every file, so there is nothing to see as one.)
+  const locked = `locked ${'k'.repeat(5000)}`, lock = await reopened.put(locked);
+  if (process.getuid?.() !== 0) {
+    for (const hand of [() => reopened.holds(lock), () => reopened.put(locked)]) {
+      await chmod(lock.pages, 0o000);
+      await assert.rejects(readFile(lock.pages, 'utf8'), { code: 'EACCES' });
+      assert.ok(await hand());
+      await whole(lock, locked);
+      assert.equal((await stat(lock.pages)).mode & 0o777, 0o600);
+    }
+  }
+  // A row that says its text twice parses to the value and reads otherwise: such pages are written again.
+  const doubled = (await rowsOf(lock)).map(row => row.replace('"text":', '"text":"something else","text":')).join('\n') + '\n';
+  await writeFile(lock.pages, doubled);
+  assert.equal(await reopened.holds(lock), true);
+  assert.notEqual(await readFile(lock.pages, 'utf8'), doubled);
+  await whole(lock, locked);
   // Nor does a put say anything of a later one: a value this very store put before is looked at again when it is
   // put again, since its files may have been damaged since.
   const twice = `put twice ${'t'.repeat(6000)}`, once = await reopened.put(twice);
@@ -1791,4 +1822,34 @@ test('a value is stored as the text a file can hold, and only a reference the st
   // And one that another writer has made right since is listed the next time.
   await writeFile(observations[1].outputRef.file, output(1));
   assert.deepEqual(await listed(), ['/src/file-0.ts', '/src/file-1.ts', '/src/file-3.ts']);
+  assert.equal(observations[0].key, observationKey('azpr_read_file', { path: '/src/file-0.ts', version: 'head' }, output(0)), 'An observation is known by its key before it is saved.');
+  // A list is handed out a few values at a time, each value once however many items name it, and in its order:
+  // a large review has thousands of observations, and each is read whole to be made ready.
+  const many = await Promise.all(Array.from({ length: 30 }, (_, index) => reopened.put(`value ${index % 20} ${'n'.repeat(300)}`)));
+  await rm(many[7].file);
+  await rm(many[7].pages);
+  let running = 0, most = 0;
+  const asked = [];
+  const counting = { ...reopened, async holds(reference) { asked.push(reference.sha256); most = Math.max(most, ++running); try { return await reopened.holds(reference); } finally { running--; } } };
+  const items = many.map((reference, index) => ({ index, reference }));
+  const handed = await heldItems(counting, items, item => [item.reference]);
+  assert.deepEqual(handed.map(item => item.index), items.filter(item => item.index % 20 !== 7).map(item => item.index), 'In their order, without the ones whose value is gone.');
+  assert.deepEqual([asked.length, new Set(asked).size, most <= 8, most > 1], [20, 20, true, true], 'Each of the 20 values was looked at once, at most eight at a time.');
+  assert.deepEqual(await heldItems(counting, [], () => []), []);
+  // What a planning page's earlier sessions read, for its continuation: an entry is listed only where the store
+  // holds its saved result ready, and its saved input where that was too large to stay inline.
+  const large = { path: '/src/large.ts', note: 'l'.repeat(13000) };
+  const entry = async (tool, input, result) => ({ sessionID: 'ses_plan', page: 1, tool, input: await reopened.pack(input), result: await reopened.object({ output: result }) });
+  const evidence = [await entry('read', { path: 'a' }, 'kept'), await entry('read', { path: 'b' }, 'its result is cut'), await entry('azpr_read_file', large, 'its input is gone'),
+    await entry('read', { path: 'd' }, 'its pages are gone'), await entry('azpr_read_file', { ...large, path: '/src/other.ts' }, 'kept too')];
+  assert.ok(evidence[2].input.azprData && !evidence[0].input.azprData, 'A large input is a reference; a small one stays as it is.');
+  await writeFile(evidence[1].result.file, 'cut');
+  await writeFile(evidence[1].result.pages, 'cut');
+  await rm(evidence[2].input.azprData.file);
+  await rm(evidence[2].input.azprData.pages);
+  await rm(evidence[3].result.pages);
+  const index = await evidenceIndex(reopened, evidence);
+  const rows = (await reopened.read(index)).trim().split('\n').map(row => JSON.parse(row));
+  assert.deepEqual(rows, [evidence[0], evidence[3], evidence[4]]);
+  assert.ok((await readFile(evidence[3].result.pages, 'utf8')).length > 0, 'Pages that were gone are written again from the object.');
 });

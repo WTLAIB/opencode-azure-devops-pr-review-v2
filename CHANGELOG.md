@@ -71,9 +71,7 @@ Private sessions:
   in a directory that has an `AGENTS.md` of its own (from OpenCode 2.3.1 also
   a `CLAUDE.md`), OpenCode leaves that file in the session. 0.5.0 took it for
   someone else's message and failed the pass, and its retry too. Such a
-  message is now kept from the model and ends no turn. A request in which
-  another plugin put that file's text somewhere else is not sent, and the
-  pass fails instead of going on with it.
+  message is now kept from the model and ends no turn.
 - **A reviewer's command that goes on in the background no longer fails its
   pass** (only with `shell` set to `ask` or `inherit`). From OpenCode 2.3.1 a
   command that outlasts its timeout, 120 seconds by default, is moved to the
@@ -81,9 +79,11 @@ Private sessions:
   that notice for someone else's message: the pass failed, and its retry ran
   the command again. The notice of a command the session itself started is
   now part of the turn, once for each such command. A turn ends where the
-  session's work on its prompt ends: a command that ends later wakes the
-  session, which then gets no model request and no tool, and the answer
-  stands.
+  session's work on its prompt ends, which is when the session goes idle and
+  not when it has answered: a command that ends before that, also right
+  after the answer, is handed to the model in the same turn, which may
+  answer once more; one that ends later wakes the session, which then gets
+  no model request and no tool, and the answer stands.
 - AZPR's tool definitions are no longer in the requests OpenCode builds for
   an ordinary conversation outside a turn (a summary, also the one it writes
   in the background, and a generation such as a side question): six

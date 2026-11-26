@@ -84,13 +84,16 @@ export function wholePages(content, text) {
     try { page = JSON.parse(row); } catch { return false; }
     if (page === null || typeof page !== 'object' || page.start !== at || typeof page.text !== 'string' || !page.text.length ||
         page.end !== at + page.text.length || !text.startsWith(page.text, at)) return false;
+    // A model reads the row as it stands: it must say nothing but this, once. A member that is there twice, or
+    // one more, parses to the same and reads otherwise.
+    if (row !== json({ start: page.start, end: page.end, text: page.text })) return false;
     at = page.end;
   }
   return at === text.length;
 }
 
-const absent = error => { if (error?.code === 'ENOENT') return undefined; throw error; };
-const present = path => readFile(path, 'utf8').catch(absent);
+// A file's text, and nothing where it is not there or cannot be read.
+const present = path => readFile(path, 'utf8').catch(() => undefined);
 /**
  * The text of an object that is what its name says, and nothing where it is not or cannot be read. Its bytes are
  * what the name is the digest of: a write that was cut off inside a character decodes like the whole character.
@@ -112,8 +115,9 @@ async function replace(path, content) {
   }
 }
 
-/** A value's pages, made right: left where they give the text whole through the host's read, written where they do not or are not there. */
+/** A value's pages, made right: left where they give the text whole through the host's read, written where they do not, are not there or cannot be read. */
 async function settlePages(file, text) {
+  // Pages that cannot be read (a file without permissions, say) are no pages: writing them again replaces them.
   const pages = file + '.pages.jsonl', existing = await present(pages);
   if (existing === undefined || !wholePages(existing, text)) await replace(pages, pageRows(text).join('\n') + '\n');
 }
@@ -220,17 +224,51 @@ export async function createCommentData({ root, directory: existing } = {}) {
   };
 }
 
+/** What tells one invocation's observation from another: its tool, its arguments and what it returned. */
+export const observationKey = (tool, input, output) => hash(json([tool, input, output]));
+
 /** No tool/schema interpretation; retain each invocation separately from bytes. */
 export async function captureObservation(store, tool, input, output) {
-  return { tool, input, outputRef: await store.put(output), key: hash(json([tool, input, output])) };
+  return { tool, input, outputRef: await store.put(output), key: observationKey(tool, input, output) };
+}
+
+// How many saved values are made ready at a time when a list of them is handed out: each is read whole.
+const HELD_AT_ONCE = 8;
+
+/**
+ * Of items that carry references a review saved, those whose references the store holds ready now, in their
+ * order. Every value is made ready once in this handing out, however many items name it, and a few at a time: a
+ * large review has thousands of observations, and several planning pages hand them out side by side. Nothing
+ * is kept for the next time.
+ */
+export async function heldItems(store, items, references) {
+  const asked = new Map();
+  const held = reference => {
+    const key = json([reference?.file, reference?.pages, reference?.sha256]);
+    if (!asked.has(key)) asked.set(key, store.holds(reference));
+    return asked.get(key);
+  };
+  const kept = [];
+  for (let at = 0; at < items.length; at += HELD_AT_ONCE) {
+    const some = items.slice(at, at + HELD_AT_ONCE);
+    const ready = await Promise.all(some.map(async item => (await Promise.all(references(item).map(held))).every(Boolean)));
+    kept.push(...some.filter((_, index) => ready[index]));
+  }
+  return kept;
 }
 
 export async function observationIndex(store, observations) {
   // Only what the store holds ready is listed, as it is now: a reference that a review saved is handed to a
   // model, which reads its pages by itself, and the files it names may be damaged or gone since (`holds`).
-  const held = await Promise.all(observations.map(({ outputRef }) => store.holds(outputRef)));
-  return store.put((await Promise.all(observations.filter((_, index) => held[index]).map(async ({ tool, input, outputRef }) =>
+  const held = await heldItems(store, observations, ({ outputRef }) => [outputRef]);
+  return store.put((await Promise.all(held.map(async ({ tool, input, outputRef }) =>
     json({ tool, arguments: await store.pack(input, 2000), output: outputRef })))).join('\n') + '\n', 'jsonl');
+}
+
+/** What a planning page's earlier sessions read, for its continuation: the entries whose saved references the store holds ready now. */
+export async function evidenceIndex(store, evidence) {
+  const held = await heldItems(store, evidence, item => [item.result, ...(item.input?.azprData ? [item.input.azprData] : [])]);
+  return store.put(held.map(item => json(item)).join('\n') + '\n', 'jsonl');
 }
 
 export const argumentValues = value => typeof value === 'string' ? [value]

@@ -63,8 +63,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   pages got about two thirds of it. Pages of a saved review that do not fit
   are written again whenever it is used.
 - **Stages in one order (0.5.1).** A review's receipt lists the stages by
-  their place in the pipeline, and the report is in the last one, whichever
-  session OpenCode created first.
+  their place in the pipeline, and the report is in the last one that did
+  not fail, whichever session OpenCode created first.
 - **Settings of 0.4.x are updated on a confirmation (0.5.0).** A version-2
   settings file is left as it is and not used. `/pr-setup` shows what its
   update changes and writes the new file only for a confirmation of that

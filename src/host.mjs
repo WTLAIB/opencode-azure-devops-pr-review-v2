@@ -245,11 +245,13 @@ export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
 export const claudeInstructions = sources => sources.map(source => source.text).join('\n\n');
 
 /**
- * The instruction files OpenCode leaves in a session by itself after the session's native read tool read a file of
- * the project: the files between that file and the conversation's directory (AGENTS.md; from OpenCode 2.3.1 also
- * CLAUDE.md), as a synthetic message whose `metadata.instruction.paths` names the files it holds (OpenCode 2.3.0
- * through 2.4.1). Nothing else is one: not a message without an ID, and not a person's message or an assistant
- * message that carries such metadata. This is the form a session's own messages hold it in.
+ * The form of the message in which OpenCode leaves instruction files in a session by itself, after the session's
+ * native read tool read a file of the project: the files between that file and the conversation's directory
+ * (AGENTS.md; from OpenCode 2.3.1 also CLAUDE.md), as a synthetic message whose `metadata.instruction.paths`
+ * names the files it holds (OpenCode 2.3.0 through 2.4.1). That metadata is what the host itself goes by: it is
+ * its only record of which files a session was given. Nothing else has this form: not a message without an ID,
+ * and not a person's message or an assistant message that carries such metadata. The text is not looked at:
+ * whoever writes the metadata writes the text too, so it would prove nothing more.
  */
 export function isInstructionLoad(message) {
   const paths = message?.metadata?.instruction?.paths;
@@ -260,9 +262,34 @@ export function isInstructionLoad(message) {
 /**
  * An update of the instructions as a session's own messages hold it: OpenCode writes a `system` message when a
  * source changed while the session ran (an instruction file that was edited, an MCP server that says something
- * else), and nothing else writes one (OpenCode 2.3.0 through 2.4.1, from `session.instructions.updated`).
+ * else, the date at midnight), and nothing else writes one (OpenCode 2.3.0 through 2.4.1, from
+ * `session.instructions.updated`; the host marks it `notice: "instructions"`, which is not asked for here: a
+ * message of this type is the host's own, whatever a later version marks it with).
  */
 export const isInstructionUpdate = message => message?.type === 'system' && typeof message.id === 'string' && message.id.length > 0 && typeof message.text === 'string';
+
+// The native tool whose reads make the host load instruction files (see READ_TOOLS in config.mjs).
+const NATIVE_READ = 'read';
+
+/**
+ * What the host wrote of instructions into a session by itself, among the session's own messages: its updates,
+ * and its loads of instruction files. A load is the late result of the session's own tool call, like the notice
+ * of a background command: it counts only after an assistant message of this session called the native read
+ * tool, since nothing else makes the host write one. A message of that form in a session that never read is
+ * someone else's. Who wrote a message cannot be proved beyond that: a message of the form that someone posts
+ * after such a call is taken for the host's. It is kept from the model like the host's own, so its text
+ * reaches no answer.
+ */
+export function hostInstructions(messages) {
+  const loads = [], updates = [];
+  let read = false;
+  for (const message of messages) {
+    if (message?.type === 'assistant') read ||= Array.isArray(message.content) && message.content.some(part => part?.type === 'tool' && part.name === NATIVE_READ);
+    else if (isInstructionUpdate(message)) updates.push(message);
+    else if (read && isInstructionLoad(message)) loads.push(message);
+  }
+  return { loads, updates };
+}
 
 // What OpenCode makes of such an update in a request: a system message whose content is its text as one text
 // part, without an ID, metadata or tools. The other system messages it knows change a model's effort or its
@@ -273,48 +300,43 @@ const updateText = message => {
   return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
 };
 
-// Whether a value holds one of the texts whole in one of its strings, however deep: a message's content is a
-// string, parts, or what a tool returned. Bytes are no text, and a value is looked at once.
-const holdsText = (value, texts) => {
-  const seen = new Set(), open = [value];
-  while (open.length) {
-    const item = open.pop();
-    if (typeof item === 'string') { if (texts.some(text => item.includes(text))) return true; continue; }
-    if (item === null || typeof item !== 'object' || ArrayBuffer.isView(item) || item instanceof ArrayBuffer || seen.has(item)) continue;
-    seen.add(item);
-    for (const held of Array.isArray(item) ? item : Object.values(item)) open.push(held);
-  }
-  return false;
-};
+// The text of a request message whose content is text alone, as a string or as text parts; nothing where it
+// holds anything else.
+const textAlone = content => typeof content === 'string' ? content
+  : Array.isArray(content) && content.length > 0 && content.every(part => part?.type === 'text' && typeof part.text === 'string') ? content.map(part => part.text).join('') : undefined;
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
  * and its updates of the instructions. Which messages those are is the session's own word (`stored`, its
- * messages as the host holds them), not the request's: a hook that ran before this one may have changed what a
- * request message looks like. A load is taken out by its ID, whatever the request made of it; an update, which
- * has no ID in a request, wherever a system message of the host's form holds exactly its text, every copy of it.
+ * messages as the host holds them; `hostInstructions`), not the request's. Only what is such a message as
+ * OpenCode builds it is taken out: a load is the user message with the load's ID whose content is the load's
+ * text, and an update, which has no ID in a request, a system message of the host's form that holds exactly an
+ * update's text (every copy of it). Another plugin's system message stays, also one that looks like the host's.
  *
- * `left` says that a message that stays still holds the text of one of them, whole and word for word in one of
- * its strings, however deep: a hook before this one joined it to another message, gave its message another ID
- * or another form. Such a request cannot be sent without showing that text, and taking it out of another
- * message is not this function's to do. A text that such a hook cut into pieces or wrote in other words is not
- * found. `loads` and
- * `updates` are the IDs of the session's messages that were found and taken out. A session that holds no such
- * message gets its request back as it is.
+ * Anything else stays as it is. A request is not searched for those texts, and a message that a hook before
+ * this one changed is not taken out for the ID it kept: it may hold what is not the host's. `changed` says that
+ * the request holds a message with a load's ID that is not the load as the host builds it, for the stage's
+ * record. `loads` and `updates` are the IDs of the session's messages that were taken out. A session that holds
+ * no such message gets its request back as it is.
  */
 export function withoutHostMessages(requested, stored) {
-  const loads = stored.filter(isInstructionLoad), updates = stored.filter(isInstructionUpdate);
-  if (!loads.length && !updates.length) return { messages: requested, loads: [], updates: [], left: false };
-  const loadIDs = new Set(loads.map(message => message.id)), found = { loads: new Set(), updates: new Set() };
+  const written = hostInstructions(stored);
+  const loads = new Map(written.loads.map(message => [message.id, message.text])), updates = new Map();
+  for (const message of written.updates) updates.set(message.text, [...(updates.get(message.text) ?? []), message.id]);
+  if (!loads.size && !updates.size) return { messages: requested, loads: [], updates: [], changed: false };
+  const found = { loads: new Set(), updates: new Set() };
+  let changed = false;
   const messages = requested.filter(message => {
-    if (typeof message?.id === 'string' && loadIDs.has(message.id)) { found.loads.add(message.id); return false; }
-    const text = updateText(message);
-    const same = text === undefined ? [] : updates.filter(update => update.text === text);
-    for (const update of same) found.updates.add(update.id);
-    return !same.length;
+    if (typeof message?.id === 'string' && loads.has(message.id)) {
+      if (message.role === 'user' && textAlone(message.content) === loads.get(message.id)) { found.loads.add(message.id); return false; }
+      changed = true;
+      return true;
+    }
+    const ids = updates.get(updateText(message));
+    for (const id of ids ?? []) found.updates.add(id);
+    return !ids;
   });
-  const texts = [...loads, ...updates].map(message => message.text).filter(text => typeof text === 'string' && text.length > 0);
-  return { messages, loads: [...found.loads], updates: [...found.updates], left: messages.some(message => holdsText(message, texts)) };
+  return { messages, loads: [...found.loads], updates: [...found.updates], changed };
 }
 
 /**

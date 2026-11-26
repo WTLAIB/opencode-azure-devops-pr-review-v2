@@ -1,6 +1,6 @@
 /** OpenCode V2 session transport. No provider, Azure or HTTP client. */
 import { isDeepStrictEqual } from 'node:util';
-import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, isInstructionLoad, isInstructionUpdate, recordOf, requireMethods } from './host.mjs';
+import { FOREIGN_MESSAGE_TYPES, USED_UP_LIMITS, isHostContinuation, hostInstructions, recordOf, requireMethods } from './host.mjs';
 
 const pendingAdmissions = new WeakMap();
 const textValue = value => typeof value === 'string' && value.length > 0;
@@ -270,8 +270,9 @@ export function classifyFailure(error) {
  * how the turn ended. The turn's answer is the last assistant message before it.
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
- * wrote of instructions (`isInstructionLoad`, `isInstructionUpdate`): the caller sends no request of this session
- * that still holds one of them, so no model of it saw them. And the notice that a background command of this
+ * wrote of instructions (`hostInstructions`): its updates, and the instruction files it loaded after a native
+ * read of this session; the caller takes them out of the session's requests where it can identify them, and
+ * nothing is asked here about what a model was shown. And the notice that a background command of this
  * session ended (`ownShellNotices`). Anyone else's message fails the request, as before, wherever the model of
  * this turn was sent it: after the prompt, and between the turn before and the prompt (`since` is that turn's
  * prompt, and what stands before a session's first prompt counts too). A turn that did not succeed fails by its
@@ -312,9 +313,11 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const changed = message => Object.assign(new Error(message), { contextChanged: true });
   const after = messages.slice(indexes[0] + 1);
   const notices = ownShellNotices(messages);
-  // What the host wrote of instructions reached no model of this session (the caller sends no request that holds
-  // it), and its notices of this session's own commands are no input of anyone else's: neither is a step.
-  const own = message => isInstructionLoad(message) || isInstructionUpdate(message) || notices.has(message);
+  // What the host wrote of instructions into the session by itself (its updates, and the instruction files it
+  // loaded after a native read of this session), and its notices of this session's own commands, are no input
+  // of anyone else's: neither is a step.
+  const written = hostInstructions(messages), loaded = new Set(written.loads), updated = new Set(written.updates);
+  const own = message => loaded.has(message) || updated.has(message) || notices.has(message);
   const steps = after.filter(message => !own(message));
   const end = steps.findIndex(message => message?.type === 'idle');
   const turn = end < 0 ? steps : steps.slice(0, end + 1);
@@ -390,7 +393,7 @@ export async function requestReview(context, { sessionID, text, role, model, met
   }
   if (retried.size) answer.retriedSteps = retried.size;
   // The instruction files the host loaded in this turn, up to its marker.
-  const loads = after.slice(0, after.indexOf(terminal)).filter(isInstructionLoad).length;
+  const loads = after.slice(0, after.indexOf(terminal)).filter(message => loaded.has(message)).length;
   if (loads) answer.instructionLoads = loads;
   // The prompt of this turn, for the caller's next one in this session (`since`).
   answer.prompt = admitted.id;
