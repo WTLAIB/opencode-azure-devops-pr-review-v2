@@ -299,8 +299,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
   }
   await cancellable(() => api.wait({ sessionID }), signal);
   settled?.();
-  const messages = await cancellable(() => api.context({ sessionID }), signal);
+  // The session's messages are read last: nothing is awaited between that reading and the decision, so what
+  // the decision rests on is the session as it stood then.
   const session = await cancellable(() => api.get({ sessionID }), signal);
+  const messages = await cancellable(() => api.context({ sessionID }), signal);
   if (!Array.isArray(messages) || session?.id !== sessionID) throw new Error('[AZPR] Invalid OpenCode V2 session context.');
   const indexes = messages.flatMap((message, index) => message?.id === admitted.id ? [index] : []);
   if (indexes.length !== 1) {
@@ -331,9 +333,11 @@ export async function requestReview(context, { sessionID, text, role, model, met
     from = ended + 1;
   }
   const between = messages.slice(from, indexes[0]).filter(message => !own(message));
-  // Either way the host recovers an interrupted stream; both need the caller's consent.
-  const retried = retriedSteps(turn, allowHostContinuations);
-  const continuation = continuedText(turn.filter(message => !retried.has(message)), allowHostContinuations);
+  // Either way the host recovers an interrupted stream; both need the caller's consent. The continuation of the
+  // earlier protocol is a message known by its text alone, so the caller consents to it only for a host that
+  // writes one (`'steps'` is a host that retries the step and queues nothing).
+  const retried = retriedSteps(turn, Boolean(allowHostContinuations));
+  const continuation = continuedText(turn.filter(message => !retried.has(message)), allowHostContinuations === true);
   const terminal = turn.at(-1);
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);

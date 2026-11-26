@@ -35,12 +35,24 @@ export function hostVersion(context) {
   return typeof context?.app?.version === 'string' ? context.app.version : 'unknown';
 }
 
+/**
+ * Whether a host of this version recovers an interrupted stream by retrying the step (OpenCode 2.3.0 and later)
+ * and never by a continuation message that it queues (2.0.32 through 2.2.7). A host that does not say its
+ * version is taken for a current one: the message of the earlier protocol is known by its text alone, which
+ * anyone can post, so it is accepted only where the host is known to write it.
+ */
+export function retriesSteps(version) {
+  const parts = /^(\d+)\.(\d+)\./.exec(typeof version === 'string' ? version : '');
+  return !parts || Number(parts[1]) > 2 || (Number(parts[1]) === 2 && Number(parts[2]) >= 3);
+}
+
 export function hostCapabilities(context) {
   const fn = path => typeof path.split('.').reduce((value, key) => value?.[key], context) === 'function';
   const version = hostVersion(context);
   return {
     version,
     tested: version === TESTED_HOST_VERSION,
+    stepRetries: retriesSteps(version),
     permissionHook: fn('permission.hook'),
     toolTransform: fn('tool.transform'),
     sessionRemove: fn('session.remove'),
@@ -294,49 +306,50 @@ export function hostInstructions(messages) {
 // What OpenCode makes of such an update in a request: a system message whose content is its text as one text
 // part, without an ID, metadata or tools. The other system messages it knows change a model's effort or its
 // tools and hold no text.
-const updateText = message => {
-  if (message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined) return undefined;
-  const content = message.content;
-  return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
-};
+const updateText = message => message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined ? undefined : oneText(message.content);
 
-// The text of a request message whose content is text alone, as a string or as text parts; nothing where it
-// holds anything else.
-const textAlone = content => typeof content === 'string' ? content
-  : Array.isArray(content) && content.length > 0 && content.every(part => part?.type === 'text' && typeof part.text === 'string') ? content.map(part => part.text).join('') : undefined;
+// The text of a content that is one text part, which is what OpenCode makes of a message's text in a request;
+// nothing where the content is anything else (a string, several parts, a part of another kind).
+const oneText = content => Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
  * and its updates of the instructions. Which messages those are is the session's own word (`stored`, its
  * messages as the host holds them; `hostInstructions`), not the request's. Only what is such a message as
  * OpenCode builds it is taken out: a load is the user message with the load's ID whose content is the load's
- * text, and an update, which has no ID in a request, a system message of the host's form that holds exactly an
- * update's text (every copy of it). Another plugin's system message stays, also one that looks like the host's.
+ * text as one text part, and an update, which has no ID in a request, a system message of the host's form that
+ * holds exactly an update's text (every copy of it). Another plugin's system message stays, also one of the
+ * host's form, unless it holds exactly the text of an update that the session holds: nothing tells the two apart.
  *
  * Anything else stays as it is. A request is not searched for those texts, and a message that a hook before
- * this one changed is not taken out for the ID it kept: it may hold what is not the host's. `changed` says that
- * the request holds a message with a load's ID that is not the load as the host builds it, for the stage's
- * record. `loads` and `updates` are the IDs of the session's messages that were taken out. A session that holds
- * no such message gets its request back as it is.
+ * this one changed (a content in another form, something joined to it, another role) is not taken out for the
+ * ID it kept: it may hold what is not the host's. `changed` says that the request holds a message with a load's
+ * ID that is not the load as the host builds it, for the stage's record. `loads` and `updates` are the IDs of
+ * the session's messages that were taken out: of updates with one text, as many as the request held, in their
+ * order. A session that holds no such message gets its request back as it is.
  */
 export function withoutHostMessages(requested, stored) {
   const written = hostInstructions(stored);
   const loads = new Map(written.loads.map(message => [message.id, message.text])), updates = new Map();
   for (const message of written.updates) updates.set(message.text, [...(updates.get(message.text) ?? []), message.id]);
   if (!loads.size && !updates.size) return { messages: requested, loads: [], updates: [], changed: false };
-  const found = { loads: new Set(), updates: new Set() };
+  const found = { loads: new Set(), updates: [] }, taken = new Map();
   let changed = false;
   const messages = requested.filter(message => {
     if (typeof message?.id === 'string' && loads.has(message.id)) {
-      if (message.role === 'user' && textAlone(message.content) === loads.get(message.id)) { found.loads.add(message.id); return false; }
+      if (message.role === 'user' && oneText(message.content) === loads.get(message.id)) { found.loads.add(message.id); return false; }
       changed = true;
       return true;
     }
-    const ids = updates.get(updateText(message));
-    for (const id of ids ?? []) found.updates.add(id);
-    return !ids;
+    const text = updateText(message), ids = updates.get(text);
+    if (!ids) return true;
+    // The copies of one text cannot be told apart: each one that the request holds is one of the session's, in their order.
+    const nth = taken.get(text) ?? 0;
+    taken.set(text, nth + 1);
+    if (nth < ids.length) found.updates.push(ids[nth]);
+    return false;
   });
-  return { messages, loads: [...found.loads], updates: [...found.updates], changed };
+  return { messages, loads: [...found.loads], updates: found.updates, changed };
 }
 
 /**

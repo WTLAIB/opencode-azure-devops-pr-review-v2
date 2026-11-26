@@ -190,12 +190,16 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    `placeInstructions` lists the instruction sources of the conversation's
    place that were left out of its requests (`core/instructions` for
    instruction files, `core/mcp-guidance` and so on), `instructionLoads` and
-   `instructionUpdates` count the instruction files OpenCode loaded beside a
-   file the session read and the updates it wrote, and
-   `placeInstructionsNotToldApart` counts the requests that went out as
-   they were because their parts, or a loaded instruction file among their
-   messages, did not have the form AZPR knows (a newer OpenCode, or another
-   plugin that edited them). `shellNotices` on the stage
+   `instructionUpdates` count the messages that were taken out of its
+   requests: those in which OpenCode loaded instruction files beside a file
+   the session read (one message can hold several files) and those in which
+   it wrote an update, and `placeInstructionsNotToldApart` counts the
+   requests that went out as they were because their parts did not have the
+   form AZPR knows, or a message that still had a loaded file's ID was not
+   that file as OpenCode builds it (a newer OpenCode, or another plugin that
+   edited them). A loaded file that another plugin moved elsewhere, or gave
+   another ID, is not seen at all, so a counter of zero does not say that
+   no such text went out. `shellNotices` on the stage
    counts background commands that reported back. `turnChecks` counts how
    often the session's messages were read, once before every request of an
    open turn; and `refusedOutsideTurn` the requests that were refused

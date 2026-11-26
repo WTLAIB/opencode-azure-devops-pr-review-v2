@@ -70,8 +70,9 @@ settings, backups and failure records. Never upload `.local/`.
   native read tool. The `context` hook reads the session's messages and
   takes out of the request what is such a message as the host builds it
   (`withoutHostMessages`): the user message with a load's ID and the load's
-  text, and a system message of the host's form that holds exactly an
-  update's text. Never tell them by what a request message looks like
+  text as one text part, and a system message of the host's form that holds
+  exactly an update's text (another plugin's system message that is the
+  same in form and text cannot be told from it). Never tell them by what a request message looks like
   alone, never take a message out for the ID it has alone (one that a hook
   before AZPR's changed may hold what is not the host's), and never take a
   message of the load's form for the host's in a session that did not read.
@@ -135,7 +136,9 @@ settings, backups and failure records. Never upload `.local/`.
   run (its idle hook runs only when a turn succeeds), or by the wait alone.
   What follows a request (the request itself, a retry of it, the tool calls
   of its answer) needs a request of this very turn that was looked at so
-  (`inTurn`). What a hook reads of the host, it reads until the stage ends
+  (`inTurn`), and a request that is refused, whatever for (the turn, the
+  session's agent or model, a look that failed), ends what an earlier one
+  allowed. What a hook reads of the host, it reads until the stage ends
   (`signal` on the grant), not the run: a stage that was stopped waits for
   its session to settle.
 - What a session read is what its turns read, by the host's record and not
@@ -281,7 +284,10 @@ settings, backups and failure records. Never upload `.local/`.
   a step it retried (OpenCode 2.3.0 and later) or a continuation it queued
   (earlier hosts). Accept an errored assistant message only with the host's retry mark
   and a complete, successful final answer on the granted agent and model; a
-  retried step's answer is the final message alone.
+  retried step's answer is the final message alone. The continuation message
+  of the earlier hosts is known by its text alone, which anyone can post:
+  accept it only on a host that writes one (`retriesSteps` in `host.mjs`; a
+  host that does not say its version is taken for a current one).
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
@@ -555,18 +561,21 @@ settings, backups and failure records. Never upload `.local/`.
   pages give it whole through the host's read: rows the read returns uncut,
   one after another, that together are the value, each row reading as it
   parses (`wholePages`: a member that is there twice parses to the value
-  and reads otherwise). A value is made ready when it is handed out, each
-  time, and not when its store is opened: when it is put, from the text in
-  hand, also where this process put it before; and when a reference that
-  was saved earlier (by a review, or by an earlier session of the same run)
-  is handed to a model or read, from its files (`holds`, `read`; a list of
-  them through `heldItems`, a few values at a time and each value once).
-  Every place that hands such a reference to a model goes through that.
+  and reads otherwise). A value is made ready when it is put, from the text
+  in hand, at every put; and when a reference that a review saved is handed
+  to a model or read, from its files, each time (`holds`, `read`; a list of
+  them through `heldItems`, a few values at a time and each value once): an
+  earlier version, or a process that was cut off, may have written them.
+  Between a put and the end of its run a value is what the put made it, and
+  is not looked at again when a reference is handed on within the run (the
+  retry of a stage, the continuation of a planning page): only that run
+  writes those files, since an earlier version never replaces a file that
+  exists and a run's data is not cleaned up before its command has ended.
   Pages that do not pass (rows of an earlier version, a file that is
   missing, cannot be read or was not finished) are written again from the
   value. Judge pages that are there by what the host's read returns, not by
   the length this version writes. Keep no mark that says a store, or a
-  value at an earlier time, is ready: an earlier version that still runs,
+  value of a saved review, is ready: an earlier version that still runs,
   and another process, write into the same directory. An object is what its
   name says by its bytes, not by the text they decode to, and a value is
   the text a file can hold (no lone surrogate), so that object and pages
@@ -574,9 +583,9 @@ settings, backups and failure records. Never upload `.local/`.
   damaged or gone and its pages are complete, write the object again from
   them. Replace a file in one step. A value that cannot be made ready is
   not handed out, and the others are not held back for it: opening a store
-  never fails for one value. What is only kept for later is not made ready
-  again and again: a file that a reviewer reads in several windows is one
-  observation, saved once (`observationKey`).
+  looks at its directory alone and never fails for one value. A file that a
+  reviewer reads in several windows is one observation, known by its tool,
+  commit and path, and saved once.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).

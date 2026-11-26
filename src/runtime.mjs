@@ -18,7 +18,7 @@ import { createReviewSession, requestReview, interruptSession, appendReport, cla
 import { COMMANDS, COMMAND_NAMES, MODES, ROLES, PROMPTS, PLUGIN_ID, PACKAGE_NAME, REPOSITORY, roleFor, privateAgent, commentRole, allowedTools, buildAgents, validateSettings, withMissingSettings, settingsText, modelRef, stageModel, firstModel, modeReady, raterState, patProblem } from './config.mjs';
 import { parseUniqueJSON, parseReviewRequest, parseCommentRequest, visibleText } from './output.mjs';
 import { createDiagnostics, diagnosticResponse, diagnosticToolError, createStageTiming, collectToolObservations } from './diagnostics.mjs';
-import { createCommentData, captureObservation, observationKey, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
+import { createCommentData, captureObservation, PAGE_CHARACTERS, COMMENT_TURN_CHARACTERS } from './comment-data.mjs';
 import { prepareComments, publishPlan, discussionDigest, PLANNING_PARALLEL_PAGES } from './comment-work.mjs';
 import { automaticPublicationProblems, automaticPublicationRepeats, publicationItems, publishableFindings, reviewMethod,
   everAdjusted, hasAdjustments, resolveAdjustments, everyFindingExcluded, publicationStarted, describeAdjustments, describeEarlierText, excludedReferences, previewNextSteps, previewActions, commentToken } from './comments.mjs';
@@ -825,7 +825,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     try {
       answer = await bounded(() => requestReview(context, {
         sessionID, role: g.role, model: modelRef(g.model), text, metadata: { azprGrant: nonce },
-        signal, allowHostContinuations: true, settled: () => close(g), since: g.validated,
+        // An interrupted stream that the host recovered: by a retried step, and by a continuation message only
+        // on a host that writes one (before OpenCode 2.3.0), since that message is known by its text alone.
+        signal, allowHostContinuations: capabilities.stepRetries ? 'steps' : true, settled: () => close(g), since: g.validated,
       }), signal);
       // The turn that was looked at: the next one in this session is looked at from its end on.
       g.validated = answer.prompt;
@@ -1091,7 +1093,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
     requireMethods(context, ['session.create', 'session.get', 'session.prompt', 'session.wait', 'session.context', 'session.interrupt', 'session.synthetic'], 'the review workflow');
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
-    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(),
+    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(), observedSources: new Set(),
       deadlineAt: settings.runTimeoutSeconds === null ? null : Date.now() + settings.runTimeoutSeconds * 1000 };
     runs.set(id, run);
     sourceRuns.set(run.origin, id);
@@ -1968,11 +1970,13 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       touch(g, `tool ${name} ended`);
     }
     let observation;
-    // Keep observed source text with its request for anchor checks in comment planning, once: a file that is
-    // read in several windows is one observation, and is saved by the first of them. A stopped call does not
-    // wait for that save, which finishes by itself.
+    // Keep observed source text with its request for anchor checks in comment planning, once: a file at a commit
+    // is the same in every window that is read of it, so it is one observation, saved by the first of them and
+    // known afterwards by the tool, the commit and the path, without its text being looked at again. A stopped
+    // call does not wait for that save, which finishes by itself.
     const observed = outcome.observation && ROLES[g.role].format === 'initial' ? { path: outcome.observation.path, version: outcome.observation.version } : null;
-    if (observed && !g.run.toolText.has(observationKey(name, observed, outcome.observation.text))) {
+    const source = observed && `${name}\n${observed.version}\n${observed.path}`;
+    if (observed && !g.run.observedSources.has(source)) {
       try {
         observation = await scoped(async () => captureObservation(await dataFor(g.run), name, observed, outcome.observation.text), stop);
       } catch {
@@ -1981,7 +1985,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
     // A call the host stopped ends here: it showed the session nothing, so nothing is credited to it.
     if (stop?.aborted) throw abortError(stop);
-    if (observation) g.run.toolText.set(observation.key, observation);
+    if (observation) { g.run.toolText.set(observation.key, observation); g.run.observedSources.add(source); }
     // Only contents this call showed at the reviewed commits count as this session's reads, and only once the
     // turn of the assistant message that asked for the call is looked at (`ask`): OpenCode names that message
     // to the tool. A call that names none is credited to no turn.
@@ -2050,7 +2054,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.open = true;
       touch(g, 'the prompt was admitted');
     }));
-    registrations.push(await context.session.hook('context', async event => {
+    const prepare = async event => {
       const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
       if (!privateSession(event)) {
         // AZPR's PAT-backed tools exist only for its private reviewers.
@@ -2074,13 +2078,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Looked at again, with nothing awaited between this and what follows: the call that waits for the turn
       // can have ended while the messages were read.
       if (state !== 'running' || grants.get(event.sessionID) !== g || !g.open || g.turn !== turn) {
-        if (grants.get(event.sessionID) === g && g.turn === turn) {
-          // Past its marker the turn is over. Before its prompt is a message, the turn's own request is still to
-          // come, and where the messages could not be read nothing is known: either way, a request of this turn
-          // that was looked at earlier says nothing for what follows this one.
-          if (state === 'ended') close(g);
-          else { g.checked = null; g.primaryPrepared = false; }
-        }
+        // Past its marker the turn is over; before its prompt is a message, the turn's own request is still to come.
+        if (state === 'ended' && grants.get(event.sessionID) === g && g.turn === turn) close(g);
         g.refusedOutsideTurn++;
         throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
       }
@@ -2123,6 +2122,17 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       g.checked = turn;
       g.primaryPrepared = true;
+    };
+    registrations.push(await context.session.hook('context', async event => {
+      // A request that is refused, whatever for (the session's agent or model, the turn, a look at the session
+      // that failed), ends what an earlier request of the session allowed: its dispatch, a retry of it and the
+      // tool calls of its answer. A request that passes allows them again.
+      try { await prepare(event); }
+      catch (error) {
+        const refused = grants.get(event.sessionID);
+        if (refused) { refused.checked = null; refused.primaryPrepared = false; }
+        throw error;
+      }
     }));
     // OpenCode builds two kinds of requests outside a turn's `context` hook, each with the session's whole tool
     // list: a summary (`compaction`, also the one it writes in the background) and a generation such as a side

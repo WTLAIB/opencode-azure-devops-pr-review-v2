@@ -37,9 +37,11 @@ OpenCode 2.4.x:
   UI has loaded the commands. With OpenCode 2.4.0 and 2.4.1 that happened in
   14 of 16 starts in a fixture (1 of 12 on 2.3.0 and 2.3.2), and in 10 of the
   14 the conversation ran on OpenCode's built-in free model, which would have
-  been sent the PR URL and the context. AZPR now refuses a prompt of an
-  ordinary conversation that begins with one of its commands, before any
-  model gets it, and says so there. The terminal UI then reports a session
+  been sent the PR URL and the context. Where AZPR's settings are in use, it
+  now refuses a prompt of an ordinary conversation that begins with one of
+  its commands, before any model gets it, and says so there (a process
+  without usable settings, as before a first setup, has no such hook). The
+  terminal UI then reports a session
   that failed and may try again in new conversations, which stay empty.
   Start commands in the terminal UI once they are listed, or from a script
   with the command endpoint.

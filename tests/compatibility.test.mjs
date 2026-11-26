@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -109,6 +109,11 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(capabilities.eventSubscribe, false);
   assert.equal(hostCapabilities({ event: { subscribe() {} } }).eventSubscribe, true);
   assert.equal(hostCapabilities({}).version, 'unknown');
+  // A host retries the step of a stream that broke from 2.3.0 on, and queues a message that asks the model to
+  // continue before that. A host that does not say its version is taken for a current one: that message is
+  // known by its text alone, so it is accepted only where the host is known to write it.
+  assert.deepEqual(['2.0.32', '2.2.7', '2.3.0', '2.3.2', '2.4.1', '2.10.0', '3.0.0', 'unknown', '', undefined].map(version => [version, retriesSteps(version)]).filter(([, steps]) => !steps).map(([version]) => version), ['2.0.32', '2.2.7']);
+  assert.deepEqual([hostCapabilities({ app: { version: '2.2.7' } }).stepRetries, capabilities.stepRetries, hostCapabilities({}).stepRetries], [false, true, true]);
   assert.equal(hostCapabilities({}).pluginList, false);
   assert.equal(hostCapabilities({ plugin: { list() {} } }).pluginList, true);
   assert.equal(hostCapabilities({}).sessionUpdate, false);
@@ -283,17 +288,17 @@ test('a request loses what the host wrote of instructions where it is as the hos
   const plain = [prompt, step, { role: 'user', content: 'added by a hook' }];
   assert.deepEqual(withoutHostMessages(plain, stored.slice(0, 2)), { messages: plain, loads: [], updates: [], changed: false });
   assert.equal(withoutHostMessages(plain, stored.slice(0, 2)).messages, plain);
-  // A load as the host builds it is the user message with its ID and its text, as a string, as one text part or
-  // as several, with or without the metadata. An update is taken out wherever a system message of the host's
-  // form holds its text, every copy of it, and two updates of one text are both counted; another hook's own
-  // system message stays, and so does a message that a hook added.
+  // A load as the host builds it is the user message with its ID and its text as one text part, with or without
+  // the metadata. An update is taken out wherever a system message of the host's form holds its text, every
+  // copy of it; of two updates with one text, as many are counted as the request held, in their order. Another
+  // hook's own system message stays, and so does a message that a hook added.
   const directive = { role: 'system', content: [{ type: 'text', text: 'Answer briefly.' }] };
   const twice = [...stored, { ...stored[3], id: 'msg_update_again' }];
   for (const [name, messages, kept, updates = ['msg_update'], session = stored] of [
-    ['a load whose content is a string, with its metadata', [prompt, step, { id: 'msg_load', role: 'user', content: stored[2].text, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
-    ['a load in two text parts', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text.slice(0, 9) }, { type: 'text', text: stored[2].text.slice(9) }] }, update, notice], [prompt, step, notice]],
+    ['a load with its metadata', [prompt, step, { ...load, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
     ['the update twice', [prompt, step, load, update, update, notice], [prompt, step, notice]],
     ['two updates of one text', [prompt, step, load, update, update, notice], [prompt, step, notice], ['msg_update', 'msg_update_again'], twice],
+    ['two updates of one text, of which the request holds one', [prompt, step, load, update, notice], [prompt, step, notice], ['msg_update'], twice],
     ['another hook\'s system message', [prompt, step, load, update, directive, notice], [prompt, step, directive, notice]],
     ['a user message that a hook added', [prompt, step, load, update, notice, { role: 'user', content: 'added by a hook' }], [prompt, step, notice, { role: 'user', content: 'added by a hook' }]],
   ]) {
@@ -306,11 +311,13 @@ test('a request loses what the host wrote of instructions where it is as the hos
   assert.deepEqual(withoutHostMessages(requested, unread), { messages: [prompt, step, load, notice, effort], loads: [], updates: ['msg_update'], changed: false });
   // What is not such a message as the host builds it stays as it is: it may hold what is not the host's, and it
   // is not this function's to take a message apart or to look through a request for a text. A message with a
-  // load's ID that a hook before this one changed (something joined to it, another role, a part that is no
-  // text) stays, and the result says so; where the load has another ID or none, or an update another form,
-  // nothing says that it is one.
+  // load's ID that a hook before this one changed (its text as a string or in two parts, something joined to
+  // it, another role, a part that is no text) stays, and the result says so; where the load has another ID or
+  // none, or an update another form, nothing says that it is one.
   const shell = 'The command ended: exit 0';
   for (const [name, messages, changed] of [
+    ['the load\'s text as a string', [prompt, step, { id: 'msg_load', role: 'user', content: stored[2].text }, notice], true],
+    ['the load\'s text in two parts', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text.slice(0, 9) }, { type: 'text', text: stored[2].text.slice(9), annotation: 'of a hook' }] }, notice], true],
     ['something joined to the load', [prompt, step, { ...load, content: [{ type: 'text', text: `${shell}\n\n${stored[2].text}` }] }, notice], true],
     ['the load as another role', [prompt, step, { ...load, role: 'assistant' }, notice], true],
     ['the load with a part that is no text', [prompt, step, { ...load, content: [...load.content, { type: 'media', data: 'AAAA' }] }, notice], true],

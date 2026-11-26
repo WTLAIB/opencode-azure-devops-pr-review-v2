@@ -1,7 +1,7 @@
 // Lossless private data transport. Page sizes are working-set sizes, never
 // limits on PR size, retained evidence, findings, comments or model rounds.
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, writeFile, readFile, readdir, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HOST_READ_LINE_CHARACTERS } from './host.mjs';
 
@@ -159,8 +159,11 @@ export async function createCommentData({ root, directory: existing } = {}) {
   // The puts of this process that are under way, by digest: two of one value are one, and nothing is kept of a
   // put that has ended, since what it wrote says nothing about the files a moment later.
   const putting = new Map();
-  if (existing) await readdir(join(existing, 'objects'));
-  else {
+  // An existing store is opened by looking at its directory, not at what it holds: each value is looked at when
+  // it is handed out.
+  if (existing) {
+    if (!(await stat(join(existing, 'objects'))).isDirectory()) throw Object.assign(new Error('The private data store has no objects directory.'), { code: 'ENOTDIR' });
+  } else {
     if (!root) throw new Error('A private data root is required.');
     await mkdir(root, { recursive: true, mode: 0o700 });
     directory = await mkdtemp(join(root, 'data-'));
@@ -237,38 +240,27 @@ const HELD_AT_ONCE = 8;
 
 /**
  * Of items that carry references a review saved, those whose references the store holds ready now, in their
- * order. Every value is made ready once in this handing out, however many items name it, and a few at a time: a
- * large review has thousands of observations, and several planning pages hand them out side by side. Nothing
- * is kept for the next time.
+ * order. The values are made ready a few at a time, each value once however many items name it: a large review
+ * has thousands of observations, and several planning pages hand them out side by side. Nothing is kept for the
+ * next time.
  */
 export async function heldItems(store, items, references) {
-  const asked = new Map();
-  const held = reference => {
-    const key = json([reference?.file, reference?.pages, reference?.sha256]);
-    if (!asked.has(key)) asked.set(key, store.holds(reference));
-    return asked.get(key);
-  };
-  const kept = [];
-  for (let at = 0; at < items.length; at += HELD_AT_ONCE) {
-    const some = items.slice(at, at + HELD_AT_ONCE);
-    const ready = await Promise.all(some.map(async item => (await Promise.all(references(item).map(held))).every(Boolean)));
-    kept.push(...some.filter((_, index) => ready[index]));
+  const named = item => references(item).map(reference => [json([reference?.file, reference?.pages, reference?.sha256]), reference]);
+  const values = new Map(items.flatMap(named)), held = new Map();
+  for (const keys = [...values.keys()]; keys.length;) {
+    const some = keys.splice(0, HELD_AT_ONCE);
+    (await Promise.all(some.map(key => store.holds(values.get(key))))).forEach((ready, index) => held.set(some[index], ready));
   }
-  return kept;
+  return items.filter(item => named(item).every(([key]) => held.get(key)));
 }
 
 export async function observationIndex(store, observations) {
   // Only what the store holds ready is listed, as it is now: a reference that a review saved is handed to a
-  // model, which reads its pages by itself, and the files it names may be damaged or gone since (`holds`).
+  // model, which reads its pages by itself, and the files it names may be of an earlier version, damaged or
+  // gone (`holds`).
   const held = await heldItems(store, observations, ({ outputRef }) => [outputRef]);
   return store.put((await Promise.all(held.map(async ({ tool, input, outputRef }) =>
     json({ tool, arguments: await store.pack(input, 2000), output: outputRef })))).join('\n') + '\n', 'jsonl');
-}
-
-/** What a planning page's earlier sessions read, for its continuation: the entries whose saved references the store holds ready now. */
-export async function evidenceIndex(store, evidence) {
-  const held = await heldItems(store, evidence, item => [item.result, ...(item.input?.azprData ? [item.input.azprData] : [])]);
-  return store.put(held.map(item => json(item)).join('\n') + '\n', 'jsonl');
 }
 
 export const argumentValues = value => typeof value === 'string' ? [value]

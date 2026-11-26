@@ -91,7 +91,7 @@ async function fixture(t, opts = {}) {
   // What OpenCode 2.3.0 through 2.4.1 make of a session's messages in a request: every user message has the ID of
   // the message it was made of, an update of the instructions is a system message of its text as one part, without
   // an ID, and a marker is no message of a request.
-  const project = history => history.flatMap(message => ['user', 'synthetic'].includes(message.type) ? [{ id: message.id, role: 'user', content: message.text, ...(message.metadata ? { metadata: clone(message.metadata) } : {}) }]
+  const project = history => history.flatMap(message => ['user', 'synthetic'].includes(message.type) ? [{ id: message.id, role: 'user', content: [{ type: 'text', text: message.text }], ...(message.metadata ? { metadata: clone(message.metadata) } : {}) }]
     : message.type === 'system' ? [{ role: 'system', content: [{ type: 'text', text: message.text }] }]
     : message.type === 'assistant' ? [{ id: message.id, role: 'assistant', content: clone(message.content ?? []) }] : []);
   // Like OpenCode, a tool call belongs to an assistant message of the session, which the host names to the tool
@@ -231,6 +231,14 @@ async function fixture(t, opts = {}) {
                 error: { type: 'provider.transport', message: 'fixture connection lost' }, retry: { attempt: cut + 2, at: 3 }, content: [{ type: 'text', text: '{"status":"COM' }] });
             }
             if (result?.$retried) result = result.answer ?? defaultAnswer({ role, packet });
+            // Like OpenCode 2.0.32 through 2.2.7: a text stream that broke stays as an errored message marked for
+            // retry, the host queues a message that asks the model to continue, and the next message is the rest.
+            if (result?.$continued) {
+              session.history.push({ id: `cut_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
+                error: { type: 'provider.transport', message: 'fixture connection lost' }, retry: { attempt: 2, at: 3 }, content: [{ type: 'text', text: result.$continued[0] }] },
+              { id: `continue_${++seq}`, type: 'synthetic', text: 'The previous response was interrupted. Continue from where you left off without repeating completed content.' });
+              result = result.$continued[1];
+            }
             if (result?.$provider) {
               session.history.push({ id: `answer_${++seq}`, type: 'assistant', agent: role, model, finish: 'error', time: { created: 1, completed: 2 },
                 error: { type: result.$providerType ?? 'provider.api', status: result.$provider, message: 'fixture' }, content: [] }, { id: `idle_${++seq}`, type: 'idle', outcome: 'failed' });
@@ -5391,12 +5399,14 @@ test('what the host wrote of instructions is taken out of a request where it is 
   // Not the host's message as the host builds it: it stays as it is, since it may hold what is not the host's,
   // and the request goes out. Where the message still has the load's ID, the record counts the request; where
   // nothing says what it is, nothing is counted. The request that the host builds next is as always.
-  const joined = messages => messages.map(message => message.id === load.id ? { ...message, content: `The command ended: exit 0\n\n${message.content}` } : message);
+  const joined = messages => messages.map(message => message.id === load.id ? { ...message, content: [{ type: 'text', text: `The command ended: exit 0\n\n${load.text}` }] } : message);
   for (const [name, change, held, notToldApart] of [
     ['something joined to the load', joined, 1, 2],
+    ['the load\'s text as a string', messages => messages.map(message => message.id === load.id ? { ...message, content: load.text } : message), 1, 2],
+    ['the load\'s text in two parts', messages => messages.map(message => message.id === load.id ? { ...message, content: [{ type: 'text', text: load.text.slice(0, 9) }, { type: 'text', text: load.text.slice(9) }] } : message), 1, 2],
     ['the load as another role', messages => messages.map(message => message.id === load.id ? { ...message, role: 'assistant' } : message), 1, 2],
     ['the load under another ID', messages => messages.map(message => message.id === load.id ? { ...message, id: 'msg_renamed' } : message), 1, 1],
-    ['the load joined to the prompt', messages => messages.filter(message => message.id !== load.id).map(message => message === prompt(messages) ? { ...message, content: `${message.content}\n\n${load.text}` } : message), 1, 1],
+    ['the load joined to the prompt', messages => messages.filter(message => message.id !== load.id).map(message => message === prompt(messages) ? { ...message, content: [{ type: 'text', text: `${message.content[0].text}\n\n${load.text}` }] } : message), 1, 1],
     ['the update written as a plain string', messages => messages.map(message => message.role === 'system' ? { role: 'system', content: update.text } : message), 1, 1],
     ['the update with a mark of another hook', messages => messages.map(message => message.role === 'system' ? { ...message, metadata: { plugin: 'other' } } : message), 1, 1],
   ]) {
@@ -5563,10 +5573,15 @@ test('a request is the turn\'s only on the word of the session\'s own messages: 
       unreadable = false;
       midway.push(await outcome(tool), await retry());
       midway.push(await outcome(() => emit('session', 'context', frame())), await outcome(tool), await retry());
+      // The same for a request that is refused before the turn is looked at: one for another model than the session's.
+      midway.push(await outcome(() => emit('session', 'context', { ...frame(), model: { providerID: 'fixture', id: 'another-model' } })), await outcome(tool), await retry());
+      midway.push(await outcome(() => emit('session', 'context', frame())), await outcome(tool), await retry());
     } });
   assert.match(await m.command('pr-quick'), /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
-  assert.deepEqual(midway, ['ran', true, '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.',
-    '[AZPR] AZPR tools are available only to an active AZPR reviewer session.', false, 'ran', 'ran', true]);
+  const NO_TOOL = '[AZPR] AZPR tools are available only to an active AZPR reviewer session.';
+  assert.deepEqual(midway.slice(0, 8), ['ran', true, '[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.', NO_TOOL, false, 'ran', 'ran', true]);
+  assert.match(midway[8], /^\[AZPR\] /);
+  assert.deepEqual(midway.slice(9), [NO_TOOL, false, 'ran', 'ran', true]);
   // The prompt is known among the session's messages by the nonce it was sent with, not by what the prompt hook
   // says of it: a host whose hook does not name the message works like any other.
   const g = await fixture(t, { settings: quickSettings, promptID: false });
@@ -5617,11 +5632,28 @@ test('what a session read is what the turns read whose answers were taken, by th
   assert.deepEqual([other.stage.status, other.stage.repairs.length, other.stage.repairFailure, other.stage.sessionReads, other.statuses], ['COMPLETE', 2, undefined, 1, ['REPORTED', 'NEEDS_INFO']]);
 });
 
+test('a message that asks the model to continue an interrupted answer is the host\'s only on a host that writes one', async t => {
+  // OpenCode before 2.3.0 queued such a message after a stream that broke; from 2.3.0 on the host retries the
+  // step and queues nothing. The message is known by its text alone, which anyone can post into a session.
+  const answer = input => { if (input.role !== 'azpr-quick-reviewer') return undefined; const text = JSON.stringify(defaultAnswer(input)); return { $continued: [text.slice(0, 20), text.slice(20)] }; };
+  const earlier = await fixture(t, { settings: quickSettings, version: '2.2.7', answer });
+  const joined = await earlier.command('pr-quick');
+  assert.match(joined, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  assert.equal((await stageRecords(joined)).find(record => record.role === 'azpr-quick-reviewer').hostContinuations, 1);
+  for (const version of ['2.3.0', '2.4.1', undefined]) {
+    const current = await fixture(t, { settings: quickSettings, ...(version ? { version } : {}), answer });
+    const refused = await current.command('pr-quick');
+    assert.match(refused, /\n- azpr-quick-reviewer: FAILED; [^\n]*failure=transient; error=\[AZPR\] The session received another message during this turn/, String(version));
+    assert.ok((await stageRecords(refused)).filter(record => record.role === 'azpr-quick-reviewer').every(record => record.hostContinuations === undefined), String(version));
+  }
+});
+
 test('a file that a reviewer reads in several windows is one observation, saved by the first of them', async t => {
   // AZPR's tool returns a window and keeps the whole file for comment planning. The file is the same in every
   // window: saving it again would read and check the stored value each time, for nothing.
   const pages = async f => (await readdir(f.stateDirectory, { recursive: true })).filter(name => name.endsWith('.pages.jsonl')).map(name => join(f.stateDirectory, name));
-  let saved, after;
+  let saved, after, whole;
+  const state = async () => [await pages(f), await Promise.all(saved.map(file => readFile(file, 'utf8')))];
   const f = await fixture(t, { files: ['/src/Main.java'], settings: quickSettings,
     async during({ session, role, turn, invoke }) {
       if (role !== 'azpr-quick-reviewer' || turn) return;
@@ -5630,12 +5662,15 @@ test('a file that a reviewer reads in several windows is one observation, saved 
       // What a second save would put right, if there were one.
       await Promise.all(saved.map(file => writeFile(file, 'not the pages\n')));
       const second = await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'head', startLine: 2, endLine: 2 });
-      after = [await pages(f), await Promise.all(saved.map(file => readFile(file, 'utf8'))), first.output === second.output];
-    } });
+      after = [...await state(), first.output === second.output];
+    },
+    // The fixture's reviewer has read the whole file by the time it answers.
+    async answer(input) { if (input.role === 'azpr-quick-reviewer' && !input.turn) whole = await state(); } });
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
   assert.equal(saved.length, 1, 'The first window saved the file.');
-  assert.deepEqual(after, [saved, ['not the pages\n'], false], 'The second window, and the read of the whole file after it, saved nothing again.');
+  assert.deepEqual(after, [saved, ['not the pages\n'], false], 'The second window saved nothing again.');
+  assert.deepEqual(whole, [saved, ['not the pages\n']], 'Nor did the read of the whole file after it.');
   assert.equal((await savedReview(f, reviewId(receipt))).toolText.filter(item => item.input.path === '/src/Main.java').length, 1);
 });
 

@@ -467,9 +467,13 @@ notice instead: an errored text-only assistant message that the host marked
 for retry, followed by that notice and a successful final text, is joined
 literally (`stream-continuations`), and when the model starts its answer over
 instead of continuing (a later fragment opens like the first), only the
-restarted text is used. Either way an errored message is excused only when the
-host marked it for retry and the turn still ends with a complete, successful
-final answer on the granted agent and model.
+restarted text is used. That notice is known by its text alone, which anyone
+can post into a session, so it is taken for the host's only on a host that
+writes one: on OpenCode 2.3.0 and later, and on a host that does not say its
+version, such a message is someone else's and fails the turn. Either way an
+errored message is excused only when the host marked it for retry and the
+turn still ends with a complete, successful final answer on the granted agent
+and model.
 
 Before asking for a correction, a narrow local repair escapes unescaped double
 quotes inside closed single-line `code` spans. Corrections for syntax errors ask
@@ -940,9 +944,11 @@ counts only after an assistant message of the session called the native read
 tool: a message of that form in a session that did not read is someone
 else's. The hook takes out of the request what is such a message as the host
 builds it (`withoutHostMessages`): the user message that has a load's ID and
-the load's text, and a system message of the host's form that holds exactly
-an update's text. A system message of another plugin's stays, also one that
-looks like the host's. Beyond that, who wrote a message cannot be proved, and
+the load's text as one text part, and a system message of the host's form
+that holds exactly an update's text. A system message of another plugin's
+stays, also one of the host's form, unless it holds exactly the text of an
+update that the session holds: nothing tells those two apart. Beyond that,
+who wrote a message cannot be proved, and
 a load's text would prove nothing more than its metadata; a message of the
 load's form that someone posts after such a read is kept from the model in
 the same way, so its text reaches no answer.
@@ -952,7 +958,8 @@ no request is refused for what it holds. A message that has a load's ID and
 is not the load as the host builds it (another plugin's hook joined
 something to it, or changed its form) goes out as it is, and the stage's
 record counts the request among those that could not be told apart
-(`placeInstructionsNotToldApart`). So `requestReview`, which fails a turn
+(`placeInstructionsNotToldApart`); a load that such a hook gave another ID,
+or moved into another message, is not seen at all. So `requestReview`, which fails a turn
 that received anyone else's message, asks for no proof of what a model was
 shown: what the host wrote of instructions is no step of a turn and no one
 else's input, wherever it stands. Anyone else's message fails the turn where
@@ -1023,8 +1030,8 @@ refused. What follows a request (the request itself, a retry of it, the tool
 calls of its answer) needs a request of this very turn that was looked at so.
 What a hook reads of the host it reads until its stage ends, so a stage that
 was stopped does not wait for a host that stalls. A request that is refused,
-or whose look at the session failed, also ends what an earlier request of the
-turn allowed. A stage's record counts those readings and the requests refused
+whatever for (the turn, the session's agent or model, a look at the session
+that failed), also ends what an earlier request of the turn allowed. A stage's record counts those readings and the requests refused
 outside a turn (`turnChecks`, `refusedOutsideTurn`).
 
 What a session read, for the check that a finding names a file its own tools

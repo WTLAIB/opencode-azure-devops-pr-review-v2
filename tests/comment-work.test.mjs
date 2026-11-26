@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readdir, rm, readFile, stat, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation, observationIndex, observationKey, evidenceIndex, heldItems, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, observationIndex, observationKey, heldItems, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
 import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -1644,7 +1644,20 @@ test('a value is made ready when it is handed out: pages that do not give it who
   await writeFile(stored['cut after a row'].pages, `${(await rowsOf(stored['cut after a row']))[0]}\n`);
   await writeFile(stored['another text'].pages, (await written('another text')).replace('another text', 'another TEXT'));
   await writeFile(stored['no rows'].pages, 'left by something else\n');
-  // Opening the store looks at nothing and changes nothing: a value is made ready when it is handed out.
+  // Opening the store looks at nothing and changes nothing: a value is made ready when it is handed out. Only
+  // the directory is looked at, not what it holds: a store whose values cannot be listed is opened like any
+  // other (an administrator lists every directory, so there is nothing to see as one), and one without its
+  // directory is not.
+  if (process.getuid?.() !== 0) {
+    await chmod(join(first.directory, 'objects'), 0o300);
+    await assert.rejects(readdir(join(first.directory, 'objects')), { code: 'EACCES' });
+    assert.equal(await (await createCommentData({ directory: first.directory })).read(fits), 'y'.repeat(length));
+    await chmod(join(first.directory, 'objects'), 0o700);
+  }
+  await assert.rejects(createCommentData({ directory: join(directory, 'nowhere') }), { code: 'ENOENT' });
+  await writeFile(join(directory, 'objects'), 'a file where a store would have its values');
+  await assert.rejects(createCommentData({ directory }), { code: 'ENOTDIR' });
+  await rm(join(directory, 'objects'));
   const reopened = await createCommentData({ directory: first.directory });
   assert.ok((await rowsOf(reference)).some(row => row.length > HOST_READ_LINE_CHARACTERS));
   await assert.rejects(readFile(stored.missing.pages), { code: 'ENOENT' });
@@ -1824,32 +1837,20 @@ test('a value is stored as the text a file can hold, and only a reference the st
   assert.deepEqual(await listed(), ['/src/file-0.ts', '/src/file-1.ts', '/src/file-3.ts']);
   assert.equal(observations[0].key, observationKey('azpr_read_file', { path: '/src/file-0.ts', version: 'head' }, output(0)), 'An observation is known by its key before it is saved.');
   // A list is handed out a few values at a time, each value once however many items name it, and in its order:
-  // a large review has thousands of observations, and each is read whole to be made ready.
+  // a large review has thousands of observations, and each is read whole to be made ready. The limit is of
+  // values, not of items: an item may name two.
   const many = await Promise.all(Array.from({ length: 30 }, (_, index) => reopened.put(`value ${index % 20} ${'n'.repeat(300)}`)));
+  const more = await Promise.all(Array.from({ length: 30 }, (_, index) => reopened.put(`another ${index} ${'a'.repeat(300)}`)));
   await rm(many[7].file);
   await rm(many[7].pages);
+  await rm(more[11].file);
+  await rm(more[11].pages);
   let running = 0, most = 0;
   const asked = [];
   const counting = { ...reopened, async holds(reference) { asked.push(reference.sha256); most = Math.max(most, ++running); try { return await reopened.holds(reference); } finally { running--; } } };
-  const items = many.map((reference, index) => ({ index, reference }));
-  const handed = await heldItems(counting, items, item => [item.reference]);
-  assert.deepEqual(handed.map(item => item.index), items.filter(item => item.index % 20 !== 7).map(item => item.index), 'In their order, without the ones whose value is gone.');
-  assert.deepEqual([asked.length, new Set(asked).size, most <= 8, most > 1], [20, 20, true, true], 'Each of the 20 values was looked at once, at most eight at a time.');
+  const items = many.map((reference, index) => ({ index, reference, other: more[index] }));
+  const handed = await heldItems(counting, items, item => [item.reference, item.other]);
+  assert.deepEqual(handed.map(item => item.index), items.filter(item => item.index % 20 !== 7 && item.index !== 11).map(item => item.index), 'In their order, without the ones of which a value is gone.');
+  assert.deepEqual([asked.length, new Set(asked).size, most], [50, 50, 8], 'Each of the 50 values was looked at once, eight at a time.');
   assert.deepEqual(await heldItems(counting, [], () => []), []);
-  // What a planning page's earlier sessions read, for its continuation: an entry is listed only where the store
-  // holds its saved result ready, and its saved input where that was too large to stay inline.
-  const large = { path: '/src/large.ts', note: 'l'.repeat(13000) };
-  const entry = async (tool, input, result) => ({ sessionID: 'ses_plan', page: 1, tool, input: await reopened.pack(input), result: await reopened.object({ output: result }) });
-  const evidence = [await entry('read', { path: 'a' }, 'kept'), await entry('read', { path: 'b' }, 'its result is cut'), await entry('azpr_read_file', large, 'its input is gone'),
-    await entry('read', { path: 'd' }, 'its pages are gone'), await entry('azpr_read_file', { ...large, path: '/src/other.ts' }, 'kept too')];
-  assert.ok(evidence[2].input.azprData && !evidence[0].input.azprData, 'A large input is a reference; a small one stays as it is.');
-  await writeFile(evidence[1].result.file, 'cut');
-  await writeFile(evidence[1].result.pages, 'cut');
-  await rm(evidence[2].input.azprData.file);
-  await rm(evidence[2].input.azprData.pages);
-  await rm(evidence[3].result.pages);
-  const index = await evidenceIndex(reopened, evidence);
-  const rows = (await reopened.read(index)).trim().split('\n').map(row => JSON.parse(row));
-  assert.deepEqual(rows, [evidence[0], evidence[3], evidence[4]]);
-  assert.ok((await readFile(evidence[3].result.pages, 'utf8')).length > 0, 'Pages that were gone are written again from the object.');
 });

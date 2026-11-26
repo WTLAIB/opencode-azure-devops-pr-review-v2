@@ -153,7 +153,7 @@ test('V2 prompt queues literal input, waits, and reads only final assistant text
   assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
   assert.equal(JSON.stringify(answer).includes('not retained'), false);
   assert.equal(answer.info.finish, 'stop');
-  assert.deepEqual(calls.map(call => call.name), ['prompt', 'wait', 'context', 'get']);
+  assert.deepEqual(calls.map(call => call.name), ['prompt', 'wait', 'get', 'context']);
   assert.deepEqual(calls[0].args, [{ sessionID, text: input, delivery: 'steer', resume: true }]);
 });
 
@@ -244,9 +244,12 @@ test('a turn ends at the first idle marker after its prompt, whatever came befor
 
 test('the caller is told that the session is idle before its context is read', async () => {
   const order = [];
-  const { context } = host({ wait: async () => { order.push('wait'); }, context: async () => { order.push('context'); return [{ id: 'msg_input', type: 'user', text: input }, assistant(), idle()]; } });
+  const { context } = host({ wait: async () => { order.push('wait'); }, context: async () => { order.push('context'); return [{ id: 'msg_input', type: 'user', text: input }, assistant(), idle()]; },
+    get: async () => { order.push('get'); return { id: sessionID, outcome: 'succeeded', agent: 'azpr-review-functional', model }; } });
   await requestReview(context, { sessionID, text: input, settled: () => order.push('settled') });
-  assert.deepEqual(order, ['wait', 'settled', 'context']);
+  // The session's messages are the last thing read: what the decision rests on is the session as it stood then,
+  // with nothing awaited in between.
+  assert.deepEqual(order, ['wait', 'settled', 'get', 'context']);
   // Not when the wait itself fails: the caller closes what it opened either way.
   const { context: failing } = host({ wait: async () => { throw new Error('wait failed'); } });
   let told = 0;
@@ -305,7 +308,7 @@ test('provider failures expose status and observed tool turns while retaining pr
       assert.deepEqual(error.response.info.error, detail);
       return true;
     });
-    assert.deepEqual(calls.map(call => call.name), ['prompt', 'wait', 'context', 'get']);
+    assert.deepEqual(calls.map(call => call.name), ['prompt', 'wait', 'get', 'context']);
   }
 });
 
@@ -431,6 +434,15 @@ test('review text can complete through the pinned host continuation protocol wit
   assert.doesNotMatch(JSON.stringify(answer), /PRIVATE_REASONING/);
   assert.equal(calls.filter(call => call.name === 'prompt').length, 1);
   await assert.rejects(requestReview(context, { sessionID, text: input }), /another message during this turn/);
+  // That message is known by its text alone, which anyone can post. A host that retries the step (OpenCode 2.3.0
+  // and later) queues none, so there it is someone else's: also after an update of the instructions, which is
+  // no step, has made it stand next to the step that broke.
+  await assert.rejects(requestReview(context, { sessionID, text: input, allowHostContinuations: 'steps' }), /another message during this turn/);
+  const [fragment, posted, final, marker] = continuationTurn();
+  const update = { id: 'msg_update', type: 'system', text: 'The instructions changed.', metadata: { notice: 'instructions' } };
+  const { context: updated } = host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, fragment, update, { ...posted, id: 'msg_posted' }, final, marker] });
+  await assert.rejects(requestReview(updated, { sessionID, text: input, allowHostContinuations: 'steps' }), /another message during this turn/);
+  assert.equal((await requestReview(updated, { sessionID, text: input, allowHostContinuations: true })).continuation.count, 1, 'A host of the earlier protocol wrote it.');
 });
 test('host continuation cannot excuse foreign input, tool execution, binding changes or unfinished execution', async () => {
   const mutations = [
@@ -498,6 +510,8 @@ test('retried steps may have run tools and may repeat; the answer is still the f
   const answer = await requestReview(context, { sessionID, text: input, allowHostContinuations: true });
   assert.deepEqual(answer.parts, [{ type: 'text', text: '{"status":"COMPLETE"}' }]);
   assert.equal(answer.retriedSteps, 2);
+  // The same where the caller consents to retried steps alone, as it does for a host that retries them.
+  assert.equal((await requestReview(context, { sessionID, text: input, allowHostContinuations: 'steps' })).retriedSteps, 2);
 });
 test('a retried step cannot excuse a missing retry mark, a failed final answer, foreign input, binding changes or unfinished execution', async () => {
   const mutations = [

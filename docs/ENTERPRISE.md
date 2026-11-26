@@ -143,8 +143,10 @@ built them, with what OpenCode collected for the directory, and the stage's
 [debug record](DEBUGGING.md) says so (`placeInstructionsNotToldApart`). The
 instruction files loaded beside a file are taken out of the request either
 way, where they are as OpenCode builds them; one that another plugin changed
-first goes out as that plugin left it, and the same record counts the
-request. AZPR does not police other plugins: what another plugin's hook adds
+first goes out as that plugin left it. The same record counts such a request
+only where the changed message still has the loaded file's ID; text that a
+plugin moved into another message is not seen at all. AZPR does not police
+other plugins: what another plugin's hook adds
 to a request, takes from it or makes of a tool's result, before or after
 AZPR's own hook, AZPR neither sees nor corrects. List AZPR first among your
 plugins, so that its hook sees a request before theirs, and install only
