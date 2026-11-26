@@ -4,37 +4,32 @@
 
 AZPR is tested with OpenCode 2.4.2 instead of 2.4.1. OpenCode 2.4.2 was
 compared with 2.4.1, the last version studied, and needs no change to how
-AZPR runs a review: in the host fixtures, private sessions were sent on 2.4.2
-exactly what they were sent on 2.4.1, request by request. The prompt files
+AZPR runs a review: in the three smoke runs of the host fixtures, private
+sessions were sent on 2.4.2 exactly what they were sent on 2.4.1, request by
+request. The prompt files
 are those of 0.5.1, no setting is new, and settings and saved reviews are
 used as they are.
 
 - **`/pr-check` notes another OpenCode version instead of warning of it.** On
   an OpenCode other than the tested one, and on one that does not say its
   version, the OpenCode row is `ok` and names the tested release in a note.
-  It was a WARNING, which read as if something were wrong. Reviews run on an
-  OpenCode V2 host that provides what AZPR needs, and AZPR says where one
-  does not: a missing permission hook is still the Project boundary WARNING;
-  a command whose work needs a session method the host lacks fails before it
-  starts and names the method; without the host's model catalog a run starts
-  and ends INCOMPLETE, naming it; and a host that lacks a method AZPR
-  registers with leaves AZPR unregistered when OpenCode starts with usable
-  settings (the host's plugin list says so), while during a first setup
-  AZPR's commands and `/pr-setup` report it. A script that looked for that
-  WARNING should read the OpenCode row instead.
+  It was a WARNING, which read as if something were wrong: reviews run on an
+  OpenCode V2 host that provides what AZPR needs, and what a host lacks is
+  still reported where it matters (the Project boundary WARNING without the
+  permission hook, a command's error or receipt that names a missing method,
+  the host's plugin list; see [compatibility](docs/ARCHITECTURE.md#compatibility)).
+  A script that looked for the OpenCode WARNING should read the OpenCode
+  row's note instead.
 - **A turn whose prompt is gone says what is known.** OpenCode 2.4.2's
-  terminal UI takes the last prompt back when Esc is pressed twice before the
-  model answered (with an empty prompt box and nothing queued), and in a
-  reviewer's session that prompt is AZPR's. The turn then fails as
-  interrupted (measured on 2.4.1 and 2.4.2 with the same steps), or, where
-  the prompt is gone before AZPR reads the session, with an error that named
-  only a compaction as its possible cause. That error now says that the
-  prompt is not among the session's messages exactly once, and that it may
-  have been taken back (Esc twice, or `/undo` and then another prompt there)
-  or removed by a compaction. Nothing of that turn is accepted and it is not
-  tried again: in a first turn the pass has no answer, in a correction or
-  follow-up turn the answer before it stands. Stop a run with `/pr-stop`, not
-  in one of its sessions.
+  terminal UI can take the last prompt back (Esc twice before the model
+  answered), and in a reviewer's session that prompt is AZPR's. Measured on
+  2.4.1 and 2.4.2 by calling the routes the terminal UI uses, in its order,
+  the turn fails as interrupted. Where the prompt is gone before AZPR reads
+  the session, the error now says that the prompt is not among the session's
+  messages exactly once and that it may have been taken back or removed by a
+  compaction; before, it named only a compaction. [Debugging](docs/DEBUGGING.md#diagnosis-order) says how a prompt is taken back
+  and what the receipt then shows. Stop a run with `/pr-stop`, not in one of
+  its sessions.
 - **Phone notifications.** From OpenCode 2.4.2 on, OpenCode's mobile app can
   notify a paired phone when a top-level session's run ends. AZPR's private
   sessions are top-level sessions, so one review can send several notices; a

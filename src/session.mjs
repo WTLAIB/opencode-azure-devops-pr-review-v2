@@ -319,7 +319,7 @@ export async function requestReview(context, { sessionID, text, role, model, met
     // the model answered, with an empty prompt box and nothing queued; /undo takes a prompt back and removes it once
     // another prompt is sent there, or at once while it still waited), or a compaction may have removed it.
     // Whatever the cause, nothing of this turn is accepted, and it is not retried.
-    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session\'s messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo and then another prompt there) or removed by a compaction. No output of this turn was accepted.');
+    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session\'s messages exactly once. It may have been taken back in that session or removed by a compaction. No output of this turn was accepted.');
   }
   const prompt = messages[indexes[0]];
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {

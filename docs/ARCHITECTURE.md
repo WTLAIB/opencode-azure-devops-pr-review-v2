@@ -441,8 +441,10 @@ output, tool starts and ends, approval requests and announced host retries are
 activity (an announced retry wait is added to the window), and a running AZPR
 tool counts until it returns because its Azure calls have their own timeouts.
 Streamed output reaches no hook, so while a stage is watched AZPR follows
-OpenCode's session events (`event.subscribe`), which carry one event per
-streamed chunk of answer text, reasoning or tool-call input. AZPR asks for
+OpenCode's session events (`event.subscribe`): the answer text and reasoning
+as they stream (OpenCode publishes what is pending every 100 ms and when a
+part ends), and the start and end of a tool call's input, whose chunks in
+between it does not publish. AZPR asks for
 those progress types only; OpenCode 2.2.0 and later deliver nothing else. A
 host without them leaves only the hooks. A stage with
 no activity for the whole window is stopped: its grant is revoked, its session
@@ -451,8 +453,9 @@ activity, such as `Stage inactivity watchdog stopped this stage: no activity
 for 600 s after model request 3 was sent`; the receipt adds an inactivity
 notice. It is retried in a new session like a transient failure. Any activity
 restarts the window, so this is not the whole-run timeout or step cap the
-[roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is never
-stopped. The longest quiet stretch in 1,097 normal live stages was 151 s
+[roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is not
+stopped, unless a model streams nothing but one tool call's arguments for the
+whole window, which shows no progress. The longest quiet stretch in 1,097 normal live stages was 151 s
 (stages of versions before 0.5.0).
 
 An interrupted model stream that OpenCode recovers by itself costs no new
@@ -1643,9 +1646,11 @@ What a host that lacks something shows a person:
 - Registration needs a set of methods, `tool.transform` among them
   (`requireMethods` in `runtime.mjs`). Where OpenCode starts with usable
   settings, a host without one leaves AZPR unregistered, and the host's plugin
-  list reports that with the error. During a first setup the runtime is loaded
-  when the setup is saved: on such a host the setup's own commands stay, and
-  they and `/pr-setup` say that the saved settings could not be loaded, and why.
+  list reports that with the error; so does a host without what setup itself
+  registers with (`command.list`, `command.transform`). During a first setup
+  on a host that has those, the runtime is loaded when the setup is saved:
+  where a method it needs is missing, the setup's own commands stay, and they
+  and `/pr-setup` say that the saved settings could not be loaded, and why.
 - A command whose workflow needs a method the host lacks fails with an error
   that names the method: the review workflow's session methods before its
   STARTED notice; the model catalog (`model.list`) at the readiness check

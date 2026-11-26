@@ -132,7 +132,7 @@ async function fixture(t, opts = {}) {
     location: { directory },
     // Like a host catalog, each configured model once, however many passes or modes name it: every reviewer, and
     // a rater that is named.
-    model: { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => [...(group.reviewers ?? []), group.rater]).filter(value => typeof value === 'string' && value)
+    model: opts.modelList === false ? {} : { async list() { return { data: [...new Set(Object.values(settings.models).flatMap(group => [...(group.reviewers ?? []), group.rater]).filter(value => typeof value === 'string' && value)
       .map(value => value.split('#')[0]))].map(reference => ({ providerID: reference.slice(0, reference.indexOf('/')), id: reference.slice(reference.indexOf('/') + 1), enabled: true, capabilities: { tools: true }, variants: [{ id: 'high' }] })) }; } },
     ...(opts.permissionHook === false ? {} : { permission: { hook: hook('permission') } }),
     ...(opts.plugins ? { plugin: { async list() { return typeof opts.plugins === 'function' ? opts.plugins() : { data: clone(opts.plugins) }; } } } : {}),
@@ -1988,7 +1988,9 @@ test('another OpenCode version, or one that reports none, is a note in /pr-check
     assert.match(review, /\] COMPLETE/, String(version));
     assert.doesNotMatch(check + review, /Host notice|differs from the tested/, String(version));
     assert.doesNotMatch(review, /tested with|the tested version/, `${version}: a review receipt does not repeat the host version.`);
-    for (const text of [version ?? 'did not report its version', TESTED_HOST_VERSION]) assert.ok(!review.includes(text), `${version}: the review receipt names ${text}.`);
+    // The receipt names its debug directory, whose path is the machine's: that line is no word about the host.
+    const said = review.split('\n').filter(line => !line.startsWith('Private debug directory: ')).join('\n');
+    for (const text of [version ?? 'did not report its version', TESTED_HOST_VERSION]) assert.ok(!said.includes(text), `${version}: the review receipt names ${text}.`);
   }
 });
 
@@ -2002,9 +2004,9 @@ test('a host that lacks a method the review workflow needs fails the command wit
 });
 
 test('a host without the model catalog starts the run, which ends INCOMPLETE and names it', async t => {
-  // The catalog is asked for at the readiness check every run begins with, after its STARTED notice.
-  const f = await fixture(t);
-  delete f.context.model.list;
+  // The catalog is asked for at the readiness check every run begins with, after its STARTED notice; AZPR registers
+  // without it.
+  const f = await fixture(t, { modelList: false });
   const receipt = await f.command('pr-review', f.azure.prUrl(), 'review');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none\nReason \(workflow\): \[AZPR\] OpenCode does not provide model\.list; readiness checks is unavailable\.\n/);
   assert.equal(f.notices.filter(notice => /\] STARTED \/pr-review /.test(notice.text)).length, 1, 'The run started.');

@@ -63,8 +63,8 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
   turn of it is open, and one of AZPR's commands that reaches OpenCode as an
   ordinary prompt is stopped before a model gets it.
 - **OpenCode 2.4.2 as the tested host (0.5.2).** No change to how a review
-  runs: in the host fixtures, 2.4.2 sends private sessions what 2.4.1 sent,
-  request by request. `/pr-check` notes
+  runs: in the three smoke runs, 2.4.2 sends private sessions what 2.4.1
+  sent, request by request. `/pr-check` notes
   another OpenCode version instead of warning of it, the tested release is
   one constant that CI, the installer and the README follow, and the error
   for a reviewer's prompt that is gone names the causes it may have, a

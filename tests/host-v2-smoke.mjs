@@ -173,8 +173,8 @@ const provider = createServer(async (request, response) => {
     // Which of the fixture's marks the whole request holds, wherever: system prompt, messages or tool results.
     marks: Object.keys(MARKS).filter(name => body.includes(MARKS[name])),
     // Whether the whole request names OpenCode's image or video generation, wherever: a tool, a Code Mode catalog,
-    // a message. The checkout's own path is no name of a tool, wherever it is.
-    names: ['generate_image', 'generate_video'].filter(name => body.split(sourceRoot).join('<checkout>').includes(name)),
+    // a message. The checkout's own path is no name of a tool, wherever it is, as it is or as JSON writes it.
+    names: ['generate_image', 'generate_video'].filter(name => body.split(sourceRoot).join('<checkout>').split(JSON.stringify(sourceRoot).slice(1, -1)).join('<checkout>').includes(name)),
     catalog: catalogOf(parsed.messages) });
   const repair = textOf(lastUser(parsed.messages)).startsWith('AZPR runtime');
   const toolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
