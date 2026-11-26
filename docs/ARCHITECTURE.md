@@ -1641,12 +1641,17 @@ says why.
 (`permission.hook`, `plugin.list` and others) and holds the host continuation text.
 What a host that lacks something shows a person:
 - Registration needs a set of methods, `tool.transform` among them
-  (`requireMethods` in `runtime.mjs`). A host without one leaves AZPR
-  unregistered, and the host's plugin list reports that with the error.
+  (`requireMethods` in `runtime.mjs`). Where OpenCode starts with usable
+  settings, a host without one leaves AZPR unregistered, and the host's plugin
+  list reports that with the error. During a first setup the runtime is loaded
+  when the setup is saved: on such a host the setup's own commands stay, and
+  they and `/pr-setup` say that the saved settings could not be loaded, and why.
 - A command whose workflow needs a method the host lacks fails with an error
-  that names the method: the review workflow's methods before its STARTED
-  notice, the model catalog (`model.list`) at the readiness check every run
-  begins with.
+  that names the method: the review workflow's session methods before its
+  STARTED notice; the model catalog (`model.list`) at the readiness check
+  every run begins with, after STARTED, so that run ends INCOMPLETE and its
+  receipt names the method. Posting a saved preview asks for no model
+  catalog.
 - Without `permission.hook` the project boundary for native read tools is left to
   the host's own permission rules; `/pr-check` shows a WARNING row and reviews
   still run.

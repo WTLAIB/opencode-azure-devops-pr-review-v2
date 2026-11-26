@@ -273,8 +273,9 @@ export function classifyFailure(error) {
  *
  * A turn is the admitted prompt and what follows it up to the first idle marker. A prompt becomes a message of
  * the session only in the execution that takes it, and an execution leaves one marker when it ends, however it
- * ends (OpenCode 2.3.0 to the tested version), so that marker is the end of the execution that had the prompt, and says
- * how the turn ended. The turn's answer is the last assistant message before it.
+ * ends while the host runs (OpenCode 2.3.0 to the tested version; a shutdown of the host leaves none, and ends the
+ * run with the process), so that marker is the end of the execution that had the prompt, and says how the turn
+ * ended. The turn's answer is the last assistant message before it.
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
  * wrote of instructions (`hostInstructions`): its updates, and the instruction files it loaded after a native
@@ -313,10 +314,12 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (!Array.isArray(messages) || session?.id !== sessionID) throw new Error('[AZPR] Invalid OpenCode V2 session context.');
   const indexes = messages.flatMap((message, index) => message?.id === admitted.id ? [index] : []);
   if (indexes.length !== 1) {
-    // What is known is only that the prompt is not there exactly once: a person may have taken it back in that
-    // session (OpenCode 2.4.2's terminal UI does on Esc twice before the model answered, and /undo does), or a
-    // compaction may have removed it. Whatever the cause, nothing of the turn is accepted, and nothing is retried.
-    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session\'s messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo) or removed by a compaction. No output of this turn was accepted.');
+    // What is known is only that the prompt is not there exactly once. A person may have taken it back in that
+    // session, in a way that removes it from the session's messages (OpenCode 2.4.2's terminal UI: Esc twice before
+    // the model answered, with an empty prompt box and nothing queued; /undo takes a prompt back and removes it once
+    // another prompt is sent there, or at once while it still waited), or a compaction may have removed it.
+    // Whatever the cause, nothing of this turn is accepted, and it is not retried.
+    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session\'s messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo and then another prompt there) or removed by a compaction. No output of this turn was accepted.');
   }
   const prompt = messages[indexes[0]];
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {

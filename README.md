@@ -435,7 +435,7 @@ models and runs.
 
 | Component | Tested target |
 | --- | --- |
-| OpenCode | **OpenCode CLI 2.4.2** (`@opencode/cli`; V2 plugin API), the one release AZPR is tested with. On another OpenCode 2.x, `/pr-check` notes the tested release in its OpenCode row and reviews run: AZPR checks that the host provides what it needs and says what is missing ([earlier releases](docs/VALIDATION.md#opencode-242-compared-with-241-2026-11-27) tell what ran there). OpenCode 1.x is not supported. |
+| OpenCode | **OpenCode CLI 2.4.2** (`@opencode/cli`; V2 plugin API), the one release AZPR is tested with. On another OpenCode 2.x, `/pr-check` notes the tested release in its OpenCode row and reviews run: AZPR checks that the host provides what it needs and says what is missing ([what ran on other releases](docs/VALIDATION.md#known-limitations)). OpenCode 1.x is not supported. |
 | Operating system | **Ubuntu 22.04** (validation environment: WSL2). Other operating systems are not yet validated. |
 | Azure | **Azure DevOps Services**, REST API **7.1**. Azure DevOps Server is not supported by the current URL handling. |
 | Installation | OpenCode's plugin manager with the npm package or the versioned Git package, or the source installer with POSIX `sh` and Python 3; no plugin build step or npm dependencies. |
@@ -1566,9 +1566,9 @@ gets long. A review that an OpenCode restart interrupts leaves its sessions in
 the list; delete those yourself. From OpenCode 2.4.2 on, OpenCode's mobile app
 can notify a paired phone when a top-level session's run ends, and these
 sessions are top-level ones, so one review can send several such notices (a
-phone registered without settings gets them all). Set the phone to notify only
-when attention is needed, or mute the `[AZPR …]` sessions there: a plugin has
-no access to these notifications, so AZPR cannot change them. Your own conversations are never deleted.
+phone registered without settings gets them all). AZPR leaves these settings
+alone: set the phone to notify only when attention is needed, or mute the
+`[AZPR …]` sessions there. Your own conversations are never deleted.
 With a `claude-agent` model, Claude Code also keeps a transcript of every
 session under its own configuration directory (`~/.claude/projects/` by
 default), with what AZPR sent, source excerpts of the PR included. Deleting

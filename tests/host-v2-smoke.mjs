@@ -173,8 +173,8 @@ const provider = createServer(async (request, response) => {
     // Which of the fixture's marks the whole request holds, wherever: system prompt, messages or tool results.
     marks: Object.keys(MARKS).filter(name => body.includes(MARKS[name])),
     // Whether the whole request names OpenCode's image or video generation, wherever: a tool, a Code Mode catalog,
-    // a message.
-    names: ['generate_image', 'generate_video'].filter(name => body.includes(name)),
+    // a message. The checkout's own path is no name of a tool, wherever it is.
+    names: ['generate_image', 'generate_video'].filter(name => body.split(sourceRoot).join('<checkout>').includes(name)),
     catalog: catalogOf(parsed.messages) });
   const repair = textOf(lastUser(parsed.messages)).startsWith('AZPR runtime');
   const toolResults = parsed.messages?.filter(message => message.role === 'tool').length ?? 0;
@@ -315,9 +315,10 @@ await writeFile(join(directories.config, 'opencode.json'), JSON.stringify({
   // fixture's environment turns off the instruction files of the project directory, not this one.)
   instructions: [placeInstructions],
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
-    // An image model makes OpenCode 2.2.2 to the tested version offer generate_image to every agent, and a video
-    // model makes 2.4.0 to the tested version offer generate_video (as tools of their own through 2.4.1, as Code
-    // Mode tools from 2.4.2): the fixture names both, so that neither depends on what the host's built-in catalog
+    // An image model makes OpenCode 2.2.2 to the tested version offer image generation (`generate_image`; before
+    // 2.4.0 `experimental_image_generate`), and a video model makes 2.4.0 to the tested version offer
+    // `generate_video`, to an agent that does not deny them, as tools of their own through 2.4.1 and as Code Mode
+    // tools from 2.4.2. The fixture names both models, so that neither depends on what the host's built-in catalog
     // happens to enable.
     models: { ...Object.fromEntries(['fixture', 'first', 'second', 'rater', 'quick'].map(id => [id, { limit: { context: 100000, output: 4000 } }])),
       image: { type: 'image', limit: { context: 100000, output: 4000 } }, video: { type: 'video', limit: { context: 100000, output: 4000 } } } } },
@@ -595,7 +596,8 @@ try {
   const refusal = await fetch(`${url}/api/session/${offOrigin}/command`, { method: 'POST', headers: { authorization: auth, 'content-type': 'application/json', 'x-opencode-directory': directories.work },
     body: JSON.stringify({ name: 'pr-deep', text: prUrl, delivery: 'steer' }), signal: AbortSignal.timeout(60000) });
   const refusalText = await refusal.text();
-  // OpenCode answers a command that throws with its error (2.3.0 to the tested version: HTTP 500, CommandExecutionError).
+  // OpenCode answers a command that throws with its error (2.3.0 to the tested version: `CommandExecutionError`, which
+  // OpenCode's protocol answers with HTTP 500; the step checks the error and that the answer is no success).
   assert.equal(refusal.ok, false, refusalText);
   assert.deepEqual(JSON.parse(refusalText), { _tag: 'CommandExecutionError', command: 'pr-deep',
     message: '[AZPR] /pr-deep is off: models.deep.reviewers names no model. Name at least one with /pr-setup or in the settings file (stronger than those of models.review, or more passes), then restart the OpenCode service (opencode service restart). No fallback to the models of another mode.' }, `${refusal.status} ${refusalText}`);

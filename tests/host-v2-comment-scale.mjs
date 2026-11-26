@@ -86,7 +86,8 @@ const provider = createServer(async (request, response) => {
       const finding = (path, i, summary) => ({ id: `F-${first + i}`, summary, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.', location: `head:${path}:1`, severity: 'medium', suggestion: 'Restore the guard.' });
       if (input.model === 'first') {
         // The first pass reads its first file whole. Its first shard is "too large": with its read it reports a context
-        // of 59,000 tokens, past the 48,000 at which OpenCode (2.3.0 to the tested version) compacts a window of 64,000.
+        // of 59,000 tokens, past the 48,000 at which OpenCode (2.3.0 to the tested version) compacts a window of 64,000
+        // (the window less the larger of 15 % of it and 16,000 tokens, where no buffer is configured).
         const tooLarge = assigned.length > 15 && assigned[0] === files[0];
         if (!results && offered('azpr_read_file')) {
           calls = [{ name: 'azpr_read_file', arguments: { path: assigned[0], version: 'head' } }];
@@ -162,7 +163,8 @@ settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });
 assert.equal(install.status, 0, install.stderr);
-// A window of 64,000 tokens: OpenCode (2.3.0 to the tested version) compacts in the turn once the context reaches the window less 16,000 tokens.
+// A window of 64,000 tokens: OpenCode (2.3.0 to the tested version) compacts in the turn once the context reaches the
+// window less the larger of 15 % of it and 16,000 tokens (no buffer is configured here): 48,000.
 await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/second',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
     models: Object.fromEntries(['first', 'second'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } }));

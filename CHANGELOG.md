@@ -3,40 +3,45 @@
 ## 0.5.2 — 2026-11-27
 
 AZPR is tested with OpenCode 2.4.2 instead of 2.4.1. OpenCode 2.4.2 was
-compared with 2.4.1, the last version studied: it needs no change to how
-AZPR runs a review, and private sessions are sent what they were sent on
-2.4.1, part by part. The prompt files are those of 0.5.1, no setting is new,
-and settings and saved reviews are used as they are.
+compared with 2.4.1, the last version studied, and needs no change to how
+AZPR runs a review: in the host fixtures, private sessions were sent on 2.4.2
+exactly what they were sent on 2.4.1, request by request. The prompt files
+are those of 0.5.1, no setting is new, and settings and saved reviews are
+used as they are.
 
 - **`/pr-check` notes another OpenCode version instead of warning of it.** On
   an OpenCode other than the tested one, and on one that does not say its
   version, the OpenCode row is `ok` and names the tested release in a note.
   It was a WARNING, which read as if something were wrong. Reviews run on an
-  OpenCode V2 host that provides what AZPR needs, and AZPR checks that when
-  it loads and when a command starts: a missing permission hook is still the
-  Project boundary WARNING, a command that needs a method the host lacks
-  fails with the method's name before it starts, and a host that lacks a
-  method AZPR registers with leaves AZPR unregistered, which the host's
-  plugin list reports. A script that looked for that WARNING should read the
-  OpenCode row instead.
-- **A pass whose prompt is gone says what is known.** OpenCode 2.4.2's
+  OpenCode V2 host that provides what AZPR needs, and AZPR says where one
+  does not: a missing permission hook is still the Project boundary WARNING;
+  a command whose work needs a session method the host lacks fails before it
+  starts and names the method; without the host's model catalog a run starts
+  and ends INCOMPLETE, naming it; and a host that lacks a method AZPR
+  registers with leaves AZPR unregistered when OpenCode starts with usable
+  settings (the host's plugin list says so), while during a first setup
+  AZPR's commands and `/pr-setup` report it. A script that looked for that
+  WARNING should read the OpenCode row instead.
+- **A turn whose prompt is gone says what is known.** OpenCode 2.4.2's
   terminal UI takes the last prompt back when Esc is pressed twice before the
-  model answered, and in a reviewer's session that prompt is AZPR's. The pass
-  then fails as interrupted (measured on 2.4.1 and 2.4.2 with the same
-  steps), or, where the prompt is gone before AZPR reads the session, with an
-  error that named only a compaction as its possible cause. That error now
-  says that the prompt is not among the session's messages exactly once, and
-  that it may have been taken back (Esc twice, or `/undo`) or removed by a
-  compaction.
-  The pass still fails and is not tried again. Stop a run with `/pr-stop`,
-  not in one of its sessions.
+  model answered (with an empty prompt box and nothing queued), and in a
+  reviewer's session that prompt is AZPR's. The turn then fails as
+  interrupted (measured on 2.4.1 and 2.4.2 with the same steps), or, where
+  the prompt is gone before AZPR reads the session, with an error that named
+  only a compaction as its possible cause. That error now says that the
+  prompt is not among the session's messages exactly once, and that it may
+  have been taken back (Esc twice, or `/undo` and then another prompt there)
+  or removed by a compaction. Nothing of that turn is accepted and it is not
+  tried again: in a first turn the pass has no answer, in a correction or
+  follow-up turn the answer before it stands. Stop a run with `/pr-stop`, not
+  in one of its sessions.
 - **Phone notifications.** From OpenCode 2.4.2 on, OpenCode's mobile app can
   notify a paired phone when a top-level session's run ends. AZPR's private
   sessions are top-level sessions, so one review can send several notices; a
-  phone registered without settings gets them all. AZPR cannot change that
-  (a plugin has no access to these notifications): set the phone to notify
-  only when attention is needed, or mute the `[AZPR …]` sessions there. The
-  README and the validation record now say so.
+  phone registered without settings gets them all. AZPR leaves these
+  settings alone: set the phone to notify only when attention is needed, or
+  mute the `[AZPR …]` sessions there. The README and the validation record
+  now say so.
 - Tested with OpenCode 2.4.2 (was 2.4.1). The tested release is one constant,
   `TESTED_HOST_VERSION` in `src/host.mjs`: CI installs the release it names,
   the installer's closing message and the contributor's instructions read it,

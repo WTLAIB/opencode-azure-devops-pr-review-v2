@@ -68,8 +68,9 @@ text of notices and receipts, which the panel reads, need the last two. Install 
 without changing your everyday OpenCode installation:
 
 ```sh
-AZPR_HOST_VERSION=$(node --input-type=module -e "import('./src/host.mjs').then(m => process.stdout.write(m.TESTED_HOST_VERSION))")
-npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund "@opencode/cli@$AZPR_HOST_VERSION"
+AZPR_HOST_VERSION=$(node --input-type=module -e "import('./src/host.mjs').then(m => process.stdout.write(m.TESTED_HOST_VERSION))") &&
+  test -n "$AZPR_HOST_VERSION" &&
+  npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund "@opencode/cli@$AZPR_HOST_VERSION"
 AZPR_TEST_HOST="$PWD/.local/contributor-host/node_modules/.bin/opencode"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --replace

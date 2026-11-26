@@ -1988,6 +1988,7 @@ test('another OpenCode version, or one that reports none, is a note in /pr-check
     assert.match(review, /\] COMPLETE/, String(version));
     assert.doesNotMatch(check + review, /Host notice|differs from the tested/, String(version));
     assert.doesNotMatch(review, /tested with|the tested version/, `${version}: a review receipt does not repeat the host version.`);
+    for (const text of [version ?? 'did not report its version', TESTED_HOST_VERSION]) assert.ok(!review.includes(text), `${version}: the review receipt names ${text}.`);
   }
 });
 
@@ -1997,6 +1998,16 @@ test('a host that lacks a method the review workflow needs fails the command wit
   // The host shows a command's error to the person who typed it.
   await assert.rejects(f.commands.get('pr-review').execute({ sessionID: 'ordinary', prompt: { text: f.azure.prUrl() } }), /^Error: \[AZPR\] OpenCode does not provide session\.interrupt; the review workflow is unavailable\.$/);
   assert.equal(f.notices.filter(notice => /\] STARTED /.test(notice.text)).length, 0, 'Nothing started.');
+  assert.equal(f.calls.filter(call => call.kind === 'create').length, 0, 'No session was created.');
+});
+
+test('a host without the model catalog starts the run, which ends INCOMPLETE and names it', async t => {
+  // The catalog is asked for at the readiness check every run begins with, after its STARTED notice.
+  const f = await fixture(t);
+  delete f.context.model.list;
+  const receipt = await f.command('pr-review', f.azure.prUrl(), 'review');
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] INCOMPLETE; verification none\nReason \(workflow\): \[AZPR\] OpenCode does not provide model\.list; readiness checks is unavailable\.\n/);
+  assert.equal(f.notices.filter(notice => /\] STARTED \/pr-review /.test(notice.text)).length, 1, 'The run started.');
   assert.equal(f.calls.filter(call => call.kind === 'create').length, 0, 'No session was created.');
 });
 

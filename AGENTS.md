@@ -162,8 +162,9 @@ settings, backups and failure records. Never upload `.local/`.
 - A turn is the admitted prompt up to the first idle marker after it, and
   its answer is the last assistant message before that marker. A prompt
   becomes a message of the session only in the execution that takes it, and
-  an execution leaves one marker however it ends, so that marker is the end
-  of the execution that had the prompt and says how the turn ended; the
+  an execution leaves one marker however it ends while the host runs (a
+  shutdown leaves none, and ends the run with the process), so that marker is
+  the end of the execution that had the prompt and says how the turn ended; the
   session's own outcome is its latest execution's, which can be a later one.
   Never skip a marker: one before any answer is the turn's own end, not an
   earlier execution's. What follows the marker is no part of the turn;

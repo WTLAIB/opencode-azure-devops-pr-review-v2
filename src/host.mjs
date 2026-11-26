@@ -122,10 +122,11 @@ export function pluginSourceLabel(source) {
 }
 
 /**
- * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.1.2 to the tested version emit one delta event per streamed chunk of answer text,
- * reasoning or tool-call input; the projected session context shows the text
- * only once the step ends.
+ * Session events that show a turn progressing while no hook runs. OpenCode 2.3.0 to the tested version (2.0.0 too)
+ * publish the answer text and reasoning a model streams in batches, at most one delta event per 100 ms, and of a
+ * tool call's input only its start and its end (source); the projected session context shows the text only once
+ * the step ends. So a model that streams nothing but a tool call's input for longer than a stage's idle window
+ * shows no progress meanwhile; AZPR's tools take short arguments.
  */
 const PROGRESS_EVENTS = new Map([
   ...['started', 'delta', 'ended'].map(phase => [`session.text.${phase}`, 'model output was streamed']),
@@ -216,8 +217,9 @@ export const isSessionNotFound = error => (error?._tag ?? error?.name) === 'Sess
 
 /**
  * Whether a session still has the name OpenCode shows for one that nobody named. OpenCode 2.3.0 to the tested version
- * create a conversation without a title and list it as "New session"; earlier releases stored the same words with the
- * time it was created. OpenCode's own model names such a conversation when it first runs there.
+ * create a conversation without a title, which the terminal UI labels "New session" (its session list adds the time
+ * it was created); earlier releases stored those words with that time as the title. OpenCode's own model names such
+ * a conversation when it first runs there.
  */
 export function isUntitledSession(session) {
   const title = session?.title;
@@ -594,7 +596,8 @@ export function promptOf(messages, nonce) {
 /**
  * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them,
  * `running` while no idle marker follows it, and `ended` once one does (an execution leaves one marker when it
- * ends, however it ends, before the host starts another one; OpenCode 2.3.0 to the tested version).
+ * ends, however it ends while the host runs, before the host starts another one; OpenCode 2.3.0 to the tested version.
+ * A shutdown of the host leaves none: the execution goes on after a restart, and the run has ended with the process).
  */
 export function turnState(messages, prompt) {
   const at = prompt ? messages.indexOf(prompt) : -1;

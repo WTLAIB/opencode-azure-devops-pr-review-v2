@@ -184,7 +184,7 @@ test('V2 output fails closed when active context lacks the exact admitted prompt
   for (const messages of [[assistant(), idle()], [{ id: 'msg_input', type: 'user', text: input }, { id: 'msg_input', type: 'user', text: input }, assistant(), idle()]]) {
     const { context } = host({ context: async () => messages });
     const error = await requestReview(context, { sessionID, text: input }).then(() => assert.fail('An answer was accepted.'), failure => failure);
-    assert.equal(error.message, "[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session's messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo) or removed by a compaction. No output of this turn was accepted.");
+    assert.equal(error.message, "[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session's messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo and then another prompt there) or removed by a compaction. No output of this turn was accepted.");
     assert.equal(classifyFailure(error), 'permanent');
   }
 });
