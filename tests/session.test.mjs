@@ -743,12 +743,23 @@ test('an answer that the host continued ends with the message that completed it,
   // asked the model to continue, the answer was completed, and then the notice of this session's background
   // command woke the model once more before the session went idle. What it answers then is the turn's answer,
   // like after any notice; the continuation message is the host's, and the fragments are not joined to an
-  // answer they do not belong to.
+  // answer they do not belong to. The stream that was recovered is counted all the same.
   const [fragment, posted, completed] = continuationTurn();
   const later = assistant({ id: 'msg_later', ...said('{"answer":"after the notice"}') });
   const turn = (...messages) => host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(), ...messages, idle()] }).context;
   const woken = await requestReview(turn(fragment, posted, completed, shellNotice(), later), { sessionID, text: input, allowHostContinuations: true });
-  assert.deepEqual([woken.parts, woken.continuation, woken.notices], [[{ type: 'text', text: '{"answer":"after the notice"}' }], undefined, ['msg_notice_sh_1']]);
+  assert.deepEqual([woken.parts, woken.continuation, woken.notices], [[{ type: 'text', text: '{"answer":"after the notice"}' }], { count: 1, fragments: [] }, ['msg_notice_sh_1']]);
+  // The stream of that later answer can break and be continued as well: each recovery is the host's, and the
+  // turn's answer is the last one with its own fragments, none of the first.
+  const error = { type: 'provider.transport', message: 'lost' };
+  const again = assistant({ id: 'msg_fragment_2', finish: 'error', error, retry: { attempt: 1, at: 9, error }, ...said('{"answer":"aft') });
+  const twice = await requestReview(turn(fragment, posted, completed, shellNotice(), again, { ...posted, id: 'msg_posted_2' }, assistant({ id: 'msg_later', ...said('er both"}') })),
+    { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual([twice.parts, twice.continuation.count, twice.continuation.fragments.map(part => part.parts[0].text)], [[{ type: 'text', text: '{"answer":"after both"}' }], 2, ['{"answer":"aft', 'er both"}']]);
+  // And one answer may take several continuations.
+  const more = assistant({ id: 'msg_fragment_3', finish: 'error', error, retry: { attempt: 1, at: 9, error }, ...said('PLE') });
+  const long = await requestReview(turn(fragment, posted, more, { ...posted, id: 'msg_posted_3' }, assistant({ id: 'msg_end', ...said('TE"}') })), { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual([long.parts, long.continuation.count], [[{ type: 'text', text: '{"status":"COMPLETE"}' }], 2]);
   // Where the notice is the last thing before the turn ends, or lies inside the recovery, the completed answer is
   // the turn's, with its fragments.
   for (const messages of [[fragment, posted, completed, shellNotice()], [fragment, shellNotice(), posted, completed], [fragment, posted, shellNotice(), completed]]) {

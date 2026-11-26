@@ -312,13 +312,17 @@ export function hostInstructions(messages) {
 // Whether a message of a request has no field but these. A field that is there without a value is none.
 const only = (message, fields) => Object.keys(message).every(key => fields.includes(key) || message[key] === undefined);
 
-// Whether two values are the same data, as JSON holds it: a key without a value is none, and the order of keys
-// says nothing.
+// Whether two values are the same data, as JSON holds it. Lists are the same with the same length and the same
+// data at each place; objects with the same keys of their own that have a value (a key without a value is none,
+// and the order of keys says nothing) and the same data under each. Anything else is the same only as the very
+// same value: what is no plain list or object (a date, an instance of a class) is not compared by its keys.
+const plainData = value => { const kind = Object.getPrototypeOf(value); return Array.isArray(value) || kind === Object.prototype || kind === null; };
 const sameData = (a, b) => {
   if (a === b) return true;
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || !plainData(a) || !plainData(b) || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && Array.from(a.keys()).every(index => sameData(a[index], b[index]));
   const keys = value => Object.keys(value).filter(key => value[key] !== undefined);
-  return keys(a).length === keys(b).length && keys(a).every(key => sameData(a[key], b[key]));
+  return keys(a).length === keys(b).length && keys(a).every(key => Object.hasOwn(b, key) && sameData(a[key], b[key]));
 };
 
 // What OpenCode makes of such an update in a request: `{ role: 'system', content: [{ type: 'text', text }] }`

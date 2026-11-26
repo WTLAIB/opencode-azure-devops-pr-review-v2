@@ -75,8 +75,10 @@ settings, backups and failure records. Never upload `.local/`.
   same in form and text cannot be told from it). As the host builds it means
   the whole message, each field of it: a message, or its text part, that
   carries anything the host did not give it (a field, metadata that is
-  other data than the stored message's) holds what a hook added, and taking
-  it out would drop that. Never tell them by what a request message looks like
+  other data than the stored message's: lists by their length and each
+  place, objects by their own keys, anything that is no plain data only as
+  the very same value) holds what a hook added, and taking it out would
+  drop that. Never tell them by what a request message looks like
   alone, never take a message out for the ID it has alone (one that a hook
   before AZPR's changed may hold what is not the host's), and never take a
   message of the load's form for the host's in a session that did not read.
@@ -297,7 +299,9 @@ settings, backups and failure records. Never upload `.local/`.
   its version, or says what is no release, is taken for a current one). The
   fragments of a continued answer belong to the answer that ended them:
   where the model answered once more afterwards (the notice of its own
-  background command woke it), that later answer stands alone.
+  background command woke it), that later answer stands alone. A turn can
+  hold several continued answers; recognise each, wherever it stands, and
+  count every stream that was recovered (`continuedText`).
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
@@ -594,7 +598,11 @@ settings, backups and failure records. Never upload `.local/`.
   (`observationIndex`). The runtime's own reads need no pages (`read`, a few
   at a time where a list is read: `anchorObservations`). A list that its run
   no longer wants (the run was stopped, a planning page failed) is not
-  looked at further and not written.
+  looked at further and not written; a page whose check of its comments was
+  cut short so is taken as it is, since a quote that was not found then says
+  nothing, and no correction is asked for a plan that is given up. An
+  observation whose arguments cannot be stored is left out of the list like
+  one whose output cannot be handed out.
   Between a put and the end of its run a value is what the put made it, and
   is not looked at again when a reference is handed on within the run (the
   retry of a stage, the continuation of a planning page), nor put again

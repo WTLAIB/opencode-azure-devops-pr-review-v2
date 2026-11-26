@@ -1563,8 +1563,10 @@ With a `claude-agent` model, Claude Code also keeps a transcript of every
 session under its own configuration directory (`~/.claude/projects/` by
 default), with what AZPR sent, source excerpts of the PR included. Deleting
 the OpenCode session does not delete it: Claude Code's cleanup does (after 30
-days by default), or you delete the folders of your OpenCode working
-directories there yourself.
+days by default). The folder of a working directory there also holds the
+transcripts of your own Claude Code conversations in that directory, so do
+not delete it to be rid of a review's; the
+[team guide](docs/ENTERPRISE.md#local-records-and-cleanup) says what can be done sooner.
 A conversation nobody named yet, which OpenCode lists as **New session**, is
 named after the PR when its first check or review starts
 (`AZPR: PR #123 (repository)`): an AZPR command never makes the conversation's

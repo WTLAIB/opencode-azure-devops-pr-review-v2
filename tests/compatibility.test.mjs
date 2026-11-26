@@ -304,6 +304,7 @@ test('a request loses what the host wrote of instructions where it is as the hos
   for (const [name, messages, kept, updates = ['msg_update'], session = stored] of [
     ['a load with its metadata', [prompt, step, { ...load, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
     ['a load with its metadata as other objects of the same data', [prompt, step, { ...load, metadata: { ...JSON.parse(JSON.stringify(stored[2].metadata)), absent: undefined } }, update, notice], [prompt, step, notice]],
+    ['a load with its metadata as data without a prototype', [prompt, step, { ...load, metadata: Object.assign(Object.create(null), { instruction: Object.assign(Object.create(null), { paths: ['/work/sub/CLAUDE.md'] }) }) }, update, notice], [prompt, step, notice]],
     ['a load with its metadata in another order of keys', [prompt, step, { ...load, metadata: { source: 'read', instruction: { kind: 'nested', paths: ['/work/sub/CLAUDE.md'] } } }, update, notice], [prompt, step, notice], ['msg_update'], wide],
     ['messages that name something they do not have', [prompt, step, { ...load, metadata: undefined, providerMetadata: undefined }, { ...update, id: undefined, name: undefined, tools: undefined }, notice], [prompt, step, notice]],
     ['parts that name something they do not have', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text, providerMetadata: undefined }] }, { role: 'system', content: [{ type: 'text', text: stored[3].text, cache: undefined }] }, notice], [prompt, step, notice]],
@@ -327,6 +328,7 @@ test('a request loses what the host wrote of instructions where it is as the hos
   // and the result says so; where the load has another ID or none, or an update another form or a field more,
   // nothing says that it is one.
   const shell = 'The command ended: exit 0';
+  const longer = ['/work/sub/CLAUDE.md']; longer.length = 2;
   for (const [name, messages, changed] of [
     ['the load\'s text as a string', [prompt, step, { id: 'msg_load', role: 'user', content: stored[2].text }, notice], true],
     ['the load\'s text in two parts', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text.slice(0, 9) }, { type: 'text', text: stored[2].text.slice(9), annotation: 'of a hook' }] }, notice], true],
@@ -349,6 +351,13 @@ test('a request loses what the host wrote of instructions where it is as the hos
     ['the load whose metadata carries another hook\'s mark', [prompt, step, { ...load, metadata: { ...stored[2].metadata, cache: { type: 'ephemeral' } } }, notice], true],
     ['the load whose metadata names other files', [prompt, step, { ...load, metadata: { instruction: { paths: ['/work/other/AGENTS.md'] } } }, notice], true],
     ['the load whose metadata lacks what the stored one has', [prompt, step, { ...load, metadata: {} }, notice], true],
+    ['the load whose list of files has an empty place more', [prompt, step, { ...load, metadata: { instruction: { paths: longer } } }, notice], true],
+    ['the load whose list of files has a place without a value', [prompt, step, { ...load, metadata: { instruction: { paths: [null] } } }, notice], true],
+    ['the load whose metadata only inherits what the stored one has', [prompt, step, { ...load, metadata: Object.assign(Object.create(stored[2].metadata), { own: undefined }) }, notice], true],
+    ['the load whose metadata inherits one key and has another', [prompt, step, { ...load, metadata: Object.assign(Object.create(stored[2].metadata), { cache: 'ephemeral' }) }, notice], true],
+    ['the load whose metadata has only what every object inherits', [prompt, step, { ...load, metadata: { toString: Object.prototype.toString } }, notice], true],
+    ['the load whose metadata is no plain data', [prompt, step, { ...load, metadata: new (class Marked { constructor() { this.instruction = { paths: ['/work/sub/CLAUDE.md'] }; } })() }, notice], true],
+    ['the load whose metadata holds a value that is no plain data', [prompt, step, { ...load, metadata: { instruction: Object.assign(new Date(0), { paths: ['/work/sub/CLAUDE.md'] }) } }, notice], true],
   ]) {
     assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   }

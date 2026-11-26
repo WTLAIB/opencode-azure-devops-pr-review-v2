@@ -278,9 +278,15 @@ configuration directory (`~/.claude/projects/<working directory>/` by default;
 OpenCode 2.4.0 and later can name another directory for that provider). It
 holds what AZPR sent, source excerpts of the PR included, in files only the
 user can read. Deleting the OpenCode session does not delete the transcript.
-Claude Code's own cleanup removes it (after 30 days by default); for code that
-must not stay that long, delete the folders that belong to your OpenCode
-working directories, and nothing else under that directory.
+Claude Code's own cleanup removes it (after 30 days by default). Do not delete
+the folder of a working directory to be rid of a review's transcripts sooner:
+the same folder holds the transcripts of every Claude Code conversation in
+that working directory, your own included. For code that must not stay that
+long, delete only the transcript files you have identified as a review's, or
+keep OpenCode's transcripts apart from your own from the start, in a
+configuration directory that only that provider uses (its `configDir`
+setting, OpenCode 2.4.0 and later); what lies there belongs to every OpenCode
+conversation that uses the provider, not only to reviews.
 
 The [terminal panel](../README.md#terminal-panel) runs in OpenCode's terminal
 UI. It reads AZPR's notices and the report queued to a review session from the

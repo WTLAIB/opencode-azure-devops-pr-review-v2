@@ -424,9 +424,10 @@ test('a page whose comments are being checked when another page fails reads no f
   // after the batch that is under way are not read.
   const findings = Array.from({ length: PLANNING_FINDINGS_PER_PAGE + 1 }, (_, i) => finding(`F-${i + 1}`));
   const { review, store } = await setup(t, findings, undefined, { kind: 'reviewers' });
-  review.toolText.push(...await Promise.all(Array.from({ length: 20 }, (_, i) => captureObservation(store, 'azpr_read_diff', { path: '/src/Main.java', version: head, context: i }, `diff window ${i}\n`))));
+  // The file itself, which holds the line that page 2's comment quotes, is the last of them: it is not read.
+  review.toolText.unshift(...await Promise.all(Array.from({ length: 20 }, (_, i) => captureObservation(store, 'azpr_read_diff', { path: '/src/Main.java', version: head, context: i }, `diff window ${i}\n`))));
   const checking = deferred(), failed = deferred();
-  let reads = 0;
+  let reads = 0, checked;
   const counting = { ...store, async read(reference) {
     if (++reads === 1) {
       checking.resolve();
@@ -444,9 +445,13 @@ test('a page whose comments are being checked when another page fails reads no f
       throw new Error('Page 1 failed.');
     }
     reads = 0;
-    return (await handler.evaluate(JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }))).result;
+    checked = await handler.evaluate(JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }));
+    return checked.result;
   }, { parallel: 2 }), /Page 1 failed/);
   assert.equal(reads, 8, 'The batch that was under way, of twenty-one values.');
+  // The quote was not found, because the file that holds it was not read. That says nothing of the comment, and
+  // the model is asked for no correction of a plan that is given up.
+  assert.deepEqual([checked.issues, checked.repairPrompt, checked.usable], [[], undefined, true]);
 });
 
 test('a comment stands in its own finding\'s file, and a page\'s plan is the same whichever fetch finishes first', async t => {
@@ -1626,7 +1631,7 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
       assert.ok(reference.pages.endsWith('.rows.jsonl'), name);
       assert.equal(content, writtenPages(written), name);
       // The same rows are there under the name an earlier version hands out, as one file.
-      assert.deepEqual([await readFile(earlierPages(reference), 'utf8'), await inode(earlierPages(reference))], [content, await inode(reference.pages)], name);
+      if (HARD_LINKS) assert.deepEqual([await readFile(earlierPages(reference), 'utf8'), await inode(earlierPages(reference))], [content, await inode(reference.pages)], name);
       assert.equal(await store.read(reference), written, name);
       const lines = content.split('\n');
       assert.equal(lines.pop(), '', name);
@@ -1661,11 +1666,21 @@ const earlierPages = reference => `${reference.file}.pages.jsonl`;
 const savedEarlier = reference => ({ ...reference, pages: earlierPages(reference) });
 const rowsOf = async reference => (await readFile(reference.pages, 'utf8')).trimEnd().split('\n');
 const inode = async path => (await stat(path)).ino;
+// Whether the file system these tests write to has hard links. A value's rows are left under the earlier name as
+// one, and the tests that look at that name need them; without them the store works all the same, which a test
+// of its own shows with a link that fails.
+const HARD_LINKS = await (async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-links-'));
+  try { await writeFile(join(directory, 'a'), ''); await fileSystem.link(join(directory, 'a'), join(directory, 'b')); return true; }
+  catch { return false; }
+  finally { await rm(directory, { recursive: true, force: true }); }
+})();
+const linked = HARD_LINKS ? {} : { skip: 'This file system has no hard links.' };
 // A file as something else left it, or gone (`null`): a file of its own, since a put leaves a value's rows under
 // two names that are one file, and what is written into one of them would be in the other.
 const leave = async (path, content) => { await rm(path, { force: true, recursive: true }); if (content !== null) await writeFile(path, content); };
 
-test('this version\'s pages are a file of their own name and one layout; a value is made ready when it is handed out, and what an earlier version wrote is left as it is', async t => {
+test('this version\'s pages are a file of their own name and one layout; a value is made ready when it is handed out, and what an earlier version wrote is left as it is', linked, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const first = await createCommentData({ root: directory });
@@ -1784,7 +1799,7 @@ test('this version\'s pages are a file of their own name and one layout; a value
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
 });
 
-test('a store this version wrote is one an earlier version can use: every object it finds there has pages of the name it hands out, which are there before the object is', async t => {
+test('a store this version wrote is one an earlier version can use: every object it finds there has pages of the name it hands out, which are there before the object is', linked, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = await createCommentData({ root: directory });
@@ -1817,7 +1832,32 @@ test('a store this version wrote is one an earlier version can use: every object
   assert.deepEqual([await readFile(reference.pages, 'utf8'), await store.read(reference), await store.handed(reference), (await stat(`${place}.pages.jsonl`)).isDirectory()], [writtenPages(other), other, reference, true]);
 });
 
-test('an object is what its name says by its bytes; one that is damaged or gone is written again from complete pages, and a value that cannot be made ready is not handed out', async t => {
+test('where no link can be made a value is ready all the same, and nothing is left under the earlier name', async t => {
+  // A file system without hard links (the link is refused as not supported). This version reads its own pages,
+  // so nothing of a review is lost; going back to an earlier version is then not provided for.
+  const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const linking = fileSystem.link;
+  let refused = 0;
+  fileSystem.link = async () => { refused++; throw Object.assign(new Error('operation not supported'), { code: 'EOPNOTSUPP' }); };
+  syncBuiltinESMExports();
+  t.after(() => { fileSystem.link = linking; syncBuiltinESMExports(); });
+  const store = await createCommentData({ root: directory });
+  const value = `no hard links here ${'n'.repeat(5000)}`, reference = await store.put(value);
+  const files = async () => [await readFile(reference.file, 'utf8'), await readFile(reference.pages, 'utf8'), await readFile(earlierPages(reference), 'utf8').catch(error => error.code)];
+  assert.deepEqual([await files(), refused > 0], [[value, writtenPages(value), 'ENOENT'], true]);
+  assert.deepEqual([await store.handed(reference), await store.holds(reference), await store.read(reference)], [reference, true, value]);
+  // An object that is gone is written again from the pages, and the value is handed out, as with links.
+  await rm(reference.file);
+  assert.equal(await store.read(reference), value);
+  assert.deepEqual(await files(), [value, writtenPages(value), 'ENOENT']);
+  await rm(reference.file);
+  await leave(reference.pages, writtenPages(value).slice(0, -1));
+  assert.deepEqual(await store.handed(reference), reference);
+  assert.deepEqual(await files(), [value, writtenPages(value), 'ENOENT']);
+});
+
+test('an object is what its name says by its bytes; one that is damaged or gone is written again from complete pages, and a value that cannot be made ready is not handed out', linked, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const first = await createCommentData({ root: directory });
@@ -1874,6 +1914,15 @@ test('an object is what its name says by its bytes; one that is damaged or gone 
   assert.equal(await readFile(damaged.pages, 'utf8'), fresh);
   await rm(damaged.file, { recursive: true });
   await whole(damaged, 'z'.repeat(9000));
+  // Handing out a value whose object had to be written again settles its pages once: they are read for the
+  // value, and once more to see that they are right, not a third time.
+  await leave(damaged.file, null);
+  const reading = fileSystem.readFile;
+  let looks = 0;
+  fileSystem.readFile = (path, ...rest) => { if (path === damaged.pages) looks++; return reading(path, ...rest); };
+  syncBuiltinESMExports();
+  try { assert.deepEqual(await store.handed(damaged), damaged); } finally { fileSystem.readFile = reading; syncBuiltinESMExports(); }
+  assert.deepEqual([looks, await readFile(damaged.file, 'utf8')], [2, 'z'.repeat(9000)]);
   // A sound object is read as it is: no pages are looked at or written for it.
   await leave(damaged.pages, null);
   await leave(earlierPages(damaged), null);
@@ -1933,7 +1982,7 @@ test('an object is what its name says by its bytes; one that is damaged or gone 
   assert.deepEqual([await store.handed(savedEarlier(sound)), await store.handed({ ...sound, pages: undefined })], [sound, sound]);
 });
 
-test('a value is stored as the text a file can hold; a saved review\'s observations are listed as they are handed out, a few values at a time; and a run puts a value once', async t => {
+test('a value is stored as the text a file can hold; a saved review\'s observations are listed as they are handed out, a few values at a time; and a run puts a value once', linked, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'azpr-comment-data-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = await createCommentData({ root: directory });
@@ -2013,6 +2062,11 @@ test('a value is stored as the text a file can hold; a saved review\'s observati
   packs = 0; wanted = true;
   const many = without.slice(0, 20).map((item, at) => ({ ...item, input: { path: `/src/packed-${at}.ts`, note: 'p'.repeat(3000) } }));
   assert.deepEqual([await observationIndex(packing, many, () => wanted), packs, await objects()], [undefined, 8, before + 3 + 8 * 3]);
+  // An observation whose arguments cannot be stored is left out, like one whose output cannot be handed out,
+  // and the others are listed.
+  const unpacked = { ...reopened, async pack(value, size) { if (value.path === '/src/packed-3.ts') throw new Error('The arguments cannot be written.'); return reopened.pack(value, size); } };
+  const some = (await reopened.read(await observationIndex(unpacked, many.slice(0, 5)))).trim().split('\n').map(row => JSON.parse(row));
+  assert.deepEqual(await Promise.all(some.map(async row => JSON.parse(await reopened.read(row.arguments.azprData)).path)), [0, 1, 2, 4].map(at => `/src/packed-${at}.ts`));
   // Within one run a value that the run has put is what that put made it: a second put of it is the first one's
   // reference and reads no file again, also for a value that is packed; a put that failed is tried again.
   const right = async (handed, expected) => assert.deepEqual([await readFile(handed.file, 'utf8'), await readFile(handed.pages, 'utf8')], [expected, writtenPages(expected)]);

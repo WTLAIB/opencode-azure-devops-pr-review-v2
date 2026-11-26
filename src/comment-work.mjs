@@ -425,6 +425,10 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const page = await invoke(payload, {
         async evaluate(answer) {
           const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options });
+          // Another page has failed: no plan will be made, and the saved observations this page's comments are
+          // checked against were not read to the end, so a quote that was not found says nothing. The page is
+          // taken as it is, and the model is asked for no correction of a plan that is given up.
+          if (result && failure) return { result: { ...result, corrections }, issues: [], usable: true };
           // A parsed page is usable: if a correction turn fails, it is finalized as it is, item by item.
           return { result: result && { ...result, corrections }, issues, usable: Boolean(result), repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },

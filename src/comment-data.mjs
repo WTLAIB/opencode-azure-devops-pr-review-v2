@@ -199,30 +199,27 @@ export async function createCommentData({ root, directory: existing } = {}) {
   /**
    * The value a reference names, by its bytes: the object where it is sound, else what complete pages give, from
    * which it is written again. An object is written again as a put writes one, after its pages, so that whoever
-   * finds it finds them; a sound object is read as it is, and no pages are looked at for it.
+   * finds it finds them. With `pages`, the value's pages are made right as well, for a model; without, a sound
+   * object is read as it is, and no pages are looked at for it. The pages are settled once either way. Nothing
+   * where the value cannot be had so.
    */
-  const valueOf = async reference => {
+  const valueOf = async (reference, pages = false) => {
     const id = reference.sha256, file = reference.file;
     // A put of this value that is under way writes these files.
     await putting.get(id)?.catch(() => {});
     try {
-      let text = await sound(file, id);
-      for (const pages of text === undefined ? [PAGES, EARLIER_PAGES] : []) {
-        const content = await present(file + pages);
+      let text = await sound(file, id), settled = false;
+      for (const name of text === undefined ? [PAGES, EARLIER_PAGES] : []) {
+        const content = await present(file + name);
         text = content === undefined ? undefined : valueOfPages(content, id);
-        if (text !== undefined) { await settlePages(file, text); await replace(file, text); break; }
+        if (text !== undefined) { await settlePages(file, text); settled = true; await replace(file, text); break; }
       }
+      if (text !== undefined && pages && !settled) await settlePages(file, text);
       return text;
     } catch { return undefined; }
   };
   /** A reference as it is handed to a model: its value made ready here and now, and this version's pages named; nothing where that cannot be. */
-  const handed = async reference => {
-    if (!own(reference)) return undefined;
-    const text = await valueOf(reference);
-    if (text === undefined) return undefined;
-    try { await settlePages(reference.file, text); } catch { return undefined; }
-    return { ...reference, pages: reference.file + PAGES };
-  };
+  const handed = async reference => own(reference) && await valueOf(reference, true) !== undefined ? { ...reference, pages: reference.file + PAGES } : undefined;
   return {
     directory, put, handed,
     /** Whether a reference, also one that a review saved, names a value that can be made ready for a model. */
@@ -298,12 +295,17 @@ export async function observationIndex(store, observations, wanted = () => true)
   // Only what the store can hand out is listed, as it is now: a reference that a review saved is handed to a
   // model, which reads its pages by itself, and the files it names may be of an earlier version, damaged or
   // gone. Each is listed as it is handed out, with the pages of this version (`handed`).
+  if (!wanted()) return undefined;
   const handed = await eachValue(observations.map(item => item.outputRef), reference => store.handed(reference), wanted);
-  // The rows are made a few at a time as well: arguments too long for a row are packed, which writes them.
+  if (!wanted()) return undefined;
+  // The rows are made a few at a time as well: arguments too long for a row are packed, which writes them. An
+  // observation whose arguments cannot be stored is left out like one whose output cannot be handed out, and
+  // the others are not held back for it.
   const listed = observations.filter(item => handed(item.outputRef)), rows = [];
   for (let at = 0; at < listed.length && wanted(); at += AT_ONCE) {
-    rows.push(...await Promise.all(listed.slice(at, at + AT_ONCE).map(async ({ tool, input, outputRef }) =>
-      json({ tool, arguments: await store.pack(input, 2000), output: handed(outputRef) }))));
+    rows.push(...(await Promise.all(listed.slice(at, at + AT_ONCE).map(async ({ tool, input, outputRef }) => {
+      try { return json({ tool, arguments: await store.pack(input, 2000), output: handed(outputRef) }); } catch { return undefined; }
+    }))).filter(row => row !== undefined));
   }
   // Stopped while its values were looked at or its rows were made: an index that no page will use is not written.
   if (!wanted()) return undefined;

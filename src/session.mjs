@@ -165,37 +165,35 @@ function retriedSteps(turn, enabled) {
 }
 
 /**
- * Text fragments of a stream the host interrupted and resumed with a
- * continuation message (OpenCode through 2.2.x). Accept only errored text-only
- * assistant messages that the host marked for retry, each followed by the host
- * continuation, and finally a successful text answer (`last`). That answer need
- * not be the turn's last message: the notice of this session's own background
- * command can wake the model once more before the session goes idle, and what
- * it answers then is the turn's answer like any other step's. The fragments
- * are one answer only together with the answer that ended them.
+ * The answers of a turn that the host continued after an interrupted stream (OpenCode through 2.2.x): a chain is
+ * one or more errored text-only assistant messages that the host marked for retry, each directly followed by
+ * the host's continuation message, and then the first complete text answer (`last`). A turn can hold several:
+ * the notice of this session's own background command can wake the model once more before the session goes
+ * idle, and that stream can break and be continued as well. Every completed chain is recognised, wherever it
+ * stands; its continuation messages are the host's (`synthetic`) and its fragments are excused (`recovered`).
+ * The fragments of a chain are one answer only together with the answer that ended them (`chains`). Fragments
+ * that no complete answer follows are no recovery, and neither they nor their continuation messages are excused.
  */
 function continuedText(turn, enabled) {
-  const none = { recovered: new Set(), synthetic: new Set(), last: undefined };
-  if (!enabled) return none;
-  const start = turn.findIndex(message => message?.type === 'assistant' && message.error);
-  if (start < 0) return none;
-  const tail = turn.slice(start, -1);
-  const recovered = new Set(), synthetic = new Set();
-  for (let index = 0; index < tail.length; index += 2) {
-    const message = tail[index];
-    if (message?.type !== 'assistant' || !Array.isArray(message.content) ||
-        !message.content.every(part => ['text', 'reasoning'].includes(part?.type)) ||
-        !message.content.some(part => part?.type === 'text' && textValue(part.text)) ||
-        !Number.isFinite(message.time?.completed)) return none;
-    if (message.finish === 'stop' && !message.error) return { recovered, synthetic, last: message };
-    const next = tail[index + 1];
-    if (message.finish !== 'error' || !message.error || !Number.isInteger(message.retry?.attempt) ||
-        message.retry.attempt < 1 || !isHostContinuation(next, message)) return none;
-    recovered.add(message);
-    synthetic.add(next);
+  const recovered = new Set(), synthetic = new Set(), chains = [];
+  if (!enabled) return { recovered, synthetic, chains };
+  const steps = turn.slice(0, -1);
+  const text = message => message?.type === 'assistant' && Array.isArray(message.content) &&
+    message.content.every(part => ['text', 'reasoning'].includes(part?.type)) &&
+    message.content.some(part => part?.type === 'text' && textValue(part.text)) && Number.isFinite(message.time?.completed);
+  const fragment = message => text(message) && message.finish === 'error' && Boolean(message.error) && Number.isInteger(message.retry?.attempt) && message.retry.attempt >= 1;
+  for (let index = 0; index < steps.length; index++) {
+    const fragments = [], notes = [];
+    let at = index;
+    while (fragment(steps[at]) && isHostContinuation(steps[at + 1], steps[at])) { fragments.push(steps[at]); notes.push(steps[at + 1]); at += 2; }
+    const last = steps[at];
+    if (!fragments.length || !text(last) || last.finish !== 'stop' || last.error) continue;
+    for (const message of fragments) recovered.add(message);
+    for (const message of notes) synthetic.add(message);
+    chains.push({ fragments, last });
+    index = at;
   }
-  // Fragments without the answer that ends them are no recovery.
-  return none;
+  return { recovered, synthetic, chains };
 }
 
 /**
@@ -392,14 +390,16 @@ export async function requestReview(context, { sessionID, text, role, model, met
   }
   if (answer.parts.some(part => typeof part.text !== 'string')) throw new Error('[AZPR] Invalid reviewer text content.');
   // The fragments of an interrupted answer belong to the answer that ended them. Where the model answered once
-  // more afterwards (a notice of its own command woke it), that later answer stands alone.
-  if (continuation.recovered.size && continuation.last === final) {
-    const fragments = [...continuation.recovered, final].map(message => normalizeAnswer(message, sessionID));
+  // more afterwards (a notice of its own command woke it), that later answer stands alone: nothing is joined to
+  // it. Every stream the host recovered in the turn is counted either way.
+  if (continuation.recovered.size) {
+    const own = continuation.chains.find(chain => chain.last === final);
+    const fragments = own ? [...own.fragments, final].map(message => normalizeAnswer(message, sessionID)) : [];
     if (fragments.some(fragment => fragment.parts.some(part => typeof part.text !== 'string'))) throw new Error('[AZPR] Invalid continued reviewer text.');
     const texts = fragments.map(fragment => fragment.parts.map(part => part.text).join(''));
     const restartedAt = restartIndex(texts);
     // Keep literal boundaries; the output parser decides whether this is usable.
-    answer.parts = [{ type: 'text', text: texts.slice(restartedAt).join('') }];
+    if (own) answer.parts = [{ type: 'text', text: texts.slice(restartedAt).join('') }];
     answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
   if (retried.size) answer.retriedSteps = retried.size;
