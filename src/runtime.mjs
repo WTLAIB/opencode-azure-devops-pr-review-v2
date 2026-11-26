@@ -875,12 +875,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // A turn is open from the admission of AZPR's prompt until the session's work on it is done. Only then does
       // the session get a model request, a retry or a tool: what the host starts in it by itself afterwards (a
       // background command that ended wakes it) gets none, so nothing is added to an answer that was taken.
-      // `turn` is the prompt of the call that waits for a turn, from before it is sent until that call ends, and
-      // `promptID` the message the host made of the prompt it admitted. The wait for the session does not tell
-      // where the turn ends, since it also covers what the host starts right after it: before every request the
-      // session's own messages are read, and a request is the turn's only while the turn's prompt is among them
-      // and no idle marker follows it (see the `context` hook). The end of the wait closes the grant in any
-      // case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
+      // `turn` is the prompt of the call that waits for a turn, with the nonce it is sent with, from before it is
+      // sent until that call ends. The wait for the session does not tell where the turn ends, since it also
+      // covers what the host starts right after it: before every request the session's own messages are read,
+      // and a request is the turn's only while the turn's prompt is among them, known by that nonce, and no
+      // idle marker follows it (see the `context` hook). The end of the wait closes the grant in any case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
       // `validated` the prompt of the last turn whose answer was taken.
       open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
@@ -2083,9 +2082,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // What the host wrote of instructions into the session by itself (the instruction files near a file the
       // native read tool read, and updates of the sources) is taken out of every request, by the session's own
       // record. The request is sent only as the turn's own and without that text: it holds the turn's prompt,
-      // once, and what stays of it holds none of those texts. A hook that ran before this one may have dropped
-      // the prompt or put such a text elsewhere; what such a hook rewrote in other words, and what a hook after
-      // this one does, cannot be seen from here.
+      // once, and what stays of it holds none of those texts whole. A hook that ran before this one may have
+      // dropped the prompt or put such a text elsewhere; what such a hook cut into pieces or rewrote in other
+      // words, and what a hook after this one does, cannot be seen from here.
       const requested = Array.isArray(event.messages) ? event.messages : [];
       const own = withoutHostMessages(requested, stored);
       if (own.left || own.messages.filter(message => message?.role === 'user' && message.id === prompt.id).length !== 1) {

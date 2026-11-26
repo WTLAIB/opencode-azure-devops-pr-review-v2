@@ -70,15 +70,16 @@ settings, backups and failure records. Never upload `.local/`.
   can have the host's form.
 - A request that cannot be made right is not sent; an answer is never
   refused afterwards for what its model was shown. Where a message that
-  stays still holds such a text word for word (a hook before AZPR's joined
-  it to another message, or gave its message another ID or form), and where
-  the request does not hold its turn's prompt once, the `context` hook
-  refuses the request. So `requestReview` needs no proof of what a model
+  stays still holds such a text whole, word for word in one of its strings
+  however deep (a hook before AZPR's joined it to another message, or gave
+  its message another ID or form), and where the request does not hold its
+  turn's prompt once, the `context` hook refuses the request. So `requestReview` needs no proof of what a model
   saw: what the host wrote of instructions is no step of a turn and no one
   else's input, wherever it stands. Say what this is and no more: AZPR
   answers for a request as its own hook leaves it. Text that a hook before
-  it rewrote in other words, and what a hook after it does, cannot be seen
-  from there, and a plugin in the same process can do anything.
+  it cut into pieces or rewrote in other words, and what a hook after it
+  does, cannot be seen from there, and a plugin in the same process can do
+  anything.
 - `requestReview` fails a turn that received anyone else's message, wherever
   the turn's model was sent it: after the prompt, and between the turn
   before and the prompt (`since`; before a session's first prompt too). A
@@ -541,9 +542,9 @@ settings, backups and failure records. Never upload `.local/`.
   pages give it whole through the host's read: rows the read returns uncut,
   one after another, that together are the value (`wholePages`). A value is
   made ready when it is handed out, each time, and not when its store is
-  opened: when it is put, from the text in hand, and when a reference that
-  a review saved is handed to a model or read (`holds`, `read`), from its
-  files. Pages that do not pass (rows of an earlier version, a file that is
+  opened: when it is put, from the text in hand, also where this process
+  put it before, and when a reference that a review saved is handed to a
+  model or read (`holds`, `read`), from its files. Pages that do not pass (rows of an earlier version, a file that is
   missing or was not finished) are written again from the value. Judge
   pages that are there by what the host's read returns, not by the length
   this version writes. Keep no mark that says a store, or a value at an

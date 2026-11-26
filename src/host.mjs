@@ -273,11 +273,19 @@ const updateText = message => {
   return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
 };
 
-// Whether a value holds one of the texts, anywhere in its strings: a message's content is a string, parts, or what
-// a tool returned.
-const holdsText = (value, texts, depth = 0) => typeof value === 'string' ? texts.some(text => value.includes(text))
-  : depth > 16 || value === null || typeof value !== 'object' ? false
-  : (Array.isArray(value) ? value : Object.values(value)).some(item => holdsText(item, texts, depth + 1));
+// Whether a value holds one of the texts whole in one of its strings, however deep: a message's content is a
+// string, parts, or what a tool returned. Bytes are no text, and a value is looked at once.
+const holdsText = (value, texts) => {
+  const seen = new Set(), open = [value];
+  while (open.length) {
+    const item = open.pop();
+    if (typeof item === 'string') { if (texts.some(text => item.includes(text))) return true; continue; }
+    if (item === null || typeof item !== 'object' || ArrayBuffer.isView(item) || item instanceof ArrayBuffer || seen.has(item)) continue;
+    seen.add(item);
+    for (const held of Array.isArray(item) ? item : Object.values(item)) open.push(held);
+  }
+  return false;
+};
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
@@ -286,9 +294,11 @@ const holdsText = (value, texts, depth = 0) => typeof value === 'string' ? texts
  * request message looks like. A load is taken out by its ID, whatever the request made of it; an update, which
  * has no ID in a request, wherever a system message of the host's form holds exactly its text, every copy of it.
  *
- * `left` says that a message that stays still holds, word for word, the text of one of them: a hook before this
- * one joined it to another message, gave its message another ID or another form. Such a request cannot be sent
- * without showing that text, and taking it out of another message is not this function's to do. `loads` and
+ * `left` says that a message that stays still holds the text of one of them, whole and word for word in one of
+ * its strings, however deep: a hook before this one joined it to another message, gave its message another ID
+ * or another form. Such a request cannot be sent without showing that text, and taking it out of another
+ * message is not this function's to do. A text that such a hook cut into pieces or wrote in other words is not
+ * found. `loads` and
  * `updates` are the IDs of the session's messages that were found and taken out. A session that holds no such
  * message gets its request back as it is.
  */

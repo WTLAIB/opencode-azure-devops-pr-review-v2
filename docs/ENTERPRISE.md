@@ -145,8 +145,8 @@ instruction files loaded beside a file are taken out of the request either
 way; a request in which another plugin put such a file's text somewhere else
 is not sent, and the pass that read beside it fails instead of going on with
 it. AZPR answers for a request as its own hook leaves it: what a plugin that
-is loaded before it rewrote in other words, and what a plugin loaded after it
-adds, it cannot see. List AZPR first among your plugins.
+is loaded before it cut into pieces or rewrote in other words, and what a
+plugin loaded after it adds, it cannot see. List AZPR first among your plugins.
 
 **Experiments of OpenCode that reach these sessions.** Three opt-in
 experiments of OpenCode 2.4 concern AZPR's private sessions; all are off

@@ -196,9 +196,9 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    OpenCode built them because their parts did not have the form AZPR knows
    (a newer OpenCode, or another plugin that edited them).
    `unsendableRequests` counts requests that were not sent because another
-   plugin had changed them before AZPR saw them: a loaded instruction file
-   or an update stood, word for word, outside the message it came in, or
-   the request did not hold its turn's prompt once. The step that asked
+   plugin had changed them before AZPR saw them: the text of a loaded
+   instruction file or of an update stood whole, word for word, outside the
+   message it came in, or the request did not hold its turn's prompt once. The step that asked
    fails, and with it the turn. `shellNotices` on the stage
    counts background commands that reported back. `turnChecks` counts how
    often the session's messages were read, once before every request of an

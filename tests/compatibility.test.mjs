@@ -292,6 +292,12 @@ test('a request loses what the host wrote of instructions by the session\'s own 
   ]) {
     assert.equal(withoutHostMessages(messages, stored).left, true, name);
   }
+  // However deep it lies in what a message holds, and without end where a value holds itself; bytes are no text.
+  const deep = (text, levels) => { let value = [text]; for (let level = 0; level < levels; level++) value = level % 2 ? [value] : { held: value }; return value; };
+  assert.equal(withoutHostMessages([prompt, { id: 'msg_step', role: 'assistant', content: [{ type: 'tool-result', output: deep(`x ${load.content} y`, 40) }] }, load, update, notice], stored).left, true);
+  const circular = { type: 'tool-result', output: { text: 'nothing of it' } };
+  circular.output.again = circular;
+  assert.equal(withoutHostMessages([prompt, { id: 'msg_step', role: 'assistant', content: [circular, { type: 'file', data: new TextEncoder().encode(load.content) }] }, load, update, notice], stored).left, false);
   // Other words are not that text: a part of it, or the same file read another way.
   assert.equal(withoutHostMessages([prompt, step, load, update, { id: 'msg_notice', role: 'user', content: 'Instructions from: /work/sub/CLAUDE.md' }, { role: 'tool', content: '1: NESTED' }], stored).left, false);
 });

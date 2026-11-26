@@ -1670,6 +1670,18 @@ test('a value is made ready when it is handed out: pages that do not give it who
     await whole(again, value);
     assert.equal(await reopened.read(again), value, name);
   }
+  // Nor does a put say anything of a later one: a value this very store put before is looked at again when it is
+  // put again, since its files may have been damaged since.
+  const twice = `put twice ${'t'.repeat(6000)}`, once = await reopened.put(twice);
+  await writeFile(once.file, twice.slice(0, 100));
+  await writeFile(once.pages, earlierRows(twice));
+  assert.deepEqual(await reopened.put(twice), once);
+  assert.equal(await readFile(once.file, 'utf8'), twice);
+  await whole(once, twice);
+  // Two puts of one value at once are one, and each gets the reference.
+  const both = await Promise.all([reopened.put(`${twice}!`), reopened.put(`${twice}!`)]);
+  assert.deepEqual(both[0], both[1]);
+  await whole(both[0], `${twice}!`);
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
 });
 

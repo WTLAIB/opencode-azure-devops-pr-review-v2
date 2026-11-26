@@ -928,7 +928,9 @@ of the project it leaves the instruction files between that file and the
 conversation's directory there, as a message of its own; and when a source
 changes while a session runs, it leaves an update. Neither is shown to a
 private session's model: the `context` hook takes them out of every request,
-whether or not the parts could be told apart. Which messages they are is the
+whether or not the parts could be told apart, and an update whatever source
+it is of, the date and the environment among them (a review that runs past
+midnight is not told the new date). Which messages they are is the
 session's own word. The hook reads the session's messages, where a load is a
 synthetic message that names the files it holds and an update is a `system`
 message, which only the host writes (`isInstructionLoad`,
@@ -939,10 +941,11 @@ message of the host's form holds exactly its text. A system message of
 another plugin's stays, also one that looks like the host's.
 
 A request that cannot be made right is not sent. After the two kinds of
-messages are taken out, the hook looks through what stays for their text,
-word for word: a hook that ran before AZPR's may have joined such a text to
-another message, or given its message another ID or another form. A request
-that still holds it is refused, and so is one that does not hold its turn's
+messages are taken out, the hook looks through every string of what stays,
+however deep it lies, for their text, whole and word for word: a hook that
+ran before AZPR's may have joined such a text to another message, or given
+its message another ID or another form. A request that still holds it is
+refused, and so is one that does not hold its turn's
 prompt once, since its answer would be an answer to something else. So no
 answer is refused afterwards for what its model was shown, and
 `requestReview`, which fails a turn that received anyone else's message,
@@ -953,9 +956,9 @@ turn before and the prompt. A turn that did not succeed fails by its own
 outcome first, which decides whether it is tried again.
 
 This is what AZPR's hook can see, and no more. It answers for a request as it
-leaves that hook: text that a hook before it rewrote in other words, and what
-a hook after it puts into a request, are out of its sight, and a plugin that
-runs in the same process can do anything. List AZPR first among the plugins,
+leaves that hook: text that a hook before it cut into pieces or rewrote in
+other words, and what a hook after it puts into a request, are out of its
+sight, and a plugin that runs in the same process can do anything. List AZPR first among the plugins,
 and it sees the request before every plugin that is listed after it.
 
 With shell allowed, a command can go on in the background: the model asked

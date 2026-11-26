@@ -152,8 +152,9 @@ function valueOfPages(content, id) {
  */
 export async function createCommentData({ root, directory: existing } = {}) {
   let directory = existing;
-  // The values this process put, by digest: a put under way or done.
-  const written = new Map();
+  // The puts of this process that are under way, by digest: two of one value are one, and nothing is kept of a
+  // put that has ended, since what it wrote says nothing about the files a moment later.
+  const putting = new Map();
   if (existing) await readdir(join(existing, 'objects'));
   else {
     if (!root) throw new Error('A private data root is required.');
@@ -164,21 +165,20 @@ export async function createCommentData({ root, directory: existing } = {}) {
   }
   const put = async (given, format = 'text') => {
     const text = wellFormed(given), id = hash(text), file = join(directory, 'objects', id + '.txt');
-    if (!written.has(id)) {
+    if (!putting.has(id)) {
       const operation = (async () => {
         const made = await writeFile(file, text, { flag: 'wx', mode: 0o600 }).then(() => true, error => { if (error.code !== 'EEXIST') throw error; return false; });
-        // An object that was there is another writer's: an earlier version that still runs, another process,
-        // or a write that was cut off. Whatever it holds, the text in hand is the value.
+        // An object that was there is an earlier put's or another writer's: an earlier version that still runs,
+        // another process, or a write that was cut off. Whatever it holds now, the text in hand is the value.
         if (!made && await sound(file, id) === undefined) await replace(file, text);
         // A line-addressable representation also works for huge single-line
         // responses. It is lossless JSON text, NOT original source line numbers. Each row is short enough for
         // the host's read to return it whole (`pageRows`); pages that were there are kept only where they are.
         await settlePages(file, text);
-      })();
-      written.set(id, operation);
-      operation.catch(() => written.delete(id));
+      })().finally(() => { if (putting.get(id) === operation) putting.delete(id); });
+      putting.set(id, operation);
     }
-    await written.get(id);
+    await putting.get(id);
     return { file, pages: file + '.pages.jsonl', format, characters: text.length, sha256: id };
   };
   // Only references to this store's own values are looked at, never a path a model wrote.
@@ -188,7 +188,7 @@ export async function createCommentData({ root, directory: existing } = {}) {
   const ready = async reference => {
     const id = reference.sha256, file = reference.file;
     // A put of this value that is under way writes these files.
-    await written.get(id)?.catch(() => {});
+    await putting.get(id)?.catch(() => {});
     try {
       let text = await sound(file, id);
       if (text === undefined) {
