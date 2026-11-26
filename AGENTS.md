@@ -72,7 +72,11 @@ settings, backups and failure records. Never upload `.local/`.
   (`withoutHostMessages`): the user message with a load's ID and the load's
   text as one text part, and a system message of the host's form that holds
   exactly an update's text (another plugin's system message that is the
-  same in form and text cannot be told from it). Never tell them by what a request message looks like
+  same in form and text cannot be told from it). As the host builds it means
+  the whole message, each field of it: a message, or its text part, that
+  carries anything the host did not give it (a field, metadata that is
+  other data than the stored message's) holds what a hook added, and taking
+  it out would drop that. Never tell them by what a request message looks like
   alone, never take a message out for the ID it has alone (one that a hook
   before AZPR's changed may hold what is not the host's), and never take a
   message of the load's form for the host's in a session that did not read.
@@ -290,7 +294,10 @@ settings, backups and failure records. Never upload `.local/`.
   of the earlier hosts is known by its text alone, which anyone can post:
   accept it only on a host whose version names a release of that protocol
   (`retriesSteps` in `host.mjs`: 2.0.x to 2.2.x; a host that does not say
-  its version, or says what is no release, is taken for a current one).
+  its version, or says what is no release, is taken for a current one). The
+  fragments of a continued answer belong to the answer that ended them:
+  where the model answered once more afterwards (the notice of its own
+  background command woke it), that later answer stands alone.
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
@@ -563,16 +570,19 @@ settings, backups and failure records. Never upload `.local/`.
   file must never change under it. This version's pages are therefore a
   file of their own name beside the value's object (`.rows.jsonl`), in one
   layout for one text (`pagesOf`): a pages file is right exactly when it is
-  that, and whoever writes it writes the same. A file of the name that
+  that, by its bytes, and whoever writes it writes the same. A file of the name that
   versions before 0.5.1 gave their pages (`.pages.jsonl`, with rows the
   host's read cuts) is never changed, since a process of such a version may
   be reading it. Such a version hands that name out for every object it
   finds when it opens a store, and writes no pages for them: so a value
-  that has no file of that name gets one, before its object is written,
-  these rows under that name too, as a link, which is there whole or not at
-  all (`settlePages`). A review that this version saved can then be planned
-  after going back to such a version. A version that changes the layout
-  gives its pages another name (a test holds the layout).
+  that has no file of that name gets one, before its object is written or
+  written again, these rows under that name too, as a link, which is there
+  whole or not at all (`settlePages`). A review that this version saved can
+  then be planned after going back to such a version. That rests on the
+  link: on a file system without hard links none is made, the value is
+  ready all the same, and going back is not provided for; say so wherever
+  going back is promised. A version that changes the layout gives its pages
+  another name (a test holds the layout).
   A value is ready when its object is what its name says and this version's
   pages are there as it writes them. It is made ready when it is put, from
   the text in hand, at every put; and when a reference that a review saved
@@ -590,10 +600,12 @@ settings, backups and failure records. Never upload `.local/`.
   retry of a stage, the continuation of a planning page), nor put again
   where the run puts the same value once more (`putOnce`, for a run's
   payloads and for what its sessions' tools returned). Nothing that writes
-  those files meanwhile makes them wrong: an earlier version writes only
-  files of another name, and none where one is there, and this version,
-  also in another process that works on the same saved review, replaces a
-  file in one step with the same content.
+  those files meanwhile makes them wrong, for two reasons that are not one:
+  an earlier version creates its files exclusively, the object under the
+  very name this version uses and the pages under its own, so it writes
+  into no file that is there; and this version, also in another process
+  that works on the same saved review, replaces a file in one step with the
+  same content.
   This process does not clean a run's data up before its command has ended.
   Another process that shares the state directory can (it knows only its own
   commands, a known limitation); the command whose data is gone then fails,
@@ -603,8 +615,8 @@ settings, backups and failure records. Never upload `.local/`.
   to, and a value is the text a file can hold (no lone surrogate), so that
   object and pages are one value. Derive pages only from such an object;
   where the object is damaged or gone and pages are complete, of this
-  version or of an earlier one, write the object again from them. Replace a
-  file in one step. A value that cannot be made ready is not handed out,
+  version or of an earlier one, write the object again from them, after
+  its pages, as a put does. Replace a file in one step. A value that cannot be made ready is not handed out,
   and the others are not held back for it: opening a store looks at its
   directory alone and never fails for one value. A file that a reviewer
   reads in several windows is one observation, known by its tool, commit

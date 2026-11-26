@@ -108,17 +108,20 @@ async function replace(path, content) {
 
 /**
  * A value's pages, made right: left where they are what this version writes of the text, written where they are
- * not, are not there or cannot be read. A file that is complete is never given another layout by this.
+ * not, are not there or cannot be read. They are that by their bytes, like an object: a file that only decodes
+ * to these rows is not them. A file that is complete is never given another layout by this.
  *
  * A version before 0.5.1 that opens a store hands out the pages of its own name for every object it finds
  * there, and writes none for them: after going back to such a version, a review that this one saved would name
  * files that do not exist. So a value that has no file of that name gets one: these rows under that name too,
- * as a link, which is there whole or not at all. A file of that name that is there is never replaced, and where
- * no link can be made the value is ready all the same, since this version reads its own pages.
+ * as a link, which is there whole or not at all. A file of that name that is there is never replaced. Where no
+ * link can be made (a file system without hard links) the value is ready all the same, since this version
+ * reads its own pages; going back to an earlier version is then not provided for.
  */
 async function settlePages(file, text) {
-  const pages = file + PAGES, rows = pagesOf(text);
-  if (await present(pages) !== rows) await replace(pages, rows);
+  const pages = file + PAGES, rows = Buffer.from(pagesOf(text));
+  const written = await readFile(pages).catch(() => undefined);
+  if (!written?.equals(rows)) await replace(pages, rows);
   await link(pages, file + EARLIER_PAGES).catch(() => {});
 }
 
@@ -193,7 +196,11 @@ export async function createCommentData({ root, directory: existing } = {}) {
   // version saved names that version's pages.
   const own = reference => Boolean(reference) && typeof reference.sha256 === 'string' && /^[a-f0-9]{64}$/.test(reference.sha256) &&
     reference.file === join(directory, 'objects', reference.sha256 + '.txt') && [undefined, reference.file + PAGES, reference.file + EARLIER_PAGES].includes(reference.pages);
-  /** The value a reference names, by its bytes: the object where it is sound, else what complete pages give, from which it is written again. */
+  /**
+   * The value a reference names, by its bytes: the object where it is sound, else what complete pages give, from
+   * which it is written again. An object is written again as a put writes one, after its pages, so that whoever
+   * finds it finds them; a sound object is read as it is, and no pages are looked at for it.
+   */
   const valueOf = async reference => {
     const id = reference.sha256, file = reference.file;
     // A put of this value that is under way writes these files.
@@ -203,7 +210,7 @@ export async function createCommentData({ root, directory: existing } = {}) {
       for (const pages of text === undefined ? [PAGES, EARLIER_PAGES] : []) {
         const content = await present(file + pages);
         text = content === undefined ? undefined : valueOfPages(content, id);
-        if (text !== undefined) { await replace(file, text); break; }
+        if (text !== undefined) { await settlePages(file, text); await replace(file, text); break; }
       }
       return text;
     } catch { return undefined; }
@@ -245,14 +252,16 @@ export async function createCommentData({ root, directory: existing } = {}) {
 export function putOnce(store) {
   if (store.putsOnce) return store;
   const puts = new Map();
-  const put = (text, format = 'text') => {
-    const key = `${format}\n${hash(text)}`;
+  const put = async (text, format = 'text') => {
+    const key = hash(text);
     if (!puts.has(key)) {
       const made = store.put(text, format);
       puts.set(key, made);
       made.catch(() => { if (puts.get(key) === made) puts.delete(key); });
     }
-    return puts.get(key);
+    // The format is the reference's, not the files': one text is one value, whatever it is said to be.
+    const reference = await puts.get(key);
+    return reference.format === format ? reference : { ...reference, format };
   };
   // `pack` is the store's own and asks `this` for the object it packs, which is this put.
   return { ...store, putsOnce: true, put, object(value) { return put(JSON.stringify(value, null, 2), 'json'); } };
@@ -290,10 +299,13 @@ export async function observationIndex(store, observations, wanted = () => true)
   // model, which reads its pages by itself, and the files it names may be of an earlier version, damaged or
   // gone. Each is listed as it is handed out, with the pages of this version (`handed`).
   const handed = await eachValue(observations.map(item => item.outputRef), reference => store.handed(reference), wanted);
-  if (!wanted()) return undefined;
-  const rows = await Promise.all(observations.filter(item => handed(item.outputRef)).map(async ({ tool, input, outputRef }) =>
-    json({ tool, arguments: await store.pack(input, 2000), output: handed(outputRef) })));
-  // Stopped while its rows were made: an index that no page will use is not written.
+  // The rows are made a few at a time as well: arguments too long for a row are packed, which writes them.
+  const listed = observations.filter(item => handed(item.outputRef)), rows = [];
+  for (let at = 0; at < listed.length && wanted(); at += AT_ONCE) {
+    rows.push(...await Promise.all(listed.slice(at, at + AT_ONCE).map(async ({ tool, input, outputRef }) =>
+      json({ tool, arguments: await store.pack(input, 2000), output: handed(outputRef) }))));
+  }
+  // Stopped while its values were looked at or its rows were made: an index that no page will use is not written.
   if (!wanted()) return undefined;
   return store.put(rows.join('\n') + '\n', 'jsonl');
 }

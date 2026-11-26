@@ -309,37 +309,61 @@ export function hostInstructions(messages) {
   return { loads, updates };
 }
 
-// What OpenCode makes of such an update in a request: a system message whose content is its text as one text
-// part, without an ID, metadata or tools. The other system messages it knows change a model's effort or its
-// tools and hold no text.
-const updateText = message => message?.role !== 'system' || message.id !== undefined || message.metadata !== undefined || message.tools !== undefined ? undefined : oneText(message.content);
+// Whether a message of a request has no field but these. A field that is there without a value is none.
+const only = (message, fields) => Object.keys(message).every(key => fields.includes(key) || message[key] === undefined);
+
+// Whether two values are the same data, as JSON holds it: a key without a value is none, and the order of keys
+// says nothing.
+const sameData = (a, b) => {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return false;
+  const keys = value => Object.keys(value).filter(key => value[key] !== undefined);
+  return keys(a).length === keys(b).length && keys(a).every(key => sameData(a[key], b[key]));
+};
+
+// What OpenCode makes of such an update in a request: `{ role: 'system', content: [{ type: 'text', text }] }`
+// and nothing more. It has no ID and no metadata (the host gives those only to a message it builds from one
+// stored message that keeps its ID), and no tools. The other system messages the host knows change a model's
+// effort or its tools and hold no text. A message that carries anything else (a name, the mark of another hook)
+// is no longer what the host built.
+const updateText = message => message?.role === 'system' && only(message, ['role', 'content']) ? oneText(message.content) : undefined;
+
+// What OpenCode makes of a load in a request: the user message with the load's ID and its text as one plain
+// text part, to which the host adds the stored message's metadata for hooks to read:
+// `{ id, role: 'user', content: [{ type: 'text', text }], metadata }` and nothing more. One without that
+// metadata holds nothing that is not the host's; one whose metadata is other data, or that carries another
+// field, holds what a hook added.
+const isLoadAsBuilt = (message, load) => message.role === 'user' && only(message, ['id', 'role', 'content', 'metadata']) &&
+  (message.metadata === undefined || sameData(message.metadata, load.metadata)) && oneText(message.content) === load.text;
 
 // The text of a content that is one plain text part, `[{ type: 'text', text }]`, which is what OpenCode makes of
 // a message's text in a request; nothing where the content is anything else: a string, several parts, a part of
 // another kind, or a text part that carries something more (the mark of another hook, say), which is no longer
 // what the host built.
-const plainText = part => part?.type === 'text' && typeof part.text === 'string' && Object.keys(part).every(key => key === 'type' || key === 'text' || part[key] === undefined);
+const plainText = part => part?.type === 'text' && typeof part.text === 'string' && only(part, ['type', 'text']);
 const oneText = content => Array.isArray(content) && content.length === 1 && plainText(content[0]) ? content[0].text : undefined;
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
  * and its updates of the instructions. Which messages those are is the session's own word (`stored`, its
  * messages as the host holds them; `hostInstructions`), not the request's. Only what is such a message as
- * OpenCode builds it is taken out: a load is the user message with the load's ID whose content is the load's
- * text as one text part, and an update, which has no ID in a request, a system message of the host's form that
- * holds exactly an update's text (every copy of it). Another plugin's system message stays, also one of the
- * host's form, unless it holds exactly the text of an update that the session holds: nothing tells the two apart.
+ * OpenCode builds it is taken out, the whole message and each of its fields: a load is the user message with
+ * the load's ID whose content is the load's text as one text part (`isLoadAsBuilt`), and an update, which has
+ * no ID in a request, a system message of the host's form that holds exactly an update's text (`updateText`;
+ * every copy of it). Another plugin's system message stays, also one of the host's form, unless it holds
+ * exactly the text of an update that the session holds: nothing tells the two apart.
  *
  * Anything else stays as it is. A request is not searched for those texts, and a message that a hook before
- * this one changed (a content in another form, something joined to it, another role) is not taken out for the
- * ID it kept: it may hold what is not the host's. `changed` says that the request holds a message with a load's
+ * this one changed (a content in another form, something joined to it, another role, a field or metadata of
+ * its own) is not taken out for the ID it kept: it holds what is not the host's, which taking it out would
+ * drop. `changed` says that the request holds a message with a load's
  * ID that is not the load as the host builds it, for the stage's record. `loads` and `updates` are the IDs of
  * the session's messages that were taken out: of updates with one text, as many as the request held, in their
  * order. A session that holds no such message gets its request back as it is.
  */
 export function withoutHostMessages(requested, stored) {
   const written = hostInstructions(stored);
-  const loads = new Map(written.loads.map(message => [message.id, message.text])), updates = new Map();
+  const loads = new Map(written.loads.map(message => [message.id, message])), updates = new Map();
   for (const message of written.updates) {
     if (!updates.has(message.text)) updates.set(message.text, []);
     updates.get(message.text).push(message.id);
@@ -349,7 +373,7 @@ export function withoutHostMessages(requested, stored) {
   let changed = false;
   const messages = requested.filter(message => {
     if (typeof message?.id === 'string' && loads.has(message.id)) {
-      if (message.role === 'user' && oneText(message.content) === loads.get(message.id)) { found.loads.add(message.id); return false; }
+      if (isLoadAsBuilt(message, loads.get(message.id))) { found.loads.add(message.id); return false; }
       changed = true;
       return true;
     }

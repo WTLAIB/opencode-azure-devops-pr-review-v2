@@ -25,8 +25,10 @@ OpenCode 2.4.x:
   the question's "Yes" row appears, the three comments were posted. A release
   now counts as a click only within a second of the pointer's last movement
   with the button down; a button held still is a click for any time. The
-  rows of the sessions and `close` follow the same rule. OpenCode 2.3.x makes
-  no such release up.
+  rows of the sessions and `close` follow the same rule. A release the
+  terminal UI makes up within that second is still taken for a click (it is
+  listed below among what is known and not changed). OpenCode 2.3.x makes no
+  such release up.
 - **A usage limit that a ChatGPT workspace's admin set is named and not
   retried.** OpenCode 2.4.0 reports it as a type of its own
   (`provider.chatgpt-workspace-limit`), which 0.5.0 did not know: a stage
@@ -101,8 +103,10 @@ Large inputs:
   what it read. Rows now fit. They are a file of this version's own beside
   the value; a review that an earlier version saved gets such pages when its
   values are used, and what that version wrote is left as it is. A value
-  that this version saves has the same rows under the earlier name as well,
-  so that its review can still be commented on after going back to 0.5.0.
+  that this version saves has the same rows under the earlier name as well
+  (a hard link), so that its review can still be commented on after going
+  back to 0.5.0; on a file system without hard links there is no such file,
+  and a review is run again after going back.
   A value whose files cannot be made right is not handed to a model. The
   instructions to the models did not change.
 

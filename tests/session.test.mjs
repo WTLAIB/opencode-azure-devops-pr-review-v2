@@ -738,6 +738,33 @@ test('the host\'s notice that a background command of this session ended is no f
   assert.deepEqual([retried.parts, retried.retriedSteps, retried.notices], [[{ type: 'text', text: '{"answer":"retried"}' }], 1, ['msg_notice_sh_1']]);
 });
 
+test('an answer that the host continued ends with the message that completed it, also where the session\'s own command woke the model once more', async () => {
+  // A host of the earlier protocol (OpenCode 2.0.x to 2.2.x) with shell allowed: the stream broke, the host
+  // asked the model to continue, the answer was completed, and then the notice of this session's background
+  // command woke the model once more before the session went idle. What it answers then is the turn's answer,
+  // like after any notice; the continuation message is the host's, and the fragments are not joined to an
+  // answer they do not belong to.
+  const [fragment, posted, completed] = continuationTurn();
+  const later = assistant({ id: 'msg_later', ...said('{"answer":"after the notice"}') });
+  const turn = (...messages) => host({ context: async () => [{ id: 'msg_input', type: 'user', text: input }, shellCall(), ...messages, idle()] }).context;
+  const woken = await requestReview(turn(fragment, posted, completed, shellNotice(), later), { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual([woken.parts, woken.continuation, woken.notices], [[{ type: 'text', text: '{"answer":"after the notice"}' }], undefined, ['msg_notice_sh_1']]);
+  // Where the notice is the last thing before the turn ends, or lies inside the recovery, the completed answer is
+  // the turn's, with its fragments.
+  for (const messages of [[fragment, posted, completed, shellNotice()], [fragment, shellNotice(), posted, completed], [fragment, posted, shellNotice(), completed]]) {
+    const joined = await requestReview(turn(...messages), { sessionID, text: input, allowHostContinuations: true });
+    assert.deepEqual([joined.parts, joined.continuation.count, joined.notices], [[{ type: 'text', text: '{"status":"COMPLETE"}' }], 1, ['msg_notice_sh_1']]);
+  }
+  // Nothing else is excused by it: on a host that retries steps the message is someone else's, fragments without
+  // the answer that ends them are no recovery, and a later answer that failed fails the turn.
+  await assert.rejects(requestReview(turn(fragment, posted, completed, shellNotice(), later), { sessionID, text: input, allowHostContinuations: 'steps' }), /another message during this turn/);
+  await assert.rejects(requestReview(turn(fragment, posted, completed, shellNotice(), later), { sessionID, text: input }), /another message during this turn/);
+  const calling = assistant({ id: 'msg_calling', finish: 'tool-calls', content: [{ type: 'tool', id: 'call_more', name: 'azpr_read_file', state: { status: 'completed' } }] });
+  await assert.rejects(requestReview(turn(fragment, posted, calling, later), { sessionID, text: input, allowHostContinuations: true }), /another message during this turn/);
+  const failed = assistant({ id: 'msg_failed', finish: 'error', error: { type: 'provider.transport', message: 'lost' }, ...said('{"ans') });
+  await assert.rejects(requestReview(turn(fragment, posted, completed, shellNotice(), failed), { sessionID, text: input, allowHostContinuations: true }), /no complete, successful final assistant response/);
+});
+
 test('a command that ends after the answer wakes the session by itself; the answer before the turn\'s idle marker stands', async () => {
   const history = [{ id: 'msg_input', type: 'user', text: input }, shellCall(), assistant({ id: 'msg_first', ...said('{"answer":"given"}') }), idle(),
     shellNotice(), assistant({ id: 'msg_woken', ...said('The command has finished.') }), { ...idle(), id: 'msg_idle2' }];

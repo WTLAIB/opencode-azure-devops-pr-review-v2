@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readdir, rm, readFile, stat, writeFile } from 'node:fs/promises';
+import fileSystem, { chmod, mkdir, mkdtemp, readdir, rm, readFile, stat, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
@@ -415,6 +416,37 @@ test('a page still preparing its input when another page fails starts no model w
     throw new Error('Page 1 failed.');
   }, { fetchSource }), /Page 1 failed/);
   assert.deepEqual(started, [1]);
+});
+
+test('a page whose comments are being checked when another page fails reads no further saved observation', async t => {
+  // Two pages side by side. Page 2 has its answer and reads the review's saved observations of the file to check
+  // its comment's anchor, eight values at a time; page 1 fails meanwhile. No plan will be made, so the values
+  // after the batch that is under way are not read.
+  const findings = Array.from({ length: PLANNING_FINDINGS_PER_PAGE + 1 }, (_, i) => finding(`F-${i + 1}`));
+  const { review, store } = await setup(t, findings, undefined, { kind: 'reviewers' });
+  review.toolText.push(...await Promise.all(Array.from({ length: 20 }, (_, i) => captureObservation(store, 'azpr_read_diff', { path: '/src/Main.java', version: head, context: i }, `diff window ${i}\n`))));
+  const checking = deferred(), failed = deferred();
+  let reads = 0;
+  const counting = { ...store, async read(reference) {
+    if (++reads === 1) {
+      checking.resolve();
+      await inTime(failed.promise, 'page 1 to fail');
+      // The failure is recorded by the time the next task runs.
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    return store.read(reference);
+  } };
+  await assert.rejects(prepareComments(review, counting, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') return (await handler.evaluate(JSON.stringify({ status: 'READY', groups: [] }))).result;
+    if (payload.commentWork.page === 1) {
+      await inTime(checking.promise, 'page 2 to check its comments');
+      failed.resolve();
+      throw new Error('Page 1 failed.');
+    }
+    reads = 0;
+    return (await handler.evaluate(JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }))).result;
+  }, { parallel: 2 }), /Page 1 failed/);
+  assert.equal(reads, 8, 'The batch that was under way, of twenty-one values.');
 });
 
 test('a comment stands in its own finding\'s file, and a page\'s plan is the same whichever fetch finishes first', async t => {
@@ -1738,9 +1770,16 @@ test('this version\'s pages are a file of their own name and one layout; a value
   await leave(once.pages, earlierRows(twice));
   assert.deepEqual(await reopened.put(twice), once);
   await right(once, twice);
-  // Two puts of one value at once are one, and each gets the reference.
-  const both = await Promise.all([reopened.put(`${twice}!`), reopened.put(`${twice}!`)]);
-  assert.deepEqual(both[0], both[1]);
+  // Two puts of one value at once are one, and each gets the reference: the files are written once (the rows
+  // and the object), not once for each put.
+  const writing = fileSystem.writeFile;
+  let writes = 0;
+  fileSystem.writeFile = (...given) => { writes++; return writing(...given); };
+  syncBuiltinESMExports();
+  let both;
+  try { both = await Promise.all([reopened.put(`${twice}!`), reopened.put(`${twice}!`)]); }
+  finally { fileSystem.writeFile = writing; syncBuiltinESMExports(); }
+  assert.deepEqual([both[0], writes], [both[1], 2]);
   await right(both[0], `${twice}!`);
   assert.deepEqual((await readdir(join(first.directory, 'objects'))).filter(name => name.endsWith('.tmp')), [], 'No working file is left.');
 });
@@ -1814,15 +1853,44 @@ test('an object is what its name says by its bytes; one that is damaged or gone 
       await leave(damaged.file, object);
       await leave(damaged.pages, rows);
       await leave(earlierPages(damaged), old);
-      // The value itself is read from them without a look at this version's pages; handing it out writes those.
+      // The value itself is read from them, and the object is written again as a put writes one: after its
+      // pages, which are there under both names, so that whoever finds the object finds them. The earlier
+      // pages are left as they are, and where there were none these rows are there under that name.
+      const left = async () => [await readFile(damaged.file, 'utf8'), await readFile(damaged.pages, 'utf8'), await readFile(earlierPages(damaged), 'utf8')];
       assert.equal(await store.read(savedEarlier(damaged)), 'z'.repeat(9000), name);
-      assert.equal(await readFile(damaged.file, 'utf8'), 'z'.repeat(9000), name);
-      if (old === null) await assert.rejects(readFile(earlierPages(damaged)), { code: 'ENOENT' }, `${name}: a read writes no pages`);
+      assert.deepEqual(await left(), ['z'.repeat(9000), fresh, old ?? fresh], name);
       await whole(damaged, 'z'.repeat(9000));
-      assert.equal(await readFile(earlierPages(damaged), 'utf8'), old ?? writtenPages('z'.repeat(9000)), `${name}: the earlier pages are left as they are, and where there were none these rows are there under that name`);
+      assert.deepEqual(await left(), ['z'.repeat(9000), fresh, old ?? fresh], name);
     }
   }
+  // The pages come first then too: where the object cannot be written again (a directory stands where it
+  // belongs), they have been written, and the value is not given out.
+  await leave(damaged.file, null);
+  await mkdir(damaged.file);
+  await writeFile(join(damaged.file, 'in the way'), '');
+  await leave(damaged.pages, null);
+  await leave(earlierPages(damaged), earlierRows('z'.repeat(9000)));
+  await lost(damaged, 'an object that cannot be written again');
+  assert.equal(await readFile(damaged.pages, 'utf8'), fresh);
+  await rm(damaged.file, { recursive: true });
+  await whole(damaged, 'z'.repeat(9000));
+  // A sound object is read as it is: no pages are looked at or written for it.
+  await leave(damaged.pages, null);
+  await leave(earlierPages(damaged), null);
+  assert.equal(await store.read(damaged), 'z'.repeat(9000));
+  await assert.rejects(readFile(damaged.pages), { code: 'ENOENT' });
+  await assert.rejects(readFile(earlierPages(damaged)), { code: 'ENOENT' });
+  await whole(damaged, 'z'.repeat(9000));
   await rm(earlierPages(damaged), { force: true });
+  // Pages are what this version writes by their bytes, like an object: a file that only decodes to those rows
+  // (a byte that is no character where the text has U+FFFD) is not them, and is written again.
+  const marked = await store.put(`a replacement character \uFFFD in the text ${'u'.repeat(3000)}`);
+  const rightRows = await readFile(marked.pages), at = rightRows.indexOf(Buffer.from('\uFFFD'));
+  assert.ok(at > 0);
+  await leave(marked.pages, Buffer.concat([rightRows.subarray(0, at), Buffer.from([0xff]), rightRows.subarray(at + 3)]));
+  assert.equal(await readFile(marked.pages, 'utf8'), rightRows.toString('utf8'), 'Decoded, the damaged pages read like the right ones.');
+  assert.equal(await store.holds(marked), true);
+  assert.deepEqual(await readFile(marked.pages), rightRows);
   // An object is what its name says by its bytes: a write that was cut off inside its last character decodes to
   // the same text, and is not the object.
   const ending = await store.put(`${'e'.repeat(3000)}�`);
@@ -1936,9 +2004,15 @@ test('a value is stored as the text a file can hold; a saved review\'s observati
   asked.length = 0; wanted = true;
   assert.deepEqual([await observationIndex(counting, both, () => false), asked], [undefined, []]);
   const large = { path: '/src/packed.ts', note: 'p'.repeat(3000) };
-  const packing = { ...reopened, async pack(value, size) { wanted = false; return reopened.pack(value, size); } };
+  let packs = 0;
+  const packing = { ...reopened, async pack(value, size) { packs++; wanted = false; return reopened.pack(value, size); } };
   assert.equal(await observationIndex(packing, [{ ...sources[0], input: large }], () => wanted), undefined, 'Stopped while a row\'s arguments were packed.');
   assert.equal(await objects(), before + 3, 'No index was written; only the arguments that were being packed: an object and its pages, under both names.');
+  // The rows are made a few at a time as well: of twenty observations whose arguments must be packed, a stop
+  // while the first are packed leaves the others unpacked and unwritten.
+  packs = 0; wanted = true;
+  const many = without.slice(0, 20).map((item, at) => ({ ...item, input: { path: `/src/packed-${at}.ts`, note: 'p'.repeat(3000) } }));
+  assert.deepEqual([await observationIndex(packing, many, () => wanted), packs, await objects()], [undefined, 8, before + 3 + 8 * 3]);
   // Within one run a value that the run has put is what that put made it: a second put of it is the first one's
   // reference and reads no file again, also for a value that is packed; a put that failed is tried again.
   const right = async (handed, expected) => assert.deepEqual([await readFile(handed.file, 'utf8'), await readFile(handed.pages, 'utf8')], [expected, writtenPages(expected)]);
@@ -1950,8 +2024,9 @@ test('a value is stored as the text a file can hold; a saved review\'s observati
   const packed = await run.pack({ list: value }, 100);
   await leave(packed.azprData.pages, 'nor this\n');
   assert.deepEqual([await run.pack({ list: value }, 100), await readFile(packed.azprData.pages, 'utf8')], [packed, 'nor this\n']);
-  assert.deepEqual(await run.put(value, 'jsonl'), { ...firstPut, format: 'jsonl' }, 'Another format is another put.');
-  await right(firstPut, value);
+  // One text is one value, whatever it is said to be: the reference says the format that was asked for, and no
+  // file is read again.
+  assert.deepEqual([await run.put(value, 'jsonl'), await run.put(value), await readFile(firstPut.pages, 'utf8')], [{ ...firstPut, format: 'jsonl' }, firstPut, 'not looked at again in this run\n']);
   // Another run puts it anew, and so does the store itself.
   await leave(firstPut.pages, 'damaged between two runs\n');
   assert.deepEqual(await putOnce(reopened).put(value), firstPut);

@@ -293,14 +293,19 @@ test('a request loses what the host wrote of instructions where it is as the hos
   const plain = [prompt, step, { role: 'user', content: 'added by a hook' }];
   assert.deepEqual(withoutHostMessages(plain, stored.slice(0, 2)), { messages: plain, loads: [], updates: [], changed: false });
   assert.equal(withoutHostMessages(plain, stored.slice(0, 2)).messages, plain);
-  // A load as the host builds it is the user message with its ID and its text as one text part, with or without
-  // the metadata. An update is taken out wherever a system message of the host's form holds its text, every
+  // A load as the host builds it is the user message with its ID and its text as one text part, with the
+  // stored message's metadata (the same data, however its keys are ordered) or without it, and with no other
+  // field. An update is taken out wherever a system message of the host's form holds its text, every
   // copy of it; of two updates with one text, as many are counted as the request held, in their order. Another
   // hook's own system message stays, and so does a message that a hook added.
   const directive = { role: 'system', content: [{ type: 'text', text: 'Answer briefly.' }] };
   const twice = [...stored, { ...stored[3], id: 'msg_update_again' }];
+  const wide = stored.map(message => message.id === 'msg_load' ? { ...message, metadata: { instruction: { paths: ['/work/sub/CLAUDE.md'], kind: 'nested' }, source: 'read' } } : message);
   for (const [name, messages, kept, updates = ['msg_update'], session = stored] of [
     ['a load with its metadata', [prompt, step, { ...load, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
+    ['a load with its metadata as other objects of the same data', [prompt, step, { ...load, metadata: { ...JSON.parse(JSON.stringify(stored[2].metadata)), absent: undefined } }, update, notice], [prompt, step, notice]],
+    ['a load with its metadata in another order of keys', [prompt, step, { ...load, metadata: { source: 'read', instruction: { kind: 'nested', paths: ['/work/sub/CLAUDE.md'] } } }, update, notice], [prompt, step, notice], ['msg_update'], wide],
+    ['messages that name something they do not have', [prompt, step, { ...load, metadata: undefined, providerMetadata: undefined }, { ...update, id: undefined, name: undefined, tools: undefined }, notice], [prompt, step, notice]],
     ['parts that name something they do not have', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text, providerMetadata: undefined }] }, { role: 'system', content: [{ type: 'text', text: stored[3].text, cache: undefined }] }, notice], [prompt, step, notice]],
     ['the update twice', [prompt, step, load, update, update, notice], [prompt, step, notice]],
     ['two updates of one text', [prompt, step, load, update, update, notice], [prompt, step, notice], ['msg_update', 'msg_update_again'], twice],
@@ -318,8 +323,9 @@ test('a request loses what the host wrote of instructions where it is as the hos
   // What is not such a message as the host builds it stays as it is: it may hold what is not the host's, and it
   // is not this function's to take a message apart or to look through a request for a text. A message with a
   // load's ID that a hook before this one changed (its text as a string or in two parts, something joined to
-  // it, another role, a part that is no text) stays, and the result says so; where the load has another ID or
-  // none, or an update another form, nothing says that it is one.
+  // it, another role, a part that is no text, metadata that is other data, a field of the hook's own) stays,
+  // and the result says so; where the load has another ID or none, or an update another form or a field more,
+  // nothing says that it is one.
   const shell = 'The command ended: exit 0';
   for (const [name, messages, changed] of [
     ['the load\'s text as a string', [prompt, step, { id: 'msg_load', role: 'user', content: stored[2].text }, notice], true],
@@ -336,6 +342,13 @@ test('a request loses what the host wrote of instructions where it is as the hos
     ['an update whose text part carries another hook\'s mark', [prompt, step, { role: 'system', content: [{ type: 'text', text: stored[3].text, metadata: { plugin: 'other' } }] }, notice], false],
     ['the load whose text part carries another hook\'s mark', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text, cache: 'ephemeral' }] }, notice], true],
     ['an update with something added', [prompt, step, { role: 'system', content: [{ type: 'text', text: `${stored[3].text}\nAnd answer briefly.` }] }, notice], false],
+    ['an update with a name', [prompt, step, { ...update, name: 'another-plugin' }, notice], false],
+    ['an update with an ID', [prompt, step, { ...update, id: 'msg_of_a_hook' }, notice], false],
+    ['an update with tools', [prompt, step, { ...update, tools: { add: [], remove: [] } }, notice], false],
+    ['the load with a field of another hook\'s', [prompt, step, { ...load, providerMetadata: { anthropic: { cacheControl: { type: 'ephemeral' } } } }, notice], true],
+    ['the load whose metadata carries another hook\'s mark', [prompt, step, { ...load, metadata: { ...stored[2].metadata, cache: { type: 'ephemeral' } } }, notice], true],
+    ['the load whose metadata names other files', [prompt, step, { ...load, metadata: { instruction: { paths: ['/work/other/AGENTS.md'] } } }, notice], true],
+    ['the load whose metadata lacks what the stored one has', [prompt, step, { ...load, metadata: {} }, notice], true],
   ]) {
     assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   }

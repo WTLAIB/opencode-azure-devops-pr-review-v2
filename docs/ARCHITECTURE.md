@@ -467,7 +467,10 @@ notice instead: an errored text-only assistant message that the host marked
 for retry, followed by that notice and a successful final text, is joined
 literally (`stream-continuations`), and when the model starts its answer over
 instead of continuing (a later fragment opens like the first), only the
-restarted text is used. That notice is known by its text alone, which anyone
+restarted text is used. The fragments belong to the answer that ended them:
+where the model answered once more afterwards, because the notice of its own
+background command woke it before the session went idle, that later answer
+is the turn's and stands alone. The continuation notice is known by its text alone, which anyone
 can post into a session, so it is taken for the host's only on a host whose
 version names a release of that protocol (2.0.x to 2.2.x): on OpenCode 2.3.0
 and later, and on a host that does not say its version or says what is no
@@ -948,7 +951,12 @@ tool: a message of that form in a session that did not read is someone
 else's. The hook takes out of the request what is such a message as the host
 builds it (`withoutHostMessages`): the user message that has a load's ID and
 the load's text as one text part, and a system message of the host's form
-that holds exactly an update's text. A system message of another plugin's
+that holds exactly an update's text. That is asked of the whole message:
+OpenCode gives a load its ID, its role, its content and the stored message's
+metadata, and an update its role and its content, and a text part its type
+and its text. A message or a part that carries anything more (a field of
+another hook's, metadata that is other data) holds what the host did not
+write, and stays. A system message of another plugin's
 stays, also one of the host's form, unless it holds exactly the text of an
 update that the session holds: nothing tells those two apart. Beyond that,
 who wrote a message cannot be proved, and
@@ -959,7 +967,7 @@ the same way, so its text reaches no answer.
 What the hook cannot identify stays as it is, as with the system parts, and
 no request is refused for what it holds. A message that has a load's ID and
 is not the load as the host builds it (another plugin's hook joined
-something to it, or changed its form) goes out as it is, and the stage's
+something to it, changed its form or marked it) goes out as it is, and the stage's
 record counts the request among those that could not be told apart
 (`placeInstructionsNotToldApart`); a load that such a hook gave another ID,
 or moved into another message, is not seen at all. So `requestReview`, which fails a turn

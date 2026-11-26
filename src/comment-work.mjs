@@ -380,10 +380,13 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
   let failure; // The lowest failed page: { index, error }.
   // What every page is handed alike is put once for the whole planning: the report, the file list and the like
   // (`putOnce`), and the index of the review's saved observations, which is made by the first page that needs
-  // it. Once the run was stopped, or a page has failed, no page will use that index: it is not finished.
+  // it. Once the run was stopped, or a page has failed, no plan will be made of what the pages still read of
+  // the review's saved observations: neither that index nor the observations a page's comments are checked
+  // against are read on.
   const pages = putOnce(store);
+  const wanted = () => active() && !failure;
   let observed;
-  const evidenceIndex = () => observed ??= observationIndex(pages, review.toolText ?? [], () => active() && !failure);
+  const evidenceIndex = () => observed ??= observationIndex(pages, review.toolText ?? [], wanted);
   async function planPage(index) {
     const parts = [], signatures = new Set();
     let pending = groups[index] ?? [], continuation, sessions = 0, summaryWritten = false;
@@ -416,7 +419,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
           const text = await source(path);
           if (text !== null) fetched.push({ tool: 'runtime', input: { path, version: review.snapshot.head }, output: text });
         }
-        return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head, active)] };
+        return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head, wanted)] };
       };
       const options = { assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary };
       const page = await invoke(payload, {
