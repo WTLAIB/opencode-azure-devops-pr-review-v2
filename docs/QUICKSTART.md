@@ -13,7 +13,7 @@ writes anything: see [upgrading from 0.4.x](../README.md#upgrading-from-04x).
 
 ## 1. Check the prerequisites (terminal)
 
-- **OpenCode CLI 2.3.2** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
+- **OpenCode CLI 2.4.1** (`@opencode/cli`, V2 plugin API), tested on **Ubuntu
   22.04.5 LTS (WSL2)**. Other host versions and operating systems are not
   validated; see [validation](VALIDATION.md). OpenCode 1.x is not supported.
 - An authenticated OpenCode model with tool support. AZPR uses your existing
@@ -34,16 +34,19 @@ opencode models
 ## 2. Install the package (terminal)
 
 ```sh
-opencode plugin add opencode-azure-devops-pr-review@0.5.0
+opencode plugin add opencode-azure-devops-pr-review@0.5.1
 ```
 
 This is the host's native package installation; no npm account or separate
-build is needed. OpenCode 2.3.0 loads the plugin into a running OpenCode
-service within a few seconds, and otherwise when OpenCode next starts. The
-plugin exposes `/pr-setup` even before its review configuration exists.
+build is needed. OpenCode (2.3.0 and later) loads the plugin into a running
+OpenCode service within a few seconds, and otherwise when OpenCode next
+starts. The plugin exposes `/pr-setup` even before its review configuration
+exists. Keep the exact version in the command: OpenCode 2.4.0 and later
+update an entry such as `…@latest` by themselves, which ends a review that is
+running ([installation](../README.md#native-package-npm-or-git)).
 
 To install the same release from Git instead of the npm registry, use
-`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.0'`.
+`opencode plugin add 'github:WTLAIB/opencode-azure-devops-pr-review-v2#v0.5.1'`.
 Add only one of the two. For a source archive or an existing source
 installation, see [other installation methods](#other-installation-methods).
 
@@ -127,11 +130,11 @@ models** row shows the passes of `/pr-review` and which model rates the
 severities, the **Deep models**
 row says whether `/pr-deep` is set up (see below), and the **AZPR** row names
 the installation that answered. The **OpenCode** row names the host version; a
-WARNING there means it is not the tested 2.3.2, and reviews still run.
+WARNING there means it is not the tested 2.4.1, and reviews still run.
 
 On a host without `permission.hook`, **Project boundary WARNING** means the
 host's own permission rules control where native read tools can read; reviews
-remain available. The tested OpenCode 2.3.2 host has that hook. `READY` is an
+remain available. The tested OpenCode 2.4.1 host has that hook. `READY` is an
 access check, not a security audit or an approval of the PR.
 
 ## 5. Run a review and preview its comments (OpenCode)
@@ -345,7 +348,7 @@ The installer carries a settings file of 0.4.x over exactly as it is;
 Do not load both copies in the same OpenCode profile.
 
 Prefer a source archive? Download and extract the
-[v0.5.0 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.0.tar.gz),
+[v0.5.1 archive](https://github.com/WTLAIB/opencode-azure-devops-pr-review-v2/archive/refs/tags/v0.5.1.tar.gz),
 then run `sh install.sh --config-dir /absolute/path/to/your/opencode-config`
 inside it. That directory must be the one your OpenCode actually loads. The
 source installer creates starter settings: `/pr-setup` in the terminal UI

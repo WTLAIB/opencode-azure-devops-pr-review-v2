@@ -30,7 +30,8 @@ import { createElement as _$createElement } from "@opentui/solid";
 // request to Azure DevOps; a token is typed into a field that shows nothing of it, and is kept nowhere.
 //
 // This is the source. OpenCode loads src/tui.js, which scripts/build-tui.mjs compiles from it:
-// OpenCode 2.3.0 compiles no JSX of a package it installed, so the package carries the result.
+// OpenCode 2.3.x compiles no JSX of a package it installed (2.4.0 and later do), so the package carries the
+// result, which every one of them loads.
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core";
 import { PANEL, buildPanel, conversationOf, createReader, opensPanel } from "./tui-model.mjs";
@@ -39,6 +40,9 @@ import { SETUP_RPC, createSetup, isSetupNotice } from "./tui-setup.mjs";
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
 const READY = "AZPR: report or preview ready. /pr-panel shows it.";
+// How long after the pointer last moved with the button down the release of that button is still a click (see
+// `hold`).
+const MOVED_MS = 1000;
 
 /** The first of these theme tokens that this OpenCode defines; their names have changed between releases. */
 const token = (theme, ...paths) => {
@@ -145,8 +149,49 @@ const inside = event => {
   if (!at || ![event.x, event.y, at.x, at.y, at.width, at.height].every(Number.isFinite)) return true;
   return event.x >= at.x && event.x < at.x + at.width && event.y >= at.y && event.y < at.y + at.height;
 };
+/**
+ * What one clickable thing keeps to tell a release the host made up from a real one. OpenTUI 0.9 (OpenCode 2.4.0
+ * and later) ends a drag whose release it never saw, as when the window lost the pointer with the button down,
+ * at the next press of the button: wherever and whenever that press is, the element that was pressed is first
+ * sent a release at the place of the pointer's last movement, which can be on that element, and no field of
+ * that release tells it from a real one. Time does: a real release follows the last movement at once. So a
+ * release that comes more than a moment after the pointer last moved, with the button that was pressed on this
+ * element still down, is no click. Without a movement the host makes none up, so a button held still for any
+ * time is a click as before, and a press of the element begins anew. Only a press of the left button does: the
+ * host ends the lost gesture at the next left press, so another button must not forget the movement. And only a
+ * movement with the left button counts: the host sends a drag with another button to whatever is under the
+ * pointer, which can be the element a lost gesture still holds, and that is no movement of the gesture.
+ *
+ * Two clocks say how long that was, and a release is a click only where both call it a moment: the time of day
+ * can be set back, and the steady clock may stand still while the machine sleeps. A click that is refused can be
+ * made again; one that is made up cannot be taken back. The moment is measured where this process handles the
+ * two events, which is all it knows of them: an event carries no time of its own. Where the terminal's input
+ * waited meanwhile (the process was stopped, or busy for that long), a made-up release that is handled right
+ * after its movement is still taken for a click.
+ */
+const hold = () => {
+  let moved;
+  return {
+    down: () => {
+      moved = undefined;
+    },
+    drag: event => {
+      if (event?.button === MouseButton.LEFT) moved = {
+        day: Date.now(),
+        steady: performance.now()
+      };
+    },
+    madeUp: () => {
+      if (!moved) return false;
+      const day = Date.now() - moved.day;
+      const steady = performance.now() - moved.steady;
+      return !(day >= 0 && day <= MOVED_MS && steady >= 0 && steady <= MOVED_MS);
+    }
+  };
+};
 function Row(props) {
   const [hover, setHover] = createSignal(false);
+  const held = hold();
   const mark = () => props.row.state === "running" ? props.colors.running : props.row.state === "failed" ? props.colors.failed : props.colors.done;
   return (() => {
     var _el$ = _$createElement("box"),
@@ -160,8 +205,9 @@ function Row(props) {
     _$setProp(_el$, "gap", 1);
     _$setProp(_el$, "onMouseOver", () => setHover(true));
     _$setProp(_el$, "onMouseOut", () => setHover(false));
+    _$setProp(_el$, "onMouseDown", event => event.button === MouseButton.LEFT && held.down());
     _$setProp(_el$, "onMouseUp", event => {
-      if (!clicked(event)) return;
+      if (!clicked(event) || held.madeUp()) return;
       event.stopPropagation();
       props.open(props.row.id);
     });
@@ -199,19 +245,22 @@ function Row(props) {
     }), null);
     _$effect(_p$ => {
       var _v$3 = hover() ? props.colors.hover : undefined,
-        _v$4 = mark(),
-        _v$5 = props.colors.base,
-        _v$6 = props.colors.muted;
+        _v$4 = held.drag,
+        _v$5 = mark(),
+        _v$6 = props.colors.base,
+        _v$7 = props.colors.muted;
       _v$3 !== _p$.e && (_p$.e = _$setProp(_el$, "backgroundColor", _v$3, _p$.e));
-      _v$4 !== _p$.t && (_p$.t = _$setProp(_el$2, "fg", _v$4, _p$.t));
-      _v$5 !== _p$.a && (_p$.a = _$setProp(_el$3, "fg", _v$5, _p$.a));
-      _v$6 !== _p$.o && (_p$.o = _$setProp(_el$4, "fg", _v$6, _p$.o));
+      _v$4 !== _p$.t && (_p$.t = _$setProp(_el$, "onMouseDrag", _v$4, _p$.t));
+      _v$5 !== _p$.a && (_p$.a = _$setProp(_el$2, "fg", _v$5, _p$.a));
+      _v$6 !== _p$.o && (_p$.o = _$setProp(_el$3, "fg", _v$6, _p$.o));
+      _v$7 !== _p$.i && (_p$.i = _$setProp(_el$4, "fg", _v$7, _p$.i));
       return _p$;
     }, {
       e: undefined,
       t: undefined,
       a: undefined,
-      o: undefined
+      o: undefined,
+      i: undefined
     });
     return _el$;
   })();
@@ -224,10 +273,12 @@ function Row(props) {
  * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
  * down, so that is stopped here: what is typed next still goes to the prompt. The press and its release are
  * handed on separately, since a click is both, on one step of one offer; any other press or release here ends
- * what was pressed (`forget`), as it does anywhere else in the panel.
+ * what was pressed (`forget`), as it does anywhere else in the panel, and so does a release the host made up
+ * (`hold`).
  */
 function Button(props) {
   const [hover, setHover] = createSignal(false);
+  const held = hold();
   return (() => {
     var _el$6 = _$createElement("box"),
       _el$7 = _$createElement("text"),
@@ -242,10 +293,11 @@ function Button(props) {
     _$setProp(_el$6, "onMouseDown", event => {
       if (event.button !== MouseButton.LEFT) return props.forget();
       event.stopPropagation();
+      held.down();
       props.press(props.item.id);
     });
     _$setProp(_el$6, "onMouseUp", event => {
-      if (!clicked(event)) return props.forget();
+      if (!clicked(event) || held.madeUp()) return props.forget();
       event.stopPropagation();
       props.lift(props.item.id, inside(event));
     });
@@ -256,20 +308,23 @@ function Button(props) {
     _$setProp(_el$8, "selectable", false);
     _$insert(_el$8, () => props.item.label);
     _$effect(_p$ => {
-      var _v$7 = hover() ? props.colors.hover : undefined,
-        _v$8 = props.live ? props.colors.link : props.colors.muted,
-        _v$9 = props.item.primary ? props.colors.base : props.colors.text,
-        _v$0 = props.item.primary ? TextAttributes.BOLD : 0;
-      _v$7 !== _p$.e && (_p$.e = _$setProp(_el$6, "backgroundColor", _v$7, _p$.e));
-      _v$8 !== _p$.t && (_p$.t = _$setProp(_el$7, "fg", _v$8, _p$.t));
-      _v$9 !== _p$.a && (_p$.a = _$setProp(_el$8, "fg", _v$9, _p$.a));
-      _v$0 !== _p$.o && (_p$.o = _$setProp(_el$8, "attributes", _v$0, _p$.o));
+      var _v$8 = hover() ? props.colors.hover : undefined,
+        _v$9 = held.drag,
+        _v$0 = props.live ? props.colors.link : props.colors.muted,
+        _v$1 = props.item.primary ? props.colors.base : props.colors.text,
+        _v$10 = props.item.primary ? TextAttributes.BOLD : 0;
+      _v$8 !== _p$.e && (_p$.e = _$setProp(_el$6, "backgroundColor", _v$8, _p$.e));
+      _v$9 !== _p$.t && (_p$.t = _$setProp(_el$6, "onMouseDrag", _v$9, _p$.t));
+      _v$0 !== _p$.a && (_p$.a = _$setProp(_el$7, "fg", _v$0, _p$.a));
+      _v$1 !== _p$.o && (_p$.o = _$setProp(_el$8, "fg", _v$1, _p$.o));
+      _v$10 !== _p$.i && (_p$.i = _$setProp(_el$8, "attributes", _v$10, _p$.i));
       return _p$;
     }, {
       e: undefined,
       t: undefined,
       a: undefined,
-      o: undefined
+      o: undefined,
+      i: undefined
     });
     return _el$6;
   })();
@@ -355,6 +410,8 @@ function Panel(props) {
     pressed = undefined;
     if (over && was && was.id === id && was.offer !== undefined && was.offer === model().next?.offer) act(id);
   };
+  // `close` is clicked like a session's row.
+  const closing = hold();
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
   // driven by commands, so the panel hands the keyboard back to the prompt: the next command can be typed
@@ -582,8 +639,9 @@ function Panel(props) {
     _$insertNode(_el$18, _$createTextNode(`close`));
     _$setProp(_el$18, "flexShrink", 0);
     _$setProp(_el$18, "selectable", false);
+    _$setProp(_el$18, "onMouseDown", event => event.button === MouseButton.LEFT && closing.down());
     _$setProp(_el$18, "onMouseUp", event => {
-      if (!clicked(event)) return;
+      if (!clicked(event) || closing.madeUp()) return;
       event.stopPropagation();
       close();
     });
@@ -700,14 +758,14 @@ function Panel(props) {
             cellPaddingX: 1
           });
           _$effect(_p$ => {
-            var _v$1 = syntax(),
-              _v$10 = model().markdown,
-              _v$11 = palette().text,
-              _v$12 = palette().surface;
-            _v$1 !== _p$.e && (_p$.e = _$setProp(_el$29, "syntaxStyle", _v$1, _p$.e));
-            _v$10 !== _p$.t && (_p$.t = _$setProp(_el$29, "content", _v$10, _p$.t));
-            _v$11 !== _p$.a && (_p$.a = _$setProp(_el$29, "fg", _v$11, _p$.a));
-            _v$12 !== _p$.o && (_p$.o = _$setProp(_el$29, "bg", _v$12, _p$.o));
+            var _v$11 = syntax(),
+              _v$12 = model().markdown,
+              _v$13 = palette().text,
+              _v$14 = palette().surface;
+            _v$11 !== _p$.e && (_p$.e = _$setProp(_el$29, "syntaxStyle", _v$11, _p$.e));
+            _v$12 !== _p$.t && (_p$.t = _$setProp(_el$29, "content", _v$12, _p$.t));
+            _v$13 !== _p$.a && (_p$.a = _$setProp(_el$29, "fg", _v$13, _p$.a));
+            _v$14 !== _p$.o && (_p$.o = _$setProp(_el$29, "bg", _v$14, _p$.o));
             return _p$;
           }, {
             e: undefined,
@@ -775,14 +833,17 @@ function Panel(props) {
       }
     }), null);
     _$effect(_p$ => {
-      var _v$13 = palette().base,
-        _v$14 = palette().muted;
-      _v$13 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$13, _p$.e));
-      _v$14 !== _p$.t && (_p$.t = _$setProp(_el$18, "fg", _v$14, _p$.t));
+      var _v$15 = palette().base,
+        _v$16 = palette().muted,
+        _v$17 = closing.drag;
+      _v$15 !== _p$.e && (_p$.e = _$setProp(_el$10, "fg", _v$15, _p$.e));
+      _v$16 !== _p$.t && (_p$.t = _$setProp(_el$18, "fg", _v$16, _p$.t));
+      _v$17 !== _p$.a && (_p$.a = _$setProp(_el$18, "onMouseDrag", _v$17, _p$.a));
       return _p$;
     }, {
       e: undefined,
-      t: undefined
+      t: undefined,
+      a: undefined
     });
     return _el$9;
   })();
@@ -1112,16 +1173,16 @@ function Secret(props) {
     })());
     _$insertNode(_el$42, _$createTextNode(`enter save · ctrl+u clear · esc leave`));
     _$effect(_p$ => {
-      var _v$15 = palette().base,
-        _v$16 = palette().muted,
-        _v$17 = palette().hover ?? palette().surface,
-        _v$18 = length() ? palette().base : palette().muted,
-        _v$19 = palette().muted;
-      _v$15 !== _p$.e && (_p$.e = _$setProp(_el$36, "fg", _v$15, _p$.e));
-      _v$16 !== _p$.t && (_p$.t = _$setProp(_el$39, "fg", _v$16, _p$.t));
-      _v$17 !== _p$.a && (_p$.a = _$setProp(_el$40, "backgroundColor", _v$17, _p$.a));
-      _v$18 !== _p$.o && (_p$.o = _$setProp(_el$41, "fg", _v$18, _p$.o));
-      _v$19 !== _p$.i && (_p$.i = _$setProp(_el$42, "fg", _v$19, _p$.i));
+      var _v$18 = palette().base,
+        _v$19 = palette().muted,
+        _v$20 = palette().hover ?? palette().surface,
+        _v$21 = length() ? palette().base : palette().muted,
+        _v$22 = palette().muted;
+      _v$18 !== _p$.e && (_p$.e = _$setProp(_el$36, "fg", _v$18, _p$.e));
+      _v$19 !== _p$.t && (_p$.t = _$setProp(_el$39, "fg", _v$19, _p$.t));
+      _v$20 !== _p$.a && (_p$.a = _$setProp(_el$40, "backgroundColor", _v$20, _p$.a));
+      _v$21 !== _p$.o && (_p$.o = _$setProp(_el$41, "fg", _v$21, _p$.o));
+      _v$22 !== _p$.i && (_p$.i = _$setProp(_el$42, "fg", _v$22, _p$.i));
       return _p$;
     }, {
       e: undefined,
@@ -1174,7 +1235,7 @@ function setupPart(context) {
       variants: (Array.isArray(model.variants) ? model.variants : []).map(variant => variant?.id).filter(id => typeof id === "string" && id)
     }));
   };
-  // The commands as the server has them now. OpenCode 2.3.0 does not tell its clients where commands changed
+  // The commands as the server has them now. OpenCode 2.3.0 through 2.4.1 do not tell their clients where commands changed
   // when a plugin changes them after it was loaded, so after a first setup the list is read again here.
   const commandsChanged = () => {
     if (disposed) return;

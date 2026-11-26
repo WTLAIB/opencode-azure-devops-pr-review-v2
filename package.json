@@ -1,6 +1,6 @@
 {
   "name": "opencode-azure-devops-pr-review",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Azure DevOps PR reviews from a URL in OpenCode, with no checkout, review passes on the models you choose, and comment previews you can adjust before posting",
   "scripts": {

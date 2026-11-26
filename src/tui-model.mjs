@@ -129,7 +129,9 @@ export const opensPanel = (text, metadata) =>
  * The same Markdown, made readable in a terminal. AZPR writes the cells of its
  * summary table with numeric character references so that Azure DevOps shows
  * their characters literally, and marks its comments with HTML comments that
- * Azure DevOps hides. The terminal renderer decodes neither: in that table,
+ * Azure DevOps hides. A terminal renderer need do neither (OpenCode 2.3.x
+ * decodes no reference; 2.4.0 and later decode them as Markdown asks, and the
+ * table reads the same there): in that table,
  * show each such character, escaped so that Markdown reads none of them as
  * markup (a file named `__init__.py` keeps its underscores, a backtick stays
  * a backtick, as on the PR), and leave the marker lines out.

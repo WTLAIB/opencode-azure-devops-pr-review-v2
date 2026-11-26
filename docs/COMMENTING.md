@@ -448,10 +448,13 @@ page's result:
   ordinals of comments on identical lines do not depend on which page finishes
   first.
 
-When a page fails, no further page or continuation session starts, the stages
-already running finish (including their correction turns and retries), and the
-command reports the failure of the lowest failed page (INCOMPLETE) as before;
-no preview is kept. `/pr-stop` cancels every running page.
+When a page fails, no further page or continuation session starts and no page
+is asked for a correction any more: a stage that is already running finishes
+the turn it is in, and its answer is taken as it is. (A page whose own session
+failed in a way that is tried again still gets its new session; only a failure
+that is final counts.) The command reports the failure of the lowest failed
+page (INCOMPLETE) as before; no preview is kept. `/pr-stop` cancels every
+running page.
 
 Every page is validated item by item:
 

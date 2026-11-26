@@ -1,6 +1,6 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewMethod, reviewVerification } from './comments.mjs';
-import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
+import { observationIndex, anchorObservations, putOnce, rowLines, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
@@ -234,11 +234,12 @@ async function planningInput(review, store, findings, report, work, continuation
     dispositions: wholeDispositions ? dispositions : dispositions.filter(row => ids.has(row.id) || ids.has(row.mergedInto)),
     ...(wholeDispositions ? {} : { allDispositions: await store.pack(dispositions, 0) }),
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
-    ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
+    ...(needsEvidence ? { evidenceIndex: await extras.evidenceIndex() } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
     ...(extras.repeatCandidates?.length ? { repeatCandidates: extras.repeatCandidates } : {}),
-    // This page's own earlier reads; pages planned at the same time keep theirs.
-    ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(extras.evidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
+    // This page's own earlier reads; pages planned at the same time keep theirs. Their values were put in this
+    // run and are what their put made them: whatever writes those files meanwhile writes the same.
+    ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(rowLines(extras.evidence.map(item => JSON.stringify(item))), 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
     commentWork: work,
   };
@@ -253,9 +254,11 @@ async function planningInput(review, store, findings, report, work, continuation
  * HEAD files of its own and earlier pages as observed source and keeps its own
  * continuation state and evidence, and pages are assembled in page order, so
  * markers and their ordinals match planning one page at a time.
- * After a page fails, no page or continuation session starts; stages already
- * running finish (with their repairs and retries) before the failure of the
- * lowest failed page is thrown.
+ * After a page fails, no page or continuation session starts and no page is
+ * asked for a correction (`abandoned`, which the stage asks before each one):
+ * stages already running finish the turn they are in (a stage that fails is
+ * still retried as any stage is) before the failure of the lowest failed page
+ * is thrown.
  * One defect made at several places is several findings. Which findings may
  * be such repeats is settled before the pages are made, so that a group is on
  * one page: when every finding fits one page, that page's findings of equal
@@ -377,6 +380,15 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     headPaths.push([...new Set([...(headPaths[index - 1] ?? []), ...own])]);
   }
   let failure; // The lowest failed page: { index, error }.
+  // What every page is handed alike is put once for the whole planning: the report, the file list and the like
+  // (`putOnce`), and the index of the review's saved observations, which is made by the first page that needs
+  // it. Once the run was stopped, or a page has failed, no plan will be made of what the pages still read of
+  // the review's saved observations: neither that index nor the observations a page's comments are checked
+  // against are read on.
+  const pages = putOnce(store);
+  const wanted = () => active() && !failure;
+  let observed;
+  const evidenceIndex = () => observed ??= observationIndex(pages, review.toolText ?? [], wanted);
   async function planPage(index) {
     const parts = [], signatures = new Set();
     let pending = groups[index] ?? [], continuation, sessions = 0, summaryWritten = false;
@@ -394,10 +406,10 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const sourceExcerpts = await excerpts(assigned);
       // Only the first page writes the summary note; a note from another page is dropped.
       const allowSummary = index === 0 && !summaryWritten;
-      const payload = await planningInput(review, store, assigned, report,
+      const payload = await planningInput(review, pages, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments });
+        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments, evidenceIndex });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
       const scoped = async answer => {
@@ -409,7 +421,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
           const text = await source(path);
           if (text !== null) fetched.push({ tool: 'runtime', input: { path, version: review.snapshot.head }, output: text });
         }
-        return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head)] };
+        return { ...review, toolText: [...fetched, ...await anchorObservations(store, review.toolText ?? [], comments, review.snapshot.head, wanted)] };
       };
       const options = { assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary };
       const page = await invoke(payload, {
@@ -422,6 +434,15 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
           const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });
           return { ...result, corrections };
         },
+        // Another page has failed: no plan will be made. Whatever is wrong with this page's answer, also where
+        // the saved observations its comments are checked against were not read to the end (a quote that was
+        // not found says nothing then) or where it cannot be read at all, the model is asked for no correction
+        // of a plan that is given up. The stage asks this right before it would ask for one, and takes the
+        // answer as its last turn would.
+        abandoned: () => Boolean(failure),
+        // A failure of this page that will not be tried again is known here as soon as the stage knows it, while
+        // its session is still being cleaned up: the other page is asked for nothing more from then on.
+        failed: error => { if (!failure || index < failure.index) failure = { index, error }; },
       });
       sessions++;
       if (text(page.summary)) summaryWritten = true;

@@ -15,6 +15,10 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * at a time, and published; a second publish creates nothing. Before the pages
  * a grouping pass says that three high findings are one defect in three files:
  * they share a page and one comment, which lists the other two places.
+ * The list of 120 changed files is too long for a planning page's input, which
+ * names the private data it lies in instead: the first page reads two rows of
+ * it with OpenCode's native read tool, and the fixture checks that the host
+ * returned each row whole (it cuts a line that is longer than 2,000 characters).
  * With --cleanup the same review runs with debug off, as installed by default.
  * A run then deletes its sessions when it ends, which debug prevents: the
  * fixture checks on the host that only the session holding the report is left
@@ -31,6 +35,7 @@ import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..'), binary = process.argv[2], cleanup = process.argv[3] === '--cleanup';
 assert.ok(binary?.startsWith('/'));
@@ -51,6 +56,11 @@ let planning = 0, planningMost = 0, planningGate = null;
 let grouped = [];
 // What the duplicate checks and the rating sessions were given.
 const duplicateChecks = [], ratings = [];
+// What the first planning page read of the changed-file list: the reference its input named and the read's result.
+let rowsRead = null;
+// A file of the project with a line of exactly the length the host's read returns whole, and one a character longer.
+const limitFile = join(dirs.work, 'read-limit.txt');
+await writeFile(limitFile, `${'a'.repeat(HOST_READ_LINE_CHARACTERS)}\n${'b'.repeat(HOST_READ_LINE_CHARACTERS + 1)}\n`);
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part.text ?? '').join('') : '';
 const provider = createServer(async (request, response) => {
   try {
@@ -76,7 +86,7 @@ const provider = createServer(async (request, response) => {
       const finding = (path, i, summary) => ({ id: `F-${first + i}`, summary, evidence: 'HEAD drops the guard.', counterevidence: 'No caller re-checks.', location: `head:${path}:1`, severity: 'medium', suggestion: 'Restore the guard.' });
       if (input.model === 'first') {
         // The first pass reads its first file whole. Its first shard is "too large": with its read it reports a context
-        // of 59,000 tokens, past the 48,000 at which OpenCode 2.3.2 compacts a window of 64,000.
+        // of 59,000 tokens, past the 48,000 at which OpenCode (2.3.0 through 2.4.1) compacts a window of 64,000.
         const tooLarge = assigned.length > 15 && assigned[0] === files[0];
         if (!results && offered('azpr_read_file')) {
           calls = [{ name: 'azpr_read_file', arguments: { path: assigned[0], version: 'head' } }];
@@ -95,7 +105,16 @@ const provider = createServer(async (request, response) => {
       // The pass before the pages: the first three high findings are the same lost guard in three files.
       grouped = payload.findings.slice(0, 3).map(({ id, location }) => ({ id, location }));
       final = { status: 'READY', groups: [{ findingIds: grouped.map(f => f.id), reason: 'The same guard is lost in each file.' }] };
+    } else if (payload?.commentWork?.kind === 'plan' && payload.commentWork.page === 1 && !results && payload.snapshot?.allFiles?.azprData && offered('read')) {
+      // The first page looks at the start of the changed-file list before it plans: rows 1 and 2 of the pages of
+      // that private value, as the planner's instructions say (one or two rows at a time, with offset and limit).
+      // And the two lines of a file of the project that stand on either side of what the host's read returns whole.
+      calls = [{ name: 'read', arguments: { path: payload.snapshot.allFiles.azprData.pages, offset: 1, limit: 2 } }, { name: 'read', arguments: { path: limitFile, offset: 1, limit: 2 } }];
     } else if (payload?.commentWork?.kind === 'plan') {
+      if (payload.commentWork.page === 1 && results) {
+        const [rows, limit] = input.messages.filter(m => m.role === 'tool').slice(-2).map(m => textOf(m.content));
+        rowsRead = { reference: payload.snapshot.allFiles.azprData, result: rows, limit };
+      }
       planningMost = Math.max(planningMost, ++planning);
       if (!planningGate) {
         let open, limit; planningGate = { promise: new Promise(resolve => { open = resolve; }), open };
@@ -143,7 +162,7 @@ settings.azure = { ...settings.azure, organization: 'fixture', pat: FAKE_PAT };
 await writeFile(join(fixture, 'settings.json'), JSON.stringify(settings));
 const install = spawnSync('/bin/sh', [join(root, 'install.sh'), '--config-dir', dirs.config, '--settings', join(fixture, 'settings.json')], { encoding: 'utf8' });
 assert.equal(install.status, 0, install.stderr);
-// A window of 64,000 tokens: OpenCode 2.3.2 compacts in the turn once the context reaches the window less 16,000 tokens.
+// A window of 64,000 tokens: OpenCode (2.3.0 through 2.4.1) compacts in the turn once the context reaches the window less 16,000 tokens.
 await writeFile(join(dirs.config, 'opencode.json'), JSON.stringify({ update: 'disable', snapshots: false, warming: false, model: 'fixture/second',
   providers: { fixture: { package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: providerURL, apiKey: 'unused' },
     models: Object.fromEntries(['first', 'second'].map(id => [id, { limit: { context: 64000, output: 4000 } }])) } } }));
@@ -161,6 +180,28 @@ try {
   const origin = (await api('/api/session', { title: 'Scale fixture', location: { directory: dirs.work } })).data;
   const notices = async () => (await api(`/api/session/${origin.id}/inbox`)).data.map(item => item.payload?.text ?? '');
   const latest = async () => { receipts.push((await notices()).at(-1)); return receipts.at(-1); };
+  // What a model gets when it reads rows of AZPR's private data with the host's native read tool. The host returns a
+  // line of at most 2,000 characters whole and cuts a longer one (OpenCode 2.3.0 through 2.4.1), so AZPR writes rows
+  // that fit: each row the page read is whole JSON, and their texts are the value itself, from its start.
+  const rowsWhole = async () => {
+    assert.ok(rowsRead, 'The first planning page read two rows of the changed-file list with the native read tool.');
+    const numbered = rowsRead.result.split('\n').filter(line => /^\d+: /.test(line));
+    assert.doesNotMatch(rowsRead.result, /line truncated to/, `The host cut a row of AZPR's private data (longest line ${Math.max(...numbered.map(line => line.length))} characters): a model that reads it gets part of the value.`);
+    assert.equal(numbered.length, 2, `The read returned rows 1 and 2: ${rowsRead.result.slice(0, 300)}`);
+    const rows = numbered.map(line => { try { return JSON.parse(line.replace(/^\d+: /, '')); } catch { return null; } });
+    assert.ok(rows.every(row => row && Number.isInteger(row.start) && Number.isInteger(row.end) && typeof row.text === 'string'), `A row is not whole JSON: ${numbered.map(line => line.slice(-80)).join(' | ')}`);
+    const value = await readFile(rowsRead.reference.file, 'utf8');
+    assert.deepEqual(JSON.parse(value), files, 'The private value is the list of the PR\'s changed files.');
+    assert.deepEqual([rows[0].start, rows[1].start, rows[1].end < value.length], [0, rows[0].end, true], 'The two rows follow each other from the start of the value, which goes on after them.');
+    assert.equal(rows[0].text + rows[1].text, value.slice(0, rows[1].end), 'The rows hold the value\'s own text, nothing lost.');
+    // The length that a row of AZPR's pages is kept under (`ROW_CHARACTERS` is a hundred less): the host returns a
+    // line of exactly that many characters whole, and cuts one that is a character longer, saying so in the line.
+    const [whole, cut] = rowsRead.limit.split('\n').filter(line => /^\d+: /.test(line)).map(line => line.replace(/^\d+: /, ''));
+    assert.equal(whole, 'a'.repeat(HOST_READ_LINE_CHARACTERS), `The host's read no longer returns a line of ${HOST_READ_LINE_CHARACTERS} characters whole (it returned ${whole?.length}): ${rowsRead.limit.slice(0, 200)}`);
+    assert.ok(cut?.startsWith('b'.repeat(HOST_READ_LINE_CHARACTERS)) && !cut.startsWith('b'.repeat(HOST_READ_LINE_CHARACTERS + 1)) && /truncated/.test(cut),
+      `The host's read no longer cuts a line of ${HOST_READ_LINE_CHARACTERS + 1} characters after ${HOST_READ_LINE_CHARACTERS}: ${String(cut).slice(-120)}`);
+    return `${numbered.length} rows of ${Math.max(...numbered.map(line => line.length))} characters at most, whole; a line of ${HOST_READ_LINE_CHARACTERS} characters is returned whole and one of ${HOST_READ_LINE_CHARACTERS + 1} is cut`;
+  };
   await api(`/api/session/${origin.id}/command`, { name: 'pr-review', text: 'https://dev.azure.com/fixture/project/_git/repository/pullrequest/321', delivery: 'steer' });
   const receipt = await latest(), reviewId = /^\[AZPR ([a-f0-9]{8})\]/.exec(receipt)[1];
   // The run's first notice names its passes and their models.
@@ -200,7 +241,8 @@ try {
     // A preview plans in nine sessions (the grouping pass and eight pages) and keeps none of them; the report session stays.
     await api(`/api/session/${origin.id}/command`, { name: 'pr-comment', text: '', delivery: 'steer' });
     assert.match(await latest(), /\] PREVIEW/);
-    assert.equal(requests.filter(r => r.work).length, 9, 'A grouping pass and eight pages.');
+    assert.equal(requests.filter(r => r.work).length, 10, 'A grouping pass and eight pages, the first of which read two rows of private data before it planned.');
+    const rowsOfData = await rowsWhole();
     assert.equal(planningMost, 2, 'Two planning pages were in flight at once, never more.');
     assert.equal((await sessions.listed()).length, 1, 'A comment run keeps none of its sessions.');
     assert.ok(await sessions.exists(report), 'The report session is still there after the preview.');
@@ -212,7 +254,7 @@ try {
     assert.match((await rawApi(`/api/session/${report}/inbox`)).data.at(-1).payload.text, new RegExp(`^\\[AZPR\\] Saved preview of review ${reviewId}`));
     assert.deepEqual([(await sessions.listed()).length, await sessions.records()], [1, {}]);
     console.log(JSON.stringify({ status: 'PASS', mode: 'cleanup', files: files.length, reviewSessions: created.length, deletedAfterReview: created.length - 1, privateSessionsLeft: 1,
-      plannerSessionsLeft: 0, threads: azure.state.threads.length, providerRequests: requests.length, azureCalls: azure.state.calls.length }, null, 2));
+      plannerSessionsLeft: 0, privateDataRows: rowsOfData, threads: azure.state.threads.length, providerRequests: requests.length, azureCalls: azure.state.calls.length }, null, 2));
   } else {
     const debug = /Private debug directory: ([^\n]+)/.exec(receipt)[1];
     const result = JSON.parse(await readFile(join(debug, 'result.json'), 'utf8'));
@@ -255,6 +297,9 @@ try {
     const passes = stagesOfPlan.filter(s => s.commentWork.kind === 'group'), planner = stagesOfPlan.filter(s => s.commentWork.kind === 'plan');
     assert.deepEqual(passes.map(s => [s.label, s.status]), [['grouping', 'READY']], 'One grouping pass before the pages.');
     assert.equal(planner.length, 8, '30 findings in planning pages of four; the three repeats share a page.');
+    // The first page read two rows of the changed-file list before it planned, in one session of two requests.
+    assert.deepEqual(planner.map(s => [s.commentWork.page, s.modelRequests]).sort((a, b) => a[0] - b[0]), [1, 2, 3, 4, 5, 6, 7, 8].map(page => [page, page === 1 ? 2 : 1]), 'Only the first page asked its model twice.');
+    const rowsOfData = await rowsWhole();
     // The three places of the one defect: a comment at the first, the two others listed under its text, each still a row of the index.
     assert.deepEqual(grouped, [0, 1, 3].map((file, index) => ({ id: `F-${[1, 3, 5][index]}`, location: `head:${files[file]}:1` })), 'The grouping pass was given the high findings in the order of the review.');
     const shared = state.threads.filter(thread => /📍 Also at/.test(thread.comments[0].content));
@@ -271,7 +316,7 @@ try {
     assert.match(await latest(), new RegExp(`\nPublication \\(ALREADY_PRESENT=${THREADS}\\):\n`), 'A second publication finds every item on the PR.');
     assert.equal(azure.callsTo('createThread').length, THREADS, 'A second publish writes nothing.');
     console.log(JSON.stringify({ status: 'PASS', files: files.length, firstPassSessions: first.length, overflowSplits: overflowed.length, compactionObserved, overflowShardsReported: overflowShards,
-      secondPassSessions: second.length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, groupingPasses: passes.length, plannerSessions: planner.length, planningInFlightMax: planningMost, sharedComments: shared.length, threads: state.threads.length, providerRequests: requests.length,
+      secondPassSessions: second.length, duplicateChecks: stages('dedupe').length, ratingSessions: stages('rating').length, groupingPasses: passes.length, plannerSessions: planner.length, planningInFlightMax: planningMost, privateDataRows: rowsOfData, sharedComments: shared.length, threads: state.threads.length, providerRequests: requests.length,
       maxRequestCharacters: Math.max(...requests.map(r => r.requestCharacters)), azureCalls: azure.state.calls.length }, null, 2));
   }
 } finally {

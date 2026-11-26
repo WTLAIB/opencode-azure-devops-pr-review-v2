@@ -242,7 +242,7 @@ never whether a defect is real.
    runtime splits that shard in half and runs both halves as parts of the
    same pass (labels `shard 1/5a`, `1/5b`; with several passes
    `pass 2/2 shard 1/5a`). OpenCode's background summary (`compaction.background`,
-   on by default in 2.3.2; `experimental.background_compaction`, opt-in, in
+   on by default from 2.3.1 on; `experimental.background_compaction`, opt-in, in
    earlier releases from 2.1.4) asks for a summary through the same request before the context is
    full and publishes nothing; it is refused before anything is sent and that
    refusal ends nothing: the
@@ -426,9 +426,13 @@ failed provider request in the same session (backoff from 2 s, `Retry-After`
 up to 15 minutes); it prepares every resend again, so the resend passes the
 `context` and `model.request` hooks like any request. AZPR refuses those
 retries for a used-up usage or spend limit (`provider.quota`,
-`provider.free-limit`, `provider.chatgpt-limit`, `provider.go-limit`,
+`provider.free-limit`, `provider.chatgpt-limit`,
+`provider.chatgpt-workspace-limit`, `provider.go-limit`,
 `provider.budget-limit`, `provider.model-budget-limit`), which fails the
-stage as permanent and is named in the receipt.
+stage as permanent and is named in the receipt. The workspace limit is the one
+a ChatGPT workspace's admin sets for a member; OpenCode 2.4.0 and later report
+it as a type of its own, and earlier ones as a rate limit or a quota,
+depending on the provider's wording.
 
 A **stage inactivity watchdog** (`workflow.stageIdleSeconds`, default 600, 0
 turns it off) covers a model stream, a tool or the host that stops responding.
@@ -463,9 +467,17 @@ notice instead: an errored text-only assistant message that the host marked
 for retry, followed by that notice and a successful final text, is joined
 literally (`stream-continuations`), and when the model starts its answer over
 instead of continuing (a later fragment opens like the first), only the
-restarted text is used. Either way an errored message is excused only when the
-host marked it for retry and the turn still ends with a complete, successful
-final answer on the granted agent and model.
+restarted text is used. The fragments belong to the answer that ended them:
+where the model answered once more afterwards, because the notice of its own
+background command woke it before the session went idle, that later answer
+is the turn's and stands alone. The continuation notice is known by its text alone, which anyone
+can post into a session, so it is taken for the host's only on a host whose
+version names a release of that protocol (2.0.x to 2.2.x): on OpenCode 2.3.0
+and later, and on a host that does not say its version or says what is no
+release, such a message is someone else's and fails the turn. Either way an
+errored message is excused only when the host marked it for retry and the
+turn still ends with a complete, successful final answer on the granted agent
+and model.
 
 Before asking for a correction, a narrow local repair escapes unescaped double
 quotes inside closed single-line `code` spans. Corrections for syntax errors ask
@@ -496,10 +508,15 @@ turn); a page's anchor checks see the HEAD source the runtime fetched for its ow
 and earlier pages' findings; a checkpoint counts only the page's own details and
 the planner tool results the runtime tagged with its page; and pages are
 assembled in page order, so markers and their ordinals match planning one page
-at a time. After a page fails, no page or continuation session starts, stages
-already running finish (with their repairs and retries), and the failure of the
-lowest failed page ends the command as before; `/pr-stop` cancels every running
-page.
+at a time. After a page fails, no page or continuation session starts and no
+page is asked for a correction: stages already running finish the turn they
+are in (the saved observations a page's comments are checked against are not
+read on, and the page is taken as it would be at its last turn: the stage
+asks the page's handler before each correction whether its work was given
+up, and a stage tells its handler of a failure that will not be tried again
+before it cleans its session up), and the failure of the lowest failed page
+ends the command as before;
+`/pr-stop` cancels every running page.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
@@ -812,13 +829,20 @@ saved reviews and the records of unfinished runs name them.
 Hooks enforce the grant:
 
 - `prompt`: only the exact pending runtime prompt is admitted; private agents
-  cannot be mentioned or delegated.
+  cannot be mentioned or delegated. In an ordinary conversation one kind of
+  prompt is refused: one of AZPR's commands that arrived as text (see below).
 - `context`: private requests keep only the role's allowlist — AZPR's six
   tools, native read/glob/grep and shell when the `shell` setting allows it;
   every other tool (other MCP servers, edits, web, delegation, CodeMode) is
   removed. The `rating` role's allowlist is empty: it sees and runs no tool,
   whatever the `shell` setting. Ordinary sessions lose only AZPR's tools. Comment pages that read too
-  much get their tools removed to force a checkpoint.
+  much get their tools removed to force a checkpoint. Private requests also
+  lose what the host collected for the conversation's place (see below).
+- `compaction`, `generate`: the requests OpenCode builds outside a turn (a
+  summary, also the one it writes in the background, and a generation such as
+  a side question) carry the session's whole tool list and pass no `context`
+  hook, so AZPR's tools are taken out of them here; a private session's are
+  refused in `model.request` all the same.
 - `model.request`: only primary requests after an authorized context; compaction,
   generation and title requests are refused (a compaction the host attempts
   in the turn ends it as overflow).
@@ -840,9 +864,11 @@ The hooks treat as private every session of an AZPR role (also a role of
 0.4.x) and every session this process created or a saved review or a session
 record names. A process without usable settings, settings of 0.4.x waiting
 for their update among them, loads no runtime: it registers placeholder
-commands only, and no hook, agent or tool. A session an earlier process
+commands, no agent, no tool, and one hook, which refuses one of AZPR's
+commands that arrives as text (see below). A session an earlier process
 created then runs as it would without AZPR installed, with nothing of AZPR's
-and no token; the hooks come with the runtime once the settings load.
+and no token; the hooks that admit a private session's requests come with
+the runtime once the settings load.
 - `tool.execute.after`: records tool outcomes and pages large comment-tool
   results into private files.
 - `prompt`, `model.request`, `retry`, the tool hooks and a pending approval in
@@ -880,6 +906,223 @@ than as a PAT or permission problem.
 Shell is denied by default. With `shell: "ask"` or `"inherit"` reviewers may run
 commands under host permissions; that is real host authority, not a sandbox.
 Reviewers have no Azure DevOps write tool at all; only the runtime writes.
+
+**What a private session is not told.** OpenCode builds the second system
+part of every request from sources: the date, the environment, the
+instruction files of the conversation's directory and above (`AGENTS.md`; from
+OpenCode 2.3.1 also `CLAUDE.md`, the user's own included; the files a
+configuration lists), and what MCP servers, references, skills and CodeMode
+say of themselves. All but the first two tell an agent how to work in the
+local directory, which is not the PR's repository; with a large instruction
+file they also multiply the size of every private request. The `context` hook
+therefore rebuilds that part from the date and the environment alone
+(`withoutPlaceInstructions` in `host.mjs`). It can do so because OpenCode
+2.3.0 through 2.4.1 keep each source as `{ key, text }` in the part's
+`metadata.experimental.instructions`, a field the host marks as experimental:
+where no part has that form, more than one has it, or a part's text is not its
+sources joined, the parts stay as they are and the stage's debug record counts
+the request (`placeInstructionsNotToldApart`); what was left out is named
+there too (`placeInstructions`). Ordinary sessions are not touched. This
+keeps the host's collected instructions out; it does not make a review the
+same in every directory, since the environment names the directory and a
+reviewer can read local files.
+
+OpenCode's own Claude Code provider (`claude-agent`) does not send the system
+parts. Its hook, which runs before any plugin's and before the built-in hooks
+that add parts of their own, has already made one text of the instructions
+part and kept it in the request's options, and the model is handed that. On
+OpenCode 2.3.0 and 2.4.1 that text is the sources but the date and the
+environment, joined by a blank line (`claudeInstructions`). For a request to
+that provider the sources are left out only where the option holds exactly
+that, and the option is emptied with them; where it holds anything else, or
+is missing, the parts and the option both stay and the request is counted.
+An option of that name on another provider's request decides nothing.
+
+The host also writes into a running session. After a native `read` of a file
+of the project it leaves the instruction files between that file and the
+conversation's directory there, as a message of its own; and when a source
+changes while a session runs, it leaves an update. Neither is shown to a
+private session's model: the `context` hook takes them out of every request,
+whether or not the parts could be told apart, and an update whatever source
+it is of, the date and the environment among them: a session that runs past
+midnight is not told the new date by such a message (a session of the same
+review that begins afterwards has it from its first request). Which messages
+they are is the session's
+own word (`hostInstructions` in `host.mjs`). An update is a `system` message,
+which only the host writes. A load is a synthetic message that names the
+files it holds; that metadata is what the host itself goes by, as its only
+record of which files a session was given. Like the notice of a background
+command, a load is the late result of the session's own tool call, so it
+counts only after an assistant message of the session called the native read
+tool: a message of that form in a session that did not read is someone
+else's. The hook takes out of the request what is such a message as the host
+builds it (`withoutHostMessages`): the user message that has a load's ID and
+the load's text as one text part, and a system message of the host's form
+that holds exactly an update's text. That is asked of the whole message:
+OpenCode gives a load its ID, its role, its content and the stored message's
+metadata, and an update its role and its content, and a text part its type
+and its text, all of it plain data (a plain object for a load, an ordinary
+array for a content, plain objects and arrays of strings for the metadata;
+seen on OpenCode 2.3.0 and 2.4.1). A message or a part that carries anything
+more holds what the host did not write, and stays: a field of another
+hook's, also one that is not listed or stands under a symbol, a value behind
+an accessor, an array or an object of another class, an object that answers
+for another (a proxy), metadata that is other data than the stored
+message's. Each is asked of the object's own properties, taken once from
+their descriptors, so that nothing of a message's own is called and looking
+at it changes nothing; metadata is compared to its end however deep it goes.
+What an object inherits is not looked at, and an update is an object of the
+host's own class, which a plugin cannot name. The same holds for a request's
+system parts: the instructions part is made anew only where it, its metadata
+and its sources are plain data, with what a hook added to them in plain
+sight kept, and a part without a source left goes only where it holds nothing
+but what the host gave it. The list of a request's messages is looked at
+like its items: one that is no ordinary list is left whole. The Claude
+provider's option is emptied only where an ordinary object holds it as a text
+that can be written, and a source of the instructions part goes only where it
+holds nothing but its key and its text. The event itself is read the same
+way: what it holds under `system`, `messages`, `options` and `tools` is taken
+once from its descriptors, a place is given another value only where it can
+be written, and a change is made only where it can be made whole (for the
+Claude provider the option and the parts together: where the parts take no
+new value the option is put back). A tool is taken out of the list of tools
+where the list lets it, and the stage's record counts a request in which one
+stayed (`toolsLeftListed`); a planning session that was told to finish
+without tools is refused a tool where it calls one all the same, and a note
+that could not be added is counted (`notesNotAdded`). Where one of these
+cannot be done the request goes out as it is and is counted; none refuses
+it. What the hook takes out of a request as the host builds it is
+exactly what `requestReview` takes for no one else's input: both go by the
+session's record. A system message of another plugin's
+stays, also one of the host's form, unless it holds exactly the text of an
+update that the session holds: nothing tells those two apart. Beyond that,
+who wrote a message cannot be proved, and
+a load's text would prove nothing more than its metadata; a message of the
+load's form that someone posts after such a read is kept from the model in
+the same way, so its text reaches no answer.
+
+What the hook cannot identify stays as it is, as with the system parts, and
+no request is refused for what it holds. A message that has a load's ID and
+is not the load as the host builds it (another plugin's hook joined
+something to it, changed its form or marked it) goes out as it is, and the stage's
+record counts the request among those that could not be told apart
+(`placeInstructionsNotToldApart`); a load that such a hook gave another ID,
+or moved into another message, is not seen at all. So `requestReview`, which fails a turn
+that received anyone else's message, asks for no proof of what a model was
+shown: what the host wrote of instructions is no step of a turn and no one
+else's input, wherever it stands. Anyone else's message fails the turn where
+the turn's model was sent it: after the prompt, and between the turn before
+and the prompt. A turn that did not succeed fails by its own outcome first,
+which decides whether it is tried again.
+
+AZPR does not police other plugins. Its rules hold for a request as OpenCode
+builds it, and for a tool's result as AZPR's tool returns it. A plugin's hook
+may add to a request, so no check of what a request holds could be complete,
+and a request refused for its form would fail every review on a host that
+builds requests another way. What another plugin's hook makes of a request or
+of a tool's result, before or after AZPR's own, AZPR neither sees nor
+corrects, and a plugin that runs in the same process can do anything. Listing
+AZPR first among the plugins of `opencode.json` makes its hook see a request
+before those of the plugins listed after it; not before a plugin that
+OpenCode loads from a configuration directory's `plugin/` or `plugins/`
+folder, and not where AZPR's runtime starts after the others (a first
+`/pr-setup` in a running OpenCode).
+
+With shell allowed, a command can go on in the background: the model asked
+for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's
+tool part then says that the command is still running and names its shell,
+and when the command ends the host tells the session with a message of its
+own, which is that call's late result. `requestReview` takes it as no one
+else's input when its metadata says `source: "shell"`, says that the command
+ended, and names a shell that a shell call of this same session reported as
+running; each such shell reports once (`ownShellNotices` in `session.mjs`).
+A notice for a shell the session did not start, a second one, or one without
+those marks fails the turn like any other message. Nothing proves who wrote a
+message, so this rests on the host's metadata; with `shell: "deny"`, the
+default, a private role has no shell call and no such notice is accepted.
+
+**A turn, and what is open during it.** A turn is the admitted prompt and
+what follows it up to the first idle marker; its answer is the last assistant
+message before that marker, and that marker says how the turn ended. This
+follows how OpenCode 2.3.0 through 2.4.1 run a session. A prompt that is
+admitted waits in the session's inbox and becomes a message only in the
+execution that takes it. An execution is one busy period: it goes on while
+input reaches the session, and leaves one marker when it ends, however it
+ends. So the first marker after the prompt is the end of the execution that
+had the prompt, also where the model never answered (the turn was interrupted
+or failed), and what another execution wrote after it is not the turn's: a
+command that ended later woke the session, and neither what the host wrote
+then nor how that ended changes the answer. The session's own outcome is its
+latest execution's, which can be that later one.
+
+A grant is open only during a turn: outside it the `context` hook refuses a
+request, the `model.request` hook a request that was prepared earlier, the
+`retry` hook a retry, and the tool hooks a call. A prompt opens it, and only
+while the call that sent it still waits for the turn: one that the host
+admits after that call has ended (the inactivity watchdog stopped the stage
+while the host still worked on the prompt) is refused. The end of the wait
+for the session closes it. Neither end is the turn's own. The host may have
+begun an execution by itself before the prompt was admitted (the notice of a
+background command woke the session), whose request does not hold the prompt;
+and OpenCode's wait also covers an execution that it starts right after the
+turn's, as when such a notice arrives in that moment, whether the turn
+succeeded or failed. So before every request of a private session the
+`context` hook reads the session's own messages and lets the request through
+only where the turn's prompt is among them and no idle marker follows it
+(`turnState` in `host.mjs`), which is the line `requestReview` draws
+afterwards. The prompt is known among them by the nonce it was sent with
+(`promptOf`). Before the prompt is a message, the request is refused and the
+turn is still to come. Where input reached the session while it was going
+idle, the same execution goes on with it, no marker stands there yet, and the
+model's next message is the turn's answer. Where the execution had ended, its
+marker is there before the host starts another one, the request is refused
+and the grant closes. So a session that the host wakes by itself asks no
+model and reads nothing. Where the messages cannot be read, the request is
+refused. What follows a request (the request itself, a retry of it, the tool
+calls of its answer) needs a request of this very turn that was looked at so.
+What a hook reads of the host it reads until its stage ends, so a stage that
+was stopped does not wait for a host that stalls. A request of the turn that
+is refused, when it is prepared or when it is sent and whatever for (the
+turn, the session's agent or model, a look at the session that failed, a
+dispatch that was not prepared), also ends what an earlier request of the
+turn allowed; a summary that the host attempts beside the turn is none of its
+requests, and its refusal ends nothing. A request that is refused because the
+session's messages could not be read is counted apart (`turnUnreadable`):
+nothing was known of its turn. A stage's record counts those readings and the requests refused
+outside a turn (`turnChecks`, `refusedOutsideTurn`).
+
+What a session read, for the check that a finding names a file its own tools
+read, is settled the same way, by the host's record and not by the time of a
+call. OpenCode names to a tool the assistant message that asked for the call.
+A read is kept under that message, and counts once the turn of that message
+is looked at and its answer taken: the reads of the turn's own assistant
+messages. A file that the session reads after its answer was taken belongs to
+no such message, and neither does a call that names none.
+
+Reading a session's messages before every request costs what the session's
+size costs: about 3 ms for each million characters of its messages, measured
+on OpenCode 2.4.1 (see the
+[validation record](VALIDATION.md#051-release-candidate-acceptance-2026-11-26)).
+
+**A command that arrives as text.** OpenCode's terminal UI can submit a
+startup prompt before it has loaded the commands (`opencode --prompt`; with
+2.4.0 and 2.4.1 nearly always, and then often to the built-in free model, see
+[debugging](DEBUGGING.md#a-startup-slash-command-becomes-an-ordinary-prompt)).
+`/pr-review <URL> …` is then an ordinary prompt: no command runs, and a model
+would receive the URL and the context. The `prompt` hook refuses a prompt of
+an ordinary conversation that begins with one of AZPR's commands, at its very
+first character as OpenCode's prompt box takes a command, and leaves a notice
+there that says what happened. It is the one prompt that AZPR refuses for
+its text (the other one it refuses names one of AZPR's private agents, which
+cannot be mentioned or delegated to); a prompt that only mentions a command,
+begins with another name, or shows a command after indentation or a blank
+line (an example) is the person's own. The rule needs no settings: a
+process without usable settings (before a first setup, or with settings of
+0.4.x that wait for their update) refuses such a prompt as well, in a hook
+that setup registers beside its placeholder commands and that stands aside
+once the runtime is loaded. With AZPR switched off (`enabled: false`) the
+server part registers nothing, also not this hook. The terminal UI answers a
+refusal by trying again in new conversations, which stay empty.
 
 ## Setup
 
@@ -1028,8 +1271,8 @@ Settings that are in use are read once as well: a later save leaves
 `state: restart`, the dialogs say so at the setting, and the runtime refuses
 new runs until the restart as for any changed file.
 
-OpenCode 2.3.0 announces a change of commands that a plugin makes after it
-was loaded without the location, and its clients ignore such an event, so a
+OpenCode 2.3.0 through 2.4.1 announce a change of commands that a plugin makes
+after it was loaded without the location, and their clients ignore such an event, so a
 terminal UI would keep suggesting the commands as they were. The server part
 therefore publishes an RPC event (`loaded`) when it has loaded a first setup,
 and the terminal part reads the commands again when it hears it.
@@ -1375,10 +1618,10 @@ run that was stopped, or one that failed before it had anything), since "yet"
 would have a person wait for what is not coming.
 
 **Why a compiled file.** OpenCode compiles a plugin's JSX when it loads it,
-but OpenCode 2.3.0 (OpenTUI 0.8.4) skips every file under `node_modules`,
-where it installs npm and Git packages. anomalyco/opentui#2051 compiles them
-again from OpenTUI 0.9.0 on, which OpenCode has not shipped yet, so JSX in the
-package would fail to load. `scripts/build-tui.mjs` compiles `tui-view.jsx` to
+but OpenCode 2.3.0 through 2.3.2 (OpenTUI 0.8.4) skip every file under
+`node_modules`, where they install npm and Git packages, so JSX in the package
+fails to load there. anomalyco/opentui#2051 compiles such files again from
+OpenTUI 0.9.0 on, which OpenCode 2.4.0 brought. `scripts/build-tui.mjs` compiles `tui-view.jsx` to
 `src/tui.js` with the settings OpenTUI itself uses for plugin JSX
 (`babel-preset-solid`, the universal renderer imported from `@opentui/solid`),
 and the result is part of the repository and of the package. The compiler is a
@@ -1387,9 +1630,10 @@ files differ. The package still has no dependency, no install script and no
 build at installation. The compiled file imports only what the host provides
 to plugins (`@opentui/solid`, `@opentui/core`, `solid-js`) and the model
 beside it, since a copy of its own would be a second renderer;
-`tests/release.test.mjs` holds that. Once the tested OpenCode compiles the JSX
-of installed packages, the package can export the JSX source and drop the
-build.
+`tests/release.test.mjs` holds that. The tested OpenCode now compiles the JSX
+of installed packages, and the package still ships the compiled file, which
+every one of these versions loads; the [roadmap](ROADMAP.md#shipping-the-terminal-panel-as-jsx-source)
+says why.
 
 ## Compatibility
 
@@ -1399,10 +1643,10 @@ Without `permission.hook` the project boundary for native read tools is left to
 the host's own permission rules; `/pr-check` shows a WARNING row and reviews
 still run. With `plugin.list`, `/pr-check` names the installation that runs
 and warns about any other AZPR entry the host configured but does not run,
-such as a second version that OpenCode 2.1.4 through 2.3.0 list as a duplicate plugin ID;
+such as a second version that OpenCode 2.1.4 through 2.4.1 list as a duplicate plugin ID;
 a host without it gets an information row.
 `/pr-check` names the detected OpenCode version in a row of its own and warns
-when it is not the tested one (`TESTED_HOST_VERSION`, 2.3.2); reviews still
+when it is not the tested one (`TESTED_HOST_VERSION`, 2.4.1); reviews still
 run, and other receipts do not repeat it.
 REST paths and the pinned api-version live only in `azure.mjs`; see
 [Azure DevOps access](AZURE_DEVOPS.md) for the API list and version policy.

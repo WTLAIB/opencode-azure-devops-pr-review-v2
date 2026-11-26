@@ -29,7 +29,7 @@ can go straight to a pull request.
 ## Work locally
 
 Use Node.js 22.12 or later, POSIX `sh`, Python 3 and Git. The current host
-acceptance target is OpenCode V2 `@opencode/cli@2.3.2` on Ubuntu 22.04; other
+acceptance target is OpenCode V2 `@opencode/cli@2.4.1` on Ubuntu 22.04; other
 environments are not yet validated. The installed plugin has no npm
 dependencies and is not built at installation. The checkout has one
 development dependency, the compiler of the terminal panel's JSX, which
@@ -67,7 +67,7 @@ text of notices and receipts, which the panel reads, need the last two. Install 
 without changing your everyday OpenCode installation:
 
 ```sh
-npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund @opencode/cli@2.3.2
+npm install --prefix "$PWD/.local/contributor-host" --no-audit --no-fund @opencode/cli@2.4.1
 AZPR_TEST_HOST="$PWD/.local/contributor-host/node_modules/.bin/opencode"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST"
 node tests/host-v2-smoke.mjs "$AZPR_TEST_HOST" --replace

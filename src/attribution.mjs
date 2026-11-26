@@ -113,6 +113,30 @@ export function conversationTitle(target) {
   return `AZPR: PR #${target.pullRequestId} (${String(target.repository).slice(0, 60)})`;
 }
 
+/**
+ * A run's stages in an order of their own, for everything a person sees: the run records a stage when OpenCode
+ * has created its session, and sessions that start side by side are created in whichever order the host answers.
+ * By the stage's place in the pipeline, the reviewer's pass and the label (shard, page; numbers by value). The
+ * sessions of one label (a stage's attempts, and for a planning page each continuation with its own attempts)
+ * ran one after another, so they keep the order in which they were recorded.
+ */
+export function stagesInOrder(stages) {
+  const slot = role => (typeof ROLES[role]?.slot === 'number' ? ROLES[role].slot : 0);
+  const parts = label => String(label ?? '').match(/\d+|\D+/g) ?? [];
+  const byLabel = (x, y) => {
+    const a = parts(x), b = parts(y);
+    for (let index = 0; index < Math.min(a.length, b.length); index++) {
+      const numbers = /^\d/.test(a[index]) && /^\d/.test(b[index]);
+      const order = numbers ? Number(a[index]) - Number(b[index]) : a[index] < b[index] ? -1 : a[index] > b[index] ? 1 : 0;
+      if (order) return order;
+    }
+    return a.length - b.length;
+  };
+  return stages.map((stage, index) => ({ stage, index })).sort((x, y) =>
+    (ROLES[x.stage.role]?.order ?? 9) - (ROLES[y.stage.role]?.order ?? 9) || slot(x.stage.role) - slot(y.stage.role) ||
+    byLabel(x.stage.label, y.stage.label) || x.index - y.index).map(item => item.stage);
+}
+
 /** Models per role, aggregated over shards and retries: the passes in their order, then the duplicate check and the rating. */
 export function reviewProvenance(run) {
   const rows = new Map();
@@ -405,7 +429,8 @@ export function renderFinalReport(final, language) {
 }
 
 /** What the reviewers that answered wrote is kept when the review did not complete. */
-export function renderIncompleteDraft(stages, failure, language) {
+export function renderIncompleteDraft(unordered, failure, language) {
+  const stages = stagesInOrder(unordered);
   const initials = stages.filter(s => ROLES[s.role]?.format === 'initial' && s.result);
   if (!initials.length) return '';
   const w = reportWords(language);
@@ -467,7 +492,7 @@ function renderStageReceipt(stage) {
 }
 
 export function renderReceipt(run, report, status, error, settings) {
-  const rows = run.stages.map(renderStageReceipt).join('\n');
+  const rows = stagesInOrder(run.stages).map(renderStageReceipt).join('\n');
   // A review states coverage and verification next to its status: whether every changed file was reviewed,
   // with several passes how many files every pass reviewed, and that nothing verified the findings separately.
   const reviewing = ['review', 'deep', 'quick'].includes(run.mode), summary = run.reviewSummary?.coverage;
@@ -526,7 +551,7 @@ export function renderDiagnosticNotices(run, settings) {
   if (blocked) notices.push(`\nTool notice: ${blocked} attempt(s) to use a tool this role may not use were blocked before execution.\n`);
   if (failures) notices.push(`\nTool error notice: ${failures} tool call(s) failed. A completed review does not erase these; inspect the original tool results.\n`);
   if (timeouts) notices.push(`\nTool timeout notice: ${timeouts} Azure DevOps read(s) exceeded the per-call timeout after retries and were abandoned.\n`);
-  const idle = run.stages.filter(stage => stage.failureClass === 'idle');
+  const idle = stagesInOrder(run.stages).filter(stage => stage.failureClass === 'idle');
   if (idle.length) notices.push(`\nInactivity notice: the stage inactivity watchdog stopped ${idle.length} stage(s) (failure=idle) after ${idle[0].idleStop?.idleSeconds ?? 'workflow.stageIdleSeconds'} s without activity: ${idle.map(stage => `${stage.role}${stage.label ? ` [${stage.label}]` : ''} after ${stage.idleStop?.lastActivity ?? 'an unknown activity'}`).join('; ')}. The model stream, a tool or OpenCode stopped responding; a stopped stage runs again in a new session while workflow.stageRetries allows.\n`);
   const search = searchLimitation(run, settings);
   if (search) notices.push(`\nContent search notice: ${search}\n`);

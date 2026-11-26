@@ -1,6 +1,6 @@
 # Roadmap
 
-Tested with OpenCode CLI 2.3.2, the Azure DevOps Services REST API
+Tested with OpenCode CLI 2.4.1, the Azure DevOps Services REST API
 (api-version 7.1) and Ubuntu 22.04. [Current validation](VALIDATION.md) records what this revision was tested
 with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 
@@ -44,6 +44,31 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Coverage in two numbers (0.5.0).** With several passes a review states
   the changed files reviewed in at least one pass and those reviewed in
   every pass. A pass that fails costs depth and leaves the others' work.
+- **Local instructions stay out of a review (0.5.1).** A private session
+  gets AZPR's own instructions and OpenCode's date and environment. What
+  OpenCode collects for the conversation's directory (instruction files, what
+  MCP servers, references and skills say of themselves) stays out of it, and
+  so do the instruction files OpenCode loads when a reviewer's native read
+  reads a file beside one, which used to fail the pass. With a `claude-agent`
+  model this holds for what OpenCode hands the Claude Code program; what that
+  program reads by itself was not tried.
+- **OpenCode 2.4.1 as the tested host (0.5.1).** With what 2.3.1 to 2.4.1
+  changed for AZPR: a release the terminal UI makes up late, for a button
+  whose own release was lost, no longer picks a step (one it makes up within
+  a second of the pointer's last movement still can), a usage limit set by a
+  ChatGPT workspace's admin is
+  named and not retried, a command that goes on in the background no longer
+  fails its pass where shell is allowed, a private session runs only while a
+  turn of it is open, and one of AZPR's commands that reaches OpenCode as an
+  ordinary prompt is stopped before a model gets it.
+- **Rows the host's read returns whole (0.5.1).** The pages of AZPR's
+  private data hold rows short enough for OpenCode's native read, which cut
+  every row after 2,000 characters, so a model that read a large value in
+  pages got about two thirds of it. Pages of a saved review that do not fit
+  are written in the new form, beside the old ones, whenever it is used.
+- **Stages in one order (0.5.1).** A review's receipt lists the stages by
+  their place in the pipeline, and the report is in the last one that did
+  not fail, whichever session OpenCode created first.
 - **Settings of 0.4.x are updated on a confirmation (0.5.0).** A version-2
   settings file is left as it is and not used. `/pr-setup` shows what its
   update changes and writes the new file only for a confirmation of that
@@ -112,7 +137,7 @@ with; [validation history](VALIDATION_HISTORY.md) keeps earlier results.
 - **Context overflow is recovered.** A compaction the host attempts in a
   reviewer's turn is refused, which ends the turn as overflow, and the shard is
   split and rerun (validated on the real host). A refused background summary
-  (OpenCode's `compaction.background`, on by default in 2.3.2;
+  (OpenCode's `compaction.background`, on by default from 2.3.1 on;
   `experimental.background_compaction` in earlier releases) ends nothing and
   leaves the turn's own failure to decide.
 - **Correction turns.** Answers that break the output contract are corrected in
@@ -255,13 +280,19 @@ data yet that ties the useful number to a PR's size or risk.
 
 ### Shipping the terminal panel as JSX source
 
-OpenCode 2.3.0 does not compile the JSX of a package it installed, so the
-package carries the panel's view compiled (`src/tui.js`) next to its source,
-and the repository has a compiler as a development dependency. OpenTUI 0.9.0
-compiles such files again (anomalyco/opentui#2051). When the tested OpenCode
-includes it, the package can export `src/tui-view.jsx` itself and drop the
-compiled file, the build script and the development dependency. Until then
-the compiled file is the only form that loads from an npm or Git package.
+OpenCode 2.3.0 through 2.3.2 do not compile the JSX of a package they
+installed, so the package carries the panel's view compiled (`src/tui.js`)
+next to its source, and the repository has a compiler as a development
+dependency. OpenCode 2.4.0 and later compile such files again (OpenTUI 0.9,
+anomalyco/opentui#2051): a package that exported `src/tui-view.jsx` itself
+loaded and worked on 2.4.1 in a fixture run. Not done all the same. On 2.3.x
+the terminal part of such a package does not load at all, while the compiled
+file loads on every version from 2.3.0 to 2.4.1 and does not depend on how a
+host transforms JSX: the native terminal UI in OpenCode's source, which has
+not shipped, documents that it compiles every plugin module with Bun's
+transform, under which the view's properties would be read only once. The
+build costs one script and one development dependency, and
+`npm run check` holds the two files together.
 
 The panel and the setup dialogs are for OpenCode's terminal UI. The desktop
 app has a plugin entry of its own, which OpenCode still marks as experimental;
@@ -414,10 +445,11 @@ record of those versions; what was measured with 0.5.0 is in
    that one measurement: other providers, API keys with low rate limits and
    other organizations have not been measured, and neither has a review of
    several passes, whose sessions share `parallelSessions`. With OpenCode's
-   claude-agent provider each session keeps a local process: for minutes
-   after it ended on OpenCode 2.2.4 (about 200 MB each), and until OpenCode
-   exits on 2.3.2, so many passes over many shards need memory for them
-   whatever `parallelSessions` is. Change `parallelSessions` and
+   claude-agent provider each session has a local process of about 200 MB
+   that ends five minutes after the session's last turn; OpenCode 2.4.0 and
+   later also end it when the session is deleted. Many passes over many
+   shards need memory for the sessions of the last five minutes, whatever
+   `parallelSessions` is. Change `parallelSessions` and
    `azure.concurrency` together.
    Comment planning runs two pages at a time, which cut a nine-page plan from
    140–175 s to 71–90 s; more lanes were not measured.

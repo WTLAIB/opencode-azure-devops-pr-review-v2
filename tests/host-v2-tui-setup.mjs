@@ -7,8 +7,8 @@ import { fakeAzure, FAKE_PAT } from './fake-azure.mjs';
  * Without --migrate, a first setup: AZPR starts without usable settings. Checked on the screen and on
  * disk: the TUI says once how to set AZPR up; /pr-setup opens the dialogs; the organization is taken from
  * a PR URL; the proxy question can be skipped; the token is pasted into a field that never shows it, a
- * refused one is asked again with the reason, and an unreachable Azure DevOps offers the proxy before the
- * same token is checked again; one model is picked from the host's list; the token file and the settings
+ * refused one is asked again with the reason, the next one is typed key by key, and an unreachable Azure
+ * DevOps offers the proxy before the same token is checked again; one model is picked from the host's list; the token file and the settings
  * file are written owner-only, the settings with that model twice for /pr-review and once for /pr-quick;
  * and /pr-check then answers READY without a restart. /pr-setup then lists the settings. A model row is a
  * list of passes: its editor asks for one model and then for the passes (a pass is added, of the same
@@ -336,9 +336,18 @@ try {
     await see(/Paste the token here; it is not shown/, 'The token is not asked for again after it was refused.');
 
     // 4. Azure DevOps cannot be reached: the reason, then the proxy once more, then the same token again.
+    // This token is typed, one key at a time, as a person does who cannot paste: a key press and a paste are
+    // different events of the host's input parser, which OpenCode 2.4.0 replaced. Backspace takes the last
+    // character away and ctrl+u all of them.
     unreachable = true;
-    paste(FAKE_PAT);
-    await see(new RegExp(`\\(${FAKE_PAT.length} characters, hidden\\)`), 'The second token was not taken.');
+    for (const character of 'abc') type(character);
+    await see(/•{3} +\(3 characters, hidden\)/, 'Typed characters are not shown as bullets and a count.');
+    key('BSpace');
+    await see(/•{2} +\(2 characters, hidden\)/, 'Backspace did not take the last typed character away.');
+    key('C-u');
+    await see(/Paste the token here; it is not shown/, 'ctrl+u did not empty the field.');
+    for (const character of FAKE_PAT) type(character);
+    await see(new RegExp(`\\(${FAKE_PAT.length} characters, hidden\\)`), 'The typed token was not taken, character for character.');
     key('Enter');
     await see(/The token could not be checked/, 'A check that could not reach Azure DevOps was not reported.');
     await see(wrapped('Azure DevOps could not be reached'), 'The reason is not shown.');
@@ -360,7 +369,7 @@ try {
     key('Enter');
     // The host gives this model variants: the model's own default is the first choice.
     await see(/Variant of fixture\/reviewer/, 'The variants of the chosen model were not offered.');
-    await see(/● Default/, 'The model\'s own default is not the preselected variant.');
+    await see(/[●▪] Default/, 'The model\'s own default is not the preselected variant.');
     key('Enter');
     await see(/Save AZPR's settings\?/, 'No summary was shown before saving.');
     assert.doesNotMatch(screen(), /Model for \/pr-review: \d+ pass/, 'A first setup asked for the passes.');
@@ -369,7 +378,7 @@ try {
     await see(/AZPR is set up/, 'The setup did not end with its result.');
     await see(/\/pr-check <PR URL>/, 'The result does not say what to do next: the settings were not loaded.');
     key('Enter');
-    result.dialogs = 'organization from a PR URL; proxy skipped; token hidden, refused once, then checked again after an unreachable Azure DevOps; one model picked by typing';
+    result.dialogs = 'organization from a PR URL; proxy skipped; token hidden, pasted and refused once, then typed key by key and checked again after an unreachable Azure DevOps; one model picked by typing';
 
     // 6. On disk: the token alone in an owner-only file, complete owner-only settings that name it. The settings
     // are the defaults of this version (from source: the installer's file, which has them) with the answers: the
@@ -428,7 +437,7 @@ try {
     await see(/Model for \/pr-deep/, 'The deep model dialog did not open.');
     await see(/Stronger than the review model, or a higher variant/, 'The dialog does not say what makes a deep model one.');
     // /pr-deep is off, so the row that switches it off is the one in use: it comes first, under its own heading.
-    await see(/● Off +\/pr-deep stays off/, 'Switching /pr-deep off is not offered first, as what is in use.');
+    await see(/[●▪] Off +\/pr-deep stays off/, 'Switching /pr-deep off is not offered first, as what is in use.');
     type('strong');
     await see(shown => /Review Strong +fixture\/reviewer/.test(shown) && !/Stronger than the review model/.test(shown), 'Typing does not filter the models.');
     key('Enter');
@@ -475,7 +484,7 @@ try {
     await see(shown => /Review models for \/pr-review +reviewer ×2/.test(shown) && !/Organization +fixture/.test(shown), 'Typing does not filter the settings.');
     key('Enter');
     await see(/Model for \/pr-review/, 'The review model dialog did not open.');
-    await see(/● Review Strong +fixture\/reviewer/, 'The model in use is not the preselected one.');
+    await see(/[●▪] Review Strong +fixture\/reviewer/, 'The model in use is not the preselected one.');
     assert.doesNotMatch(screen(), OFF_ROW, '/pr-review can be left without a model.');
     key('Enter');
     await see(/Variant of fixture\/reviewer/, 'The variants of the chosen model were not offered.');
@@ -537,7 +546,7 @@ try {
       await see(shown => /Review models for \/pr-review +reviewer \+ chat/.test(shown) && !/Organization +fixture/.test(shown), 'Typing does not filter the settings.');
       key('Enter');
       await see(/Model for \/pr-review/, 'The review model dialog did not open again.');
-      await see(/● Review Strong +fixture\/reviewer/, 'The first model of the saved list is not the preselected one.');
+      await see(/[●▪] Review Strong +fixture\/reviewer/, 'The first model of the saved list is not the preselected one.');
     };
     const backInList = shown => /Review models for \/pr-review +reviewer \+ chat/.test(shown) && !/Model for \/pr-review/.test(shown);
     await reopen();

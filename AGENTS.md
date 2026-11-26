@@ -1,7 +1,7 @@
 # AI development guide
 
 This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.3.2`), the Azure DevOps Services REST API (api-version 7.1)
+`@opencode/cli@2.4.1`), the Azure DevOps Services REST API (api-version 7.1)
 and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
@@ -29,9 +29,181 @@ settings, backups and failure records. Never upload `.local/`.
 - Models read the repository only through the read-only tools in
   `review-tools.mjs`, registered with `codemode: false`; private roles see an
   explicit tool allowlist (empty for the `rating` role) and ordinary sessions
-  never see AZPR's tools.
+  never see AZPR's tools: also not in the requests the host builds outside a
+  turn, a summary or a generation, which pass the `compaction` and `generate`
+  hooks instead of `context`.
 - Models review, compare, rate and plan comment text. They never echo identity
   or SHAs and never write to Azure DevOps.
+
+**A private session is told what AZPR tells it, and runs only for AZPR's prompt.**
+- A private role works from AZPR's own instructions and the host's date and
+  environment. What the host collects for the place a conversation is in stays
+  out of its requests: instruction files (AGENTS.md, CLAUDE.md, configured
+  ones), and what MCP servers, references, skills and CodeMode say of
+  themselves (`withoutPlaceInstructions` and `HOST_FACT_SOURCES` in
+  `host.mjs`). Those speak of the local directory, which is not the PR's
+  repository, and are no instructions for a review. Claim no more than that:
+  the environment still names the directory, and a reviewer can read local
+  files on purpose. Ordinary sessions are never touched.
+- The host's parts are told apart by a field it marks as experimental. Where
+  they cannot be (no such part, several, a text that is not its sources
+  joined), the system parts stay as they are and the stage record counts the
+  request (`placeInstructionsNotToldApart`); never tell them apart by their
+  text. OpenCode's Claude Code provider (`claude-agent`) does not send the
+  parts: it hands the model a text it made of them before any plugin's hook
+  ran, in the request's options, when the parts were not yet what a plugin
+  sees. For a request to that provider, leave the sources out only where
+  that option holds exactly what they give (`claudeInstructions`), and empty
+  it with them; where it holds anything else, or is missing, the parts and
+  the option stay as they are. That is a rule for what OpenCode hands the
+  Claude Code program, and no more is claimed: what that program reads of
+  the working directory by itself was not tried with the real one. An option of that name on another provider's
+  request decides nothing. The messages below are taken out either way.
+- What the host writes of instructions into a running private session by
+  itself is kept from the model: the instruction files it loads beside a
+  file the native read tool read (`isInstructionLoad`), and its updates of
+  the sources (`isInstructionUpdate`), whatever source an update is of.
+  Which messages those are is the session's own word, not a request's
+  (`hostInstructions`): an update is a `system` message, which only the
+  host writes; a load is a synthetic message that names the files it holds,
+  which is what the host itself goes by, and like the notice of a
+  background command it is the late result of the session's own tool call:
+  it counts only after an assistant message of the session called the
+  native read tool. The `context` hook reads the session's messages and
+  takes out of the request what is such a message as the host builds it
+  (`withoutHostMessages`): the user message with a load's ID and the load's
+  text as one text part, and a system message of the host's form that holds
+  exactly an update's text (another plugin's system message that is the
+  same in form and text cannot be told from it). As the host builds it means
+  the whole message, each field of it, and what the host builds is plain
+  data: a plain object for a load, an ordinary array of one plain text part
+  for a content, plain objects and arrays for a load's metadata (seen on
+  OpenCode 2.3.0 and 2.4.1; `host.mjs` says what plain data is). A message,
+  a part or metadata that carries anything the host did not give it holds
+  what a hook added, and taking it out would drop that. Ask it of an
+  object's own properties, each taken once from its descriptor, so that
+  nothing of the object's own is ever called and looking changes nothing:
+  every one of them is listed, has a string for its name and holds its
+  value itself (an array's length aside). A field that is not listed, one
+  under a symbol, an accessor, an array or an object of another class, an
+  object that answers for another (a proxy), metadata that is other data
+  than the stored message's are each no longer the host's, and the message
+  stays. The list of a request's messages is looked at like its items, and
+  left whole where it is no ordinary list. Ask whether a value answers for
+  another before anything else is asked of it: a proxy that was revoked
+  throws at any question, also at whether it is a list. Never read a message through its properties (not its ID either),
+  and compare metadata to its end, without a limit that data can exceed:
+  what the hook takes out of a request as OpenCode builds it must be
+  exactly what `requestReview` takes for no one else's input, or a message
+  that someone posted reaches the model and its answer is accepted. That is
+  the whole rule, so never add a case for one more shape: what is not plain
+  data is not the host's. The same rule reads a request's system parts
+  (`withoutPlaceInstructions`): a part that is no plain data is not looked
+  into, and the instructions part is made anew only from plain data, with
+  what a hook added to it in plain sight kept; where no source of it stays
+  the part goes, so only a part that holds nothing but what the host gave
+  it, and that part is a text part. The Claude provider's option is emptied
+  only where it is a text that plain options hold of their own
+  (`claudeOption`) and take the empty one, and a tool is taken out of a request's list
+  only where the list lets it: a tool is what the list lists under a name
+  (what a hook keeps there unlisted is none), and one that cannot be taken
+  out stays listed, since whether a tool may run is decided where it is
+  called, and the stage's record counts the request (`toolsLeftListed`). A
+  planning session that is told to finish without tools is held to that
+  where a tool is called too, since a list that could not be emptied still
+  offers them. A part of AZPR's own is added after a request's system
+  parts as a new list, where they are an ordinary one (`withPart`). A source
+  that goes takes with it what it holds, so only one that holds nothing but
+  its key and its text. The event itself is read the same way: what it holds
+  under `system`, `messages`, `options` and `tools` is taken once from its
+  own descriptors (`requestSlots`), and a place is given another value only
+  where it can be written; make a change only where it can be made whole,
+  and look at what a write answers (the parts and the Claude option
+  together, the option put back where the parts took no new value; the
+  messages before anything is recorded as taken out; a note that could not
+  be added is counted, `notesNotAdded`). Whose request it is (session, agent, model) is
+  read as the host reads it. None of these refuses a request, and these are
+  all the places where the `context` hook touches one. Its limit is said with it: a
+  message is what it holds of its own, what an object inherits is not
+  looked at, and an update is an object of the host's own class, which a
+  plugin cannot name. Never tell them by what a request message looks like
+  alone, never take a message out for the ID it has alone (one that a hook
+  before AZPR's changed may hold what is not the host's), and never take a
+  message of the load's form for the host's in a session that did not read.
+  Beyond that nothing proves who wrote a message, and the text of a load
+  proves nothing more than its metadata: one of that form that someone
+  posts after such a read is kept from the model like the host's, so its
+  text reaches no answer.
+- What AZPR cannot identify in a request stays as it is, and no request is
+  refused for what it holds: a message with a load's ID that is not the
+  load as the host builds it goes out as it is, and the stage record counts
+  the request with those whose parts could not be told apart. AZPR does not
+  police other plugins. A plugin's hook may add to a request, so no check
+  of what a request holds could be complete, and a request refused for its
+  form would fail every review on a host that builds requests another way.
+  Say that and no more: AZPR's rules hold for a request as OpenCode builds
+  it and for a tool's result as AZPR's tool returns it. What another
+  plugin's hook makes of either, before or after AZPR's own, AZPR neither
+  sees nor corrects, and a plugin in the same process can do anything. So
+  `requestReview` asks for no proof of what a model saw: what the host
+  wrote of instructions is no step of a turn and no one else's input,
+  wherever it stands.
+- `requestReview` fails a turn that received anyone else's message, wherever
+  the turn's model was sent it: after the prompt, and between the turn
+  before and the prompt (`since`; before a session's first prompt too). A
+  turn that did not succeed fails by its own outcome first, which decides
+  whether it is tried again. A message of the host passes only where it is
+  one of those above, or the late result of the session's own tool call:
+  the host's notice that a background command ended, which names a shell
+  that a shell call of this same session reported as running, once for each
+  such shell (`ownShellNotices`); that can only be with shell allowed, and
+  it rests on the host's metadata, since nothing proves who wrote a message.
+  Never accept a message that the model saw by its text or its form alone.
+- A turn is the admitted prompt up to the first idle marker after it, and
+  its answer is the last assistant message before that marker. A prompt
+  becomes a message of the session only in the execution that takes it, and
+  an execution leaves one marker however it ends, so that marker is the end
+  of the execution that had the prompt and says how the turn ended; the
+  session's own outcome is its latest execution's, which can be a later one.
+  Never skip a marker: one before any answer is the turn's own end, not an
+  earlier execution's. What follows the marker is no part of the turn;
+  someone else's message there still fails it.
+- A private session gets a model request, a retry and a tool only while a
+  turn of it is open (`open` on the grant). A prompt opens it, and only
+  while the call that sent it still waits for that turn (`turn`): one the
+  host admits after that call ended, as when the inactivity watchdog stopped
+  the stage meanwhile, is refused. The end of the wait for the session
+  closes it. Neither end is the turn's own: the host may have begun an
+  execution by itself before the prompt was admitted, whose request does not
+  hold the prompt, and the wait also covers what the host starts in the
+  session right after the turn, as when a background command that ended
+  wakes it, whether the turn succeeded or failed. So before every request of
+  a private session, read the session's messages (`turnState`): the request
+  is the turn's only while the turn's prompt is among them and no idle
+  marker follows it, which is the line `requestReview` draws afterwards. The
+  prompt is known among them by the nonce it was sent with (`promptOf`),
+  not by what a hook's event says. Before the prompt is a message, the
+  request is refused and the turn is still to come; after the marker the
+  turn has ended, the grant closes, and what the host does now gets nothing.
+  Where the messages cannot be read, refuse: there is no weaker rule to fall
+  back on. Never tell the end of a turn by time, by a hook the host may not
+  run (its idle hook runs only when a turn succeeds), or by the wait alone.
+  What follows a request (the request itself, a retry of it, the tool calls
+  of its answer) needs a request of this very turn that was looked at so
+  (`inTurn`), and a request of the turn that is refused, when it is
+  prepared or when it is sent and whatever for (the turn, the session's
+  agent or model, a look that failed, a dispatch that was not prepared),
+  ends what an earlier one allowed; a summary or a generation that the host
+  attempts beside the turn is none of its requests. What a hook reads of the host, it reads until the stage ends
+  (`signal` on the grant), not the run: a stage that was stopped waits for
+  its session to settle.
+- What a session read is what its turns read, by the host's record and not
+  by the time of a call: OpenCode names to a tool the assistant message that
+  asked for the call, and a read counts for a finding only once the turn of
+  that message is looked at and its answer taken (`readsBy` on the grant,
+  `assistants` of the answer). So nothing is added to an answer that was
+  taken: not a file the session reads later, and not one that a call read
+  which names no message of the turn.
 
 **Every mode runs one pipeline and differs only in its models.**
 - `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
@@ -63,7 +235,12 @@ settings, backups and failure records. Never upload `.local/`.
   stage or a person sees may depend on
   which session finished first or on an ID a model wrote: also not the tool
   observations and limitations the planner is given, which follow the order
-  of their content.
+  of their content. Nor on which session the host created first: a run
+  records its stages in that order, so a receipt, its notices, a draft and
+  the choice of the session that holds the report take them by their place in
+  the pipeline (`stagesInOrder` in `attribution.mjs`). Only the sessions of
+  one label keep the order they were recorded in: they ran one after another,
+  and each continuation of a planning page counts its attempts anew.
 - Add mode-specific or pass-specific instructions only with a measured
   benefit: deep-only prompt text and the split into a functional and a risk
   reviewer were both removed after runs showed no gain over repeating one
@@ -143,6 +320,13 @@ settings, backups and failure records. Never upload `.local/`.
   degrade the affected item (NEEDS_INFO, a merge left out, a level kept, a
   skipped comment) and keep the rest. Never discard a whole review for one bad
   item or one failed pass, and never invent a decision, evidence or a location.
+- A handler whose work is given up says so (`abandoned`: comment planning,
+  once another page has failed), and the stage asks it before every further
+  turn: no correction and no follow-up is asked for work that will not be
+  used, and the answer that is there is taken as the last. A stage tells its
+  handler of a failure that no new session will be tried for (`failed`) the
+  moment it knows, before it awaits anything: the cleanup of the failed
+  session takes time in which another stage would still ask.
 - Each stage's handler says which answers it can use (`usable`: a reviewer
   answer that reviewed a file or holds a usable finding, a duplicate check
   that returned its list of merges, a rating that rated a finding, a
@@ -163,7 +347,16 @@ settings, backups and failure records. Never upload `.local/`.
   a step it retried (OpenCode 2.3.0 and later) or a continuation it queued
   (earlier hosts). Accept an errored assistant message only with the host's retry mark
   and a complete, successful final answer on the granted agent and model; a
-  retried step's answer is the final message alone.
+  retried step's answer is the final message alone. The continuation message
+  of the earlier hosts is known by its text alone, which anyone can post:
+  accept it only on a host whose version names a release of that protocol
+  (`retriesSteps` in `host.mjs`: 2.0.x to 2.2.x; a host that does not say
+  its version, or says what is no release, is taken for a current one). The
+  fragments of a continued answer belong to the answer that ended them:
+  where the model answered once more afterwards (the notice of its own
+  background command woke it), that later answer stands alone. A turn can
+  hold several continued answers; recognise each, wherever it stands, and
+  count every stream that was recovered (`continuedText`).
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
@@ -175,7 +368,7 @@ settings, backups and failure records. Never upload `.local/`.
 - Large PRs are handled by sharding, not by compaction: private sessions may not
   compact, and a compaction the host attempts in a reviewer's turn means "split
   this shard". A refused background summary (OpenCode's `compaction.background`, on
-  by default in 2.3.2; `experimental.background_compaction` in earlier releases)
+  by default from 2.3.1 on; `experimental.background_compaction` in earlier releases)
   ends nothing, so the turn's own failure decides its class.
 - There is deliberately no default whole-run timeout and no per-stage step cap;
   see the roadmap's Deferred section before adding either.
@@ -188,7 +381,11 @@ settings, backups and failure records. Never upload `.local/`.
   records (run stages, a saved review's sessions), never the host's session
   tree.
 - The conversation is the person's: AZPR leaves its notices there and changes
-  nothing else, with one exception. A conversation nobody named yet
+  nothing else, but the name of a conversation nobody named. It refuses
+  nothing a person sends but two kinds of prompt: one that names one of
+  AZPR's private agents (they cannot be mentioned or delegated to, see
+  below), and one of AZPR's own commands that arrives as a prompt (below). A
+  conversation nobody named yet
   (`isUntitledSession` in `host.mjs`) gets a name when a check or a review
   starts in it, made of the PR's number and repository from the URL the
   person typed (`conversationTitle`): no model runs there to name it, and the
@@ -216,6 +413,29 @@ settings, backups and failure records. Never upload `.local/`.
   handler: a feed that fails has ended. A host without that feed names
   nothing, and a name that is not AZPR's own is never recorded. Say this
   limit where the naming is described; never write "never replaced".
+- One of AZPR's commands can reach an ordinary conversation as text: the
+  terminal UI submits a startup prompt (`opencode --prompt`) before it has
+  loaded the commands, with OpenCode 2.4.0 and 2.4.1 nearly always, and then
+  often to the host's built-in free model. No command ran, and a model would
+  be sent the PR URL and the person's context. The `prompt` hook refuses such
+  a prompt and leaves a notice in the conversation that says what happened.
+  Refuse only a prompt that begins with one of AZPR's own command names
+  followed by a blank or the end, at its very first character as OpenCode's
+  prompt box requires of a command: one that mentions a command, begins with
+  another name, or has the command after indentation or a blank line (an
+  example, say) is the person's own. The names are every slash command AZPR
+  has, whichever part registers it (`COMMAND_NAMES` in `config.mjs`). The
+  rule and its words are one (`strayCommand`, `strayNotice`), and it needs
+  no settings: a process that has no runtime (before a first setup, with
+  settings that cannot be used, with settings of 0.4.x waiting for their
+  update) refuses such a prompt too, in a hook that `setup.mjs` registers
+  with the commands that say that AZPR is not ready and that stands aside
+  once the runtime is loaded, whose own hook also knows the private
+  sessions. Switched off (`enabled: false`), the server part registers
+  nothing, also not this hook. The
+  refusal has a cost that the documentation states (the terminal UI tries
+  again in new conversations, which stay empty); never widen it to anything
+  else a person types.
 - Only explicit commands start private sessions, and the comment step a
   COMPLETE review hands on when `afterReview` or the review command's flag
   (`--preview`, `--publish`) asks for it; that step is a run of its own with a
@@ -291,9 +511,10 @@ settings, backups and failure records. Never upload `.local/`.
   the grant of a command that is under way, and no tool call either
   (`execute.before`), whatever agent the host names. A process without
   usable settings (settings of 0.4.x waiting for their update among them)
-  loads no runtime and registers no hook, agent or tool: a session an
+  loads no runtime and registers no agent, no tool and no hook but the one
+  that refuses one of AZPR's commands sent as a prompt (above): a session an
   earlier process created runs there as it would without AZPR, with nothing
-  of AZPR's and no token, and the hooks come with the runtime.
+  of AZPR's and no token, and the admission hooks come with the runtime.
 - Pin private agent definitions at first use and refuse later host changes.
 - Shell for private roles follows the `shell` setting (default deny), enforced
   through the `permission` hook and by hiding the tool. Native edit, write,
@@ -410,6 +631,71 @@ settings, backups and failure records. Never upload `.local/`.
 **Persistence and privacy.**
 - Completed reviews, plans and ledgers persist under the private state directory
   (owner-only permissions, newest 20). Clean only stale, unreferenced data.
+- A model reads a large private value in pages, with the host's native read,
+  one row per line. A row must be one that read returns whole: OpenCode cuts a
+  longer line and says so only inside the line (`HOST_READ_LINE_CHARACTERS` in
+  `host.mjs`). Measure a row as it is written, after escaping (`pageRows` in
+  `comment-data.mjs`), and never rely on the prompt to work around a cut row.
+  A model reads the pages by itself, row by row, so the layout of a pages
+  file must never change under it. This version's pages are therefore a
+  file of their own name beside the value's object (`.rows.jsonl`), in one
+  layout for one text (`pagesOf`): a pages file is right exactly when it is
+  that, by its bytes, and whoever writes it writes the same. A file of the name that
+  versions before 0.5.1 gave their pages (`.pages.jsonl`, with rows the
+  host's read cuts) is never changed, since a process of such a version may
+  be reading it. Such a version hands that name out for every object it
+  finds when it opens a store, and writes no pages for them: so a value
+  that has no file of that name gets one, before its object is written or
+  written again, these rows under that name too, as a link, which is there
+  whole or not at all (`settlePages`). A review that this version saved can
+  then be planned after going back to such a version. That rests on the
+  link having been made: where it cannot be (a file system without hard
+  links, something else under that name) the value is ready all the same,
+  and going back is provided for only as far as the rows are there under
+  the earlier name; say so wherever going back is promised. A version that changes the layout gives its pages
+  another name (a test holds the layout).
+  A value is ready when its object is what its name says and this version's
+  pages are there as it writes them. It is made ready when it is put, from
+  the text in hand, at every put; and when a reference that a review saved
+  is handed to a model, from its files, each time (`handed`, `holds`): an
+  earlier version, or a process that was cut off, may have written them.
+  The reference that is handed out names this version's pages, whatever the
+  saved one named; the one place that hands a saved review's references to
+  a model lists them so, a few values at a time and each value once
+  (`observationIndex`). The runtime's own reads need no pages (`read`, a few
+  at a time where a list is read: `anchorObservations`). A list that its run
+  no longer wants (the run was stopped, a planning page failed) is not
+  looked at further and not written; a page whose check of its comments was
+  cut short so is taken as it is, since a quote that was not found then says
+  nothing, and no correction is asked for a plan that is given up. An
+  observation whose arguments cannot be stored is left out of the list like
+  one whose output cannot be handed out.
+  Between a put and the end of its run a value is what the put made it, and
+  is not looked at again when a reference is handed on within the run (the
+  retry of a stage, the continuation of a planning page), nor put again
+  where the run puts the same value once more (`putOnce`, for a run's
+  payloads and for what its sessions' tools returned). Nothing that writes
+  those files meanwhile makes them wrong, for two reasons that are not one:
+  an earlier version creates its files exclusively, the object under the
+  very name this version uses and the pages under its own, so it writes
+  into no file that is there; and this version, also in another process
+  that works on the same saved review, replaces a file in one step with the
+  same content.
+  This process does not clean a run's data up before its command has ended.
+  Another process that shares the state directory can (it knows only its own
+  commands, a known limitation); the command whose data is gone then fails,
+  which no look before a reference is handed on would cure.
+  Keep no mark that says a store, or a value of a saved review, is ready.
+  An object is what its name says by its bytes, not by the text they decode
+  to, and a value is the text a file can hold (no lone surrogate), so that
+  object and pages are one value. Derive pages only from such an object;
+  where the object is damaged or gone and pages are complete, of this
+  version or of an earlier one, write the object again from them, after
+  its pages, as a put does. Replace a file in one step. A value that cannot be made ready is not handed out,
+  and the others are not held back for it: opening a store looks at its
+  directory alone and never fails for one value. A file that a reviewer
+  reads in several windows is one observation, known by its tool, commit
+  and path, and saved once.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -543,7 +829,29 @@ settings, backups and failure records. Never upload `.local/`.
   release of a button that was dragged away to the element it was pressed
   on. A press is one gesture's: end it with every other press or release
   the panel sees (`forget`), so that a gesture that was given up never makes
-  a later release a click. Draw the steps from their names, as the session
+  a later release a click. The host can also make a release up: OpenTUI 0.9
+  (OpenCode 2.4.0 and later) ends a drag whose release it never saw at the
+  next press of the button, anywhere and any time later, with a release at
+  the place of the pointer's last movement, which the element that was
+  pressed receives before anything sees that press, and nothing in that
+  event tells it from a real one. So a release is a click, on a step, a
+  session's row or `close`, only within a moment of the pointer's last
+  movement with the button down (`hold` and `MOVED_MS` in `tui-view.jsx`);
+  without a movement the host makes none up, so a button held still is a
+  click for any time. Only a press of the left button begins a gesture: the
+  host ends a lost one at the next left press, so another button must not
+  forget the movement. And only a movement with the left button is one of
+  the gesture: the host sends a drag with another button to whatever is
+  under the pointer, also to an element that a lost gesture still holds.
+  That moment is measured on two clocks, and a release
+  is a click only where both call it a moment: the time of day can be set
+  back, and the steady clock may stand still while the machine sleeps. A
+  click that is refused can be made again; one that is made up cannot be
+  taken back. An event carries no time of its own, so the moment is that
+  between handling the two events: where the terminal's input waited, a
+  made-up release can follow its movement at once. Say that limit where the
+  rule is described.
+  Draw the steps from their names, as the session
   rows are drawn from their IDs, so that each keeps its element while the
   panel's content is worked out again (with every notice and every answer
   of the server; often while a run is under way): an element made anew is
@@ -621,8 +929,10 @@ settings, backups and failure records. Never upload `.local/`.
   together with `tui-model.mjs`, whose tests run against `renderReceipt` and
   against the notices of a whole run.
 - `src/tui.js` is generated: edit `tui-view.jsx`, run `npm run build:tui` and
-  commit both. OpenCode 2.3.0 compiles no JSX of an installed package, so the
-  package ships the compiled file; keep it free of JSX and importing only what
+  commit both. OpenCode 2.3.x compiles no JSX of an installed package (2.4.0
+  and later do), so the package ships the compiled file, which loads on all of
+  them (see the roadmap's Deferred section before shipping the source
+  instead); keep it free of JSX and importing only what
   the host provides (`@opentui/solid`, `@opentui/core`, `solid-js`). The
   compiler stays a development dependency at an exact version: the package
   has no dependency, no lifecycle script and no build at installation.
@@ -763,6 +1073,23 @@ publication, also run `node tests/host-v2-smoke.mjs <opencode binary>` (fresh an
 also with `--cleanup`. The fixtures keep debug on to read its records, and
 debug keeps every private session: only the `--cleanup` runs, with debug off,
 exercise the deletion of a run's sessions on a real host.
+The smoke and the scale fixture also hold the forms of the host that the
+runtime tells things apart by: the sources of a request's instructions (a
+configured instruction file reaches an ordinary conversation and no private
+session), the message OpenCode leaves after a native read beside an
+instruction file and what a request holds of it, the session's messages read
+from inside a hook (the prompt is among them by the turn's first request,
+with the nonce it was sent with, and no idle marker follows it while the
+turn runs), the assistant message that OpenCode names to a tool for a call,
+the error type of a used-up limit, a prompt that is one of AZPR's commands,
+and the line length the native read returns. When one of these steps fails
+on another OpenCode, read that version's source before changing the step.
+Two kinds of fallback are behind them. Where the parts of a request cannot
+be told apart, or a message is not what the host builds of its own, the
+runtime leaves them as they are, which such a step is there to notice. Where
+the session's messages cannot be read, or do not say that a request is its
+turn's, the runtime refuses the request, and a review fails instead of going
+on unchecked.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.

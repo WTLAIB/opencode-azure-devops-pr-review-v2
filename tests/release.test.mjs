@@ -24,7 +24,7 @@ test('the terminal part is shipped compiled and binds only what OpenCode provide
   const compiled = read('src/tui.js');
   assert.match(compiled, /^\/\/ Generated from tui-view\.jsx by scripts\/build-tui\.mjs \(@babel\/core 7\.29\.7, babel-preset-solid 1\.9\.16; /, 'The file names the compiler that made it.');
   assert.ok(existsSync(new URL('../src/tui-view.jsx', import.meta.url)), 'Its source is in the repository and in the package.');
-  // OpenCode 2.3.0 compiles no JSX under node_modules, where it installs packages: nothing here may need its compiler.
+  // OpenCode 2.3.x compiles no JSX under node_modules, where it installs packages: nothing here may need its compiler.
   assert.doesNotMatch(compiled, /<\/?[A-Za-z][\w.]*(?:\s[^<>]*)?\/?>\s*$/m, 'No JSX is left in the compiled file.');
   const imports = [...compiled.matchAll(/^import\s+(?:\{([^}]*)\}|[\w$]+)\s+from\s+"([^"]+)";?$/gm)].map(([, names = '', source]) => ({ source, names: names.split(',').map(name => name.trim().split(/\s+as\s+/)[0]).filter(Boolean) }));
   assert.equal(imports.length, [...compiled.matchAll(/^import\b/gm)].length, 'Every import has the plain form the host rewrites to its own modules.');

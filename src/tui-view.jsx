@@ -19,7 +19,8 @@
 // request to Azure DevOps; a token is typed into a field that shows nothing of it, and is kept nowhere.
 //
 // This is the source. OpenCode loads src/tui.js, which scripts/build-tui.mjs compiles from it:
-// OpenCode 2.3.0 compiles no JSX of a package it installed, so the package carries the result.
+// OpenCode 2.3.x compiles no JSX of a package it installed (2.4.0 and later do), so the package carries the
+// result, which every one of them loads.
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { MouseButton, SyntaxStyle, TextAttributes } from "@opentui/core"
 import { PANEL, buildPanel, conversationOf, createReader, opensPanel } from "./tui-model.mjs"
@@ -28,6 +29,9 @@ import { SETUP_RPC, createSetup, isSetupNotice } from "./tui-setup.mjs"
 
 // Short enough for one line of a toast, which the host wraps at about fifty characters.
 const READY = "AZPR: report or preview ready. /pr-panel shows it."
+// How long after the pointer last moved with the button down the release of that button is still a click (see
+// `hold`).
+const MOVED_MS = 1000
 
 /** The first of these theme tokens that this OpenCode defines; their names have changed between releases. */
 const token = (theme, ...paths) => {
@@ -94,9 +98,47 @@ const inside = (event) => {
   if (!at || ![event.x, event.y, at.x, at.y, at.width, at.height].every(Number.isFinite)) return true
   return event.x >= at.x && event.x < at.x + at.width && event.y >= at.y && event.y < at.y + at.height
 }
+/**
+ * What one clickable thing keeps to tell a release the host made up from a real one. OpenTUI 0.9 (OpenCode 2.4.0
+ * and later) ends a drag whose release it never saw, as when the window lost the pointer with the button down,
+ * at the next press of the button: wherever and whenever that press is, the element that was pressed is first
+ * sent a release at the place of the pointer's last movement, which can be on that element, and no field of
+ * that release tells it from a real one. Time does: a real release follows the last movement at once. So a
+ * release that comes more than a moment after the pointer last moved, with the button that was pressed on this
+ * element still down, is no click. Without a movement the host makes none up, so a button held still for any
+ * time is a click as before, and a press of the element begins anew. Only a press of the left button does: the
+ * host ends the lost gesture at the next left press, so another button must not forget the movement. And only a
+ * movement with the left button counts: the host sends a drag with another button to whatever is under the
+ * pointer, which can be the element a lost gesture still holds, and that is no movement of the gesture.
+ *
+ * Two clocks say how long that was, and a release is a click only where both call it a moment: the time of day
+ * can be set back, and the steady clock may stand still while the machine sleeps. A click that is refused can be
+ * made again; one that is made up cannot be taken back. The moment is measured where this process handles the
+ * two events, which is all it knows of them: an event carries no time of its own. Where the terminal's input
+ * waited meanwhile (the process was stopped, or busy for that long), a made-up release that is handled right
+ * after its movement is still taken for a click.
+ */
+const hold = () => {
+  let moved
+  return {
+    down: () => {
+      moved = undefined
+    },
+    drag: (event) => {
+      if (event?.button === MouseButton.LEFT) moved = { day: Date.now(), steady: performance.now() }
+    },
+    madeUp: () => {
+      if (!moved) return false
+      const day = Date.now() - moved.day
+      const steady = performance.now() - moved.steady
+      return !(day >= 0 && day <= MOVED_MS && steady >= 0 && steady <= MOVED_MS)
+    },
+  }
+}
 
 function Row(props) {
   const [hover, setHover] = createSignal(false)
+  const held = hold()
   const mark = () => (props.row.state === "running" ? props.colors.running : props.row.state === "failed" ? props.colors.failed : props.colors.done)
   return (
     <box
@@ -105,8 +147,10 @@ function Row(props) {
       backgroundColor={hover() ? props.colors.hover : undefined}
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
+      onMouseDown={(event) => event.button === MouseButton.LEFT && held.down()}
+      onMouseDrag={held.drag}
       onMouseUp={(event) => {
-        if (!clicked(event)) return
+        if (!clicked(event) || held.madeUp()) return
         event.stopPropagation()
         props.open(props.row.id)
       }}
@@ -137,10 +181,12 @@ function Row(props) {
  * A click on it is a button pressed, not the keyboard asked for. The host gives a panel the keyboard on mouse
  * down, so that is stopped here: what is typed next still goes to the prompt. The press and its release are
  * handed on separately, since a click is both, on one step of one offer; any other press or release here ends
- * what was pressed (`forget`), as it does anywhere else in the panel.
+ * what was pressed (`forget`), as it does anywhere else in the panel, and so does a release the host made up
+ * (`hold`).
  */
 function Button(props) {
   const [hover, setHover] = createSignal(false)
+  const held = hold()
   return (
     <box
       flexDirection="row"
@@ -152,10 +198,12 @@ function Button(props) {
       onMouseDown={(event) => {
         if (event.button !== MouseButton.LEFT) return props.forget()
         event.stopPropagation()
+        held.down()
         props.press(props.item.id)
       }}
+      onMouseDrag={held.drag}
       onMouseUp={(event) => {
-        if (!clicked(event)) return props.forget()
+        if (!clicked(event) || held.madeUp()) return props.forget()
         event.stopPropagation()
         props.lift(props.item.id, inside(event))
       }}
@@ -239,6 +287,8 @@ function Panel(props) {
     pressed = undefined
     if (over && was && was.id === id && was.offer !== undefined && was.offer === model().next?.offer) act(id)
   }
+  // `close` is clicked like a session's row.
+  const closing = hold()
 
   // The host gives the keyboard to a panel that opens, and has no way to open one without it. AZPR is
   // driven by commands, so the panel hands the keyboard back to the prompt: the next command can be typed
@@ -346,8 +396,10 @@ function Panel(props) {
             fg={palette().muted}
             flexShrink={0}
             selectable={false}
+            onMouseDown={(event) => event.button === MouseButton.LEFT && closing.down()}
+            onMouseDrag={closing.drag}
             onMouseUp={(event) => {
-              if (!clicked(event)) return
+              if (!clicked(event) || closing.madeUp()) return
               event.stopPropagation()
               close()
             }}
@@ -757,7 +809,7 @@ function setupPart(context) {
         variants: (Array.isArray(model.variants) ? model.variants : []).map((variant) => variant?.id).filter((id) => typeof id === "string" && id),
       }))
   }
-  // The commands as the server has them now. OpenCode 2.3.0 does not tell its clients where commands changed
+  // The commands as the server has them now. OpenCode 2.3.0 through 2.4.1 do not tell their clients where commands changed
   // when a plugin changes them after it was loaded, so after a first setup the list is read again here.
   const commandsChanged = () => {
     if (disposed) return

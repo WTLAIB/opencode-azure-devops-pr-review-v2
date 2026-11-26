@@ -340,7 +340,7 @@ const startedNotice = { text: `[AZPR ${STARTED_RUN}] STARTED /pr-comment. Work c
  * `focused` says whether the panel has the keyboard.
  */
 function panelTui(notices, answers = [], { without, focused = true } = {}) {
-  const log = { sent: [], shown: [], toasts: [] };
+  const log = { sent: [], shown: [], toasts: [], opened: [], closed: 0 };
   const queue = [...answers], layers = [], slots = {};
   const entry = (notice, index) => ({ id: `msg_${String(index).padStart(6, '0')}`, type: 'synthetic', delivery: 'steer',
     payload: { text: notice.text, description: notice.text, ...(notice.metadata ? { metadata: notice.metadata } : {}) } });
@@ -354,7 +354,7 @@ function panelTui(notices, answers = [], { without, focused = true } = {}) {
     ui: {
       slot(claim) { slots[claim.append] = claim.render; return () => {}; },
       panel: { open: () => true, close() {}, current: () => screen.panel },
-      router: { navigate() {}, current: () => ({ type: 'session', sessionID: CONVERSATION }) },
+      router: { navigate(route) { log.opened.push(route.sessionID); }, current: () => ({ type: 'session', sessionID: CONVERSATION }) },
       toast: { show: options => log.toasts.push(options) },
       dialog: { select: async options => {
         log.shown.push(options);
@@ -374,7 +374,7 @@ function panelTui(notices, answers = [], { without, focused = true } = {}) {
   for (const path of without ?? []) { const parts = path.split('.'); const last = parts.pop(); delete parts.reduce((object, part) => object[part], context)[last]; }
   const stop = plugin.setup(context);
   // The panel as the host would draw it in the conversation: its keys, and the rows of what can be done next.
-  const input = { name: 'azpr.panel', sessionID: CONVERSATION, width: 96, presentation: 'panel', focused, focus() {}, close() {} };
+  const input = { name: 'azpr.panel', sessionID: CONVERSATION, width: 96, presentation: 'panel', focused, focus() {}, close() { log.closed++; } };
   globalThis.azprMounted = [];
   globalThis.azprCleanups = [];
   const shown = slots['session.panel'](input).props.children;
@@ -393,7 +393,17 @@ function panelTui(notices, answers = [], { without, focused = true } = {}) {
     .map(created => ({ item: created.props.item, element: created.component(created.props) })));
   // What the panel registered for the moment it is no longer drawn.
   const cleanups = globalThis.azprCleanups;
-  return { context, log, stop, command, rows, arrive, screen, all: [...all, ...sections], undraw: () => cleanups.forEach(run => run()), left: () => queue.length };
+  // A session's row, drawn for an ID as the list of sessions draws it: that list is under a <Show> that shows
+  // nothing while no session is known, so what it would show is looked through here.
+  const sessionRow = id => {
+    const hidden = [];
+    for (const node of all.filter(node => node.component && Object.getOwnPropertyDescriptor(node.props, 'children')?.get)) {
+      (function walk(child) { if (!child || typeof child !== 'object') return; hidden.push(child); for (const next of child.children ?? []) walk(next.shows ?? next); })(node.props.children);
+    }
+    const drawn = hidden.filter(node => typeof node.props?.children === 'function' && Array.isArray(node.props.each)).map(node => node.props.children(id)).find(created => created?.props && 'row' in created.props);
+    return drawn?.component(drawn.props);
+  };
+  return { context, log, stop, command, rows, sessionRow, arrive, screen, all: [...all, ...sections], undraw: () => cleanups.forEach(run => run()), left: () => queue.length };
 }
 
 test('what a preview offers is one row at the panel\'s foot: each sends /pr-comment for the review shown, to the session on screen, after asking', async t => {
@@ -483,6 +493,137 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   held.rows[2].element.props.onMouseUp(event());
   await settle();
   assert.deepEqual(held.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'Also where the host does not say where the pointer is.');
+  // A release the host makes up. OpenTUI 0.9 ends a drag whose release it never saw at the next press of the
+  // button, wherever and whenever that is, with a release for the element that was pressed, at the place of the
+  // last movement: on the step, when the pointer left the terminal from there. It picks nothing once more than
+  // a moment has passed since that movement. The clock is the test's, so nothing here waits.
+  const lost = panelTui([previewNotice], []);
+  t.after(lost.stop);
+  const step = lost.rows[2].element, onStep = { ...event(), x: 45, y: 20, currentTarget: place };
+  // Both clocks the panel reads are the test's: the time of day and the steady one, which move together here.
+  const clock = Date.now, steady = performance.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  performance.now = () => now;
+  const restore = () => { Date.now = clock; performance.now = steady; };
+  t.after(restore);
+  step.props.onMouseDown(event());
+  step.props.onMouseDrag(onStep);
+  now += 60_000;
+  step.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual([lost.log.sent, lost.log.shown.length], [[], 0], 'A release long after the pointer last moved on the step picks nothing.');
+  // What was pressed then is over. The pointer moves on the step again, with nothing pressed anew, and a release
+  // follows at once: were the press still held, this would be a click.
+  step.props.onMouseDrag(onStep);
+  now += 150;
+  step.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual([lost.log.sent, lost.log.shown.length], [[], 0], 'The made-up release ended the gesture.');
+  // A movement with another button is no movement of the gesture: the host sends it to whatever is under the
+  // pointer, also to the step that a lost gesture still holds, and the release it makes up later is no click.
+  step.props.onMouseDown(event());
+  step.props.onMouseDrag(onStep);
+  now += 60_000;
+  step.props.onMouseDrag({ ...onStep, button: 2 });
+  now += 150;
+  step.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual([lost.log.sent, lost.log.shown.length], [[], 0], 'A drag with the right button over the step does not make the made-up release a click.');
+  // A hand that moves a little while it clicks: the release follows the movement at once, and it is a click.
+  step.props.onMouseDown(event());
+  step.props.onMouseDrag(onStep);
+  now += 150;
+  step.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual(lost.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'A release right after a movement on the step is a click.');
+  // A button held still: the host makes up no release without a movement, so any time may pass.
+  const still = panelTui([previewNotice], []);
+  t.after(still.stop);
+  still.rows[2].element.props.onMouseDown(event());
+  now += 3_600_000;
+  still.rows[2].element.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual(still.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'A button held still for any time is a click.');
+  // A movement belongs to the press before it: one that no press of a step preceded changes nothing.
+  const stray = panelTui([previewNotice], []);
+  t.after(stray.stop);
+  stray.rows[2].element.props.onMouseDrag(onStep);
+  now += 60_000;
+  stray.rows[2].element.props.onMouseDown(event());
+  stray.rows[2].element.props.onMouseUp(onStep);
+  await settle();
+  assert.deepEqual(stray.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'A movement before the press does not count against the click.');
+  // A session's row and `close` act on a release alone: one the host made up would open a session, or close the
+  // panel, at a press that was made somewhere else. They keep the same watch, each for itself.
+  const others = panelTui([previewNotice], []);
+  t.after(others.stop);
+  const session = others.sessionRow('ses_made_up');
+  const closing = others.all.find(node => typeof node.props?.onMouseUp === 'function' && node.children?.some(child => child?.text === 'close'));
+  for (const [name, element, done] of [['a session\'s row', session, () => [...others.log.opened]], ['close', closing, () => others.log.closed]]) {
+    const before = done();
+    element.props.onMouseDown(event());
+    element.props.onMouseDrag(event());
+    now += 60_000;
+    element.props.onMouseUp(event());
+    assert.deepEqual(done(), before, `A release the host made up for ${name} does nothing.`);
+    // Another button pressed on it meanwhile forgets nothing: the host ends the lost gesture at the next press of
+    // the left button, and only that button begins a new one here.
+    element.props.onMouseDown(event());
+    element.props.onMouseDrag(event());
+    now += 60_000;
+    element.props.onMouseDown({ ...event(), button: 2 });
+    element.props.onMouseUp(event());
+    assert.deepEqual(done(), before, `A press of another button on ${name} does not make the made-up release a click.`);
+    // Nor does a movement with another button over it.
+    element.props.onMouseDown(event());
+    element.props.onMouseDrag(event());
+    now += 60_000;
+    element.props.onMouseDrag({ ...event(), button: 2 });
+    now += 150;
+    element.props.onMouseUp(event());
+    assert.deepEqual(done(), before, `A drag with another button over ${name} does not make the made-up release a click.`);
+    element.props.onMouseDown(event());
+    element.props.onMouseDrag(event());
+    now += 150;
+    element.props.onMouseUp(event());
+    assert.notDeepEqual(done(), before, `A click on ${name} with a hand that moves a little is a click.`);
+  }
+  assert.deepEqual([others.log.opened, others.log.closed, others.log.sent], [['ses_made_up'], 1, []]);
+  // Each clock is believed where it says that a moment has passed, and neither where it runs backwards: the time
+  // of day can be set back between the movement and the release, and the steady clock stands still while the
+  // machine sleeps.
+  const clocks = panelTui([previewNotice], []);
+  t.after(clocks.stop);
+  const watched = clocks.rows[2].element;
+  // The moment is a second, to the millisecond, on each clock: a millisecond more on either is no click.
+  for (const [name, day, steadily] of [['the time of day alone', 60_000, 150], ['the steady clock alone', 150, 60_000], ['the time of day set back', -60_000, 150], ['the steady clock gone back', 150, -5],
+    ['a millisecond over the second by the time of day', 1001, 1000], ['a millisecond over the second by the steady clock', 1000, 1001]]) {
+    let wall = 2_000_000, mono = 5_000;
+    Date.now = () => wall;
+    performance.now = () => mono;
+    watched.props.onMouseDown(event());
+    watched.props.onMouseDrag(onStep);
+    wall += day;
+    mono += steadily;
+    watched.props.onMouseUp(onStep);
+    await settle();
+    assert.deepEqual([clocks.log.sent, clocks.log.shown.length], [[], 0], `No click by ${name}.`);
+  }
+  // Exactly a second after the movement, by both clocks, is still that moment.
+  {
+    let wall = 3_000_000, mono = 9_000;
+    Date.now = () => wall;
+    performance.now = () => mono;
+    watched.props.onMouseDown(event());
+    watched.props.onMouseDrag(onStep);
+    wall += 1000;
+    mono += 1000;
+    watched.props.onMouseUp(onStep);
+    await settle();
+    assert.deepEqual(clocks.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'A release exactly a second after the movement is a click.');
+  }
+  restore();
   // A key that would only type a letter into the prompt is drawn dim: its colour says that it works.
   const prompt = panelTui([previewNotice], [], { focused: false });
   t.after(prompt.stop);

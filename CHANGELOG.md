@@ -1,5 +1,176 @@
 # Changelog
 
+## 0.5.1 — 2026-11-26
+
+AZPR is tested with OpenCode 2.4.1 instead of 2.3.2. OpenCode 2.3.1 to 2.4.1
+were compared with 2.3.0, the last version whose interfaces had been studied
+one by one, and what they change for AZPR is fixed here, together with
+defects that were there on 2.3.0 too. The prompt files are those of 0.5.0,
+no setting is new, and settings and saved reviews are used as they are. What
+a private session is sent besides its prompt changed (see below), and no
+review with a real model was run on this version.
+
+**With OpenCode 2.4.0 or 2.4.1 and the terminal panel, upgrade**: the first
+item below could post comments that nobody asked for.
+
+OpenCode 2.4.x:
+
+- **A release the terminal UI makes up no longer picks a step.** OpenCode
+  2.4.0 and later end a mouse drag whose release they never saw (the pointer
+  left the window with the button down, for instance) at the next press of
+  the button, anywhere and any time later, with a release for the element
+  that was pressed first. 0.5.0 took that for a click: a step that had been
+  pressed and moved on a little was picked by a later click somewhere else.
+  In a fixture, with the step **Post 3 comments…** and the next click where
+  the question's "Yes" row appears, the three comments were posted. A release
+  now counts as a click only within a second of the pointer's last movement
+  with the button down; a button held still is a click for any time. The
+  rows of the sessions and `close` follow the same rule. A release the
+  terminal UI makes up within that second is still taken for a click (it is
+  listed below among what is known and not changed). OpenCode 2.3.x makes no
+  such release up.
+- **A usage limit that a ChatGPT workspace's admin set is named and not
+  retried.** OpenCode 2.4.0 reports it as a type of its own
+  (`provider.chatgpt-workspace-limit`), which 0.5.0 did not know: a stage
+  that hit it started a second session that failed the same way, and the
+  receipt said only HTTP 429.
+- **One of AZPR's commands that arrives as an ordinary prompt is stopped.**
+  `opencode --prompt "/pr-review …"` can submit the text before the terminal
+  UI has loaded the commands. With OpenCode 2.4.0 and 2.4.1 that happened in
+  14 of 16 starts in a fixture (1 of 12 on 2.3.0 and 2.3.2), and in 10 of the
+  14 the conversation ran on OpenCode's built-in free model, which would have
+  been sent the PR URL and the context. AZPR now refuses a prompt that
+  begins with one of its commands, before any model gets it, and says so in
+  the conversation: also before a first setup and while settings of 0.4.x
+  wait for their update, when the commands themselves only say that AZPR is
+  not ready (not while AZPR is switched off, and not where OpenCode has not
+  loaded the plugin). The terminal UI then reports a session
+  that failed and may try again in new conversations, which stay empty.
+  Start commands in the terminal UI once they are listed, or from a script
+  with the command endpoint.
+- Tested with OpenCode 2.4.1 (was 2.3.2); `/pr-check` warns on other
+  versions. The terminal panel, the setup dialogs and the token field were
+  exercised in the new design that 2.4.0 made the default and in the classic
+  one.
+
+Private sessions:
+
+- **Local instructions stay out of private sessions.** OpenCode adds to every
+  request what it collects for the conversation's directory: `AGENTS.md`
+  (from 2.3.1 also `CLAUDE.md` and `~/.claude/CLAUDE.md`), the instruction
+  files a configuration lists, and what MCP servers, references and skills
+  say of themselves. All of it went to every reviewer, duplicate check,
+  rating and comment planning session, although it describes the local
+  directory and not the PR: with an instruction file of 54,000 characters,
+  the system messages of a small review and its preview grew from 138,000 to
+  625,000 characters. Private sessions now get AZPR's own instructions and
+  OpenCode's date and environment. For `claude-agent` models, to which
+  OpenCode hands its collected instructions another way, AZPR takes them out
+  of what OpenCode hands over; what the Claude Code program reads by itself
+  (the date and the environment, and possibly an instruction file of the
+  working directory) is its own, and was not tried with the real program.
+  Your own conversations are not
+  touched. A reviewer can still read local files on purpose, and the
+  environment names the directory as before. Where AZPR cannot tell these
+  parts of a request apart (another plugin rewrote them, or a later OpenCode
+  builds them another way), it sends them as it received them, as 0.5.0
+  did, and the stage's debug record counts the request.
+- **Reading a file beside a nested instruction file no longer fails the
+  pass.** When a reviewer's native `read` reads a file of the local project
+  in a directory that has an `AGENTS.md` of its own (from OpenCode 2.3.1 also
+  a `CLAUDE.md`), OpenCode leaves that file in the session. 0.5.0 took it for
+  someone else's message and failed the pass, and its retry too. Such a
+  message is now kept from the model and ends no turn.
+- **A reviewer's command that goes on in the background no longer fails its
+  pass** (only with `shell` set to `ask` or `inherit`). From OpenCode 2.3.1 a
+  command that outlasts its timeout, 120 seconds by default, is moved to the
+  background, and OpenCode tells the session when it has ended. 0.5.0 took
+  that notice for someone else's message: the pass failed, and its retry ran
+  the command again. The notice of a command the session itself started is
+  now part of the turn, once for each such command. A turn ends where the
+  session's work on its prompt ends, which is when the session goes idle and
+  not when it has answered: a command that ends before that, also right
+  after the answer, is handed to the model in the same turn, which may
+  answer once more; one that ends later wakes the session, which then gets
+  no model request and no tool, and the answer stands.
+- AZPR's tool definitions are no longer in the requests OpenCode builds for
+  an ordinary conversation outside a turn (a summary, also the one it writes
+  in the background, and a generation such as a side question): six
+  definitions, 4,990 characters, that those sessions could never call.
+
+Large inputs:
+
+- **Rows that OpenCode's read returns whole.** A value too large for a prompt
+  (a long PR description, the file list of a large PR, a large tool result)
+  is handed to a model as a reference to pages, which it reads with OpenCode's
+  native read. That tool cuts every line after 2,000 characters, and a row
+  held up to 3,000 characters of text, so a model got about two thirds of
+  what it read. Rows now fit. They are a file of this version's own beside
+  the value; a review that an earlier version saved gets such pages when its
+  values are used, and what that version wrote is left as it is. A value
+  that this version saves has the same rows under the earlier name as well
+  where a hard link can be made, so that its review can still be commented
+  on after going back to 0.5.0; where it cannot (a file system without hard
+  links, something else under that name) there is no such file, and a review
+  is run again after going back.
+  A value whose files cannot be made right is not handed to a model. The
+  instructions to the models did not change.
+
+Receipts:
+
+- A review's receipt lists the stages by their place in the pipeline (the
+  passes in their order, the duplicate checks, the rating), also in its
+  inactivity notice, and the report is in the session of the last of them
+  that did not fail. Until now these followed the order in which OpenCode had
+  created the sessions, which differed between runs of one review.
+
+Documentation:
+
+- Install an exact version: OpenCode 2.4.0 and later update an entry such as
+  `…@latest` by themselves, which ends a review that is running. A plugin
+  that is loaded before AZPR reloads AZPR when it changes; list AZPR first.
+- Corrected: with `claude-agent` models a session's local process ends five
+  minutes after the session's last turn, not when OpenCode exits, and
+  OpenCode 2.4.0 and later end it when the session is deleted. Claude Code
+  keeps a transcript of every such session under its own configuration
+  directory, which deleting the OpenCode session does not remove.
+- Corrected: OpenCode writes background summaries by default from 2.3.1 on,
+  not from 2.3.2.
+- The team guide names three opt-in experiments of OpenCode 2.4 that reach
+  AZPR's sessions (`full_codemode`, `sqlite_fts`, `home_memory`).
+
+Known and not changed by this release (see the
+[validation record](docs/VALIDATION.md#known-limitations)):
+
+- A reviewer's answer that reaches the model's output limit fails its pass;
+  the receipt names another message in the turn, not the limit.
+- In the list that adjusts findings, typing an ID selects by OpenCode's fuzzy
+  search: with ten or more findings, `F-1` selects `F-11`. Read the title of
+  the dialog that opens before choosing.
+- Page Up and Page Down close the token dialog of `/pr-setup`, as they close
+  OpenCode's own dialogs; nothing is saved then.
+- With `claude-agent` models, AZPR keeps the instructions OpenCode collected
+  out of what OpenCode hands the Claude Code program; whether that program
+  reads an instruction file of the working directory by itself (`CLAUDE.md`)
+  was not tried with the real program.
+- With `claude-agent` models, the note that AZPR adds to a comment planning
+  session that has read much does not reach the model: OpenCode's Claude
+  Code provider does not send what a plugin adds to a request's system
+  parts. The planner then loses its tools for that request without being
+  told why.
+- Several OpenCode processes share AZPR's state directory, and each knows
+  only its own running commands: one that saves a twenty-first review can
+  remove the oldest saved review while another process is planning or
+  posting its comments, and a process that starts can remove the data of
+  another process's run that has gone on for more than a day.
+- After a release was lost, a second press within a second of the pointer's
+  last movement can still pick the step that was pressed. The second is
+  measured where the terminal UI handles the two events: where its input
+  waited meanwhile, a press made later counts the same.
+- A step, a session's row or `close` that is pressed, moved on a little and
+  released more than a second after the last movement is not taken (click
+  again), also on OpenCode 2.3.x, which makes no release up.
+
 ## 0.5.0 — 2026-11-24
 
 Every review now runs one pipeline: independent review passes, a duplicate

@@ -248,7 +248,13 @@ test('comment data reopens after a restart and still verifies hashes', async t =
   const reference = await first.put('saved text');
   const reopened = await createCommentData({ directory: first.directory });
   assert.equal(await reopened.read(reference), 'saved text');
+  // An object that is no longer what its name says is never what a read returns. Its pages still hold the value,
+  // which is the digest's: the object is written again from them. With both changed there is no value to return.
   await writeFile(reference.file, 'tampered');
+  assert.equal(await reopened.read(reference), 'saved text');
+  assert.equal(await readFile(reference.file, 'utf8'), 'saved text');
+  await writeFile(reference.file, 'tampered');
+  await writeFile(reference.pages, `${JSON.stringify({ start: 0, end: 8, text: 'tampered' })}\n`);
   await assert.rejects(reopened.read(reference), /changed/);
   await assert.rejects(reopened.read({ ...reference, file: '/etc/passwd' }), /Unknown private comment data reference/);
 });
