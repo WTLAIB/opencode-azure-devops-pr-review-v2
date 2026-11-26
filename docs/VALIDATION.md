@@ -2,7 +2,7 @@
 
 This page records validation of the Azure DevOps REST implementation, the
 0.1.0 through 0.3.4 distributions, the release candidates from 0.3.5 to
-0.5.1, the moves to OpenCode 2.3.0, 2.3.2 and 2.4.1, runs of Martian's public code
+0.5.1, the moves to OpenCode 2.3.0, 2.3.2, 2.4.1 and 2.4.2, runs of Martian's public code
 review benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, the severity changes
 of 0.3.7 run on ReviewBench's test set, the runs behind the single
@@ -18,7 +18,8 @@ acceptance runs, including the MCP-based runs, are preserved in
 ## Summary
 
 - **Every change, in CI.** `npm run check` and the offline test suite, then
-  thirteen runs on the real OpenCode 2.4.1 host with isolated profiles and
+  thirteen runs on the real host of the tested OpenCode release (the README's
+  [Compatibility](../README.md#compatibility) row names it) with isolated profiles and
   fake model and Azure DevOps services: fresh, replacement and native
   installation (including an authenticating proxy, a custom CA certificate, a
   foreign MCP server behind CodeMode and an image model), a 120-file review
@@ -85,6 +86,65 @@ The test-PR runs show that the workflow works and what it found on those PRs;
 the benchmark measures how much of a published reference set it finds.
 Findings still vary between models and runs; see
 [known limitations](#known-limitations).
+
+## OpenCode 2.4.2 compared with 2.4.1 (2026-11-27)
+
+The baseline is OpenCode 2.4.1, the tested host of 0.5.1 and the last
+version studied ([OpenCode 2.3.1 to 2.4.1 compared with 2.3.0](#opencode-231-to-241-compared-with-230-2026-11-24-to-26)).
+OpenCode 2.4.2 was released on 2026-11-26 (tag `v2.4.2`, commit
+`fc31a4853`).
+
+Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3 and tmux 3.2a. OpenCode
+CLI 2.4.1 and 2.4.2 were installed into disposable prefixes; both embed Bun
+1.4.4, and 2.4.2 moves from OpenTUI 0.9.4 to 0.9.9. Every run used isolated
+profiles and the fake model and Azure DevOps services; no real model or
+Azure request was made. The upstream source of both tags (184 commits) was
+read for each host behaviour AZPR relies on: every fact in `src/host.mjs`,
+the hooks of `runtime.mjs` and the calls of `session.mjs`. The 47 entries of
+2.4.2's release notes were read against it. "0.5.1" below is the released
+tree; "the candidate" is 0.5.2. Each row says on which versions it was
+measured; "source" means read in OpenCode's code and not run.
+
+| Check | Observed |
+| --- | --- |
+| The fixtures of 0.5.1 | 13 of 13 on 2.4.1. On 2.4.2, 10 of 13: the three smokes stopped at their positive control that an ordinary conversation is offered image and video generation (next row); with that control changed, 13 of 13. Each fixture sent the same number of requests to the fake model on both. |
+| Image and video generation | 2.4.2 registers `generate_image` and `generate_video` as Code Mode tools (source): an ordinary conversation is offered `execute`, and the Code Mode catalog in its system text lists the two (measured). A private session has `execute` denied, so the host lists Code Mode tools directly, and AZPR's allowlist leaves them out (source, the same on both): measured on 2.4.2 in the three smokes, no private request names either tool anywhere, and every private reviewer is offered exactly the 9 tools of its allowlist. The candidate's smoke accepts either form in its positive control and checks every private request of the run for the two names. |
+| Model requests | Every request of the three smokes of 0.5.1 (fresh, replacement and native installation; 354 in all) was recorded on both versions and compared part by part, grouped by what a request is for (told by its payload, so that the native smoke's first-setup review counts as private although its model also serves an ordinary conversation) and by model. The 348 requests of private sessions are identical on both: system texts, tool definitions, other fields, the order of roles and every message. The ordinary conversation differs as the row above says, and in what 2.4.2 tells a model of Code Mode (the description of `execute` and the catalog). |
+| The controls of 0.5.1 | Each of the 9 controls takes one rule of 0.5.1 out of a copy and runs the fixture step it is for. On 2.4.2 each failed at that step, as on 2.4.1 in the 0.5.1 acceptance: with the system parts left as they were, or the host's form no longer recognised, the step for the configured instruction file; with what the host wrote left in the requests, the nested file; without the refusal of one of AZPR's commands sent as a prompt, that prompt (HTTP 200 and a user message), also before a first setup; without the limit's type, the usage limit (a second request); with rows of 2,900 characters, the read (a row cut at 2,000); without the reading of the session's messages, the step for the session's own word; and with a made-up release taken for a click again, the panel's step. So 2.4.2 still does what these rules are for, and the rules still hold. |
+| The probes of 0.5.1 | Instruction loads beside a read file (`n1`), the Claude Code provider's instructions option (`ca`), commands in the background (`shell`), the end of a turn at its edges (`turn-end`) and an instruction update (`upd`), on both versions: the same stage results, and the same requests accepted and refused. One timing differs: a background command's notice that arrives 8 ms after the turn ended is, on 2.4.2, delivered into the session that keeps the report within the execution of the host's that AZPR refuses, where 2.4.1 left it in the inbox; the stage results are the same, and the panel reads a report from the messages as well when the inbox has none. Planning a review of 0.5.0 after the upgrade (`a5`), going back to 0.5.0 (`goback`) and a shell approval (`shell ask`) on 2.4.2: as on 2.4.1 in the [0.5.1 acceptance](#051-release-candidate-acceptance-2026-11-26). |
+| Background summary | In the background-summary fixture the host asks for a summary of a reviewer that has answered, before its stage ends: once per run on 2.4.0 and 2.4.1 (also in the ten runs of the 0.5.1 acceptance), twice per run on 2.4.2 (two runs), as on 2.3.2. AZPR refused each one, no request reached the model, and the review was COMPLETE. The change was not traced to a single commit. |
+| A prompt taken back | The terminal UI of 2.4.2 takes the last prompt back when Esc is pressed twice within five seconds before the model answered (source): it interrupts the session, waits for it, and then takes the prompt back with the routes that `/undo` uses on 2.4.1 too. Measured on 2.4.1 and 2.4.2 by calling those routes in that order in a reviewer's session (`probe-undo`), against a plain interrupt: AZPR read the session about 10 ms before the prompt was taken back, so the pass FAILED as interrupted (`failure=permanent`) in all four runs, with the same receipts and stage records. The other order, the prompt gone before AZPR reads the session, was not produced: the pass then fails as well, with the error that 0.5.2 rewords. The key presses themselves were not sent in a real terminal UI. |
+| Phone notifications | New in 2.4.2 (source, `packages/core/src/push/`): OpenCode's mobile app registers a phone, and OpenCode sends it a notice through OpenCode's own relay when a top-level session's execution ends ("Finished" after one that succeeded with a model step, "Failed" after one that failed, none after an interrupted one), when a model asks a question and when a permission is requested. A phone registered without settings gets everything (`all`); `attention` keeps only questions and permission requests, and a session can be muted. AZPR's private sessions are top-level sessions, so one review can send a notice for each of them; the plugin API offers no access to these notices. Not measured: the host accepts only two relay addresses of OpenCode's own, so a local receiver could not register. |
+| Permissions and tool visibility | 2.4.2 evaluates permissions with a new policy (source): the last matching rule still decides, and a tool is now hidden when every outcome of its action is a denial. AZPR's rules hide the same tools under both readings; measured, each private reviewer is offered exactly its allowlist. |
+| Plugin interface | The session methods, message types, hooks and events AZPR uses, the error of a missing session, the plugin list and the registration of commands and agents are unchanged (source). New: the Promise form of the plugin API honours a `signal` given as a call's second argument; AZPR passes none. An agent can carry `instructions`, which become an instruction source of their own; AZPR's roles carry none, and such a source would be left out of private requests like the other sources of a conversation's place. |
+| Experimental flags | A session working directory with a `cd` tool and its own instruction files (`machines`), skills loaded from MCP servers (`mcp_skills`) and a compaction record of subagents and background work (`compaction_jobs`) are off in release builds (source); not run. |
+| Terminal UI | The JavaScript with which OpenTUI 0.9.9 handles the mouse is the same as in 0.9.4, and the dialog interface plugins use is unchanged (source). Its native input parser now delivers a release that a terminal reports as button 3 while a button is held, which 0.9.4 dropped (source; a terminal that reports so, ConEmu for one, was not tried). Measured on 2.4.2: the panel fixture (2 runs) and the setup fixture (4 runs, the confirmed update of 0.4.x settings among them) as on 2.4.1, and the `click` control above. OpenTUI 0.9.4 to 0.9.8 could crash while laying out a Markdown list (upstream issue 65766), fixed in 0.9.9; whether the panel's documents could reach that path was not established. |
+| Database | No migration is added: 64 on 2.4.0, 2.4.1 and 2.4.2 (source). Going back from 2.4.2 to 2.4.1 needs no restored database. |
+
+Host behaviour that the candidate dates "OpenCode A to the tested version"
+was checked on 2.4.2 as follows ("fixture" and "control" are the runs
+above; "source" the reading of both tags):
+
+| Behaviour | Checked on 2.4.2 by |
+| --- | --- |
+| A request's instruction part, built from sources kept as `{ key, text }` and joined with a blank line; what the host adds for a conversation's place to every request | `ca` probe; `parts` and `form` controls; the request comparison |
+| The message the host leaves after a native read beside an instruction file, and the files its metadata names | `n1` probe; `hide` control |
+| The host's update of an instruction source, a `system` message | `upd` probe |
+| The prompt among the session's messages with its nonce, from the execution that takes it; one idle marker per execution | `turn-end` probe; `look` control |
+| The notice that a background command ended, with the shell's ID and state | `shell` probe |
+| A session's messages in a request: every user message with the ID of the stored one | the request comparison; `hide` control |
+| The native read returns at most 2,000 characters of a line | `rows` control |
+| Compaction in a turn once the context reaches the window less 16,000 tokens | the comment-scale and background-summary fixtures; source |
+| A command that throws answers HTTP 500 with `CommandExecutionError` | the smoke's step for a mode without models |
+| Commands that change after loading are announced without their location | source (the terminal UI's handling and the generated client are unchanged); the setup fixture |
+| A startup prompt can reach a conversation as an ordinary prompt (`opencode --prompt`) | source (unchanged); `early` and `stray` controls |
+| The plugin list names a second AZPR entry as a duplicate plugin ID | the native smoke's duplicate-entry step |
+| One delta event per streamed chunk of answer text | the smoke's inactivity step (an answer that streams for longer than the window runs on) |
+| Bun 1.4.4 | source (`packageManager`); the smoke's proxy and CA steps |
+| The error of `session.get` and `session.remove` for a missing session | source |
+| The name OpenCode shows for a session nobody named | the smoke's naming step |
+| An agent's default `external_directory` permission is `allow` | source |
+| Image generation offered to every agent (2.2.2 on) and video generation (2.4.0 on), as Code Mode tools from 2.4.2 | the smoke's positive control |
 
 ## 0.5.1 after publication (2026-11-26)
 
@@ -6291,12 +6351,22 @@ transient failure, and its error names the last activity.
 
 ## Known limitations
 
-- **Tested environment.** OpenCode CLI 2.4.1 (V2 plugin API) on Ubuntu 22.04
-  under WSL2 since 0.5.1 (2.3.2 for 0.5.0, 2.3.0 for 0.4.1 to 0.4.6). Other
-  OpenCode 2.x versions get an OpenCode WARNING row in `/pr-check` and are not
-  validated, apart from what the records of 0.4.1 (2.2.4) and of 0.5.1 (2.3.0
-  to 2.4.0) say was run there; OpenCode 1.x is not supported. Other operating
+- **Tested environment.** OpenCode CLI 2.4.2 (V2 plugin API) on Ubuntu 22.04
+  under WSL2 since 0.5.2 (2.4.1 for 0.5.1, 2.3.2 for 0.5.0, 2.3.0 for 0.4.1 to
+  0.4.6). Other OpenCode 2.x versions get a note in the OpenCode row of
+  `/pr-check` (a WARNING row until 0.5.1) and are not validated, apart from what
+  the records of 0.4.1 (2.2.4), of 0.5.1 (2.3.0 to 2.4.0) and of 0.5.2 (2.3.0 to
+  2.4.1) say was run there; OpenCode 1.x is not supported. Other operating
   systems are not validated yet.
+- **Phone notifications of OpenCode 2.4.2 and later.** OpenCode's mobile app can
+  be told of every top-level session's run that ends, and AZPR's private
+  sessions are top-level sessions, so a paired phone at the default level
+  (`all`) can get several notices for one review; the plugin API gives AZPR no
+  access to them. Read from OpenCode's source (`packages/core/src/push/`): a run
+  that succeeded after a model step sends "Finished", one that failed sends
+  "Failed", an interrupted one sends none, and `attention` keeps only questions
+  and permission requests. Not measured: OpenCode accepts only its own relays as
+  a phone's address.
 - **0.5.1 with real models.** No review with a real model ran on the 0.5.1
   candidate. Its review prompts are those of 0.5.0, but its private sessions
   no longer get the local instructions OpenCode collects, and what a real
@@ -6420,7 +6490,7 @@ transient failure, and its error names the last activity.
   use, and another project directory that the OpenCode service had already
   opened without settings, still need a restart of the OpenCode service. After a first setup, a client other than the terminal UI
   with AZPR's part may go on suggesting the review commands as "setup
-  required" until it reconnects, because OpenCode 2.3.0 through 2.4.1 announce
+  required" until it reconnects, because OpenCode 2.3.0 to the tested version announce
   that change of commands without a location; the commands themselves work. The token
   passes through the terminal UI's memory and its connection to the OpenCode
   server on its way to the token file.

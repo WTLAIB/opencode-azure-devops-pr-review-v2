@@ -1,8 +1,8 @@
 # AI development guide
 
-This repository targets the OpenCode V2 plugin API (tested with
-`@opencode/cli@2.4.1`), the Azure DevOps Services REST API (api-version 7.1)
-and Ubuntu 22.04. Public source and documentation use English. Follow the user's
+This repository targets the OpenCode V2 plugin API (tested with the
+`@opencode/cli` release that `TESTED_HOST_VERSION` in `src/host.mjs` names), the
+Azure DevOps Services REST API (api-version 7.1) and Ubuntu 22.04. Public source and documentation use English. Follow the user's
 conversation language and current authorization scope.
 
 ## Before changing anything
@@ -1062,6 +1062,22 @@ settings, backups and failure records. Never upload `.local/`.
 Detect capabilities; do not assume them. The terminal part runs in the TUI's
 process: it checks the TUI plugin API it uses at setup and reads theme tokens
 through fallbacks.
+- The tested host is one constant, `TESTED_HOST_VERSION`. CI, the installer and
+  CONTRIBUTING read it; the README's badge and Compatibility row show it, and
+  `tests/release.test.mjs` holds the README to it. Name the tested version
+  nowhere else outside dated records (the dated sections of VALIDATION, the
+  changelog, release notes, ROADMAP's done entries): refer to the constant or
+  link the Compatibility row.
+- Date a host behaviour that AZPR relies on as "OpenCode A to the tested
+  version": seen from A on and still there in the tested release. Every move of
+  the tested version checks each such fact again on the new release, with a
+  source read or a probe that the study of that release lists; a behaviour
+  that ends gets a closed range then. Keep a measurement as measured ("measured
+  on 2.3.0 and 2.4.1") and a change between two releases with both ("through
+  2.4.1 …; from 2.4.2 …").
+- A study of a new host release starts from the last release studied, which is
+  the tested one, and covers every release between the two; VALIDATION records
+  each study.
 
 ## Verification and delivery
 

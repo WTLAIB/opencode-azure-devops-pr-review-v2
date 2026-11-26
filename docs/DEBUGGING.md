@@ -6,7 +6,7 @@ acceptance, Azure source validity or report quality.
 
 ## A startup slash command becomes an ordinary prompt
 
-On OpenCode 2.1.2 through 2.4.1, `opencode --prompt "/pr-review ..."` can
+On OpenCode 2.1.2 to the tested version, `opencode --prompt "/pr-review ..."` can
 submit before the terminal UI has loaded the commands. The host then
 treats the text as an ordinary model prompt; AZPR has not received the command.
 This was observed in local native-package TUI acceptance failures on 2.1.2 and
@@ -167,9 +167,10 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
 
 1. `result.json`: which stage failed and its `failureClass`:
    - `transient` was retried once in a new session (provider 408/409/425/429/5xx,
-     interrupted turn, unexpected message in the turn);
+     a turn that ended without a complete answer, unexpected message in the turn);
    - `overflow` means the session needed compaction; the runtime split the shard;
-   - `permanent` (authentication, bad request) was not retried;
+   - `permanent` (authentication, bad request, a turn a person interrupted in the
+     reviewer's session) was not retried;
    - `idle` means the stage inactivity watchdog stopped the stage after
      `workflow.stageIdleSeconds` without activity; it was retried once in a new
      session. Its error and `idleStop` name the last activity and when it
@@ -272,6 +273,7 @@ Common receipts:
 | `Content search notice: Content search (azpr_search_code) was unavailable: …` (also among the report's limitations) | The repository archive is over `azure.archiveMegabytes`, or is one AZPR cannot read (ZIP64, encrypted, damaged). The review ran, but sessions could not search file contents, so callers and other uses of changed code may be unchecked. Raise `azure.archiveMegabytes` (at most 1024) where the notice names it and restart the OpenCode service; the archive is held in memory during a review. |
 | `azpr_read_file failed: …` in a stage's tool errors | The model asked for a missing path or invalid range; the review continues and reports the gap. |
 | `The session received another message during this turn; its output cannot be assigned to the authorized request` (`failure=transient`) | Something other than the reviewer's own prompt arrived in its session while it answered, so the answer is not taken; the stage ran once more in a new session. Known causes: a message someone sent to that session; and an answer that reached the model's output limit, after which OpenCode asks the model to go on (a second failure for that reason means the shard's answer is too long for the model: lower `workflow.shardFiles` or use a model with a larger output limit). The instruction files OpenCode loads beside a file a reviewer read, and its notice that a background command ended, no longer count (0.5.1). |
+| `The admitted prompt is absent or ambiguous in the session context: it is not among the session's messages exactly once` (`failure=permanent`) | The reviewer's prompt is gone from its session, or is there twice. Someone may have taken it back in that session (in OpenCode's terminal UI, Esc twice before the model answered, from 2.4.2 on, or `/undo`), or a compaction removed it. That pass gives no answer and is not retried; run the review again. To stop a run, use `/pr-stop` in its conversation (or the panel's stop step), not Esc in one of its reviewer sessions: an interrupted reviewer fails its pass the same way. |
 | `[AZPR] /pr-review reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it` (any AZPR command) | The text was sent before OpenCode had loaded its commands, typically with `opencode --prompt` at startup; see [above](#a-startup-slash-command-becomes-an-ordinary-prompt). Nothing ran. Type the command once it shows in the slash-command list. |
 | `permission.rejected` … `cannot run a shell command that OpenCode cannot analyze` | With shell allowed, a reviewer's command used something OpenCode's scanner cannot follow (an alias, for instance), for which OpenCode 2.4.0 and later ask for every directory; AZPR refuses that, and the model is told to rewrite the command. |
 | `permission.rejected` … `cannot use paths outside the local OpenCode project` | A reviewer used a native tool on a repository path; it was refused instead of waiting for an approval and the model was pointed to the azpr tools. |

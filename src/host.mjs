@@ -7,8 +7,16 @@ import { types } from 'node:util';
  * capabilities instead of assuming exact response shapes. Every host-specific
  * constant and response normalization lives here so an upgrade has one place
  * to adjust.
+ *
+ * How the comments here date what a host does: "OpenCode 2.3.0 to the tested version" is a behaviour AZPR relies
+ * on, seen from 2.3.0 on and still there in `TESTED_HOST_VERSION`. Every move of the tested version checks each
+ * such fact again on the new release (the study of that release lists them with the source read or probe that
+ * checked them); a behaviour that ends then gets a closed range. "Measured on …" names the releases a
+ * measurement ran on, and a change from one release to the next names both.
  */
-export const TESTED_HOST_VERSION = '2.4.1';
+// The one OpenCode release AZPR is tested with. CI, the installer and CONTRIBUTING read it from here, and the
+// README shows it (tests/release.test.mjs holds the two together).
+export const TESTED_HOST_VERSION = '2.4.2';
 
 // Text OpenCode 2.0.32 through 2.2.7 queue after resuming an interrupted text stream. OpenCode 2.3.0 retries the
 // interrupted step instead and queues nothing (see `retriedSteps` in session.mjs).
@@ -79,7 +87,7 @@ export function packageNamed(target, name, repository) {
 }
 
 /**
- * This plugin's entries in the host's plugin list. OpenCode 2.1.4 through 2.4.1 list
+ * This plugin's entries in the host's plugin list. OpenCode 2.1.4 to the tested version list
  * { id?, source: { type: package|local|builtin|sdk, target?, version? },
  * state: { status: active|failed, error? } } and keeps only the first entry
  * of a plugin ID: a second one is listed as failed with "Duplicate plugin ID".
@@ -115,7 +123,7 @@ export function pluginSourceLabel(source) {
 
 /**
  * Session events that show a turn progressing while no hook runs. OpenCode
- * 2.1.2 through 2.4.1 emit one delta event per streamed chunk of answer text,
+ * 2.1.2 to the tested version emit one delta event per streamed chunk of answer text,
  * reasoning or tool-call input; the projected session context shows the text
  * only once the step ends.
  */
@@ -144,7 +152,7 @@ export function sessionProgress(event) {
 }
 
 /**
- * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 in 2.1.4 through 2.4.1),
+ * OpenCode runs plugins on Bun (1.4.2 in 2.0.32 and 2.1.2, 1.4.4 from 2.1.4 to the tested version),
  * whose fetch accepts per-request `proxy` and `tls` options. Node's fetch
  * silently ignores both, so a configured proxy would be bypassed; callers
  * refuse instead.
@@ -194,20 +202,20 @@ export const USED_UP_LIMITS = Object.freeze({
 
 /**
  * The longest line OpenCode's native `read` returns whole: it cuts a longer one there and appends
- * "... (line truncated to 2000 chars)" (OpenCode 2.3.0 through 2.4.1). A model reads AZPR's private data pages
+ * "... (line truncated to 2000 chars)" (OpenCode 2.3.0 to the tested version). A model reads AZPR's private data pages
  * with that tool, one row per line, so a row must not be longer.
  */
 export const HOST_READ_LINE_CHARACTERS = 2000;
 
 /**
  * Whether a rejected session call says the session does not exist. OpenCode
- * 2.2.4 through 2.4.1 reject `session.get` and `session.remove` of such a session
+ * 2.2.4 to the tested version reject `session.get` and `session.remove` of such a session
  * with an error whose `_tag` and `name` are `Session.NotFoundError`.
  */
 export const isSessionNotFound = error => (error?._tag ?? error?.name) === 'Session.NotFoundError';
 
 /**
- * Whether a session still has the name OpenCode shows for one that nobody named. OpenCode 2.3.0 through 2.4.1
+ * Whether a session still has the name OpenCode shows for one that nobody named. OpenCode 2.3.0 to the tested version
  * create a conversation without a title and list it as "New session"; earlier releases stored the same words with the
  * time it was created. OpenCode's own model names such a conversation when it first runs there.
  */
@@ -227,7 +235,7 @@ export const HOST_FACT_SOURCES = Object.freeze(['core/date', 'core/environment']
 
 /**
  * A request's system parts with the instructions part rebuilt from the sources named in `keep`. OpenCode 2.3.0
- * through 2.4.1 build that part from sources, join their texts with a blank line and keep each source as
+ * to the tested version build that part from sources, join their texts with a blank line and keep each source as
  * `{ key, text }` in the part's `metadata.experimental.instructions`, a field the host marks as experimental.
  * Returns `{ system, removed }` (the sources that were left out, in their order), or null where no part has that
  * shape, more than one has it, or its text is not what its sources give: nothing can be told apart then, and
@@ -301,7 +309,7 @@ export function withPart(system, part) {
  * model. That provider does not send a request's system parts. Its own `context` hook, which runs before any
  * plugin's and before the built-in hooks that add parts of their own, leaves there what it made of the
  * instructions part: the texts of its sources but the date and the environment, which Claude Code writes itself,
- * joined with a blank line (OpenCode 2.3.0 through 2.4.1, measured on 2.3.0 and 2.4.1).
+ * joined with a blank line (OpenCode 2.3.0 to the tested version, measured on 2.3.0, 2.4.1 and 2.4.2).
  */
 export const CLAUDE_PROVIDER = 'claude-agent';
 export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
@@ -362,7 +370,7 @@ export const claudeInstructions = sources => sources.map(source => source.text).
  * The form of the message in which OpenCode leaves instruction files in a session by itself, after the session's
  * native read tool read a file of the project: the files between that file and the conversation's directory
  * (AGENTS.md; from OpenCode 2.3.1 also CLAUDE.md), as a synthetic message whose `metadata.instruction.paths`
- * names the files it holds (OpenCode 2.3.0 through 2.4.1). That metadata is what the host itself goes by: it is
+ * names the files it holds (OpenCode 2.3.0 to the tested version). That metadata is what the host itself goes by: it is
  * its only record of which files a session was given. Nothing else has this form: not a message without an ID,
  * and not a person's message or an assistant message that carries such metadata. The text is not looked at:
  * whoever writes the metadata writes the text too, so it would prove nothing more.
@@ -376,7 +384,7 @@ export function isInstructionLoad(message) {
 /**
  * An update of the instructions as a session's own messages hold it: OpenCode writes a `system` message when a
  * source changed while the session ran (an instruction file that was edited, an MCP server that says something
- * else, the date at midnight), and nothing else writes one (OpenCode 2.3.0 through 2.4.1, from
+ * else, the date at midnight), and nothing else writes one (OpenCode 2.3.0 to the tested version, from
  * `session.instructions.updated`; the host marks it `notice: "instructions"`, which is not asked for here: a
  * message of this type is the host's own, whatever a later version marks it with).
  */
@@ -576,7 +584,7 @@ export function withoutHostMessages(requested, stored) {
 /**
  * The message a session's turn began with: the one user message that carries the nonce AZPR sent its prompt
  * with. A prompt that is admitted waits in the session's inbox, and becomes a message only in the execution
- * that takes it (OpenCode 2.3.0 through 2.4.1); until then, and where two messages carry the nonce, there is none.
+ * that takes it (OpenCode 2.3.0 to the tested version); until then, and where two messages carry the nonce, there is none.
  */
 export function promptOf(messages, nonce) {
   const prompts = typeof nonce === 'string' && nonce.length > 0 ? messages.filter(message => message?.type === 'user' && message.metadata?.azprGrant === nonce) : [];
@@ -586,7 +594,7 @@ export function promptOf(messages, nonce) {
 /**
  * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them,
  * `running` while no idle marker follows it, and `ended` once one does (an execution leaves one marker when it
- * ends, however it ends, before the host starts another one; OpenCode 2.3.0 through 2.4.1).
+ * ends, however it ends, before the host starts another one; OpenCode 2.3.0 to the tested version).
  */
 export function turnState(messages, prompt) {
   const at = prompt ? messages.indexOf(prompt) : -1;

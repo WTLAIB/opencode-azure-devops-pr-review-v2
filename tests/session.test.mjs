@@ -179,9 +179,13 @@ test('V2 prompt binds admission metadata without including it in model text', as
 });
 
 test('V2 output fails closed when active context lacks the exact admitted prompt', async () => {
+  // Gone (taken back in that session, or compacted away) or there twice: nothing of the turn is accepted, the text
+  // says what is known and names the possible causes without claiming one, and the failure is not retried.
   for (const messages of [[assistant(), idle()], [{ id: 'msg_input', type: 'user', text: input }, { id: 'msg_input', type: 'user', text: input }, assistant(), idle()]]) {
     const { context } = host({ context: async () => messages });
-    await assert.rejects(requestReview(context, { sessionID, text: input }), /absent or ambiguous/);
+    const error = await requestReview(context, { sessionID, text: input }).then(() => assert.fail('An answer was accepted.'), failure => failure);
+    assert.equal(error.message, "[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session's messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo) or removed by a compaction. No output of this turn was accepted.");
+    assert.equal(classifyFailure(error), 'permanent');
   }
 });
 
@@ -707,7 +711,7 @@ test('a turn that did not succeed fails by its own outcome, whatever else reache
   await assert.rejects(requestReview(answered, { sessionID, text: input }), error => error.contextChanged === true && classifyFailure(error) === 'transient');
 });
 
-// OpenCode 2.3.0 through 2.4.1, shell allowed: a command the session started goes on in the background (the model
+// OpenCode 2.3.0 to the tested version, shell allowed: a command the session started goes on in the background (the model
 // asked for it, or from 2.3.1 its timeout ran out) and the host tells the session when it has ended.
 const shellCall = (shellID = 'sh_1', name = 'shell', reported = { status: 'running', truncated: false, shellID, pid: 1 }) => assistant({ id: `msg_call_${shellID}`, finish: 'tool-calls',
   content: [{ type: 'tool', id: `tool_${shellID}`, name, state: { status: 'completed', input: { command: 'sleep 2', background: true }, metadata: reported, content: [{ type: 'text', text: `Command moved to the background (shell ID: ${shellID}).` }] } }] });

@@ -100,10 +100,11 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   assert.equal(listOf({}), null);
   assert.deepEqual(recordOf({ data: { a: 1 } }), { a: 1 });
   assert.deepEqual(recordOf({ a: 1 }), { a: 1 });
-  const capabilities = hostCapabilities({ app: { version: '2.4.1' }, permission: { hook() {} }, tool: { transform() {} } });
+  const capabilities = hostCapabilities({ app: { version: TESTED_HOST_VERSION }, permission: { hook() {} }, tool: { transform() {} } });
   assert.equal(capabilities.tested, true);
-  assert.equal(TESTED_HOST_VERSION, '2.4.1');
-  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.4.2']) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
+  // One exact OpenCode 2.x release; the README shows it (tests/release.test.mjs).
+  assert.match(TESTED_HOST_VERSION, /^2\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/);
+  for (const version of ['2.0.32', '2.1.4', '2.2.4', '2.2.7', '2.3.0', '2.3.1', '2.3.2', '2.4.0', '2.4.1', '2.4.2', '2.4.3'].filter(version => version !== TESTED_HOST_VERSION)) assert.equal(hostCapabilities({ app: { version } }).tested, false, version);
   assert.equal(capabilities.permissionHook, true);
   assert.equal(capabilities.toolTransform, true);
   assert.equal(capabilities.eventSubscribe, false);
@@ -211,7 +212,7 @@ test('session progress events: streamed text, reasoning and tool-call input, too
 });
 
 test('a request\'s instructions part is rebuilt from the host\'s own facts, and left alone where it cannot be told apart', () => {
-  // The shape of OpenCode 2.3.0 through 2.4.1: the agent's system prompt, a part a host plugin adds, then the
+  // The shape of OpenCode 2.3.0 to the tested version: the agent's system prompt, a part a host plugin adds, then the
   // instructions part, whose text is its sources joined by a blank line.
   const sources = [{ key: 'core/codemode', text: 'CODEMODE' }, { key: 'core/mcp-guidance', text: 'MCP SAYS' }, { key: 'core/instructions', text: 'Instructions from: /work/AGENTS.md\nLOCAL RULES' },
     { key: 'core/date', text: "Today's date: Wed Nov 25 2026" }, { key: 'core/environment', text: 'Here is some useful information…\n<env>\n</env>' }, { key: 'other.plugin/notes', text: 'PLUGIN NOTES' }];
@@ -389,7 +390,7 @@ test('the Claude provider\'s option is the text that plain options hold of their
 });
 
 test('what the host wrote of instructions into a session is told by the session\'s own messages: an update by its type, a load by the paths it names after a native read of the session', () => {
-  // OpenCode 2.3.0 through 2.4.1, after the native read tool read a file below a directory that holds one, and
+  // OpenCode 2.3.0 to the tested version, after the native read tool read a file below a directory that holds one, and
   // after a source changed while the session ran.
   const load = { id: 'msg_load', type: 'synthetic', text: 'Instructions from: /work/sub/AGENTS.md\nNESTED', description: 'Loaded sub/AGENTS.md', metadata: { instruction: { paths: ['/work/sub/AGENTS.md'] } } };
   const update = { id: 'msg_update', type: 'system', text: 'The instructions from /work/AGENTS.md no longer apply.', description: 'Instructions updated: core/instructions', metadata: { notice: 'instructions', instructionSources: ['core/instructions'] } };

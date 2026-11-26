@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { TESTED_HOST_VERSION } from '../src/host.mjs';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const pkg = JSON.parse(read('package.json'));
@@ -18,6 +19,23 @@ test('the npm package is publishable and carries the runtime entry', () => {
   for (const hook of ['preinstall', 'install', 'postinstall', 'prepare', 'prepack', 'postpack', 'prepublishOnly']) assert.equal(pkg.scripts?.[hook], undefined, hook);
   // Only the compiler of the terminal panel's JSX, at exact versions; npm installs none of it with the package.
   assert.deepEqual(pkg.devDependencies, { '@babel/core': '7.29.7', 'babel-preset-solid': '1.9.16' });
+});
+
+test('the tested OpenCode release is chosen in one place: the README shows it, CI and CONTRIBUTING read it', () => {
+  // TESTED_HOST_VERSION in src/host.mjs is the selection; a move of the tested host changes it and the README.
+  const readme = read('README.md');
+  const badge = /^\[!\[Tested with OpenCode ([^\]]+)\]\(https:\/\/img\.shields\.io\/badge\/OpenCode-([^%)]+)%20tested-blue\)\]\(docs\/VALIDATION\.md\)$/m.exec(readme);
+  assert.deepEqual(badge?.slice(1), [TESTED_HOST_VERSION, TESTED_HOST_VERSION], 'The README badge shows the tested release.');
+  const row = /^\| OpenCode \| \*\*OpenCode CLI ([^*]+)\*\* \(`@opencode\/cli`; V2 plugin API\), the one release AZPR is tested with\./m.exec(readme);
+  assert.equal(row?.[1], TESTED_HOST_VERSION, 'The Compatibility row names the tested release.');
+  // A host version written into the workflow or the contributor's command, or the latest one, is another selection.
+  const reads = "import('./src/host.mjs').then(m => process.stdout.write(m.TESTED_HOST_VERSION))";
+  for (const [path, variable] of [['.github/workflows/ci.yml', 'version'], ['CONTRIBUTING.md', 'AZPR_HOST_VERSION']]) {
+    const text = read(path);
+    assert.doesNotMatch(text, /@opencode\/cli@(?!\$)/, `${path} installs no host version of its own.`);
+    assert.ok(text.includes(`${variable}=$(node --input-type=module -e "${reads}")`), `${path} reads the tested release from src/host.mjs.`);
+    assert.ok(text.includes(`"@opencode/cli@$${variable}"`), `${path} installs the release it read.`);
+  }
 });
 
 test('the terminal part is shipped compiled and binds only what OpenCode provides', () => {

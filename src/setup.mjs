@@ -1262,7 +1262,7 @@ export async function setupPlugin(context, sourceDirectory = SOURCE_DIRECTORY, t
         }
         use.blocked = false;
         use.problem = use.loadProblem = '';
-        // OpenCode 2.3.0 through 2.4.1 announce commands that change after a plugin was loaded without their location,
+        // OpenCode 2.3.0 to the tested version announce commands that change after a plugin was loaded without their location,
         // and their clients then keep the list they have: the terminal part reads the commands again on this event.
         try { await rpc?.events?.emit?.('loaded', {}); } catch { /* The commands work either way. */ }
         return true;

@@ -15,8 +15,9 @@ function aborted(signal) {
   if (signal?.aborted) throw signal.reason ?? new Error('[AZPR] Session operation cancelled.');
 }
 
-// The host Promise adapter ignores request options, including signals. Race
-// locally, but keep pending admissions so cleanup waits for a delayed prompt.
+// OpenCode's Promise adapter ignored request options, signals included, through 2.4.1; from 2.4.2 on it honours a
+// `signal` given as a call's second argument. AZPR passes none: it races locally, and keeps pending admissions so
+// that cleanup waits for a delayed prompt.
 function cancellable(operation, signal) {
   aborted(signal);
   const promise = Promise.resolve().then(() => { aborted(signal); return operation(); });
@@ -221,7 +222,7 @@ const SHELL_ENDED = Object.freeze(['completed', 'cancelled', 'error']);
  * `"inherit"`). A shell call that goes on in the background says so in its tool part (`state.metadata`: `status`
  * "running" and a `shellID`; a call that ended in the foreground names no shell), and when the command ends the
  * host writes one synthetic message whose metadata names that shell and how it ended (`source` "shell",
- * `shellID`, `state`), which it hands to the model like a late tool result (OpenCode 2.3.0 through 2.4.1). Each
+ * `shellID`, `state`), which it hands to the model like a late tool result (OpenCode 2.3.0 to the tested version). Each
  * such shell reports once. A second notice for it, a notice before its call, one for a shell this session did
  * not start (a command a person ran with `!`, another session's) and one without the host's marks are someone
  * else's messages.
@@ -272,7 +273,7 @@ export function classifyFailure(error) {
  *
  * A turn is the admitted prompt and what follows it up to the first idle marker. A prompt becomes a message of
  * the session only in the execution that takes it, and an execution leaves one marker when it ends, however it
- * ends (OpenCode 2.3.0 through 2.4.1), so that marker is the end of the execution that had the prompt, and says
+ * ends (OpenCode 2.3.0 to the tested version), so that marker is the end of the execution that had the prompt, and says
  * how the turn ended. The turn's answer is the last assistant message before it.
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
@@ -312,7 +313,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
   if (!Array.isArray(messages) || session?.id !== sessionID) throw new Error('[AZPR] Invalid OpenCode V2 session context.');
   const indexes = messages.flatMap((message, index) => message?.id === admitted.id ? [index] : []);
   if (indexes.length !== 1) {
-    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context; compaction may have removed it. No output was accepted.');
+    // What is known is only that the prompt is not there exactly once: a person may have taken it back in that
+    // session (OpenCode 2.4.2's terminal UI does on Esc twice before the model answered, and /undo does), or a
+    // compaction may have removed it. Whatever the cause, nothing of the turn is accepted, and nothing is retried.
+    throw new Error('[AZPR] The admitted prompt is absent or ambiguous in the session context: it is not among the session\'s messages exactly once. It may have been taken back in that session (Esc twice before the model answered, or /undo) or removed by a compaction. No output of this turn was accepted.');
   }
   const prompt = messages[indexes[0]];
   if (prompt.type !== 'user' || prompt.text !== text || !isDeepStrictEqual(prompt.metadata, metadata) || ['files', 'agents', 'skills'].some(key => prompt[key]?.length)) {
