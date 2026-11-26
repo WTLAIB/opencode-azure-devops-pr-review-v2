@@ -92,7 +92,10 @@ Findings still vary between models and runs; see
 Environment: Ubuntu 22.04.5 under WSL2, Node 22.23.3, npm 10.9.9 and tmux
 3.2a; OpenCode CLI 2.4.2, 2.4.1, 2.4.0, 2.3.2 and 2.3.0 in disposable
 prefixes, with isolated OpenCode profiles and the fake model and Azure DevOps
-services. The runs below are of the candidate's commit `d52d209`.
+services. The host runs below were made on the candidate's commit
+`a74b82f`, and the two commits before it, `d52d209` and `a4b7c50`, gave the
+same results; the commit that adds this record changes after `a74b82f` only a
+unit test and documents, and the offline checks were run on it.
 
 0.5.2 moves the tested host to OpenCode 2.4.2 after the
 [comparison with 2.4.1](#opencode-242-compared-with-241-2026-11-27). Its
@@ -107,23 +110,25 @@ package has the files of 0.5.1.
 
 ### Offline
 
-- `npm run check` passes, and `npm test` runs 829 tests (825 for 0.5.1), all
-  passing. New: the OpenCode row for the tested release, for another release
-  and for a host that reports no version (READY, no WARNING, and no review
-  receipt naming either version); a host without a session method the review
-  workflow needs (the command fails before STARTED and names it) and one
-  without the model catalog (STARTED, then INCOMPLETE naming it); the error
-  of a missing or doubled prompt (its text, and that it is not retried); the
-  README's badge and Compatibility row, CI and CONTRIBUTING against
-  `TESTED_HOST_VERSION`; and the installer's closing message.
-- Mutations: 162 changes to `src/`, each run against the test file that
-  should catch it, were all caught, 8 of them for this release (the note
+- `npm run check` passes, and `npm test` runs 829 tests (825 for 0.5.1),
+  all passing. New: the OpenCode row for the tested release, for another
+  release and for a host that reports no version (READY, no WARNING, and no
+  review receipt naming either version); a host without a session method the
+  review workflow needs (the command fails before STARTED and names it) and
+  one without the model catalog (STARTED, then INCOMPLETE naming it); the
+  error of a missing or doubled prompt (its text, and that it is not
+  retried); the README's badge and Compatibility row, CI and CONTRIBUTING
+  against `TESTED_HOST_VERSION`; and the installer's closing message.
+- Mutations: 165 changes to `src/`, each run against the test file that
+  should catch it, were all caught, 11 of them for this release (the note
   turned into a WARNING or a failure, the tested release left out of it,
-  every host taken for the tested one, the review workflow without
-  `session.interrupt`, the old error text, the error retried). 8 changes to
-  the README, CI, CONTRIBUTING and the installer, each selecting or showing
-  another release, were all caught by `tests/release.test.mjs` and
-  `tests/install.test.mjs`.
+  every host taken for the tested one, the tested row without its version, a
+  review receipt that names the host's version or the tested one, the review
+  workflow without `session.interrupt`, the readiness check without the model
+  catalog, the old error text, the error retried).
+  8 changes to the README, CI, CONTRIBUTING and the installer, each
+  selecting or showing another release, were all caught by
+  `tests/release.test.mjs` and `tests/install.test.mjs`.
 - No undeclared name in the sources and tests (a scope analysis with the
   repository's Babel); all local links and images of the Markdown files
   resolve. CONTRIBUTING's command for a contributor's host, run as written in
@@ -140,9 +145,11 @@ package has the files of 0.5.1.
   found image and video generation as Code Mode tools.
 - **What private sessions are sent.** The three smokes ran on 2.4.2 and on
   2.4.1 in copies that record every request body (on 2.4.1 with the
-  constant naming it). Compared as in the comparison of the hosts, request by
-  request and whole, the private requests are identical on both: 121, 100
-  and 127. None of them names image or video generation.
+  constant naming it). Compared as in the
+  [comparison of the hosts](#opencode-242-compared-with-241-2026-11-27),
+  request by request and whole, the private requests are identical on both:
+  121, 100 and 127. None of them names image or video generation, and each is
+  offered exactly the tools of its role.
 - **The controls.** The 9 controls of 0.5.1 failed on 2.4.2 at the step each
   is for, as in the comparison of the hosts, and the new one as well: with
   the context of the quick review naming `generate_image`, the smoke failed
@@ -150,11 +157,12 @@ package has the files of 0.5.1.
   before it.
 - **The probes.** The probes of 0.5.1 gave the candidate on 2.4.2 the
   outcomes 0.5.1 had on 2.4.1: the same stage results, and the same requests
-  accepted and refused. In one run of the turn-end probe a request the host
-  made after a turn had ended was refused and counted (`refusedAfterTurn`);
-  six more runs of that case on both hosts had none, and the stage was
-  COMPLETE each time. The take-back probe gave the results of the
-  comparison of the hosts.
+  accepted and refused, apart from timing: in one run of the turn-end probe's
+  case `own-m:1` (of the commit `d52d209`) a request the host made after the
+  turn's end was refused and counted in the stage record
+  (`refusedOutsideTurn`; the probe calls it `refusedAfterTurn`); six more
+  runs of that case on both hosts had none, and the stage was COMPLETE each
+  time. The take-back probe gave the results of the comparison of the hosts.
 - **Another OpenCode.** The candidate unchanged, on OpenCode 2.4.1: `/pr-check`
   READY with every row `ok`, the OpenCode row "OpenCode 2.4.1. Note: AZPR is
   tested with 2.4.2. Reviews run on an OpenCode V2 host that provides what
@@ -173,7 +181,6 @@ package has the files of 0.5.1.
   `mcp_skills`, `compaction_jobs`), the delivery of phone notifications,
   key presses in a real terminal (the take-back was driven through the routes
   the terminal UI calls), the desktop app, macOS and Windows.
-- No review with a real model ran on this candidate.
 
 ## OpenCode 2.4.2 compared with 2.4.1 (2026-11-27)
 
@@ -202,9 +209,9 @@ run on is in [its acceptance](#052-release-candidate-acceptance-2026-11-27).
 | --- | --- |
 | The fixtures of 0.5.1 | 13 of 13 on 2.4.1. On 2.4.2, 10 of 13: the three smokes stopped at their positive control that an ordinary conversation is offered image and video generation (next row); with that control accepting either form, 13 of 13. Each fixture sent the same number of requests to the fake model on both. |
 | Image and video generation | 2.4.2 registers `generate_image` and `generate_video` as Code Mode tools (source): an ordinary conversation is offered `execute`, and the Code Mode catalog in its system text lists the two (measured). A private session has `execute` denied, so the host lists Code Mode tools directly, and AZPR's allowlist leaves them out (source, the same on both). Measured in the bodies of all requests of the three smokes on both hosts: none of the 348 private requests names either tool anywhere, the ordinary conversation's requests do, and every private request is offered exactly the tools of its role (the 9 of the reviewers' allowlist to reviewers, duplicate checks and planners; none to the rating). |
-| Model requests | The same bodies (354 requests on each host) were compared request by request, grouped by what a request is for (told by its payload, so that the native smoke's first-setup review counts as private although its model also serves an ordinary conversation) and by model. Each request is compared whole, its keys sorted and its messages, tools and parts in their order; only values are normalised (paths, ports, dates, times, short run IDs, host versions), and the IDs of sessions, messages, parts and tool calls are numbered in the order the request first names them, so that which result answers which call counts. The 348 requests of private sessions are identical on both. The ordinary conversation differs in the tools of the row above and in what 2.4.2 tells a model of Code Mode (the description of `execute` and the catalog). The comparison was checked on changed copies of a recorded run: each of a tool offer dropped from a request or moved to another, two tool results or two answers exchanged between requests, a tool result's call field renamed and two results that answer each other's call is reported as a difference of its group, and a copy that only orders a message's keys otherwise compares equal. Two earlier forms of the comparison, by parts and with field names normalised as well, missed some of these. |
+| Model requests | The same bodies (354 requests on each host) were compared request by request, grouped by what a request is for (told by its payload, so that the native smoke's first-setup review counts as private although its model also serves an ordinary conversation) and by model. Each request is compared whole, its keys sorted and its messages, tools and parts in their order; only values are normalised: the run's own fixture directory and copy of the tree (known from where its capture lies), ports, AZPR's stored-data paths, dates, times, short run IDs and host versions, and the IDs of sessions, messages, parts and tool calls are numbered in the order the request first names them, so that which result answers which call counts. A capture that already holds one of these placeholders is refused; none did. The 348 requests of private sessions are identical on both. The ordinary conversation differs in the tools of the row above and in what 2.4.2 tells a model of Code Mode (the description of `execute` and the catalog). The comparison was checked on changed copies of a recorded run: each of a tool offer dropped from a request or moved to another, two tool results or two answers exchanged between requests, a tool result's call field renamed, two results that answer each other's call and lines put right before a run's path is reported as a difference of its group; a copy that only orders a message's keys otherwise compares equal, and one in which a result names a placeholder as its call is refused. Earlier forms of the comparison (by parts; with field names normalised as well; with paths matched by pattern) missed some of these. |
 | The controls of 0.5.1 | Each of the 9 controls takes one rule of 0.5.1 out of a copy and runs the fixture step it is for. On 2.4.2 each failed at that step, as on 2.4.1 in the 0.5.1 acceptance: with the system parts left as they were, or the host's form no longer recognised, the step for the configured instruction file; with what the host wrote left in the requests, the nested file; without the refusal of one of AZPR's commands sent as a prompt, that prompt (HTTP 200 and a user message), also before a first setup; without the limit's type, the usage limit (the step's own error: the provider was asked again after it reported the limit); with rows of 2,900 characters, the read (a row cut at 2,000); without the reading of the session's messages, the step for the session's own word; and with a made-up release taken for a click again, the panel's step. So 2.4.2 still does what these rules are for, and the rules still hold. |
-| The probes of 0.5.1 | Instruction loads beside a read file (`n1`), the Claude Code provider's instructions option (`ca`), commands in the background (`shell`), the end of a turn at its edges (`turn-end`) and an instruction update (`upd`), on both versions: the same stage results, and the same requests accepted and refused. One case depends on timing: where the probe ends a background command 8 ms after the model's last answer (its case `edge:8`), the host starts an execution for the command's notice, which AZPR refuses, and the report AZPR left for the session's model was delivered into the session within that execution in 2 of 5 runs on 2.4.2 and in none of 5 on 2.4.1, where it stayed in the inbox; the notice itself is in the session's history on both. The stage results are the same, and the panel reads a report from the messages as well when the inbox has none. Planning a review of 0.5.0 after the upgrade (`a5`), going back to 0.5.0 (`goback`) and a shell approval (`shell ask`) on 2.4.2: as on 2.4.1 in the [0.5.1 acceptance](#051-release-candidate-acceptance-2026-11-26). |
+| The probes of 0.5.1 | Instruction loads beside a read file (`n1`), the Claude Code provider's instructions option (`ca`), commands in the background (`shell`), the end of a turn at its edges (`turn-end`) and an instruction update (`upd`), on both versions: the same stage results, and the same requests accepted and refused. One case depends on timing: where the probe schedules a background command's end 8 ms after the model's last answer (its case `edge:8`), the host starts an execution for the command's notice, which AZPR refuses, and the report AZPR left for the session's model was delivered into the session within that execution in 2 of 5 runs on 2.4.2 and in none of 5 on 2.4.1, where it stayed in the inbox; the notice itself is in the session's history on both. The stage results are the same, and the panel reads a report from the messages as well when the inbox has none. Planning a review of 0.5.0 after the upgrade (`a5`), going back to 0.5.0 (`goback`) and a shell approval (`shell ask`) on 2.4.2: as on 2.4.1 in the [0.5.1 acceptance](#051-release-candidate-acceptance-2026-11-26). |
 | Background summary | In the background-summary fixture the host asks for a summary of a reviewer that has answered, before its stage ends: once per run on 2.4.0 and 2.4.1 (also in the ten runs of the 0.5.1 acceptance), twice per run on 2.4.2 (two runs), as on 2.3.2. AZPR refused each one, no request reached the model, and the review was COMPLETE. The change was not traced to a single commit. |
 | A prompt taken back | The terminal UI of 2.4.2 takes the last prompt back on Esc pressed twice within five seconds before the model answered, where the prompt box is empty and nothing is queued (source): it interrupts the session, waits for it, and takes the prompt back with the two routes `/undo` uses, at once, so the prompt is gone from the session's messages. `/undo` itself (2.4.1 and 2.4.2) only marks the prompt as taken back, and it is removed when the next prompt is sent in that session, or at once while it still waited (source). Measured on 2.4.1 and 2.4.2 by calling the routes of the double Esc in that order in a reviewer's session (`probe-undo`), against a plain interrupt: AZPR read the session before the prompt was gone, so the pass FAILED as interrupted (`failure=permanent`) in all four runs, with the same receipts and stage records. The other order, the prompt gone before AZPR reads the session, was not produced: the turn then fails as well, with the error that 0.5.2 rewords. The key presses themselves were not sent in a real terminal UI. |
 | Phone notifications | New in 2.4.2 (source, `packages/core/src/push/`): OpenCode's mobile app registers a phone, and OpenCode sends it a notice through OpenCode's own relay when a top-level session's execution ends ("Finished" after one that succeeded with a model step, "Failed" after one that failed, none after an interrupted one), when a model asks a question and when a permission is requested. A phone registered without settings gets everything (`all`); `attention` keeps only questions and permission requests, and a session can be muted. AZPR's private sessions are top-level sessions, so one review can send a notice for each of them. The server's plugin interface has no access to these settings; a terminal UI plugin's client does (`experimental.push`), and AZPR's terminal part leaves them alone. Not measured: the host accepts only two relay addresses of OpenCode's own, so a local receiver could not register. |

@@ -5,8 +5,8 @@
 AZPR is tested with OpenCode 2.4.2 instead of 2.4.1. OpenCode 2.4.2 was
 compared with 2.4.1, the last version studied, and needs no change to how
 AZPR runs a review: in the three smoke runs of the host fixtures, private
-sessions were sent on 2.4.2 exactly what they were sent on 2.4.1, request by
-request. The prompt files
+sessions were sent on 2.4.2 what they were sent on 2.4.1, request by request,
+once what differs between any two runs (paths, IDs, times) is set aside. The prompt files
 are those of 0.5.1, no setting is new, and settings and saved reviews are
 used as they are.
 

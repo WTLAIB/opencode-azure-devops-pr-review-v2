@@ -453,9 +453,11 @@ activity, such as `Stage inactivity watchdog stopped this stage: no activity
 for 600 s after model request 3 was sent`; the receipt adds an inactivity
 notice. It is retried in a new session like a transient failure. Any activity
 restarts the window, so this is not the whole-run timeout or step cap the
-[roadmap](ROADMAP.md#deferred) defers: a stage that keeps working is not
-stopped, unless a model streams nothing but one tool call's arguments for the
-whole window, which shows no progress. The longest quiet stretch in 1,097 normal live stages was 151 s
+[roadmap](ROADMAP.md#deferred) defers: a stage whose progress keeps reaching
+AZPR is not stopped. A model that streams nothing but one tool call's
+arguments for the whole window shows no progress, and neither does a stream
+whose session events do not reach AZPR (a host without them, or a feed that
+failed). The longest quiet stretch in 1,097 normal live stages was 151 s
 (stages of versions before 0.5.0).
 
 An interrupted model stream that OpenCode recovers by itself costs no new

@@ -1984,13 +1984,12 @@ test('another OpenCode version, or one that reports none, is a note in /pr-check
     assert.match(check, /\] READY/, String(version));
     assert.match(check, new RegExp(`\\| OpenCode \\| ok \\| ${host}\\. Note: AZPR is tested with ${TESTED}\\. Reviews run on an OpenCode V2 host that provides what AZPR needs; AZPR checks that when it loads and when a command starts, and refuses a command it cannot run\\. \\|`), String(version));
     assert.doesNotMatch(check, /\| OpenCode \| WARNING \|/, String(version));
-    const review = await f.command('pr-review', f.azure.prUrl(), 'review');
+    // A receipt names its debug directory, below the fixture's: that path is the machine's, no word about the host.
+    const review = (await f.command('pr-review', f.azure.prUrl(), 'review')).split(f.directory).join('<directory>');
     assert.match(review, /\] COMPLETE/, String(version));
-    assert.doesNotMatch(check + review, /Host notice|differs from the tested/, String(version));
+    assert.doesNotMatch(check.split(f.directory).join('<directory>') + review, /Host notice|differs from the tested/, String(version));
     assert.doesNotMatch(review, /tested with|the tested version/, `${version}: a review receipt does not repeat the host version.`);
-    // The receipt names its debug directory, whose path is the machine's: that line is no word about the host.
-    const said = review.split('\n').filter(line => !line.startsWith('Private debug directory: ')).join('\n');
-    for (const text of [version ?? 'did not report its version', TESTED_HOST_VERSION]) assert.ok(!said.includes(text), `${version}: the review receipt names ${text}.`);
+    for (const text of [version ?? 'did not report its version', TESTED_HOST_VERSION]) assert.ok(!review.includes(text), `${version}: the review receipt names ${text}.`);
   }
 });
 
