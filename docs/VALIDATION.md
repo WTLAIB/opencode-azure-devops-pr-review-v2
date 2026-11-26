@@ -174,7 +174,11 @@ without a runtime. In the fourth round
 three such changes passed at first, because a later read through the store
 repaired what the change had broken before the test looked, and because no
 test had a read that was asked for by a message of another turn; the tests
-were changed until they failed.
+were changed until they failed. In the seventeenth round one passed because a
+test's own gate called a helper its file did not define, and the code under
+test took that error for a failed stop: the test now asserts that its gate
+held, and a scan of the sources and tests for names that are used and never
+declared found no other.
 
 The other changed expectations are the tested version (`2.4.1`) and what
 `/pr-check` says of it.
@@ -339,6 +343,150 @@ the wait for the turn still covers it and the grant is still open was not
 produced on a real host: it is a few awaits wide, and what AZPR does in it
 (it reads the session's messages, finds the marker and refuses) is shown by
 the unit test with the fixture's host.
+
+### Reviews by a second model
+
+The pull request was reviewed nineteen times by a second model (GPT-6.2 Astra
+at its highest reasoning effort through the Codex CLI 0.171.0, in a read-only
+sandbox on a clean clone). Its instructions were the change, its purpose and
+the host behaviour the change relies on, which the reviewer cannot see for
+itself; not the results of the checks above. Each correction was reviewed
+again. The reviewer ran the build check and the tests that write nothing; the
+tests that write files, the host fixture runs and the probes ran here, on
+each tree that was sent to a review. The reviews reported 24, 24, 16, 18, 17,
+14, 12, 9, 9, 11, 12, 11, 7, 6, 5, 8, 6 and 3 points, and the nineteenth
+none. Every point was
+checked against the code and, where it concerned the host, against OpenCode's
+source for 2.3.0 to 2.4.1. From the ninth round on the reviewer was asked to
+say which points had to be corrected before a release, and named 2, 3, 3, 3,
+4, 4, 4, 5, 2 and 1 of them; all points of those rounds were corrected, not
+only the named ones.
+
+Four questions took several designs each.
+
+1. **Where a turn ends, and what is open during it.** The first commit opened
+   a private session's grant when its prompt was admitted and closed it when
+   the wait for the session ended. The first review found that the wait also
+   covers what the host starts right after a turn (a background command that
+   ended wakes the session), so that a file read then counted for an answer
+   given before. The first correction took "the first idle marker after an
+   answer" for the turn's end, a rule that rested on the unit tests' host and
+   not on OpenCode's, where a prompt becomes a message only in the execution
+   that takes it; the second closed the grant at the host's idle hook, which
+   does not run when a turn fails. As it stands since the fifth commit, the
+   session's own messages say where a turn stands, before every request: the
+   turn's prompt is among them and no idle marker follows it. What follows a
+   request needs a request of that turn that was looked at so, and what a
+   session read is settled by the assistant message that asked for each call.
+2. **What the host writes into a session by itself.** The first commit told a
+   loaded instruction file by the form of a request's message and remembered
+   which it had hidden. Four reviews found, each time, another way in which a
+   hook of another plugin could have changed a request so that this record
+   said more than was true, and the corrections went from a record of what
+   was shown, to a proof that a request was the session's messages one for
+   one, to a search of every request for the host's texts with a refusal
+   where one was found. The fifth review found the gaps of that search, and
+   the kind has no end: a plugin's hook may add to a request, so no check of
+   what a request holds can be complete, and a request refused for its form
+   fails every review on a host that builds requests another way. As it
+   stands, which messages are the host's is the session's own word (an
+   update by its type; a load by the metadata the host itself goes by, after
+   the session's own native read), a request loses what is such a message as
+   the host builds it, anything else stays as it is and is counted, and AZPR
+   does not police other plugins, which the documents say in those words.
+3. **What "as the host builds it" means.** That was then asked of one level
+   at a time, and four rounds each found the next one: a text part that
+   carried another hook's mark, a message that did, metadata with a list of
+   another length or a value it only inherited, a list of another class and
+   a field that is not listed. The twelfth round ended that with one
+   definition, taken from the requests of OpenCode 2.3.0 and 2.4.1 logged
+   property by property: what the host builds is plain data, asked of an
+   object's own properties through their descriptors, so that nothing of a
+   request's own is called; whatever is not is no longer the host's and
+   stays. The rounds after it held every place where the hook touches a
+   request to that rule (the list of messages, the system parts, the Claude
+   provider's option, the list of tools, the event's own places) and to what
+   a change may do there: only what can be made whole, with what a write
+   answers looked at. One of them found the one case in which the rule's own
+   fallback was wrong, in the tree of the round before: metadata too deep to
+   compare left a posted message in the request while the turn's check took
+   it for the host's, so that a model would have answered someone else's
+   text and the answer been accepted. Metadata is compared to its end now.
+4. **When a stored value is ready, and whose pages a model reads.** The
+   first commit marked a store whose pages it had written again. The reviews
+   found that an earlier version that still runs writes into the same
+   directory after the mark, that a check when a store is opened says nothing
+   of a value handed out later, and that a store which fails to open for one
+   damaged value keeps every other value from a review. A value was then made
+   ready wherever it was handed on, and the reviews asked for that at more
+   and more places; the sixth round drew the line once (at every put, and
+   each time a reference of a saved review is handed to a model; within a
+   run a value is what the put made it), and the eighth added that a run
+   puts a value once. The ninth found that writing an earlier version's
+   pages again in place, with shorter rows, changes the layout under a model
+   of that version that is reading them row by row. As it stands, this
+   version's pages are a file of their own name, in one layout for one text
+   and right by their bytes; a file of the earlier name is never changed.
+   Reading that correction again showed the other direction: 0.5.0 hands out
+   the pages of its own name for every object it finds and writes none, so
+   after going back to it a review that this version had saved named a file
+   that did not exist (a probe on a real host answered `File not found`). A
+   value therefore has these rows under the earlier name too, as a hard
+   link, before its object is written; the tenth review found the one path
+   where that order was not kept (an object written again from its pages)
+   and that the documents promised going back also where no link can be
+   made.
+
+The other corrections that stand:
+
+- The notice of a background command is the session's own only for a shell
+  that a call of this session reported as running, once for each such shell
+  and only when it says that the command ended.
+- A turn that did not succeed fails by its own outcome, whatever else reached
+  the session, so that a used-up limit is not tried again in a new session.
+- A prompt that the host admits after the call that sent it has ended opens
+  no turn, and what a hook reads of the host it reads until its stage ends.
+- On hosts before 2.3.0, every continued answer of a turn is recognised and
+  the turn's answer is joined of its own fragments only.
+- For the Claude Code provider the sources are left out only where its option
+  holds exactly what they give, parts and option are changed together or not
+  at all, and the documents claim this for what OpenCode hands the Claude
+  Code program and no further.
+- One of AZPR's commands is refused as a prompt only at the first character
+  of the text, as OpenCode's prompt box takes a command, for every command
+  AZPR has, and also by a process that has no settings yet. The last was a
+  stated limit until the eighteenth review named it; the rule needs no
+  settings.
+- Once a planning page has failed for good, no other page is asked for a
+  correction: a stage asks its handler before every further turn and tells
+  it of such a failure before the failed session is cleaned up. A planning
+  session that was told to finish without tools is refused a tool where it
+  calls one, and its list of tools is emptied in place.
+- A release counts as a click by two clocks, only a left press begins a
+  gesture and only a left drag moves it.
+- A review's receipt, its inactivity notice and the choice of the report's
+  session follow the order of the pipeline; the sessions of one label keep
+  the order they ran in.
+- Two pieces of advice in the documents would have cost a person data, and
+  both were the reviewer's finds: deleting Claude Code's folders for the
+  working directory, which also hold the person's own conversations there,
+  and deleting OpenCode's database before a backup is put back. The first is
+  advice against it now; the upgrade and go-back commands of the release
+  notes back the database up into a directory of their own, stop when that
+  fails, move what they replace aside, and were run as written in a sandbox
+  with stand-ins for the programs they call.
+
+Not changed: the second that tells a made-up release from a click is measured
+where the terminal UI handles the two events, since an event carries no time;
+the terminal part is not told the host's version before 2.4.0, so the rule
+also refuses a slow click on OpenCode 2.3.x; who wrote a message cannot be
+proved; several OpenCode processes that share AZPR's state directory know
+only their own commands; and the note that tells a planning session to finish
+does not reach a `claude-agent` model. Each is among the known limitations or
+in the architecture guide.
+
+The nineteenth review found nothing to correct, so the tree it reviewed is
+the one that stands; the commit after it adds this record only.
 
 ### Not verified
 
