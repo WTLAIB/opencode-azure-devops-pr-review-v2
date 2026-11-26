@@ -186,12 +186,15 @@ function continuedText(turn, enabled) {
     const fragments = [], notes = [];
     let at = index;
     while (fragment(steps[at]) && isHostContinuation(steps[at + 1], steps[at])) { fragments.push(steps[at]); notes.push(steps[at + 1]); at += 2; }
+    if (!fragments.length) continue;
     const last = steps[at];
-    if (!fragments.length || !text(last) || last.finish !== 'stop' || last.error) continue;
+    // The fragments are gone through once, whether an answer ends them or not: a chain that begins inside them
+    // ends where this one does.
+    index = at;
+    if (!text(last) || last.finish !== 'stop' || last.error) { index = at - 1; continue; }
     for (const message of fragments) recovered.add(message);
     for (const message of notes) synthetic.add(message);
     chains.push({ fragments, last });
-    index = at;
   }
   return { recovered, synthetic, chains };
 }
@@ -393,14 +396,18 @@ export async function requestReview(context, { sessionID, text, role, model, met
   // more afterwards (a notice of its own command woke it), that later answer stands alone: nothing is joined to
   // it. Every stream the host recovered in the turn is counted either way.
   if (continuation.recovered.size) {
+    const pieces = chain => [...chain.fragments, chain.last].map(message => normalizeAnswer(message, sessionID));
+    const textsOf = fragments => fragments.map(fragment => fragment.parts.map(part => part.text).join(''));
     const own = continuation.chains.find(chain => chain.last === final);
-    const fragments = own ? [...own.fragments, final].map(message => normalizeAnswer(message, sessionID)) : [];
+    const fragments = own ? pieces(own) : [];
     if (fragments.some(fragment => fragment.parts.some(part => typeof part.text !== 'string'))) throw new Error('[AZPR] Invalid continued reviewer text.');
-    const texts = fragments.map(fragment => fragment.parts.map(part => part.text).join(''));
+    const texts = textsOf(fragments);
     const restartedAt = restartIndex(texts);
     // Keep literal boundaries; the output parser decides whether this is usable.
     if (own) answer.parts = [{ type: 'text', text: texts.slice(restartedAt).join('') }];
-    answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
+    // How many of the turn's continued answers the model began anew, the one that stands or an earlier one.
+    const restarts = continuation.chains.filter(chain => restartIndex(textsOf(pieces(chain))) > 0).length;
+    answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}), ...(restarts ? { restarts } : {}) };
   }
   if (retried.size) answer.retriedSteps = retried.size;
   // The instruction files the host loaded in this turn, up to its marker.

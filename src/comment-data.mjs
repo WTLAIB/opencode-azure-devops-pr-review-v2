@@ -318,6 +318,8 @@ export const argumentValues = value => typeof value === 'string' ? [value]
 
 /** Observations whose arguments name the reviewed HEAD and one of the paths, each with the text it saved. */
 export async function anchorObservations(store, observations, comments, head, wanted = () => true) {
+  // Not wanted any more when it is asked for: the list is not gone through.
+  if (!wanted()) return [];
   const paths = new Set(comments.flatMap(comment => typeof comment?.path === 'string'
     ? [comment.path, comment.path.replace(/^\//, ''), comment.path.startsWith('/') ? comment.path : '/' + comment.path] : []));
   const selected = observations.filter(item => {

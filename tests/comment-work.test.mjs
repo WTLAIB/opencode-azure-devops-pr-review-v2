@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation, observationIndex, anchorObservations, observationKey, putOnce, pageRows, pagesOf as writtenPages, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, observationIndex, anchorObservations, observationKey, putOnce, pageRows, textPages, pagesOf as writtenPages, ROW_CHARACTERS } from '../src/comment-data.mjs';
 import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -452,6 +452,25 @@ test('a page whose comments are being checked when another page fails reads no f
   // The quote was not found, because the file that holds it was not read. That says nothing of the comment, and
   // the model is asked for no correction of a plan that is given up.
   assert.deepEqual([checked.issues, checked.repairPrompt, checked.usable], [[], undefined, true]);
+  // The same for an answer that cannot be read at all: it is taken as its last turn would take it, and nothing
+  // is asked of the model again.
+  const again = await setup(t, findings, undefined, { kind: 'reviewers' });
+  const entered = deferred(), broke = deferred();
+  let unreadable;
+  await assert.rejects(prepareComments(again.review, again.store, async (payload, handler) => {
+    if (payload.commentWork.kind === 'group') return (await handler.evaluate(JSON.stringify({ status: 'READY', groups: [] }))).result;
+    if (payload.commentWork.page === 1) {
+      await inTime(entered.promise, 'page 2 to start');
+      broke.resolve();
+      throw new Error('Page 1 failed.');
+    }
+    entered.resolve();
+    await inTime(broke.promise, 'page 1 to fail');
+    await new Promise(resolve => setImmediate(resolve));
+    unreadable = await handler.evaluate('This is no JSON.');
+    return unreadable.result;
+  }, { parallel: 2 }), /Page 1 failed/);
+  assert.deepEqual([unreadable.issues, unreadable.repairPrompt, unreadable.usable, unreadable.result.comments, unreadable.result.skipped.map(item => item.findingId)], [[], undefined, true, [], ['F-5']]);
 });
 
 test('a comment stands in its own finding\'s file, and a page\'s plan is the same whichever fetch finishes first', async t => {
@@ -1659,9 +1678,21 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
     'The rows of a `.rows.jsonl` file are no longer what this version wrote: give the pages of another layout another name.');
 });
 
-// As 0.5.0 and earlier wrote a pages file, under their name for it: rows of 3,000 characters of text.
-const earlierRows = text => { const rows = []; for (let start = 0; start < text.length; start += 3000) rows.push(JSON.stringify({ start, end: Math.min(text.length, start + 3000), text: text.slice(start, start + 3000) })); return rows.join('\n') + '\n'; };
+// As 0.5.0 and earlier wrote a pages file, under their name for it: the rows of `textPages(text, 3000)`, which
+// is that version's function still (up to 3,000 characters of text, ending at a line break in a row's second
+// half, never inside a surrogate pair).
+const earlierRows = text => textPages(text, 3000).map(({ start, end, text: row }) => JSON.stringify({ start, end, text: row })).join('\n') + '\n';
 const earlierPages = reference => `${reference.file}.pages.jsonl`;
+test('the pages of an earlier version in these tests are what that version wrote', () => {
+  // A row ends at a line break in its second half, and a surrogate pair is never split: the boundaries of 0.5.0.
+  const lines = Array.from({ length: 300 }, (_, i) => `line ${i} of a tool output that a review saved`).join('\n');
+  const rows = text => earlierRows(text).trimEnd().split('\n').map(row => JSON.parse(row));
+  assert.deepEqual(rows(lines).slice(0, 2).map(row => [row.start, row.end]), [[0, 2960], [2960, 5916]]);
+  assert.ok(rows(lines).every(row => row.end === lines.length || row.text.endsWith('\n')));
+  const pairs = `${'a'.repeat(2999)}🙂${'b'.repeat(10)}`;
+  assert.deepEqual(rows(pairs).map(row => [row.start, row.end]), [[0, 2999], [2999, 3011]]);
+  assert.equal(rows('x'.repeat(7000)).map(row => row.text.length).join(), '3000,3000,1000');
+});
 // A reference as a review that 0.5.0 saved holds it: it names that version's pages.
 const savedEarlier = reference => ({ ...reference, pages: earlierPages(reference) });
 const rowsOf = async reference => (await readFile(reference.pages, 'utf8')).trimEnd().split('\n');

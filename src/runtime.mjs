@@ -959,7 +959,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         if (settings.debug.enabled) await run.debug.write(`${stem}.response${turn ? `-${followUp?.turn === turn ? 'follow-up' : 'repair'}${turn}` : ''}.json`, diagnosticResponse(answer));
         if (answer.continuation) {
           record.hostContinuations = (record.hostContinuations ?? 0) + answer.continuation.count;
-          if (answer.continuation.restartedAt) record.continuationRestarts = (record.continuationRestarts ?? 0) + 1;
+          if (answer.continuation.restarts) record.continuationRestarts = (record.continuationRestarts ?? 0) + answer.continuation.restarts;
         }
         if (answer.retriedSteps) record.hostStepRetries = (record.hostStepRetries ?? 0) + answer.retriedSteps;
         evaluation = await handler.evaluate(answerText, evaluation?.result, session);

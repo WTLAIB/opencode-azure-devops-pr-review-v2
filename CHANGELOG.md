@@ -104,9 +104,10 @@ Large inputs:
   the value; a review that an earlier version saved gets such pages when its
   values are used, and what that version wrote is left as it is. A value
   that this version saves has the same rows under the earlier name as well
-  (a hard link), so that its review can still be commented on after going
-  back to 0.5.0; on a file system without hard links there is no such file,
-  and a review is run again after going back.
+  where a hard link can be made, so that its review can still be commented
+  on after going back to 0.5.0; where it cannot (a file system without hard
+  links, something else under that name) there is no such file, and a review
+  is run again after going back.
   A value whose files cannot be made right is not handed to a model. The
   instructions to the models did not change.
 

@@ -305,6 +305,7 @@ test('a request loses what the host wrote of instructions where it is as the hos
     ['a load with its metadata', [prompt, step, { ...load, metadata: stored[2].metadata }, update, notice], [prompt, step, notice]],
     ['a load with its metadata as other objects of the same data', [prompt, step, { ...load, metadata: { ...JSON.parse(JSON.stringify(stored[2].metadata)), absent: undefined } }, update, notice], [prompt, step, notice]],
     ['a load with its metadata as data without a prototype', [prompt, step, { ...load, metadata: Object.assign(Object.create(null), { instruction: Object.assign(Object.create(null), { paths: ['/work/sub/CLAUDE.md'] }) }) }, update, notice], [prompt, step, notice]],
+    ['an update that is an instance of a class, as the host builds it', [prompt, step, load, Object.assign(new (class SystemMessage {})(), update), notice], [prompt, step, notice]],
     ['a load with its metadata in another order of keys', [prompt, step, { ...load, metadata: { source: 'read', instruction: { kind: 'nested', paths: ['/work/sub/CLAUDE.md'] } } }, update, notice], [prompt, step, notice], ['msg_update'], wide],
     ['messages that name something they do not have', [prompt, step, { ...load, metadata: undefined, providerMetadata: undefined }, { ...update, id: undefined, name: undefined, tools: undefined }, notice], [prompt, step, notice]],
     ['parts that name something they do not have', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text, providerMetadata: undefined }] }, { role: 'system', content: [{ type: 'text', text: stored[3].text, cache: undefined }] }, notice], [prompt, step, notice]],
@@ -329,6 +330,7 @@ test('a request loses what the host wrote of instructions where it is as the hos
   // nothing says that it is one.
   const shell = 'The command ended: exit 0';
   const longer = ['/work/sub/CLAUDE.md']; longer.length = 2;
+  class Tagged extends Array {}
   for (const [name, messages, changed] of [
     ['the load\'s text as a string', [prompt, step, { id: 'msg_load', role: 'user', content: stored[2].text }, notice], true],
     ['the load\'s text in two parts', [prompt, step, { ...load, content: [{ type: 'text', text: stored[2].text.slice(0, 9) }, { type: 'text', text: stored[2].text.slice(9), annotation: 'of a hook' }] }, notice], true],
@@ -356,11 +358,37 @@ test('a request loses what the host wrote of instructions where it is as the hos
     ['the load whose metadata only inherits what the stored one has', [prompt, step, { ...load, metadata: Object.assign(Object.create(stored[2].metadata), { own: undefined }) }, notice], true],
     ['the load whose metadata inherits one key and has another', [prompt, step, { ...load, metadata: Object.assign(Object.create(stored[2].metadata), { cache: 'ephemeral' }) }, notice], true],
     ['the load whose metadata has only what every object inherits', [prompt, step, { ...load, metadata: { toString: Object.prototype.toString } }, notice], true],
+    ['the load whose list of files is an array of a class of its own', [prompt, step, { ...load, metadata: { instruction: { paths: Tagged.from(['/work/sub/CLAUDE.md']) } } }, notice], true],
+    ['the load whose list of files carries something more', [prompt, step, { ...load, metadata: { instruction: { paths: Object.assign(['/work/sub/CLAUDE.md'], { note: 'of a hook' }) } } }, notice], true],
+    ['the load whose content is an array of a class of its own', [prompt, step, { ...load, content: Tagged.from(load.content) }, notice], true],
+    ['the load whose content carries something more', [prompt, step, { ...load, content: Object.assign([...load.content], { cache: 'ephemeral' }) }, notice], true],
+    ['the load whose text part is an instance of a class', [prompt, step, { ...load, content: [Object.assign(new (class Part {})(), load.content[0])] }, notice], true],
+    ['the load that is an instance of a class', [prompt, step, Object.assign(new (class UserMessage {})(), load), notice], true],
+    ['the load with a field that is not listed', [prompt, step, Object.defineProperty({ ...load }, 'name', { value: 'of a hook' }), notice], true],
+    ['the load with a field that is an accessor', [prompt, step, Object.defineProperty({ ...load }, 'name', { get: () => 'of a hook', enumerable: true }), notice], true],
+    ['the load whose list of files has an empty place and something more', [prompt, step, { ...load, metadata: { instruction: { paths: Object.assign(['/work/sub/CLAUDE.md', undefined].slice(0, 1).concat(new Array(1)), { note: 'of a hook' }) } } }, notice], true],
+    ['the load with a field under a symbol', [prompt, step, { ...load, [Symbol('mark')]: 'of a hook' }, notice], true],
+    ['the load whose content is read through an accessor', [prompt, step, Object.defineProperty({ id: load.id, role: 'user' }, 'content', { get: () => load.content, enumerable: true }), notice], true],
+    ['the load whose metadata refuses to be read', [prompt, step, { ...load, metadata: new Proxy({}, { ownKeys() { throw new Error('not for you'); } }) }, notice], true],
+    ['the load that refuses to be read', [prompt, step, new Proxy({ ...load }, { ownKeys() { throw new Error('not for you'); } }), notice], true],
+    ['an update with a field that is not listed', [prompt, step, Object.defineProperty({ ...update }, 'name', { value: 'another-plugin' }), notice], false],
+    ['an update with a field under a symbol', [prompt, step, { ...update, [Symbol('mark')]: 'of a hook' }, notice], false],
+    ['an update whose content is an array of a class of its own', [prompt, step, { role: 'system', content: Tagged.from(update.content) }, notice], false],
+    ['an update whose text part has a field that is not listed', [prompt, step, { role: 'system', content: [Object.defineProperty({ ...update.content[0] }, 'cache', { value: 'ephemeral' })] }, notice], false],
+    ['an update whose text is read through an accessor', [prompt, step, { role: 'system', content: [Object.defineProperty({ type: 'text' }, 'text', { get: () => stored[3].text, enumerable: true })] }, notice], false],
+    ['an update that refuses to be read', [prompt, step, new Proxy({ ...update }, { getOwnPropertyDescriptor() { throw new Error('not for you'); } }), notice], false],
     ['the load whose metadata is no plain data', [prompt, step, { ...load, metadata: new (class Marked { constructor() { this.instruction = { paths: ['/work/sub/CLAUDE.md'] }; } })() }, notice], true],
     ['the load whose metadata holds a value that is no plain data', [prompt, step, { ...load, metadata: { instruction: Object.assign(new Date(0), { paths: ['/work/sub/CLAUDE.md'] }) } }, notice], true],
   ]) {
     assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   }
+  // Metadata is compared however deep it goes while the comparison can come to an end; where it cannot, the
+  // message is not known to be the host's and stays, and the request is not refused for it.
+  const nested = depth => { let value = { paths: ['/work/sub/CLAUDE.md'] }; for (let level = 0; level < depth; level++) value = { paths: ['/work/sub/CLAUDE.md'], inner: value }; return { instruction: value }; };
+  const deep = depth => stored.map(message => message.id === 'msg_load' ? { ...message, metadata: nested(depth) } : message);
+  assert.deepEqual(withoutHostMessages([prompt, step, { ...load, metadata: nested(200) }, notice], deep(200)), { messages: [prompt, step, notice], loads: ['msg_load'], updates: [], changed: false });
+  const endless = [prompt, step, { ...load, metadata: nested(200000) }, notice];
+  assert.deepEqual(withoutHostMessages(endless, deep(200000)), { messages: endless, loads: [], updates: [], changed: true });
 });
 
 test('a turn\'s prompt is the session\'s one message with its nonce, and the turn stands before it, runs, or has ended at the first idle marker after it', () => {

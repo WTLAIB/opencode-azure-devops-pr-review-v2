@@ -73,12 +73,22 @@ settings, backups and failure records. Never upload `.local/`.
   text as one text part, and a system message of the host's form that holds
   exactly an update's text (another plugin's system message that is the
   same in form and text cannot be told from it). As the host builds it means
-  the whole message, each field of it: a message, or its text part, that
-  carries anything the host did not give it (a field, metadata that is
-  other data than the stored message's: lists by their length and each
-  place, objects by their own keys, anything that is no plain data only as
-  the very same value) holds what a hook added, and taking it out would
-  drop that. Never tell them by what a request message looks like
+  the whole message, each field of it, and what the host builds is plain
+  data: a plain object for a load, an ordinary array of one plain text part
+  for a content, plain objects and arrays for a load's metadata (seen on
+  OpenCode 2.3.0 and 2.4.1; `host.mjs` says what plain data is). A message,
+  a part or metadata that carries anything the host did not give it holds
+  what a hook added, and taking it out would drop that. Ask it of an
+  object's own properties, each read once from its descriptor: a field that
+  is not listed, one under a symbol, an accessor, an array or an object of
+  another class, metadata that is other data than the stored message's are
+  each no longer the host's. What cannot be looked at (an object that
+  refuses to be read, a comparison that does not come to an end) is not
+  known to be the host's and stays; nothing is refused for it. That is the
+  whole rule, so never add a case for one more shape: what is not plain
+  data is not the host's. Its limit is said with it: a message is what it
+  holds of its own, what an object inherits is not looked at, and an update
+  is an object of the host's own class, which a plugin cannot name. Never tell them by what a request message looks like
   alone, never take a message out for the ID it has alone (one that a hook
   before AZPR's changed may hold what is not the host's), and never take a
   message of the load's form for the host's in a session that did not read.
@@ -583,9 +593,10 @@ settings, backups and failure records. Never upload `.local/`.
   written again, these rows under that name too, as a link, which is there
   whole or not at all (`settlePages`). A review that this version saved can
   then be planned after going back to such a version. That rests on the
-  link: on a file system without hard links none is made, the value is
-  ready all the same, and going back is not provided for; say so wherever
-  going back is promised. A version that changes the layout gives its pages
+  link having been made: where it cannot be (a file system without hard
+  links, something else under that name) the value is ready all the same,
+  and going back is provided for only as far as the rows are there under
+  the earlier name; say so wherever going back is promised. A version that changes the layout gives its pages
   another name (a test holds the layout).
   A value is ready when its object is what its name says and this version's
   pages are there as it writes them. It is made ready when it is put, from

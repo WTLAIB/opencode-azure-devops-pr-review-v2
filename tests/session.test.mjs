@@ -756,6 +756,10 @@ test('an answer that the host continued ends with the message that completed it,
   const twice = await requestReview(turn(fragment, posted, completed, shellNotice(), again, { ...posted, id: 'msg_posted_2' }, assistant({ id: 'msg_later', ...said('er both"}') })),
     { sessionID, text: input, allowHostContinuations: true });
   assert.deepEqual([twice.parts, twice.continuation.count, twice.continuation.fragments.map(part => part.parts[0].text)], [[{ type: 'text', text: '{"answer":"after both"}' }], 2, ['{"answer":"aft', 'er both"}']]);
+  // An earlier answer that the model began anew after the interruption is counted as such, though it is not the
+  // answer that stands.
+  const anew = await requestReview(turn(fragment, posted, assistant({ id: 'msg_anew', ...said('{"status":"COMPLETE"}') }), shellNotice(), later), { sessionID, text: input, allowHostContinuations: true });
+  assert.deepEqual([anew.parts, anew.continuation], [[{ type: 'text', text: '{"answer":"after the notice"}' }], { count: 1, fragments: [], restarts: 1 }]);
   // And one answer may take several continuations.
   const more = assistant({ id: 'msg_fragment_3', finish: 'error', error, retry: { attempt: 1, at: 9, error }, ...said('PLE') });
   const long = await requestReview(turn(fragment, posted, more, { ...posted, id: 'msg_posted_3' }, assistant({ id: 'msg_end', ...said('TE"}') })), { sessionID, text: input, allowHostContinuations: true });

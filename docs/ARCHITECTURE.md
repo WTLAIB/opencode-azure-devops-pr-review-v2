@@ -508,10 +508,12 @@ turn); a page's anchor checks see the HEAD source the runtime fetched for its ow
 and earlier pages' findings; a checkpoint counts only the page's own details and
 the planner tool results the runtime tagged with its page; and pages are
 assembled in page order, so markers and their ordinals match planning one page
-at a time. After a page fails, no page or continuation session starts, stages
-already running finish (with their repairs and retries), and the failure of the
-lowest failed page ends the command as before; `/pr-stop` cancels every running
-page.
+at a time. After a page fails, no page or continuation session starts and no
+page is asked for a correction: stages already running finish the turn they
+are in (the saved observations a page's comments are checked against are not
+read on, and the page is taken as it would be at its last turn), and the
+failure of the lowest failed page ends the command as before; `/pr-stop`
+cancels every running page.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
@@ -954,9 +956,17 @@ the load's text as one text part, and a system message of the host's form
 that holds exactly an update's text. That is asked of the whole message:
 OpenCode gives a load its ID, its role, its content and the stored message's
 metadata, and an update its role and its content, and a text part its type
-and its text. A message or a part that carries anything more (a field of
-another hook's, metadata that is other data) holds what the host did not
-write, and stays. A system message of another plugin's
+and its text, all of it plain data (a plain object for a load, an ordinary
+array for a content, plain objects and arrays of strings for the metadata;
+seen on OpenCode 2.3.0 and 2.4.1). A message or a part that carries anything
+more holds what the host did not write, and stays: a field of another
+hook's, also one that is not listed or stands under a symbol, a value read
+through an accessor, an array or an object of another class, metadata that is
+other data than the stored message's. Each is asked of the object's own
+properties; what an object inherits is not looked at, and an update is an
+object of the host's own class, which a plugin cannot name. What cannot be
+looked at (an object that refuses to be read, metadata too deep to compare)
+is not known to be the host's and stays as well. A system message of another plugin's
 stays, also one of the host's form, unless it holds exactly the text of an
 update that the session holds: nothing tells those two apart. Beyond that,
 who wrote a message cannot be proved, and

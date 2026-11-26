@@ -309,43 +309,106 @@ export function hostInstructions(messages) {
   return { loads, updates };
 }
 
-// Whether a message of a request has no field but these. A field that is there without a value is none.
-const only = (message, fields) => Object.keys(message).every(key => fields.includes(key) || message[key] === undefined);
+// What OpenCode builds for a request is plain data, and that is what "as the host builds it" asks of every level
+// (seen on OpenCode 2.3.0 and 2.4.1): a load is a plain object, a message's content an ordinary array of one
+// plain text part, a load's metadata plain objects and arrays of strings. Whether something is that is asked of
+// its own properties, each read once from its descriptor: a property with a symbol for its name, one that is an
+// accessor, an array of another class or with something more on it, an object of another class is not plain
+// data, whatever it would answer when asked. A property that is there without a value is none. What an object
+// inherits, and how an object that is no ordinary one answers, is not looked at beyond that: a message is what
+// it holds of its own.
 
-// Whether two values are the same data, as JSON holds it. Lists are the same with the same length and the same
-// data at each place; objects with the same keys of their own that have a value (a key without a value is none,
-// and the order of keys says nothing) and the same data under each. Anything else is the same only as the very
-// same value: what is no plain list or object (a date, an instance of a class) is not compared by its keys.
-const plainData = value => { const kind = Object.getPrototypeOf(value); return Array.isArray(value) || kind === Object.prototype || kind === null; };
-const sameData = (a, b) => {
+// The own properties of an object that have a value, by name; nothing where one has a symbol for its name or is
+// an accessor.
+function ownValues(value) {
+  const values = new Map();
+  for (const key of Reflect.ownKeys(value)) {
+    const property = Reflect.getOwnPropertyDescriptor(value, key);
+    if (!property || !Object.hasOwn(property, 'value')) return undefined;
+    if (property.value === undefined) continue;
+    if (typeof key !== 'string') return undefined;
+    values.set(key, property.value);
+  }
+  return values;
+}
+
+// The items of an ordinary list: an array of the arrays' own class with a value at every place and nothing else
+// on it. Nothing where the value is anything else (an array of a class of its own, one with an empty place or
+// with a property more).
+function listItems(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  const values = ownValues(value), length = values?.get('length');
+  if (!Number.isInteger(length) || values.size !== length + 1) return undefined;
+  const items = [];
+  for (let index = 0; index < length; index++) {
+    if (!values.has(String(index))) return undefined;
+    items.push(values.get(String(index)));
+  }
+  return items;
+}
+
+// The fields of a plain object: one of the objects' own class, or of none. Nothing where it is anything else.
+function recordFields(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const kind = Object.getPrototypeOf(value);
+  return kind === Object.prototype || kind === null ? ownValues(value) : undefined;
+}
+
+// Whether two values are the same data, as JSON holds it: ordinary lists with the same length and the same data
+// at each place, plain objects with the same fields (their order says nothing) and the same data under each.
+// Anything else (a list or an object that is not plain, a function) is the same only as the very same value.
+function sameData(a, b) {
   if (a === b) return true;
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || !plainData(a) || !plainData(b) || Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a)) return a.length === b.length && Array.from(a.keys()).every(index => sameData(a[index], b[index]));
-  const keys = value => Object.keys(value).filter(key => value[key] !== undefined);
-  return keys(a).length === keys(b).length && keys(a).every(key => Object.hasOwn(b, key) && sameData(a[key], b[key]));
-};
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const first = listItems(a), second = listItems(b);
+    return Boolean(first && second) && first.length === second.length && first.every((item, index) => sameData(item, second[index]));
+  }
+  const first = recordFields(a), second = recordFields(b);
+  if (!first || !second || first.size !== second.size) return false;
+  for (const [name, value] of first) if (!second.has(name) || !sameData(value, second.get(name))) return false;
+  return true;
+}
+
+// The fields of a request's message when it has none of its own but these; nothing otherwise. The message
+// itself may be of the host's own class, which a plugin cannot name: only what it holds of its own is asked.
+function fieldsOf(message, names) {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return undefined;
+  const fields = ownValues(message);
+  return fields && [...fields.keys()].every(name => names.includes(name)) ? fields : undefined;
+}
+
+// The text of a content that is one plain text part, `[{ type: 'text', text }]`, which is what OpenCode makes of
+// a message's text in a request; nothing where the content is anything else: a string, several parts, a part of
+// another kind, a list or a part that is not plain, or a text part that carries something more (the mark of
+// another hook, say), which is no longer what the host built.
+function oneText(content) {
+  const parts = listItems(content), part = parts?.length === 1 ? recordFields(parts[0]) : undefined;
+  if (!part || ![...part.keys()].every(name => name === 'type' || name === 'text')) return undefined;
+  return part.get('type') === 'text' && typeof part.get('text') === 'string' ? part.get('text') : undefined;
+}
 
 // What OpenCode makes of such an update in a request: `{ role: 'system', content: [{ type: 'text', text }] }`
 // and nothing more. It has no ID and no metadata (the host gives those only to a message it builds from one
 // stored message that keeps its ID), and no tools. The other system messages the host knows change a model's
-// effort or its tools and hold no text. A message that carries anything else (a name, the mark of another hook)
-// is no longer what the host built.
-const updateText = message => message?.role === 'system' && only(message, ['role', 'content']) ? oneText(message.content) : undefined;
+// effort or its tools and hold no text. A message that carries anything else (a name, the mark of another hook,
+// also one that is not listed among its fields) is no longer what the host built.
+function updateText(message) {
+  const fields = fieldsOf(message, ['role', 'content']);
+  return fields?.get('role') === 'system' ? oneText(fields.get('content')) : undefined;
+}
 
 // What OpenCode makes of a load in a request: the user message with the load's ID and its text as one plain
 // text part, to which the host adds the stored message's metadata for hooks to read:
-// `{ id, role: 'user', content: [{ type: 'text', text }], metadata }` and nothing more. One without that
-// metadata holds nothing that is not the host's; one whose metadata is other data, or that carries another
-// field, holds what a hook added.
-const isLoadAsBuilt = (message, load) => message.role === 'user' && only(message, ['id', 'role', 'content', 'metadata']) &&
-  (message.metadata === undefined || sameData(message.metadata, load.metadata)) && oneText(message.content) === load.text;
-
-// The text of a content that is one plain text part, `[{ type: 'text', text }]`, which is what OpenCode makes of
-// a message's text in a request; nothing where the content is anything else: a string, several parts, a part of
-// another kind, or a text part that carries something more (the mark of another hook, say), which is no longer
-// what the host built.
-const plainText = part => part?.type === 'text' && typeof part.text === 'string' && only(part, ['type', 'text']);
-const oneText = content => Array.isArray(content) && content.length === 1 && plainText(content[0]) ? content[0].text : undefined;
+// `{ id, role: 'user', content: [{ type: 'text', text }], metadata }`, a plain object, and nothing more. One
+// without that metadata holds nothing that is not the host's; one whose metadata is other data, or that carries
+// another field, holds what a hook added.
+function isLoadAsBuilt(message, load) {
+  const fields = recordFields(message);
+  return Boolean(fields) && [...fields.keys()].every(name => ['id', 'role', 'content', 'metadata'].includes(name)) &&
+    fields.get('id') === load.id && fields.get('role') === 'user' &&
+    (!fields.has('metadata') || sameData(fields.get('metadata'), load.metadata)) && oneText(fields.get('content')) === load.text;
+}
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
@@ -375,13 +438,17 @@ export function withoutHostMessages(requested, stored) {
   if (!loads.size && !updates.size) return { messages: requested, loads: [], updates: [], changed: false };
   const found = { loads: new Set(), updates: [] }, taken = new Map();
   let changed = false;
+  // What cannot be looked at (a comparison that does not come to an end, an object that refuses to be read) is
+  // not known to be the host's: it stays like anything else that is not, and nothing is refused for it.
+  const known = look => { try { return look(); } catch { return undefined; } };
   const messages = requested.filter(message => {
-    if (typeof message?.id === 'string' && loads.has(message.id)) {
-      if (isLoadAsBuilt(message, loads.get(message.id))) { found.loads.add(message.id); return false; }
+    const id = known(() => message?.id);
+    if (typeof id === 'string' && loads.has(id)) {
+      if (known(() => isLoadAsBuilt(message, loads.get(id)))) { found.loads.add(id); return false; }
       changed = true;
       return true;
     }
-    const text = updateText(message), ids = updates.get(text);
+    const text = known(() => updateText(message)), ids = text === undefined ? undefined : updates.get(text);
     if (!ids) return true;
     // The copies of one text cannot be told apart: each one that the request holds is one of the session's, in their order.
     const nth = taken.get(text) ?? 0;
