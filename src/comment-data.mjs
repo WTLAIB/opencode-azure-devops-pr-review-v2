@@ -227,6 +227,27 @@ export async function createCommentData({ root, directory: existing } = {}) {
   };
 }
 
+/**
+ * A store for the puts of one run. Until its run ends a value is what the run's put made it, so a second put of
+ * it in the same run is the first one's reference and reads no file again: planning a large review puts the same
+ * report, file list and dispositions for every page. A value is known by its digest, so that none of its text
+ * is kept for this. A put that failed is tried again by the next one.
+ */
+export function putOnce(store) {
+  const puts = new Map();
+  const put = (text, format = 'text') => {
+    const key = `${format}\n${hash(text)}`;
+    if (!puts.has(key)) {
+      const made = store.put(text, format);
+      puts.set(key, made);
+      made.catch(() => { if (puts.get(key) === made) puts.delete(key); });
+    }
+    return puts.get(key);
+  };
+  // `pack` is the store's own and asks `this` for the object it packs, which is this put.
+  return { ...store, put, object(value) { return put(JSON.stringify(value, null, 2), 'json'); } };
+}
+
 /** What tells one invocation's observation from another: its tool, its arguments and what it returned. */
 export const observationKey = (tool, input, output) => hash(json([tool, input, output]));
 
@@ -246,20 +267,29 @@ const HELD_AT_ONCE = 8;
  * value is looked at, and what was not looked at is not handed out.
  */
 export async function heldItems(store, items, references, wanted = () => true) {
-  const named = item => references(item).map(reference => [json([reference?.file, reference?.pages, reference?.sha256]), reference]);
-  const values = new Map(items.flatMap(named)), keys = [...values.keys()], held = new Map();
-  for (let at = 0; at < keys.length && wanted(); at += HELD_AT_ONCE) {
-    const some = keys.slice(at, at + HELD_AT_ONCE);
-    (await Promise.all(some.map(key => store.holds(values.get(key))))).forEach((ready, index) => held.set(some[index], ready));
-  }
+  const named = item => references(item).map(reference => [referenceKey(reference), reference]);
+  const held = await eachValue(new Map(items.flatMap(named)), reference => store.holds(reference), wanted);
   return items.filter(item => named(item).every(([key]) => held.get(key)));
 }
+const referenceKey = reference => json([reference?.file, reference?.pages, reference?.sha256]);
+// What `look` answers for each of the values, looked at once each and a few at a time, in their order.
+async function eachValue(values, look, wanted = () => true) {
+  const keys = [...values.keys()], answers = new Map();
+  for (let at = 0; at < keys.length && wanted(); at += HELD_AT_ONCE) {
+    const some = keys.slice(at, at + HELD_AT_ONCE);
+    (await Promise.all(some.map(key => look(values.get(key))))).forEach((answer, index) => answers.set(some[index], answer));
+  }
+  return answers;
+}
 
-export async function observationIndex(store, observations, wanted) {
+/** The index of a review's saved observations, for a planner to read; nothing where it is no longer wanted. */
+export async function observationIndex(store, observations, wanted = () => true) {
   // Only what the store holds ready is listed, as it is now: a reference that a review saved is handed to a
   // model, which reads its pages by itself, and the files it names may be of an earlier version, damaged or
   // gone (`holds`).
   const held = await heldItems(store, observations, ({ outputRef }) => [outputRef], wanted);
+  // A run that was stopped meanwhile gets no index: nothing more is packed or written for it.
+  if (!wanted()) return undefined;
   return store.put((await Promise.all(held.map(async ({ tool, input, outputRef }) =>
     json({ tool, arguments: await store.pack(input, 2000), output: outputRef })))).join('\n') + '\n', 'jsonl');
 }
@@ -276,8 +306,10 @@ export async function anchorObservations(store, observations, comments, head) {
     const values = argumentValues(item.input);
     return values.includes(head) && values.some(value => paths.has(value));
   });
-  const loaded = await Promise.allSettled(selected.map(async item => ({ ...item, output: await store.read(item.outputRef) })));
-  return loaded.filter(item => item.status === 'fulfilled').map(item => item.value);
+  // Each value is read once, however many observations name it (a file that was read whole and as a diff is
+  // one), and a few at a time: a read makes a saved value ready, which reads it whole.
+  const texts = await eachValue(new Map(selected.map(item => [referenceKey(item.outputRef), item.outputRef])), reference => store.read(reference).catch(() => undefined));
+  return selected.flatMap(item => typeof texts.get(referenceKey(item.outputRef)) === 'string' ? [{ ...item, output: texts.get(referenceKey(item.outputRef)) }] : []);
 }
 
 export function compactDispositions(dispositions) {

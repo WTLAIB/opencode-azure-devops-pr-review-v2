@@ -567,17 +567,23 @@ settings, backups and failure records. Never upload `.local/`.
   and reads otherwise). A value is made ready when it is put, from the text
   in hand, at every put; and when a reference that a review saved is handed
   to a model or read, from its files, each time (`holds`, `read`; a list of
-  them through `heldItems`, a few values at a time and each value once): an
-  earlier version, or a process that was cut off, may have written them.
+  them through `heldItems`, a few values at a time and each value once,
+  and the observations a planner's comments are checked against likewise):
+  an earlier version, or a process that was cut off, may have written them.
+  A list that its run no longer wants (the run was stopped, a planning page
+  failed) is not looked at further and not written.
   Between a put and the end of its run a value is what the put made it, and
   is not looked at again when a reference is handed on within the run (the
-  retry of a stage, the continuation of a planning page): only that run
-  writes those files, since an earlier version never replaces a file that
-  exists, and this process does not clean a run's data up before its
-  command has ended. Another process that shares the state directory can
-  (it knows only its own commands, a known limitation); the command whose
-  data is gone then fails, which no look before a reference is handed on
-  would cure.
+  retry of a stage, the continuation of a planning page), nor put again
+  where the run puts the same value once more (`putOnce` for the pages of a
+  planning). Nothing that writes those files meanwhile makes them wrong: an
+  earlier version never replaces a file that exists, and this version,
+  also in another process that works on the same saved review, replaces a
+  file in one step with what the digest-checked value gives, which is the
+  same. This process does not clean a run's data up before its command has
+  ended. Another process that shares the state directory can (it knows only
+  its own commands, a known limitation); the command whose data is gone
+  then fails, which no look before a reference is handed on would cure.
   Pages that do not pass (rows of an earlier version, a file that is
   missing, cannot be read or was not finished) are written again from the
   value. Judge pages that are there by what the host's read returns, not by

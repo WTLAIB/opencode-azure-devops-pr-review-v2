@@ -4,7 +4,7 @@ import fsPromises, { chmod, mkdir, mkdtemp, readFile, writeFile, cp, rm, readdir
 import { syncBuiltinESMExports } from 'node:module';
 import { closeSync, constants as fsConstants, openSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import cryptoModule, { createHash, randomBytes } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -209,7 +209,8 @@ async function fixture(t, opts = {}) {
             session.visibleTools = Object.keys(frame.tools);
             // What happens between a request's preparation and its dispatch, as when a later hook of the host is slow.
             await opts.prepared?.({ session, role, turn });
-            await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
+            // `dispatching` returning false is a host that sends a request without running the hook for it.
+            if (await opts.dispatching?.({ session, role, turn }) !== false) await emit('session', 'model.request', { sessionID: session.id, agent: role, model: clone(session.model), kind: 'primary' });
             // Like OpenCode 2.1.4 through 2.3.0: a compaction it attempts in the turn opens its message first, and AZPR's refusal
             // ends the turn; a background summary publishes nothing, and its refusal stays in the background.
             const compact = async ({ background = false } = {}) => {
@@ -5615,6 +5616,7 @@ test('what a session read is what the turns read whose answers were taken, by th
         if (input.turn && how === 'the turn fails') return { $provider: 401 };
         return { ...defaultAnswer(input), findings: [ownFinding(input, '/src/Main.java'), ownFinding(input, '/src/Other.java', 'medium', 2)] };
       },
+      dispatching: ({ role, turn }) => !(how === 'the host ran no hook for the request' && role === 'azpr-quick-reviewer' && turn === 1),
       async during({ session, role, turn, invoke }) {
         if (role !== 'azpr-quick-reviewer' || turn !== 1) return;
         const read = { path: '/src/Other.java', version: 'head' };
@@ -5642,6 +5644,12 @@ test('what a session read is what the turns read whose answers were taken, by th
   // the finding stays what it was.
   const other = await run('asked by a message of the turn before');
   assert.deepEqual([other.stage.status, other.stage.repairs.length, other.stage.repairFailure, other.stage.sessionReads, other.statuses], ['COMPLETE', 2, undefined, 1, ['REPORTED', 'NEEDS_INFO']]);
+  // The correction turn answers, but the host ran no hook for its request: such an answer is not taken, and
+  // nothing of that turn is kept, its read no more than its answer.
+  const unannounced = await run('the host ran no hook for the request');
+  assert.match(unannounced.receipt, /\n- azpr-quick-reviewer: COMPLETE; [^\n]*repair=failed:/);
+  assert.match(unannounced.stage.repairFailure.error, /Required V2 prompt\/context hooks were not observed/);
+  assert.deepEqual([unannounced.stage.sessionReads, unannounced.statuses], [1, ['REPORTED', 'NEEDS_INFO']]);
 });
 
 test('a message that asks the model to continue an interrupted answer is the host\'s only on a host that writes one', async t => {
@@ -5667,12 +5675,25 @@ test('a file that a reviewer reads in several windows is one observation, saved 
   const pages = async f => (await readdir(f.stateDirectory, { recursive: true })).filter(name => name.endsWith('.pages.jsonl')).map(name => join(f.stateDirectory, name));
   let saved, after, whole, together;
   const state = async () => [await pages(f), await Promise.all(saved.map(file => readFile(file, 'utf8')))];
+  // How often the text of a file is hashed for a put: once for each save that is begun, before the store makes
+  // one of two puts of a value that overlap.
+  const OTHER = 'other\nsecond line\n', original = cryptoModule.createHash;
+  let hashed = 0;
+  const restore = () => { cryptoModule.createHash = original; syncBuiltinESMExports(); };
+  t.after(restore);
+  cryptoModule.createHash = (...args) => {
+    const hash = original(...args), update = hash.update.bind(hash);
+    hash.update = (value, ...rest) => { if (value === OTHER) hashed++; return update(value, ...rest); };
+    return hash;
+  };
+  syncBuiltinESMExports();
   const f = await fixture(t, { azure: fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Other.java': 'other\nsecond line\n' } }), settings: quickSettings,
     async during({ session, role, turn, invoke }) {
       if (role !== 'azpr-quick-reviewer' || turn) return;
       // Two windows of another file that are read at the same moment share one save.
       const both = await Promise.all([1, 2].map(line => invoke(session, 'azpr_read_file', { path: '/src/Other.java', version: 'head', startLine: line, endLine: line })));
-      together = [both.map(result => /\| (other|second line)/.exec(result.output)?.[1]), (await pages(f)).length];
+      together = [both.map(result => /\| (other|second line)/.exec(result.output)?.[1]), (await pages(f)).length, hashed];
+      restore();
       await Promise.all((await pages(f)).map(file => rm(file)));
       const first = await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'head', startLine: 1, endLine: 1 });
       saved = await pages(f);
@@ -5685,7 +5706,7 @@ test('a file that a reviewer reads in several windows is one observation, saved 
     async answer(input) { if (input.role === 'azpr-quick-reviewer' && !input.turn) whole = await state(); } });
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
-  assert.deepEqual(together, [['other', 'second line'], 1], 'Each window returned its lines, and the file was saved once.');
+  assert.deepEqual(together, [['other', 'second line'], 1, 1], 'Each window returned its lines, and the file was saved by one put: its text was hashed once.');
   assert.equal(saved.length, 1, 'The first window saved the file.');
   assert.deepEqual(after, [saved, ['not the pages\n'], false], 'The second window saved nothing again.');
   assert.deepEqual(whole, [saved, ['not the pages\n']], 'Nor did the read of the whole file after it.');

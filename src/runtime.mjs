@@ -829,6 +829,8 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // on a host that writes one (before OpenCode 2.3.0), since that message is known by its text alone.
         signal, allowHostContinuations: capabilities.stepRetries ? 'steps' : true, settled: () => close(g), since: g.validated,
       }), signal);
+      // An answer counts only where the host ran the hooks that a turn needs; nothing of one that did not is kept.
+      if (g.admitted <= before.admitted || g.calls <= before.calls) throw new Error('Required V2 prompt/context hooks were not observed; the answer cannot be accepted.');
       // The turn that was looked at: the next one in this session is looked at from its end on.
       g.validated = answer.prompt;
       for (const id of answer.notices ?? []) g.shellNotices.add(id);
@@ -837,7 +839,6 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // which message asked for it) showed this answer nothing.
       for (const id of answer.assistants ?? []) for (const read of g.readsBy.get(id) ?? []) g.reads.add(read);
     } finally { g.watch.waiting = false; close(g); g.pending = g.turn = null; }
-    if (g.admitted <= before.admitted || g.calls <= before.calls) throw new Error('Required V2 prompt/context hooks were not observed; the answer cannot be accepted.');
     return answer;
   }
 

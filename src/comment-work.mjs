@@ -1,6 +1,6 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewMethod, reviewVerification } from './comments.mjs';
-import { observationIndex, anchorObservations, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
+import { observationIndex, anchorObservations, putOnce, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
@@ -234,11 +234,11 @@ async function planningInput(review, store, findings, report, work, continuation
     dispositions: wholeDispositions ? dispositions : dispositions.filter(row => ids.has(row.id) || ids.has(row.mergedInto)),
     ...(wholeDispositions ? {} : { allDispositions: await store.pack(dispositions, 0) }),
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
-    ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? [], extras.active) } : {}),
+    ...(needsEvidence ? { evidenceIndex: await extras.evidenceIndex() } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
     ...(extras.repeatCandidates?.length ? { repeatCandidates: extras.repeatCandidates } : {}),
     // This page's own earlier reads; pages planned at the same time keep theirs. Their values were put in this
-    // run, which alone writes them until it ends, so they are what their put made them.
+    // run and are what their put made them: whatever writes those files meanwhile writes the same.
     ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(extras.evidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
     commentWork: work,
@@ -378,6 +378,12 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
     headPaths.push([...new Set([...(headPaths[index - 1] ?? []), ...own])]);
   }
   let failure; // The lowest failed page: { index, error }.
+  // What every page is handed alike is put once for the whole planning: the report, the file list and the like
+  // (`putOnce`), and the index of the review's saved observations, which is made by the first page that needs
+  // it. Once the run was stopped, or a page has failed, no page will use that index: it is not finished.
+  const pages = putOnce(store);
+  let observed;
+  const evidenceIndex = () => observed ??= observationIndex(pages, review.toolText ?? [], () => active() && !failure);
   async function planPage(index) {
     const parts = [], signatures = new Set();
     let pending = groups[index] ?? [], continuation, sessions = 0, summaryWritten = false;
@@ -395,10 +401,10 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const sourceExcerpts = await excerpts(assigned);
       // Only the first page writes the summary note; a note from another page is dropped.
       const allowSummary = index === 0 && !summaryWritten;
-      const payload = await planningInput(review, store, assigned, report,
+      const payload = await planningInput(review, pages, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments, active });
+        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments, evidenceIndex });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
       const scoped = async answer => {

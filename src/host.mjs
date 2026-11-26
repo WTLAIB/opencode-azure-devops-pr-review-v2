@@ -35,6 +35,11 @@ export function hostVersion(context) {
   return typeof context?.app?.version === 'string' ? context.app.version : 'unknown';
 }
 
+// A release of 2.0.x to 2.2.x, as a whole version (Semantic Versioning 2.0.0): numbers without a leading zero,
+// then perhaps a pre-release and build metadata, each of identifiers between dots, none of them empty.
+const NUMBER = '(?:0|[1-9]\\d*)', NAME = '(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)', BUILD = '[0-9A-Za-z-]+';
+const EARLIER_PROTOCOL = new RegExp(`^2\\.[0-2]\\.${NUMBER}(?:-${NAME}(?:\\.${NAME})*)?(?:\\+${BUILD}(?:\\.${BUILD})*)?$`);
+
 /**
  * Whether a host of this version recovers an interrupted stream by retrying the step (OpenCode 2.3.0 and later)
  * and never by a continuation message that it queues (2.0.32 through 2.2.7). Only a version that names a host of
@@ -44,7 +49,7 @@ export function hostVersion(context) {
  * is known to write it.
  */
 export function retriesSteps(version) {
-  return !(typeof version === 'string' && /^2\.[0-2]\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/.test(version));
+  return !(typeof version === 'string' && EARLIER_PROTOCOL.test(version));
 }
 
 export function hostCapabilities(context) {

@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readdir, rm, readFile, stat, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareComments, publishPlan, PLANNING_FINDINGS_PER_PAGE, PAGE_CONTINUATIONS, discussionDigest, parseLocation, pairable, sourceWindow, mergeCandidates, candidatePages, repeatEligible, severitySets, boundedGroups } from '../src/comment-work.mjs';
-import { createCommentData, captureObservation, observationIndex, observationKey, heldItems, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
+import { createCommentData, captureObservation, observationIndex, anchorObservations, observationKey, heldItems, putOnce, pageRows, wholePages, ROW_CHARACTERS } from '../src/comment-data.mjs';
 import { HOST_READ_LINE_CHARACTERS } from '../src/host.mjs';
 import { createAzureClient, parsePullRequestUrl, markersInThreads } from '../src/azure.mjs';
 import { createToolQueue } from '../src/tool-queue.mjs';
@@ -216,6 +216,27 @@ eachKind('a page gets at most three continuation sessions even when each one rea
   assert.deepEqual(plan.skipped.map(s => s.findingId), ['F-2', 'F-3', 'F-4']);
   assert.ok(plan.skipped.every(s => s.reason === 'The comment planner did not finish the page in 4 sessions; it remains in the summary index.'));
   assert.ok(notices.includes('Planning comments, page 1/2: the planner did not finish the page in 4 sessions; 3 finding(s) skipped.'));
+});
+
+test('what every planning page is handed alike is put once for the whole planning', async t => {
+  // Two pages, one of which continues once, and a report in two segments, so that every page is handed a
+  // reference to the whole report. Putting it reads and checks the stored value each time; planning does it once.
+  const findings = Array.from({ length: PLANNING_FINDINGS_PER_PAGE + 1 }, (_, i) => finding(`F-${i + 1}`));
+  const { review, store } = await setup(t, findings);
+  review.final.report = Array.from({ length: 400 }, (_, i) => `Report line ${i} about the change under review.`).join('\n');
+  const puts = [];
+  const counting = { ...store, put(text, format) { puts.push(text); return store.put(text, format); }, object(value) { return this.put(JSON.stringify(value, null, 2), 'json'); } };
+  const { invoke, payloads } = stages(async payload => payload.commentWork.kind === 'group' ? JSON.stringify({ status: 'READY', groups: [] })
+    : payload.commentWork.page === 1 && !payload.continuation
+      ? JSON.stringify({ status: 'CONTINUE', comments: [comment('F-1')], skipped: [], continuation: 'F-2 to F-4 are still to check.' })
+      : JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }));
+  const plan = await prepareComments(review, counting, invoke);
+  assert.equal(plan.comments.length, findings.length);
+  const planned = payloads.filter(payload => payload.commentWork.kind === 'plan');
+  assert.deepEqual(planned.map(payload => `${payload.commentWork.page}${payload.continuation ? ' continued' : ''}`).sort(), ['1', '1 continued', '2'], 'Page 1, its continuation, and page 2.');
+  assert.ok(planned.every(payload => payload.reportReference && payload.reportReference.sha256 === planned[0].reportReference.sha256), 'Each is handed the whole report.');
+  assert.equal(await store.read(planned[0].reportReference), review.final.report);
+  assert.equal(puts.filter(text => text === review.final.report).length, 1, 'The whole report was put once.');
 });
 
 eachKind('pages planned side by side assemble exactly as one at a time, whichever page finishes first', async (t, kind) => {
@@ -1864,4 +1885,45 @@ test('a value is stored as the text a file can hold, and only a reference the st
   assert.deepEqual([asked.length, some.map(item => item.index)], [8, [0, 1, 2, 3]], 'Eight values were looked at: those of the first four items.');
   asked.length = 0;
   assert.deepEqual([await heldItems(counting, items, item => [item.reference], () => false), asked], [[], []]);
+  // An index that is no longer wanted is not made: nothing is looked at, packed or written for it, also where
+  // the run is stopped while its values are looked at.
+  const objects = async () => (await readdir(join(reopened.directory, 'objects'))).length;
+  const before = await objects();
+  wanted = true;
+  assert.deepEqual([await observationIndex(reopened, observations, () => false), await observationIndex(stopping, observations, () => wanted), await objects()], [undefined, undefined, before]);
+  // The observations a planner's comments are checked against are read the same way: each value once, however
+  // many observations name it, a few at a time, and one that cannot be read is left out.
+  const text = index => `source of file ${index}\n${'s'.repeat(400)}`;
+  const sources = await Promise.all(Array.from({ length: 12 }, (_, index) => captureObservation(reopened, 'azpr_read_file', { path: `/src/anchor-${index}.ts`, version: 'c'.repeat(40) }, text(index))));
+  const diffs = await Promise.all(sources.map((source, index) => captureObservation(reopened, 'azpr_read_diff', { path: `/src/anchor-${index}.ts`, version: 'c'.repeat(40) }, text(index))));
+  await rm(sources[5].outputRef.file);
+  await rm(sources[5].outputRef.pages);
+  running = 0; most = 0;
+  const reads = [];
+  const reading = { ...reopened, async read(reference) { reads.push(reference.sha256); most = Math.max(most, ++running); try { return await reopened.read(reference); } finally { running--; } } };
+  const anchored = await anchorObservations(reading, [...sources, ...diffs, ...observations], sources.map((_, index) => ({ path: `/src/anchor-${index}.ts` })), 'c'.repeat(40));
+  assert.deepEqual([reads.length, new Set(reads).size, most], [12, 12, 8], 'Twelve values for twenty-four observations, eight at a time.');
+  assert.deepEqual(anchored.map(item => [item.tool, item.input.path, item.output === text(Number(/\d+/.exec(item.input.path)[0]))]),
+    [...sources, ...diffs].filter(item => item.input.path !== '/src/anchor-5.ts').map(item => [item.tool, item.input.path, true]));
+  // Within one run a value that the run has put is what that put made it: a second put of it is the first one's
+  // reference and reads no file again, also for a value that is packed; a put that failed is tried again.
+  const whole = async (reference, expected) => assert.deepEqual([await readFile(reference.file, 'utf8'), (await rowsOf(reference)).map(row => JSON.parse(row).text).join('')], [expected, expected]);
+  const run = putOnce(reopened), value = `put once in a run ${'r'.repeat(5000)}`;
+  const firstPut = await run.put(value);
+  await writeFile(firstPut.pages, 'not looked at again in this run\n');
+  assert.deepEqual([await run.put(value), await readFile(firstPut.pages, 'utf8')], [firstPut, 'not looked at again in this run\n']);
+  const packed = await run.pack({ list: value }, 100);
+  await writeFile(packed.azprData.pages, 'nor this\n');
+  assert.deepEqual([await run.pack({ list: value }, 100), await readFile(packed.azprData.pages, 'utf8')], [packed, 'nor this\n']);
+  assert.deepEqual(await run.put(value, 'jsonl'), { ...firstPut, format: 'jsonl' }, 'Another format is another put.');
+  await whole(firstPut, value);
+  // Another run puts it anew, and so does the store itself.
+  await writeFile(firstPut.pages, 'damaged between two runs\n');
+  assert.deepEqual(await putOnce(reopened).put(value), firstPut);
+  await whole(firstPut, value);
+  let failing = true;
+  const flaky = putOnce({ ...reopened, put: (given, format) => failing ? Promise.reject(new Error('disk full')) : reopened.put(given, format) });
+  await assert.rejects(flaky.put(value), /disk full/);
+  failing = false;
+  assert.deepEqual(await flaky.put(value), firstPut);
 });

@@ -112,10 +112,12 @@ test('host helpers normalize response shapes and detect capabilities', () => {
   // A host retries the step of a stream that broke from 2.3.0 on, and queues a message that asks the model to
   // continue before that. A host that does not say its version is taken for a current one: that message is
   // known by its text alone, so it is accepted only where the host is known to write it.
-  // Only a version that names a release of the earlier protocol says so: a development build, a text that is no
-  // version and a version without its last number say no more than no version.
-  assert.deepEqual(['2.0.32', '2.2.7', '2.2.7-beta.1', '2.1.4+build.5', '2.3.0', '2.3.2', '2.4.1', '2.10.0', '2.20.1', '3.0.0', '1.14.0', '0.0.0-dev', '0.0.0-dev-202611260101', '2.2.', '2.2', '2.2.x', 'v2.2.7', ' 2.2.7', 'unknown', '', undefined, null, 2.2]
-    .map(version => [version, retriesSteps(version)]).filter(([, steps]) => !steps).map(([version]) => version), ['2.0.32', '2.2.7', '2.2.7-beta.1', '2.1.4+build.5']);
+  // Only a version that names a release of the earlier protocol says so: a development build and a text that is no
+  // version say no more than no version: a number with a leading zero, a suffix that is empty or has an empty
+  // part, a version without its last number.
+  assert.deepEqual(['2.0.32', '2.2.7', '2.2.7-beta.1', '2.1.4+build.5', '2.2.0-rc.1+sha.5114f85', '2.3.0', '2.3.2', '2.4.1', '2.10.0', '2.20.1', '3.0.0', '1.14.0', '0.0.0-dev', '0.0.0-dev-202611260101',
+    '2.2.', '2.2', '2.2.x', 'v2.2.7', ' 2.2.7', '2.2.7 ', '2.2.07', '2.02.7', '2.2.7+', '2.2.7-', '2.2.7+build..5', '2.2.7-beta..1', '2.2.7-01', '2.2.7+a+b', '2.2.7.1', 'unknown', '', undefined, null, 2.2]
+    .map(version => [version, retriesSteps(version)]).filter(([, steps]) => !steps).map(([version]) => version), ['2.0.32', '2.2.7', '2.2.7-beta.1', '2.1.4+build.5', '2.2.0-rc.1+sha.5114f85']);
   assert.deepEqual([hostCapabilities({ app: { version: '2.2.7' } }).stepRetries, capabilities.stepRetries, hostCapabilities({}).stepRetries], [false, true, true]);
   assert.equal(hostCapabilities({}).pluginList, false);
   assert.equal(hostCapabilities({ plugin: { list() {} } }).pluginList, true);
