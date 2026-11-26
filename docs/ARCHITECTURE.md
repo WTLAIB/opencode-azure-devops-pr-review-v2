@@ -1053,7 +1053,8 @@ follows how OpenCode 2.3.0 to the tested version run a session. A prompt that is
 admitted waits in the session's inbox and becomes a message only in the
 execution that takes it. An execution is one busy period: it goes on while
 input reaches the session, and leaves one marker when it ends, however it
-ends. So the first marker after the prompt is the end of the execution that
+ends while the host runs (a shutdown leaves none, and ends the run with the
+process). So the first marker after the prompt is the end of the execution that
 had the prompt, also where the model never answered (the turn was interrupted
 or failed), and what another execution wrote after it is not the turn's: a
 command that ended later woke the session, and neither what the host wrote

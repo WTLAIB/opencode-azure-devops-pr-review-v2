@@ -1566,7 +1566,7 @@ gets long. A review that an OpenCode restart interrupts leaves its sessions in
 the list; delete those yourself. From OpenCode 2.4.2 on, OpenCode's mobile app
 can notify a paired phone when a top-level session's run ends, and these
 sessions are top-level ones, so one review can send several such notices (a
-phone registered without settings gets them all). AZPR leaves these settings
+phone newly registered without settings gets them all). AZPR leaves these settings
 alone: set the phone to notify only when attention is needed, or mute the
 `[AZPR …]` sessions there. Your own conversations are never deleted.
 With a `claude-agent` model, Claude Code also keeps a transcript of every

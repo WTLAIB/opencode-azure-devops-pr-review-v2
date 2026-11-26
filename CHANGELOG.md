@@ -33,7 +33,7 @@ used as they are.
 - **Phone notifications.** From OpenCode 2.4.2 on, OpenCode's mobile app can
   notify a paired phone when a top-level session's run ends. AZPR's private
   sessions are top-level sessions, so one review can send several notices; a
-  phone registered without settings gets them all. AZPR leaves these
+  phone newly registered without settings gets them all. AZPR leaves these
   settings alone: set the phone to notify only when attention is needed, or
   mute the `[AZPR …]` sessions there. The README and the validation record
   now say so.

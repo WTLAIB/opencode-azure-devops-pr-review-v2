@@ -15,9 +15,9 @@ function aborted(signal) {
   if (signal?.aborted) throw signal.reason ?? new Error('[AZPR] Session operation cancelled.');
 }
 
-// OpenCode's Promise adapter ignored request options, signals included, through 2.4.1; from 2.4.2 on it honours a
-// `signal` given as a call's second argument. AZPR passes none: it races locally, and keeps pending admissions so
-// that cleanup waits for a delayed prompt.
+// OpenCode's Promise adapter ignored request options, signals included, in its calls of the host's endpoints through
+// 2.4.1; from 2.4.2 on they honour a `signal` in an options object given as their second argument (`{ signal }`).
+// AZPR passes none: it races locally, and keeps pending admissions so that cleanup waits for a delayed prompt.
 function cancellable(operation, signal) {
   aborted(signal);
   const promise = Promise.resolve().then(() => { aborted(signal); return operation(); });
