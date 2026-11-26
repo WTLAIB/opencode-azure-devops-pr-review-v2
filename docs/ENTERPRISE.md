@@ -138,8 +138,9 @@ reads a file beside one. A reviewer can still read such a file on purpose,
 like any other file of the active project. This relies on a field of
 OpenCode's plugin interface that OpenCode marks as experimental: where AZPR
 cannot tell the parts of a request apart (another plugin rewrote them, or a
-later OpenCode builds them another way), it sends those parts as OpenCode
-built them, with what OpenCode collected for the directory, and the stage's
+later OpenCode builds them another way), it sends those parts as it received
+them, with whatever they hold of what OpenCode collected for the directory,
+and the stage's
 [debug record](DEBUGGING.md) says so (`placeInstructionsNotToldApart`). The
 instruction files loaded beside a file are taken out of the request either
 way, where they are as OpenCode builds them; one that another plugin changed

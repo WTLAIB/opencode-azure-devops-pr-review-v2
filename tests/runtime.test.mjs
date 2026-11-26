@@ -121,7 +121,8 @@ async function fixture(t, opts = {}) {
     return event.result ?? result;
   };
   const context = {
-    app: { version: opts.version ?? '2.4.1' },
+    // `version: null` is a host that does not say its version.
+    app: opts.version === null ? {} : { version: opts.version ?? '2.4.1' },
     location: { directory },
     // Like a host catalog, each configured model once, however many passes or modes name it: every reviewer, and
     // a rater that is named.
@@ -831,23 +832,34 @@ test('a permanent provider failure is not retried and the other pass continues; 
 });
 
 test('a host retry is allowed and recorded: OpenCode prepares context again before it resends; a resend without context is refused', async t => {
-  let retry;
+  let retry, unprepared, summarized;
   const f = await fixture(t, { async during({ session, role, turn, emit }) {
     if (role !== 'azpr-review-reviewerb' || turn) return;
     const base = { sessionID: session.id, agent: role, model: clone(session.model) };
-    await assert.rejects(emit('session', 'model.request', { ...base, kind: 'primary' }), /no authorized primary context/);
+    const prepared = () => emit('session', 'context', { ...base, system: [], messages: f.project(session.history), tools: {} });
+    const proposal = attempt => emit('session', 'retry', { ...base, attempt, error: { type: 'provider.api', status: 503 }, decision: { retry: true, delay: 10 } });
     // OpenCode 2.0.22 (SessionRunner.runStep): the retry decision, then a newly prepared request.
-    retry = await emit('session', 'retry', { ...base, attempt: 2, error: { type: 'provider.api', status: 503 }, decision: { retry: true, delay: 10 } });
-    await emit('session', 'context', { ...base, system: [], messages: f.project(session.history), tools: {} });
+    retry = await proposal(2);
+    await prepared();
+    await emit('session', 'model.request', { ...base, kind: 'primary' });
+    // A resend without a newly prepared request is refused, and ends what the request before it allowed: no
+    // retry and no tool until a request is prepared again. A summary that the host attempts beside the turn is
+    // refused too, and ends nothing.
+    await assert.rejects(emit('session', 'model.request', { ...base, kind: 'primary' }), /no authorized primary context/);
+    unprepared = [(await proposal(3)).decision.retry, await f.registry.tool('azpr_read_file').execute({ path: '/src/Main.java', version: 'head' }, { sessionID: session.id, agent: role }).then(() => 'ran', error => error.message)];
+    await prepared();
+    await assert.rejects(emit('session', 'model.request', { ...base, kind: 'compaction' }), /compaction is not authorized/);
+    summarized = [(await proposal(4)).decision.retry, await f.registry.tool('azpr_read_file').execute({ path: '/src/Main.java', version: 'head' }, { sessionID: session.id, agent: role }).then(() => 'ran', error => error.message)];
     await emit('session', 'model.request', { ...base, kind: 'primary' });
   } });
   const receipt = await f.command();
   assert.match(receipt, /\] COMPLETE/);
   assert.deepEqual(retry.decision, { retry: true, delay: 10 });
+  assert.deepEqual([unprepared, summarized], [[false, '[AZPR] AZPR tools are available only to an active AZPR reviewer session.'], [true, 'ran']]);
   assert.equal(f.sessionsFor('azpr-review-reviewerb').length, 1, 'The host retried in place, not in a new session.');
   const secondPass = (await stageRecords(receipt)).find(stage => stage.role === 'azpr-review-reviewerb');
-  assert.deepEqual(secondPass.requestObservations.retries, [{ attempt: 2, proposed: true, allowed: true, delayMs: 10 }]);
-  assert.deepEqual([secondPass.requestObservations.kinds.primary, secondPass.requestObservations.authorizedPrimary, secondPass.requestObservations.rejected], [3, 2, 1]);
+  assert.deepEqual(secondPass.requestObservations.retries, [{ attempt: 2, proposed: true, allowed: true, delayMs: 10 }, { attempt: 3, proposed: true, allowed: false }, { attempt: 4, proposed: true, allowed: true, delayMs: 10 }]);
+  assert.deepEqual([secondPass.requestObservations.kinds.primary, secondPass.requestObservations.kinds.compaction, secondPass.requestObservations.authorizedPrimary, secondPass.requestObservations.rejected], [4, 1, 3, 2]);
   const late = await f.emit('session', 'retry', { sessionID: secondPass.sessionID, agent: 'azpr-review-reviewerb', model: { providerID: 'fixture', id: 'review-b', variant: 'default' }, attempt: 3, decision: { retry: true, delay: 10 } });
   assert.deepEqual(late.decision, { retry: false }, 'A retry after the command ended is refused.');
 });
@@ -5640,8 +5652,9 @@ test('a message that asks the model to continue an interrupted answer is the hos
   const joined = await earlier.command('pr-quick');
   assert.match(joined, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
   assert.equal((await stageRecords(joined)).find(record => record.role === 'azpr-quick-reviewer').hostContinuations, 1);
-  for (const version of ['2.3.0', '2.4.1', undefined]) {
-    const current = await fixture(t, { settings: quickSettings, ...(version ? { version } : {}), answer });
+  for (const version of ['2.3.0', '2.4.1', '0.0.0-dev', null]) {
+    const current = await fixture(t, { settings: quickSettings, version, answer });
+    assert.equal(current.context.app.version, version ?? undefined);
     const refused = await current.command('pr-quick');
     assert.match(refused, /\n- azpr-quick-reviewer: FAILED; [^\n]*failure=transient; error=\[AZPR\] The session received another message during this turn/, String(version));
     assert.ok((await stageRecords(refused)).filter(record => record.role === 'azpr-quick-reviewer').every(record => record.hostContinuations === undefined), String(version));
@@ -5652,11 +5665,15 @@ test('a file that a reviewer reads in several windows is one observation, saved 
   // AZPR's tool returns a window and keeps the whole file for comment planning. The file is the same in every
   // window: saving it again would read and check the stored value each time, for nothing.
   const pages = async f => (await readdir(f.stateDirectory, { recursive: true })).filter(name => name.endsWith('.pages.jsonl')).map(name => join(f.stateDirectory, name));
-  let saved, after, whole;
+  let saved, after, whole, together;
   const state = async () => [await pages(f), await Promise.all(saved.map(file => readFile(file, 'utf8')))];
-  const f = await fixture(t, { files: ['/src/Main.java'], settings: quickSettings,
+  const f = await fixture(t, { azure: fakeAzure({ files: ['/src/Main.java'], sources: { '/src/Other.java': 'other\nsecond line\n' } }), settings: quickSettings,
     async during({ session, role, turn, invoke }) {
       if (role !== 'azpr-quick-reviewer' || turn) return;
+      // Two windows of another file that are read at the same moment share one save.
+      const both = await Promise.all([1, 2].map(line => invoke(session, 'azpr_read_file', { path: '/src/Other.java', version: 'head', startLine: line, endLine: line })));
+      together = [both.map(result => /\| (other|second line)/.exec(result.output)?.[1]), (await pages(f)).length];
+      await Promise.all((await pages(f)).map(file => rm(file)));
       const first = await invoke(session, 'azpr_read_file', { path: '/src/Main.java', version: 'head', startLine: 1, endLine: 1 });
       saved = await pages(f);
       // What a second save would put right, if there were one.
@@ -5668,10 +5685,11 @@ test('a file that a reviewer reads in several windows is one observation, saved 
     async answer(input) { if (input.role === 'azpr-quick-reviewer' && !input.turn) whole = await state(); } });
   const receipt = await f.command('pr-quick');
   assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete; verification none\n/);
+  assert.deepEqual(together, [['other', 'second line'], 1], 'Each window returned its lines, and the file was saved once.');
   assert.equal(saved.length, 1, 'The first window saved the file.');
   assert.deepEqual(after, [saved, ['not the pages\n'], false], 'The second window saved nothing again.');
   assert.deepEqual(whole, [saved, ['not the pages\n']], 'Nor did the read of the whole file after it.');
-  assert.equal((await savedReview(f, reviewId(receipt))).toolText.filter(item => item.input.path === '/src/Main.java').length, 1);
+  assert.deepEqual((await savedReview(f, reviewId(receipt))).toolText.map(item => item.input.path).sort(), ['/src/Main.java', '/src/Other.java']);
 });
 
 test('a prompt the host admits after the call that sent it has ended opens no turn', async t => {

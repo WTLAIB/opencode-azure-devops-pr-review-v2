@@ -242,23 +242,24 @@ const HELD_AT_ONCE = 8;
  * Of items that carry references a review saved, those whose references the store holds ready now, in their
  * order. The values are made ready a few at a time, each value once however many items name it: a large review
  * has thousands of observations, and several planning pages hand them out side by side. Nothing is kept for the
- * next time.
+ * next time. Where the list is no longer wanted (`wanted`: the run that asked for it was stopped), no further
+ * value is looked at, and what was not looked at is not handed out.
  */
-export async function heldItems(store, items, references) {
+export async function heldItems(store, items, references, wanted = () => true) {
   const named = item => references(item).map(reference => [json([reference?.file, reference?.pages, reference?.sha256]), reference]);
-  const values = new Map(items.flatMap(named)), held = new Map();
-  for (const keys = [...values.keys()]; keys.length;) {
-    const some = keys.splice(0, HELD_AT_ONCE);
+  const values = new Map(items.flatMap(named)), keys = [...values.keys()], held = new Map();
+  for (let at = 0; at < keys.length && wanted(); at += HELD_AT_ONCE) {
+    const some = keys.slice(at, at + HELD_AT_ONCE);
     (await Promise.all(some.map(key => store.holds(values.get(key))))).forEach((ready, index) => held.set(some[index], ready));
   }
   return items.filter(item => named(item).every(([key]) => held.get(key)));
 }
 
-export async function observationIndex(store, observations) {
+export async function observationIndex(store, observations, wanted) {
   // Only what the store holds ready is listed, as it is now: a reference that a review saved is handed to a
   // model, which reads its pages by itself, and the files it names may be of an earlier version, damaged or
   // gone (`holds`).
-  const held = await heldItems(store, observations, ({ outputRef }) => [outputRef]);
+  const held = await heldItems(store, observations, ({ outputRef }) => [outputRef], wanted);
   return store.put((await Promise.all(held.map(async ({ tool, input, outputRef }) =>
     json({ tool, arguments: await store.pack(input, 2000), output: outputRef })))).join('\n') + '\n', 'jsonl');
 }

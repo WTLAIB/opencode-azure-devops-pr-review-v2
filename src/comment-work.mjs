@@ -234,7 +234,7 @@ async function planningInput(review, store, findings, report, work, continuation
     dispositions: wholeDispositions ? dispositions : dispositions.filter(row => ids.has(row.id) || ids.has(row.mergedInto)),
     ...(wholeDispositions ? {} : { allDispositions: await store.pack(dispositions, 0) }),
     reviewWarnings: await store.pack(review.final.reviewWarnings ?? []),
-    ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? []) } : {}),
+    ...(needsEvidence ? { evidenceIndex: await observationIndex(store, review.toolText ?? [], extras.active) } : {}),
     ...(extras.mergeCandidates?.length ? { mergeCandidates: extras.mergeCandidates } : {}),
     ...(extras.repeatCandidates?.length ? { repeatCandidates: extras.repeatCandidates } : {}),
     // This page's own earlier reads; pages planned at the same time keep theirs. Their values were put in this
@@ -398,7 +398,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const payload = await planningInput(review, store, assigned, report,
         { kind: 'plan', page: index + 1, pages: count, allowSummary,
           ...(reports[index] ? { reportRange: { start: reports[index].start, end: reports[index].end } } : {}) },
-        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments });
+        continuation, { sourceExcerpts, discussions, reportSegments: reports.length, mergeCandidates: candidates, repeatCandidates, evidence: evidence(), adjustments, active });
       // Another page failed while this input was prepared: start no model work.
       if (failure) return parts;
       const scoped = async answer => {

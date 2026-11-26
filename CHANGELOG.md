@@ -66,7 +66,7 @@ Private sessions:
   touched. A reviewer can still read local files on purpose, and the
   environment names the directory as before. Where AZPR cannot tell these
   parts of a request apart (another plugin rewrote them, or a later OpenCode
-  builds them another way), it sends them as OpenCode built them, as 0.5.0
+  builds them another way), it sends them as it received them, as 0.5.0
   did, and the stage's debug record counts the request.
 - **Reading a file beside a nested instruction file no longer fails the
   pass.** When a reviewer's native `read` reads a file of the local project
@@ -136,6 +136,16 @@ Known and not changed by this release (see the
   the dialog that opens before choosing.
 - Page Up and Page Down close the token dialog of `/pr-setup`, as they close
   OpenCode's own dialogs; nothing is saved then.
+- With `claude-agent` models, the note that AZPR adds to a comment planning
+  session that has read much does not reach the model: OpenCode's Claude
+  Code provider does not send what a plugin adds to a request's system
+  parts. The planner then loses its tools for that request without being
+  told why.
+- Several OpenCode processes share AZPR's state directory, and each knows
+  only its own running commands: one that saves a twenty-first review can
+  remove the oldest saved review while another process is planning or
+  posting its comments, and a process that starts can remove the data of
+  another process's run that has gone on for more than a day.
 - After a release was lost, a second press within a second of the pointer's
   last movement can still pick the step that was pressed. The second is
   measured where the terminal UI handles the two events: where its input

@@ -200,7 +200,8 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    edited them). A loaded file that another plugin moved elsewhere, or gave
    another ID, is not seen at all, so a counter of zero does not say that
    no such text went out. `shellNotices` on the stage
-   counts background commands that reported back. `turnChecks` counts how
+   counts the background commands that reported back in turns whose answers
+   were taken; a turn that failed after such a notice does not add to it. `turnChecks` counts how
    often the session's messages were read, once before every request of an
    open turn; and `refusedOutsideTurn` the requests that were refused
    because they were not a turn's (the notice of a background command woke

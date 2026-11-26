@@ -468,9 +468,10 @@ for retry, followed by that notice and a successful final text, is joined
 literally (`stream-continuations`), and when the model starts its answer over
 instead of continuing (a later fragment opens like the first), only the
 restarted text is used. That notice is known by its text alone, which anyone
-can post into a session, so it is taken for the host's only on a host that
-writes one: on OpenCode 2.3.0 and later, and on a host that does not say its
-version, such a message is someone else's and fails the turn. Either way an
+can post into a session, so it is taken for the host's only on a host whose
+version names a release of that protocol (2.0.x to 2.2.x): on OpenCode 2.3.0
+and later, and on a host that does not say its version or says what is no
+release, such a message is someone else's and fails the turn. Either way an
 errored message is excused only when the host marked it for retry and the
 turn still ends with a complete, successful final answer on the granted agent
 and model.
@@ -1029,9 +1030,12 @@ model and reads nothing. Where the messages cannot be read, the request is
 refused. What follows a request (the request itself, a retry of it, the tool
 calls of its answer) needs a request of this very turn that was looked at so.
 What a hook reads of the host it reads until its stage ends, so a stage that
-was stopped does not wait for a host that stalls. A request that is refused,
-whatever for (the turn, the session's agent or model, a look at the session
-that failed), also ends what an earlier request of the turn allowed. A stage's record counts those readings and the requests refused
+was stopped does not wait for a host that stalls. A request of the turn that
+is refused, when it is prepared or when it is sent and whatever for (the
+turn, the session's agent or model, a look at the session that failed, a
+dispatch that was not prepared), also ends what an earlier request of the
+turn allowed; a summary that the host attempts beside the turn is none of its
+requests, and its refusal ends nothing. A stage's record counts those readings and the requests refused
 outside a turn (`turnChecks`, `refusedOutsideTurn`).
 
 What a session read, for the check that a finding names a file its own tools

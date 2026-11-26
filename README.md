@@ -537,8 +537,8 @@ environment; your own conversations are not touched. A reviewer can still read
 the instruction files of the PR's repository with AZPR's tools, at the
 reviewed commit, and local files on purpose. Where AZPR cannot tell these
 parts of a request apart (another plugin rewrote them, or a later OpenCode
-builds them another way), it sends them as OpenCode built them, your local
-instructions included, and the stage's
+builds them another way), it sends them as it received them, with whatever
+of your local instructions they hold, and the stage's
 [debug record](docs/DEBUGGING.md) counts the request; see
 [what the selected model receives](docs/ENTERPRISE.md#what-the-selected-model-receives).
 

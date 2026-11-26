@@ -1093,7 +1093,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
     requireMethods(context, ['session.create', 'session.get', 'session.prompt', 'session.wait', 'session.context', 'session.interrupt', 'session.synthetic'], 'the review workflow');
     let id; do { id = randomUUID().slice(0, 8); } while (runs.has(id) || completed.has(id));
-    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(), observedSources: new Set(),
+    const run = { ...details, id, active: true, controller: new AbortController(), stages: [], toolText: new Map(), observations: new Map(),
       deadlineAt: settings.runTimeoutSeconds === null ? null : Date.now() + settings.runTimeoutSeconds * 1000 };
     runs.set(id, run);
     sourceRuns.set(run.origin, id);
@@ -1971,21 +1971,26 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     }
     let observation;
     // Keep observed source text with its request for anchor checks in comment planning, once: a file at a commit
-    // is the same in every window that is read of it, so it is one observation, saved by the first of them and
-    // known afterwards by the tool, the commit and the path, without its text being looked at again. A stopped
-    // call does not wait for that save, which finishes by itself.
+    // is the same in every window that is read of it and for every session that reads it, so it is one
+    // observation, known by the tool, the commit and the path. Its text is saved by the first call that reads
+    // it; the others, also those that read it at the same moment, share that save and look at the text no more.
+    // A save that failed is tried again by the next call. A stopped call does not wait for the save, which
+    // finishes by itself.
     const observed = outcome.observation && ROLES[g.role].format === 'initial' ? { path: outcome.observation.path, version: outcome.observation.version } : null;
-    const source = observed && `${name}\n${observed.version}\n${observed.path}`;
-    if (observed && !g.run.observedSources.has(source)) {
-      try {
-        observation = await scoped(async () => captureObservation(await dataFor(g.run), name, observed, outcome.observation.text), stop);
-      } catch {
-        if (!stop?.aborted) g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.');
+    if (observed) {
+      const source = `${name}\n${observed.version}\n${observed.path}`;
+      let saving = g.run.observations.get(source);
+      if (!saving) {
+        saving = (async () => captureObservation(await dataFor(g.run), name, observed, outcome.observation.text))();
+        g.run.observations.set(source, saving);
+        saving.catch(() => { if (g.run.observations.get(source) === saving) g.run.observations.delete(source); });
       }
+      try { observation = await scoped(() => saving, stop); }
+      catch { if (!stop?.aborted) g.run.debug.warnings.push('A review tool observation could not be saved for comment planning.'); }
     }
     // A call the host stopped ends here: it showed the session nothing, so nothing is credited to it.
     if (stop?.aborted) throw abortError(stop);
-    if (observation) { g.run.toolText.set(observation.key, observation); g.run.observedSources.add(source); }
+    if (observation) g.run.toolText.set(observation.key, observation);
     // Only contents this call showed at the reviewed commits count as this session's reads, and only once the
     // turn of the assistant message that asked for the call is looked at (`ask`): OpenCode names that message
     // to the tool. A call that names none is credited to no turn.
@@ -2167,6 +2172,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         touch(g, `model request ${g.calls} was sent`);
       } catch (error) {
         if (observed) observed.rejectedRequests++;
+        // A request of the turn that is refused ends what an earlier one allowed, like a request that is refused
+        // when it is prepared. A summary or a generation that the host attempts beside the turn is none of the
+        // turn's requests: its refusal ends nothing.
+        if (observed && event.kind === 'primary') { observed.checked = null; observed.primaryPrepared = false; }
         throw error;
       }
     }));

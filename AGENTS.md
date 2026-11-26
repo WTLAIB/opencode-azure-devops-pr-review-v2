@@ -136,9 +136,11 @@ settings, backups and failure records. Never upload `.local/`.
   run (its idle hook runs only when a turn succeeds), or by the wait alone.
   What follows a request (the request itself, a retry of it, the tool calls
   of its answer) needs a request of this very turn that was looked at so
-  (`inTurn`), and a request that is refused, whatever for (the turn, the
-  session's agent or model, a look that failed), ends what an earlier one
-  allowed. What a hook reads of the host, it reads until the stage ends
+  (`inTurn`), and a request of the turn that is refused, when it is
+  prepared or when it is sent and whatever for (the turn, the session's
+  agent or model, a look that failed, a dispatch that was not prepared),
+  ends what an earlier one allowed; a summary or a generation that the host
+  attempts beside the turn is none of its requests. What a hook reads of the host, it reads until the stage ends
   (`signal` on the grant), not the run: a stage that was stopped waits for
   its session to settle.
 - What a session read is what its turns read, by the host's record and not
@@ -286,8 +288,9 @@ settings, backups and failure records. Never upload `.local/`.
   and a complete, successful final answer on the granted agent and model; a
   retried step's answer is the final message alone. The continuation message
   of the earlier hosts is known by its text alone, which anyone can post:
-  accept it only on a host that writes one (`retriesSteps` in `host.mjs`; a
-  host that does not say its version is taken for a current one).
+  accept it only on a host whose version names a release of that protocol
+  (`retriesSteps` in `host.mjs`: 2.0.x to 2.2.x; a host that does not say
+  its version, or says what is no release, is taken for a current one).
 - Only a changed source commit makes a review STALE.
 
 **Bounded, recoverable execution.**
@@ -570,7 +573,11 @@ settings, backups and failure records. Never upload `.local/`.
   is not looked at again when a reference is handed on within the run (the
   retry of a stage, the continuation of a planning page): only that run
   writes those files, since an earlier version never replaces a file that
-  exists and a run's data is not cleaned up before its command has ended.
+  exists, and this process does not clean a run's data up before its
+  command has ended. Another process that shares the state directory can
+  (it knows only its own commands, a known limitation); the command whose
+  data is gone then fails, which no look before a reference is handed on
+  would cure.
   Pages that do not pass (rows of an earlier version, a file that is
   missing, cannot be read or was not finished) are written again from the
   value. Judge pages that are there by what the host's read returns, not by

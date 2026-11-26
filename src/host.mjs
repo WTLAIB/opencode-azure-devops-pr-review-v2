@@ -37,13 +37,14 @@ export function hostVersion(context) {
 
 /**
  * Whether a host of this version recovers an interrupted stream by retrying the step (OpenCode 2.3.0 and later)
- * and never by a continuation message that it queues (2.0.32 through 2.2.7). A host that does not say its
- * version is taken for a current one: the message of the earlier protocol is known by its text alone, which
- * anyone can post, so it is accepted only where the host is known to write it.
+ * and never by a continuation message that it queues (2.0.32 through 2.2.7). Only a version that names a host of
+ * the earlier protocol, 2.0.x to 2.2.x, says otherwise: a host that does not say its version, or says one that
+ * is no release (a development build, a text that is no version), is taken for a current one. The message of
+ * the earlier protocol is known by its text alone, which anyone can post, so it is accepted only where the host
+ * is known to write it.
  */
 export function retriesSteps(version) {
-  const parts = /^(\d+)\.(\d+)\./.exec(typeof version === 'string' ? version : '');
-  return !parts || Number(parts[1]) > 2 || (Number(parts[1]) === 2 && Number(parts[2]) >= 3);
+  return !(typeof version === 'string' && /^2\.[0-2]\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/.test(version));
 }
 
 export function hostCapabilities(context) {
@@ -331,7 +332,10 @@ const oneText = content => Array.isArray(content) && content.length === 1 && con
 export function withoutHostMessages(requested, stored) {
   const written = hostInstructions(stored);
   const loads = new Map(written.loads.map(message => [message.id, message.text])), updates = new Map();
-  for (const message of written.updates) updates.set(message.text, [...(updates.get(message.text) ?? []), message.id]);
+  for (const message of written.updates) {
+    if (!updates.has(message.text)) updates.set(message.text, []);
+    updates.get(message.text).push(message.id);
+  }
   if (!loads.size && !updates.size) return { messages: requested, loads: [], updates: [], changed: false };
   const found = { loads: new Set(), updates: [] }, taken = new Map();
   let changed = false;

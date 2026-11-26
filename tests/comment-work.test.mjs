@@ -1567,9 +1567,11 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
     pairs: '中文說明與🙂表情'.repeat(700),
   };
   for (const [name, text] of Object.entries(texts)) {
-    for (const reference of [await store.put(text), await store.object({ value: text, list: [text.slice(0, 5000)] })]) {
-      const whole = await store.read(reference);
+    for (const [reference, written] of [[await store.put(text), text], [await store.object({ value: text, list: [text.slice(0, 5000)] }), JSON.stringify({ value: text, list: [text.slice(0, 5000)] }, null, 2)]]) {
+      // The pages as the put left them: a read through the store would write pages again that were not right.
       const content = await readFile(reference.pages, 'utf8');
+      const whole = await store.read(reference);
+      assert.equal(whole, written, name);
       // What tells that a pages file gives its value whole says so of every file this version writes, and of
       // nothing that is a part of it, a row longer than the host returns, another text or another order.
       assert.equal(wholePages(content, whole), true, name);
@@ -1853,4 +1855,13 @@ test('a value is stored as the text a file can hold, and only a reference the st
   assert.deepEqual(handed.map(item => item.index), items.filter(item => item.index % 20 !== 7 && item.index !== 11).map(item => item.index), 'In their order, without the ones of which a value is gone.');
   assert.deepEqual([asked.length, new Set(asked).size, most], [50, 50, 8], 'Each of the 50 values was looked at once, eight at a time.');
   assert.deepEqual(await heldItems(counting, [], () => []), []);
+  // A list that is no longer wanted (its run was stopped) is not looked at further: the values of the batch that
+  // is under way are, no other, and what was not looked at is not handed out.
+  asked.length = 0;
+  let wanted = true;
+  const stopping = { ...counting, async holds(reference) { const held = await counting.holds(reference); wanted = false; return held; } };
+  const some = await heldItems(stopping, items, item => [item.reference, item.other], () => wanted);
+  assert.deepEqual([asked.length, some.map(item => item.index)], [8, [0, 1, 2, 3]], 'Eight values were looked at: those of the first four items.');
+  asked.length = 0;
+  assert.deepEqual([await heldItems(counting, items, item => [item.reference], () => false), asked], [[], []]);
 });
