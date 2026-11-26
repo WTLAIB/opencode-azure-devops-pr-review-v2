@@ -7,7 +7,8 @@ review benchmark, the instruction
 changes of 0.3.6 measured on it and on ReviewBench, the severity changes
 of 0.3.7 run on ReviewBench's test set, the runs behind the single
 pipeline of 0.5.0, 0.5.0 against 0.4.6 scored by ReviewBench's own
-judge, and 0.5.0 on Martian's benchmark. Host
+judge, 0.5.0 on Martian's benchmark, and a prototype in which reviewers
+ran code in a sandbox. Host
 integration, provider
 admission, source fidelity, model quality and publication are separate claims; a
 passing fixture establishes only the first. Earlier revisions and their live
@@ -572,6 +573,115 @@ the one that stands; the commit after it adds this record only.
 - A store that 0.5.0 saved, used by this version on a host, and one that
   this version saved, used by 0.5.0, beyond the two runs named above.
 - macOS, Windows and the desktop app.
+
+## Reviewers running code in a sandbox (2026-11-25 and 26)
+
+Whether reviewers find more defects, or file fewer invalid findings, when
+they can test a suspicion by running code instead of only reading. A
+prototype that gives reviewer passes a sandbox to run commands in was
+measured against the same build with shell denied, with two models. Neither
+showed a measurable difference, so AZPR has no such mode, and `shell` stays
+`deny` by default. These are development measurements scored by our own
+judge.
+
+**The prototype.** Two commits on `main` at `be9d608` (0.5.0 and
+documentation changes after it), not part of any release and not
+published. With `shell: "sandbox"`, each reviewer pass gets a tool,
+`azpr_run`, that runs one command under bubblewrap 0.6.1: no network, none
+of the host's environment variables and no home directory; `/usr` and the
+few system files a program needs, read-only, so the programs installed on
+the host can run; a private `/tmp`; and a working directory that holds
+copies of the PR files the reviewer names, at the PR's head or base, and
+the files it writes. A command has 30 seconds by default and 60 at most,
+2 GB of memory and 16 KB of output. Three sentences in the shell section of
+the reviewer prompt describe the tool, ask the reviewer to run a small
+experiment when reading leaves a suspected defect uncertain and to put what
+it ran and the actual result in the evidence, and not to report a defect
+its experiment contradicts. OpenCode's own shell stays denied. The other
+arm, `shell: "deny"`, is 0.5.0's default, with reviewer prompts
+byte-identical to 0.5.0's.
+
+**Setup.** ReviewBench's 24 test pull requests of the earlier pages and the
+Git-backed stand-in for Azure DevOps, on OpenCode 2.4.0 with isolated
+profiles, Ubuntu 22.04.5 under WSL2. Two passes of one model at the
+provider's default effort, which also rated the severities: GPT-6.1 Terra on
+2026-11-25 and GPT-6.2 Sol on 2026-11-26. One run per arm; the two arms of a
+model ran at the same time. One Sol review without shell failed before it
+started, on a Git lock that the other arm's checkout held in the clone both
+arms use, and was run again alone.
+
+**Judge and rules.** The local judge of the earlier pages, Claude Opus 5.5
+subagents applying ReviewBench's matcher and classifier rubric, with the
+arms' names hidden until the scores were in; every finding without a match
+was classified. The rules for reading the results were written before the
+runs: a difference of 5 points in the share of findings judged valid, or of
+4 points of recall, counts; a smaller one is no measurable difference at one
+run per arm. In the runs behind 0.5.0, reruns of one setting varied with a
+standard deviation of about 1 to 3 points of valid share and 0.4 to 1.5
+points of recall. Costs are list prices from the token records of the
+review stages.
+
+| | Terra, no shell | Terra, sandbox | Sol, no shell | Sol, sandbox |
+| --- | ---: | ---: | ---: | ---: |
+| Reviewer passes that ran a command | | 8 of 54 (15%) | | 43 of 54 (80%) |
+| Commands per PR | | 0.5 | | 5.9 |
+| Findings per PR | 6.6 | 6.9 | 29.4 | 27.7 |
+| Judged valid | 89.3% | 91.5% | 84.0% | 86.6% |
+| Reference recall (346 issues) | 29.2% | 30.9% | 50.0% | 49.7% |
+| High and medium recall (167) | 51.5% | 53.3% | 61.7% | 59.9% |
+| Invalid findings | 17 | 14 | 113 | 89 |
+| Cost per review | US$0.131 | US$0.127 | US$0.742 | US$0.759 |
+| Median time per review | 61 s | 63 s | 264 s | 287 s |
+
+No difference reaches its bar. With the sandbox the share judged valid was
+2.2 and 2.6 points higher and recall 1.7 points higher and 0.3 lower, at
+3% less and 2% more cost, and a median time 2 and 23 seconds longer.
+
+**What the commands did.** Every command was read against both arms'
+findings, without the judge's labels.
+
+- Terra ran 12. Nine supported findings that the arm without shell filed as
+  well, from reading and often with the same reasoning; one of them also
+  computed a contrast ratio that became a finding of its own, which matched
+  a reference issue. One went against a suspicion that the other arm did not
+  report either, and one was a baseline. One could show nothing, since the
+  files it needed had not been copied; its reviewer did not notice, and no
+  finding cites it.
+- Sol ran 142: Node and Python scripts, the PR's own packaging and install
+  scripts with a stand-in home directory, and the host's `codex` CLI, which
+  the read-only `/usr` made available. 92 back 129 of the arm's findings,
+  which were judged valid as often as its others (86.8% against 86.6%). Six
+  findings that only this arm filed rest on an experiment, and one of them
+  was judged valid; the other five describe mechanisms that the experiments
+  showed real, rated invalid as unreachable or immaterial in this code.
+  Seven went against a suspicion, none of which the arm without shell had
+  reported, so they avoided no false report that the other arm made. 14
+  could not run what they meant to: Java or Ruby was missing (4), a Python
+  module or a feature newer than the host's Python 3.10 (5), a binary file,
+  which the sandbox does not copy (3), or the setup was wrong (2), which the
+  reviewer's next command corrected. 29 were probes, baselines and steps
+  toward another command. No finding relies on the result of a wrong setup.
+- One experiment talked Sol out of a claim that the reference set holds
+  three times as a true issue: that a token percent-encoded before it is
+  assigned to `URL.password` is encoded twice. It is not, as the URL
+  standard specifies; neither arm reported it, so no score changed. No other
+  experiment of either model talked a reviewer out of an issue that the
+  reference set holds as true.
+
+Sol's arm with the sandbox had 24 fewer invalid findings, which the
+commands do not explain: where both arms filed a finding at one place, the
+same claim was often rated differently by different classifier batches,
+with no experiment behind it, and the rest are findings that one arm did
+not file, on topics no command touched. With Terra, most findings that the
+classifier rejected (10 of 14) state true behaviour that is intended or
+does not matter, which running code cannot settle; the other invalid ones
+mostly match issues that the reference set itself lists as invalid.
+
+**Limits.** One run per arm, 24 pull requests, our judge, two GPT models at
+their default effort; nothing was measured with Claude. The three prompt
+sentences cannot be told apart from the tool in this design. The sandbox
+needs Linux with bubblewrap. No measurable difference at this size does not
+mean no effect.
 
 ## OpenCode 2.3.1 to 2.4.1 compared with 2.3.0 (2026-11-24 to 26)
 

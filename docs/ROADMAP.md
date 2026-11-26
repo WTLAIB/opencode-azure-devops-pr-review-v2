@@ -272,6 +272,17 @@ missed, so a vote would remove exactly those findings, and agreement between
 passes does not make a finding right. The record keeps which sessions
 reported a finding; it is never used to drop or to rate one.
 
+### A sandbox for reviewers' experiments
+
+Not done: a prototype that let reviewer passes run commands in an isolated
+sandbox (no network and no home directory, with copies of the PR's files),
+to test a suspicion that reading leaves open, changed neither recall nor the
+share of valid findings measurably, with GPT-6.1 Terra, which used it in 15%
+of its passes, or with GPT-6.2 Sol, which used it in 80%. Most experiments
+backed findings that reviewers without the sandbox filed as well, by
+reading; see
+[validation](VALIDATION.md#reviewers-running-code-in-a-sandbox-2026-11-25-and-26).
+
 ### Choosing the number of passes by PR size
 
 Not done: the number of passes is what a person lists per mode, and
