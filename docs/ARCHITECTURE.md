@@ -513,7 +513,9 @@ page is asked for a correction: stages already running finish the turn they
 are in (the saved observations a page's comments are checked against are not
 read on, and the page is taken as it would be at its last turn: the stage
 asks the page's handler before each correction whether its work was given
-up), and the failure of the lowest failed page ends the command as before;
+up, and a stage tells its handler of a failure that will not be tried again
+before it cleans its session up), and the failure of the lowest failed page
+ends the command as before;
 `/pr-stop` cancels every running page.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
@@ -979,9 +981,13 @@ that can be written, and a source of the instructions part goes only where it
 holds nothing but its key and its text. The event itself is read the same
 way: what it holds under `system`, `messages`, `options` and `tools` is taken
 once from its descriptors, a place is given another value only where it can
-be written, and a change is made only where it can be made whole. A tool is
-taken out of the list of tools where the list lets it, and the stage's record
-counts a request in which one stayed (`toolsLeftListed`). Where one of these
+be written, and a change is made only where it can be made whole (for the
+Claude provider the option and the parts together: where the parts take no
+new value the option is put back). A tool is taken out of the list of tools
+where the list lets it, and the stage's record counts a request in which one
+stayed (`toolsLeftListed`); a planning session that was told to finish
+without tools is refused a tool where it calls one all the same, and a note
+that could not be added is counted (`notesNotAdded`). Where one of these
 cannot be done the request goes out as it is and is counted; none refuses
 it. What the hook takes out of a request as the host builds it is
 exactly what `requestReview` takes for no one else's input: both go by the

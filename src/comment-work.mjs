@@ -440,6 +440,9 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
         // of a plan that is given up. The stage asks this right before it would ask for one, and takes the
         // answer as its last turn would.
         abandoned: () => Boolean(failure),
+        // A failure of this page that will not be tried again is known here as soon as the stage knows it, while
+        // its session is still being cleaned up: the other page is asked for nothing more from then on.
+        failed: error => { if (!failure || index < failure.index) failure = { index, error }; },
       });
       sessions++;
       if (text(page.summary)) summaryWritten = true;

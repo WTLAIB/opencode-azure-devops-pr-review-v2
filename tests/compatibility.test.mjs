@@ -274,6 +274,11 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
   assert.deepEqual(withoutPlaceInstructions([system[0], bare]).system, [system[0]]);
   for (const [name, marked] of Object.entries({ 'the part': { ...bare, cache: { type: 'ephemeral' } }, 'its metadata': { ...bare, metadata: { ...bare.metadata, note: 'of a hook' } },
     'beside the sources': { ...bare, metadata: { experimental: { instructions: local, also: true } } } })) assert.equal(withoutPlaceInstructions([system[0], marked]), null, `a mark on ${name}`);
+  // The instructions part is a text part: one of another kind that kept its text and its sources is not the
+  // host's, and is not made anew or dropped.
+  assert.equal(withoutPlaceInstructions([system[0], { ...part, type: 'cache' }]), null);
+  assert.equal(withoutPlaceInstructions([system[0], { ...bare, type: 'cache' }]), null);
+  assert.equal(withoutPlaceInstructions([system[0], { text: part.text, metadata: part.metadata }]), null, 'A part that says no kind is none.');
   // A source that goes takes what it holds with it, so only one that holds nothing but its key and its text: a
   // mark on one that goes leaves everything as it is, and a mark on one that stays, stays with it.
   const origin = at => [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, index) => index === at ? { ...source, origin: 'of a hook' } : source) } } }];
@@ -303,6 +308,11 @@ test('a tool is taken out of a request\'s list where the list is an ordinary obj
   const tools = { read: {}, edit: {}, azpr_read_file: {}, [Symbol('mark')]: 'of a hook' };
   assert.equal(withoutTools(tools, unwanted), true);
   assert.deepEqual([Object.keys(tools), Object.getOwnPropertySymbols(tools).length], [['read'], 1], 'The tools that are not wanted are gone, and nothing else.');
+  // A tool is what the list lists: something a hook keeps on the list for itself, not listed, is no tool. It is
+  // left where it is, whether it could be taken out or not, and nothing is said of it.
+  const kept = Object.defineProperties({ read: {}, edit: {} }, { revision: { value: 7, configurable: true }, azpr_state: { value: {}, configurable: false } });
+  assert.equal(withoutTools(kept, name => name !== 'read'), true);
+  assert.deepEqual([Object.keys(kept), kept.revision, typeof kept.azpr_state], [['read'], 7, 'object']);
   // A list that cannot be changed keeps its tools, and one of them that cannot be taken out stays: the request
   // goes on either way.
   const fixed = Object.freeze({ read: {}, edit: {} }), partly = Object.defineProperty({ read: {}, azpr_read_file: {} }, 'edit', { value: {}, enumerable: true });
@@ -342,15 +352,20 @@ test('the places of a request are taken once from the event\'s own descriptors: 
   assert.equal(asked, 0);
 });
 
-test('the Claude provider\'s option is the text an ordinary object holds of its own, with whether it can be written', () => {
+test('the Claude provider\'s option is the text that plain options hold of their own', async () => {
   const key = CLAUDE_INSTRUCTIONS_OPTION;
-  const held = (text, writable = true) => ({ text, writable });
-  assert.deepEqual([claudeOption({ [key]: 'TEXT', maxTokens: 1 }), claudeOption({ [key]: '' }), claudeOption(Object.assign(Object.create(null), { [key]: 'TEXT' }))], [held('TEXT'), held(''), held('TEXT')]);
-  // Its text is there to compare where it cannot be written, and the option says so: it is not emptied then.
-  assert.deepEqual([claudeOption(Object.freeze({ [key]: 'TEXT' })), claudeOption(Object.defineProperty({}, key, { value: 'TEXT', enumerable: true, configurable: true }))], [held('TEXT', false), held('TEXT', false)]);
+  assert.deepEqual([claudeOption({ [key]: 'TEXT', maxTokens: 1 }), claudeOption({ [key]: '' }), claudeOption(Object.assign(Object.create(null), { [key]: 'TEXT' }))], ['TEXT', '', 'TEXT']);
+  // Its text is there to compare where it cannot be written: whether it can be emptied is what writing it answers.
+  assert.deepEqual([claudeOption(Object.freeze({ [key]: 'TEXT' })), claudeOption(Object.defineProperty({}, key, { value: 'TEXT', enumerable: true, configurable: true }))], ['TEXT', 'TEXT']);
   let asked = 0;
   const revoked = Proxy.revocable({ [key]: 'TEXT' }, {}); revoked.revoke();
+  // An object of a module's exports says of each that it can be written, and takes no value: it is no plain data.
+  const exported = await import(`data:text/javascript,export const ${key} = 'TEXT';`);
+  assert.deepEqual([Object.getOwnPropertyDescriptor(exported, key).writable, Reflect.set(exported, key, '')], [true, false]);
   for (const [name, options] of Object.entries({
+    'options that are a module\'s exports': exported,
+    'options of a class of their own': Object.assign(new (class Options {})(), { [key]: 'TEXT' }),
+    'options that hold something that is not listed': Object.defineProperty({ [key]: 'TEXT' }, 'note', { value: 'of a hook' }),
     'an option behind an accessor': Object.defineProperty({}, key, { enumerable: true, get() { asked++; return 'TEXT'; } }),
     'an option that is inherited': Object.create({ [key]: 'TEXT' }),
     'an option that is no text': { [key]: ['TEXT'] },

@@ -219,7 +219,10 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    tools still held one this role may not call, because another plugin made
    the list something AZPR does not change (a list that cannot be written,
    or one that answers for another object); such a tool is refused when it
-   is called.
+   is called. `notesNotAdded` counts the requests of a planning session that
+   was to finish without tools in which AZPR could not add its note saying
+   so, because the parts were no ordinary list or their place could not be
+   written; the tools were unavailable all the same.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a

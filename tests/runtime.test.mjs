@@ -282,7 +282,7 @@ async function fixture(t, opts = {}) {
       // `reading` runs before the session's messages are handed out, and may fail the read.
       async context({ sessionID }) { await opts.reading?.(sessions.get(sessionID)); return clone(sessions.get(sessionID).history); },
       async remove({ sessionID }) { calls.push({ kind: 'remove', sessionID }); await opts.remove?.(sessionID); sessions.delete(sessionID); },
-      async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); const s = sessions.get(sessionID); if (s) { s.outcome = 'interrupted'; s.onInterrupt?.(); } return { interrupted: true }; },
+      async interrupt({ sessionID }) { calls.push({ kind: 'interrupt', sessionID }); await opts.interrupting?.(sessionID); const s = sessions.get(sessionID); if (s) { s.outcome = 'interrupted'; s.onInterrupt?.(); } return { interrupted: true }; },
       async synthetic(input) {
         if (opts.syntheticFailure?.(input)) throw new Error('Fixture notice unavailable');
         await opts.syntheticDelay?.(input);
@@ -2199,23 +2199,36 @@ test('when a planning page fails, the page already running finishes before the c
   // The page that is still running is asked for no correction once the other has failed: its answer, also one
   // that cannot be read, is taken as its last turn would take it, and no further model turn is spent on a plan
   // that will not be made. While no page has failed, such an answer gets its correction turn as ever.
-  for (const fails of [true, false]) {
-    const broke = deferred(), turns = [];
+  // The failure counts from the moment the stage knows that no new session will be tried, while the failed
+  // session is still being stopped: page 1 answers during that, with the stop held open, and is not corrected.
+  // A failure that is tried again in a new session is none yet: the other page is corrected as ever, and the
+  // preview is planned.
+  for (const fails of [true, false, 'once']) {
+    const answered = deferred(), stopping = deferred(), release = deferred(), turns = [];
+    let failing, tried = 0;
     const g = await fixture(t, { files,
       answer: input => {
         if (input.role !== 'azpr-review-comment-plan' || input.packet.commentWork.kind !== 'plan') return reviewers(input);
-        if (input.packet.commentWork.page === 2) { broke.resolve(); return fails ? { $provider: 401 } : reviewers(input); }
+        if (input.packet.commentWork.page === 2) {
+          failing ??= input.session.id; answered.resolve();
+          return fails === true ? { $provider: 401 } : fails === 'once' && !tried++ ? { $provider: 503 } : reviewers(input);
+        }
         turns.push(input.turn);
         return input.turn ? reviewers(input) : 'This is no JSON.';
       },
+      async interrupting(sessionID) { if (fails && sessionID === failing) { stopping.resolve(); await within(release.promise); } },
       async during({ role, packet, turn }) {
-        if (role === 'azpr-review-comment-plan' && packet.commentWork.kind === 'plan' && packet.commentWork.page === 1 && !turn) { await within(broke.promise); await sleep(100); }
+        if (role !== 'azpr-review-comment-plan' || packet.commentWork.kind !== 'plan' || packet.commentWork.page !== 1) return;
+        // Page 1 answers once page 2 has answered and, where that failed, while its session is being stopped.
+        if (!turn) await within((fails ? stopping : answered).promise);
+        else release.resolve();
       } });
     await g.command();
     const planned = await g.command('pr-comment', '');
-    assert.match(planned, fails ? /\] INCOMPLETE/ : /\] PREVIEW/, String(fails));
+    assert.match(planned, fails === true ? /\] INCOMPLETE/ : /\] PREVIEW/, String(fails));
     const pageOne = (await stageRecords(planned)).find(stage => stage.stage === 'comment-plan' && stage.commentWork.kind === 'plan' && stage.commentWork.page === 1);
-    assert.deepEqual([turns, pageOne.repairs?.length], fails ? [[0], undefined] : [[0, 1], 1], String(fails));
+    assert.deepEqual([turns, pageOne.repairs?.length], fails === true ? [[0], undefined] : [[0, 1], 1], String(fails));
+    release.resolve();
   }
 });
 
@@ -2358,8 +2371,8 @@ test('a comment for several places is planned away from lines where the PR alrea
 });
 
 test('a grouping pass that takes many steps is told to finish in its own words: groups and READY, no page and no continuation', async t => {
-  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], reviewers = findingPerFile(files), frames = {};
-  const f = await fixture(t, { files, answer: input => reviewers(input) ?? repeating(input), async during({ session, role, packet, turn, emit }) {
+  const files = ['/src/A.java', '/src/B.java', '/src/C.java'], reviewers = findingPerFile(files), frames = {}, stuck = {};
+  const f = await fixture(t, { files, answer: input => reviewers(input) ?? repeating(input), async during({ session, role, packet, turn, emit, invoke }) {
     if (role !== 'azpr-review-comment-plan' || turn || frames[packet.commentWork.kind]) return;
     const model = structuredClone(session.model);
     const context = async () => {
@@ -2373,9 +2386,27 @@ test('a grouping pass that takes many steps is told to finish in its own words: 
       await emit('session', 'model.request', { sessionID: session.id, agent: role, model, kind: 'primary' });
     }
     frames[packet.commentWork.kind] = await context();
+    if (packet.commentWork.kind !== 'plan') return;
+    // The same request where another plugin left a list of tools that cannot be emptied and parts that cannot be
+    // replaced: the tools stay listed and the note is not added, the request goes on, and a tool that the model
+    // calls all the same is not run.
+    const fixed = (event, name, value) => Object.defineProperty(event, name, { value, enumerable: true, writable: false, configurable: true });
+    stuck.frame = fixed(fixed({ sessionID: session.id, agent: role, model, messages: f.project(session.history) }, 'tools', Object.freeze({ azpr_read_file: {}, read: {} })), 'system', []);
+    await emit('session', 'context', stuck.frame);
+    await emit('session', 'model.request', { sessionID: session.id, agent: role, model, kind: 'primary' });
+    stuck.calls = [await invoke(session, 'read', { filePath: 'notes.md' }).then(() => 'ran', error => error.message), await invoke(session, 'azpr_read_file', { path: '/src/A.java' }).then(() => 'ran', error => error.message)];
+    stuck.session = session.id;
+    // A list that cannot be changed, in a place that can be given another: an empty list takes its place, so no
+    // tool is left listed and none is counted.
+    stuck.replaced = { sessionID: session.id, agent: role, model, system: [], messages: f.project(session.history), tools: Object.freeze({ azpr_read_file: {}, read: {}, edit: {} }) };
+    await emit('session', 'context', stuck.replaced);
   } });
   await f.command();
-  assert.match(await f.command('pr-comment', ''), /\] PREVIEW/);
+  const planned = await f.command('pr-comment', '');
+  assert.match(planned, /\] PREVIEW/);
+  assert.deepEqual([Object.keys(stuck.frame.tools), stuck.frame.system, stuck.calls], [['azpr_read_file', 'read'], [], Array(2).fill('[AZPR] Tools are unavailable for this response.')]);
+  const observed = (await stageRecords(planned)).find(stage => stage.sessionID === stuck.session).requestObservations;
+  assert.deepEqual([observed.toolsLeftListed, observed.notesNotAdded, stuck.replaced.tools, stuck.replaced.system.length], [1, 1, {}, 1], 'The stage\'s record says what could not be done, and only that.');
   assert.deepEqual([frames.group.tools, frames.plan.tools], [{}, {}], 'Neither may call a tool in that response.');
   assert.equal(frames.group.system.length, 1);
   assert.equal(frames.group.system[0].text, 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.');
@@ -5353,7 +5384,7 @@ test('a private role gets AZPR\'s instructions and the host\'s date and environm
 test('for the Claude Code provider the sources are left out only where its option holds what they give, and the option is emptied with them', async t => {
   const given = `${PLACE_SOURCES[0].text}\n\n${PLACE_SOURCES[1].text}`, facts = PLACE_SOURCES.slice(2);
   const frames = {};
-  let asked = 0, listed;
+  let asked = 0, listed, halfway;
   const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.models.review.reviewers = ['claude-agent/haiku', 'fixture/review-b']; },
     async during({ session, role, turn, emit }) {
       if (role !== 'azpr-review-reviewer' || turn) return;
@@ -5371,12 +5402,21 @@ test('for the Claude Code provider the sources are left out only where its optio
         // and the option stay as they are, the request goes on and is counted.
         ['in options that cannot be written', Object.freeze({ maxTokens: 1, claudeCodeInstructions: given })],
         ['behind an accessor', Object.defineProperty({ maxTokens: 1 }, 'claudeCodeInstructions', { enumerable: true, get() { asked++; return given; } })],
+        // An object of a module's exports says that the option can be written, and takes no value.
+        ['in options that only say they can be written', await import(`data:text/javascript,export const maxTokens = 1, claudeCodeInstructions = ${JSON.stringify(given)};`)],
       ]) {
-        const before = clone(frame(options, sources));
+        const before = clone(frame(options && { ...options }, sources));
         // Counted from here: what the hook asks of the option, not what this test read to keep a copy.
         asked = 0;
         frames[name] = { before, after: await emit('session', 'context', frame(options, sources)) };
       }
+      // The two writes are made together or not at all. Here the event is an object of a module's exports, whose
+      // places say they can be written and take no value: the option, which could be emptied, is put back.
+      globalThis.azprTestFrame = frame({ maxTokens: 1, claudeCodeInstructions: given });
+      const exported = await import('data:text/javascript,const frame = globalThis.azprTestFrame; export const sessionID = frame.sessionID, agent = frame.agent, model = frame.model, system = frame.system, messages = frame.messages, tools = frame.tools, options = frame.options;');
+      delete globalThis.azprTestFrame;
+      await emit('session', 'context', exported);
+      halfway = [exported.options.claudeCodeInstructions, exported.system.map(part => part.text)];
       // A list of tools that another plugin froze cannot be changed: the request goes on with it as it is.
       listed = await emit('session', 'context', { ...frame({ maxTokens: 1, claudeCodeInstructions: given }), tools: Object.freeze({ read: {}, edit: {}, azpr_read_file: {} }) });
     } });
@@ -5385,16 +5425,18 @@ test('for the Claude Code provider the sources are left out only where its optio
   const told = frames['as the provider writes it'].after;
   assert.deepEqual([told.system.map(part => part.text), told.options], [LEAN_SYSTEM, { maxTokens: 1, claudeCodeAgent: 'ROLE', claudeCodeInstructions: '' }], 'The parts lose the sources, and so does what the provider hands the model.');
   for (const name of ['written another way', 'with one source more than the parts have now', 'with a part of what the parts give', 'missing', 'no options at all', 'not a text', 'nothing to leave out, but an option that holds something',
-    'in options that cannot be written']) {
-    assert.deepEqual([frames[name].after.system, frames[name].after.options], [frames[name].before.system, frames[name].before.options], `${name}: the parts and the option stay as they are`);
+    'in options that cannot be written', 'in options that only say they can be written']) {
+    const options = frames[name].after.options;
+    assert.deepEqual([frames[name].after.system, options && { ...options }], [frames[name].before.system, frames[name].before.options], `${name}: the parts and the option stay as they are`);
   }
   assert.deepEqual([frames['behind an accessor'].after.system, asked], [frames['behind an accessor'].before.system, 0], 'An option behind an accessor is not asked for, and nothing is left out.');
   assert.deepEqual([Object.keys(listed.tools), listed.system.map(part => part.text)], [['read', 'edit', 'azpr_read_file'], LEAN_SYSTEM], 'The request with a list of tools that cannot be changed went on.');
   const plain = frames['nothing to leave out, and an empty option'];
   assert.deepEqual([plain.after.system, plain.after.options], [plain.before.system, plain.before.options], 'Nothing to change.');
   const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
-  // Nine of the twelve requests above, and the fixture's own, which has neither parts nor the option.
-  assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 10]);
+  assert.deepEqual(halfway, [given, placeSystem().map(part => part.text)], 'Where the parts took no new value, the option holds what it held.');
+  // Eleven of the fourteen requests above, and the fixture's own, which has neither parts nor the option.
+  assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 12]);
 });
 
 test('a place of a request that cannot be written, or a list in it that cannot be changed, leaves the request as it is there; the request goes on and the stage\'s record counts it', async t => {
@@ -5404,9 +5446,19 @@ test('a place of a request that cannot be written, or a list in it that cannot b
   const load = instructionLoad(), update = { id: 'msg_update', type: 'system', text: 'The instructions changed:\nInstructions from: /work/AGENTS.md\nCHANGED RULES', metadata: { notice: 'instructions' } };
   const holding = messages => messages.filter(message => JSON.stringify(message).includes('NESTED RULES') || JSON.stringify(message).includes('CHANGED RULES')).length;
   const seen = {};
-  let asked = 0, first, f;
+  let asked = 0, first, second, f;
   f = await fixture(t, { files: ['/src/Main.java'], async during({ session, role, turn, emit, invoke }) {
-    if (role !== 'azpr-review-reviewer' || turn || (first ??= session.id) !== session.id) return;
+    // Both passes: each position has a role of its own.
+    if (!role.startsWith('azpr-review-reviewer') || turn) return;
+    if (first !== undefined && session.id !== first) {
+      // The other pass's session, with one such request and no other: parts that cannot be replaced.
+      if (second !== undefined) return;
+      second = session.id;
+      const event = { sessionID: session.id, agent: role, model: clone(session.model), messages: f.project(session.history), options: { maxTokens: 1 }, tools: { read: {} } };
+      await emit('session', 'context', Object.defineProperty(event, 'system', { value: placeSystem(), enumerable: true, writable: false, configurable: true }));
+      return;
+    }
+    first = session.id;
     await invoke(session, 'read', { path: 'sub/note.txt' });
     session.history.push(clone(load), clone(update));
     const request = () => ({ sessionID: session.id, agent: role, model: clone(session.model), system: placeSystem(), messages: f.project(session.history), options: { maxTokens: 1 }, tools: { read: {}, edit: {} } });
@@ -5444,6 +5496,10 @@ test('a place of a request that cannot be written, or a list in it that cannot b
   // not (fixed, behind an accessor). And for the tools: behind an accessor, answering for another object twice,
   // and in a list that cannot be changed.
   assert.deepEqual([record.placeInstructionsNotToldApart, record.toolsLeftListed, record.instructionLoads, record.instructionUpdates], [6, 4, 1, 1]);
+  // Only what was written is recorded as left out: the session whose one such request could not take new parts
+  // names no source, and counts that request beside its own.
+  const other = (await stageRecords(receipt)).find(stage => stage.sessionID === second).requestObservations;
+  assert.deepEqual([other.placeInstructions, other.placeInstructionsNotToldApart], [undefined, 2]);
 });
 
 test('what the host wrote of instructions is taken out of a request where it is as the host builds it; what another hook changed goes out as it is and is counted; a message that only looks like a load is someone else\'s', async t => {

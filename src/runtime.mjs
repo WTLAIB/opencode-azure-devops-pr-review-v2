@@ -859,15 +859,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
    * watchdog stops only this attempt; the run's signal still cancels everything.
    * @param {{evaluate: Function, finalize?: Function}} handler
    */
-  async function stageAttempt(run, role, payload, handler, { label, attempt }) {
+  async function stageAttempt(run, role, payload, handler, { label, attempt, retried }) {
     const watch = { at: Date.now(), activity: 'the stage started', quietUntil: 0, toolsRunning: 0, waiting: true };
     const stopper = new AbortController();
     const unwatch = watchStage(watch, error => stopper.abort(error));
-    try { return await attemptStage(run, role, payload, handler, { label, attempt }, watch, AbortSignal.any([run.controller.signal, stopper.signal])); }
+    try { return await attemptStage(run, role, payload, handler, { label, attempt, retried }, watch, AbortSignal.any([run.controller.signal, stopper.signal])); }
     finally { unwatch(); }
   }
 
-  async function attemptStage(run, role, payload, handler, { label, attempt }, watch, signal) {
+  async function attemptStage(run, role, payload, handler, { label, attempt, retried }, watch, signal) {
     const runSignal = run.controller.signal;
     if (!run.active) throw new Error('Review stopped.');
     await checkRole(role, signal);
@@ -895,7 +895,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // and a request is the turn's only while the turn's prompt is among them, known by that nonce, and no
       // idle marker follows it (see the `context` hook). The end of the wait closes the grant in any case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
       // `validated` the prompt of the last turn whose answer was taken.
-      open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0, turnUnreadable: 0, toolsLeftListed: 0,
+      open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0, turnUnreadable: 0, toolsLeftListed: 0, notesNotAdded: 0, toolless: false,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
@@ -1016,7 +1016,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // Cancelling the run wins; otherwise a watchdog stop is reported as one.
       const idle = !runSignal.aborted && watch.error;
       g.timing?.promptSettled(runSignal.aborted ? 'interrupted' : idle ? 'idle-stopped' : 'rejected');
-      if (error?.response && settings.debug.enabled) await run.debug.write(`${stem}.response.json`, diagnosticResponse(error.response));
+      const response = error?.response;
       if (runSignal.aborted) error = abortError(runSignal);
       else if (idle) error = watch.error;
       record.status = 'FAILED';
@@ -1027,6 +1027,11 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       record.failureClass = failureClass;
       if (error instanceof Error) error.failureClass = failureClass;
       grants.delete(made.id);
+      // A failure that no new session will be tried for is said to the handler here, before anything is awaited:
+      // what it gives up for that (comment planning asks no other page for a correction) is given up while this
+      // session is still being cleaned up, not only once the failure has been handed on.
+      if (!retried(failureClass)) handler.failed?.(error);
+      if (response && settings.debug.enabled) await run.debug.write(`${stem}.response.json`, diagnosticResponse(response));
       if (!runSignal.aborted) await abortSession(run, made.id);
       throw error;
     } finally {
@@ -1050,7 +1055,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}), ...(g.refusedOutsideTurn ? { refusedOutsideTurn: g.refusedOutsideTurn } : {}),
         ...(g.turnUnreadable ? { turnUnreadable: g.turnUnreadable } : {}),
         // Requests whose list of tools still held one this role may not call: the list could not be changed.
-        ...(g.toolsLeftListed ? { toolsLeftListed: g.toolsLeftListed } : {}) };
+        ...(g.toolsLeftListed ? { toolsLeftListed: g.toolsLeftListed } : {}),
+        // Requests of a planning session that was told to finish without tools, where that note could not be added.
+        ...(g.notesNotAdded ? { notesNotAdded: g.notesNotAdded } : {}) };
       record.endedAt = new Date().toISOString();
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
@@ -1069,10 +1076,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
   async function runStage(run, role, payload, handler, { label = '' } = {}) {
     const attempts = 1 + settings.workflow.stageRetries;
     for (let attempt = 1; ; attempt++) {
-      try { return await stageAttempt(run, role, payload, handler, { label, attempt }); }
+      // Whether a failure of this attempt, of that class, is tried again in a new session: the one rule, which the
+      // attempt itself asks to tell its handler at once of a failure that is not.
+      const retried = failureClass => run.active && !run.controller.signal.aborted && ['transient', 'idle'].includes(failureClass) && attempt < attempts;
+      try { return await stageAttempt(run, role, payload, handler, { label, attempt, retried }); }
       catch (error) {
-        if (!run.active || run.controller.signal.aborted) throw error;
-        if (!['transient', 'idle'].includes(error?.failureClass) || attempt >= attempts) throw error;
+        if (!retried(error?.failureClass)) throw error;
         progress(run, `${ROLES[role].label}${label ? ` ${label}` : ''} failed (${errorText(error).slice(0, 200)}); retrying in a new session.`);
       }
     }
@@ -2152,26 +2161,37 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       const forClaude = model?.providerID === CLAUDE_PROVIDER;
       const option = forClaude ? claudeOption(slots.options.value) : undefined;
       const leaves = Boolean(lean?.removed.length);
-      const told = Boolean(lean) && (!forClaude || option?.text === claudeInstructions(lean.removed)) && (!leaves || (slots.system.writable && (!forClaude || option.writable)));
+      const told = Boolean(lean) && (!forClaude || option === claudeInstructions(lean.removed));
+      // The sources are left out by writing the parts, and for the Claude provider the option as well: both writes
+      // are made or neither. What a write answers is looked at, since a place can refuse a value (frozen options,
+      // parts whose place cannot be written): the option first, which is put back where the parts then do not
+      // take their new value. Only what was written is recorded as left out.
+      let left = false;
+      if (told && leaves) {
+        const emptied = !forClaude || Reflect.set(slots.options.value, CLAUDE_INSTRUCTIONS_OPTION, '');
+        left = emptied && put('system', lean.system);
+        if (emptied && !left && forClaude) Reflect.set(slots.options.value, CLAUDE_INSTRUCTIONS_OPTION, option);
+      }
       // Counted once: the parts could not be told apart or changed, or what the host wrote of instructions was
       // not as the host builds it or could not be taken out.
-      if (!told || own.changed || !taken) g.place.unknown++;
-      if (told && leaves) {
-        if (forClaude) Reflect.set(slots.options.value, CLAUDE_INSTRUCTIONS_OPTION, '');
-        put('system', lean.system);
+      if (!told || (leaves && !left) || own.changed || !taken) g.place.unknown++;
+      if (left) {
         system = lean.system;
         for (const source of lean.removed) g.place.sources.add(source.key);
       }
-      if (commentRole(g.role) && (g.checkpointRequested || g.calls >= 12)) {
+      // Whether the answer to this request may call a tool: looked at again where a tool is called
+      // (`execute.before`), since a list of tools that could not be emptied still offers them.
+      g.toolless = commentRole(g.role) && (g.checkpointRequested || g.calls >= 12);
+      if (g.toolless) {
         // No tool for this response: an empty list in the place of the one that is there, or, where that place
         // cannot be written, every tool taken out of the list that is.
-        if (!put('tools', {})) listed = !slots.tools.unread && withoutTools(slots.tools.value, () => true);
+        listed = put('tools', {}) || (!slots.tools.unread && withoutTools(slots.tools.value, () => true));
         // The note is one more part, where the parts are an ordinary list and their place can be written; where
         // not, the request goes without it.
         const noted = withPart(system, { type: 'text', text: g.grouping
           ? 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.'
           : 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
-        if (noted) put('system', noted);
+        if (!noted || !put('system', noted)) g.notesNotAdded++;
       }
       // A tool this role may not call that is still listed (its list could not be changed, or not looked at).
       if (!listed) g.toolsLeftListed++;
@@ -2291,6 +2311,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       if (!allowedTools(g.role, settings.shell).includes(event.tool)) {
         g.blockedNativeCalls.set(call, event.tool);
         throw new Error(`[AZPR] ${event.tool} is not available to this private reviewer.`);
+      }
+      // The request this call answers was prepared without tools (a planning session that is to finish): a tool
+      // that its list still offered, because the list could not be emptied, is not run either.
+      if (g.toolless) {
+        g.blockedNativeCalls.set(call, event.tool);
+        throw new Error('[AZPR] Tools are unavailable for this response.');
       }
     }));
     registrations.push(await context.tool.hook('execute.after', async event => {

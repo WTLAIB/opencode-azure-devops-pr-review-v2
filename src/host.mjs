@@ -250,7 +250,7 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
   if (found.length !== 1) return null;
   const [{ index: at, part, fields, sources, bare }] = found;
   const text = held => held.fields.get('text');
-  if (typeof fields.get('text') !== 'string' || !sources.every(held => held.fields && typeof held.fields.get('key') === 'string' && typeof text(held) === 'string') ||
+  if (fields.get('type') !== 'text' || typeof fields.get('text') !== 'string' || !sources.every(held => held.fields && typeof held.fields.get('key') === 'string' && typeof text(held) === 'string') ||
       fields.get('text') !== sources.map(text).join('\n\n')) return null;
   const kept = sources.filter(held => keep.includes(held.fields.get('key'))), gone = sources.filter(held => !keep.includes(held.fields.get('key'))), removed = gone.map(held => held.source);
   if (!removed.length) return { system, removed };
@@ -274,7 +274,12 @@ export function withoutTools(tools, unwanted) {
   if (tools === undefined || tools === null) return true;
   if (!ordinary(tools)) return false;
   let gone = true;
-  for (const name of Reflect.ownKeys(tools)) if (typeof name === 'string' && unwanted(name) && !Reflect.deleteProperty(tools, name)) gone = false;
+  // A tool is what the list lists under a name: a property that is not listed (something a hook keeps there for
+  // itself) or stands under a symbol is no tool, and is left where it is.
+  for (const name of Reflect.ownKeys(tools)) {
+    if (typeof name !== 'string' || !Reflect.getOwnPropertyDescriptor(tools, name)?.enumerable || !unwanted(name)) continue;
+    if (!Reflect.deleteProperty(tools, name)) gone = false;
+  }
   return gone;
 }
 
@@ -299,16 +304,19 @@ export const CLAUDE_PROVIDER = 'claude-agent';
 export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
 
 /**
- * That option as a request's options hold it: its text, where an ordinary object holds one of its own, and
- * whether it can be written (not in a frozen object). Nothing where the options answer for another object, the
- * option stands behind an accessor or holds no text. It is taken from its descriptor, so nothing of the options'
- * own is called. A caller empties the option only where it can be written, and leaves parts and option as they
- * are otherwise.
+ * The text of that option as a request's options hold it, where the options are plain data that holds one of
+ * its own. Nothing where the options are no plain data (they answer for another object, are of a class of their
+ * own, or hold something that is not listed data), or where the option holds no text. It is taken from its
+ * descriptor, so nothing of the options' own is called. Whether the option can be emptied is what writing it
+ * answers (it cannot in frozen options): a caller looks at that, and leaves parts and option as they are where
+ * it was not.
  */
 export function claudeOption(options) {
-  if (!ordinary(options)) return undefined;
+  // Options are a plain object as the host builds them. In anything else a property that says it can be written
+  // need not take a value (an object of a module's exports says so and refuses), so nothing is taken from it.
+  if (!recordFields(options)) return undefined;
   const property = Reflect.getOwnPropertyDescriptor(options, CLAUDE_INSTRUCTIONS_OPTION);
-  return property && Object.hasOwn(property, 'value') && typeof property.value === 'string' ? { text: property.value, writable: property.writable === true } : undefined;
+  return property && typeof property.value === 'string' ? property.value : undefined;
 }
 
 /**

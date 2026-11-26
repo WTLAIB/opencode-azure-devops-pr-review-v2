@@ -100,20 +100,26 @@ settings, backups and failure records. Never upload `.local/`.
   into, and the instructions part is made anew only from plain data, with
   what a hook added to it in plain sight kept; where no source of it stays
   the part goes, so only a part that holds nothing but what the host gave
-  it. The Claude provider's option is emptied only where it is a text that
-  an ordinary object holds of its own and lets be written (`claudeOption`),
-  and a tool is taken out of a request's list only where the list lets it:
-  one that cannot be stays listed, since whether a tool may run is decided
-  where it is called, and the stage's record counts the request
-  (`toolsLeftListed`). A part of AZPR's own is added after a request's system
+  it, and that part is a text part. The Claude provider's option is emptied
+  only where it is a text that plain options hold of their own
+  (`claudeOption`) and take the empty one, and a tool is taken out of a request's list
+  only where the list lets it: a tool is what the list lists under a name
+  (what a hook keeps there unlisted is none), and one that cannot be taken
+  out stays listed, since whether a tool may run is decided where it is
+  called, and the stage's record counts the request (`toolsLeftListed`). A
+  planning session that is told to finish without tools is held to that
+  where a tool is called too, since a list that could not be emptied still
+  offers them. A part of AZPR's own is added after a request's system
   parts as a new list, where they are an ordinary one (`withPart`). A source
   that goes takes with it what it holds, so only one that holds nothing but
   its key and its text. The event itself is read the same way: what it holds
   under `system`, `messages`, `options` and `tools` is taken once from its
   own descriptors (`requestSlots`), and a place is given another value only
-  where it can be written; make a change only where it can be made whole
-  (the parts and the Claude option together, the messages before anything
-  is recorded as taken out). Whose request it is (session, agent, model) is
+  where it can be written; make a change only where it can be made whole,
+  and look at what a write answers (the parts and the Claude option
+  together, the option put back where the parts took no new value; the
+  messages before anything is recorded as taken out; a note that could not
+  be added is counted, `notesNotAdded`). Whose request it is (session, agent, model) is
   read as the host reads it. None of these refuses a request, and these are
   all the places where the `context` hook touches one. Its limit is said with it: a
   message is what it holds of its own, what an object inherits is not
@@ -315,7 +321,10 @@ settings, backups and failure records. Never upload `.local/`.
 - A handler whose work is given up says so (`abandoned`: comment planning,
   once another page has failed), and the stage asks it before every further
   turn: no correction and no follow-up is asked for work that will not be
-  used, and the answer that is there is taken as the last.
+  used, and the answer that is there is taken as the last. A stage tells its
+  handler of a failure that no new session will be tried for (`failed`) the
+  moment it knows, before it awaits anything: the cleanup of the failed
+  session takes time in which another stage would still ask.
 - Each stage's handler says which answers it can use (`usable`: a reviewer
   answer that reviewed a file or holds a usable finding, a duplicate check
   that returned its list of merges, a rating that rated a finding, a
