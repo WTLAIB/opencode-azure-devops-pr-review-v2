@@ -195,9 +195,11 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    the session read (one message can hold several files) and those in which
    it wrote an update, and `placeInstructionsNotToldApart` counts the
    requests in which, when they were prepared, the parts did not have the
-   form AZPR knows, or a message that still had a loaded file's ID was not
-   that file as OpenCode builds it (a newer OpenCode, or another plugin that
-   edited them); AZPR left those as they were. That counter is of what was
+   form AZPR knows (or, for the Claude Code provider, its option could not
+   be emptied), a message that still had a loaded file's ID was not that
+   file as OpenCode builds it, or the list of messages was no ordinary list
+   while the session held such a message (a newer OpenCode, or another
+   plugin that edited them); AZPR left those as they were. That counter is of what was
    seen while a request was prepared, not of what went out: a request that
    is counted can still be refused when it is sent, and a loaded file that
    another plugin moved elsewhere, or gave another ID, is not seen at all,

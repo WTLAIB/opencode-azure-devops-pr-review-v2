@@ -5332,6 +5332,7 @@ test('a private role gets AZPR\'s instructions and the host\'s date and environm
 test('for the Claude Code provider the sources are left out only where its option holds what they give, and the option is emptied with them', async t => {
   const given = `${PLACE_SOURCES[0].text}\n\n${PLACE_SOURCES[1].text}`, facts = PLACE_SOURCES.slice(2);
   const frames = {};
+  let asked = 0, listed;
   const f = await fixture(t, { files: ['/src/Main.java'], settings: s => { s.models.review.reviewers = ['claude-agent/haiku', 'fixture/review-b']; },
     async during({ session, role, turn, emit }) {
       if (role !== 'azpr-review-reviewer' || turn) return;
@@ -5345,20 +5346,34 @@ test('for the Claude Code provider the sources are left out only where its optio
         ['missing', { claudeCodeAgent: 'ROLE' }], ['no options at all', undefined], ['not a text', { claudeCodeInstructions: ['x'] }],
         ['nothing to leave out, and an empty option', { claudeCodeInstructions: '' }, facts],
         ['nothing to leave out, but an option that holds something', { claudeCodeInstructions: 'LOCAL RULES OF AN EARLIER HOOK' }, facts],
-      ]) frames[name] = { before: clone(frame(options, sources)), after: await emit('session', 'context', frame(options, sources)) };
+        // What the option holds is right, but it cannot be emptied, or it would have to be asked for: the parts
+        // and the option stay as they are, the request goes on and is counted.
+        ['in options that cannot be written', Object.freeze({ maxTokens: 1, claudeCodeInstructions: given })],
+        ['behind an accessor', Object.defineProperty({ maxTokens: 1 }, 'claudeCodeInstructions', { enumerable: true, get() { asked++; return given; } })],
+      ]) {
+        const before = clone(frame(options, sources));
+        // Counted from here: what the hook asks of the option, not what this test read to keep a copy.
+        asked = 0;
+        frames[name] = { before, after: await emit('session', 'context', frame(options, sources)) };
+      }
+      // A list of tools that another plugin froze cannot be changed: the request goes on with it as it is.
+      listed = await emit('session', 'context', { ...frame({ maxTokens: 1, claudeCodeInstructions: given }), tools: Object.freeze({ read: {}, edit: {}, azpr_read_file: {} }) });
     } });
   const receipt = await f.command();
   assert.match(receipt, /\] COMPLETE/, receipt);
   const told = frames['as the provider writes it'].after;
   assert.deepEqual([told.system.map(part => part.text), told.options], [LEAN_SYSTEM, { maxTokens: 1, claudeCodeAgent: 'ROLE', claudeCodeInstructions: '' }], 'The parts lose the sources, and so does what the provider hands the model.');
-  for (const name of ['written another way', 'with one source more than the parts have now', 'with a part of what the parts give', 'missing', 'no options at all', 'not a text', 'nothing to leave out, but an option that holds something']) {
+  for (const name of ['written another way', 'with one source more than the parts have now', 'with a part of what the parts give', 'missing', 'no options at all', 'not a text', 'nothing to leave out, but an option that holds something',
+    'in options that cannot be written']) {
     assert.deepEqual([frames[name].after.system, frames[name].after.options], [frames[name].before.system, frames[name].before.options], `${name}: the parts and the option stay as they are`);
   }
+  assert.deepEqual([frames['behind an accessor'].after.system, asked], [frames['behind an accessor'].before.system, 0], 'An option behind an accessor is not asked for, and nothing is left out.');
+  assert.deepEqual([Object.keys(listed.tools), listed.system.map(part => part.text)], [['read', 'edit', 'azpr_read_file'], LEAN_SYSTEM], 'The request with a list of tools that cannot be changed went on.');
   const plain = frames['nothing to leave out, and an empty option'];
   assert.deepEqual([plain.after.system, plain.after.options], [plain.before.system, plain.before.options], 'Nothing to change.');
   const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
-  // Seven of the nine requests above, and the fixture's own, which has neither parts nor the option.
-  assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 8]);
+  // Nine of the twelve requests above, and the fixture's own, which has neither parts nor the option.
+  assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 10]);
 });
 
 test('what the host wrote of instructions is taken out of a request where it is as the host builds it; what another hook changed goes out as it is and is counted; a message that only looks like a load is someone else\'s', async t => {

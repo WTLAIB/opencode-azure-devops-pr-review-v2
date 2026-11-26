@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCe
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, promptOf, turnState, withoutHostMessages, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, promptOf, turnState, withoutHostMessages, claudeOption, withPart, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
 import { reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions, renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview, conversationTitle, enclose, stagesInOrder } from './attribution.mjs';
 
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -2072,11 +2072,15 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.open = true;
       touch(g, 'the prompt was admitted');
     }));
+    // A tool is hidden from a request where its list lets it be taken out. A list that does not (one that another
+    // plugin froze, say) keeps it in view, and the request goes on: whether a tool may run is decided where it is
+    // called, not by what a request lists.
+    const hide = (tools, name) => { try { Reflect.deleteProperty(tools, name); } catch { /* It stays listed. */ } };
     const prepare = async event => {
       const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
       if (!privateSession(event)) {
         // AZPR's PAT-backed tools exist only for its private reviewers.
-        if (tools) for (const name of REVIEW_TOOL_NAMES) delete tools[name];
+        if (tools) for (const name of REVIEW_TOOL_NAMES) hide(tools, name);
         return;
       }
       const g = authorize(event.sessionID, event.agent, event.model);
@@ -2112,14 +2116,14 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // record, where the request holds it as the host builds it. Nothing else is taken out and nothing is
       // looked for: a request that another plugin's hook changed before this one goes out as that hook left it,
       // and what a hook after this one does is not seen here either.
-      const requested = Array.isArray(event.messages) ? event.messages : [];
+      const requested = event.messages;
       const own = withoutHostMessages(requested, stored);
-      if (own.messages.length !== requested.length) event.messages = own.messages;
+      if (own.messages !== requested) event.messages = own.messages;
       for (const id of own.loads) g.hiddenLoads.add(id);
       for (const id of own.updates) g.hiddenUpdates.add(id);
       // Show only the tools this role may run, so the model does not waste turns on others.
       const allowed = new Set(allowedTools(g.role, settings.shell));
-      if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) delete tools[name];
+      if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) hide(tools, name);
       // A private role works from AZPR's own instructions and the host's date and environment. What the host
       // collects for the place a conversation is in stays out: instruction files (AGENTS.md, CLAUDE.md, configured
       // ones) and what MCP servers, references and skills say of themselves. Those tell an agent how to work in
@@ -2130,7 +2134,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // that provider, the sources can be left out only where the option holds exactly what those sources give;
       // it is emptied then. Where the parts or that text cannot be told apart, both stay as they are.
       const forClaude = event.model?.providerID === CLAUDE_PROVIDER;
-      const told = lean && (!forClaude || event.options?.[CLAUDE_INSTRUCTIONS_OPTION] === claudeInstructions(lean.removed));
+      const told = lean && (!forClaude || claudeOption(event.options) === claudeInstructions(lean.removed));
       // Counted once: the parts could not be told apart, or a loaded instruction file was not as the host builds it.
       if (!told || own.changed) g.place.unknown++;
       if (told && lean.removed.length) {
@@ -2140,9 +2144,12 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       }
       if (commentRole(g.role) && (g.checkpointRequested || g.calls >= 12)) {
         event.tools = {};
-        event.system?.push?.({ type: 'text', text: g.grouping
+        // The note is one more part, where the parts are an ordinary list; where they are not, the request goes
+        // without it, and without tools all the same.
+        const noted = withPart(event.system, { type: 'text', text: g.grouping
           ? 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.'
           : 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
+        if (noted) event.system = noted;
       }
       g.checked = turn;
       g.primaryPrepared = true;
@@ -2167,7 +2174,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     for (const name of ['compaction', 'generate']) {
       registrations.push(await context.session.hook(name, async event => {
         const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
-        if (tools) for (const tool of REVIEW_TOOL_NAMES) delete tools[tool];
+        if (tools) for (const tool of REVIEW_TOOL_NAMES) hide(tools, tool);
       }));
     }
     registrations.push(await context.session.hook('model.request', async event => {

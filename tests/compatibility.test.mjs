@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, claudeInstructions, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, withPart, claudeInstructions, claudeOption, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -268,9 +268,47 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
     'a source has its text under an accessor': [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, at) => at ? source : Object.defineProperty({ key: source.key }, 'text', { enumerable: true, get() { asked++; return source.text; } })) } } }],
     'a source has a text that is not listed': [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, at) => at ? source : Object.defineProperty({ key: source.key }, 'text', { value: source.text })) } } }],
   })) assert.equal(withoutPlaceInstructions(unknown), null, name);
+  // Where no source is kept the whole part goes, so only a part that holds nothing but what the host gave it:
+  // one that a hook marked, on the part, its metadata or beside the sources, would lose the mark with it.
+  const local = [{ key: 'core/instructions', text: 'LOCAL' }], bare = { type: 'text', text: 'LOCAL', metadata: { experimental: { instructions: local } } };
+  assert.deepEqual(withoutPlaceInstructions([system[0], bare]).system, [system[0]]);
+  for (const [name, marked] of Object.entries({ 'the part': { ...bare, cache: { type: 'ephemeral' } }, 'its metadata': { ...bare, metadata: { ...bare.metadata, note: 'of a hook' } },
+    'beside the sources': { ...bare, metadata: { experimental: { instructions: local, also: true } } } })) assert.equal(withoutPlaceInstructions([system[0], marked]), null, `a mark on ${name}`);
+  // A value that was revoked throws at any question, also whether it is a list: it is asked none.
+  const gone = target => { const made = Proxy.revocable(target, {}); made.revoke(); return made.proxy; };
+  assert.equal(withoutPlaceInstructions(gone([...system])), null);
+  assert.equal(withoutPlaceInstructions([system[0], { ...part, metadata: gone({}) }]), null);
+  assert.equal(withoutPlaceInstructions([system[0], { ...part, metadata: { experimental: { instructions: gone([...sources]) } } }]), null);
+  assert.deepEqual(withoutPlaceInstructions([system[0], gone({}), { type: 'text', text: 'OTHER', metadata: gone({}) }, part]).system.length, 4, 'A part that was revoked, or holds something that was, is another part.');
+  // A part of AZPR's own is added as a new list, where the parts are an ordinary list (also one that cannot be
+  // changed): the list that was handed over is not touched and none of its methods is called. Where they are
+  // not, nothing is made of them.
+  const note = { type: 'text', text: 'NOTE' }, fixed = Object.freeze([...system]);
+  class Parts extends Array { push() { asked++; return super.push(...arguments); } }
+  assert.deepEqual([withPart(system, note), system.length, withPart(fixed, note).at(-1), fixed.length, withPart([], note)], [[...system, note], 4, note, 4, [note]]);
+  for (const other of [Parts.from(system), Object.assign([...system], { cache: true }), new Proxy([...system], {}), gone([...system]), undefined, 'parts', { 0: system[0], length: 1 }]) assert.equal(withPart(other, note), undefined);
   const beside = [system[0], refusing, lazy(() => { throw new Error('not for you'); }), part];
   assert.deepEqual(withoutPlaceInstructions(beside).system.slice(0, 3), beside.slice(0, 3), 'A part that refuses to be read is another part, left where it is.');
   assert.equal(asked, 0, 'Nothing of a part\'s own was called.');
+});
+
+test('the Claude provider\'s option is taken where it can be emptied: an ordinary object\'s own text that can be written', () => {
+  const key = CLAUDE_INSTRUCTIONS_OPTION;
+  assert.deepEqual([claudeOption({ [key]: 'TEXT', maxTokens: 1 }), claudeOption({ [key]: '' }), claudeOption(Object.assign(Object.create(null), { [key]: 'TEXT' }))], ['TEXT', '', 'TEXT']);
+  let asked = 0;
+  const revoked = Proxy.revocable({ [key]: 'TEXT' }, {}); revoked.revoke();
+  for (const [name, options] of Object.entries({
+    'frozen options': Object.freeze({ [key]: 'TEXT' }),
+    'an option that cannot be written': Object.defineProperty({}, key, { value: 'TEXT', enumerable: true, configurable: true }),
+    'an option behind an accessor': Object.defineProperty({}, key, { enumerable: true, get() { asked++; return 'TEXT'; } }),
+    'an option that is inherited': Object.create({ [key]: 'TEXT' }),
+    'an option that is no text': { [key]: ['TEXT'] },
+    'no such option': { maxTokens: 1 },
+    'options that answer for another object': new Proxy({ [key]: 'TEXT' }, new Proxy({}, { get() { asked++; return undefined; } })),
+    'options that were revoked': revoked.proxy,
+    'no options': undefined, 'a text for options': 'TEXT', 'nothing': null,
+  })) assert.equal(claudeOption(options), undefined, name);
+  assert.equal(asked, 0, 'Nothing of the options\' own was called.');
 });
 
 test('what the host wrote of instructions into a session is told by the session\'s own messages: an update by its type, a load by the paths it names after a native read of the session', () => {
@@ -427,6 +465,40 @@ test('a request loses what the host wrote of instructions where it is as the hos
   ]) {
     assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   }
+  // The list of messages is looked at like everything in it. One that is no ordinary list (of a class of its
+  // own, with something more on it, with an item behind an accessor, one that answers for another object, also
+  // one that was revoked) is left as it is, whole: the very list comes back, nothing of its own is called, and
+  // the request is counted, since what the host wrote may be in it.
+  const revoked = target => { const made = Proxy.revocable(target, {}); made.revoke(); return made.proxy; };
+  let read = 0;
+  class Listed extends Array { filter() { read++; return super.filter(...arguments); } }
+  for (const [name, list] of Object.entries({
+    'a list of a class of its own': Listed.from(requested),
+    'a list that carries something more': Object.assign([...requested], { cache: 'ephemeral' }),
+    'a list with an item behind an accessor': Object.defineProperty([prompt, step, , update, notice], 2, { enumerable: true, configurable: true, get() { read++; return load; } }),
+    'a list that answers for another object': new Proxy([...requested], new Proxy({}, { get() { read++; return undefined; } })),
+    'a list that was revoked': revoked([...requested]),
+    'no list at all': { 0: load, length: 1 },
+  })) {
+    const result = withoutHostMessages(list, stored);
+    assert.equal(result.messages, list, name);
+    assert.deepEqual([result.loads, result.updates, result.changed], [[], [], true], name);
+  }
+  assert.equal(read, 0, 'Nothing of a list\'s own was called.');
+  // Where nothing is taken out, the list that was handed over comes back.
+  const untouched = [prompt, step, notice];
+  assert.equal(withoutHostMessages(untouched, stored).messages, untouched);
+  // And nothing in a request is asked what it is before it is known not to answer for another object: one that
+  // was revoked throws at any question. As a message, a content, a part, metadata or a place in it, it is
+  // something that is not the host's, and stays.
+  for (const [name, messages, changed] of [
+    ['a message that was revoked', [prompt, step, revoked({ ...load }), notice], false],
+    ['a content that was revoked', [prompt, step, { ...load, content: revoked([...load.content]) }, notice], true],
+    ['a text part that was revoked', [prompt, step, { ...load, content: [revoked({ ...load.content[0] })] }, notice], true],
+    ['metadata that was revoked', [prompt, step, { ...load, metadata: revoked({}) }, notice], true],
+    ['a list of files that was revoked', [prompt, step, { ...load, metadata: { instruction: { paths: revoked([]) } } }, notice], true],
+    ['an update whose content was revoked', [prompt, step, { role: 'system', content: revoked([...update.content]) }, notice], false],
+  ]) assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   // Looking at a message calls nothing of its own and changes nothing. An ID that would work itself out when it
   // is asked for is not asked: the message stays as it was, and nothing says that it is a load.
   let asked = 0;

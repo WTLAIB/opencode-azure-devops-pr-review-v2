@@ -243,19 +243,33 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
   const read = part => {
     const fields = recordFields(part), metadata = recordFields(fields?.get('metadata')), experimental = recordFields(metadata?.get('experimental'));
     const listed = listItems(experimental?.get('instructions'));
-    return listed ? { fields, sources: listed.map(source => ({ source, fields: recordFields(source) })) } : undefined;
+    return listed ? { fields, sources: listed.map(source => ({ source, fields: recordFields(source) })),
+      bare: only(fields, ['type', 'text', 'metadata']) && only(metadata, ['experimental']) && only(experimental, ['instructions']) } : undefined;
   };
   const found = parts.flatMap((part, index) => { const held = read(part); return held ? [{ index, part, ...held }] : []; });
   if (found.length !== 1) return null;
-  const [{ index: at, part, fields, sources }] = found;
+  const [{ index: at, part, fields, sources, bare }] = found;
   const text = held => held.fields.get('text');
   if (typeof fields.get('text') !== 'string' || !sources.every(held => held.fields && typeof held.fields.get('key') === 'string' && typeof text(held) === 'string') ||
       fields.get('text') !== sources.map(text).join('\n\n')) return null;
   const kept = sources.filter(held => keep.includes(held.fields.get('key'))), removed = sources.filter(held => !keep.includes(held.fields.get('key'))).map(held => held.source);
   if (!removed.length) return { system, removed };
+  // Where no source is kept the part goes, and with it whatever it holds: so only a part that holds nothing but
+  // what the host gave it. One that a hook marked would lose that mark, and is not told apart instead.
+  if (!kept.length && !bare) return null;
   const rebuilt = kept.length ? [{ ...part, text: kept.map(text).join('\n\n'),
     metadata: { ...part.metadata, experimental: { ...part.metadata.experimental, instructions: kept.map(held => held.source) } } }] : [];
   return { system: [...parts.slice(0, at), ...rebuilt, ...parts.slice(at + 1)], removed };
+}
+
+/**
+ * A request's system parts with one more part after them: a new list, where they are an ordinary list (also one
+ * that cannot be changed), and nothing where they are not, so that nothing of the list's own is called and
+ * nothing it carries is lost. The caller leaves the parts as they are then.
+ */
+export function withPart(system, part) {
+  const parts = listItems(system);
+  return parts ? [...parts, part] : undefined;
 }
 
 /**
@@ -267,6 +281,18 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
  */
 export const CLAUDE_PROVIDER = 'claude-agent';
 export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
+
+/**
+ * The text of that option where a request's options hold it so that it can be emptied: an ordinary object's own
+ * property that holds a text and can be written. Nothing where the options answer for another object, the option
+ * stands behind an accessor, or it cannot be written (a frozen object): the caller then leaves parts and option
+ * as they are. It is taken from its descriptor, so nothing of the options' own is called.
+ */
+export function claudeOption(options) {
+  if (!ordinary(options)) return undefined;
+  const property = Reflect.getOwnPropertyDescriptor(options, CLAUDE_INSTRUCTIONS_OPTION);
+  return property && Object.hasOwn(property, 'value') && property.writable === true && typeof property.value === 'string' ? property.value : undefined;
+}
 
 /**
  * What that option holds for a request whose instructions part has these sources besides the host's facts. A
@@ -333,11 +359,15 @@ export function hostInstructions(messages) {
 // property that is there without a value is none. What an object inherits is not looked at: a message is what it
 // holds of its own.
 
+// An object that can be looked at: one that does not answer for another. That is asked before anything else is
+// asked of a value, since even whether a proxy is an array is its own to answer (one that was revoked throws).
+const ordinary = value => value !== null && typeof value === 'object' && !types.isProxy(value);
+
 // The fields of an ordinary object, by name: its own properties that have a value, where each of them is listed
 // and holds its value under a string name (an array's length aside, which no array lists). Nothing where one is
 // not, or where the object answers for another.
 function ownFields(value, list = false) {
-  if (types.isProxy(value)) return undefined;
+  if (!ordinary(value)) return undefined;
   const fields = new Map();
   for (const key of Reflect.ownKeys(value)) {
     const property = Reflect.getOwnPropertyDescriptor(value, key);
@@ -350,7 +380,7 @@ function ownFields(value, list = false) {
 // The items of an ordinary list: an array of the arrays' own class with a value at every place and nothing else
 // on it. Nothing where the value is anything else.
 function listItems(value) {
-  if (!Array.isArray(value) || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+  if (!ordinary(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
   const fields = ownFields(value, true), length = fields?.get('length');
   if (!Number.isInteger(length) || fields.size !== length + 1) return undefined;
   const items = [];
@@ -363,7 +393,7 @@ function listItems(value) {
 
 // The fields of a plain object: one of the objects' own class, or of none. Nothing where it is anything else.
 function recordFields(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) || types.isProxy(value)) return undefined;
+  if (!ordinary(value) || Array.isArray(value)) return undefined;
   const kind = Object.getPrototypeOf(value);
   return kind === Object.prototype || kind === null ? ownFields(value) : undefined;
 }
@@ -377,7 +407,7 @@ function sameData(a, b) {
   while (pairs.length) {
     const [first, second] = pairs.pop();
     if (first === second) continue;
-    if (first === null || second === null || typeof first !== 'object' || typeof second !== 'object') return false;
+    if (!ordinary(first) || !ordinary(second)) return false;
     if (Array.isArray(first) || Array.isArray(second)) {
       const mine = listItems(first), theirs = listItems(second);
       if (!mine || !theirs || mine.length !== theirs.length) return false;
@@ -396,7 +426,7 @@ function sameData(a, b) {
 
 // The fields of a request's message: those of an object of any class (an update is one of the host's own class,
 // which a plugin cannot name) whose own properties are all listed data. Nothing for anything else.
-const messageFields = message => message !== null && typeof message === 'object' && !Array.isArray(message) ? ownFields(message) : undefined;
+const messageFields = message => ordinary(message) && !Array.isArray(message) ? ownFields(message) : undefined;
 const only = (fields, names) => [...fields.keys()].every(name => names.includes(name));
 
 // The text of a content that is one plain text part, `[{ type: 'text', text }]`, which is what OpenCode makes of
@@ -429,7 +459,7 @@ function isLoadAsBuilt(message, load) {
 // The ID a request's message holds of its own, where it is a text: read from its descriptor, so that a message
 // that would work its ID out when asked is not asked.
 function ownID(message) {
-  if (message === null || typeof message !== 'object' || types.isProxy(message)) return undefined;
+  if (!ordinary(message)) return undefined;
   const property = Reflect.getOwnPropertyDescriptor(message, 'id');
   return property && Object.hasOwn(property, 'value') && typeof property.value === 'string' ? property.value : undefined;
 }
@@ -447,7 +477,8 @@ function ownID(message) {
  * Anything else stays as it is. A request is not searched for those texts, and a message that a hook before
  * this one changed (a content in another form, something joined to it, another role, a field or metadata of
  * its own) is not taken out for the ID it kept: it holds what is not the host's, which taking it out would
- * drop. `changed` says that the request holds a message with a load's
+ * drop. The list of messages is asked the same: only an ordinary list is gone through. `changed` says that the
+ * request's messages are no such list, or that it holds a message with a load's
  * ID that is not the load as the host builds it, for the stage's record. `loads` and `updates` are the IDs of
  * the session's messages that were taken out: of updates with one text, as many as the request held, in their
  * order. A session that holds no such message gets its request back as it is.
@@ -460,12 +491,17 @@ export function withoutHostMessages(requested, stored) {
     updates.get(message.text).push(message.id);
   }
   if (!loads.size && !updates.size) return { messages: requested, loads: [], updates: [], changed: false };
+  // The list is looked at like everything in it: an ordinary list is gone through as its own items say, and one
+  // that is not (a list of a class of its own, one that carries something more, one that answers for another) is
+  // left as it is, whole. What the host wrote may be in it then, so the request is counted.
+  const items = listItems(requested);
+  if (!items) return { messages: requested, loads: [], updates: [], changed: true };
   const found = { loads: new Set(), updates: [] }, taken = new Map();
   let changed = false;
   // A message is looked at through the descriptors of its own properties and nowhere else, so nothing of its own
   // is called and looking at it changes nothing: one that is no plain data is not known to be the host's, and
   // stays like anything else that is not.
-  const messages = requested.filter(message => {
+  const messages = items.filter(message => {
     const id = ownID(message);
     if (id !== undefined && loads.has(id)) {
       if (isLoadAsBuilt(message, loads.get(id))) { found.loads.add(id); return false; }
@@ -480,7 +516,8 @@ export function withoutHostMessages(requested, stored) {
     if (nth < ids.length) found.updates.push(ids[nth]);
     return false;
   });
-  return { messages, loads: [...found.loads], updates: found.updates, changed };
+  // The list that was handed over comes back where nothing was taken out of it.
+  return { messages: messages.length === items.length ? requested : messages, loads: [...found.loads], updates: found.updates, changed };
 }
 
 /**

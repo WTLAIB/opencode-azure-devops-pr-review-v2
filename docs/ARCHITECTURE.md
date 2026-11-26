@@ -970,7 +970,12 @@ What an object inherits is not looked at, and an update is an object of the
 host's own class, which a plugin cannot name. The same holds for a request's
 system parts: the instructions part is made anew only where it, its metadata
 and its sources are plain data, with what a hook added to them in plain
-sight kept. What the hook takes out of a request as the host builds it is
+sight kept, and a part without a source left goes only where it holds nothing
+but what the host gave it. The list of a request's messages is looked at
+like its items: one that is no ordinary list is left whole. The Claude
+provider's option is emptied only where an ordinary object holds it as a text
+that can be written. Where one of these cannot be done the request goes out
+as it is and is counted; none refuses it. What the hook takes out of a request as the host builds it is
 exactly what `requestReview` takes for no one else's input: both go by the
 session's record. A system message of another plugin's
 stays, also one of the host's form, unless it holds exactly the text of an

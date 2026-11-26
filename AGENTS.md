@@ -86,7 +86,10 @@ settings, backups and failure records. Never upload `.local/`.
   under a symbol, an accessor, an array or an object of another class, an
   object that answers for another (a proxy), metadata that is other data
   than the stored message's are each no longer the host's, and the message
-  stays. Never read a message through its properties (not its ID either),
+  stays. The list of a request's messages is looked at like its items, and
+  left whole where it is no ordinary list. Ask whether a value answers for
+  another before anything else is asked of it: a proxy that was revoked
+  throws at any question, also at whether it is a list. Never read a message through its properties (not its ID either),
   and compare metadata to its end, without a limit that data can exceed:
   what the hook takes out of a request as OpenCode builds it must be
   exactly what `requestReview` takes for no one else's input, or a message
@@ -95,7 +98,16 @@ settings, backups and failure records. Never upload `.local/`.
   data is not the host's. The same rule reads a request's system parts
   (`withoutPlaceInstructions`): a part that is no plain data is not looked
   into, and the instructions part is made anew only from plain data, with
-  what a hook added to it in plain sight kept. Its limit is said with it: a
+  what a hook added to it in plain sight kept; where no source of it stays
+  the part goes, so only a part that holds nothing but what the host gave
+  it. The Claude provider's option is emptied only where it is a text that
+  an ordinary object holds of its own and lets be written (`claudeOption`),
+  and a tool is taken out of a request's list only where the list lets it:
+  one that cannot be stays listed, since whether a tool may run is decided
+  where it is called. A part of AZPR's own is added after a request's system
+  parts as a new list, where they are an ordinary one (`withPart`). None of
+  these refuses a request, and these are all the places where the `context`
+  hook touches one. Its limit is said with it: a
   message is what it holds of its own, what an object inherits is not
   looked at, and an update is an object of the host's own class, which a
   plugin cannot name. Never tell them by what a request message looks like
@@ -345,10 +357,12 @@ settings, backups and failure records. Never upload `.local/`.
   with `metadata.azpr`, and tie them to the conversation through AZPR's own
   records (run stages, a saved review's sessions), never the host's session
   tree.
-- The conversation is the person's: AZPR leaves its notices there, changes
-  nothing else and refuses nothing a person sends, with two exceptions: the
-  name of a conversation nobody named, and one of AZPR's own commands that
-  arrives as a prompt (below). A conversation nobody named yet
+- The conversation is the person's: AZPR leaves its notices there and changes
+  nothing else, but the name of a conversation nobody named. It refuses
+  nothing a person sends but two kinds of prompt: one that names one of
+  AZPR's private agents (they cannot be mentioned or delegated to, see
+  below), and one of AZPR's own commands that arrives as a prompt (below). A
+  conversation nobody named yet
   (`isUntitledSession` in `host.mjs`) gets a name when a check or a review
   starts in it, made of the PR's number and repository from the URL the
   person typed (`conversationTitle`): no model runs there to name it, and the
