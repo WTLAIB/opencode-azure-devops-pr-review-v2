@@ -243,7 +243,7 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
   const read = part => {
     const fields = recordFields(part), metadata = recordFields(fields?.get('metadata')), experimental = recordFields(metadata?.get('experimental'));
     const listed = listItems(experimental?.get('instructions'));
-    return listed ? { fields, sources: listed.map(source => ({ source, fields: recordFields(source) })),
+    return listed ? { fields, sources: listed.map(source => { const held = recordFields(source); return { source, fields: held, bare: Boolean(held) && only(held, ['key', 'text']) }; }),
       bare: only(fields, ['type', 'text', 'metadata']) && only(metadata, ['experimental']) && only(experimental, ['instructions']) } : undefined;
   };
   const found = parts.flatMap((part, index) => { const held = read(part); return held ? [{ index, part, ...held }] : []; });
@@ -252,14 +252,30 @@ export function withoutPlaceInstructions(system, keep = HOST_FACT_SOURCES) {
   const text = held => held.fields.get('text');
   if (typeof fields.get('text') !== 'string' || !sources.every(held => held.fields && typeof held.fields.get('key') === 'string' && typeof text(held) === 'string') ||
       fields.get('text') !== sources.map(text).join('\n\n')) return null;
-  const kept = sources.filter(held => keep.includes(held.fields.get('key'))), removed = sources.filter(held => !keep.includes(held.fields.get('key'))).map(held => held.source);
+  const kept = sources.filter(held => keep.includes(held.fields.get('key'))), gone = sources.filter(held => !keep.includes(held.fields.get('key'))), removed = gone.map(held => held.source);
   if (!removed.length) return { system, removed };
-  // Where no source is kept the part goes, and with it whatever it holds: so only a part that holds nothing but
-  // what the host gave it. One that a hook marked would lose that mark, and is not told apart instead.
-  if (!kept.length && !bare) return null;
+  // A source that goes takes with it whatever it holds, so only one that holds nothing but the host's key and
+  // text; and where no source is kept the part goes too, so only a part that holds nothing but what the host
+  // gave it. What a hook marked would lose that mark, and is not told apart instead.
+  if (gone.some(held => !held.bare) || (!kept.length && !bare)) return null;
   const rebuilt = kept.length ? [{ ...part, text: kept.map(text).join('\n\n'),
     metadata: { ...part.metadata, experimental: { ...part.metadata.experimental, instructions: kept.map(held => held.source) } } }] : [];
   return { system: [...parts.slice(0, at), ...rebuilt, ...parts.slice(at + 1)], removed };
+}
+
+/**
+ * Takes out of a request's list of tools those that `unwanted` names (a tool's name is given to it), where the
+ * list is an ordinary object and lets a tool be taken out. A list that answers for another object is not asked
+ * what it holds, and a tool that cannot be taken out stays listed: whether a tool may run is decided where it
+ * is called, not by what a request lists, so nothing is refused or thrown for either. Says whether no such tool
+ * is left listed, as far as that can be known (not of a list that answers for another object).
+ */
+export function withoutTools(tools, unwanted) {
+  if (tools === undefined || tools === null) return true;
+  if (!ordinary(tools)) return false;
+  let gone = true;
+  for (const name of Reflect.ownKeys(tools)) if (typeof name === 'string' && unwanted(name) && !Reflect.deleteProperty(tools, name)) gone = false;
+  return gone;
 }
 
 /**
@@ -283,15 +299,42 @@ export const CLAUDE_PROVIDER = 'claude-agent';
 export const CLAUDE_INSTRUCTIONS_OPTION = 'claudeCodeInstructions';
 
 /**
- * The text of that option where a request's options hold it so that it can be emptied: an ordinary object's own
- * property that holds a text and can be written. Nothing where the options answer for another object, the option
- * stands behind an accessor, or it cannot be written (a frozen object): the caller then leaves parts and option
- * as they are. It is taken from its descriptor, so nothing of the options' own is called.
+ * That option as a request's options hold it: its text, where an ordinary object holds one of its own, and
+ * whether it can be written (not in a frozen object). Nothing where the options answer for another object, the
+ * option stands behind an accessor or holds no text. It is taken from its descriptor, so nothing of the options'
+ * own is called. A caller empties the option only where it can be written, and leaves parts and option as they
+ * are otherwise.
  */
 export function claudeOption(options) {
   if (!ordinary(options)) return undefined;
   const property = Reflect.getOwnPropertyDescriptor(options, CLAUDE_INSTRUCTIONS_OPTION);
-  return property && Object.hasOwn(property, 'value') && property.writable === true && typeof property.value === 'string' ? property.value : undefined;
+  return property && Object.hasOwn(property, 'value') && typeof property.value === 'string' ? { text: property.value, writable: property.writable === true } : undefined;
+}
+
+/**
+ * What a request's event holds in the places a `context` hook looks at and may replace (`system`, `messages`,
+ * `options`, `tools`), each taken once from the event's own descriptor: its value, and whether the place can be
+ * given another one. OpenCode hands a hook a plain object with these as listed data it can write (read from the
+ * events of OpenCode 2.3.0 and 2.4.1). A place behind an accessor is not asked: it holds nothing here and cannot
+ * be written, and neither can a place of an event that answers for another object. Whose request it is (its
+ * session, agent and model) is not among them: that is read from the event as the host reads it, since a
+ * request is authorized for what the host will send it as.
+ */
+export function requestSlots(event) {
+  const slot = name => {
+    const property = ordinary(event) ? Reflect.getOwnPropertyDescriptor(event, name) : undefined;
+    const data = Boolean(property) && Object.hasOwn(property, 'value');
+    // `unread`: something is there that was not asked (an accessor), so nothing is known of what it holds.
+    return { value: data ? property.value : undefined, writable: data && property.writable === true, unread: Boolean(property) && !data };
+  };
+  return { system: slot('system'), messages: slot('messages'), options: slot('options'), tools: slot('tools') };
+}
+
+/** A text that an ordinary object holds of its own under `name`, taken from its descriptor; nothing otherwise. */
+export function ownText(value, name) {
+  if (!ordinary(value)) return undefined;
+  const property = Reflect.getOwnPropertyDescriptor(value, name);
+  return property && Object.hasOwn(property, 'value') && typeof property.value === 'string' ? property.value : undefined;
 }
 
 /**
@@ -458,11 +501,7 @@ function isLoadAsBuilt(message, load) {
 
 // The ID a request's message holds of its own, where it is a text: read from its descriptor, so that a message
 // that would work its ID out when asked is not asked.
-function ownID(message) {
-  if (!ordinary(message)) return undefined;
-  const property = Reflect.getOwnPropertyDescriptor(message, 'id');
-  return property && Object.hasOwn(property, 'value') && typeof property.value === 'string' ? property.value : undefined;
-}
+const ownID = message => ownText(message, 'id');
 
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files

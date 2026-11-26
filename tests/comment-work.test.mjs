@@ -73,7 +73,10 @@ async function setup(t, findings, azure = fakeAzure(), { kind = 'verified', sour
 /** One test per kind of review, for what the kinds share: `run(t, kind)`. By default a verified review of 0.4.x and a review of this pipeline. */
 const eachKind = (name, run, kinds = ['verified', 'reviewers']) => { for (const kind of kinds) test(`${name} [${kind}]`, t => run(t, kind)); };
 
-/** Mirror the runtime's stage loop: evaluate, repair up to twice, then finalize. */
+/**
+ * Mirror the runtime's stage loop: evaluate, repair up to twice, then finalize. Like the runtime's, it asks the
+ * handler before each correction whether its work is still wanted.
+ */
 function stages(answer) {
   const payloads = [];
   const invoke = async (payload, handler) => {
@@ -82,7 +85,7 @@ function stages(answer) {
     for (let turn = 0; ; turn++) {
       text = await answer(payload, turn, evaluation);
       evaluation = await handler.evaluate(text, evaluation?.result);
-      if (!evaluation.issues?.length || turn >= 2) break;
+      if (!evaluation.issues?.length || turn >= 2 || handler.abandoned?.() === true) break;
     }
     return evaluation.issues?.length && handler.finalize ? handler.finalize(text) : evaluation.result;
   };
@@ -428,6 +431,7 @@ test('a page whose comments are being checked when another page fails reads no f
   review.toolText.unshift(...await Promise.all(Array.from({ length: 20 }, (_, i) => captureObservation(store, 'azpr_read_diff', { path: '/src/Main.java', version: head, context: i }, `diff window ${i}\n`))));
   const checking = deferred(), failed = deferred();
   let reads = 0, checked;
+  const turns = [];
   const counting = { ...store, async read(reference) {
     if (++reads === 1) {
       checking.resolve();
@@ -437,40 +441,40 @@ test('a page whose comments are being checked when another page fails reads no f
     }
     return store.read(reference);
   } };
-  await assert.rejects(prepareComments(review, counting, async (payload, handler) => {
-    if (payload.commentWork.kind === 'group') return (await handler.evaluate(JSON.stringify({ status: 'READY', groups: [] }))).result;
-    if (payload.commentWork.page === 1) {
-      await inTime(checking.promise, 'page 2 to check its comments');
-      failed.resolve();
-      throw new Error('Page 1 failed.');
-    }
-    reads = 0;
-    checked = await handler.evaluate(JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }));
-    return checked.result;
-  }, { parallel: 2 }), /Page 1 failed/);
+  // The stage's own loop, as the runtime runs it: an answer with problems gets a correction turn while turns are
+  // left, unless the handler says that its work was given up.
+  const staged = (pageTwo, seen) => stages(async (payload, turn, evaluation) => {
+    if (payload.commentWork.kind === 'group') return JSON.stringify({ status: 'READY', groups: [] });
+    if (payload.commentWork.page === 1) { await seen.started; seen.fail(); throw new Error('Page 1 failed.'); }
+    turns.push(turn);
+    if (turn) checked = evaluation;
+    return pageTwo(payload, turn);
+  }).invoke;
+  await assert.rejects(prepareComments(review, counting, staged(payload => { reads = 0; return JSON.stringify({ status: 'READY', comments: payload.findings.map(f => comment(f.id)), skipped: [] }); },
+    { started: inTime(checking.promise, 'page 2 to check its comments'), fail: failed.resolve }), { parallel: 2 }), /Page 1 failed/);
   assert.equal(reads, 8, 'The batch that was under way, of twenty-one values.');
   // The quote was not found, because the file that holds it was not read. That says nothing of the comment, and
-  // the model is asked for no correction of a plan that is given up.
-  assert.deepEqual([checked.issues, checked.repairPrompt, checked.usable], [[], undefined, true]);
+  // the model is asked for no correction of a plan that is given up: the page had its one turn.
+  assert.deepEqual([turns, checked], [[0], undefined]);
   // The same for an answer that cannot be read at all: it is taken as its last turn would take it, and nothing
   // is asked of the model again.
   const again = await setup(t, findings, undefined, { kind: 'reviewers' });
   const entered = deferred(), broke = deferred();
-  let unreadable;
+  turns.length = 0;
+  let taken;
+  const invoke = staged(async () => { entered.resolve(); await inTime(broke.promise, 'page 1 to fail'); await new Promise(resolve => setImmediate(resolve)); return 'This is no JSON.'; },
+    { started: inTime(entered.promise, 'page 2 to start'), fail: broke.resolve });
   await assert.rejects(prepareComments(again.review, again.store, async (payload, handler) => {
-    if (payload.commentWork.kind === 'group') return (await handler.evaluate(JSON.stringify({ status: 'READY', groups: [] }))).result;
-    if (payload.commentWork.page === 1) {
-      await inTime(entered.promise, 'page 2 to start');
-      broke.resolve();
-      throw new Error('Page 1 failed.');
-    }
-    entered.resolve();
-    await inTime(broke.promise, 'page 1 to fail');
-    await new Promise(resolve => setImmediate(resolve));
-    unreadable = await handler.evaluate('This is no JSON.');
-    return unreadable.result;
+    const page = await invoke(payload, handler);
+    if (payload.commentWork.page === 2) taken = page;
+    return page;
   }, { parallel: 2 }), /Page 1 failed/);
-  assert.deepEqual([unreadable.issues, unreadable.repairPrompt, unreadable.usable, unreadable.result.comments, unreadable.result.skipped.map(item => item.findingId)], [[], undefined, true, [], ['F-5']]);
+  assert.deepEqual([turns, taken.comments, taken.skipped.map(item => item.findingId)], [[0], [], ['F-5']]);
+  // While no page has failed, such an answer is asked to be corrected as ever.
+  const alone = await setup(t, [finding('F-1')], undefined, { kind: 'reviewers' });
+  turns.length = 0;
+  const plan = await prepareComments(alone.review, alone.store, stages(async (payload, turn) => { turns.push(turn); return turn ? JSON.stringify({ status: 'READY', comments: [comment('F-1')], skipped: [] }) : 'This is no JSON.'; }).invoke);
+  assert.deepEqual([turns, plan.comments.length], [[0, 1], 1]);
 });
 
 test('a comment stands in its own finding\'s file, and a page\'s plan is the same whichever fetch finishes first', async t => {

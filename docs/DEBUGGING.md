@@ -215,7 +215,11 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    background command woke the session after its answer, or before its next
    prompt became a message); and `turnUnreadable` those that were refused
    because the session's messages could not be read, so that nothing was
-   known of the turn.
+   known of the turn. `toolsLeftListed` counts the requests whose list of
+   tools still held one this role may not call, because another plugin made
+   the list something AZPR does not change (a list that cannot be written,
+   or one that answers for another object); such a tool is refused when it
+   is called.
 2. The failed stage's request, response(s) and result together. `repairs` lists
    what the runtime asked the model to correct; `unresolvedIssues` lists what
    was still wrong after the last turn and therefore downgraded per item. For a

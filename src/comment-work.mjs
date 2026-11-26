@@ -255,9 +255,10 @@ async function planningInput(review, store, findings, report, work, continuation
  * continuation state and evidence, and pages are assembled in page order, so
  * markers and their ordinals match planning one page at a time.
  * After a page fails, no page or continuation session starts and no page is
- * asked for a correction: stages already running finish the turn they are in
- * (a stage that fails is still retried as any stage is) before the failure of
- * the lowest failed page is thrown.
+ * asked for a correction (`abandoned`, which the stage asks before each one):
+ * stages already running finish the turn they are in (a stage that fails is
+ * still retried as any stage is) before the failure of the lowest failed page
+ * is thrown.
  * One defect made at several places is several findings. Which findings may
  * be such repeats is settled before the pages are made, so that a group is on
  * one page: when every finding fits one page, that page's findings of equal
@@ -425,16 +426,7 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
       const options = { assigned, candidates, repeats: repeatCandidates, sources: sourceExcerpts, discussions, posted, allowSummary };
       const page = await invoke(payload, {
         async evaluate(answer) {
-          const observed = await scoped(answer);
-          // Another page has failed: no plan will be made. The saved observations this page's comments are
-          // checked against were not read to the end, so a quote that was not found says nothing; and whatever
-          // is wrong with the answer, also where it cannot be read at all, the model is asked for no correction
-          // of a plan that is given up. The page is taken as it would be at its last turn.
-          if (failure) {
-            const { result, corrections } = evaluatePlanPage(answer, { review: observed, ...options, final: true });
-            return { result: { ...result, corrections }, issues: [], usable: true };
-          }
-          const { result, issues, corrections } = evaluatePlanPage(answer, { review: observed, ...options });
+          const { result, issues, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options });
           // A parsed page is usable: if a correction turn fails, it is finalized as it is, item by item.
           return { result: result && { ...result, corrections }, issues, usable: Boolean(result), repairPrompt: issues.length ? planRepairPrompt(issues, { parseOnly: !result && syntaxProblem(issues) }) : undefined };
         },
@@ -442,6 +434,12 @@ export async function prepareComments(review, store, invoke, { progress, fetchSo
           const { result, corrections } = evaluatePlanPage(answer, { review: await scoped(answer), ...options, final: true });
           return { ...result, corrections };
         },
+        // Another page has failed: no plan will be made. Whatever is wrong with this page's answer, also where
+        // the saved observations its comments are checked against were not read to the end (a quote that was
+        // not found says nothing then) or where it cannot be read at all, the model is asked for no correction
+        // of a plan that is given up. The stage asks this right before it would ask for one, and takes the
+        // answer as its last turn would.
+        abandoned: () => Boolean(failure),
       });
       sessions++;
       if (text(page.summary)) summaryWritten = true;

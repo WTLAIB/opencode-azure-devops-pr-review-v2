@@ -2196,6 +2196,27 @@ test('when a planning page fails, the page already running finishes before the c
   assert.deepEqual(planners.map(stage => [stage.commentWork.page, stage.status]).sort(), [[1, 'READY'], [2, 'FAILED']], 'The running page finished; the failed page was not retried.');
   const saved = JSON.parse(JSON.parse(await readFile(join(f.stateDirectory, 'reviews', `${id}.json`), 'utf8')).body);
   assert.equal(saved.plan, null);
+  // The page that is still running is asked for no correction once the other has failed: its answer, also one
+  // that cannot be read, is taken as its last turn would take it, and no further model turn is spent on a plan
+  // that will not be made. While no page has failed, such an answer gets its correction turn as ever.
+  for (const fails of [true, false]) {
+    const broke = deferred(), turns = [];
+    const g = await fixture(t, { files,
+      answer: input => {
+        if (input.role !== 'azpr-review-comment-plan' || input.packet.commentWork.kind !== 'plan') return reviewers(input);
+        if (input.packet.commentWork.page === 2) { broke.resolve(); return fails ? { $provider: 401 } : reviewers(input); }
+        turns.push(input.turn);
+        return input.turn ? reviewers(input) : 'This is no JSON.';
+      },
+      async during({ role, packet, turn }) {
+        if (role === 'azpr-review-comment-plan' && packet.commentWork.kind === 'plan' && packet.commentWork.page === 1 && !turn) { await within(broke.promise); await sleep(100); }
+      } });
+    await g.command();
+    const planned = await g.command('pr-comment', '');
+    assert.match(planned, fails ? /\] INCOMPLETE/ : /\] PREVIEW/, String(fails));
+    const pageOne = (await stageRecords(planned)).find(stage => stage.stage === 'comment-plan' && stage.commentWork.kind === 'plan' && stage.commentWork.page === 1);
+    assert.deepEqual([turns, pageOne.repairs?.length], fails ? [[0], undefined] : [[0, 1], 1], String(fails));
+  }
 });
 
 test('/pr-stop cancels both running planning pages; nothing keeps running and no plan is kept', async t => {
@@ -5374,6 +5395,55 @@ test('for the Claude Code provider the sources are left out only where its optio
   const [stage] = (await stageRecords(receipt)).filter(record => record.role === 'azpr-review-reviewer');
   // Nine of the twelve requests above, and the fixture's own, which has neither parts nor the option.
   assert.deepEqual([stage.requestObservations.placeInstructions, stage.requestObservations.placeInstructionsNotToldApart], [['core/mcp-guidance', 'core/instructions'], 10]);
+});
+
+test('a place of a request that cannot be written, or a list in it that cannot be changed, leaves the request as it is there; the request goes on and the stage\'s record counts it', async t => {
+  // OpenCode hands the hook a plain object whose places can be written. A hook before AZPR's may have made one
+  // of them something else. Each place is read once, from its descriptor; a change is made only where it can be
+  // made whole, and nothing of the request's own is called.
+  const load = instructionLoad(), update = { id: 'msg_update', type: 'system', text: 'The instructions changed:\nInstructions from: /work/AGENTS.md\nCHANGED RULES', metadata: { notice: 'instructions' } };
+  const holding = messages => messages.filter(message => JSON.stringify(message).includes('NESTED RULES') || JSON.stringify(message).includes('CHANGED RULES')).length;
+  const seen = {};
+  let asked = 0, first, f;
+  f = await fixture(t, { files: ['/src/Main.java'], async during({ session, role, turn, emit, invoke }) {
+    if (role !== 'azpr-review-reviewer' || turn || (first ??= session.id) !== session.id) return;
+    await invoke(session, 'read', { path: 'sub/note.txt' });
+    session.history.push(clone(load), clone(update));
+    const request = () => ({ sessionID: session.id, agent: role, model: clone(session.model), system: placeSystem(), messages: f.project(session.history), options: { maxTokens: 1 }, tools: { read: {}, edit: {} } });
+    const fixed = name => { const event = request(); return Object.defineProperty(event, name, { value: event[name], enumerable: true, writable: false, configurable: true }); };
+    const lazy = name => { const event = request(), held = event[name]; return Object.defineProperty(event, name, { enumerable: true, configurable: true, get() { asked++; return held; } }); };
+    const watched = () => new Proxy({ read: {}, edit: {} }, new Proxy({}, { get() { asked++; return undefined; } }));
+    const revoked = () => { const made = Proxy.revocable({ edit: {} }, {}); made.revoke(); return made.proxy; };
+    seen.plain = await emit('session', 'context', request());
+    seen.messages = await emit('session', 'context', fixed('messages'));
+    seen.system = await emit('session', 'context', fixed('system'));
+    seen.whole = await emit('session', 'context', Object.freeze(request()));
+    for (const name of ['messages', 'system', 'tools', 'options']) seen[`lazy ${name}`] = await emit('session', 'context', lazy(name));
+    seen.watched = await emit('session', 'context', { ...request(), tools: watched() });
+    seen.revoked = await emit('session', 'context', { ...request(), tools: revoked() });
+    seen.frozenTools = await emit('session', 'context', { ...request(), tools: Object.freeze({ read: {}, edit: {} }) });
+  } });
+  const receipt = await f.command();
+  assert.match(receipt, /^\[AZPR [a-f0-9]{8}\] COMPLETE; coverage complete, 1\/1 file\(s\) in every pass; verification none\n/);
+  const texts = event => event.system.map(part => part.text), FULL = placeSystem().map(part => part.text);
+  // As the host builds it: what it wrote of instructions is gone, the parts are lean, the tool this role may not call is gone.
+  assert.deepEqual([holding(seen.plain.messages), texts(seen.plain), Object.keys(seen.plain.tools)], [0, LEAN_SYSTEM, ['read']]);
+  // The messages cannot be replaced: they stay as they are, whole, and the rest of the request is changed as ever.
+  assert.deepEqual([holding(seen.messages.messages), texts(seen.messages), Object.keys(seen.messages.tools)], [2, LEAN_SYSTEM, ['read']]);
+  // The parts cannot be replaced: they stay, and the messages are still gone.
+  assert.deepEqual([holding(seen.system.messages), texts(seen.system)], [0, FULL]);
+  // Nothing of the event can be replaced: only the list of tools, which is changed where it stands, differs.
+  assert.deepEqual([holding(seen.whole.messages), texts(seen.whole), Object.keys(seen.whole.tools)], [2, FULL, ['read']]);
+  // A place behind an accessor is not asked, and holds nothing for this hook: the request goes on as it is there.
+  assert.equal(asked, 0, 'Nothing of a request\'s own was called.');
+  // A list of tools that answers for another object, or cannot be changed, keeps its tools; the request goes on.
+  assert.deepEqual([Object.keys(seen.frozenTools.tools), texts(seen.frozenTools)], [['read', 'edit'], LEAN_SYSTEM]);
+  const record = (await stageRecords(receipt)).find(stage => stage.sessionID === first).requestObservations;
+  // Counted once each: the fixture's own request, which has no parts to tell apart; the three whose messages
+  // could not be replaced or read (fixed, frozen as a whole, behind an accessor); the two more whose parts could
+  // not (fixed, behind an accessor). And for the tools: behind an accessor, answering for another object twice,
+  // and in a list that cannot be changed.
+  assert.deepEqual([record.placeInstructionsNotToldApart, record.toolsLeftListed, record.instructionLoads, record.instructionUpdates], [6, 4, 1, 1]);
 });
 
 test('what the host wrote of instructions is taken out of a request where it is as the host builds it; what another hook changed goes out as it is and is counted; a message that only looks like a load is someone else\'s', async t => {

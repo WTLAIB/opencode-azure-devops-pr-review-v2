@@ -104,10 +104,18 @@ settings, backups and failure records. Never upload `.local/`.
   an ordinary object holds of its own and lets be written (`claudeOption`),
   and a tool is taken out of a request's list only where the list lets it:
   one that cannot be stays listed, since whether a tool may run is decided
-  where it is called. A part of AZPR's own is added after a request's system
-  parts as a new list, where they are an ordinary one (`withPart`). None of
-  these refuses a request, and these are all the places where the `context`
-  hook touches one. Its limit is said with it: a
+  where it is called, and the stage's record counts the request
+  (`toolsLeftListed`). A part of AZPR's own is added after a request's system
+  parts as a new list, where they are an ordinary one (`withPart`). A source
+  that goes takes with it what it holds, so only one that holds nothing but
+  its key and its text. The event itself is read the same way: what it holds
+  under `system`, `messages`, `options` and `tools` is taken once from its
+  own descriptors (`requestSlots`), and a place is given another value only
+  where it can be written; make a change only where it can be made whole
+  (the parts and the Claude option together, the messages before anything
+  is recorded as taken out). Whose request it is (session, agent, model) is
+  read as the host reads it. None of these refuses a request, and these are
+  all the places where the `context` hook touches one. Its limit is said with it: a
   message is what it holds of its own, what an object inherits is not
   looked at, and an update is an object of the host's own class, which a
   plugin cannot name. Never tell them by what a request message looks like
@@ -304,6 +312,10 @@ settings, backups and failure records. Never upload `.local/`.
   degrade the affected item (NEEDS_INFO, a merge left out, a level kept, a
   skipped comment) and keep the rest. Never discard a whole review for one bad
   item or one failed pass, and never invent a decision, evidence or a location.
+- A handler whose work is given up says so (`abandoned`: comment planning,
+  once another page has failed), and the stage asks it before every further
+  turn: no correction and no follow-up is asked for work that will not be
+  used, and the answer that is there is taken as the last.
 - Each stage's handler says which answers it can use (`usable`: a reviewer
   answer that reviewed a file or holds a usable finding, a duplicate check
   that returned its list of merges, a rating that rated a finding, a

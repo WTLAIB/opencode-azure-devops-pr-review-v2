@@ -27,7 +27,7 @@ import { API_VERSION, createAzureClient, fetchTransport, markersInThreads, pemCe
 import { REVIEW_TOOL_NAMES, reviewToolDefinitions, runReviewTool } from './review-tools.mjs';
 import { runReview } from './review-work.mjs';
 import { createReviewStore, createReviewWrites, stateRoot, REVIEW_LIMIT } from './store.mjs';
-import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, promptOf, turnState, withoutHostMessages, claudeOption, withPart, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
+import { PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION, USED_UP_LIMITS, fetchTransportSupported, hostCapabilities, promptOf, turnState, withoutHostMessages, withoutTools, claudeOption, withPart, requestSlots, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, requireMethods, sessionProgress, tokenUsage, usageTotals, withoutCredentials, withoutPlaceInstructions, claudeInstructions, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER } from './host.mjs';
 import { reviewProvenance, provenanceReport, commentAttribution, renderFinalReport, renderCommentActions, renderIncompleteDraft, renderReceipt, renderDiagnosticNotices, renderCheckReport, renderPublication, describeReview, conversationTitle, enclose, stagesInOrder } from './attribution.mjs';
 
 const DEFAULT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -895,7 +895,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       // and a request is the turn's only while the turn's prompt is among them, known by that nonce, and no
       // idle marker follows it (see the `context` hook). The end of the wait closes the grant in any case. `checked` is the turn of which a request was looked at so and found to be the turn's, and
       // `validated` the prompt of the last turn whose answer was taken.
-      open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0, turnUnreadable: 0,
+      open: false, turn: null, checked: null, validated: undefined, turnChecks: 0, refusedOutsideTurn: 0, turnUnreadable: 0, toolsLeftListed: 0,
       referenceSnapshot: run.snapshot ?? run.review?.snapshot,
       requestKinds: { primary: 0, compaction: 0, generate: 0, title: 0, unknown: 0 }, rejectedRequests: 0, retryEvents: [],
       // What the context hook kept from this session's model: the instruction sources of the conversation's place
@@ -965,7 +965,10 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         evaluation = await handler.evaluate(answerText, evaluation?.result, session);
         // What a handler can still use of an answer, whatever its items need: kept if a later turn fails or is unusable.
         if (evaluation.usable === true) lastUsable = { evaluation, answerText, turn };
-        const budget = turn < settings.workflow.repairAttempts;
+        // Another turn is asked for only while the handler's work is still wanted: where it was given up meanwhile
+        // (another planning page failed, so no plan will be made), the answer that is there is taken as the last.
+        // Looked at here, with nothing awaited between this and the next prompt.
+        const budget = turn < settings.workflow.repairAttempts && handler.abandoned?.() !== true;
         if (evaluation.issues?.length && evaluation.repairPrompt && budget) {
           repairs.push({ issues: evaluation.issues.slice(0, 25) });
           prompt = evaluation.repairPrompt;
@@ -1045,7 +1048,9 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         // How often the session's messages were read before a request (once for every request of an open
         // turn), and how many requests were refused because they were not a turn's.
         ...(g.turnChecks ? { turnChecks: g.turnChecks } : {}), ...(g.refusedOutsideTurn ? { refusedOutsideTurn: g.refusedOutsideTurn } : {}),
-        ...(g.turnUnreadable ? { turnUnreadable: g.turnUnreadable } : {}) };
+        ...(g.turnUnreadable ? { turnUnreadable: g.turnUnreadable } : {}),
+        // Requests whose list of tools still held one this role may not call: the list could not be changed.
+        ...(g.toolsLeftListed ? { toolsLeftListed: g.toolsLeftListed } : {}) };
       record.endedAt = new Date().toISOString();
       record.durationMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
       record.remainingRunMsAtEnd = remainingRunMs(run);
@@ -2072,18 +2077,18 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
       g.open = true;
       touch(g, 'the prompt was admitted');
     }));
-    // A tool is hidden from a request where its list lets it be taken out. A list that does not (one that another
-    // plugin froze, say) keeps it in view, and the request goes on: whether a tool may run is decided where it is
-    // called, not by what a request lists.
-    const hide = (tools, name) => { try { Reflect.deleteProperty(tools, name); } catch { /* It stays listed. */ } };
+    // A tool is hidden from a request where its list lets it be taken out (`withoutTools`). A list that does not
+    // (one that another plugin froze, say) keeps it in view, and the request goes on: whether a tool may run is
+    // decided where it is called, not by what a request lists.
     const prepare = async event => {
-      const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
       if (!privateSession(event)) {
         // AZPR's PAT-backed tools exist only for its private reviewers.
-        if (tools) for (const name of REVIEW_TOOL_NAMES) hide(tools, name);
+        withoutTools(requestSlots(event).tools.value, name => REVIEW_TOOL_NAMES.includes(name));
         return;
       }
-      const g = authorize(event.sessionID, event.agent, event.model);
+      // Whose request this is, read once, as the host reads it.
+      const model = event.model;
+      const g = authorize(event.sessionID, event.agent, model);
       if (!g.admitted) throw new Error('[AZPR] Missing authorized reviewer input.');
       // A request is the turn's only while the execution that took the turn's prompt runs. The grant is open
       // from the prompt's admission until the wait for the session ends, but neither end is the turn's own. The
@@ -2111,46 +2116,65 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
         g.refusedOutsideTurn++;
         throw new Error('[AZPR] No reviewer turn is open in this session; a request the host starts by itself is not authorized.');
       }
+      // What the request holds in the places this hook looks at, each taken once (`requestSlots`), and whether a
+      // place can be given another value. Every change below is made only where it can be made whole: a place
+      // that cannot be written, or something in it that cannot be changed, leaves the request as it is there,
+      // and the stage's record counts it. Nothing here refuses a request.
+      const slots = requestSlots(event);
+      const put = (name, value) => slots[name].writable && Reflect.set(event, name, value);
       // What the host wrote of instructions into the session by itself (the instruction files near a file the
       // native read tool read, and updates of the sources) is taken out of every request, by the session's own
       // record, where the request holds it as the host builds it. Nothing else is taken out and nothing is
       // looked for: a request that another plugin's hook changed before this one goes out as that hook left it,
       // and what a hook after this one does is not seen here either.
-      const requested = event.messages;
+      const requested = slots.messages.value;
       const own = withoutHostMessages(requested, stored);
-      if (own.messages !== requested) event.messages = own.messages;
-      for (const id of own.loads) g.hiddenLoads.add(id);
-      for (const id of own.updates) g.hiddenUpdates.add(id);
+      // A list that cannot be put in the place of the one that was handed over takes nothing out.
+      const taken = own.messages === requested || put('messages', own.messages);
+      if (taken) {
+        for (const id of own.loads) g.hiddenLoads.add(id);
+        for (const id of own.updates) g.hiddenUpdates.add(id);
+      }
       // Show only the tools this role may run, so the model does not waste turns on others.
       const allowed = new Set(allowedTools(g.role, settings.shell));
-      if (tools) for (const name of Object.keys(tools)) if (!allowed.has(name)) hide(tools, name);
+      let listed = !slots.tools.unread && withoutTools(slots.tools.value, name => !allowed.has(name));
       // A private role works from AZPR's own instructions and the host's date and environment. What the host
       // collects for the place a conversation is in stays out: instruction files (AGENTS.md, CLAUDE.md, configured
       // ones) and what MCP servers, references and skills say of themselves. Those tell an agent how to work in
       // the local directory, which is not the PR's repository, and are no instructions for a review.
-      const lean = withoutPlaceInstructions(event.system);
+      let system = slots.system.value;
+      const lean = withoutPlaceInstructions(system);
       // OpenCode's Claude Code provider does not send the system parts: before this hook runs it has made one text
       // of the instructions part, which it keeps in the request's options and hands the model. For a request to
       // that provider, the sources can be left out only where the option holds exactly what those sources give;
-      // it is emptied then. Where the parts or that text cannot be told apart, both stay as they are.
-      const forClaude = event.model?.providerID === CLAUDE_PROVIDER;
-      const told = lean && (!forClaude || claudeOption(event.options) === claudeInstructions(lean.removed));
-      // Counted once: the parts could not be told apart, or a loaded instruction file was not as the host builds it.
-      if (!told || own.changed) g.place.unknown++;
-      if (told && lean.removed.length) {
-        if (forClaude) event.options[CLAUDE_INSTRUCTIONS_OPTION] = '';
-        event.system = lean.system;
+      // it is emptied then. Where the parts or that text cannot be told apart, both stay as they are; and so do
+      // both where one of them cannot be changed.
+      const forClaude = model?.providerID === CLAUDE_PROVIDER;
+      const option = forClaude ? claudeOption(slots.options.value) : undefined;
+      const leaves = Boolean(lean?.removed.length);
+      const told = Boolean(lean) && (!forClaude || option?.text === claudeInstructions(lean.removed)) && (!leaves || (slots.system.writable && (!forClaude || option.writable)));
+      // Counted once: the parts could not be told apart or changed, or what the host wrote of instructions was
+      // not as the host builds it or could not be taken out.
+      if (!told || own.changed || !taken) g.place.unknown++;
+      if (told && leaves) {
+        if (forClaude) Reflect.set(slots.options.value, CLAUDE_INSTRUCTIONS_OPTION, '');
+        put('system', lean.system);
+        system = lean.system;
         for (const source of lean.removed) g.place.sources.add(source.key);
       }
       if (commentRole(g.role) && (g.checkpointRequested || g.calls >= 12)) {
-        event.tools = {};
-        // The note is one more part, where the parts are an ordinary list; where they are not, the request goes
-        // without it, and without tools all the same.
-        const noted = withPart(event.system, { type: 'text', text: g.grouping
+        // No tool for this response: an empty list in the place of the one that is there, or, where that place
+        // cannot be written, every tool taken out of the list that is.
+        if (!put('tools', {})) listed = !slots.tools.unread && withoutTools(slots.tools.value, () => true);
+        // The note is one more part, where the parts are an ordinary list and their place can be written; where
+        // not, the request goes without it.
+        const noted = withPart(system, { type: 'text', text: g.grouping
           ? 'Finish the grouping now; tools are unavailable for this response. Return exactly one JSON object: {"status": "READY", "groups": [...]} with the groups you are sure of from the findings in your input, and [] when there is none. This pass has no continuation.'
           : 'Finish this work page now; tools are unavailable for this response. Return exactly one JSON object. If all assigned findings are handled, return READY. Otherwise return CONTINUE with completed comments/skips and a "continuation" note naming exact data references, completed checks and remaining work.' });
-        if (noted) event.system = noted;
+        if (noted) put('system', noted);
       }
+      // A tool this role may not call that is still listed (its list could not be changed, or not looked at).
+      if (!listed) g.toolsLeftListed++;
       g.checked = turn;
       g.primaryPrepared = true;
     };
@@ -2173,8 +2197,7 @@ export async function setupAzurePrReview(context, baseDirectory = DEFAULT_DIR, o
     // is a failure like any other hook's.
     for (const name of ['compaction', 'generate']) {
       registrations.push(await context.session.hook(name, async event => {
-        const tools = event.tools && typeof event.tools === 'object' ? event.tools : null;
-        if (tools) for (const tool of REVIEW_TOOL_NAMES) hide(tools, tool);
+        withoutTools(requestSlots(event).tools.value, tool => REVIEW_TOOL_NAMES.includes(tool));
       }));
     }
     registrations.push(await context.session.hook('model.request', async event => {

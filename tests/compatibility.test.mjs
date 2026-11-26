@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { parseReviewRequest } from '../src/output.mjs';
 import { PACKAGE_NAME, REPOSITORY, validateSettings } from '../src/config.mjs';
-import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, withPart, claudeInstructions, claudeOption, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
+import { hostCapabilities, retriesSteps, hostInstructions, isInstructionLoad, isInstructionUpdate, promptOf, turnState, withoutHostMessages, withoutPlaceInstructions, withPart, withoutTools, requestSlots, claudeInstructions, claudeOption, HOST_FACT_SOURCES, CLAUDE_INSTRUCTIONS_OPTION, CLAUDE_PROVIDER, isHostContinuation, isSessionNotFound, isUntitledSession, listOf, packageNamed, pluginEntries, pluginSourceLabel, recordOf, sessionProgress, tokenUsage, usageTotals, withoutCredentials, HOST_CONTINUATION_TEXT, PROGRESS_EVENT_TYPES, TESTED_HOST_VERSION } from '../src/host.mjs';
 
 test('request parser preserves Unicode, multiline text, quotes and literal metacharacters', () => {
   const url = 'https://dev.azure.com/org/project/_git/repo/pullrequest/12';
@@ -274,6 +274,12 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
   assert.deepEqual(withoutPlaceInstructions([system[0], bare]).system, [system[0]]);
   for (const [name, marked] of Object.entries({ 'the part': { ...bare, cache: { type: 'ephemeral' } }, 'its metadata': { ...bare, metadata: { ...bare.metadata, note: 'of a hook' } },
     'beside the sources': { ...bare, metadata: { experimental: { instructions: local, also: true } } } })) assert.equal(withoutPlaceInstructions([system[0], marked]), null, `a mark on ${name}`);
+  // A source that goes takes what it holds with it, so only one that holds nothing but its key and its text: a
+  // mark on one that goes leaves everything as it is, and a mark on one that stays, stays with it.
+  const origin = at => [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, index) => index === at ? { ...source, origin: 'of a hook' } : source) } } }];
+  assert.equal(withoutPlaceInstructions(origin(2)), null, 'A source that would go carries a mark.');
+  assert.deepEqual(withoutPlaceInstructions(origin(3)).system[1].metadata.experimental.instructions.map(source => source.origin), ['of a hook', undefined], 'A source that stays keeps its mark.');
+  assert.equal(withoutPlaceInstructions([system[0], { ...bare, metadata: { experimental: { instructions: [{ ...local[0], origin: 'of a hook' }] } } }]), null, 'The only source carries a mark: the part does not go.');
   // A value that was revoked throws at any question, also whether it is a list: it is asked none.
   const gone = target => { const made = Proxy.revocable(target, {}); made.revoke(); return made.proxy; };
   assert.equal(withoutPlaceInstructions(gone([...system])), null);
@@ -292,14 +298,59 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
   assert.equal(asked, 0, 'Nothing of a part\'s own was called.');
 });
 
-test('the Claude provider\'s option is taken where it can be emptied: an ordinary object\'s own text that can be written', () => {
+test('a tool is taken out of a request\'s list where the list is an ordinary object and lets it; nothing is asked of a list that answers for another, and nothing is thrown', () => {
+  const unwanted = name => name.startsWith('azpr_') || name === 'edit';
+  const tools = { read: {}, edit: {}, azpr_read_file: {}, [Symbol('mark')]: 'of a hook' };
+  assert.equal(withoutTools(tools, unwanted), true);
+  assert.deepEqual([Object.keys(tools), Object.getOwnPropertySymbols(tools).length], [['read'], 1], 'The tools that are not wanted are gone, and nothing else.');
+  // A list that cannot be changed keeps its tools, and one of them that cannot be taken out stays: the request
+  // goes on either way.
+  const fixed = Object.freeze({ read: {}, edit: {} }), partly = Object.defineProperty({ read: {}, azpr_read_file: {} }, 'edit', { value: {}, enumerable: true });
+  assert.deepEqual([withoutTools(fixed, unwanted), withoutTools(partly, unwanted), withoutTools(Object.freeze({ read: {} }), unwanted)], [false, false, true], 'It says whether a tool that is not wanted is left listed.');
+  assert.deepEqual([Object.keys(fixed), Object.keys(partly)], [['read', 'edit'], ['read', 'edit']]);
+  // A list that answers for another object is asked nothing, also one that was revoked; and what is no list of
+  // tools is left alone.
+  let asked = 0;
+  const watched = new Proxy({ edit: {} }, new Proxy({}, { get() { asked++; return undefined; } })), revoked = Proxy.revocable({ edit: {} }, {});
+  revoked.revoke();
+  assert.deepEqual([watched, revoked.proxy, 'tools', 7].map(other => withoutTools(other, unwanted)), [false, false, false, false], 'Of a list that is not looked into nothing is known.');
+  assert.deepEqual([withoutTools(undefined, unwanted), withoutTools(null, unwanted)], [true, true], 'No list holds no tool.');
+  assert.equal(asked, 0);
+});
+
+test('the places of a request are taken once from the event\'s own descriptors: what each holds and whether it can be given another value', () => {
+  const system = [{ type: 'text', text: 'ROLE' }], messages = [], options = { maxTokens: 1 }, tools = { read: {} };
+  const place = (value, writable = true, unread = false) => ({ value, writable, unread });
+  // As OpenCode hands it over: a plain object whose places are listed data that can be written.
+  assert.deepEqual(requestSlots({ sessionID: 'ses_1', system, messages, options, tools }), { system: place(system), messages: place(messages), options: place(options), tools: place(tools) });
+  // A place that is not there holds nothing and cannot be written; one that cannot be written says so and still
+  // holds its value; a frozen event holds every value and lets none be replaced.
+  assert.deepEqual(requestSlots({ system }), { system: place(system), messages: place(undefined, false), options: place(undefined, false), tools: place(undefined, false) });
+  assert.deepEqual(requestSlots(Object.defineProperty({ messages }, 'system', { value: system, enumerable: true })).system, place(system, false));
+  assert.deepEqual(Object.values(requestSlots(Object.freeze({ system, messages, options, tools }))).map(slot => [slot.value !== undefined, slot.writable]), Array(4).fill([true, false]));
+  // A place behind an accessor is not asked: something is there, and nothing is known of it. An event that
+  // answers for another object, or is none, has no places.
+  let asked = 0;
+  const lazy = Object.defineProperty({ messages }, 'system', { enumerable: true, get() { asked++; return system; } });
+  assert.deepEqual([requestSlots(lazy).system, requestSlots(lazy).messages], [place(undefined, false, true), place(messages)]);
+  const revoked = Proxy.revocable({ system }, {}); revoked.revoke();
+  for (const event of [new Proxy({ system }, new Proxy({}, { get() { asked++; return undefined; } })), revoked.proxy, undefined, null, 'event']) {
+    assert.deepEqual(requestSlots(event), { system: place(undefined, false), messages: place(undefined, false), options: place(undefined, false), tools: place(undefined, false) });
+  }
+  // What an event inherits is not its own.
+  assert.deepEqual(requestSlots(Object.create({ system })).system, place(undefined, false));
+  assert.equal(asked, 0);
+});
+
+test('the Claude provider\'s option is the text an ordinary object holds of its own, with whether it can be written', () => {
   const key = CLAUDE_INSTRUCTIONS_OPTION;
-  assert.deepEqual([claudeOption({ [key]: 'TEXT', maxTokens: 1 }), claudeOption({ [key]: '' }), claudeOption(Object.assign(Object.create(null), { [key]: 'TEXT' }))], ['TEXT', '', 'TEXT']);
+  const held = (text, writable = true) => ({ text, writable });
+  assert.deepEqual([claudeOption({ [key]: 'TEXT', maxTokens: 1 }), claudeOption({ [key]: '' }), claudeOption(Object.assign(Object.create(null), { [key]: 'TEXT' }))], [held('TEXT'), held(''), held('TEXT')]);
+  // Its text is there to compare where it cannot be written, and the option says so: it is not emptied then.
+  assert.deepEqual([claudeOption(Object.freeze({ [key]: 'TEXT' })), claudeOption(Object.defineProperty({}, key, { value: 'TEXT', enumerable: true, configurable: true }))], [held('TEXT', false), held('TEXT', false)]);
   let asked = 0;
   const revoked = Proxy.revocable({ [key]: 'TEXT' }, {}); revoked.revoke();
   for (const [name, options] of Object.entries({
-    'frozen options': Object.freeze({ [key]: 'TEXT' }),
-    'an option that cannot be written': Object.defineProperty({}, key, { value: 'TEXT', enumerable: true, configurable: true }),
     'an option behind an accessor': Object.defineProperty({}, key, { enumerable: true, get() { asked++; return 'TEXT'; } }),
     'an option that is inherited': Object.create({ [key]: 'TEXT' }),
     'an option that is no text': { [key]: ['TEXT'] },

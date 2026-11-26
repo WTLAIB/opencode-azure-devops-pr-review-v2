@@ -511,9 +511,10 @@ assembled in page order, so markers and their ordinals match planning one page
 at a time. After a page fails, no page or continuation session starts and no
 page is asked for a correction: stages already running finish the turn they
 are in (the saved observations a page's comments are checked against are not
-read on, and the page is taken as it would be at its last turn), and the
-failure of the lowest failed page ends the command as before; `/pr-stop`
-cancels every running page.
+read on, and the page is taken as it would be at its last turn: the stage
+asks the page's handler before each correction whether its work was given
+up), and the failure of the lowest failed page ends the command as before;
+`/pr-stop` cancels every running page.
 Each page is validated per item: titles, severity labels, path slashes and
 HTML comment markers are normalized; anchors are restored against source text
 observed during the review; real problems get a repair turn; what remains is
@@ -974,8 +975,15 @@ sight kept, and a part without a source left goes only where it holds nothing
 but what the host gave it. The list of a request's messages is looked at
 like its items: one that is no ordinary list is left whole. The Claude
 provider's option is emptied only where an ordinary object holds it as a text
-that can be written. Where one of these cannot be done the request goes out
-as it is and is counted; none refuses it. What the hook takes out of a request as the host builds it is
+that can be written, and a source of the instructions part goes only where it
+holds nothing but its key and its text. The event itself is read the same
+way: what it holds under `system`, `messages`, `options` and `tools` is taken
+once from its descriptors, a place is given another value only where it can
+be written, and a change is made only where it can be made whole. A tool is
+taken out of the list of tools where the list lets it, and the stage's record
+counts a request in which one stayed (`toolsLeftListed`). Where one of these
+cannot be done the request goes out as it is and is counted; none refuses
+it. What the hook takes out of a request as the host builds it is
 exactly what `requestReview` takes for no one else's input: both go by the
 session's record. A system message of another plugin's
 stays, also one of the host's form, unless it holds exactly the text of an
