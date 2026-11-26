@@ -273,51 +273,57 @@ const updateText = message => {
   return Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' && typeof content[0].text === 'string' ? content[0].text : undefined;
 };
 
+// Whether a value holds one of the texts, anywhere in its strings: a message's content is a string, parts, or what
+// a tool returned.
+const holdsText = (value, texts, depth = 0) => typeof value === 'string' ? texts.some(text => value.includes(text))
+  : depth > 16 || value === null || typeof value !== 'object' ? false
+  : (Array.isArray(value) ? value : Object.values(value)).some(item => holdsText(item, texts, depth + 1));
+
 /**
  * A request's messages without what OpenCode wrote into the session by itself: its loads of instruction files
  * and its updates of the instructions. Which messages those are is the session's own word (`stored`, its
  * messages as the host holds them), not the request's: a hook that ran before this one may have changed what a
  * request message looks like. A load is taken out by its ID, whatever the request made of it; an update, which
- * has no ID in a request, where a system message of the host's form holds exactly its text.
+ * has no ID in a request, wherever a system message of the host's form holds exactly its text, every copy of it.
  *
- * `hidden` are the IDs of the stored messages that were taken out. `trusted` says whether this request can count
- * as proof that its model saw none of the others: every user message of the request is one message of the
- * session under its ID, each once (OpenCode makes every user message of a request from one stored message and
- * gives it that message's ID, 2.3.0 through 2.4.1), and every load and every update the session holds was
- * among the request's messages and was taken out. Where a hook before this one joined messages, gave them
- * other IDs, dropped a load or rewrote an update, that is not so, and nothing is proved: what such a hook did
- * with their text cannot be told from here.
+ * `left` says that a message that stays still holds, word for word, the text of one of them: a hook before this
+ * one joined it to another message, gave its message another ID or another form. Such a request cannot be sent
+ * without showing that text, and taking it out of another message is not this function's to do. `loads` and
+ * `updates` are the IDs of the session's messages that were found and taken out. A session that holds no such
+ * message gets its request back as it is.
  */
 export function withoutHostMessages(requested, stored) {
-  const loads = new Set(stored.filter(isInstructionLoad).map(message => message.id));
-  const updates = stored.filter(isInstructionUpdate);
-  const known = new Set(stored.map(message => message?.id).filter(id => typeof id === 'string' && id.length > 0));
-  const users = new Set(), hidden = new Set();
-  let trusted = true;
+  const loads = stored.filter(isInstructionLoad), updates = stored.filter(isInstructionUpdate);
+  if (!loads.length && !updates.length) return { messages: requested, loads: [], updates: [], left: false };
+  const loadIDs = new Set(loads.map(message => message.id)), found = { loads: new Set(), updates: new Set() };
   const messages = requested.filter(message => {
-    const id = typeof message?.id === 'string' && message.id.length > 0 ? message.id : undefined;
-    if (message?.role === 'user') {
-      if (id === undefined || !known.has(id) || users.has(id)) trusted = false;
-      else users.add(id);
-    }
-    if (id !== undefined && loads.has(id)) { hidden.add(id); return false; }
+    if (typeof message?.id === 'string' && loadIDs.has(message.id)) { found.loads.add(message.id); return false; }
     const text = updateText(message);
-    const update = text === undefined ? undefined : updates.find(candidate => candidate.text === text && !hidden.has(candidate.id));
-    if (update) { hidden.add(update.id); return false; }
-    return true;
+    const same = text === undefined ? [] : updates.filter(update => update.text === text);
+    for (const update of same) found.updates.add(update.id);
+    return !same.length;
   });
-  if ([...loads].some(id => !hidden.has(id)) || updates.some(update => !hidden.has(update.id))) trusted = false;
-  return { messages, hidden: [...hidden], trusted };
+  const texts = [...loads, ...updates].map(message => message.text).filter(text => typeof text === 'string' && text.length > 0);
+  return { messages, loads: [...found.loads], updates: [...found.updates], left: messages.some(message => holdsText(message, texts)) };
 }
 
 /**
- * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them (a
- * prompt that is admitted waits in the session's inbox, and becomes a message only in the execution that takes
- * it), `running` while no idle marker follows it, and `ended` once one does (an execution leaves one marker
- * when it ends, however it ends, before the host starts another one; OpenCode 2.3.0 through 2.4.1).
+ * The message a session's turn began with: the one user message that carries the nonce AZPR sent its prompt
+ * with. A prompt that is admitted waits in the session's inbox, and becomes a message only in the execution
+ * that takes it (OpenCode 2.3.0 through 2.4.1); until then, and where two messages carry the nonce, there is none.
  */
-export function turnState(messages, promptID) {
-  const at = typeof promptID === 'string' && promptID.length > 0 ? messages.findIndex(message => message?.id === promptID) : -1;
+export function promptOf(messages, nonce) {
+  const prompts = typeof nonce === 'string' && nonce.length > 0 ? messages.filter(message => message?.type === 'user' && message.metadata?.azprGrant === nonce) : [];
+  return prompts.length === 1 && typeof prompts[0].id === 'string' && prompts[0].id.length > 0 ? prompts[0] : undefined;
+}
+
+/**
+ * Where a turn stands, by the session's own messages: `before` while the turn's prompt is not among them,
+ * `running` while no idle marker follows it, and `ended` once one does (an execution leaves one marker when it
+ * ends, however it ends, before the host starts another one; OpenCode 2.3.0 through 2.4.1).
+ */
+export function turnState(messages, prompt) {
+  const at = prompt ? messages.indexOf(prompt) : -1;
   if (at < 0) return 'before';
   return messages.slice(at + 1).some(message => message?.type === 'idle') ? 'ended' : 'running';
 }

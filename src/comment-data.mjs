@@ -120,12 +120,13 @@ async function settlePages(file, text) {
 
 /**
  * The value a pages file holds, where its rows are complete and give a text of the digest: rows of any length,
- * since this reads them itself. An object that was damaged after its pages were written is restored from them.
+ * since this reads them itself, and also where only the line end after the last row is missing. An object that
+ * was damaged or lost after its pages were written is restored from them.
  */
 function valueOfPages(content, id) {
-  if (!content.endsWith('\n')) return undefined;
+  const body = content.endsWith('\n') ? content.slice(0, -1) : content;
   let text = '';
-  for (const row of content.length > 1 ? content.slice(0, -1).split('\n') : []) {
+  for (const row of body === '' ? [] : body.split('\n')) {
     let page;
     try { page = JSON.parse(row); } catch { return undefined; }
     if (page === null || typeof page !== 'object' || page.start !== text.length || typeof page.text !== 'string' || page.end !== text.length + page.text.length) return undefined;
@@ -136,53 +137,25 @@ function valueOfPages(content, id) {
 }
 
 /**
- * Whether a value that a store holds when it is opened again is ready to be handed out: its object is what its
- * name says, and its pages give it whole through the host's read. A saved review's references name these files,
- * and a model reads the pages by itself, so every value is looked at for itself, each time the store is opened:
- * nothing says of a store as a whole that it is ready, since an earlier version that still runs, or another
- * process, may have written into it meanwhile. Pages of a sound object that are not whole (rows of 3,000
- * characters as 0.5.0 wrote them, a file that is missing or was not finished) are written again from the object.
- *
- * An object that is not what its name says gives no pages. Complete pages hold the value all the same, and
- * the object is written again from them. Otherwise the value is not ready: it is another writer's work in
- * progress or a write that was cut off, and putting it writes it again. Only where such a value has pages with
- * a row the host's read cuts does opening the store fail, as it does where pages cannot be written: a reference
- * a review saved may name them, and their rows would reach a model cut. The object is read once more before
- * that, since a writer may have finished it between the two reads.
- */
-async function ready(file, id) {
-  const unwritten = error => unfit(`they could not be written again (${error?.code ?? 'error'}). Nothing was planned; run the command again once the cause is gone.`);
-  for (let again = false; ; again = true) {
-    const text = await sound(file, id);
-    if (text !== undefined) {
-      try { await settlePages(file, text); } catch (error) { throw unwritten(error); }
-      return true;
-    }
-    const pages = await present(file + '.pages.jsonl').catch(() => undefined);
-    const value = pages === undefined ? undefined : valueOfPages(pages, id);
-    if (value !== undefined) {
-      try { await replace(file, value); await settlePages(file, value); } catch (error) { throw unwritten(error); }
-      return true;
-    }
-    if (!pages?.split('\n').some(row => row.length > HOST_READ_LINE_CHARACTERS)) return false;
-    if (again) throw unfit('the value they belong to is damaged, so they cannot be written again. Nothing was planned; review the pull request again.');
-  }
-}
-const unfit = rest => Object.assign(new Error(`[AZPR] This review's private data holds pages that OpenCode's read tool does not return whole (an earlier version wrote longer rows, or a write was cut off), and ${rest}`), { unfitPages: true });
-
-/**
  * Private content-addressed store. A new store gets a fresh directory under
  * `root`; an existing `directory` is reopened after a restart.
+ *
+ * A value is an object named by the digest of its bytes and a pages file, which a model reads by itself. It is
+ * made ready when it is handed out, not when the store is opened: nothing says of a store, or of a value at an
+ * earlier time, that it is ready, since an earlier version that still runs, or another process, writes into the
+ * same directory. Ready means that the object is what its name says and that the pages give it whole through
+ * the host's read (`wholePages`). `put` has the text in hand: files that were there (an earlier version's rows
+ * of 3,000 characters, a write that was cut off, an object that is something else) are made right from it. A
+ * reference that a review saved has only the files: pages that are not whole are written again from a sound
+ * object, and an object that is damaged or gone is written again from pages that are complete. A value that
+ * cannot be made ready is not handed out (`holds`, `read`); the others are not held back for it.
  */
 export async function createCommentData({ root, directory: existing } = {}) {
   let directory = existing;
+  // The values this process put, by digest: a put under way or done.
   const written = new Map();
-  if (existing) {
-    for (const name of await readdir(join(existing, 'objects'))) {
-      const match = /^([a-f0-9]{64})\.txt$/.exec(name);
-      if (match && await ready(join(existing, 'objects', name), match[1])) written.set(match[1], Promise.resolve());
-    }
-  } else {
+  if (existing) await readdir(join(existing, 'objects'));
+  else {
     if (!root) throw new Error('A private data root is required.');
     await mkdir(root, { recursive: true, mode: 0o700 });
     directory = await mkdtemp(join(root, 'data-'));
@@ -208,17 +181,34 @@ export async function createCommentData({ root, directory: existing } = {}) {
     await written.get(id);
     return { file, pages: file + '.pages.jsonl', format, characters: text.length, sha256: id };
   };
-  // A reference is the store's own where it names a value that is ready here: one a review saved earlier may
-  // name files that are no longer what they were, and a model reads the pages by itself.
-  const holds = reference => Boolean(reference) && typeof reference.sha256 === 'string' && reference.file === join(directory, 'objects', reference.sha256 + '.txt') &&
-    reference.pages === reference.file + '.pages.jsonl' && written.has(reference.sha256);
+  // Only references to this store's own values are looked at, never a path a model wrote.
+  const own = reference => Boolean(reference) && typeof reference.sha256 === 'string' && /^[a-f0-9]{64}$/.test(reference.sha256) &&
+    reference.file === join(directory, 'objects', reference.sha256 + '.txt') && (reference.pages === undefined || reference.pages === reference.file + '.pages.jsonl');
+  /** The value a reference names, made ready from its files here and now; nothing where it cannot be. */
+  const ready = async reference => {
+    const id = reference.sha256, file = reference.file;
+    // A put of this value that is under way writes these files.
+    await written.get(id)?.catch(() => {});
+    try {
+      let text = await sound(file, id);
+      if (text === undefined) {
+        const pages = await present(file + '.pages.jsonl');
+        text = pages === undefined ? undefined : valueOfPages(pages, id);
+        if (text === undefined) return undefined;
+        await replace(file, text);
+      }
+      await settlePages(file, text);
+      return text;
+    } catch { return undefined; }
+  };
   return {
-    directory, put, holds,
+    directory, put,
+    /** Whether a reference, also one that a review saved, names a value that is ready to be handed to a model. */
+    async holds(reference) { return own(reference) && await ready(reference) !== undefined; },
     async object(value) { return put(JSON.stringify(value, null, 2), 'json'); },
     async read(reference) {
-      // Only references created by this store are accepted, never model paths.
-      if (!reference || reference.file !== join(directory, 'objects', reference.sha256 + '.txt') || !written.has(reference.sha256)) throw new Error('Unknown private comment data reference.');
-      const value = await sound(reference.file, reference.sha256);
+      if (!own(reference)) throw new Error('Unknown private comment data reference.');
+      const value = await ready(reference);
       if (value === undefined) throw new Error('Private comment data changed; no plan was accepted.');
       return value;
     },
@@ -236,9 +226,10 @@ export async function captureObservation(store, tool, input, output) {
 }
 
 export async function observationIndex(store, observations) {
-  // Only what the store holds ready is listed: a reference that a review saved is handed to a model, which reads
-  // its pages by itself, and the files it names may be damaged or gone since (`holds`).
-  return store.put((await Promise.all(observations.filter(({ outputRef }) => store.holds(outputRef)).map(async ({ tool, input, outputRef }) =>
+  // Only what the store holds ready is listed, as it is now: a reference that a review saved is handed to a
+  // model, which reads its pages by itself, and the files it names may be damaged or gone since (`holds`).
+  const held = await Promise.all(observations.map(({ outputRef }) => store.holds(outputRef)));
+  return store.put((await Promise.all(observations.filter((_, index) => held[index]).map(async ({ tool, input, outputRef }) =>
     json({ tool, arguments: await store.pack(input, 2000), output: outputRef })))).join('\n') + '\n', 'jsonl');
 }
 

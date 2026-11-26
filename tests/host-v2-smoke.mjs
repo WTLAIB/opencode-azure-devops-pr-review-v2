@@ -747,10 +747,11 @@ try {
     assert.equal(stage.requestObservations.placeInstructionsNotToldApart, undefined, `Every request of ${stage.role} could be told apart: ${JSON.stringify(stage.requestObservations)}`);
     // Before every request of a private session its messages are read, and the request is the turn's only while
     // no idle marker follows the turn's prompt: every request here was looked at so and found to be its turn's
-    // (the prompt is among the session's messages by then, and the marker comes when the execution has ended).
-    // And every request was the session's own messages, one for one: each user message under the ID of the message
-    // it was made of.
-    assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn, stage.requestObservations.untrustedRequests], [stage.requestObservations.authorizedPrimary, undefined, undefined], JSON.stringify(stage.requestObservations));
+    // (the prompt is among the session's messages by then, known by the nonce it was sent with, and the marker
+    // comes when the execution has ended). Every request held that prompt once, under the ID of the session's
+    // message, and none was held back. What a reviewer's own tool calls read is credited by the assistant message
+    // that asked for each call, which OpenCode names to the tool: the check of `sessionReads` above holds that.
+    assert.deepEqual([stage.requestObservations.turnChecks, stage.requestObservations.refusedOutsideTurn, stage.requestObservations.unsendableRequests], [stage.requestObservations.authorizedPrimary, undefined, undefined], JSON.stringify(stage.requestObservations));
   }
   assert.ok(during.every(request => !request.marks.length), 'No request of the review carried the configured instruction file.');
   results.placeInstructions = `left out of every private request (${[...new Set(reviewStages.flatMap(stage => stage.requestObservations.placeInstructions))].sort().join(', ')}); an ordinary conversation keeps them`;
@@ -1119,7 +1120,9 @@ try {
   const strayNotices = await inbox(strayOrigin);
   assert.ok(strayNotices.length === 1 && strayNotices[0].startsWith('[AZPR] /pr-check reached OpenCode as an ordinary prompt, not as a command, so AZPR stopped it: nothing ran and no model received it.'), JSON.stringify(strayNotices));
   const strayContext = await rawApi(`/api/session/${strayOrigin}/context`);
-  assert.deepEqual((Array.isArray(strayContext) ? strayContext : strayContext?.data ?? []).filter(message => message.type === 'user').map(message => message.text), [], 'The refused prompt is no message of the conversation, so no later request holds it either.');
+  const strayMessages = Array.isArray(strayContext) ? strayContext : strayContext?.data;
+  assert.ok(Array.isArray(strayMessages), `The conversation's messages were not answered as a list: ${JSON.stringify(strayContext).slice(0, 200)}`);
+  assert.deepEqual(strayMessages.filter(message => message.type === 'user').map(message => message.text), [], 'The refused prompt is no message of the conversation, so no later request holds it either.');
   assert.equal(requests.length, beforeStray, 'No model was asked, not even for a title.');
   await api(`/api/session/${strayOrigin}/command`, { name: 'pr-check', text: prUrl, delivery: 'steer' });
   assert.match(await latest(strayOrigin), /\] READY/, 'The command itself still runs in that conversation.');

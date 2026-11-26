@@ -270,18 +270,21 @@ export function classifyFailure(error) {
  * how the turn ended. The turn's answer is the last assistant message before it.
  *
  * Two kinds of messages the host writes by itself are no one else's input and no step of the turn. What it
- * wrote of instructions (`isInstructionLoad`, `isInstructionUpdate`), anywhere in the session, since every
- * request is sent the whole session: the caller says of each by its ID that no request of this session showed
- * it (`unseen`), and where it does not say so of one, an answer is not accepted. And the notice that a
- * background command of this session ended (`ownShellNotices`). Anyone else's message fails the request, as
- * before, wherever the model of this turn was sent it: after the prompt, and between the turn before and the
- * prompt (`since` is that turn's prompt, and what stands before a session's first prompt counts too).
+ * wrote of instructions (`isInstructionLoad`, `isInstructionUpdate`): the caller sends no request of this session
+ * that still holds one of them, so no model of it saw them. And the notice that a background command of this
+ * session ended (`ownShellNotices`). Anyone else's message fails the request, as before, wherever the model of
+ * this turn was sent it: after the prompt, and between the turn before and the prompt (`since` is that turn's
+ * prompt, and what stands before a session's first prompt counts too). A turn that did not succeed fails by its
+ * own outcome first, which decides whether it is tried again.
  *
  * What follows the turn's idle marker is no part of it: a command that ended later woke the session, and what
  * the host did then neither changes the answer nor how the turn ended. `settled` is called once the host reports
  * the session idle, before anything else is awaited, so that the caller can close what it opened for the turn.
+ * The answer names its turn for the caller: the prompt (`prompt`), the assistant messages of the turn, whose
+ * tool calls are the turn's (`assistants`), and the notices of this session's commands that were looked at
+ * (`notices`).
  */
-export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, unseen, since, settled }) {
+export async function requestReview(context, { sessionID, text, role, model, metadata, signal, allowHostContinuations = false, since, settled }) {
   const api = sessionApi(context, ['prompt', 'wait', 'context', 'get']);
   if (!textValue(sessionID) || !textValue(text) || !textValue(role)) throw new Error('[AZPR] A session, role and literal prompt are required.');
   const selectedModel = modelRef(model);
@@ -309,10 +312,9 @@ export async function requestReview(context, { sessionID, text, role, model, met
   const changed = message => Object.assign(new Error(message), { contextChanged: true });
   const after = messages.slice(indexes[0] + 1);
   const notices = ownShellNotices(messages);
-  // What the host wrote of instructions is answered for by the caller (below), and its notices of this
-  // session's own commands are no input of anyone else's: neither is a step.
-  const instructions = message => isInstructionLoad(message) || isInstructionUpdate(message);
-  const own = message => instructions(message) || notices.has(message);
+  // What the host wrote of instructions reached no model of this session (the caller sends no request that holds
+  // it), and its notices of this session's own commands are no input of anyone else's: neither is a step.
+  const own = message => isInstructionLoad(message) || isInstructionUpdate(message) || notices.has(message);
   const steps = after.filter(message => !own(message));
   const end = steps.findIndex(message => message?.type === 'idle');
   const turn = end < 0 ? steps : steps.slice(0, end + 1);
@@ -329,10 +331,6 @@ export async function requestReview(context, { sessionID, text, role, model, met
   // Either way the host recovers an interrupted stream; both need the caller's consent.
   const retried = retriedSteps(turn, allowHostContinuations);
   const continuation = continuedText(turn.filter(message => !retried.has(message)), allowHostContinuations);
-  // Someone else's message ends it: before the prompt, in the turn or after it.
-  if ([...between, ...steps].some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
-    throw changed('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
-  }
   const terminal = turn.at(-1);
   const assistants = turn.filter(message => message?.type === 'assistant');
   const final = assistants.at(-1);
@@ -361,11 +359,10 @@ export async function requestReview(context, { sessionID, text, role, model, met
       : '';
     throw responseError(`[AZPR] ${detail}Reviewer execution did not finish successfully (session=${execution.sessionOutcome}; terminal=${execution.terminalOutcome}; assistantResponses=${assistants.length}; finish=${finish}).`, answer, execution);
   }
-  // Instructions that a request showed, in this turn or in an earlier one of the session, are instructions nobody
-  // authorized for this answer. A turn that did not succeed has failed by its own outcome above, which decides
-  // whether it is tried again.
-  if (messages.some(message => instructions(message) && unseen?.(message.id) !== true)) {
-    throw changed('[AZPR] Instructions that OpenCode wrote into this session by itself were not kept from its model; the output cannot be assigned to the authorized request.');
+  // Someone else's message ends it: before the prompt, in the turn or after it. A turn that did not succeed has
+  // failed by its own outcome above.
+  if ([...between, ...steps].some(message => FOREIGN_MESSAGE_TYPES.includes(message?.type) && !continuation.synthetic.has(message))) {
+    throw changed('[AZPR] The session received another message during this turn; its output cannot be assigned to the authorized request.');
   }
   if (session.agent !== role || !sameModel(session.model, selectedModel) ||
       assistants.some(message => message.agent !== role || !sameModel(message.model, selectedModel))) {
@@ -392,12 +389,16 @@ export async function requestReview(context, { sessionID, text, role, model, met
     answer.continuation = { count: continuation.recovered.size, fragments, ...(restartedAt ? { restartedAt } : {}) };
   }
   if (retried.size) answer.retriedSteps = retried.size;
-  const loads = after.filter(isInstructionLoad).length;
+  // The instruction files the host loaded in this turn, up to its marker.
+  const loads = after.slice(0, after.indexOf(terminal)).filter(isInstructionLoad).length;
   if (loads) answer.instructionLoads = loads;
   // The prompt of this turn, for the caller's next one in this session (`since`).
   answer.prompt = admitted.id;
-  const noticed = after.filter(message => notices.has(message)).length;
-  if (noticed) answer.shellNotices = noticed;
+  // The notices of this session's own commands that this turn looked at, also those that arrived before its
+  // prompt: by ID, since the turn after this one looks at what follows this turn's marker again.
+  answer.notices = messages.slice(from).filter(message => notices.has(message)).map(message => message.id).filter(id => typeof id === 'string');
+  // The assistant messages of the turn: what their tool calls read is what this turn's answer was given after.
+  answer.assistants = assistants.map(message => message.id).filter(id => typeof id === 'string');
   aborted(signal);
   return answer;
 }

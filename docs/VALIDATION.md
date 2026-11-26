@@ -97,45 +97,58 @@ found. `host.mjs` has the tested version, the workspace limit among the
 used-up limits, the length of a line the host's read returns, and what tells
 the host's parts and messages apart and where a turn stands
 (`withoutPlaceInstructions`, `claudeInstructions`, `isInstructionLoad`,
-`isInstructionUpdate`, `withoutHostMessages`, `turnState`). `runtime.mjs`
-reads a private session's messages before every request, in its `context`
-hook: the request is the turn's only while the turn's prompt is among them
-and no idle marker follows it, and what the host wrote of instructions into
-the session is taken out of the request by that record. It keeps the place's
+`isInstructionUpdate`, `withoutHostMessages`, `promptOf`, `turnState`).
+`runtime.mjs` reads a private session's messages before every request, in its
+`context` hook: the request is the turn's only while the turn's prompt, known
+by the nonce it was sent with, is among them and no idle marker follows it;
+what the host wrote of instructions into the session is taken out of the
+request by that record; and a request that still holds such a text word for
+word, or does not hold its turn's prompt once, is not sent. What follows a
+request (the request itself, a retry, a tool call) needs a request of the
+same turn that was looked at so, and what a session read is what the
+assistant messages of its accepted turns asked for. It keeps the place's
 instructions out of private requests, takes AZPR's tools out of the requests
 built outside a turn, refuses one of AZPR's commands that arrives as a
 prompt, and puts the report into the last stage of the pipeline that did not
 fail. `session.mjs` ends a turn at the first idle marker after its prompt,
-looks at what reached the session since the turn before, and lets pass what
-the host wrote of instructions where no request showed it, and the notice of
-the session's own background command. `comment-data.mjs` writes rows that fit
-(`pageRows`) and hands out a stored value only when its object is what its
-name says and its pages give it whole through the host's read (`wholePages`),
+looks at what reached the session since the turn before, judges a turn by its
+own outcome first, and takes neither what the host wrote of instructions nor
+the notice of the session's own background command for someone else's input.
+`comment-data.mjs` writes rows that fit (`pageRows`) and makes a stored value
+ready each time it is handed out: its object is what its name says by its
+bytes, and its pages give it whole through the host's read (`wholePages`).
 `attribution.mjs` orders the stages (`stagesInOrder`), and `tui-view.jsx`
 tells a made-up release from a click (`hold`). No prompt changed (the hash
 test holds them), no setting is new, and the package has the files of 0.5.0.
 
 ### Offline
 
-`npm run check` passes, and `npm test` runs 811 tests (783 for 0.5.0), all
+`npm run check` passes, and `npm test` runs 812 tests (783 for 0.5.0), all
 passing. The new ones:
 
 | Tests | What they establish |
 | ---: | --- |
-| 5 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. What the Claude Code provider keeps for a request is its sources but those two, joined. In a session's messages a load of instruction files is a synthetic message with an ID that names its paths, and an update a `system` message; what a request holds of them is neither. A request loses both by the session's record: a load by its ID, also with its metadata taken away or as another role, and an update where a system message of the host's form holds exactly its text, so that another hook's system message stays; the request that was handed over is not changed. It proves that its model saw none of it only where it is the session's messages one for one: not with a user message without an ID, of an ID the session does not have, or twice; not where a load was joined to the message before it or is missing; not where an update is a plain string, has another text or is missing. Where a turn stands: before its prompt is among the session's messages, running, or ended at the first idle marker after it, and never begun where the host does not say which message the prompt became. |
-| 10 | The hooks (`tests/runtime.test.mjs`). A private request keeps only the date and the environment, loses the loaded instruction file and the update and keeps a change of effort; an option of the Claude provider's name on another provider's request changes nothing of that; an ordinary session's request is untouched. For the Claude Code provider the sources are left out, and its option emptied, only where the option holds exactly what they give: written another way, with a source more or less, missing, not a text, or holding something where nothing is to leave out, the parts and the option stay and the stage record counts the request. What the host wrote of instructions ends no turn only on proof that no request showed it: a load or an update that no request offered to the hook fails the turn; so does one in a session of which one request, before or after, was not the session's messages one for one (the load joined to another message, missing, under another ID or without one, a user message that is not the session's, the update as a plain string or marked by another hook), and one that was hidden in the first turn and shown in the correction turn; with its metadata taken away a load is taken out all the same and the turn stands; a message that only looks like a load is someone else's; AZPR's own prompt is no load, whatever another hook wrote on it. A private session gets a request and a tool only while a turn is open: between two turns the hook refuses a request, the tool hook a call and AZPR's own tool its execution, and nothing is read. At the end of a turn (the fixture's host leaves its marker as OpenCode does): asked again before the marker, because input reached the session while it was going idle, the turn goes on and what it reads counts; asked again after the marker, with the wait for the session still pending, the session gets no request, no retry and no tool, and nothing is read. A request that the host built before the turn's prompt became a message is refused, and the turn's own request then goes through. Where the session's messages cannot be read, or the host does not say which message the prompt became, the request is refused: the pass runs again in a new session in the first case, and no model is asked in the second. A prompt that the host admits after the call that sent it has ended (the inactivity watchdog stopped the stage while the host was slow) is refused and no model is asked: before the prompt hook because the prompt is no longer waited for, inside it because the hook's read of the session ends with the stage; and a request that was prepared before the stage was stopped is not sent. One of AZPR's commands sent as a prompt is refused with a notice, for each of its eight commands; a question about a command, a longer name, an unknown name, an indented example and a command after a blank line or a tab are not. A hook that cannot be registered fails the load, also one for the requests built outside a turn. The receipt lists the passes in their order and the report goes to the last of them. |
-| 7 | The turn (`tests/session.test.mjs`): a turn ends at the first idle marker after its prompt, whatever came before it: a marker right after the prompt is the end of the prompt's own execution (interrupted, failed, or with nothing answered), what another execution wrote afterwards is not the answer, and the turn keeps the outcome its own marker says. A follow-up turn is looked at from the idle marker of the turn before: someone else's message between the two turns fails it like one after the prompt, the end of an execution the host had begun there and the notice of this session's own command do not, a session's first turn is looked at from the session's beginning, and the turn before must still be where it was. What the host wrote of instructions ends no turn where the caller says that no request showed it, and the answer is not accepted otherwise, also for a load or an update of an earlier turn and one after the turn's marker; a turn that was interrupted, or that a used-up limit ended, keeps that failure. An update is no step of the turn between two steps, between a step that broke and its retry, and after the answer, and excuses nothing else. The caller is told that the session is idle before its context is read. The notice of the session's own background command is no foreign input, whether the command completed, was cancelled or ended in error, also between a step that broke and its retry; a notice after the turn's marker leaves the answer before it, whatever the woken turn's outcome and whatever else of the host's lies between. A notice for a shell the session did not start, one before its call, one of another tool's or of a call that ended in the foreground, one without the host's marks, one that does not say the command ended, and a second one for a shell (in the turn, in a later turn, between two turns, after the turn) are foreign; the notice of a command that an earlier turn started is the session's own, in the later turn and between the two. And the workspace limit is named and not retried. |
-| 4 | Rows and stored values (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. What tells that a pages file gives its value whole says so of every file this version writes and of none that lacks a row or its line end, repeats or reorders rows, holds another text or a row longer than the host returns (2,000 characters pass, 2,001 do not). A store that is opened again writes the pages of a sound object again where they are rows of 0.5.0, a row of 2,001 characters, missing, empty, cut in a row, cut after a row, another text, or something else, each time it is opened, and leaves a row of exactly 2,000 characters as it is; it holds no mark. A value that another writer has written since the store was opened (an earlier version with its rows, a writer cut off in the object or in the pages, an object that is something else) is made right when it is put. An object is what its name says by its bytes: one that lost its end and has no pages is not ready and not handed out, and putting its value writes it again; with complete pages, of whatever row length, it is written again from them, also where it was cut inside its last character and decodes like the whole text; with pages that are cut as well and hold rows the host's read would cut, and where the pages of a sound object cannot be written, the store is not opened, leaves no working file, and is opened once the obstacle is gone. A value is stored as the text a file can hold: a lone surrogate becomes U+FFFD in the object and in the pages alike. And the evidence a planner is listed holds only references the store holds ready: one whose object was damaged since, one whose files are gone and one of another store are left out. |
+| 5 | The host's forms (`tests/compatibility.test.mjs`): the instructions part is rebuilt from the date and the environment, without changing the parts that were handed over, and comes back as it was when nothing can be left out; no such part, two of them, a text that is not its sources joined or sources of another form are not told apart. What the Claude Code provider keeps for a request is its sources but those two, joined. In a session's messages a load of instruction files is a synthetic message with an ID that names its paths, and an update a `system` message with an ID and a text; what a request holds of them is neither. A request loses both by the session's record: a load by its ID, also with its metadata taken away or as another role, and an update wherever a system message of the host's form holds exactly its text, every copy of it, so that another hook's system message stays; the request that was handed over is not changed, and a session without such messages gets its request back as it is. Where such a text is still in what stays, word for word, the result says so: a load joined to another message, under another ID, without one, or in what a tool returned; an update as a plain string, with another hook's mark, or copied into a user message. A part of such a text, or the same file read another way, is not that text. A turn's prompt is the session's one message of a person's type that has the turn's nonce and an ID (another type, no ID, two such messages or no nonce: none), and the turn stands before it, runs, or has ended at the first idle marker after it. |
+| 11 | The hooks (`tests/runtime.test.mjs`). A private request keeps only the date and the environment, loses the loaded instruction file and the update and keeps a change of effort; an option of the Claude provider's name on another provider's request changes nothing of that; an ordinary session's request is untouched. For the Claude Code provider the sources are left out, and its option emptied, only where the option holds exactly what they give: written another way, with a source more or less, missing, not a text, or holding something where nothing is to leave out, the parts and the option stay and the stage record counts the request. No request is sent that holds what the host wrote of instructions: as the host built it, with the load's metadata taken away, with the update twice, with neither among its messages and with a user message that a hook added, the request goes out without them, and the stage's record counts the load and the update; where their text is still in it (the load joined to the prompt, under another ID or without one; the update as a plain string, with another hook's mark, or copied into a user message), the request is refused and counted, the request the host builds next goes through, and the review is COMPLETE; the same in a correction turn, for a load of the turn before. A request that does not hold its turn's prompt once (dropped, twice, or as another role) is refused. A load or an update that came after the turn's last request ends no turn, a message that only looks like a load is someone else's and fails it, and AZPR's own prompt is no load, whatever another hook wrote on it. A private session gets a request and a tool only while a turn is open: between two turns the hook refuses a request, the tool hook a call and AZPR's own tool its execution, and nothing is read. At the end of a turn (the fixture's host leaves its marker as OpenCode does): asked again before the marker, because input reached the session while it was going idle, the turn goes on, and what it reads counts where an assistant message of the turn asked for it and not where a call names no message; asked again after the marker, with the wait for the session still pending, the session gets no request, no retry and no tool, and nothing is read. A request that the host built before the turn's prompt became a message is refused, like a model request, a tool call, AZPR's own tool and a retry at that moment, and the turn's own request then goes through. Where the session's messages cannot be read the request is refused, and the pass runs again in a new session; a host whose prompt hook does not say which message the prompt became works like any other. What a session read is what its accepted turns read: a file read in a correction turn counts when that turn's answer is taken, not when the turn fails after the read, and not when the call names the assistant message of the turn before. A prompt that the host admits after the call that sent it has ended (the inactivity watchdog stopped the stage while the host was slow) is refused and no model is asked: before the prompt hook because the prompt is no longer waited for, inside it because the hook's read of the session ends with the stage; and a request that was prepared before the stage was stopped is not sent. One of AZPR's commands sent as a prompt is refused with a notice, for each of its eight commands; a question about a command, a longer name, an unknown name, an indented example and a command after a blank line or a tab are not. A hook that cannot be registered fails the load, also one for the requests built outside a turn. The receipt lists the passes in their order and the report goes to the last of them. |
+| 7 | The turn (`tests/session.test.mjs`): a turn ends at the first idle marker after its prompt, whatever came before it: a marker right after the prompt is the end of the prompt's own execution (interrupted, failed, or with nothing answered), what another execution wrote afterwards is not the answer, and the turn keeps the outcome its own marker says. A follow-up turn is looked at from the idle marker of the turn before: someone else's message between the two turns fails it like one after the prompt, the end of an execution the host had begun there and the notice of this session's own command do not, a session's first turn is looked at from the session's beginning, and the turn before must still be where it was. What the host wrote of instructions is no step of a turn and no one else's input, wherever it stands: a load after a read, an update between two steps, between a step that broke and its retry and after the answer, both in an earlier turn, and both after the turn's marker; someone else's message beside it still fails the turn, and it excuses nothing else (a step that broke still needs its retry, and a turn without a marker is unfinished). A turn that did not succeed fails by its own outcome, whatever else reached the session: a used-up limit or an interruption keeps its failure with someone else's message before the prompt, in the turn or after it, and a turn that succeeded with such a message is refused for the message. The caller is told that the session is idle before its context is read. The notice of the session's own background command is no foreign input, whether the command completed, was cancelled or ended in error, also between a step that broke and its retry; a notice after the turn's marker leaves the answer before it, whatever the woken turn's outcome and whatever else of the host's lies between. A notice for a shell the session did not start, one before its call, one of another tool's or of a call that ended in the foreground, one without the host's marks, one that does not say the command ended, and a second one for a shell (in the turn, in a later turn, between two turns, after the turn) are foreign; the notice of a command that an earlier turn started is the session's own, in the later turn and between the two. And the workspace limit is named and not retried. |
+| 4 | Rows and stored values (`tests/comment-work.test.mjs`): for prose, code, one long line, quotes and backslashes, control characters and surrogate pairs, every row is at most 1,900 characters as written, the rows are the value, each continues the one before and none splits a pair; a row ends at a line break in its second half. What tells that a pages file gives its value whole says so of every file this version writes and of none that lacks a row or its line end, repeats or reorders rows, holds another text or a row longer than the host returns (2,000 characters pass, 2,001 do not). A value is made ready when it is handed out, not when its store is opened: opening looks at nothing and changes nothing, and a saved reference that is asked for has its pages written again from a sound object where they are rows of 0.5.0, a row of 2,001 characters, missing, empty, cut in a row, cut after a row, another text, or something else, each time it is handed out, while a row of exactly 2,000 characters stays as it is; the store holds no mark. A value that another writer has written (an earlier version with its rows, a writer cut off in the object or in the pages, an object that is something else) is made right when it is put, as the files show before anything is read through the store. An object is what its name says by its bytes: one that lost its end and has no pages is not handed out, the other values are, and putting its value writes it again; with complete pages, of whatever row length and also without their last line end, an object that is damaged or gone is written again from them, also where it was cut inside its last character and decodes like the whole text; with pages that are cut as well, and where the pages of a sound object cannot be written, the value is not handed out, nothing of it is changed, no working file is left, and it is ready again once the obstacle is gone. Only a reference to the store's own values is looked at: another store's, a path of someone's choosing and a name that is no digest are not. A value is stored as the text a file can hold: a lone surrogate becomes U+FFFD in the object and in the pages alike, as the put leaves them. And the evidence a planner is listed holds only references the store holds ready when the list is made: one whose object and pages were cut since, one whose files are gone and one of another store are left out, one whose object is gone and whose pages are complete is written again and listed, and one that another writer made right since is listed the next time. |
 | 2 | The order of stages (`tests/attribution.test.mjs`): three orders of creation give one list, for a review and for a comment run; the sessions of one label, among them a page's continuation after a retry, keep the order they ran in; the receipt's inactivity notice follows the same order. |
-| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture, which a later movement and release without a new press show; one right after a movement, and one after any time without a movement, is a click; a movement before the press does not count, and neither does one with another button; a session's row and `close` follow the same rule, also after another button was pressed or moved on them; and each of the two clocks alone, or one that runs backwards, is enough to refuse. The clocks are the test's. |
+| in an existing test | A made-up release (`tests/tui-view.test.mjs`): a release long after the last movement picks nothing and ends the gesture, which a later movement and release without a new press show; one right after a movement, and one after any time without a movement, is a click; a release a second after the movement is a click, and one a millisecond later is none, by either clock alone; a movement before the press does not count, and neither does one with another button; a session's row and `close` follow the same rule, also after another button was pressed or moved on them; and a clock that runs backwards is enough to refuse. The clocks are the test's. |
 | in an existing test | The requests built outside a turn lose AZPR's tools (`tests/runtime.test.mjs`). |
+| in an existing test | A saved review's object that was changed since is written again from its pages and read; with both changed, the read is refused (`tests/store.test.mjs`). |
 
-Thirty-two changes that each take one of these rules out of the code (the
-marker rule, the look at what reached a session between two turns, the proof
-for what the host wrote, the one-for-one check of a request, the three states
-of a turn, the stage's signal in a hook's read, the checks of a stored value
-by its bytes and by its pages, and so on) were tried against the tests, and
-each made one fail.
+Forty changes that each take one of these rules out of the code were tried
+against the tests, and each made one fail: the marker rule, the look at what
+reached a session between two turns, the turn's own outcome before anything
+else, the three states of a turn, the grant that closes only past the marker,
+what a model request, a retry and a tool need of the turn, the refusal of a
+request that holds the host's text or lacks its prompt, the prompt by its
+nonce, the reads credited by the asking message, the stage's signal in a
+hook's read, and the checks of a stored value by its bytes, by its pages and
+by the reference that names it. Three of them passed at first, because a
+later read through the store repaired what the change had broken before the
+test looked, and because no test had a read that was asked for by a message
+of another turn; the tests were changed until they failed.
 
 The other changed expectations are the tested version (`2.4.1`) and what
 `/pr-check` says of it.
@@ -154,11 +167,13 @@ them:
   not be told apart.
 - **The session's own word.** Before every request of a private session its
   messages are read from inside the `context` hook: the request is the
-  turn's only while the turn's prompt is among them and no idle marker
-  follows it, and what the host wrote of instructions is taken out by that
-  record. Every stage's record of that review counts as many such readings
-  as requests, none refused, and no request that was not the session's
-  messages one for one.
+  turn's only while the turn's prompt, found by its nonce, is among them and
+  no idle marker follows it, and it is sent only where it holds that prompt
+  once, under the ID of the session's message. Every stage's record of that
+  review counts as many such readings as requests, none refused and none
+  held back. The reviewers' records count what their sessions read, which
+  the runtime credits by the assistant message that OpenCode names to a tool
+  for each call.
 - **A local read beside an instruction file.** A quick review whose reviewer
   reads a file of the project with the native read, in a folder that has an
   `AGENTS.md`. The host leaves that file in the reviewer's session, which the
@@ -200,14 +215,14 @@ them:
 
 Each new step failed when the change it is for was taken out of a copy of the
 tree: with the system parts left as they were, or the host's form no longer
-recognised, the step for the configured file; without hiding the load, the
-nested file (both sessions `failure=transient`, and the file's text in their
-requests); without the refusal, the prompt (HTTP 200 and a user message);
-without the limit's type, the usage limit (a second request); with rows of
-2,900 characters, the read (a row cut at 2,000); without the reading of the
-session's messages, the step for the session's own word (no reading in the
-record); and with a made-up release taken for a click again, the panel's step
-(the step that was pressed long before was picked).
+recognised, the step for the configured file; with what the host wrote left
+in the requests, the nested file (the review was COMPLETE, and the file's
+text was in a request); without the refusal, the prompt (HTTP 200 and a user
+message); without the limit's type, the usage limit (a second request); with
+rows of 2,900 characters, the read (a row cut at 2,000); without the reading
+of the session's messages, the step for the session's own word (no reading in
+the record); and with a made-up release taken for a click again, the panel's
+step (the step that was pressed long before was picked).
 
 Model and Azure DevOps requests of the runs: smoke fresh 123 and 212,
 replacement 102 and 182, native 129 and 228; comment scale 36 and 125, with
@@ -245,7 +260,8 @@ session with the command run once; so did, on 2.4.1, a background command
 under `shell: ask` that was approved through the API. And a review saved by
 0.5.0 on 2.4.1, then the candidate installed over it and `/pr-comment`: the
 store's pages, 14 rows of up to 3,243 characters as 0.5.0 wrote them, were
-written again as 24 rows of at most 1,879, and the preview was planned.
+written again as 24 rows of at most 1,879 when the comment run used the
+value, and the preview was planned.
 
 What the reading of a session's messages before every request costs was
 timed on 2.4.1, with a copy of the candidate that measures it. In sessions of
@@ -253,7 +269,8 @@ timed on 2.4.1, with a copy of the candidate that measures it. In sessions of
 characters, all readings of a session together took 59, 525 and 1,667 ms: 3 to
 10 ms each, 52 ms at most, about 3 ms for each million characters the session
 holds. In the smoke fixture's main review and the reviews after it, 68
-readings in 34 stages took 85 ms.
+readings in 34 stages took 85 ms. A request is searched for the host's texts
+only in a session that holds one, which was not timed.
 
 A fifth probe looked at the end of a turn, on 2.3.0, 2.3.1, 2.4.0 and 2.4.1,
 with shell allowed and a reviewer that starts a background command. A second
@@ -268,18 +285,20 @@ once more, and the review was COMPLETE with the notice counted on its stage.
 In the other runs the execution had ended: the session held its marker before
 the notice, and the execution the host started then got no request (the
 provider was asked nothing more); the review was COMPLETE with the answer
-before the marker. In two of those runs, one on 2.4.1 and one on 2.4.0, that
-execution began while the stage still had its grant, and the stage's record
-counts the refusal. With the command's own notice, timed from 40 ms before to
-40 ms after the model's last answer (eight runs on 2.4.1, three on each other
-version), every review was COMPLETE in one session with the command run once:
-the notice was handed to the model as input that waited (three of eight on
-2.4.1, one of three elsewhere), or came after the marker. In all 34 runs every
-request was the session's messages one for one. The moment in which OpenCode
-starts another execution while the wait for the turn still covers it and the
-grant is still open was not produced on a real host: it is a few awaits wide,
-and what AZPR does in it (it reads the session's messages, finds the marker
-and refuses) is shown by the unit test with the fixture's host.
+before the marker. In three of those runs, one each on 2.4.1, 2.4.0 and
+2.3.0, that execution began while the stage still had its grant, and the
+stage's record counts the refusal. With the command's own notice, timed from
+40 ms before to 40 ms after the model's last answer (eight runs on 2.4.1,
+three on each other version), every review was COMPLETE in one session with
+the command run once: the notice was handed to the model as input that waited
+(four of eight on 2.4.1, one of three elsewhere), or came after the marker.
+In all 34 runs every request that was sent, 115 of them, was looked at
+first, and none was held back. Which side of the marker a notice falls on differs from run to run at
+the same setting. The moment in which OpenCode starts another execution while
+the wait for the turn still covers it and the grant is still open was not
+produced on a real host: it is a few awaits wide, and what AZPR does in it
+(it reads the session's messages, finds the marker and refuses) is shown by
+the unit test with the fixture's host.
 
 ### Not verified
 
@@ -288,9 +307,12 @@ and refuses) is shown by the unit test with the fixture's host.
 - The moment in which OpenCode starts another execution in a private session
   while the wait for its turn still covers it and the grant is still open
   (the fifth probe above).
-- A plugin that is loaded before AZPR and rewrites the messages of a private
-  session's request: the check that a request is the session's messages one
-  for one ran only against requests as OpenCode builds them.
+- A plugin that is loaded before AZPR and changes the messages of a private
+  session's request. That a request which still holds the host's text, or
+  lacks its turn's prompt, is not sent ran on real hosts only against
+  requests as OpenCode builds them, where nothing is held back; requests that
+  a hook changed are the unit tests'. Text that such a hook wrote in other
+  words, and what a hook after AZPR's does, cannot be seen by AZPR at all.
 - The Claude Code provider with a real Claude Code: a stand-in recorded what
   it would be given, for the reviewer role only; nested instruction files and
   updates with that provider were not run.
@@ -298,8 +320,8 @@ and refuses) is shown by the unit test with the fixture's host.
   update against a registry.
 - Real terminal emulators: every mouse gesture and key was injected in tmux.
 - The refused prompt in the desktop app and other clients.
-- A store that 0.5.0 saved, reopened by this version on a host, beyond the
-  run named above.
+- A store that 0.5.0 saved, used by this version on a host, beyond the run
+  named above.
 - macOS, Windows and the desktop app.
 
 ## OpenCode 2.3.1 to 2.4.1 compared with 2.3.0 (2026-11-24 to 26)

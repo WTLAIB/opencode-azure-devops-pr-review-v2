@@ -64,30 +64,32 @@ settings, backups and failure records. Never upload `.local/`.
   are is the session's own word, not a request's: the `context` hook reads
   the session's messages and takes them out by that record
   (`withoutHostMessages`), a load by its ID whatever the request made of it,
-  an update where a system message of the host's form holds exactly its
+  an update wherever a system message of the host's form holds exactly its
   text. Never tell them by what a request message looks like: a hook that
   ran before AZPR's may have changed it, and another plugin's system message
   can have the host's form.
+- A request that cannot be made right is not sent; an answer is never
+  refused afterwards for what its model was shown. Where a message that
+  stays still holds such a text word for word (a hook before AZPR's joined
+  it to another message, or gave its message another ID or form), and where
+  the request does not hold its turn's prompt once, the `context` hook
+  refuses the request. So `requestReview` needs no proof of what a model
+  saw: what the host wrote of instructions is no step of a turn and no one
+  else's input, wherever it stands. Say what this is and no more: AZPR
+  answers for a request as its own hook leaves it. Text that a hook before
+  it rewrote in other words, and what a hook after it does, cannot be seen
+  from there, and a plugin in the same process can do anything.
 - `requestReview` fails a turn that received anyone else's message, wherever
   the turn's model was sent it: after the prompt, and between the turn
-  before and the prompt (`since`; before a session's first prompt too). It
-  lets a message of the host pass only on one of two grounds. The model
-  never saw it: what the host wrote of instructions, anywhere in the session
-  since every request is sent the whole session, which the `context` hook
-  took out of a request, in a session of which every request was the
-  session's own messages one for one (`unseen`): each user message of the
-  request one message of the session under its ID, once, and every load and
-  update the session holds among the request's messages. Where that proof is
-  missing, an answer is not accepted; a turn that did not succeed keeps its
-  own failure, which decides whether it is tried again. Or it is the late
-  result of the session's own tool call: the host's notice that a background
-  command ended, which names a shell that a shell call of this same session
-  reported as running, once for each such shell (`ownShellNotices`); that
-  can only be with shell allowed, and it rests on the host's metadata, since
-  nothing proves who wrote a message. Never accept a message that the model
-  saw by its text or its form alone. What a hook before AZPR's did with the
-  text of a request's messages cannot be told from here: claim the
-  one-for-one check, and no more.
+  before and the prompt (`since`; before a session's first prompt too). A
+  turn that did not succeed fails by its own outcome first, which decides
+  whether it is tried again. A message of the host passes only where it is
+  one of those above, or the late result of the session's own tool call:
+  the host's notice that a background command ended, which names a shell
+  that a shell call of this same session reported as running, once for each
+  such shell (`ownShellNotices`); that can only be with shell allowed, and
+  it rests on the host's metadata, since nothing proves who wrote a message.
+  Never accept a message that the model saw by its text or its form alone.
 - A turn is the admitted prompt up to the first idle marker after it, and
   its answer is the last assistant message before that marker. A prompt
   becomes a message of the session only in the execution that takes it, and
@@ -109,17 +111,26 @@ settings, backups and failure records. Never upload `.local/`.
   wakes it, whether the turn succeeded or failed. So before every request of
   a private session, read the session's messages (`turnState`): the request
   is the turn's only while the turn's prompt is among them and no idle
-  marker follows it, which is the line `requestReview` draws afterwards.
-  Before the prompt is a message, the request is refused and the turn is
-  still to come; after the marker the turn has ended, the grant closes, and
-  what the host does now gets nothing. So nothing is added to an answer that
-  was taken: not a file the session reads later, which would count as read
-  for a finding it had already filed. Where the messages cannot be read,
-  refuse: there is no weaker rule to fall back on. Never tell the end of a
-  turn by time, by a hook the host may not run (its idle hook runs only when
-  a turn succeeds), or by the wait alone. What a hook reads of the host, it
-  reads until the stage ends (`signal` on the grant), not the run: a stage
-  that was stopped waits for its session to settle.
+  marker follows it, which is the line `requestReview` draws afterwards. The
+  prompt is known among them by the nonce it was sent with (`promptOf`),
+  not by what a hook's event says. Before the prompt is a message, the
+  request is refused and the turn is still to come; after the marker the
+  turn has ended, the grant closes, and what the host does now gets nothing.
+  Where the messages cannot be read, refuse: there is no weaker rule to fall
+  back on. Never tell the end of a turn by time, by a hook the host may not
+  run (its idle hook runs only when a turn succeeds), or by the wait alone.
+  What follows a request (the request itself, a retry of it, the tool calls
+  of its answer) needs a request of this very turn that was looked at so
+  (`inTurn`). What a hook reads of the host, it reads until the stage ends
+  (`signal` on the grant), not the run: a stage that was stopped waits for
+  its session to settle.
+- What a session read is what its turns read, by the host's record and not
+  by the time of a call: OpenCode names to a tool the assistant message that
+  asked for the call, and a read counts for a finding only once the turn of
+  that message is looked at and its answer taken (`readsBy` on the grant,
+  `assistants` of the answer). So nothing is added to an answer that was
+  taken: not a file the session reads later, and not one that a call read
+  which names no message of the turn.
 
 **Every mode runs one pipeline and differs only in its models.**
 - `/pr-review`, `/pr-deep` and `/pr-quick` run the same stages with the same
@@ -528,24 +539,23 @@ settings, backups and failure records. Never upload `.local/`.
   Saved references name the pages files, and a model reads them by itself,
   so a value is ready only when its object is what its name says and its
   pages give it whole through the host's read: rows the read returns uncut,
-  one after another, that together are the value (`wholePages`). That is
-  asked of every value when its store is opened and when a value is put
-  whose files another writer made, and pages that do not pass (rows of an
-  earlier version, a file that is missing or was not finished) are written
-  again from the value. Judge pages that are there by what the host's read
-  returns, not by the length this version writes. Each value answers for
-  itself: keep no mark that says a whole store is ready, since an earlier
-  version that still runs can add to it. An object is what its name says by
-  its bytes, not by the text they decode to, and a value is the text a file
-  can hold (no lone surrogate), so that object and pages are one value.
-  Derive pages only from such an object; where the object is damaged and
-  its pages are complete, write the object again from them. Replace a file
-  in one step, hand out no value that is not ready, also not through a
-  reference a review saved (`holds`: the evidence index lists only what the
-  store holds), and fail the opening only where pages with a row the host's
-  read cuts cannot be written again (a sound object's that cannot be
-  written; a damaged object's whose pages are not complete, looked at
-  twice): their rows would reach a model cut.
+  one after another, that together are the value (`wholePages`). A value is
+  made ready when it is handed out, each time, and not when its store is
+  opened: when it is put, from the text in hand, and when a reference that
+  a review saved is handed to a model or read (`holds`, `read`), from its
+  files. Pages that do not pass (rows of an earlier version, a file that is
+  missing or was not finished) are written again from the value. Judge
+  pages that are there by what the host's read returns, not by the length
+  this version writes. Keep no mark that says a store, or a value at an
+  earlier time, is ready: an earlier version that still runs, and another
+  process, write into the same directory. An object is what its name says
+  by its bytes, not by the text they decode to, and a value is the text a
+  file can hold (no lone surrogate), so that object and pages are one
+  value. Derive pages only from such an object; where the object is damaged
+  or gone and its pages are complete, write the object again from them.
+  Replace a file in one step. A value that cannot be made ready is not
+  handed out, and the others are not held back for it: opening a store
+  never fails for one value.
 - OpenCode lists every private session like a conversation. When a run ends,
   delete its sessions except the one holding the report or draft (a comment
   run keeps none; all stay while debugging or after an unconfirmed abort).
@@ -928,13 +938,17 @@ runtime tells things apart by: the sources of a request's instructions (a
 configured instruction file reaches an ordinary conversation and no private
 session), the message OpenCode leaves after a native read beside an
 instruction file, the session's messages read from inside a hook (the prompt
-is among them by the turn's first request, and no idle marker follows it
-while the turn runs), the ID on every user message of a request, the error
-type of a used-up limit, a prompt that is one of AZPR's commands, and the
-line length the native read returns. When one of
+is among them by the turn's first request, with the nonce it was sent with,
+and no idle marker follows it while the turn runs), the prompt's message in
+the request under the same ID, the assistant message that OpenCode names to
+a tool for a call, the error type of a used-up limit, a prompt that is one of
+AZPR's commands, and the line length the native read returns. When one of
 these steps fails on another OpenCode, read that version's source before
-changing the step: the runtime's fallback is to leave things as the host
-made them, which such a step is there to notice.
+changing the step. Two kinds of fallback are behind them. Where the parts of
+a request cannot be told apart, the runtime leaves them as the host made
+them, which such a step is there to notice. Where the session's messages
+cannot be read, or do not say that a request is its turn's, the runtime
+refuses the request, and a review fails instead of going on unchecked.
 For package entry points, first-run setup or settings-path changes, also run
 `node tests/host-v2-smoke.mjs <opencode binary> --native`; this installs the
 packed artifact through OpenCode's plugin manager in an isolated profile.

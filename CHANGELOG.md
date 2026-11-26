@@ -71,7 +71,9 @@ Private sessions:
   in a directory that has an `AGENTS.md` of its own (from OpenCode 2.3.1 also
   a `CLAUDE.md`), OpenCode leaves that file in the session. 0.5.0 took it for
   someone else's message and failed the pass, and its retry too. Such a
-  message is now kept from the model and ends no turn.
+  message is now kept from the model and ends no turn. A request in which
+  another plugin put that file's text somewhere else is not sent, and the
+  pass fails instead of going on with it.
 - **A reviewer's command that goes on in the background no longer fails its
   pass** (only with `shell` set to `ask` or `inherit`). From OpenCode 2.3.1 a
   command that outlasts its timeout, 120 seconds by default, is moved to the
@@ -95,9 +97,9 @@ Large inputs:
   native read. That tool cuts every line after 2,000 characters, and a row
   held up to 3,000 characters of text, so a model got about two thirds of
   what it read. Rows now fit, and pages of a saved review that do not are
-  written again whenever it is used. Where that cannot be done (a full disk,
-  for instance) the command says so instead of planning from cut rows. The
-  instructions to the models did not change.
+  written again when their value is used. A value whose files cannot be made
+  right is not handed to a model. The instructions to the models did not
+  change.
 
 Receipts:
 

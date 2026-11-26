@@ -934,29 +934,29 @@ synthetic message that names the files it holds and an update is a `system`
 message, which only the host writes (`isInstructionLoad`,
 `isInstructionUpdate`), and takes them out of the request by that record
 (`withoutHostMessages` in `host.mjs`): a load by its ID, whatever a hook
-before AZPR's made of it in the request, and an update where a system message
-of the host's form holds exactly its text. A system message of another
-plugin's stays, also one that looks like the host's.
+before AZPR's made of it in the request, and an update wherever a system
+message of the host's form holds exactly its text. A system message of
+another plugin's stays, also one that looks like the host's.
 
-`requestReview`, which fails a turn that received anyone else's message, lets
-what the host wrote of instructions pass only on proof that no request of the
-session showed it. Every request is sent the whole session, so that is asked
-of every such message the session holds, not only of those after the turn's
-prompt: the hook took it out of a request, and every request of the session
-was the session's own messages one for one. OpenCode makes each user message
-of a request from one message of the session and gives it that message's ID;
-a request in which a user message has no ID, an ID the session does not have,
-or the same ID twice, or which lacks a load or an update that the session
-holds, was rewritten by a hook that ran before AZPR's, and what that hook did
-with the text cannot be told from here. After such a request nothing is
-proved, and an answer of a session that holds a load or an update is not
-accepted. With the proof, the model never saw it, the answer is still the
-answer to the admitted prompt, and a message that merely has the same form
-reaches no model either. A turn that did not succeed keeps its own failure,
-which decides whether it is tried again. An update is no step of a turn,
-wherever it stands between the steps. Anyone else's message fails the turn
-where the turn's model was sent it: after the prompt, and between the turn
-before and the prompt.
+A request that cannot be made right is not sent. After the two kinds of
+messages are taken out, the hook looks through what stays for their text,
+word for word: a hook that ran before AZPR's may have joined such a text to
+another message, or given its message another ID or another form. A request
+that still holds it is refused, and so is one that does not hold its turn's
+prompt once, since its answer would be an answer to something else. So no
+answer is refused afterwards for what its model was shown, and
+`requestReview`, which fails a turn that received anyone else's message,
+takes what the host wrote of instructions for what it is: no step of a turn
+and no one else's input, wherever it stands. Anyone else's message fails the
+turn where the turn's model was sent it: after the prompt, and between the
+turn before and the prompt. A turn that did not succeed fails by its own
+outcome first, which decides whether it is tried again.
+
+This is what AZPR's hook can see, and no more. It answers for a request as it
+leaves that hook: text that a hook before it rewrote in other words, and what
+a hook after it puts into a request, are out of its sight, and a plugin that
+runs in the same process can do anything. List AZPR first among the plugins,
+and it sees the request before every plugin that is listed after it.
 
 With shell allowed, a command can go on in the background: the model asked
 for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's
@@ -1000,19 +1000,32 @@ succeeded or failed. So before every request of a private session the
 `context` hook reads the session's own messages and lets the request through
 only where the turn's prompt is among them and no idle marker follows it
 (`turnState` in `host.mjs`), which is the line `requestReview` draws
-afterwards. Before the prompt is a message, the request is refused and the
+afterwards. The prompt is known among them by the nonce it was sent with
+(`promptOf`). Before the prompt is a message, the request is refused and the
 turn is still to come. Where input reached the session while it was going
 idle, the same execution goes on with it, no marker stands there yet, and the
 model's next message is the turn's answer. Where the execution had ended, its
 marker is there before the host starts another one, the request is refused
 and the grant closes. So a session that the host wakes by itself asks no
-model and reads nothing, and a file read later cannot count as read for a
-finding the session had already filed. Where the messages cannot be read, the
-request is refused. What a hook reads of the host it reads until its stage
-ends, so a stage that was stopped does not wait for a host that stalls. A
-stage's record counts those readings and the requests refused outside a turn
-(`turnChecks`, `refusedOutsideTurn`). The reading costs what the
-session's size costs: about 3 ms for each megabyte of its messages, measured
+model and reads nothing. Where the messages cannot be read, the request is
+refused. What follows a request (the request itself, a retry of it, the tool
+calls of its answer) needs a request of this very turn that was looked at so.
+What a hook reads of the host it reads until its stage ends, so a stage that
+was stopped does not wait for a host that stalls. A stage's record counts
+those readings, the requests refused outside a turn, and the requests that
+were not sent because another plugin had changed them (`turnChecks`,
+`refusedOutsideTurn`, `unsendableRequests`).
+
+What a session read, for the check that a finding names a file its own tools
+read, is settled the same way, by the host's record and not by the time of a
+call. OpenCode names to a tool the assistant message that asked for the call.
+A read is kept under that message, and counts once the turn of that message
+is looked at and its answer taken: the reads of the turn's own assistant
+messages. A file that the session reads after its answer was taken belongs to
+no such message, and neither does a call that names none.
+
+Reading a session's messages before every request costs what the session's
+size costs: about 3 ms for each million characters of its messages, measured
 on OpenCode 2.4.1 (see the
 [validation record](VALIDATION.md#051-release-candidate-acceptance-2026-11-26)).
 

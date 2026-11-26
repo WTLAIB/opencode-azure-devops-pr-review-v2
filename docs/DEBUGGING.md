@@ -195,12 +195,11 @@ first pass, `-reviewerb`, `-reviewerc` and `-reviewerd` for the next ones,
    `placeInstructionsNotToldApart` counts the requests that went out as
    OpenCode built them because their parts did not have the form AZPR knows
    (a newer OpenCode, or another plugin that edited them).
-   `untrustedRequests` counts requests that were not the session's own
-   messages one for one (a user message without an ID or with another one,
-   a loaded instruction file or an update that was missing from the
-   request), which another plugin rewrote: a session with one cannot prove
-   that its model never saw a loaded instruction file or an update, so a
-   turn of a session that holds one fails. `shellNotices` on the stage
+   `unsendableRequests` counts requests that were not sent because another
+   plugin had changed them before AZPR saw them: a loaded instruction file
+   or an update stood, word for word, outside the message it came in, or
+   the request did not hold its turn's prompt once. The step that asked
+   fails, and with it the turn. `shellNotices` on the stage
    counts background commands that reported back. `turnChecks` counts how
    often the session's messages were read, once before every request of an
    open turn; and `refusedOutsideTurn` the requests that were refused

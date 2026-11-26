@@ -596,7 +596,9 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
   const clocks = panelTui([previewNotice], []);
   t.after(clocks.stop);
   const watched = clocks.rows[2].element;
-  for (const [name, day, steadily] of [['the time of day alone', 60_000, 150], ['the steady clock alone', 150, 60_000], ['the time of day set back', -60_000, 150], ['the steady clock gone back', 150, -5]]) {
+  // The moment is a second, to the millisecond, on each clock: a millisecond more on either is no click.
+  for (const [name, day, steadily] of [['the time of day alone', 60_000, 150], ['the steady clock alone', 150, 60_000], ['the time of day set back', -60_000, 150], ['the steady clock gone back', 150, -5],
+    ['a millisecond over the second by the time of day', 1001, 1000], ['a millisecond over the second by the steady clock', 1000, 1001]]) {
     let wall = 2_000_000, mono = 5_000;
     Date.now = () => wall;
     performance.now = () => mono;
@@ -607,6 +609,19 @@ test('what a preview offers is one row at the panel\'s foot: each sends /pr-comm
     watched.props.onMouseUp(onStep);
     await settle();
     assert.deepEqual([clocks.log.sent, clocks.log.shown.length], [[], 0], `No click by ${name}.`);
+  }
+  // Exactly a second after the movement, by both clocks, is still that moment.
+  {
+    let wall = 3_000_000, mono = 9_000;
+    Date.now = () => wall;
+    performance.now = () => mono;
+    watched.props.onMouseDown(event());
+    watched.props.onMouseDrag(onStep);
+    wall += 1000;
+    mono += 1000;
+    watched.props.onMouseUp(onStep);
+    await settle();
+    assert.deepEqual(clocks.log.sent.map(command => command.text), [`${REVIEW} --reset --seen 0f1e2d3c4b5a`], 'A release exactly a second after the movement is a click.');
   }
   restore();
   // A key that would only type a letter into the prompt is drawn dim: its colour says that it works.
