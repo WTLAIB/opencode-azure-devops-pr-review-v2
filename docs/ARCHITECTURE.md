@@ -960,13 +960,19 @@ and its text, all of it plain data (a plain object for a load, an ordinary
 array for a content, plain objects and arrays of strings for the metadata;
 seen on OpenCode 2.3.0 and 2.4.1). A message or a part that carries anything
 more holds what the host did not write, and stays: a field of another
-hook's, also one that is not listed or stands under a symbol, a value read
-through an accessor, an array or an object of another class, metadata that is
-other data than the stored message's. Each is asked of the object's own
-properties; what an object inherits is not looked at, and an update is an
-object of the host's own class, which a plugin cannot name. What cannot be
-looked at (an object that refuses to be read, metadata too deep to compare)
-is not known to be the host's and stays as well. A system message of another plugin's
+hook's, also one that is not listed or stands under a symbol, a value behind
+an accessor, an array or an object of another class, an object that answers
+for another (a proxy), metadata that is other data than the stored
+message's. Each is asked of the object's own properties, taken once from
+their descriptors, so that nothing of a message's own is called and looking
+at it changes nothing; metadata is compared to its end however deep it goes.
+What an object inherits is not looked at, and an update is an object of the
+host's own class, which a plugin cannot name. The same holds for a request's
+system parts: the instructions part is made anew only where it, its metadata
+and its sources are plain data, with what a hook added to them in plain
+sight kept. What the hook takes out of a request as the host builds it is
+exactly what `requestReview` takes for no one else's input: both go by the
+session's record. A system message of another plugin's
 stays, also one of the host's form, unless it holds exactly the text of an
 update that the session holds: nothing tells those two apart. Beyond that,
 who wrote a message cannot be proved, and
@@ -994,8 +1000,12 @@ may add to a request, so no check of what a request holds could be complete,
 and a request refused for its form would fail every review on a host that
 builds requests another way. What another plugin's hook makes of a request or
 of a tool's result, before or after AZPR's own, AZPR neither sees nor
-corrects, and a plugin that runs in the same process can do anything. List
-AZPR first among the plugins: its hook then sees the request before theirs.
+corrects, and a plugin that runs in the same process can do anything. Listing
+AZPR first among the plugins of `opencode.json` makes its hook see a request
+before those of the plugins listed after it; not before a plugin that
+OpenCode loads from a configuration directory's `plugin/` or `plugins/`
+folder, and not where AZPR's runtime starts after the others (a first
+`/pr-setup` in a running OpenCode).
 
 With shell allowed, a command can go on in the background: the model asked
 for that, or (OpenCode 2.3.1 and later) its timeout ran out. The shell call's

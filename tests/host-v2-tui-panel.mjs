@@ -695,6 +695,10 @@ try {
   await sleep(2500);
   await click('Sessions (click one to open it)');
   await handled('pressed-somewhere-else');
+  // The terminal UI has handled the press; what a command sent in error would do on the server takes longer, and
+  // on a slow machine longer than this wait. Such a command is not lost to this fixture: it would take the first
+  // adjustment back, which the second adjustment below does not keep then, and the previews planned in this
+  // session are counted before the comments are posted.
   await sleep(2000);
   assert.equal((await own()).length, toldBefore, 'A release the host made up for a step that was pressed long before picked that step.');
   assert.match(screen(), new RegExp(`AZPR ${adjustedRun} · PREVIEW`), 'A release the host made up changed what the panel shows.');
@@ -716,6 +720,10 @@ try {
   await see(/\[p\] Post 3 comments…/, 'The row does not count what is left after the second adjustment.');
   assert.ok((await own()).some(text => text.startsWith(`[AZPR ${secondRun}] PREVIEW; source review=${review}`)), 'The second adjustment has no receipt in the session on screen.');
   assert.equal(azure.state.threads.length, 0, 'An adjustment posts nothing.');
+  // No command but the ones that were picked reached the server from this session, whenever one sent in error
+  // would have arrived: the previews planned here are the three that were asked for, in their order.
+  assert.deepEqual((await own()).flatMap(text => { const run = /^\[AZPR ([a-f0-9]{8})\] PREVIEW;/.exec(text); return run ? [run[1]] : []; }), [typedHere, adjustedRun, secondRun],
+    'A step that nobody picked started a run in this session.');
   // Posting asks first, with "no" first: Enter alone posts nothing. The key works while the panel has the keyboard.
   await click('Sessions (click one to open it)');
   key('p');

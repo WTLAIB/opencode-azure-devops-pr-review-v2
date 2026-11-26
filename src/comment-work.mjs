@@ -1,6 +1,6 @@
 // Comment planning (model pages) and deterministic, idempotent publication.
 import { commentFindings, adjustmentInput, publicationItems, evaluatePlanPage, planRepairPrompt, evaluateGrouping, groupingRepairPrompt, assemblePlan, parseLocation, placeOf, reviewMethod, reviewVerification } from './comments.mjs';
-import { observationIndex, anchorObservations, putOnce, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
+import { observationIndex, anchorObservations, putOnce, rowLines, compactDispositions, textPages, itemPages, PAGE_CHARACTERS } from './comment-data.mjs';
 import { markersInThreads, markerTexts, deletedThreads, threadMarkers } from './azure.mjs';
 import { listedPlaces, listablePlace } from './attribution.mjs';
 import { parseModelJSON, syntaxProblem } from './output.mjs';
@@ -239,7 +239,7 @@ async function planningInput(review, store, findings, report, work, continuation
     ...(extras.repeatCandidates?.length ? { repeatCandidates: extras.repeatCandidates } : {}),
     // This page's own earlier reads; pages planned at the same time keep theirs. Their values were put in this
     // run and are what their put made them: whatever writes those files meanwhile writes the same.
-    ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(extras.evidence.map(item => JSON.stringify(item)).join('\n') + '\n', 'jsonl') } : {}),
+    ...(continuation && extras.evidence?.length ? { workEvidence: await store.put(rowLines(extras.evidence.map(item => JSON.stringify(item))), 'jsonl') } : {}),
     continuation: continuation ? await store.pack(continuation, 3000) : undefined,
     commentWork: work,
   };

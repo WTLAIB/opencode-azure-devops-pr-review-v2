@@ -237,6 +237,40 @@ test('a request\'s instructions part is rebuilt from the host\'s own facts, and 
     [{ type: 'text', text: 'x', metadata: { experimental: { instructions: 'x' } } }]]) {
     assert.equal(withoutPlaceInstructions(unknown), null, JSON.stringify(unknown)?.slice(0, 80));
   }
+  // What a hook added to the part, its metadata or a source in plain sight stays with them where the part is
+  // made anew, and with the sources that are kept.
+  const marked = [system[0], { ...part, cache: { type: 'ephemeral' }, metadata: { note: 'of a hook', experimental: { also: true, instructions: sources.map(source => source.key === 'core/date' ? { ...source, seen: 1 } : source) } } }];
+  const kept = withoutPlaceInstructions(marked).system[1];
+  assert.deepEqual([kept.cache, kept.metadata.note, kept.metadata.experimental.also, kept.metadata.experimental.instructions.map(source => [source.key, source.seen])],
+    [{ type: 'ephemeral' }, 'of a hook', true, [['core/date', 1], ['core/environment', undefined]]]);
+  // The parts are plain data as the host builds them. A list, a part, its metadata or a source that is not (one
+  // of a class of its own, with a field that is not listed, under a symbol or read through an accessor, or one
+  // that answers for another object) is not looked into, so nothing of its own is called; the instructions part
+  // cannot be told apart then, and everything stays as it is. A part of another plugin's that is no plain data
+  // changes nothing for the part that is.
+  class Tagged extends Array {}
+  let asked = 0;
+  const lazy = make => Object.defineProperty({ type: 'text', text: part.text }, 'metadata', { enumerable: true, get() { asked++; return make(); } });
+  const refusing = new Proxy({}, new Proxy({}, { get() { asked++; throw new Error('not for you'); } }));
+  for (const [name, unknown] of Object.entries({
+    'the list is an array of a class of its own': Tagged.from(system),
+    'the list carries something more': Object.assign([...system], { note: 'of a hook' }),
+    'the list answers for another object': new Proxy([...system], {}),
+    'the part is an instance of a class': [system[0], Object.assign(new (class SystemPart {})(), part)],
+    'the part has a field that is not listed': [system[0], Object.defineProperty({ ...part }, 'name', { value: 'of a hook' })],
+    'the part has a field under a symbol': [system[0], { ...part, [Symbol('mark')]: true }],
+    'the part answers for another object': [system[0], new Proxy({ ...part }, {})],
+    'the metadata is read through an accessor': [system[0], lazy(() => part.metadata)],
+    'the metadata is an instance of a class': [system[0], { ...part, metadata: Object.assign(new (class Metadata {})(), part.metadata) }],
+    'the sources are an array of a class of their own': [system[0], { ...part, metadata: { experimental: { instructions: Tagged.from(sources) } } }],
+    'the sources carry something more': [system[0], { ...part, metadata: { experimental: { instructions: Object.assign([...sources], { note: 'of a hook' }) } } }],
+    'a source is an instance of a class': [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, at) => at ? source : Object.assign(new (class Source {})(), source)) } } }],
+    'a source has its text under an accessor': [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, at) => at ? source : Object.defineProperty({ key: source.key }, 'text', { enumerable: true, get() { asked++; return source.text; } })) } } }],
+    'a source has a text that is not listed': [system[0], { ...part, metadata: { experimental: { instructions: sources.map((source, at) => at ? source : Object.defineProperty({ key: source.key }, 'text', { value: source.text })) } } }],
+  })) assert.equal(withoutPlaceInstructions(unknown), null, name);
+  const beside = [system[0], refusing, lazy(() => { throw new Error('not for you'); }), part];
+  assert.deepEqual(withoutPlaceInstructions(beside).system.slice(0, 3), beside.slice(0, 3), 'A part that refuses to be read is another part, left where it is.');
+  assert.equal(asked, 0, 'Nothing of a part\'s own was called.');
 });
 
 test('what the host wrote of instructions into a session is told by the session\'s own messages: an update by its type, a load by the paths it names after a native read of the session', () => {
@@ -370,25 +404,57 @@ test('a request loses what the host wrote of instructions where it is as the hos
     ['the load with a field under a symbol', [prompt, step, { ...load, [Symbol('mark')]: 'of a hook' }, notice], true],
     ['the load whose content is read through an accessor', [prompt, step, Object.defineProperty({ id: load.id, role: 'user' }, 'content', { get: () => load.content, enumerable: true }), notice], true],
     ['the load whose metadata refuses to be read', [prompt, step, { ...load, metadata: new Proxy({}, { ownKeys() { throw new Error('not for you'); } }) }, notice], true],
-    ['the load that refuses to be read', [prompt, step, new Proxy({ ...load }, { ownKeys() { throw new Error('not for you'); } }), notice], true],
+    ['the load that answers for another object', [prompt, step, new Proxy({ ...load }, {}), notice], false],
+    ['the load that refuses to be read', [prompt, step, new Proxy({ ...load }, { ownKeys() { throw new Error('not for you'); }, getOwnPropertyDescriptor() { throw new Error('not for you'); }, get() { throw new Error('not for you'); } }), notice], false],
+    ['the load whose metadata answers for another object', [prompt, step, { ...load, metadata: new Proxy(stored[2].metadata, {}) }, notice], true],
+    ['the load whose content answers for another object', [prompt, step, { ...load, content: new Proxy(load.content, {}) }, notice], true],
+    ['the load whose text part answers for another object', [prompt, step, { ...load, content: [new Proxy(load.content[0], {})] }, notice], true],
+    ['the load whose ID is not listed', [prompt, step, Object.defineProperty({ role: 'user', content: load.content }, 'id', { value: load.id }), notice], true],
+    ['the load whose content is not listed', [prompt, step, Object.defineProperty({ id: load.id, role: 'user' }, 'content', { value: load.content }), notice], true],
+    ['the load whose text is not listed', [prompt, step, { ...load, content: [Object.defineProperty({ type: 'text' }, 'text', { value: stored[2].text })] }, notice], true],
+    ['the load whose list of files has a place that is not listed', [prompt, step, { ...load, metadata: { instruction: { paths: Object.defineProperty([], '0', { value: '/work/sub/CLAUDE.md', writable: true, configurable: true }) } } }, notice], true],
+    ['an update whose text is not listed', [prompt, step, { role: 'system', content: [Object.defineProperty({ type: 'text' }, 'text', { value: stored[3].text })] }, notice], false],
+    ['an update whose role is not listed', [prompt, step, Object.defineProperty({ content: update.content }, 'role', { value: 'system' }), notice], false],
+    ['an update that answers for another object', [prompt, step, new Proxy({ ...update }, {}), notice], false],
     ['an update with a field that is not listed', [prompt, step, Object.defineProperty({ ...update }, 'name', { value: 'another-plugin' }), notice], false],
     ['an update with a field under a symbol', [prompt, step, { ...update, [Symbol('mark')]: 'of a hook' }, notice], false],
     ['an update whose content is an array of a class of its own', [prompt, step, { role: 'system', content: Tagged.from(update.content) }, notice], false],
     ['an update whose text part has a field that is not listed', [prompt, step, { role: 'system', content: [Object.defineProperty({ ...update.content[0] }, 'cache', { value: 'ephemeral' })] }, notice], false],
     ['an update whose text is read through an accessor', [prompt, step, { role: 'system', content: [Object.defineProperty({ type: 'text' }, 'text', { get: () => stored[3].text, enumerable: true })] }, notice], false],
-    ['an update that refuses to be read', [prompt, step, new Proxy({ ...update }, { getOwnPropertyDescriptor() { throw new Error('not for you'); } }), notice], false],
+    ['an update that refuses to be read', [prompt, step, new Proxy({ ...update }, { ownKeys() { throw new Error('not for you'); }, getOwnPropertyDescriptor() { throw new Error('not for you'); }, get() { throw new Error('not for you'); } }), notice], false],
     ['the load whose metadata is no plain data', [prompt, step, { ...load, metadata: new (class Marked { constructor() { this.instruction = { paths: ['/work/sub/CLAUDE.md'] }; } })() }, notice], true],
     ['the load whose metadata holds a value that is no plain data', [prompt, step, { ...load, metadata: { instruction: Object.assign(new Date(0), { paths: ['/work/sub/CLAUDE.md'] }) } }, notice], true],
   ]) {
     assert.deepEqual(withoutHostMessages(messages, stored), { messages, loads: [], updates: [], changed }, name);
   }
-  // Metadata is compared however deep it goes while the comparison can come to an end; where it cannot, the
-  // message is not known to be the host's and stays, and the request is not refused for it.
+  // Looking at a message calls nothing of its own and changes nothing. An ID that would work itself out when it
+  // is asked for is not asked: the message stays as it was, and nothing says that it is a load.
+  let asked = 0;
+  const lazy = Object.defineProperty({ role: 'user', content: load.content }, 'id', { enumerable: true, configurable: true,
+    get() { asked++; Object.defineProperty(this, 'id', { value: load.id, enumerable: true, writable: true, configurable: true }); return load.id; } });
+  assert.deepEqual(withoutHostMessages([prompt, step, lazy, notice], stored), { messages: [prompt, step, lazy, notice], loads: [], updates: [], changed: false });
+  assert.deepEqual([asked, typeof Object.getOwnPropertyDescriptor(lazy, 'id').get], [0, 'function'], 'The ID was not asked for, and is still to be worked out.');
+  const traps = [];
+  const watched = new Proxy({ ...load }, new Proxy({}, { get: (_, trap) => { traps.push(trap); return undefined; } }));
+  withoutHostMessages([prompt, step, watched, update, notice], stored);
+  assert.deepEqual(traps, [], 'An object that answers for another is not asked anything.');
+  // What a request holds of a session's messages as the host builds it is what `hostInstructions` names for no
+  // one else's input, whatever plain data a load's metadata is: both go by the same record, so a load that is
+  // kept from the model here is one that fails no turn there, and the other way round. Metadata is compared to
+  // its end however deep it goes.
   const nested = depth => { let value = { paths: ['/work/sub/CLAUDE.md'] }; for (let level = 0; level < depth; level++) value = { paths: ['/work/sub/CLAUDE.md'], inner: value }; return { instruction: value }; };
-  const deep = depth => stored.map(message => message.id === 'msg_load' ? { ...message, metadata: nested(depth) } : message);
-  assert.deepEqual(withoutHostMessages([prompt, step, { ...load, metadata: nested(200) }, notice], deep(200)), { messages: [prompt, step, notice], loads: ['msg_load'], updates: [], changed: false });
-  const endless = [prompt, step, { ...load, metadata: nested(200000) }, notice];
-  assert.deepEqual(withoutHostMessages(endless, deep(200000)), { messages: endless, loads: [], updates: [], changed: true });
+  const lists = depth => { let value = ['/work/sub/CLAUDE.md']; for (let level = 0; level < depth; level++) value = [value, level]; return { instruction: { paths: ['/work/sub/CLAUDE.md'], within: value } }; };
+  const copy = value => JSON.parse(JSON.stringify(value));
+  for (const [name, metadata] of Object.entries({ 'as the host writes it': stored[2].metadata, 'two hundred levels deep': nested(200), 'two hundred thousand levels deep': nested(200000), 'two hundred thousand lists deep': lists(200000),
+    'with other data beside the files': { instruction: { paths: ['/work/sub/CLAUDE.md'], sizes: [0, 1.5, -2], flags: { read: true, cut: false, none: null }, empty: {}, list: [[], [[]], ['']] }, note: '' } })) {
+    const session = stored.map(message => message.id === 'msg_load' ? { ...message, metadata } : message);
+    // As OpenCode builds the request: the load with a copy of the stored message's metadata, the update as an
+    // object of its own class.
+    const built = [prompt, step, { ...load, metadata: name.includes('lists') ? lists(200000) : name.includes('thousand') ? nested(200000) : copy(metadata) }, Object.assign(new (class SystemMessage {})(), update), notice];
+    const written = hostInstructions(session);
+    assert.deepEqual([written.loads.map(message => message.id), written.updates.map(message => message.id)], [['msg_load'], ['msg_update']], name);
+    assert.deepEqual(withoutHostMessages(built, session), { messages: [prompt, step, notice], loads: ['msg_load'], updates: ['msg_update'], changed: false }, name);
+  }
 });
 
 test('a turn\'s prompt is the session\'s one message with its nonce, and the turn stands before it, runs, or has ended at the first idle marker after it', () => {

@@ -149,9 +149,13 @@ only where the changed message still has the loaded file's ID; text that a
 plugin moved into another message is not seen at all. AZPR does not police
 other plugins: what another plugin's hook adds
 to a request, takes from it or makes of a tool's result, before or after
-AZPR's own hook, AZPR neither sees nor corrects. List AZPR first among your
-plugins, so that its hook sees a request before theirs, and install only
-plugins you trust with what a review reads.
+AZPR's own hook, AZPR neither sees nor corrects. List AZPR first among the
+plugins of your `opencode.json`: its hook then runs before those of the
+plugins listed after it. It does not run before the hooks of a plugin that
+OpenCode loads from a configuration directory's `plugin/` or `plugins/`
+folder, which are loaded first, nor before any other plugin's where AZPR's
+runtime starts late (after a first `/pr-setup` in a running OpenCode). So
+install only plugins you trust with what a review reads.
 
 **Experiments of OpenCode that reach these sessions.** Three opt-in
 experiments of OpenCode 2.4 concern AZPR's private sessions; all are off

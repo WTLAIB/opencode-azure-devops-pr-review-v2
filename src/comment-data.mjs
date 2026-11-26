@@ -70,11 +70,17 @@ export function itemPages(items, size = PAGE_CHARACTERS, maxItems = Infinity) {
 }
 
 /**
+ * Rows as a file holds them: one per line, each ended by a line break, and nothing where there is no row. A file
+ * of no rows is empty; a line break alone would be a row of nothing, which is no JSON.
+ */
+export const rowLines = rows => rows.map(row => `${row}\n`).join('');
+
+/**
  * A value's pages file as this version writes it: the rows of the text (`pageRows`), one per line. It is one
  * layout for one text, so a pages file is right exactly when it is this, and two writers of one value write the
- * same.
+ * same. An empty value has no row, and its pages file is empty.
  */
-export const pagesOf = text => pageRows(text).join('\n') + '\n';
+export const pagesOf = text => rowLines(pageRows(text));
 
 // The name of a value's pages beside its object. This version's pages have a name of their own, since their
 // rows are its own layout, and the layout of a file must never change under a model that reads it row by row.
@@ -309,7 +315,7 @@ export async function observationIndex(store, observations, wanted = () => true)
   }
   // Stopped while its values were looked at or its rows were made: an index that no page will use is not written.
   if (!wanted()) return undefined;
-  return store.put(rows.join('\n') + '\n', 'jsonl');
+  return store.put(rowLines(rows), 'jsonl');
 }
 
 export const argumentValues = value => typeof value === 'string' ? [value]

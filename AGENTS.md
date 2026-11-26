@@ -79,16 +79,26 @@ settings, backups and failure records. Never upload `.local/`.
   OpenCode 2.3.0 and 2.4.1; `host.mjs` says what plain data is). A message,
   a part or metadata that carries anything the host did not give it holds
   what a hook added, and taking it out would drop that. Ask it of an
-  object's own properties, each read once from its descriptor: a field that
-  is not listed, one under a symbol, an accessor, an array or an object of
-  another class, metadata that is other data than the stored message's are
-  each no longer the host's. What cannot be looked at (an object that
-  refuses to be read, a comparison that does not come to an end) is not
-  known to be the host's and stays; nothing is refused for it. That is the
-  whole rule, so never add a case for one more shape: what is not plain
-  data is not the host's. Its limit is said with it: a message is what it
-  holds of its own, what an object inherits is not looked at, and an update
-  is an object of the host's own class, which a plugin cannot name. Never tell them by what a request message looks like
+  object's own properties, each taken once from its descriptor, so that
+  nothing of the object's own is ever called and looking changes nothing:
+  every one of them is listed, has a string for its name and holds its
+  value itself (an array's length aside). A field that is not listed, one
+  under a symbol, an accessor, an array or an object of another class, an
+  object that answers for another (a proxy), metadata that is other data
+  than the stored message's are each no longer the host's, and the message
+  stays. Never read a message through its properties (not its ID either),
+  and compare metadata to its end, without a limit that data can exceed:
+  what the hook takes out of a request as OpenCode builds it must be
+  exactly what `requestReview` takes for no one else's input, or a message
+  that someone posted reaches the model and its answer is accepted. That is
+  the whole rule, so never add a case for one more shape: what is not plain
+  data is not the host's. The same rule reads a request's system parts
+  (`withoutPlaceInstructions`): a part that is no plain data is not looked
+  into, and the instructions part is made anew only from plain data, with
+  what a hook added to it in plain sight kept. Its limit is said with it: a
+  message is what it holds of its own, what an object inherits is not
+  looked at, and an update is an object of the host's own class, which a
+  plugin cannot name. Never tell them by what a request message looks like
   alone, never take a message out for the ID it has alone (one that a hook
   before AZPR's changed may hold what is not the host's), and never take a
   message of the load's form for the host's in a session that did not read.

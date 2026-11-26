@@ -1663,7 +1663,11 @@ test('the rows of a private value\'s pages come back whole through the host\'s r
       });
     }
   }
-  assert.deepEqual([pageRows(''), writtenPages('')], [[], '\n'], 'An empty value has no row, and its pages file is a line end.');
+  // An empty value has no row, and its pages file is empty: a line break alone would be a row of nothing, which
+  // a reader that takes each line for JSON cannot read.
+  assert.deepEqual([pageRows(''), writtenPages('')], [[], '']);
+  const nothing = await store.put('');
+  assert.deepEqual([await readFile(nothing.file, 'utf8'), await readFile(nothing.pages, 'utf8'), nothing.characters, await store.handed(nothing), await store.read(nothing)], ['', '', 0, nothing, '']);
   assert.ok(ROW_CHARACTERS < HOST_READ_LINE_CHARACTERS, 'A row is shorter than what the host\'s read returns of a line.');
   assert.deepEqual(pageRows('abc').map(row => JSON.parse(row)), [{ start: 0, end: 3, text: 'abc' }]);
   assert.equal(writtenPages('abc'), '{"start":0,"end":3,"text":"abc"}\n');
@@ -2095,6 +2099,9 @@ test('a value is stored as the text a file can hold; a saved review\'s observati
   assert.deepEqual([await observationIndex(packing, many, () => wanted), packs, await objects()], [undefined, 8, before + 3 + 8 * 3]);
   // An observation whose arguments cannot be stored is left out, like one whose output cannot be handed out,
   // and the others are listed.
+  // Where no observation can be listed the index is an empty value, not a line of nothing.
+  const none = await observationIndex(reopened, [elsewhere]);
+  assert.deepEqual([none.characters, await reopened.read(none), await readFile(none.pages, 'utf8')], [0, '', '']);
   const unpacked = { ...reopened, async pack(value, size) { if (value.path === '/src/packed-3.ts') throw new Error('The arguments cannot be written.'); return reopened.pack(value, size); } };
   const some = (await reopened.read(await observationIndex(unpacked, many.slice(0, 5)))).trim().split('\n').map(row => JSON.parse(row));
   assert.deepEqual(await Promise.all(some.map(async row => JSON.parse(await reopened.read(row.arguments.azprData)).path)), [0, 1, 2, 4].map(at => `/src/packed-${at}.ts`));
